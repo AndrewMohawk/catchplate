@@ -1,8 +1,24 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-TMP_DIR="${TMP_DIR:-.tmp}"
+tmp_root="$(python3 - "${TMP_DIR:-.tmp}" <<'PY'
+import pathlib
+import sys
+
+print(pathlib.Path(sys.argv[1]).resolve())
+PY
+)"
+observation_container_suffix="$$-$(openssl rand -hex 6)"
+TMP_DIR="$tmp_root/response-proof-capture-$observation_container_suffix"
+gate_proxy_url="${SERVERWARE_RESPONSE_PROOF_PROXY_URL:-http://localhost:9090}"
 mkdir -p "$TMP_DIR"
+verified_ca_source="${SERVERWARE_CA_FILE:-$tmp_root/serverware-ca.pem}"
+if [[ ! -f "$verified_ca_source" ]]; then
+  echo "verified Serverware CA is missing at $verified_ca_source" >&2
+  exit 1
+fi
+cp "$verified_ca_source" "$TMP_DIR/serverware-ca.pem"
+chmod 0600 "$TMP_DIR/serverware-ca.pem"
 collector_key="$TMP_DIR/dev-proof-collector-key.pem"
 collector_public_der="$TMP_DIR/dev-proof-collector-public.der"
 stream_dir="$TMP_DIR/stream-proof"
@@ -10,10 +26,31 @@ stream_proof="$stream_dir/dev-streaming-proxy-response-proof.json"
 stream_body="$stream_dir/dev-streaming-body.bin"
 stream_summary="$TMP_DIR/dev-streaming-proof-summary.json"
 structured_stream_dir="$TMP_DIR/structured-stream-proofs"
+observation_dir="$TMP_DIR/response-observation-proofs"
+observation_post_dir="$observation_dir/post-success"
+observation_deny_dir="$observation_dir/local-denial"
+observation_upstream_error_dir="$observation_dir/upstream-error"
+observation_validation_dir="$observation_dir/validation-block"
+observation_limit_dir="$observation_dir/body-limit-retry"
+observation_outage_dir="$observation_dir/attestation-outage"
+observation_replay_first_dir="$observation_dir/replay-first"
+observation_replay_second_dir="$observation_dir/replay-second"
+observation_generic_dir="$observation_dir/generic-unverified"
 mkdir -p "$stream_dir"
 mkdir -p "$structured_stream_dir"
+mkdir -p \
+  "$observation_post_dir" \
+  "$observation_deny_dir" \
+  "$observation_upstream_error_dir" \
+  "$observation_validation_dir" \
+  "$observation_limit_dir" \
+  "$observation_outage_dir" \
+  "$observation_replay_first_dir" \
+  "$observation_replay_second_dir" \
+  "$observation_generic_dir"
 chmod 0700 "$stream_dir"
 chmod 0700 "$structured_stream_dir"
+chmod 0700 "$observation_dir" "$observation_dir"/*
 rm -f \
   "$TMP_DIR/dev-proxy-response-proof.json" \
   "$TMP_DIR/dev-proxy-response-proof-summary.json" \
@@ -22,18 +59,96 @@ rm -f \
   "$stream_summary" \
   "$collector_key" \
   "$collector_public_der"
+observation_outage_gate="serverware-observation-outage-$observation_container_suffix"
+observation_custody="serverware-observation-custody-$observation_container_suffix"
+observation_custody_gate="serverware-observation-custody-gate-$observation_container_suffix"
+observation_custody_socket_volume="serverware-observation-socket-$observation_container_suffix"
+observation_custody_state_volume="serverware-observation-state-$observation_container_suffix"
+observation_containers=()
+observation_volumes=()
+
+cleanup_observation_containers() {
+  if [[ "${#observation_containers[@]}" -gt 0 ]]; then
+    docker rm -f "${observation_containers[@]}" >/dev/null 2>&1 || true
+  fi
+  if [[ "${#observation_volumes[@]}" -gt 0 ]]; then
+    docker volume rm -f "${observation_volumes[@]}" >/dev/null 2>&1 || true
+  fi
+  chmod -R u+rwX "$TMP_DIR" >/dev/null 2>&1 || true
+  rm -rf "$TMP_DIR"
+}
+
+trap cleanup_observation_containers EXIT
+
+wait_for_observation_gate() {
+  local container_name="$1"
+  for _ in $(seq 1 100); do
+    if docker inspect --format '{{.State.Running}}' "$container_name" 2>/dev/null | grep -qx true \
+      && docker compose exec -T serverware python - "$container_name" <<'PY' >/dev/null 2>&1
+import socket
+import sys
+
+with socket.create_connection((sys.argv[1], 9090), timeout=0.25):
+    pass
+PY
+    then
+      return 0
+    fi
+    sleep 0.1
+  done
+  docker logs "$container_name" >&2 || true
+  echo "observation gate $container_name did not become ready" >&2
+  return 1
+}
+
+demo_request_count() {
+  local method="$1"
+  local path="$2"
+  local run_id="${3:-}"
+  docker compose exec -T demo-upstream python - "$method" "$path" "$run_id" <<'PY'
+import json
+import ssl
+import sys
+import urllib.parse
+import urllib.request
+
+parameters = {"method": sys.argv[1], "path": sys.argv[2]}
+if sys.argv[3]:
+    parameters["run_id"] = sys.argv[3]
+query = urllib.parse.urlencode(parameters)
+with urllib.request.urlopen(
+    "https://127.0.0.1:8443/_test/request-count?" + query,
+    context=ssl._create_unverified_context(),
+    timeout=5,
+) as response:
+    print(json.load(response)["count"])
+PY
+}
+
+new_observation_nonce() {
+  docker compose exec -T serverware python - <<'PY'
+import base64
+import os
+import struct
+import time
+
+nonce = struct.pack(">I", int(time.time()) + 300) + os.urandom(28)
+print(base64.urlsafe_b64encode(nonce).rstrip(b"=").decode("ascii"))
+PY
+}
+
 openssl genpkey -algorithm ED25519 -out "$collector_key" >/dev/null 2>&1
 chmod 0600 "$collector_key"
 openssl pkey -in "$collector_key" -pubout -outform DER -out "$collector_public_der"
 
 docker compose run --rm --no-deps \
   --user "$(id -u):$(id -g)" \
-  -v "$PWD/$TMP_DIR:/proof" \
+  -v "$TMP_DIR:/proof" \
   --entrypoint /usr/local/bin/serverware-proof-client \
   decision-gate-rs \
   --proxy decision-gate-rs:9090 \
   --url https://demo-upstream:8443/echo \
-  --ca /data/decision-gate-ca-cert.pem \
+  --ca /proof/serverware-ca.pem \
   --out /proof/dev-proxy-response-proof.json \
   --collector-key /proof/dev-proof-collector-key.pem \
   --expected-principal-id agent:demo \
@@ -344,13 +459,13 @@ PY
 
 docker compose run --rm --no-deps \
   --user "$(id -u):$(id -g)" \
-  -v "$PWD/$TMP_DIR:/proof" \
+  -v "$TMP_DIR:/proof" \
   --entrypoint /usr/local/bin/serverware-proof-client \
   decision-gate-rs \
   --stream \
   --proxy decision-gate-rs:9090 \
   --url 'https://demo-upstream:8443/stream-bytes?chunks=2&chunkSize=16' \
-  --ca /data/decision-gate-ca-cert.pem \
+  --ca /proof/serverware-ca.pem \
   --out /proof/stream-proof/dev-streaming-proxy-response-proof.json \
   --body-out /proof/stream-proof/dev-streaming-body.bin \
   --collector-key /proof/dev-proof-collector-key.pem \
@@ -361,7 +476,8 @@ docker compose run --rm --no-deps \
   > "$stream_summary"
 
 docker compose run --rm --no-deps -T \
-  -v "$PWD/$TMP_DIR:/proof:ro" \
+  --user "$(id -u):$(id -g)" \
+  -v "$TMP_DIR:/proof:ro" \
   -v "$PWD/schemas:/proof-schemas:ro" \
   --entrypoint python \
   serverware - \
@@ -478,13 +594,13 @@ for stream_mode in "${structured_stream_modes[@]}"; do
   rm -f "$mode_dir/proof.json" "$mode_dir/body.bin" "$mode_dir/summary.json"
   docker compose run --rm --no-deps \
     --user "$(id -u):$(id -g)" \
-    -v "$PWD/$TMP_DIR:/proof" \
+    -v "$TMP_DIR:/proof" \
     --entrypoint /usr/local/bin/serverware-proof-client \
     decision-gate-rs \
     --stream \
     --proxy decision-gate-rs:9090 \
     --url "https://demo-upstream:8443/proof-stream/$stream_mode" \
-    --ca /data/decision-gate-ca-cert.pem \
+    --ca /proof/serverware-ca.pem \
     --out "/proof/structured-stream-proofs/$stream_mode/proof.json" \
     --body-out "/proof/structured-stream-proofs/$stream_mode/body.bin" \
     --collector-key /proof/dev-proof-collector-key.pem \
@@ -496,7 +612,8 @@ for stream_mode in "${structured_stream_modes[@]}"; do
 done
 
 docker compose run --rm --no-deps -T \
-  -v "$PWD/$structured_stream_dir:/proof:ro" \
+  --user "$(id -u):$(id -g)" \
+  -v "$structured_stream_dir:/proof:ro" \
   -v "$PWD/schemas:/proof-schemas:ro" \
   --entrypoint python \
   serverware - \
@@ -668,10 +785,552 @@ for mode, (route_id, content_type) in expected.items():
     assert_no_forbidden_keys(value)
 PY
 
+printf '%s' '{"audit_marker":"serverware-observation-post"}' > "$observation_post_dir/request.bin"
+chmod 0600 "$observation_post_dir/request.bin"
+
+docker compose run --rm --no-deps \
+  --user "$(id -u):$(id -g)" \
+  -v "$TMP_DIR:/proof" \
+  --entrypoint /usr/local/bin/serverware-proof-client \
+  decision-gate-rs \
+  --observation \
+  --method POST \
+  --proxy decision-gate-rs:9090 \
+  --url https://demo-upstream:8443/echo \
+  --ca /proof/serverware-ca.pem \
+  --out /proof/response-observation-proofs/post-success/proof.json \
+  --body-out /proof/response-observation-proofs/post-success/body.bin \
+  --request-body /proof/response-observation-proofs/post-success/request.bin \
+  --collector-key /proof/dev-proof-collector-key.pem \
+  --expected-principal-id agent:demo \
+  --proxy-header "X-Serverware-Agent: demo-agent" \
+  --header "X-Serverware-Agent: demo-agent" \
+  --header "Content-Type: application/json" \
+  > "$observation_post_dir/summary.json"
+
+denied_run_id="denied-$observation_container_suffix"
+denied_count_before="$(demo_request_count DELETE /echo "$denied_run_id")"
+docker compose run --rm --no-deps \
+  --user "$(id -u):$(id -g)" \
+  -v "$TMP_DIR:/proof" \
+  --entrypoint /usr/local/bin/serverware-proof-client \
+  decision-gate-rs \
+  --observation \
+  --method DELETE \
+  --proxy decision-gate-rs:9090 \
+  --url https://demo-upstream:8443/echo \
+  --ca /proof/serverware-ca.pem \
+  --out /proof/response-observation-proofs/local-denial/proof.json \
+  --body-out /proof/response-observation-proofs/local-denial/body.bin \
+  --collector-key /proof/dev-proof-collector-key.pem \
+  --expected-principal-id agent:demo \
+  --proxy-header "X-Serverware-Agent: demo-agent" \
+  --header "X-Serverware-Agent: demo-agent" \
+  --header "User-Agent: serverware-test-run/$denied_run_id" \
+  > "$observation_deny_dir/summary.json"
+denied_count_after="$(demo_request_count DELETE /echo "$denied_run_id")"
+
+docker compose run --rm --no-deps \
+  --user "$(id -u):$(id -g)" \
+  -v "$TMP_DIR:/proof" \
+  --entrypoint /usr/local/bin/serverware-proof-client \
+  decision-gate-rs \
+  --observation \
+  --proxy decision-gate-rs:9090 \
+  --url 'https://demo-upstream:8443/echo?reflectCredential=1' \
+  --ca /proof/serverware-ca.pem \
+  --out /proof/response-observation-proofs/validation-block/proof.json \
+  --body-out /proof/response-observation-proofs/validation-block/body.bin \
+  --collector-key /proof/dev-proof-collector-key.pem \
+  --expected-principal-id agent:demo \
+  --proxy-header "X-Serverware-Agent: demo-agent" \
+  --header "X-Serverware-Agent: demo-agent" \
+  > "$observation_validation_dir/summary.json"
+
+docker compose run --rm --no-deps \
+  --user "$(id -u):$(id -g)" \
+  -v "$TMP_DIR:/proof" \
+  --entrypoint /usr/local/bin/serverware-proof-client \
+  decision-gate-rs \
+  --observation \
+  --proxy decision-gate-rs:9090 \
+  --url https://demo-upstream:8443/2/tweets/search/recent \
+  --ca /proof/serverware-ca.pem \
+  --out /proof/response-observation-proofs/upstream-error/proof.json \
+  --body-out /proof/response-observation-proofs/upstream-error/body.bin \
+  --collector-key /proof/dev-proof-collector-key.pem \
+  --expected-principal-id agent:demo \
+  --proxy-header "X-Serverware-Agent: demo-agent" \
+  --header "X-Serverware-Agent: demo-agent" \
+  > "$observation_upstream_error_dir/summary.json"
+
+if docker compose run --rm --no-deps \
+  --user "$(id -u):$(id -g)" \
+  -v "$TMP_DIR:/proof" \
+  --entrypoint /usr/local/bin/serverware-proof-client \
+  decision-gate-rs \
+  --observation \
+  --proxy decision-gate-rs:9090 \
+  --url https://demo-upstream:8443/echo \
+  --ca /proof/serverware-ca.pem \
+  --out /proof/response-observation-proofs/body-limit-retry/proof.json \
+  --body-out /proof/response-observation-proofs/body-limit-retry/body.bin \
+  --max-observation-body-bytes 1 \
+  --collector-key /proof/dev-proof-collector-key.pem \
+  --expected-principal-id agent:demo \
+  --proxy-header "X-Serverware-Agent: demo-agent" \
+  --header "X-Serverware-Agent: demo-agent" \
+  > "$observation_limit_dir/failed.stdout.json" \
+  2> "$observation_limit_dir/failed.stderr.json"; then
+  echo "observation collector unexpectedly accepted a body above its configured limit" >&2
+  exit 1
+fi
+python3 - "$observation_limit_dir" <<'PY'
+import json
+import pathlib
+import re
+import sys
+
+directory = pathlib.Path(sys.argv[1])
+assert not (directory / "proof.json").exists(), list(directory.iterdir())
+assert not (directory / "body.bin").exists(), list(directory.iterdir())
+stderr_lines = [
+    line for line in (directory / "failed.stderr.json").read_text(encoding="utf-8").splitlines()
+    if line.strip()
+]
+assert stderr_lines, stderr_lines
+assert all(
+    re.fullmatch(r"Container [A-Za-z0-9_.-]+ (Creating|Created)", line.strip())
+    for line in stderr_lines[:-1]
+), stderr_lines
+error = json.loads(stderr_lines[-1])
+assert error == {
+    "ok": False,
+    "error": "observation decoded body exceeds --max-observation-body-bytes 1",
+}, error
+PY
+docker compose run --rm --no-deps \
+  --user "$(id -u):$(id -g)" \
+  -v "$TMP_DIR:/proof" \
+  --entrypoint /usr/local/bin/serverware-proof-client \
+  decision-gate-rs \
+  --observation \
+  --proxy decision-gate-rs:9090 \
+  --url https://demo-upstream:8443/echo \
+  --ca /proof/serverware-ca.pem \
+  --out /proof/response-observation-proofs/body-limit-retry/proof.json \
+  --body-out /proof/response-observation-proofs/body-limit-retry/body.bin \
+  --max-observation-body-bytes 16777216 \
+  --collector-key /proof/dev-proof-collector-key.pem \
+  --expected-principal-id agent:demo \
+  --proxy-header "X-Serverware-Agent: demo-agent" \
+  --header "X-Serverware-Agent: demo-agent" \
+  > "$observation_limit_dir/summary.json"
+
+docker compose run --rm --no-deps -T \
+  --user "$(id -u):$(id -g)" \
+  -v "$observation_dir:/proof:ro" \
+  -v "$PWD/schemas:/proof-schemas:ro" \
+  --entrypoint python \
+  serverware - \
+  /proof \
+  /proof-schemas/response-observation-proof.v1.schema.json <<'PY'
+import json
+import pathlib
+import re
+import sys
+
+import jsonschema
+
+root = pathlib.Path(sys.argv[1])
+with open(sys.argv[2], "r", encoding="utf-8") as handle:
+    schema = json.load(handle)
+jsonschema.Draft202012Validator.check_schema(schema)
+proofs = sorted(root.glob("*/proof.json"))
+assert len(proofs) == 5, proofs
+for proof_path in proofs:
+    with proof_path.open("r", encoding="utf-8") as handle:
+        jsonschema.validate(json.load(handle), schema)
+PY
+
+python3 - \
+  "$observation_post_dir" \
+  "$observation_deny_dir" \
+  "$observation_upstream_error_dir" \
+  "$observation_validation_dir" \
+  "$denied_count_before" \
+  "$denied_count_after" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+
+def load_case(path_text):
+    path = pathlib.Path(path_text)
+    proof_bytes = (path / "proof.json").read_bytes()
+    body = (path / "body.bin").read_bytes()
+    summary = json.loads((path / "summary.json").read_text(encoding="utf-8"))
+    proof = json.loads(proof_bytes)
+    statement = proof["runtime_proof"]["server_statement"]
+    assert summary["ok"] is True and summary["observation_verified"] is True, summary
+    assert summary["proof_sha256"] == "sha256:" + hashlib.sha256(proof_bytes).hexdigest(), summary
+    assert summary["body_sha256"] == "sha256:" + hashlib.sha256(body).hexdigest(), summary
+    assert summary["body_bytes"] == len(body), summary
+    assert proof["apiVersion"] == "serverware.responseObservationProof/v1", proof
+    assert proof["kind"] == "ServerwareResponseObservationProof", proof
+    assert proof["runtime_proof"]["apiVersion"] == "serverware.responseObservationRuntimeProof/v1", proof
+    assert proof["runtime_proof"]["kind"] == "ServerwareResponseObservationRuntimeProof", proof
+    assert proof["runtime_proof"]["vendor_tee"]["provider"] == "development-fixture", proof
+    assert statement["request"]["body_observation"] == "complete-buffered", statement
+    assert statement["request"]["aggregate_digest"] == summary["request_aggregate_digest"], summary
+    assert statement["emitted_response"] == proof["response"], proof
+    assert proof["response"]["body_digest"] == summary["body_sha256"], proof
+    assert proof["response"]["body_bytes"] == len(body), proof
+    assert statement["observation_authority"] == {
+        "source": "gate-authored",
+        "upstream_truth": "not-independently-observed",
+        "downstream_delivery": "not-claimed",
+    }, statement
+    assert proof["collector"]["algorithm"] == "Ed25519", proof
+    return proof, statement, body
+
+
+post_proof, post, post_body = load_case(sys.argv[1])
+request_body = (pathlib.Path(sys.argv[1]) / "request.bin").read_bytes()
+assert post["request"]["method"] == "POST", post
+assert post["request"]["body_digest"] == "sha256:" + hashlib.sha256(request_body).hexdigest(), post
+assert post["request"]["body_bytes"] == len(request_body), post
+assert post["policy"]["decision_state"] == "allowed", post
+assert post["principal_id"] == "agent:demo" and post["route_id"] == "demo.echo", post
+assert post["credential"]["state"] == "injected", post
+assert post["credential"]["binding_digest"].startswith("sha256:"), post
+assert post["authorization"]["state"] == "completed-forwarded", post
+assert post["authorization"]["binding_digest"].startswith("sha256:"), post
+assert post["authorization"]["release_authority"]["credential_ref"] == "cred-demo-bearer", post
+assert post["authorization"]["control_plane_authorization_receipt"] is not None, post
+assert post["authorization"]["control_plane_authorization_receipt_sha256"].startswith("sha256:"), post
+assert post["response_path"] == "complete-upstream-response-released", post
+assert post["upstream_attempt"] == "complete", post
+assert post["upstream_observation"]["status"] == 200, post
+assert post["upstream_observation"]["body_state"] == "complete", post
+post_payload = json.loads(post_body)
+assert post_payload["method"] == "POST" and post_payload["path"] == "/echo", post_payload
+assert post_payload["authorization_present"] is True, post_payload
+assert post_payload["authorization_scheme"] == "Bearer", post_payload
+assert post_payload["credential_marker"] in {"initial", "rotated"}, post_payload
+
+_, denied, denied_body = load_case(sys.argv[2])
+assert denied["policy"]["decision_state"] == "denied", denied
+assert denied["response_path"] == "local-reject-no-upstream-attempt", denied
+assert denied["upstream_attempt"] == "not-started", denied
+assert denied["upstream_observation"] is None, denied
+assert denied["credential"] == {"state": "not-evaluated", "binding_digest": None}, denied
+assert denied["authorization"]["state"] == "denied", denied
+denied_payload = json.loads(denied_body)
+assert denied_payload["action"] == "deny" and denied_payload["allowed"] is False, denied_payload
+assert denied_payload["status_code"] == 403, denied_payload
+assert denied_payload["payload"] == {"error": "unknown_route_denied"}, denied_payload
+assert int(sys.argv[5]) == int(sys.argv[6]), (
+    "locally denied observation reached the upstream",
+    sys.argv[5],
+    sys.argv[6],
+)
+
+_, upstream_error, upstream_error_body = load_case(sys.argv[3])
+assert upstream_error["policy"]["decision_state"] == "allowed", upstream_error
+assert upstream_error["route_id"] == "demo.x.search.recent", upstream_error
+assert upstream_error["response_path"] == "post-dispatch-local-failure", upstream_error
+assert upstream_error["upstream_attempt"] == "headers-observed-body-incomplete", upstream_error
+assert upstream_error["upstream_observation"]["status"] == 404, upstream_error
+assert upstream_error["upstream_observation"]["body_state"] == "unread", upstream_error
+assert upstream_error["upstream_observation"]["body_bytes"] is None, upstream_error
+assert upstream_error["upstream_observation"]["body_digest"] is None, upstream_error
+assert json.loads(upstream_error_body)["error"] == "response_error_policy_missing", upstream_error_body
+
+_, validation, validation_body = load_case(sys.argv[4])
+assert validation["policy"]["decision_state"] == "allowed", validation
+assert validation["route_id"] == "demo.echo", validation
+assert validation["response_path"] == "complete-upstream-response-blocked", validation
+assert validation["upstream_attempt"] == "complete", validation
+assert validation["upstream_observation"]["status"] == 200, validation
+assert validation["upstream_observation"]["body_state"] == "complete", validation
+assert validation["upstream_observation"]["body_bytes"] > 0, validation
+assert validation["upstream_observation"]["body_digest"].startswith("sha256:"), validation
+assert validation["upstream_observation"]["body_digest"] != validation["emitted_response"]["body_digest"], validation
+assert json.loads(validation_body) == {"error": "response_credential_reflection"}, validation_body
+PY
+
+generic_nonce="$(new_observation_nonce)"
+curl -sS --http1.1 --raw --noproxy '' \
+  --max-time 10 \
+  --proxy "$gate_proxy_url" \
+  --proxy-header "X-Serverware-Agent: demo-agent" \
+  --cacert "$TMP_DIR/serverware-ca.pem" \
+  -H "X-Serverware-Agent: demo-agent" \
+  -H "X-Serverware-Observation-Nonce: $generic_nonce" \
+  -D "$observation_generic_dir/headers.txt" \
+  -o "$observation_generic_dir/wire.bin" \
+  https://demo-upstream:8443/not-allowed-generic-observation
+
+python3 - "$observation_generic_dir" <<'PY'
+import base64
+import hashlib
+import json
+import pathlib
+import re
+import sys
+
+directory = pathlib.Path(sys.argv[1])
+headers = (directory / "headers.txt").read_bytes().lower()
+wire = (directory / "wire.bin").read_bytes()
+assert b"transfer-encoding: chunked\r\n" in headers, headers
+assert b"connection: close\r\n" in headers, headers
+assert b"content-length:" not in headers, headers
+assert (
+    b"trailer: x-serverware-observation-proof-b64, x-serverware-observation-proof-sha256\r\n"
+    in headers
+), headers
+match = re.fullmatch(
+    rb"([0-9a-f]+)\r\n(.*)\r\n0\r\n"
+    rb"x-serverware-observation-proof-b64: ([A-Za-z0-9_-]+)\r\n"
+    rb"x-serverware-observation-proof-sha256: (sha256:[0-9a-f]{64})\r\n\r\n",
+    wire,
+    re.DOTALL | re.IGNORECASE,
+)
+assert match is not None, wire[-512:]
+assert int(match.group(1), 16) == len(match.group(2)), (match.group(1), len(match.group(2)))
+runtime_proof_bytes = base64.urlsafe_b64decode(match.group(3) + b"=" * (-len(match.group(3)) % 4))
+assert match.group(4).decode("ascii").lower() == (
+    "sha256:" + hashlib.sha256(runtime_proof_bytes).hexdigest()
+), match.group(4)
+runtime_proof = json.loads(runtime_proof_bytes)
+assert runtime_proof["apiVersion"] == "serverware.responseObservationRuntimeProof/v1", runtime_proof
+assert runtime_proof["kind"] == "ServerwareResponseObservationRuntimeProof", runtime_proof
+assert "collector" not in runtime_proof, runtime_proof
+assert not (directory / "proof.json").exists(), list(directory.iterdir())
+assert not (directory / "body.bin").exists(), list(directory.iterdir())
+assert {path.name for path in directory.iterdir()} == {"headers.txt", "wire.bin"}, list(directory.iterdir())
+PY
+
+outage_container_id="$(docker compose run -d --no-deps \
+  --name "$observation_outage_gate" \
+  -e SERVERWARE_DATA_PLANE_RESPONSE_PROOF_ATTESTATION_COMMAND=/bin/false \
+  decision-gate-rs)"
+observation_containers+=("$outage_container_id")
+wait_for_observation_gate "$observation_outage_gate"
+if docker compose run --rm --no-deps \
+  --user "$(id -u):$(id -g)" \
+  -v "$TMP_DIR:/proof" \
+  --entrypoint /usr/local/bin/serverware-proof-client \
+  decision-gate-rs \
+  --observation \
+  --proxy "$observation_outage_gate:9090" \
+  --url https://demo-upstream:8443/not-allowed-attestation-outage \
+  --ca /proof/serverware-ca.pem \
+  --out /proof/response-observation-proofs/attestation-outage/proof.json \
+  --body-out /proof/response-observation-proofs/attestation-outage/body.bin \
+  --collector-key /proof/dev-proof-collector-key.pem \
+  --expected-principal-id agent:demo \
+  --proxy-header "X-Serverware-Agent: demo-agent" \
+  --header "X-Serverware-Agent: demo-agent" \
+  > "$observation_outage_dir/stdout.json" \
+  2> "$observation_outage_dir/stderr.json"; then
+  echo "observation collector unexpectedly accepted an attestation outage" >&2
+  exit 1
+fi
+python3 - "$observation_outage_dir" <<'PY'
+import json
+import pathlib
+import re
+import sys
+
+directory = pathlib.Path(sys.argv[1])
+assert not (directory / "proof.json").exists(), list(directory.iterdir())
+assert not (directory / "body.bin").exists(), list(directory.iterdir())
+assert (directory / "stdout.json").read_bytes() == b"", list(directory.iterdir())
+assert {path.name for path in directory.iterdir()} == {"stdout.json", "stderr.json"}, list(directory.iterdir())
+stderr_lines = [
+    line for line in (directory / "stderr.json").read_text(encoding="utf-8").splitlines()
+    if line.strip()
+]
+assert stderr_lines, stderr_lines
+assert all(
+    re.fullmatch(r"Container [A-Za-z0-9_.-]+ (Creating|Created)", line.strip())
+    for line in stderr_lines[:-1]
+), stderr_lines
+error = json.loads(stderr_lines[-1])
+assert error == {
+    "ok": False,
+    "error": "observation collection failed before the response head",
+}, error
+PY
+
+custody_compose=(docker compose --profile custody -f docker-compose.yml -f docker-compose.custody.yml)
+observation_volumes+=("$observation_custody_socket_volume")
+docker volume create "$observation_custody_socket_volume" >/dev/null
+observation_volumes+=("$observation_custody_state_volume")
+docker volume create "$observation_custody_state_volume" >/dev/null
+custody_container_id="$("${custody_compose[@]}" run -d --no-deps \
+  --name "$observation_custody" \
+  -v "$observation_custody_socket_volume:/run/serverware-custody" \
+  -v "$observation_custody_state_volume:/var/lib/serverware-custody" \
+  custody-runtime)"
+observation_containers+=("$custody_container_id")
+for _ in $(seq 1 100); do
+  if docker exec "$custody_container_id" test -S /run/serverware-custody/custody.sock 2>/dev/null; then
+    break
+  fi
+  sleep 0.1
+done
+docker exec "$custody_container_id" test -S /run/serverware-custody/custody.sock
+custody_gate_container_id="$("${custody_compose[@]}" run -d --no-deps \
+  --name "$observation_custody_gate" \
+  -v "$observation_custody_socket_volume:/run/serverware-custody:ro" \
+  decision-gate-rs)"
+observation_containers+=("$custody_gate_container_id")
+custody_image_id="$(docker inspect --format '{{.Image}}' "$custody_container_id")"
+custody_gate_image_id="$(docker inspect --format '{{.Image}}' "$custody_gate_container_id")"
+if [[ -z "$custody_image_id" || "$custody_image_id" != "$custody_gate_image_id" ]]; then
+  echo "observation custody and decision gate did not use the same immutable image ID" >&2
+  exit 1
+fi
+wait_for_observation_gate "$observation_custody_gate"
+
+replay_nonce="$(new_observation_nonce)"
+replay_run_id="replay-$observation_container_suffix"
+replay_count_before="$(demo_request_count GET /echo "$replay_run_id")"
+docker compose run --rm --no-deps \
+  --user "$(id -u):$(id -g)" \
+  -v "$TMP_DIR:/proof" \
+  --entrypoint /usr/local/bin/serverware-proof-client \
+  decision-gate-rs \
+  --observation \
+  --nonce "$replay_nonce" \
+  --proxy "$observation_custody_gate:9090" \
+  --url https://demo-upstream:8443/echo \
+  --ca /proof/serverware-ca.pem \
+  --out /proof/response-observation-proofs/replay-first/proof.json \
+  --body-out /proof/response-observation-proofs/replay-first/body.bin \
+  --collector-key /proof/dev-proof-collector-key.pem \
+  --expected-principal-id agent:demo \
+  --proxy-header "X-Serverware-Agent: demo-agent" \
+  --header "X-Serverware-Agent: demo-agent" \
+  --header "User-Agent: serverware-test-run/$replay_run_id" \
+  > "$observation_replay_first_dir/summary.json"
+
+replay_count_after_first="$(demo_request_count GET /echo "$replay_run_id")"
+docker stop "$observation_custody_gate" >/dev/null
+docker restart "$custody_container_id" >/dev/null
+for _ in $(seq 1 100); do
+  if docker exec "$custody_container_id" test -S /run/serverware-custody/custody.sock 2>/dev/null; then
+    break
+  fi
+  sleep 0.1
+done
+docker exec "$custody_container_id" test -S /run/serverware-custody/custody.sock
+docker start "$observation_custody_gate" >/dev/null
+wait_for_observation_gate "$observation_custody_gate"
+
+if docker compose run --rm --no-deps \
+  --user "$(id -u):$(id -g)" \
+  -v "$TMP_DIR:/proof" \
+  --entrypoint /usr/local/bin/serverware-proof-client \
+  decision-gate-rs \
+  --observation \
+  --nonce "$replay_nonce" \
+  --proxy "$observation_custody_gate:9090" \
+  --url https://demo-upstream:8443/echo \
+  --ca /proof/serverware-ca.pem \
+  --out /proof/response-observation-proofs/replay-second/proof.json \
+  --body-out /proof/response-observation-proofs/replay-second/body.bin \
+  --collector-key /proof/dev-proof-collector-key.pem \
+  --expected-principal-id agent:demo \
+  --proxy-header "X-Serverware-Agent: demo-agent" \
+  --header "X-Serverware-Agent: demo-agent" \
+  --header "User-Agent: serverware-test-run/$replay_run_id" \
+  > "$observation_replay_second_dir/stdout.json" \
+  2> "$observation_replay_second_dir/stderr.json"; then
+  echo "custody-backed observation replay unexpectedly produced a verified artifact" >&2
+  exit 1
+fi
+replay_count_after="$(demo_request_count GET /echo "$replay_run_id")"
+python3 - \
+  "$observation_replay_first_dir" \
+  "$observation_replay_second_dir" \
+  "$replay_count_before" \
+  "$replay_count_after_first" \
+  "$replay_count_after" <<'PY'
+import hashlib
+import json
+import pathlib
+import re
+import sys
+
+first = pathlib.Path(sys.argv[1])
+second = pathlib.Path(sys.argv[2])
+first_proof = json.loads((first / "proof.json").read_text(encoding="utf-8"))
+first_body = (first / "body.bin").read_bytes()
+first_summary = json.loads((first / "summary.json").read_text(encoding="utf-8"))
+assert first_summary["ok"] is True and first_summary["observation_verified"] is True, first_summary
+assert first_proof["runtime_proof"]["server_statement"]["upstream_attempt"] == "complete", first_proof
+assert first_proof["response"]["body_digest"] == "sha256:" + hashlib.sha256(first_body).hexdigest(), first_proof
+
+assert not (second / "proof.json").exists(), list(second.iterdir())
+assert not (second / "body.bin").exists(), list(second.iterdir())
+assert (second / "stdout.json").read_bytes() == b"", list(second.iterdir())
+assert {path.name for path in second.iterdir()} == {"stdout.json", "stderr.json"}, list(second.iterdir())
+stderr_lines = [
+    line for line in (second / "stderr.json").read_text(encoding="utf-8").splitlines()
+    if line.strip()
+]
+assert stderr_lines, stderr_lines
+assert all(
+    re.fullmatch(r"Container [A-Za-z0-9_.-]+ (Creating|Created)", line.strip())
+    for line in stderr_lines[:-1]
+), stderr_lines
+error = json.loads(stderr_lines[-1])
+assert error == {
+    "ok": False,
+    "error": "observation request rejected before proof: HTTP 409 response_observation_nonce_rejected",
+}, error
+before, after_first, after_replay = map(int, sys.argv[3:6])
+assert after_first == before + 1, (
+    "first custody-backed observation did not make exactly one upstream attempt",
+    before,
+    after_first,
+)
+assert after_replay == after_first, (
+    "replayed observation nonce reached the upstream after durable custody restart",
+    after_first,
+    after_replay,
+)
+PY
+
+docker compose run --rm --no-deps -T \
+  --user "$(id -u):$(id -g)" \
+  -v "$observation_replay_first_dir:/proof:ro" \
+  -v "$PWD/schemas:/proof-schemas:ro" \
+  --entrypoint python \
+  serverware - \
+  /proof/proof.json \
+  /proof-schemas/response-observation-proof.v1.schema.json <<'PY'
+import json
+import sys
+
+import jsonschema
+
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    proof = json.load(handle)
+with open(sys.argv[2], "r", encoding="utf-8") as handle:
+    schema = json.load(handle)
+jsonschema.validate(proof, schema)
+PY
+
 nonce="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 status="$(curl -sS -o "$TMP_DIR/response-proof-unsafe.json" -w '%{http_code}' \
   --max-time 10 \
-  --proxy http://localhost:9090 \
+  --proxy "$gate_proxy_url" \
   --proxy-header "X-Serverware-Agent: demo-agent" \
   --cacert "$TMP_DIR/serverware-ca.pem" \
   -H "X-Serverware-Agent: demo-agent" \
@@ -689,4 +1348,4 @@ assert status == 400, (status, payload)
 assert payload == {"error": "response_proof_requires_safe_method"}, payload
 PY
 
-printf '%s\n' '{"buffered_response_proof_capture":"pass","ok":true,"streaming_response_proof_capture":"pass","structured_streaming_connect_proofs":6}'
+printf '%s\n' '{"buffered_response_proof_capture":"pass","observation_proof_capture":"pass","observation_proof_cases":8,"ok":true,"streaming_response_proof_capture":"pass","structured_streaming_connect_proofs":6}'

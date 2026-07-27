@@ -762,10 +762,18 @@ def development_compose_services(
     gate = services.get("decision-gate-rs") or {}
     custody_env = custody.get("environment") or {}
     gate_env = gate.get("environment") or {}
+    custody_image = custody.get("image")
+    gate_image = gate.get("image")
     if (
         custody.get("network_mode") != "none"
         or custody.get("user") != "10002:10003"
         or gate.get("user") != "10001:10001"
+        or not isinstance(custody_image, str)
+        or not custody_image
+        or custody_image != gate_image
+        or custody.get("build") is not None
+        or custody.get("pull_policy") != "never"
+        or not isinstance(gate.get("build"), dict)
         or custody_env.get("SERVERWARE_CUSTODY_EXPECTED_CLIENT_UID") != "10001"
         or gate_env.get("SERVERWARE_RESPONSE_PROOF_CUSTODY_SOCKET")
         != "/run/serverware-custody/custody.sock"
@@ -788,6 +796,39 @@ def development_compose_services(
     ):
         raise ValueError("rendered development gate lacks the read-only custody socket mount")
     return CUSTODY_DEV_SERVICES
+
+
+def verify_development_image_identity(
+    services: tuple[str, ...],
+    images: dict[str, Any],
+    containers: dict[str, Any],
+) -> None:
+    if services != CUSTODY_DEV_SERVICES:
+        return
+    custody_image_id = (images.get("custody-runtime") or {}).get("image_id")
+    gate_image_id = (images.get("decision-gate-rs") or {}).get("image_id")
+    if (
+        not isinstance(custody_image_id, str)
+        or not custody_image_id
+        or custody_image_id != gate_image_id
+    ):
+        raise ValueError(
+            "development custody and gate image inventories must resolve to one image ID"
+        )
+    custody_container_image = (containers.get("custody-runtime") or {}).get("image")
+    gate_container_image = (containers.get("decision-gate-rs") or {}).get("image")
+    if (
+        not isinstance(custody_container_image, str)
+        or not custody_container_image
+        or custody_container_image != gate_container_image
+    ):
+        raise ValueError(
+            "running development custody and gate containers must use one image ID"
+        )
+    if custody_container_image != custody_image_id:
+        raise ValueError(
+            "running development custody and gate image ID must match the image inventory"
+        )
 
 
 def production_image_inventory(
@@ -1669,6 +1710,11 @@ def main() -> None:
         )
         containers = container_inventory(
             development_services, compose_command=development_compose_cli
+        )
+        verify_development_image_identity(
+            development_services,
+            images,
+            containers,
         )
         control_attestation = None
         gate_attestation = None

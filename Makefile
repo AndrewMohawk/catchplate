@@ -10,6 +10,8 @@ AGENT_ENROLLMENT_TARGET_PYTHON ?= 311
 AGENT_ENROLLMENT_TARGET_ABI ?= cp311
 PLAYWRIGHT_RUN ?= uv run --no-project --isolated --python 3.11 --with-requirements requirements.lock --with playwright==1.61.0
 TEST_PYTHON_RUN ?= uv run --no-project --isolated --python 3.11 --with-requirements requirements.lock python
+CRYPTO_SCHEMA_PYTHON_RUN ?= uv run --no-project --isolated --python 3.11 --with jsonschema==4.23.0 --with cryptography==48.0.1 python
+CRYPTO_PYTHON_RUN ?= uv run --no-project --isolated --python 3.11 --with cryptography==48.0.1 python
 MITMPROXY_TEST_RUN ?= uv run --no-project --isolated --python 3.11 --with mitmproxy==11.0.2 --with fastapi==0.136.1 --with cbor2==5.9.0 --with jsonschema==4.23.0 --with 'psycopg[binary]==3.2.3' --with python-multipart==0.0.31 --with 'uvicorn[standard]==0.34.0'
 PRODUCTION_READINESS_CLAIMS_ARGS ?=
 PRODUCTION_READINESS_OUT ?= .tmp/production-readiness.json
@@ -634,13 +636,13 @@ verify-production-handoff:
 	python3 scripts/test_production_handoff.py
 
 verify-production-release-input-preflight:
-	uvx --with jsonschema==4.23.0 --with cryptography==48.0.1 python scripts/test_production_release_input_preflight.py
+	$(CRYPTO_SCHEMA_PYTHON_RUN) scripts/test_production_release_input_preflight.py
 
 verify-production-policy-identity:
-	uvx --with jsonschema==4.23.0 --with cryptography==48.0.1 python scripts/test_production_policy_identity.py
+	$(CRYPTO_SCHEMA_PYTHON_RUN) scripts/test_production_policy_identity.py
 
 verify-production-host-preflight:
-	uvx --with jsonschema==4.23.0 --with cryptography==48.0.1 python scripts/test_production_host_preflight.py
+	$(CRYPTO_SCHEMA_PYTHON_RUN) scripts/test_production_host_preflight.py
 
 verify-production-python-runtime:
 	python3 scripts/test_build_production_images.py
@@ -651,8 +653,8 @@ verify-production-launch-assets: verify-production-python-runtime
 	cargo test --locked --manifest-path data-plane/decision-gate-rs/Cargo.toml --bin serverware-production-launcher
 
 verify-launch-authorization:
-	uvx --with jsonschema==4.23.0 --with cryptography==48.0.1 python scripts/test_launch_authorization.py
-	uvx --with cryptography==48.0.1 python scripts/test_launch_authority_service.py
+	$(CRYPTO_SCHEMA_PYTHON_RUN) scripts/test_launch_authorization.py
+	$(CRYPTO_PYTHON_RUN) scripts/test_launch_authority_service.py
 
 verify-production-release-proof: verify-production-launch-assets verify-launch-authorization verify-production-image-builds verify-production-release-input-preflight verify-production-host-preflight verify-production-readiness-runner verify-release-completion verify-custody-response-proof
 	python3 scripts/test_production_release_proof_target.py
@@ -676,7 +678,7 @@ verify-reproducible-builds:
 	python3 scripts/test_reproducible_builds.py
 
 verify-policy-activation-evidence:
-	uvx --with jsonschema==4.23.0 --with cryptography==48.0.1 python scripts/test_policy_activation_evidence.py
+	$(CRYPTO_SCHEMA_PYTHON_RUN) scripts/test_policy_activation_evidence.py
 
 verify-transparency-checkpoint:
 	python3 scripts/test_transparency_checkpoint.py
@@ -798,7 +800,7 @@ verify-production-readiness-runner:
 	$(TEST_PYTHON_RUN) scripts/test_run_production_readiness.py
 
 verify-release-completion:
-	uvx --with jsonschema==4.23.0 --with cryptography==48.0.1 python scripts/test_release_completion.py
+	$(CRYPTO_SCHEMA_PYTHON_RUN) scripts/test_release_completion.py
 
 verify-production-config:
 	python3 scripts/verify_production_readiness.py --mode config

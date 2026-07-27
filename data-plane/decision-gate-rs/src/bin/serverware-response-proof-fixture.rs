@@ -7,6 +7,11 @@ const BUFFERED_REQUEST_VERSION: &str = "serverware.responseProofAttestationReque
 const BUFFERED_REQUEST_KIND: &str = "ServerwareResponseProofAttestationRequest";
 const STREAMING_REQUEST_VERSION: &str = "serverware.streamingResponseProofAttestationRequest/v1";
 const STREAMING_REQUEST_KIND: &str = "ServerwareStreamingResponseProofAttestationRequest";
+const OBSERVATION_REQUEST_VERSION: &str =
+    "serverware.responseObservationProofAttestationRequest/v1";
+const OBSERVATION_REQUEST_KIND: &str = "ServerwareResponseObservationProofAttestationRequest";
+const OBSERVATION_STATEMENT_VERSION: &str = "serverware.responseObservationStatement/v1";
+const OBSERVATION_EXPORTER_LABEL: &str = "EXPORTER-Serverware-Response-Observation-v1";
 const STREAMING_STATEMENT_VERSION: &str = "serverware.streamingResponseStatement/v1";
 const STREAMING_EXPORTER_LABEL: &str = "EXPORTER-Serverware-Proxy-Stream-v1";
 const STREAMING_TRAILERS: [&str; 2] = [
@@ -60,6 +65,29 @@ const STREAMING_CLAIM_FIELDS: [&str; 35] = [
     "tls_exporter_label",
     "tls_channel_binding_sha256",
     "response_signing_key_id",
+];
+
+const OBSERVATION_CLAIM_FIELDS: [&str; 20] = [
+    "server_statement_sha256",
+    "server_statement_api_version",
+    "issued_at_unix",
+    "observation_id",
+    "client_nonce_sha256",
+    "request_aggregate_digest",
+    "response_path",
+    "upstream_attempt",
+    "upstream_observation_digest",
+    "emitted_response_digest",
+    "policy_digest",
+    "runtime_manifest_digest",
+    "data_plane_binary_digest",
+    "release_digest",
+    "server_instance_id",
+    "server_instance_identity_digest",
+    "tls_exporter_label",
+    "tls_channel_binding_sha256",
+    "response_signing_key_id",
+    "observation_source",
 ];
 
 const RELEASE_AUTHORITY_FIELDS: [&str; 13] = [
@@ -335,6 +363,149 @@ fn validate_streaming_request(request: &Value) -> Result<(Value, String, String)
     ))
 }
 
+fn validate_observation_request(request: &Value) -> Result<(Value, String, String), String> {
+    let object = exact_object(
+        request,
+        &[
+            "apiVersion",
+            "kind",
+            "server_statement_sha256",
+            "response_signing_key_id",
+            "response_signing_public_key_pem",
+            "attested_claims",
+        ],
+        "response observation fixture request",
+    )?;
+    if required_string(object, "apiVersion")? != OBSERVATION_REQUEST_VERSION
+        || required_string(object, "kind")? != OBSERVATION_REQUEST_KIND
+    {
+        return Err("response observation fixture request has the wrong type".to_string());
+    }
+    let statement_digest = required_digest(object, "server_statement_sha256")?;
+    let key_id = required_digest(object, "response_signing_key_id")?;
+    if response_key_id(required_string(object, "response_signing_public_key_pem")?)? != key_id {
+        return Err(
+            "response observation signing public key does not match its key ID".to_string(),
+        );
+    }
+    let claims_value = object
+        .get("attested_claims")
+        .ok_or("response observation fixture request is missing attested_claims")?;
+    let claims = exact_object(
+        claims_value,
+        &OBSERVATION_CLAIM_FIELDS,
+        "response observation attested_claims",
+    )?;
+    if required_digest(claims, "server_statement_sha256")? != statement_digest
+        || required_string(claims, "server_statement_api_version")? != OBSERVATION_STATEMENT_VERSION
+        || required_digest(claims, "response_signing_key_id")? != key_id
+    {
+        return Err("response observation claims do not bind the request identity".to_string());
+    }
+    if required_u64(claims, "issued_at_unix")? == 0 {
+        return Err("response observation issued_at_unix must be positive".to_string());
+    }
+    for field in [
+        "observation_id",
+        "client_nonce_sha256",
+        "request_aggregate_digest",
+        "emitted_response_digest",
+        "policy_digest",
+        "runtime_manifest_digest",
+        "data_plane_binary_digest",
+        "release_digest",
+        "server_instance_identity_digest",
+        "tls_channel_binding_sha256",
+    ] {
+        required_digest(claims, field)?;
+    }
+    let upstream_digest = match claims.get("upstream_observation_digest") {
+        Some(Value::Null) => None,
+        Some(Value::String(value)) if is_sha256_digest(value) => Some(value.as_str()),
+        _ => {
+            return Err(
+                "upstream_observation_digest must be null or a lowercase SHA-256 digest"
+                    .to_string(),
+            )
+        }
+    };
+    let response_path = required_string(claims, "response_path")?;
+    let upstream_attempt = required_string(claims, "upstream_attempt")?;
+    if ![
+        "local-reject-no-upstream-attempt",
+        "dispatch-denied-no-upstream-attempt",
+        "authorized-not-attempted",
+        "upstream-attempt-outcome-unknown",
+        "complete-upstream-response-released",
+        "complete-upstream-response-blocked",
+        "post-dispatch-local-failure",
+    ]
+    .contains(&response_path)
+        || ![
+            "not-started",
+            "started-no-response",
+            "headers-observed-body-incomplete",
+            "complete",
+        ]
+        .contains(&upstream_attempt)
+    {
+        return Err("response observation lifecycle claim is invalid".to_string());
+    }
+    match response_path {
+        "local-reject-no-upstream-attempt"
+        | "dispatch-denied-no-upstream-attempt"
+        | "authorized-not-attempted"
+            if upstream_attempt != "not-started" || upstream_digest.is_some() =>
+        {
+            return Err("response observation no-attempt lifecycle is inconsistent".to_string())
+        }
+        "upstream-attempt-outcome-unknown"
+            if !matches!(
+                upstream_attempt,
+                "started-no-response" | "headers-observed-body-incomplete"
+            ) || (upstream_attempt == "started-no-response" && upstream_digest.is_some())
+                || (upstream_attempt == "headers-observed-body-incomplete"
+                    && upstream_digest.is_none()) =>
+        {
+            return Err("response observation unknown lifecycle is inconsistent".to_string())
+        }
+        "complete-upstream-response-released" | "complete-upstream-response-blocked"
+            if upstream_attempt != "complete" || upstream_digest.is_none() =>
+        {
+            return Err("response observation complete lifecycle is inconsistent".to_string())
+        }
+        "post-dispatch-local-failure"
+            if (upstream_attempt == "not-started")
+                || (upstream_attempt == "started-no-response" && upstream_digest.is_some())
+                || (matches!(
+                    upstream_attempt,
+                    "headers-observed-body-incomplete" | "complete"
+                ) && upstream_digest.is_none()) =>
+        {
+            return Err("response observation post-dispatch lifecycle is inconsistent".to_string())
+        }
+        _ => {}
+    }
+    let instance_id = required_string(claims, "server_instance_id")?;
+    if !instance_id.starts_with("spiffe://")
+        || !is_bounded_identity(instance_id)
+        || claims.get("server_instance_identity_digest")
+            != Some(&Value::String(sha256_prefixed(instance_id.as_bytes())))
+    {
+        return Err("response observation server identity binding is invalid".to_string());
+    }
+    if required_string(claims, "tls_exporter_label")? != OBSERVATION_EXPORTER_LABEL
+        || required_string(claims, "observation_source")? != "gate-authored"
+    {
+        return Err("response observation exporter or authority is invalid".to_string());
+    }
+    Ok((
+        claims_value.clone(),
+        statement_digest.to_string(),
+        key_id.to_string(),
+    ))
+}
+
 fn development_attestation(
     claims: Value,
     statement_digest: &str,
@@ -392,6 +563,15 @@ fn run_with_input(input: &[u8]) -> Result<Value, String> {
             &statement_digest,
             &key_id,
             true,
+        ));
+    }
+    if request.get("apiVersion").and_then(Value::as_str) == Some(OBSERVATION_REQUEST_VERSION) {
+        let (claims, statement_digest, key_id) = validate_observation_request(&request)?;
+        return Ok(development_attestation(
+            claims,
+            &statement_digest,
+            &key_id,
+            false,
         ));
     }
     if request.get("apiVersion").and_then(Value::as_str) != Some(BUFFERED_REQUEST_VERSION)
@@ -525,6 +705,41 @@ mod tests {
         })
     }
 
+    fn observation_request() -> Value {
+        let (pem, key_id) = public_key();
+        let instance_id = "spiffe://prod.serverware/decision-gate/test";
+        let claims = json!({
+            "server_statement_sha256":digest(1),
+            "server_statement_api_version":OBSERVATION_STATEMENT_VERSION,
+            "issued_at_unix":1,
+            "observation_id":digest(2),
+            "client_nonce_sha256":digest(3),
+            "request_aggregate_digest":digest(4),
+            "response_path":"local-reject-no-upstream-attempt",
+            "upstream_attempt":"not-started",
+            "upstream_observation_digest":null,
+            "emitted_response_digest":digest(5),
+            "policy_digest":digest(6),
+            "runtime_manifest_digest":digest(7),
+            "data_plane_binary_digest":digest(8),
+            "release_digest":digest(9),
+            "server_instance_id":instance_id,
+            "server_instance_identity_digest":sha256_prefixed(instance_id.as_bytes()),
+            "tls_exporter_label":OBSERVATION_EXPORTER_LABEL,
+            "tls_channel_binding_sha256":digest(10),
+            "response_signing_key_id":key_id,
+            "observation_source":"gate-authored",
+        });
+        json!({
+            "apiVersion":OBSERVATION_REQUEST_VERSION,
+            "kind":OBSERVATION_REQUEST_KIND,
+            "server_statement_sha256":digest(1),
+            "response_signing_key_id":key_id,
+            "response_signing_public_key_pem":pem,
+            "attested_claims":claims,
+        })
+    }
+
     #[test]
     fn buffered_request_behavior_is_preserved() {
         let request = json!({
@@ -578,5 +793,46 @@ mod tests {
         assert!(run_with_input(canonical_json(&wrong_key).as_bytes())
             .unwrap_err()
             .contains("public key does not match"));
+    }
+
+    #[test]
+    fn strict_observation_request_is_attested() {
+        let request = observation_request();
+        let output = run_with_input(canonical_json(&request).as_bytes())
+            .expect("response observation fixture");
+        let verifier = &output["vendor_tee"]["trusted_verifier"]["statement"];
+        assert_eq!(verifier["server_statement_sha256"], digest(1));
+        assert_eq!(verifier["attested_claims"], request["attested_claims"]);
+    }
+
+    #[test]
+    fn observation_request_rejects_unknown_claim_and_identity_substitution() {
+        let mut extra = observation_request();
+        extra["attested_claims"]["unexpected"] = json!(true);
+        assert!(run_with_input(canonical_json(&extra).as_bytes())
+            .unwrap_err()
+            .contains("missing or unexpected fields"));
+
+        let mut wrong_key = observation_request();
+        wrong_key["attested_claims"]["response_signing_key_id"] = digest(30).into();
+        assert!(run_with_input(canonical_json(&wrong_key).as_bytes())
+            .unwrap_err()
+            .contains("bind the request identity"));
+    }
+
+    #[test]
+    fn observation_request_rejects_lifecycle_and_exporter_substitution() {
+        let mut wrong_lifecycle = observation_request();
+        wrong_lifecycle["attested_claims"]["upstream_attempt"] = json!("complete");
+        wrong_lifecycle["attested_claims"]["upstream_observation_digest"] = json!(digest(31));
+        assert!(run_with_input(canonical_json(&wrong_lifecycle).as_bytes())
+            .unwrap_err()
+            .contains("no-attempt lifecycle"));
+
+        let mut wrong_exporter = observation_request();
+        wrong_exporter["attested_claims"]["tls_exporter_label"] = json!("wrong");
+        assert!(run_with_input(canonical_json(&wrong_exporter).as_bytes())
+            .unwrap_err()
+            .contains("exporter or authority"));
     }
 }

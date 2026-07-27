@@ -199,6 +199,49 @@ def assert_production_dependencies() -> None:
         pass
     else:
         raise AssertionError("custody provenance accepted the wrong authenticated client UID")
+    custody_model_mutations = (
+        (
+            "unequal configured image references",
+            lambda candidate: candidate["services"]["custody-runtime"].__setitem__(
+                "image", "serverware-custody:dev"
+            ),
+        ),
+        (
+            "custody build ownership",
+            lambda candidate: candidate["services"]["custody-runtime"].__setitem__(
+                "build",
+                {
+                    "context": str(ROOT),
+                    "dockerfile": "data-plane/decision-gate-rs/Dockerfile",
+                },
+            ),
+        ),
+        (
+            "custody image pulling",
+            lambda candidate: candidate["services"]["custody-runtime"].__setitem__(
+                "pull_policy", "missing"
+            ),
+        ),
+        (
+            "missing gate build ownership",
+            lambda candidate: candidate["services"]["decision-gate-rs"].pop(
+                "build", None
+            ),
+        ),
+    )
+    for description, mutate in custody_model_mutations:
+        candidate = copy.deepcopy(custody_model)
+        mutate(candidate)
+        try:
+            generate_release_provenance.development_compose_services(
+                candidate,
+                ["docker-compose.yml", "docker-compose.custody.yml"],
+                ["custody"],
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"custody provenance accepted {description}")
     if services_mounting_source(dev_model, "serverware-response-signing-private") != {"serverware"}:
         raise AssertionError("development response-signing private volume must be mounted only by the control plane")
     if services_mounting_source(dev_model, "serverware-custody-state") != {"custody-runtime"}:
@@ -443,6 +486,60 @@ def assert_production_dependencies() -> None:
             raise AssertionError(f"production decision gate is missing {name}")
     if int(gate_environment["SERVERWARE_DECISION_GATE_PROXY_WORKERS"]) > 24:
         raise AssertionError("production decision-gate worker count exceeds the 512 MiB memory safety bound")
+
+
+def assert_development_image_identity_validation() -> None:
+    shared_image_id = "sha256:" + "1" * 64
+    other_image_id = "sha256:" + "2" * 64
+    images = {
+        "custody-runtime": {"image_id": shared_image_id},
+        "decision-gate-rs": {"image_id": shared_image_id},
+    }
+    containers = {
+        "custody-runtime": {"image": shared_image_id},
+        "decision-gate-rs": {"image": shared_image_id},
+    }
+    generate_release_provenance.verify_development_image_identity(
+        generate_release_provenance.CUSTODY_DEV_SERVICES,
+        images,
+        containers,
+    )
+
+    mutations = (
+        (
+            "unequal image inventory IDs",
+            lambda candidate_images, _candidate_containers: candidate_images[
+                "decision-gate-rs"
+            ].__setitem__("image_id", other_image_id),
+        ),
+        (
+            "unequal running container image IDs",
+            lambda _candidate_images, candidate_containers: candidate_containers[
+                "decision-gate-rs"
+            ].__setitem__("image", other_image_id),
+        ),
+        (
+            "running image IDs that differ from inventory",
+            lambda _candidate_images, candidate_containers: [
+                candidate_containers[service].__setitem__("image", other_image_id)
+                for service in ("custody-runtime", "decision-gate-rs")
+            ],
+        ),
+    )
+    for description, mutate in mutations:
+        candidate_images = copy.deepcopy(images)
+        candidate_containers = copy.deepcopy(containers)
+        mutate(candidate_images, candidate_containers)
+        try:
+            generate_release_provenance.verify_development_image_identity(
+                generate_release_provenance.CUSTODY_DEV_SERVICES,
+                candidate_images,
+                candidate_containers,
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"development provenance accepted {description}")
 
 
 def assert_reproducible_rust_binary_config() -> None:
@@ -1109,6 +1206,7 @@ def assert_production_reproducibility_binds_image_outputs() -> None:
 def main() -> None:
     assert_dockerignore()
     assert_production_dependencies()
+    assert_development_image_identity_validation()
     assert_reproducible_rust_binary_config()
     assert_custody_ledger_image_seed()
     assert_gate_response_context_publish_wait()

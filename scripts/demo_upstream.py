@@ -25,6 +25,7 @@ KEY_PATH = CERT_DIR / "key.pem"
 
 app = FastAPI(title="Serverware demo upstream")
 _REQUEST_COUNTS: dict[tuple[str, str], int] = {}
+_REQUEST_COUNTS_BY_RUN: dict[tuple[str, str, str], int] = {}
 _STRUCTURED_PROOF_STREAMS: dict[str, tuple[str, bytes]] = {
     "jsonl": (
         "application/x-ndjson",
@@ -64,6 +65,15 @@ _STRUCTURED_PROOF_STREAMS: dict[str, tuple[str, bytes]] = {
 def _record_request(request: Request) -> None:
     key = (request.method.upper(), request.url.path)
     _REQUEST_COUNTS[key] = _REQUEST_COUNTS.get(key, 0) + 1
+    run_id = request.headers.get("x-serverware-test-run")
+    if run_id is None:
+        user_agent = request.headers.get("user-agent", "")
+        prefix = "serverware-test-run/"
+        if user_agent.startswith(prefix):
+            run_id = user_agent[len(prefix) :]
+    if run_id and len(run_id) <= 128 and run_id.isascii():
+        run_key = (*key, run_id)
+        _REQUEST_COUNTS_BY_RUN[run_key] = _REQUEST_COUNTS_BY_RUN.get(run_key, 0) + 1
 
 
 def _epoch_millis(value: datetime) -> str:
@@ -672,9 +682,14 @@ async def x_tweets(request: Request) -> dict[str, Any]:
 
 
 @app.get("/_test/request-count")
-async def request_count(method: str, path: str) -> dict[str, Any]:
+async def request_count(method: str, path: str, run_id: str | None = None) -> dict[str, Any]:
     key = (method.upper(), path)
-    return {"method": key[0], "path": key[1], "count": _REQUEST_COUNTS.get(key, 0)}
+    count = (
+        _REQUEST_COUNTS.get(key, 0)
+        if run_id is None
+        else _REQUEST_COUNTS_BY_RUN.get((*key, run_id), 0)
+    )
+    return {"method": key[0], "path": key[1], "runId": run_id, "count": count}
 
 
 @app.api_route("/npm/{package}", methods=["PUT", "POST"])

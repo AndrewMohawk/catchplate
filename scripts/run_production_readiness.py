@@ -49,13 +49,22 @@ PROOF_COLLECTOR_COMMAND_SETTING = "SERVERWARE_PROXY_PROOF_COLLECTOR_COMMAND"
 PROXY_PROOF_CONTRACT_ENV = "SERVERWARE_PROXY_PROOF_CONTRACT"
 PROXY_STREAM_BODY_FILE_ENV = "SERVERWARE_PROXY_STREAM_BODY_FILE"
 PROXY_PROOF_MAX_STREAM_BYTES_ENV = "SERVERWARE_PROXY_PROOF_MAX_STREAM_BYTES"
+PROXY_OBSERVATION_BODY_FILE_ENV = "SERVERWARE_PROXY_OBSERVATION_BODY_FILE"
+PROXY_PROOF_MAX_OBSERVATION_BODY_BYTES_ENV = (
+    "SERVERWARE_PROXY_PROOF_MAX_OBSERVATION_BODY_BYTES"
+)
 PROXY_EXPECTED_OPERATION_CONTEXT_DIGEST_ENV = (
     "SERVERWARE_PROXY_EXPECTED_OPERATION_CONTEXT_DIGEST"
 )
 BUFFERED_PROXY_PROOF_CONTRACT = "buffered-v3"
+OBSERVATION_PROXY_PROOF_CONTRACT = "observation-v1"
 STREAMING_PROXY_PROOF_CONTRACT = "streaming-v1"
 PROXY_PROOF_CONTRACTS = frozenset(
-    (BUFFERED_PROXY_PROOF_CONTRACT, STREAMING_PROXY_PROOF_CONTRACT)
+    (
+        BUFFERED_PROXY_PROOF_CONTRACT,
+        OBSERVATION_PROXY_PROOF_CONTRACT,
+        STREAMING_PROXY_PROOF_CONTRACT,
+    )
 )
 PRODUCTION_DOCKER_EXECUTABLE_ENV = "SERVERWARE_DOCKER_EXECUTABLE"
 DOCKER_COMPOSE_PLUGIN_EXECUTABLE_ENV = "SERVERWARE_DOCKER_COMPOSE_PLUGIN_EXECUTABLE"
@@ -202,6 +211,9 @@ PROXY_DIGEST_ENV_SETTINGS = {
 COMPLETION_P99_LIMIT_ENV = "SERVERWARE_COMPLETION_P99_LIMIT_MS"
 MAX_COMPLETION_PROOF_BYTES = 64 * 1024 * 1024
 MAX_PROXY_STREAM_BODY_BYTES = 64 * 1024 * 1024
+MAX_PROXY_OBSERVATION_BODY_BYTES = 16 * 1024 * 1024
+MAX_PROXY_TRUST_INPUT_BYTES = 4 * 1024 * 1024
+RESPONSE_OBSERVATION_NONCE_LIFETIME_SECONDS = 300
 MAX_EXECUTABLE_BYTES = 256 * 1024 * 1024
 MAX_PRODUCTION_ENV_BYTES = 8 * 1024 * 1024
 MAX_BOOTSTRAP_RECEIPT_BYTES = 4 * 1024 * 1024
@@ -1135,20 +1147,167 @@ def sha256_prefixed_file(path: Path) -> str:
     return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def normalized_file_path(
+    path: str | Path,
+    label: str,
+    *,
+    require_absolute: bool,
+) -> Path:
+    value = os.fspath(path)
+    if (
+        not value
+        or "\x00" in value
+        or (require_absolute and not os.path.isabs(value))
+        or os.path.normpath(value) != value
+        or str(Path(value)) != value
+        or Path(value).name in {"", ".", ".."}
+    ):
+        requirement = "normalized and absolute" if require_absolute else "normalized"
+        raise ValueError(f"{label} path must be {requirement}")
+    return Path(value)
+
+
+def require_secure_ancestor(metadata: os.stat_result, path: Path, label: str) -> None:
+    if not stat.S_ISDIR(metadata.st_mode):
+        raise ValueError(f"{label} ancestors must be non-symlink directories: {path}")
+    if metadata.st_uid not in {0, os.geteuid()}:
+        raise ValueError(f"{label} ancestor must be owned by root or the readiness runner: {path}")
+    if stat.S_IMODE(metadata.st_mode) & 0o022:
+        raise ValueError(f"{label} ancestor must not be writable by group/other: {path}")
+
+
+def open_secure_parent_descriptor(
+    path: Path,
+    label: str,
+    *,
+    require_absolute: bool = True,
+) -> tuple[Path, int, os.stat_result]:
+    path = normalized_file_path(path, label, require_absolute=require_absolute)
+    if not all(
+        hasattr(os, flag)
+        for flag in ("O_DIRECTORY", "O_NOFOLLOW")
+    ):
+        raise ValueError(f"{label} ancestors cannot be opened safely on this platform")
+    flags = (
+        os.O_RDONLY
+        | os.O_DIRECTORY
+        | os.O_NOFOLLOW
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+    try:
+        descriptor = os.open(path.anchor or ".", flags)
+    except OSError as exc:
+        raise ValueError(f"{label} path anchor could not be opened safely") from exc
+    current = Path(path.anchor or ".")
+    try:
+        metadata = os.fstat(descriptor)
+        require_secure_ancestor(metadata, current, label)
+        start = 1 if path.is_absolute() else 0
+        for component in path.parts[start:-1]:
+            current /= component
+            try:
+                child = os.open(component, flags, dir_fd=descriptor)
+            except OSError as exc:
+                raise ValueError(
+                    f"{label} ancestor could not be opened without following symlinks: {current}"
+                ) from exc
+            os.close(descriptor)
+            descriptor = child
+            metadata = os.fstat(descriptor)
+            require_secure_ancestor(metadata, current, label)
+        return path, descriptor, metadata
+    except Exception:
+        os.close(descriptor)
+        raise
+
+
 def validate_secure_ancestors(path: Path, label: str) -> None:
-    if not path.is_absolute():
-        raise ValueError(f"{label} path must be absolute")
-    current = Path(path.anchor)
-    for component in path.parts[1:-1]:
-        current /= component
+    _, descriptor, _ = open_secure_parent_descriptor(path, label)
+    os.close(descriptor)
+
+
+def validate_proxy_artifact_path_separation(
+    output_paths: dict[str, str],
+    input_paths: dict[str, str],
+) -> None:
+    seen_locations: dict[tuple[int, int, str], tuple[str, bool]] = {}
+    seen_inodes: dict[tuple[int, int], tuple[str, bool]] = {}
+    for label, value, is_output in (
+        *((label, value, True) for label, value in output_paths.items()),
+        *((label, value, False) for label, value in input_paths.items()),
+    ):
+        path = normalized_file_path(value, label, require_absolute=True)
         try:
-            metadata = current.lstat()
+            _, parent_descriptor, parent_metadata = open_secure_parent_descriptor(path, label)
+        except ValueError:
+            raise
         except OSError as exc:
-            raise ValueError(f"{label} ancestor is unavailable: {current}") from exc
-        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
-            raise ValueError(f"{label} ancestors must be non-symlink directories: {current}")
-        if stat.S_IMODE(metadata.st_mode) & 0o022:
-            raise ValueError(f"{label} ancestor must not be writable by group/other: {current}")
+            raise ValueError(f"{label} parent directory is unavailable: {path.parent}") from exc
+        try:
+            location = (parent_metadata.st_dev, parent_metadata.st_ino, path.name)
+            previous_location = seen_locations.get(location)
+            if previous_location is not None and (is_output or previous_location[1]):
+                raise ValueError(
+                    f"{label} aliases {previous_location[0]}; proxy outputs and collector inputs "
+                    "must use different filesystem locations"
+                )
+            seen_locations[location] = (label, is_output)
+
+            metadata: os.stat_result | None = None
+            if is_output:
+                flags = (
+                    os.O_RDONLY
+                    | os.O_NOFOLLOW
+                    | getattr(os, "O_CLOEXEC", 0)
+                    | getattr(os, "O_NONBLOCK", 0)
+                )
+                try:
+                    descriptor = os.open(path.name, flags, dir_fd=parent_descriptor)
+                except FileNotFoundError:
+                    descriptor = -1
+                except OSError as exc:
+                    raise ValueError(
+                        f"{label} could not be opened without following symlinks: {path}"
+                    ) from exc
+                if descriptor >= 0:
+                    try:
+                        metadata = os.fstat(descriptor)
+                    finally:
+                        os.close(descriptor)
+            else:
+                try:
+                    _, metadata = read_regular_file_once(
+                        path,
+                        label,
+                        max_bytes=MAX_PROXY_TRUST_INPUT_BYTES,
+                        owner_only=(label == "proxy collector private key"),
+                    )
+                except FileNotFoundError as exc:
+                    raise ValueError(f"{label} is unavailable: {path}") from exc
+                if metadata.st_uid not in {0, os.geteuid()}:
+                    raise ValueError(
+                        f"{label} must be owned by root or the readiness runner: {path}"
+                    )
+                if stat.S_IMODE(metadata.st_mode) & 0o022:
+                    raise ValueError(f"{label} must not be writable by group/other: {path}")
+
+            if metadata is None:
+                continue
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+                raise ValueError(
+                    f"{label} must be a single-link regular file when it exists: {path}"
+                )
+        finally:
+            os.close(parent_descriptor)
+
+        inode = (metadata.st_dev, metadata.st_ino)
+        previous_inode = seen_inodes.get(inode)
+        if previous_inode is not None and (is_output or previous_inode[1]):
+            raise ValueError(
+                f"{label} aliases {previous_inode[0]}; proxy outputs and collector inputs "
+                "must not share an inode"
+            )
+        seen_inodes[inode] = (label, is_output)
 
 
 def read_fd_bytes(
@@ -1623,9 +1782,15 @@ def read_regular_file_once(
     max_bytes: int,
     owner_only: bool = False,
     executable: bool = False,
+    allow_empty: bool = False,
 ) -> tuple[bytes, os.stat_result]:
     if not hasattr(os, "O_NOFOLLOW"):
         raise ValueError(f"{label} cannot be opened safely on this platform")
+    path, parent_descriptor, parent_metadata = open_secure_parent_descriptor(
+        path,
+        label,
+        require_absolute=False,
+    )
     flags = (
         os.O_RDONLY
         | os.O_NOFOLLOW
@@ -1633,28 +1798,66 @@ def read_regular_file_once(
         | getattr(os, "O_NONBLOCK", 0)
     )
     try:
-        descriptor = os.open(path, flags)
+        descriptor = os.open(path.name, flags, dir_fd=parent_descriptor)
     except FileNotFoundError:
+        os.close(parent_descriptor)
         raise
     except OSError as exc:
+        os.close(parent_descriptor)
         raise ValueError(f"{label} could not be opened without following symlinks: {path}") from exc
     try:
         opened = os.fstat(descriptor)
         if not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1:
             raise ValueError(f"{label} must be a single-link regular file: {path}")
-        if opened.st_size <= 0 or opened.st_size > max_bytes:
-            raise ValueError(f"{label} must contain between 1 and {max_bytes} bytes: {path}")
+        if opened.st_size > max_bytes or (opened.st_size == 0 and not allow_empty):
+            minimum = 0 if allow_empty else 1
+            raise ValueError(
+                f"{label} must contain between {minimum} and {max_bytes} bytes: {path}"
+            )
         if owner_only:
-            if stat.S_IMODE(opened.st_mode) != 0o600:
-                raise ValueError(f"{label} must use owner-only mode 0600: {path}")
-            if opened.st_uid != os.geteuid():
-                raise ValueError(f"{label} must be owned by the readiness runner user: {path}")
+            if stat.S_IMODE(opened.st_mode) not in {0o400, 0o600}:
+                raise ValueError(f"{label} must use owner-only mode 0400 or 0600: {path}")
+            if opened.st_uid not in {0, os.geteuid()}:
+                raise ValueError(f"{label} must be owned by root or the readiness runner: {path}")
         if executable and not opened.st_mode & stat.S_IXUSR:
             raise ValueError(f"{label} must be executable by its owner: {path}")
         data = read_fd_bytes(descriptor, opened, f"{label}: {path}", max_bytes=max_bytes)
+        try:
+            current_parent_descriptor_path, current_parent_descriptor, current_parent = (
+                open_secure_parent_descriptor(path, label, require_absolute=False)
+            )
+            del current_parent_descriptor_path
+        except ValueError as exc:
+            raise ValueError(f"{label} path changed while being read: {path}") from exc
+        try:
+            if (
+                current_parent.st_dev,
+                current_parent.st_ino,
+            ) != (
+                parent_metadata.st_dev,
+                parent_metadata.st_ino,
+            ):
+                raise ValueError(f"{label} path changed while being read: {path}")
+            try:
+                current_descriptor = os.open(
+                    path.name,
+                    flags,
+                    dir_fd=current_parent_descriptor,
+                )
+            except OSError as exc:
+                raise ValueError(f"{label} path changed while being read: {path}") from exc
+            try:
+                current = os.fstat(current_descriptor)
+            finally:
+                os.close(current_descriptor)
+            if (current.st_dev, current.st_ino) != (opened.st_dev, opened.st_ino):
+                raise ValueError(f"{label} path changed while being read: {path}")
+        finally:
+            os.close(current_parent_descriptor)
         return data, opened
     finally:
         os.close(descriptor)
+        os.close(parent_descriptor)
 
 
 def remeasure_executable(path: Path, expected_digest: str, label: str) -> str:
@@ -1970,6 +2173,7 @@ def verify_completion_output(path: Path, expected: argparse.Namespace | None = N
     artifacts = proof.get("artifacts")
     if not isinstance(artifacts, dict) or not artifacts:
         raise ValueError("completion proof artifact contract is empty")
+    reopened_artifacts: dict[str, dict[str, Any]] = {}
     for label, artifact in artifacts.items():
         if (
             not isinstance(label, str)
@@ -1979,14 +2183,35 @@ def verify_completion_output(path: Path, expected: argparse.Namespace | None = N
             or SHA256_RE.fullmatch(str(artifact.get("sha256"))) is None
         ):
             raise ValueError("completion proof artifact contract is invalid")
+        artifact_max_bytes = MAX_COMPLETION_PROOF_BYTES
+        if label == "proxy_stream_body":
+            artifact_max_bytes = min(
+                MAX_PROXY_STREAM_BODY_BYTES,
+                getattr(expected, "proxy_max_stream_bytes", MAX_PROXY_STREAM_BODY_BYTES),
+            )
+        elif label == "proxy_observation_body":
+            artifact_max_bytes = min(
+                MAX_PROXY_OBSERVATION_BODY_BYTES,
+                getattr(
+                    expected,
+                    "proxy_max_observation_body_bytes",
+                    MAX_PROXY_OBSERVATION_BODY_BYTES,
+                ),
+            )
         artifact_bytes, _ = read_regular_file_once(
             Path(artifact["path"]),
             f"completion proof artifact {label}",
-            max_bytes=MAX_COMPLETION_PROOF_BYTES,
+            max_bytes=artifact_max_bytes,
+            allow_empty=label
+            in {"proxy_stream_body", "proxy_observation_body"},
         )
         artifact_digest = "sha256:" + hashlib.sha256(artifact_bytes).hexdigest()
         if not hmac.compare_digest(artifact_digest, artifact["sha256"]):
             raise ValueError(f"completion proof artifact {label} digest does not match current bytes")
+        reopened_artifacts[label] = {
+            "sha256": artifact_digest,
+            "bytes": len(artifact_bytes),
+        }
     binding = proof.get("production_env_binding")
     proxy = proof.get("production_proxy_response_proof")
     if not isinstance(binding, dict) or not isinstance(proxy, dict):
@@ -2038,32 +2263,80 @@ def verify_completion_output(path: Path, expected: argparse.Namespace | None = N
                 raise ValueError(
                     "completion proof production env binding omitted streaming proof settings"
                 )
+            if any(
+                binding.get(field) is not None
+                for field in (
+                    "proxy_observation_body",
+                    "proxy_max_observation_body_bytes",
+                )
+            ):
+                raise ValueError(
+                    "streaming completion proof retained observation-only env settings"
+                )
+        elif expected_proof_contract == OBSERVATION_PROXY_PROOF_CONTRACT:
+            if (
+                binding.get("proxy_observation_body")
+                != str(expected.proxy_observation_body)
+                or binding.get("proxy_max_observation_body_bytes")
+                != expected.proxy_max_observation_body_bytes
+            ):
+                raise ValueError(
+                    "completion proof production env binding omitted observation proof settings"
+                )
+            if any(
+                binding.get(field) is not None
+                for field in (
+                    "proxy_stream_body",
+                    "proxy_max_stream_bytes",
+                    "proxy_operation_context_digest",
+                )
+            ):
+                raise ValueError(
+                    "observation completion proof retained streaming-only env settings"
+                )
         elif any(
             binding.get(field) is not None
             for field in (
                 "proxy_stream_body",
                 "proxy_max_stream_bytes",
                 "proxy_operation_context_digest",
+                "proxy_observation_body",
+                "proxy_max_observation_body_bytes",
             )
         ):
-            raise ValueError("buffered completion proof retained streaming-only env settings")
+            raise ValueError(
+                "buffered completion proof retained body-artifact env settings"
+            )
         if proxy.get("server_instance_id") != expected.proxy_server_instance_id:
             raise ValueError("completion proof proxy server instance mismatch")
         if proxy.get("principal_id") != expected.proxy_principal_id:
             raise ValueError("completion proof proxy principal mismatch")
-        for field in (
-            "vendor_quote_verified",
-            "collector_signature_verified",
-            "server_statement_signature_verified",
-            "fresh_client_nonce_bound",
-            "authenticated_external_client_capture_bound",
-            "release_authority_bound",
-            "embedded_control_plane_authorization_receipt_bound",
-            "signed_policy_route_bound",
-            "signed_policy_response_headers_bound",
-            "upstream_response_bound",
-            "release_artifacts_bound",
-        ):
+        required_proxy_bindings = (
+            (
+                "vendor_quote_verified",
+                "collector_signature_verified",
+                "server_statement_signature_verified",
+                "terminal_runtime_proof_bound",
+                "strict_collector_capture_bound",
+                "signed_policy_route_bound",
+                "release_artifacts_bound",
+            )
+            if expected_proof_contract == OBSERVATION_PROXY_PROOF_CONTRACT
+            else (
+                "vendor_quote_verified",
+                "collector_signature_verified",
+                "server_statement_signature_verified",
+                "fresh_client_nonce_bound",
+                "authenticated_external_client_capture_bound",
+                "release_authority_bound",
+                "embedded_control_plane_authorization_receipt_bound",
+                "signed_policy_route_bound",
+                "signed_policy_response_headers_bound",
+                "upstream_response_bound",
+                "release_artifacts_bound",
+            )
+        )
+        for field in required_proxy_bindings:
             if proxy.get(field) is not True:
                 raise ValueError(f"completion proof proxy contract omitted {field}")
         if binding.get("verification_mode") != verification_mode:
@@ -2113,6 +2386,10 @@ def verify_completion_output(path: Path, expected: argparse.Namespace | None = N
         }
         if expected_proof_contract == STREAMING_PROXY_PROOF_CONTRACT:
             expected_artifact_paths["proxy_stream_body"] = expected.proxy_stream_body
+        elif expected_proof_contract == OBSERVATION_PROXY_PROOF_CONTRACT:
+            expected_artifact_paths["proxy_observation_body"] = (
+                expected.proxy_observation_body
+            )
         if expected.hardware_assurance:
             expected_artifact_paths["hardware_assurance"] = expected.hardware_assurance
             expected_artifact_paths["hardware_assurance_trusted_public_key"] = (
@@ -2482,17 +2759,22 @@ def verify_completion_output(path: Path, expected: argparse.Namespace | None = N
         )
         if proxy.get("client_nonce_sha256") != expected_nonce_digest:
             raise ValueError("completion proof proxy nonce does not bind the current runner challenge")
-        expected_channel_binding = {
-            "type": "tls-exporter",
-            "value": expected.proxy_tls_channel_binding,
-        }
-        if expected_proof_contract == STREAMING_PROXY_PROOF_CONTRACT:
-            expected_channel_binding["exporter_label"] = (
-                "EXPORTER-Serverware-Proxy-Stream-v1"
-            )
-        expected_channel_digest = "sha256:" + hashlib.sha256(
-            canonical_json(expected_channel_binding).encode("utf-8")
-        ).hexdigest()
+        if expected_proof_contract == OBSERVATION_PROXY_PROOF_CONTRACT:
+            expected_channel_digest = "sha256:" + hashlib.sha256(
+                expected.proxy_tls_channel_binding.encode("utf-8")
+            ).hexdigest()
+        else:
+            expected_channel_binding = {
+                "type": "tls-exporter",
+                "value": expected.proxy_tls_channel_binding,
+            }
+            if expected_proof_contract == STREAMING_PROXY_PROOF_CONTRACT:
+                expected_channel_binding["exporter_label"] = (
+                    "EXPORTER-Serverware-Proxy-Stream-v1"
+                )
+            expected_channel_digest = "sha256:" + hashlib.sha256(
+                canonical_json(expected_channel_binding).encode("utf-8")
+            ).hexdigest()
         if proxy.get("tls_channel_binding_sha256") != expected_channel_digest:
             raise ValueError("completion proof TLS channel binding does not match the current collector result")
         collector_proof_digest = getattr(expected, "collected_proxy_proof_sha256", None)
@@ -2501,6 +2783,7 @@ def verify_completion_output(path: Path, expected: argparse.Namespace | None = N
             raise ValueError("completion proof does not bind the exact collector proof bytes")
         if expected_proof_contract == STREAMING_PROXY_PROOF_CONTRACT:
             stream_body_artifact = artifacts.get("proxy_stream_body")
+            reopened_stream_body = reopened_artifacts.get("proxy_stream_body")
             retained_stream_digest = getattr(
                 expected, "collected_proxy_stream_body_sha256", None
             )
@@ -2509,14 +2792,59 @@ def verify_completion_output(path: Path, expected: argparse.Namespace | None = N
             )
             if (
                 not isinstance(stream_body_artifact, dict)
+                or not isinstance(reopened_stream_body, dict)
                 or retained_stream_digest is None
                 or stream_body_artifact.get("sha256") != retained_stream_digest
+                or reopened_stream_body.get("sha256") != retained_stream_digest
+                or reopened_stream_body.get("bytes") != retained_stream_bytes
                 or proxy.get("streamed_body_artifact_sha256")
                 != retained_stream_digest
                 or proxy.get("emitted_body_digest") != retained_stream_digest
                 or proxy.get("emitted_body_bytes") != retained_stream_bytes
             ):
                 raise ValueError("completion proof does not bind the exact collected streaming body")
+        elif expected_proof_contract == OBSERVATION_PROXY_PROOF_CONTRACT:
+            observation_body_artifact = artifacts.get("proxy_observation_body")
+            reopened_observation_body = reopened_artifacts.get(
+                "proxy_observation_body"
+            )
+            observation_body_binding = proxy.get("observed_body_artifact")
+            retained_observation_digest = getattr(
+                expected, "collected_proxy_observation_body_sha256", None
+            )
+            retained_observation_bytes = getattr(
+                expected, "collected_proxy_observation_body_bytes", None
+            )
+            if (
+                not isinstance(observation_body_artifact, dict)
+                or not isinstance(reopened_observation_body, dict)
+                or retained_observation_digest is None
+                or observation_body_artifact.get("sha256")
+                != retained_observation_digest
+                or reopened_observation_body.get("sha256")
+                != retained_observation_digest
+                or reopened_observation_body.get("bytes")
+                != retained_observation_bytes
+                or proxy.get("observed_body_artifact_sha256")
+                != retained_observation_digest
+                or proxy.get("observed_body_artifact_bytes")
+                != retained_observation_bytes
+                or proxy.get("emitted_body_digest")
+                != retained_observation_digest
+                or proxy.get("emitted_body_bytes")
+                != retained_observation_bytes
+                or observation_body_binding
+                != {
+                    "path": str(Path(expected.proxy_observation_body)),
+                    "sha256": retained_observation_digest,
+                    "bytes": retained_observation_bytes,
+                    "max_bytes": expected.proxy_max_observation_body_bytes,
+                }
+                or proxy.get("observed_body_artifact_bound") is not True
+            ):
+                raise ValueError(
+                    "completion proof does not bind the exact collected observation body"
+                )
         collector_contract = getattr(expected, "collector_proof_contract", None)
         if is_final:
             if not isinstance(collector_contract, dict):
@@ -2534,6 +2862,17 @@ def verify_completion_output(path: Path, expected: argparse.Namespace | None = N
             if expected_proof_contract == STREAMING_PROXY_PROOF_CONTRACT:
                 for field in (
                     "streamed_body_artifact_sha256",
+                    "emitted_body_digest",
+                    "emitted_body_bytes",
+                ):
+                    if proxy.get(field) != collector_contract.get(field):
+                        raise ValueError(
+                            f"completion proof {field} differs from the current collector proof"
+                        )
+            elif expected_proof_contract == OBSERVATION_PROXY_PROOF_CONTRACT:
+                for field in (
+                    "observed_body_artifact_sha256",
+                    "observed_body_artifact_bytes",
                     "emitted_body_digest",
                     "emitted_body_bytes",
                 ):
@@ -2682,8 +3021,13 @@ def validate_proxy_proof_policy_consistency(
         )
 
 
-def generated_client_nonce() -> str:
-    return base64.urlsafe_b64encode(secrets.token_bytes(32)).rstrip(b"=").decode("ascii")
+def generated_client_nonce(proof_contract: str) -> str:
+    if proof_contract == OBSERVATION_PROXY_PROOF_CONTRACT:
+        expires_at = int(time.time()) + RESPONSE_OBSERVATION_NONCE_LIFETIME_SECONDS
+        nonce = expires_at.to_bytes(4, "big") + secrets.token_bytes(28)
+    else:
+        nonce = secrets.token_bytes(32)
+    return base64.urlsafe_b64encode(nonce).rstrip(b"=").decode("ascii")
 
 
 def collector_command(args: argparse.Namespace) -> dict[str, Any]:
@@ -2724,6 +3068,16 @@ def collector_command(args: argparse.Namespace) -> dict[str, Any]:
                 args.proxy_stream_body,
                 "--max-stream-bytes",
                 str(args.proxy_max_stream_bytes),
+            ]
+        )
+    elif args.proxy_proof_contract == OBSERVATION_PROXY_PROOF_CONTRACT:
+        argv.extend(
+            [
+                "--observation",
+                "--body-out",
+                args.proxy_observation_body,
+                "--max-observation-body-bytes",
+                str(args.proxy_max_observation_body_bytes),
             ]
         )
     return {"label": "collect-production-proxy-response-proof", "argv": argv}
@@ -2860,6 +3214,15 @@ def completion_command(args: argparse.Namespace) -> dict[str, Any]:
                 str(args.proxy_max_stream_bytes),
                 "--proxy-operation-context-digest",
                 args.proxy_operation_context_digest,
+            ]
+        )
+    elif args.proxy_proof_contract == OBSERVATION_PROXY_PROOF_CONTRACT:
+        command["argv"].extend(
+            [
+                "--proxy-observation-body",
+                args.proxy_observation_body,
+                "--proxy-max-observation-body-bytes",
+                str(args.proxy_max_observation_body_bytes),
             ]
         )
     if args.verification_mode == "final":
@@ -3067,17 +3430,148 @@ def write_private_json(path: Path, value: dict[str, Any]) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def parse_observation_collector_artifact(
+    proof_bytes: bytes,
+    summary: dict[str, Any],
+    args: argparse.Namespace,
+) -> dict[str, Any]:
+    try:
+        document = json.loads(proof_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("production response observation proof is not valid JSON") from exc
+    if not isinstance(document, dict) or set(document) != {
+        "apiVersion",
+        "kind",
+        "captured_at_unix",
+        "request",
+        "response",
+        "runtime_proof",
+        "collector",
+    }:
+        raise ValueError(
+            "production response observation proof top-level shape is invalid"
+        )
+    if (
+        document.get("apiVersion") != "serverware.responseObservationProof/v1"
+        or document.get("kind") != "ServerwareResponseObservationProof"
+    ):
+        raise ValueError("production response observation proof has the wrong type")
+    request = document.get("request")
+    response = document.get("response")
+    runtime = document.get("runtime_proof")
+    statement = runtime.get("server_statement") if isinstance(runtime, dict) else None
+    statement_request = statement.get("request") if isinstance(statement, dict) else None
+    emitted_response = (
+        statement.get("emitted_response") if isinstance(statement, dict) else None
+    )
+    tls_channel_binding = (
+        statement.get("tls_channel_binding") if isinstance(statement, dict) else None
+    )
+    server_instance = (
+        statement.get("server_instance") if isinstance(statement, dict) else None
+    )
+    if not all(
+        isinstance(value, dict)
+        for value in (
+            request,
+            response,
+            runtime,
+            statement,
+            statement_request,
+            emitted_response,
+            tls_channel_binding,
+            server_instance,
+        )
+    ):
+        raise ValueError(
+            "production response observation proof runtime statement shape is invalid"
+        )
+    for field, actual, expected in (
+        ("request aggregate", request.get("aggregate_digest"), args.proxy_client_request_digest),
+        (
+            "signed request aggregate",
+            statement_request.get("aggregate_digest"),
+            args.proxy_client_request_digest,
+        ),
+        ("dispatched request", statement.get("request_digest"), args.proxy_request_digest),
+        ("operation", statement.get("operation_digest"), args.proxy_operation_digest),
+    ):
+        if (
+            not isinstance(actual, str)
+            or SHA256_RE.fullmatch(actual) is None
+            or not hmac.compare_digest(actual, expected)
+        ):
+            raise ValueError(
+                f"production response observation proof {field} digest does not match the independent pin"
+            )
+    if response != emitted_response:
+        raise ValueError(
+            "production response observation collector response differs from the signed emitted response"
+        )
+    if summary.get("response_aggregate_digest") != response.get("aggregate_digest"):
+        raise ValueError(
+            "production response observation collector summary response aggregate differs from the artifact"
+        )
+    if summary.get("response_status") != response.get("status"):
+        raise ValueError(
+            "production response observation collector summary status differs from the artifact"
+        )
+    if server_instance.get("id") != args.proxy_server_instance_id:
+        raise ValueError(
+            "production response observation statement reached an unexpected server instance"
+        )
+    if (
+        tls_channel_binding.get("type") != "tls-exporter"
+        or tls_channel_binding.get("label")
+        != "EXPORTER-Serverware-Response-Observation-v1"
+    ):
+        raise ValueError(
+            "production response observation proof TLS exporter contract is invalid"
+        )
+    tls_exporter = tls_channel_binding.get("value")
+    if not isinstance(tls_exporter, str):
+        raise ValueError(
+            "production response observation proof TLS exporter value is missing"
+        )
+    sha256_prefixed_base64url(tls_exporter, "response observation TLS exporter")
+    nonce = statement.get("client_nonce")
+    if nonce != args.proxy_client_nonce:
+        raise ValueError(
+            "production response observation statement did not bind the runner challenge"
+        )
+    return {
+        "document": document,
+        "statement": statement,
+        "response": response,
+        "tls_exporter": tls_exporter,
+        "nonce": nonce,
+    }
+
+
 def run_collector(command: dict[str, Any], args: argparse.Namespace, env: dict[str, str]) -> dict[str, Any]:
-    expected_digests = {
+    proof_contract = getattr(
+        args, "proxy_proof_contract", BUFFERED_PROXY_PROOF_CONTRACT
+    )
+    if proof_contract not in PROXY_PROOF_CONTRACTS:
+        raise ValueError("production proxy proof contract is invalid before collection")
+    independent_expected_digests = {
         "client_request_digest": args.proxy_client_request_digest,
         "request_digest": args.proxy_request_digest,
         "operation_digest": args.proxy_operation_digest,
     }
-    for field, expected_digest in expected_digests.items():
-        if not isinstance(expected_digest, str) or SHA256_RE.fullmatch(expected_digest) is None:
+    for field, expected_digest in independent_expected_digests.items():
+        if (
+            not isinstance(expected_digest, str)
+            or SHA256_RE.fullmatch(expected_digest) is None
+        ):
             raise ValueError(
                 f"independent expected proxy {field} pin must be sha256:<64 lowercase hex> before collection"
             )
+    expected_digests = (
+        {"request_aggregate_digest": args.proxy_client_request_digest}
+        if proof_contract == OBSERVATION_PROXY_PROOF_CONTRACT
+        else independent_expected_digests
+    )
     print(f"==> {command['label']}", file=sys.stderr)
     result = run_command_with_optional_pin(
         command["argv"],
@@ -3112,8 +3606,12 @@ def run_collector(command: dict[str, Any], args: argparse.Namespace, env: dict[s
                 f"production proxy response proof collector {field} does not match the independent expected pin"
             )
     tls_binding = summary.get("tls_channel_binding")
-    if not isinstance(tls_binding, str) or len(tls_binding) < 43:
-        raise ValueError("production proxy response proof collector returned an invalid TLS channel binding")
+    if proof_contract != OBSERVATION_PROXY_PROOF_CONTRACT and (
+        not isinstance(tls_binding, str) or len(tls_binding) < 43
+    ):
+        raise ValueError(
+            "production proxy response proof collector returned an invalid TLS channel binding"
+        )
     if summary.get("server_instance_id") != args.proxy_server_instance_id:
         raise ValueError("production proxy response proof collector reached an unexpected server instance")
     expected_proof_path = str(Path(args.proxy_response_proof))
@@ -3129,62 +3627,120 @@ def run_collector(command: dict[str, Any], args: argparse.Namespace, env: dict[s
     if summary.get("proof_sha256") != proof_digest:
         raise ValueError("production proxy response proof collector summary does not bind the proof artifact")
     args.collected_proxy_proof_sha256 = proof_digest
-    proof_contract = getattr(args, "proxy_proof_contract", BUFFERED_PROXY_PROOF_CONTRACT)
-    if proof_contract not in PROXY_PROOF_CONTRACTS:
-        raise ValueError("production proxy proof contract is invalid before collection")
+    observation_artifact = None
+    if proof_contract == OBSERVATION_PROXY_PROOF_CONTRACT:
+        if summary.get("observation_verified") is not True:
+            raise ValueError(
+                "production response observation collector did not return observation_verified=true"
+            )
+        observation_artifact = parse_observation_collector_artifact(
+            proof_bytes, summary, args
+        )
+        tls_binding = observation_artifact["tls_exporter"]
+    args.collected_proxy_tls_channel_binding = tls_binding
     claimed_contract = summary.get("proof_contract")
     if claimed_contract is not None and claimed_contract != proof_contract:
         raise ValueError("production proxy response proof collector returned a conflicting proof contract")
     args.collected_proxy_proof_contract = proof_contract
     args.collected_proxy_stream_body_sha256 = None
     args.collected_proxy_stream_body_bytes = None
-    if proof_contract == STREAMING_PROXY_PROOF_CONTRACT:
-        if summary.get("stream_verified") is not True:
-            raise ValueError("production streaming proxy proof collector did not return stream_verified=true")
-        expected_body_path = str(Path(args.proxy_stream_body))
+    args.collected_proxy_observation_body_sha256 = None
+    args.collected_proxy_observation_body_bytes = None
+    if proof_contract in {
+        STREAMING_PROXY_PROOF_CONTRACT,
+        OBSERVATION_PROXY_PROOF_CONTRACT,
+    }:
+        is_streaming = proof_contract == STREAMING_PROXY_PROOF_CONTRACT
+        if is_streaming and summary.get("stream_verified") is not True:
+            raise ValueError(
+                "production streaming proxy proof collector did not return stream_verified=true"
+            )
+        body_path = (
+            args.proxy_stream_body if is_streaming else args.proxy_observation_body
+        )
+        body_limit = (
+            args.proxy_max_stream_bytes
+            if is_streaming
+            else args.proxy_max_observation_body_bytes
+        )
+        body_label = "streaming" if is_streaming else "response observation"
+        expected_body_path = str(Path(body_path))
         if summary.get("body_path") != expected_body_path:
-            raise ValueError("production streaming proxy proof collector wrote an unexpected body path")
+            raise ValueError(
+                f"production {body_label} proxy proof collector wrote an unexpected body path"
+            )
         body_bytes, _ = read_regular_file_once(
-            Path(args.proxy_stream_body),
-            "production proxy stream body",
-            max_bytes=args.proxy_max_stream_bytes,
+            Path(body_path),
+            f"production proxy {body_label} body",
+            max_bytes=body_limit,
+            allow_empty=True,
         )
         actual_body_bytes = len(body_bytes)
         actual_body_digest = "sha256:" + hashlib.sha256(body_bytes).hexdigest()
         summary_body_bytes = summary.get("body_bytes")
         if type(summary_body_bytes) is not int or summary_body_bytes != actual_body_bytes:
-            raise ValueError("production streaming proxy proof collector body byte count does not match the artifact")
+            raise ValueError(
+                f"production {body_label} proxy proof collector body byte count does not match the artifact"
+            )
         summary_body_digest = summary.get("body_sha256")
         if (
             not isinstance(summary_body_digest, str)
             or SHA256_RE.fullmatch(summary_body_digest) is None
             or not hmac.compare_digest(summary_body_digest, actual_body_digest)
         ):
-            raise ValueError("production streaming proxy proof collector body digest does not match the artifact")
-        args.collected_proxy_stream_body_sha256 = actual_body_digest
-        args.collected_proxy_stream_body_bytes = actual_body_bytes
+            raise ValueError(
+                f"production {body_label} proxy proof collector body digest does not match the artifact"
+            )
+        if is_streaming:
+            args.collected_proxy_stream_body_sha256 = actual_body_digest
+            args.collected_proxy_stream_body_bytes = actual_body_bytes
+        else:
+            response = observation_artifact["response"]
+            if response.get("body_digest") != actual_body_digest:
+                raise ValueError(
+                    "production response observation artifact body digest does not match the published body"
+                )
+            if response.get("body_bytes") != actual_body_bytes:
+                raise ValueError(
+                    "production response observation artifact body byte count does not match the published body"
+                )
+            args.collected_proxy_observation_body_sha256 = actual_body_digest
+            args.collected_proxy_observation_body_bytes = actual_body_bytes
     summary["proof_contract"] = proof_contract
     if getattr(args, "verification_mode", None) == "final":
         try:
-            proof_document = json.loads(proof_bytes.decode("utf-8"))
-            external_capture = proof_document["external_capture"]
-            statement_field = (
-                "streaming_response_statement"
-                if proof_contract == STREAMING_PROXY_PROOF_CONTRACT
-                else "server_statement"
-            )
-            server_statement = proof_document[statement_field]
-            tls_channel_binding = external_capture["tls_channel_binding"]
-            nonce = external_capture["client_nonce"]
+            if proof_contract == OBSERVATION_PROXY_PROOF_CONTRACT:
+                proof_document = observation_artifact["document"]
+                server_statement = observation_artifact["statement"]
+                captured_at_unix = proof_document["captured_at_unix"]
+                tls_channel_binding = observation_artifact["tls_exporter"]
+                nonce = observation_artifact["nonce"]
+                tls_channel_binding_sha256 = "sha256:" + hashlib.sha256(
+                    tls_channel_binding.encode("utf-8")
+                ).hexdigest()
+            else:
+                proof_document = json.loads(proof_bytes.decode("utf-8"))
+                external_capture = proof_document["external_capture"]
+                statement_field = (
+                    "streaming_response_statement"
+                    if proof_contract == STREAMING_PROXY_PROOF_CONTRACT
+                    else "server_statement"
+                )
+                server_statement = proof_document[statement_field]
+                captured_at_unix = external_capture["captured_at_unix"]
+                tls_channel_binding = external_capture["tls_channel_binding"]
+                nonce = external_capture["client_nonce"]
+                tls_channel_binding_sha256 = "sha256:" + hashlib.sha256(
+                    canonical_json(tls_channel_binding).encode("utf-8")
+                ).hexdigest()
             args.collector_proof_contract = {
                 "proof_contract": proof_contract,
                 "server_statement_sha256": "sha256:"
                 + hashlib.sha256(canonical_json(server_statement).encode("utf-8")).hexdigest(),
-                "captured_at_unix": external_capture["captured_at_unix"],
+                "captured_at_unix": captured_at_unix,
                 "issued_at_unix": server_statement["issued_at_unix"],
                 "client_nonce_sha256": sha256_prefixed_base64url(nonce, "collector proof client nonce"),
-                "tls_channel_binding_sha256": "sha256:"
-                + hashlib.sha256(canonical_json(tls_channel_binding).encode("utf-8")).hexdigest(),
+                "tls_channel_binding_sha256": tls_channel_binding_sha256,
             }
             if proof_contract == STREAMING_PROXY_PROOF_CONTRACT:
                 args.collector_proof_contract.update(
@@ -3192,6 +3748,23 @@ def run_collector(command: dict[str, Any], args: argparse.Namespace, env: dict[s
                         "streamed_body_artifact_sha256": args.collected_proxy_stream_body_sha256,
                         "emitted_body_digest": args.collected_proxy_stream_body_sha256,
                         "emitted_body_bytes": args.collected_proxy_stream_body_bytes,
+                    }
+                )
+            elif proof_contract == OBSERVATION_PROXY_PROOF_CONTRACT:
+                args.collector_proof_contract.update(
+                    {
+                        "observed_body_artifact_sha256": (
+                            args.collected_proxy_observation_body_sha256
+                        ),
+                        "observed_body_artifact_bytes": (
+                            args.collected_proxy_observation_body_bytes
+                        ),
+                        "emitted_body_digest": (
+                            args.collected_proxy_observation_body_sha256
+                        ),
+                        "emitted_body_bytes": (
+                            args.collected_proxy_observation_body_bytes
+                        ),
                     }
                 )
         except (KeyError, TypeError, UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -3277,6 +3850,8 @@ def main() -> None:
     parser.add_argument("--proxy-proof-contract", choices=sorted(PROXY_PROOF_CONTRACTS), default=None)
     parser.add_argument("--proxy-stream-body", default=None)
     parser.add_argument("--proxy-max-stream-bytes", type=int, default=None)
+    parser.add_argument("--proxy-observation-body", default=None)
+    parser.add_argument("--proxy-max-observation-body-bytes", type=int, default=None)
     parser.add_argument("--proxy-proof-summary-out", default=".tmp/proxy-response-proof-summary.json")
     parser.add_argument("--proxy-proof-collector-command", default=None)
     parser.add_argument("--proxy-address", default=None)
@@ -3852,37 +4427,49 @@ def main() -> None:
     if not args.config_only:
         missing = []
         env_proof_contract = loaded.get(PROXY_PROOF_CONTRACT_ENV)
+        if not env_proof_contract:
+            print(
+                f"production readiness env error: {PROXY_PROOF_CONTRACT_ENV} must be pinned in the "
+                "production readiness env file",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
         if (
-            args.verification_mode == "final"
-            and args.proxy_proof_contract is not None
+            args.proxy_proof_contract is not None
             and args.proxy_proof_contract != env_proof_contract
         ):
             print(
                 f"production readiness env error: --proxy-proof-contract must match {PROXY_PROOF_CONTRACT_ENV} "
-                "in final verification mode",
+                "in the production readiness env file",
                 file=sys.stderr,
             )
             raise SystemExit(1)
-        proof_contract = (
-            env_proof_contract
-            if args.verification_mode == "final"
-            else args.proxy_proof_contract
-            or env_proof_contract
-            or BUFFERED_PROXY_PROOF_CONTRACT
-        )
-        if args.verification_mode == "final" and not proof_contract:
-            missing.append(
-                f"{PROXY_PROOF_CONTRACT_ENV} (must be pinned in the production readiness env file)"
-            )
-        elif proof_contract not in PROXY_PROOF_CONTRACTS:
+        proof_contract = env_proof_contract
+        if proof_contract not in PROXY_PROOF_CONTRACTS:
             print(
-                f"production readiness env error: {PROXY_PROOF_CONTRACT_ENV} must be buffered-v3 or streaming-v1",
+                f"production readiness env error: {PROXY_PROOF_CONTRACT_ENV} must be buffered-v3, "
+                "observation-v1, or streaming-v1",
                 file=sys.stderr,
             )
             raise SystemExit(1)
         args.proxy_proof_contract = proof_contract
 
         if proof_contract == STREAMING_PROXY_PROOF_CONTRACT:
+            if any(
+                value is not None
+                for value in (
+                    args.proxy_observation_body,
+                    args.proxy_max_observation_body_bytes,
+                    loaded.get(PROXY_OBSERVATION_BODY_FILE_ENV),
+                    loaded.get(PROXY_PROOF_MAX_OBSERVATION_BODY_BYTES_ENV),
+                )
+            ):
+                print(
+                    "production readiness env error: observation body settings are only valid with "
+                    "proxy proof contract observation-v1",
+                    file=sys.stderr,
+                )
+                raise SystemExit(1)
             env_operation_context_digest = loaded.get(
                 PROXY_EXPECTED_OPERATION_CONTEXT_DIGEST_ENV
             )
@@ -3979,7 +4566,9 @@ def main() -> None:
             max_stream_bytes = (
                 parsed_env_max_stream_bytes
                 if args.verification_mode == "final"
-                else args.proxy_max_stream_bytes or parsed_env_max_stream_bytes
+                else args.proxy_max_stream_bytes
+                if args.proxy_max_stream_bytes is not None
+                else parsed_env_max_stream_bytes
             )
             if max_stream_bytes is None:
                 missing.append(
@@ -3996,20 +4585,125 @@ def main() -> None:
                 raise SystemExit(1)
             else:
                 args.proxy_max_stream_bytes = max_stream_bytes
+        elif proof_contract == OBSERVATION_PROXY_PROOF_CONTRACT:
+            if any(
+                value is not None
+                for value in (
+                    args.proxy_stream_body,
+                    args.proxy_max_stream_bytes,
+                    args.proxy_operation_context_digest,
+                    loaded.get(PROXY_STREAM_BODY_FILE_ENV),
+                    loaded.get(PROXY_PROOF_MAX_STREAM_BYTES_ENV),
+                    loaded.get(PROXY_EXPECTED_OPERATION_CONTEXT_DIGEST_ENV),
+                )
+            ):
+                print(
+                    "production readiness env error: stream body, max stream bytes, and operation context "
+                    "digest settings are only valid with proxy proof contract streaming-v1",
+                    file=sys.stderr,
+                )
+                raise SystemExit(1)
+
+            env_observation_body = loaded.get(PROXY_OBSERVATION_BODY_FILE_ENV)
+            if (
+                args.verification_mode == "final"
+                and args.proxy_observation_body is not None
+                and args.proxy_observation_body != env_observation_body
+            ):
+                print(
+                    "production readiness env error: --proxy-observation-body must match "
+                    f"{PROXY_OBSERVATION_BODY_FILE_ENV} in final verification mode",
+                    file=sys.stderr,
+                )
+                raise SystemExit(1)
+            observation_body = (
+                env_observation_body
+                if args.verification_mode == "final"
+                else args.proxy_observation_body or env_observation_body
+            )
+            if not observation_body:
+                missing.append(
+                    f"{PROXY_OBSERVATION_BODY_FILE_ENV} (must be pinned in the production readiness env file)"
+                    if args.verification_mode == "final"
+                    else f"--proxy-observation-body or {PROXY_OBSERVATION_BODY_FILE_ENV}"
+                )
+            elif not Path(observation_body).is_absolute():
+                print(
+                    f"production readiness env error: {PROXY_OBSERVATION_BODY_FILE_ENV} must be an absolute path",
+                    file=sys.stderr,
+                )
+                raise SystemExit(1)
+            else:
+                args.proxy_observation_body = observation_body
+
+            env_max_observation_bytes = loaded.get(
+                PROXY_PROOF_MAX_OBSERVATION_BODY_BYTES_ENV
+            )
+            parsed_env_max_observation_bytes = None
+            if env_max_observation_bytes is not None:
+                try:
+                    parsed_env_max_observation_bytes = int(env_max_observation_bytes)
+                except ValueError as exc:
+                    print(
+                        "production readiness env error: "
+                        f"{PROXY_PROOF_MAX_OBSERVATION_BODY_BYTES_ENV} must be an integer",
+                        file=sys.stderr,
+                    )
+                    raise SystemExit(1) from exc
+            if (
+                args.verification_mode == "final"
+                and args.proxy_max_observation_body_bytes is not None
+                and args.proxy_max_observation_body_bytes
+                != parsed_env_max_observation_bytes
+            ):
+                print(
+                    "production readiness env error: --proxy-max-observation-body-bytes must match "
+                    f"{PROXY_PROOF_MAX_OBSERVATION_BODY_BYTES_ENV} in final verification mode",
+                    file=sys.stderr,
+                )
+                raise SystemExit(1)
+            max_observation_bytes = (
+                parsed_env_max_observation_bytes
+                if args.verification_mode == "final"
+                else args.proxy_max_observation_body_bytes
+                if args.proxy_max_observation_body_bytes is not None
+                else parsed_env_max_observation_bytes
+            )
+            if max_observation_bytes is None:
+                missing.append(
+                    f"{PROXY_PROOF_MAX_OBSERVATION_BODY_BYTES_ENV} "
+                    "(must be pinned in the production readiness env file)"
+                    if args.verification_mode == "final"
+                    else "--proxy-max-observation-body-bytes or "
+                    f"{PROXY_PROOF_MAX_OBSERVATION_BODY_BYTES_ENV}"
+                )
+            elif not 1 <= max_observation_bytes <= MAX_PROXY_OBSERVATION_BODY_BYTES:
+                print(
+                    "production readiness env error: proxy proof max observation body bytes must be between 1 and "
+                    f"{MAX_PROXY_OBSERVATION_BODY_BYTES}",
+                    file=sys.stderr,
+                )
+                raise SystemExit(1)
+            else:
+                args.proxy_max_observation_body_bytes = max_observation_bytes
         elif any(
             value is not None
             for value in (
                 args.proxy_stream_body,
                 args.proxy_max_stream_bytes,
                 args.proxy_operation_context_digest,
+                args.proxy_observation_body,
+                args.proxy_max_observation_body_bytes,
                 loaded.get(PROXY_STREAM_BODY_FILE_ENV),
                 loaded.get(PROXY_PROOF_MAX_STREAM_BYTES_ENV),
                 loaded.get(PROXY_EXPECTED_OPERATION_CONTEXT_DIGEST_ENV),
+                loaded.get(PROXY_OBSERVATION_BODY_FILE_ENV),
+                loaded.get(PROXY_PROOF_MAX_OBSERVATION_BODY_BYTES_ENV),
             )
         ):
             print(
-                "production readiness env error: stream body, max stream bytes, and operation context digest "
-                "settings are only valid with proxy proof contract streaming-v1",
+                "production readiness env error: stream and observation body settings are only valid with "
+                "their matching proxy proof contracts",
                 file=sys.stderr,
             )
             raise SystemExit(1)
@@ -4043,17 +4737,39 @@ def main() -> None:
                 )
             else:
                 setattr(args, attribute, value)
-        if (
-            proof_contract == STREAMING_PROXY_PROOF_CONTRACT
-            and args.proxy_response_proof
-            and args.proxy_stream_body
-            and Path(args.proxy_response_proof) == Path(args.proxy_stream_body)
-        ):
-            print(
-                "production readiness env error: proxy proof and streaming body outputs must use different paths",
-                file=sys.stderr,
+        if proof_contract in {
+            STREAMING_PROXY_PROOF_CONTRACT,
+            OBSERVATION_PROXY_PROOF_CONTRACT,
+        }:
+            body_label = (
+                "streaming body output"
+                if proof_contract == STREAMING_PROXY_PROOF_CONTRACT
+                else "observation body output"
             )
-            raise SystemExit(1)
+            body_path = (
+                args.proxy_stream_body
+                if proof_contract == STREAMING_PROXY_PROOF_CONTRACT
+                else args.proxy_observation_body
+            )
+            proxy_outputs = {
+                "proxy proof output": args.proxy_response_proof,
+                body_label: body_path,
+            }
+            proxy_inputs = {
+                "proxy CA bundle": args.proxy_proof_ca,
+                "proxy collector private key": args.proxy_collector_key,
+                "proxy collector public key": args.proxy_collector_public_key,
+                "proxy verifier public key": args.proxy_proof_verifier_public_key,
+            }
+            if all((*proxy_outputs.values(), *proxy_inputs.values())):
+                try:
+                    validate_proxy_artifact_path_separation(
+                        proxy_outputs,
+                        proxy_inputs,
+                    )
+                except ValueError as exc:
+                    print(f"production readiness env error: {exc}", file=sys.stderr)
+                    raise SystemExit(1) from exc
         explicit_server_instance = loaded.get("SERVERWARE_PROXY_SERVER_INSTANCE_ID")
         data_plane_instance = loaded.get("SERVERWARE_DATA_PLANE_INSTANCE_ID")
         if explicit_server_instance and data_plane_instance and explicit_server_instance != data_plane_instance:
@@ -4217,7 +4933,7 @@ def main() -> None:
                 file=sys.stderr,
             )
             raise SystemExit(1) from exc
-        args.proxy_client_nonce = generated_client_nonce()
+        args.proxy_client_nonce = generated_client_nonce(args.proxy_proof_contract)
         args.proxy_tls_channel_binding = "$COLLECTOR_SUMMARY.tls_channel_binding"
     if args.verification_mode == "final":
         try:
@@ -4325,8 +5041,8 @@ def main() -> None:
         isolated_python=args.verification_mode == "final",
         pass_fds=bootstrap_pass_fds,
     )
-    summary = run_collector(commands[-2], args, env)
-    args.proxy_tls_channel_binding = summary["tls_channel_binding"]
+    run_collector(commands[-2], args, env)
+    args.proxy_tls_channel_binding = args.collected_proxy_tls_channel_binding
     run_commands(
         [completion_command(args)],
         env,

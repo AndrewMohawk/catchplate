@@ -101,7 +101,7 @@ services:
       SERVERWARE_RELEASE_CHANNEL: dev
       SERVERWARE_KEY_RELEASE_MIN_ROLLBACK_EPOCH: "1"
       SERVERWARE_KEY_RELEASE_REQUIRE_DATA_PLANE_DIGEST: "1"
-      SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST: ${SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST:-sha256:cd8ffea89999933b73c911b8c36aa5fe6d8b8bad03febe2187f2b611d37b640a}
+      SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST: ${SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST:-sha256:9295b89278fcf3062085a2fe3270d180818dc07ce42916a1d8963a66a50fb13c}
       SERVERWARE_RESPONSE_SIGNING_KEY: /run/serverware/response-signing-private/response-signing-ed25519.pem
       SERVERWARE_RESPONSE_SIGNING_PUBLIC_KEY: /custody-trust/control-plane-response-signing.pub.pem
       SERVERWARE_RESPONSE_SIGNING_PUBLIC_KEY_ID_PATH: /custody-trust/control-plane-response-signing.key-id
@@ -225,9 +225,8 @@ services:
 
   custody-runtime:
     profiles: ["custody"]
-    build:
-      context: .
-      dockerfile: data-plane/decision-gate-rs/Dockerfile
+    image: ${SERVERWARE_DECISION_GATE_DEV_IMAGE:-serverware-decision-gate:dev}
+    pull_policy: never
     init: true
     read_only: true
     network_mode: none
@@ -261,6 +260,7 @@ services:
         condition: service_healthy
 
   decision-gate-rs:
+    image: ${SERVERWARE_DECISION_GATE_DEV_IMAGE:-serverware-decision-gate:dev}
     build:
       context: .
       dockerfile: data-plane/decision-gate-rs/Dockerfile

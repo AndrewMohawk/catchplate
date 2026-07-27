@@ -115,13 +115,21 @@ BASE64URL_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 PROXY_PROOF_MAX_AGE_LIMIT_SECONDS = 900
 PROXY_PROOF_FUTURE_SKEW_SECONDS = 30
 PROXY_PROOF_CONTRACT_ENV_KEY = "SERVERWARE_PROXY_PROOF_CONTRACT"
-PROXY_PROOF_CONTRACTS = {"buffered-v3", "streaming-v1"}
+PROXY_PROOF_CONTRACTS = {"buffered-v3", "observation-v1", "streaming-v1"}
 PROXY_STREAM_BODY_ENV_KEY = "SERVERWARE_PROXY_STREAM_BODY_FILE"
 PROXY_STREAM_MAX_BYTES_ENV_KEY = "SERVERWARE_PROXY_PROOF_MAX_STREAM_BYTES"
 PROXY_STREAM_OPERATION_CONTEXT_DIGEST_ENV_KEY = (
     "SERVERWARE_PROXY_EXPECTED_OPERATION_CONTEXT_DIGEST"
 )
+PROXY_OBSERVATION_BODY_ENV_KEY = "SERVERWARE_PROXY_OBSERVATION_BODY_FILE"
+PROXY_OBSERVATION_MAX_BYTES_ENV_KEY = (
+    "SERVERWARE_PROXY_PROOF_MAX_OBSERVATION_BODY_BYTES"
+)
 MAX_PROXY_STREAM_BODY_BYTES = 64 * 1024 * 1024
+MAX_PROXY_OBSERVATION_BODY_BYTES = 16 * 1024 * 1024
+MAX_VENDOR_QUOTE_BYTES = 96 * 1024
+RESPONSE_OBSERVATION_NONCE_EXPIRY_BYTES = 4
+RESPONSE_OBSERVATION_NONCE_MAX_LIFETIME_SECONDS = 330
 STREAMING_TLS_EXPORTER_LABEL = "EXPORTER-Serverware-Proxy-Stream-v1"
 CONTROL_PLANE_AUTHORIZATION_RECEIPT_API_VERSION = "serverware.controlPlaneAuthorizationReceipt/v1"
 CONTROL_PLANE_RESPONSE_SIGNATURE_API_VERSION = "serverware.responseSignature/v2"
@@ -267,13 +275,34 @@ class InputSnapshots:
     def __init__(self) -> None:
         self.by_key: dict[str, FileSnapshot] = {}
         self._by_path: dict[str, FileSnapshot] = {}
+        self._path_by_inode: dict[tuple[int, int], str] = {}
 
-    def capture(self, key: str, path: Path, label: str, *, max_bytes: int) -> FileSnapshot:
+    def capture(
+        self,
+        key: str,
+        path: Path,
+        label: str,
+        *,
+        max_bytes: int,
+        allow_empty: bool = False,
+    ) -> FileSnapshot:
         absolute = os.path.abspath(os.fspath(path))
         snapshot = self._by_path.get(absolute)
         if snapshot is None:
-            snapshot = snapshot_regular_file(path, label, max_bytes=max_bytes)
+            snapshot = snapshot_regular_file(
+                path,
+                label,
+                max_bytes=max_bytes,
+                allow_empty=allow_empty,
+            )
+            inode = (snapshot.metadata.st_dev, snapshot.metadata.st_ino)
+            existing_path = self._path_by_inode.get(inode)
+            require(
+                existing_path is None or existing_path == absolute,
+                f"{label} aliases another verification artifact inode: {path}",
+            )
             self._by_path[absolute] = snapshot
+            self._path_by_inode[inode] = absolute
         else:
             require(len(snapshot.data) <= max_bytes, f"{label} exceeds the {max_bytes}-byte size limit")
         self.by_key[key] = snapshot
@@ -292,7 +321,14 @@ class InputSnapshots:
             )
         for entries in grouped.values():
             strictest = min(entry[3] for entry in entries)
-            snapshot = self.capture(entries[0][0], entries[0][1], entries[0][2], max_bytes=strictest)
+            body_artifact_keys = {"proxy_stream_body", "proxy_observation_body"}
+            snapshot = self.capture(
+                entries[0][0],
+                entries[0][1],
+                entries[0][2],
+                max_bytes=strictest,
+                allow_empty=all(entry[0] in body_artifact_keys for entry in entries),
+            )
             for key, _path, label, max_bytes in entries:
                 require(len(snapshot.data) <= max_bytes, f"{label} exceeds the {max_bytes}-byte size limit")
                 self.by_key[key] = snapshot
@@ -545,10 +581,21 @@ def reject_duplicate_json_object_keys(pairs: list[tuple[str, Any]]) -> dict[str,
     return parsed
 
 
-def snapshot_regular_file(path: Path, label: str, *, max_bytes: int) -> FileSnapshot:
+def snapshot_regular_file(
+    path: Path,
+    label: str,
+    *,
+    max_bytes: int,
+    allow_empty: bool = False,
+) -> FileSnapshot:
     require(max_bytes > 0, f"{label} snapshot size limit is invalid")
     require(hasattr(os, "O_NOFOLLOW"), f"{label} cannot be opened safely on this platform")
-    flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    flags = (
+        os.O_RDONLY
+        | os.O_NOFOLLOW
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+    )
     try:
         descriptor = os.open(path, flags)
     except OSError as exc:
@@ -558,6 +605,10 @@ def snapshot_regular_file(path: Path, label: str, *, max_bytes: int) -> FileSnap
     try:
         opened_metadata = os.fstat(descriptor)
         require(stat.S_ISREG(opened_metadata.st_mode), f"{label} must be a regular file: {path}")
+        require(
+            opened_metadata.st_nlink == 1,
+            f"{label} must not have hardlink aliases: {path}",
+        )
         require(opened_metadata.st_size <= max_bytes, f"{label} exceeds the {max_bytes}-byte size limit")
         chunks: list[bytes] = []
         remaining = max_bytes + 1
@@ -568,7 +619,7 @@ def snapshot_regular_file(path: Path, label: str, *, max_bytes: int) -> FileSnap
             chunks.append(chunk)
             remaining -= len(chunk)
         data = b"".join(chunks)
-        require(data, f"{label} must not be empty")
+        require(allow_empty or data, f"{label} must not be empty")
         require(len(data) <= max_bytes, f"{label} exceeds the {max_bytes}-byte size limit")
         completed_metadata = os.fstat(descriptor)
         require(
@@ -578,6 +629,7 @@ def snapshot_regular_file(path: Path, label: str, *, max_bytes: int) -> FileSnap
                 completed_metadata.st_size,
                 completed_metadata.st_mtime_ns,
                 completed_metadata.st_ctime_ns,
+                completed_metadata.st_nlink,
             )
             == (
                 opened_metadata.st_dev,
@@ -585,6 +637,7 @@ def snapshot_regular_file(path: Path, label: str, *, max_bytes: int) -> FileSnap
                 opened_metadata.st_size,
                 opened_metadata.st_mtime_ns,
                 opened_metadata.st_ctime_ns,
+                opened_metadata.st_nlink,
             )
             and len(data) == opened_metadata.st_size,
             f"{label} changed while its byte snapshot was being captured",
@@ -3578,6 +3631,8 @@ def verify_current_production_env_binding(
     proxy_proof_contract: str | None = None,
     proxy_stream_body: str | None = None,
     proxy_max_stream_bytes: int | None = None,
+    proxy_observation_body: str | None = None,
+    proxy_max_observation_body_bytes: int | None = None,
     proxy_operation_context_digest: str | None = None,
     p99_limit_ms: float | None = None,
     docker_executable: str | None = None,
@@ -3633,7 +3688,7 @@ def verify_current_production_env_binding(
     expected_proxy_proof_contract = production_env.get(PROXY_PROOF_CONTRACT_ENV_KEY)
     require(
         expected_proxy_proof_contract in PROXY_PROOF_CONTRACTS,
-        f"production readiness env must pin {PROXY_PROOF_CONTRACT_ENV_KEY} to buffered-v3 or streaming-v1",
+        f"production readiness env must pin {PROXY_PROOF_CONTRACT_ENV_KEY} to buffered-v3, observation-v1, or streaming-v1",
     )
     require(
         proxy_proof_contract == expected_proxy_proof_contract,
@@ -3641,6 +3696,8 @@ def verify_current_production_env_binding(
     )
     expected_proxy_stream_body: str | None = None
     expected_proxy_max_stream_bytes: int | None = None
+    expected_proxy_observation_body: str | None = None
+    expected_proxy_max_observation_body_bytes: int | None = None
     if expected_proxy_proof_contract == "streaming-v1":
         expected_proxy_stream_body = production_env.get(PROXY_STREAM_BODY_ENV_KEY)
         require(
@@ -3677,18 +3734,78 @@ def verify_current_production_env_binding(
             proxy_operation_context_digest == expected_operation_context_digest,
             f"selected proxy operation context digest does not exactly match {PROXY_STREAM_OPERATION_CONTEXT_DIGEST_ENV_KEY}",
         )
+        require(
+            PROXY_OBSERVATION_BODY_ENV_KEY not in production_env
+            and PROXY_OBSERVATION_MAX_BYTES_ENV_KEY not in production_env
+            and proxy_observation_body is None
+            and proxy_max_observation_body_bytes is None,
+            "streaming-v1 must not select observation body settings",
+        )
+    elif expected_proxy_proof_contract == "observation-v1":
+        require(
+            PROXY_STREAM_BODY_ENV_KEY not in production_env
+            and PROXY_STREAM_MAX_BYTES_ENV_KEY not in production_env
+            and PROXY_STREAM_OPERATION_CONTEXT_DIGEST_ENV_KEY not in production_env
+            and proxy_stream_body is None
+            and proxy_max_stream_bytes is None
+            and proxy_operation_context_digest is None,
+            "observation-v1 production readiness env must not define streaming proof settings",
+        )
+        expected_proxy_observation_body = production_env.get(
+            PROXY_OBSERVATION_BODY_ENV_KEY
+        )
+        require(
+            isinstance(expected_proxy_observation_body, str)
+            and Path(expected_proxy_observation_body).is_absolute(),
+            f"observation production readiness env must pin absolute {PROXY_OBSERVATION_BODY_ENV_KEY}",
+        )
+        raw_observation_max_bytes = production_env.get(
+            PROXY_OBSERVATION_MAX_BYTES_ENV_KEY
+        )
+        require(
+            isinstance(raw_observation_max_bytes, str),
+            f"observation production readiness env must pin {PROXY_OBSERVATION_MAX_BYTES_ENV_KEY}",
+        )
+        try:
+            expected_proxy_max_observation_body_bytes = int(
+                raw_observation_max_bytes
+            )
+        except ValueError as exc:
+            raise ValueError(
+                f"{PROXY_OBSERVATION_MAX_BYTES_ENV_KEY} must be an integer"
+            ) from exc
+        require(
+            1
+            <= expected_proxy_max_observation_body_bytes
+            <= MAX_PROXY_OBSERVATION_BODY_BYTES,
+            f"{PROXY_OBSERVATION_MAX_BYTES_ENV_KEY} must be between 1 and {MAX_PROXY_OBSERVATION_BODY_BYTES}",
+        )
+        require(
+            proxy_observation_body == expected_proxy_observation_body,
+            f"selected proxy observation body does not exactly match {PROXY_OBSERVATION_BODY_ENV_KEY}",
+        )
+        require(
+            proxy_max_observation_body_bytes
+            == expected_proxy_max_observation_body_bytes,
+            f"selected proxy observation body byte limit does not exactly match {PROXY_OBSERVATION_MAX_BYTES_ENV_KEY}",
+        )
+        expected_operation_context_digest = None
     else:
         require(
             PROXY_STREAM_BODY_ENV_KEY not in production_env
-            and PROXY_STREAM_MAX_BYTES_ENV_KEY not in production_env,
-            "buffered-v3 production readiness env must not define streaming proof settings",
-        )
-        require(
-            PROXY_STREAM_OPERATION_CONTEXT_DIGEST_ENV_KEY not in production_env
+            and PROXY_STREAM_MAX_BYTES_ENV_KEY not in production_env
+            and PROXY_STREAM_OPERATION_CONTEXT_DIGEST_ENV_KEY not in production_env
             and proxy_stream_body is None
             and proxy_max_stream_bytes is None
             and proxy_operation_context_digest is None,
             "buffered-v3 completion must not select streaming proof settings",
+        )
+        require(
+            PROXY_OBSERVATION_BODY_ENV_KEY not in production_env
+            and PROXY_OBSERVATION_MAX_BYTES_ENV_KEY not in production_env
+            and proxy_observation_body is None
+            and proxy_max_observation_body_bytes is None,
+            "buffered-v3 completion must not select observation body settings",
         )
         expected_operation_context_digest = None
     raw_p99_limit = production_env.get(COMPLETION_P99_LIMIT_ENV_KEY)
@@ -4342,6 +4459,10 @@ def verify_current_production_env_binding(
         "proxy_proof_contract": expected_proxy_proof_contract,
         "proxy_stream_body": expected_proxy_stream_body,
         "proxy_max_stream_bytes": expected_proxy_max_stream_bytes,
+        "proxy_observation_body": expected_proxy_observation_body,
+        "proxy_max_observation_body_bytes": (
+            expected_proxy_max_observation_body_bytes
+        ),
         "proxy_operation_context_digest": expected_operation_context_digest,
         "p99_limit_ms": expected_p99_limit_ms,
         "docker_executable": expected_docker_executable,
@@ -5058,6 +5179,10 @@ def verify_running_image_config_ids(
             approved_image_config_ids["serverware-decision-gate"],
             "approved decision-gate image config id",
         ),
+        "custody-runtime": require_sha256(
+            approved_image_config_ids["serverware-decision-gate"],
+            "approved custody image config id",
+        ),
     }
     require(
         set(observed_image_config_ids) == set(expected_config_ids),
@@ -5125,6 +5250,7 @@ def verify_running_production_containers(
         "serverware": by_name["control"],
         "audit-anchor": by_name["control"],
         "decision-gate-rs": by_name["decision-gate"],
+        "custody-runtime": by_name["decision-gate"],
     }
 
     child_env = run_production_readiness.build_final_child_environment(production_env)
@@ -6114,6 +6240,7 @@ def verify_control_plane_authorization_receipt(
         "dispatch_expires_at_epoch_ms": dispatch_expires_at_epoch_ms,
         "reservation_expires_at_epoch_ms": reservation_expires_at_epoch_ms,
         "issued_at_ms": issued_at_ms,
+        "quotas": quotas,
         "canonical_signature_verified": True,
         "dispatch_body_exact_match": True,
         "attested_context_exact_match": True,
@@ -6163,12 +6290,12 @@ def verify_and_compile_policy_snapshot(
     return compiled
 
 
-def match_proxy_policy_route(
+def require_proxy_policy_route(
     policy: PolicySnapshot,
     *,
     principal_id: str,
     route_id: str,
-) -> tuple[str, set[str]]:
+) -> Any:
     label = "proxy response independently matched policy route identity"
     require(
         isinstance(principal_id, str)
@@ -6191,6 +6318,21 @@ def match_proxy_policy_route(
         principal_id in route.principals or "*" in route.principals,
         f"{label} does not authorize the independently pinned principal",
     )
+    return route
+
+
+def match_proxy_policy_route(
+    policy: PolicySnapshot,
+    *,
+    principal_id: str,
+    route_id: str,
+) -> tuple[str, set[str]]:
+    route = require_proxy_policy_route(
+        policy,
+        principal_id=principal_id,
+        route_id=route_id,
+    )
+    label = "proxy response independently matched policy route identity"
     response_profile = route.adapter_config.get("response")
     require(isinstance(response_profile, dict), f"{label} success response profile is missing")
     raw_allowed_headers = response_profile.get("allowedHeaders", [])
@@ -6211,6 +6353,91 @@ def match_proxy_policy_route(
         "content-type",
         *raw_allowed_headers,
     }
+
+
+def route_shared_quota_constraints(route: Any) -> list[dict[str, Any]]:
+    return [
+        constraint
+        for constraint in route.constraints
+        if constraint.get("type") == "rateLimit"
+        and constraint.get("store", "local") == "shared"
+        and constraint.get("phase", "request") in {"request", "both"}
+    ]
+
+
+def route_requires_atomic_authorization(route: Any) -> bool:
+    return bool(
+        route.credential_ref
+        or (route.jit or {}).get("required") is True
+        or route_shared_quota_constraints(route)
+    )
+
+
+def verify_route_authorization_evidence(
+    route: Any,
+    release_authority: dict[str, Any],
+    control_plane_receipt: dict[str, Any],
+    *,
+    label: str,
+) -> None:
+    expected_credential_ref = route.credential_ref
+    require(
+        release_authority["credential_ref"] == expected_credential_ref,
+        f"{label} release authority credential does not match the signed route",
+    )
+    jit_required = (route.jit or {}).get("required") is True
+    has_jit_authority = (
+        release_authority["grant_id"] is not None
+        and release_authority["approval_id"] is not None
+    )
+    require(
+        has_jit_authority == jit_required,
+        f"{label} release authority JIT evidence does not match the signed route",
+    )
+
+    expected_quotas = route_shared_quota_constraints(route)
+    observed_quotas = control_plane_receipt.get("quotas")
+    require(
+        isinstance(observed_quotas, list),
+        f"{label} control-plane receipt quota evidence is missing",
+    )
+    require(
+        len(observed_quotas) == len(expected_quotas),
+        f"{label} control-plane receipt quota count does not match the signed route",
+    )
+    observed_by_id = {
+        quota.get("constraintId"): quota
+        for quota in observed_quotas
+        if isinstance(quota, dict)
+    }
+    require(
+        len(observed_by_id) == len(observed_quotas),
+        f"{label} control-plane receipt quota identities are not unique",
+    )
+    for constraint in expected_quotas:
+        constraint_id = str(constraint.get("id") or "unnamed")
+        quota = observed_by_id.get(constraint_id)
+        require(
+            isinstance(quota, dict),
+            f"{label} control-plane receipt omits signed route quota {constraint_id}",
+        )
+        require(
+            quota.get("max") == constraint.get("max"),
+            f"{label} control-plane receipt quota {constraint_id} maximum mismatch",
+        )
+        calendar_window = constraint.get("calendarWindow")
+        if calendar_window is None:
+            require(
+                quota.get("windowKind") in {None, "fixed"}
+                and quota.get("windowSeconds") == constraint.get("windowSeconds"),
+                f"{label} control-plane receipt quota {constraint_id} fixed window mismatch",
+            )
+        else:
+            require(
+                quota.get("windowKind") == calendar_window
+                and quota.get("calendarWindow") == calendar_window,
+                f"{label} control-plane receipt quota {constraint_id} calendar window mismatch",
+            )
 
 
 def verify_proxy_upstream_response(
@@ -6724,7 +6951,15 @@ def verify_streaming_vendor_tee(
     require(isinstance(quote, dict), f"{label} quote must be an object")
     require_exact_object_fields(quote, {"format", "body_b64"}, f"{label} quote")
     require_production_identifier(quote.get("format"), f"{label} quote format")
-    require_base64url_bytes(quote.get("body_b64"), f"{label} quote body", minimum_bytes=64)
+    quote_body = require_base64url_bytes(
+        quote.get("body_b64"),
+        f"{label} quote body",
+        minimum_bytes=64,
+    )
+    require(
+        len(quote_body) <= MAX_VENDOR_QUOTE_BYTES,
+        f"{label} quote body exceeds the schema size limit",
+    )
     quote_digest = require_sha256(vendor_tee.get("quote_sha256"), f"{label} quote digest")
     require(quote_digest == sha256_prefixed_json(quote), f"{label} quote digest mismatch")
 
@@ -7220,6 +7455,7 @@ def verify_production_streaming_proxy_response_proof(
         "release_authority": release_authority,
         "authorization_binding_digest": authorization_binding_digest,
         "authorization_binding_commitment": authorization_binding,
+        "control_plane_response_signing_key_id": control_plane_key_id,
         "control_plane_authorization_receipt": control_plane_authorization,
         "upstream_response": upstream_response,
         "status": released_response["status"],
@@ -7840,7 +8076,15 @@ def verify_production_buffered_proxy_response_proof(
     quote = vendor_tee.get("quote") if isinstance(vendor_tee.get("quote"), dict) else {}
     require(bool(quote), "proxy response proof is missing a non-null vendor TEE quote")
     require_production_identifier(quote.get("format"), "proxy response vendor quote format")
-    require_base64url_bytes(quote.get("body_b64"), "proxy response vendor quote body", minimum_bytes=64)
+    quote_body = require_base64url_bytes(
+        quote.get("body_b64"),
+        "proxy response vendor quote body",
+        minimum_bytes=64,
+    )
+    require(
+        len(quote_body) <= MAX_VENDOR_QUOTE_BYTES,
+        "proxy response vendor quote body exceeds the schema size limit",
+    )
     vendor_quote_digest = require_sha256(vendor_tee.get("quote_sha256"), "proxy response vendor quote digest")
     require(vendor_quote_digest == sha256_prefixed_json(quote), "proxy response vendor quote digest mismatch")
 
@@ -7995,6 +8239,9 @@ def verify_production_buffered_proxy_response_proof(
         "principal_id": expected_principal_id,
         "route_id": matched_route_id,
         "release_authority": release_authority,
+        "control_plane_response_signing_key_id": (
+            control_plane_authorization_key_id
+        ),
         "control_plane_authorization_receipt": control_plane_authorization,
         "upstream_response": upstream_response,
         "status": status,
@@ -8027,17 +8274,885 @@ def verify_production_buffered_proxy_response_proof(
     }
 
 
+OBSERVATION_STATEMENT_API_VERSION = "serverware.responseObservationStatement/v1"
+OBSERVATION_RUNTIME_PROOF_API_VERSION = "serverware.responseObservationRuntimeProof/v1"
+OBSERVATION_TLS_EXPORTER_LABEL = "EXPORTER-Serverware-Response-Observation-v1"
+OBSERVATION_MAX_BODY_BYTES = MAX_PROXY_OBSERVATION_BODY_BYTES
+OBSERVATION_RESPONSE_PATHS = {
+    "local-reject-no-upstream-attempt",
+    "dispatch-denied-no-upstream-attempt",
+    "authorized-not-attempted",
+    "upstream-attempt-outcome-unknown",
+    "complete-upstream-response-released",
+    "complete-upstream-response-blocked",
+    "post-dispatch-local-failure",
+}
+OBSERVATION_UPSTREAM_ATTEMPTS = {
+    "not-started",
+    "started-no-response",
+    "headers-observed-body-incomplete",
+    "complete",
+}
+
+
+def require_observation_count(value: Any, label: str, *, maximum: int) -> int:
+    count = require_uint64(value, label)
+    require(count <= maximum, f"{label} exceeds the observation contract limit")
+    return count
+
+
+def require_observation_identifier(value: Any, label: str) -> str:
+    require(
+        isinstance(value, str)
+        and 1 <= len(value) <= 256
+        and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/@-]*", value) is not None,
+        f"{label} is invalid",
+    )
+    return value
+
+
+def verify_observation_request(value: Any, *, statement_form: bool) -> dict[str, Any]:
+    label = "response observation statement request" if statement_form else "response observation collector request"
+    require(isinstance(value, dict), f"{label} must be an object")
+    request = dict(value)
+    fields = {
+        "method",
+        "target_digest",
+        "query_present",
+        "query_digest",
+        "headers_digest",
+        "header_count",
+        "body_digest",
+        "body_bytes",
+        "aggregate_digest",
+    }
+    if statement_form:
+        fields.add("body_observation")
+    require_exact_object_fields(request, fields, label)
+    method = request.get("method")
+    require(
+        isinstance(method, str)
+        and 1 <= len(method) <= 64
+        and re.fullmatch(r"[!#$%&'*+.^_`|~0-9A-Z-]+", method) is not None,
+        f"{label} method is invalid",
+    )
+    for field in ("target_digest", "query_digest", "headers_digest", "body_digest"):
+        require_sha256(request.get(field), f"{label} {field.replace('_', ' ')}")
+    require(isinstance(request.get("query_present"), bool), f"{label} query presence is invalid")
+    require_observation_count(request.get("header_count"), f"{label} header count", maximum=65535)
+    require_observation_count(
+        request.get("body_bytes"),
+        f"{label} body byte count",
+        maximum=OBSERVATION_MAX_BODY_BYTES,
+    )
+    if statement_form:
+        require(
+            request.get("body_observation") == "complete-buffered",
+            f"{label} does not prove complete buffered request-body observation",
+        )
+    aggregate_digest = require_sha256(request.get("aggregate_digest"), f"{label} aggregate digest")
+    aggregate = {field: request[field] for field in request if field != "aggregate_digest"}
+    if not statement_form:
+        # The public collector view omits this constant field, but its digest is
+        # the statement aggregate over the complete-buffered observation.
+        aggregate["body_observation"] = "complete-buffered"
+    require(
+        aggregate_digest == sha256_prefixed_json(aggregate),
+        f"{label} aggregate digest mismatch",
+    )
+    return request
+
+
+def verify_observation_response(value: Any, label: str) -> dict[str, Any]:
+    require(isinstance(value, dict), f"{label} must be an object")
+    response = dict(value)
+    require_exact_object_fields(
+        response,
+        {
+            "status",
+            "headers_digest",
+            "header_count",
+            "body_digest",
+            "body_bytes",
+            "aggregate_digest",
+        },
+        label,
+    )
+    status = require_uint64(response.get("status"), f"{label} status")
+    require(200 <= status <= 599, f"{label} status is invalid")
+    require_sha256(response.get("headers_digest"), f"{label} headers digest")
+    require_observation_count(response.get("header_count"), f"{label} header count", maximum=65535)
+    require_sha256(response.get("body_digest"), f"{label} body digest")
+    require_observation_count(
+        response.get("body_bytes"),
+        f"{label} body byte count",
+        maximum=OBSERVATION_MAX_BODY_BYTES,
+    )
+    aggregate_digest = require_sha256(response.get("aggregate_digest"), f"{label} aggregate digest")
+    require(
+        aggregate_digest
+        == sha256_prefixed_json({field: response[field] for field in response if field != "aggregate_digest"}),
+        f"{label} aggregate digest mismatch",
+    )
+    return response
+
+
+def verify_observation_upstream(value: Any, *, attempt: str) -> dict[str, Any] | None:
+    label = "response observation upstream observation"
+    if attempt in {"not-started", "started-no-response"}:
+        require(value is None, f"{label} must be null before response headers are observed")
+        return None
+    require(isinstance(value, dict), f"{label} must be an object after response headers are observed")
+    upstream = dict(value)
+    require_exact_object_fields(
+        upstream,
+        {
+            "status",
+            "headers_digest",
+            "header_count",
+            "body_state",
+            "body_digest",
+            "body_bytes",
+            "aggregate_digest",
+        },
+        label,
+    )
+    status = require_uint64(upstream.get("status"), f"{label} status")
+    require(200 <= status <= 599, f"{label} status is invalid")
+    require_sha256(upstream.get("headers_digest"), f"{label} headers digest")
+    require_observation_count(upstream.get("header_count"), f"{label} header count", maximum=65535)
+    body_state = upstream.get("body_state")
+    require(body_state in {"unread", "incomplete", "complete"}, f"{label} body state is invalid")
+    if body_state == "unread":
+        require(
+            upstream.get("body_digest") is None and upstream.get("body_bytes") is None,
+            f"{label} unread body must not carry body commitments",
+        )
+    else:
+        require_sha256(upstream.get("body_digest"), f"{label} body digest")
+        require_observation_count(
+            upstream.get("body_bytes"),
+            f"{label} body byte count",
+            maximum=OBSERVATION_MAX_BODY_BYTES,
+        )
+    require(
+        (attempt == "complete" and body_state == "complete")
+        or (attempt == "headers-observed-body-incomplete" and body_state in {"unread", "incomplete"}),
+        f"{label} body state does not match upstream attempt state",
+    )
+    aggregate_digest = require_sha256(upstream.get("aggregate_digest"), f"{label} aggregate digest")
+    require(
+        aggregate_digest
+        == sha256_prefixed_json({field: upstream[field] for field in upstream if field != "aggregate_digest"}),
+        f"{label} aggregate digest mismatch",
+    )
+    return upstream
+
+
+def verify_observation_vendor_tee(
+    value: Any,
+    *,
+    trusted_verifier_public_key_pem: str,
+    expected_tee_platform: str,
+    expected_quote_provider: str,
+    statement_digest: str,
+    response_signing_key_id: str,
+    expected_attested_claims: dict[str, Any],
+    max_age_seconds: int,
+    now: int,
+) -> dict[str, Any]:
+    label = "response observation vendor TEE"
+    require(isinstance(value, dict), f"{label} must be an object")
+    vendor = dict(value)
+    require_exact_object_fields(
+        vendor,
+        {"platform", "provider", "quote_sha256", "quote", "trusted_verifier"},
+        label,
+    )
+    platform_value = require_production_identifier(vendor.get("platform"), f"{label} platform")
+    provider = require_production_identifier(vendor.get("provider"), f"{label} provider")
+    require(platform_value == expected_tee_platform, f"{label} platform does not match release attestation")
+    require(provider == expected_quote_provider, f"{label} provider does not match release attestation")
+    quote = vendor.get("quote")
+    require(isinstance(quote, dict), f"{label} quote must be an object")
+    require_exact_object_fields(quote, {"format", "body_b64"}, f"{label} quote")
+    require_production_identifier(quote.get("format"), f"{label} quote format")
+    quote_body = require_base64url_bytes(
+        quote.get("body_b64"),
+        f"{label} quote body",
+        minimum_bytes=64,
+    )
+    require(
+        len(quote_body) <= MAX_VENDOR_QUOTE_BYTES,
+        f"{label} quote body exceeds the schema size limit",
+    )
+    quote_digest = require_sha256(vendor.get("quote_sha256"), f"{label} quote digest")
+    require(quote_digest == sha256_prefixed_json(quote), f"{label} quote digest mismatch")
+
+    trusted = vendor.get("trusted_verifier")
+    require(isinstance(trusted, dict), f"{label} trusted verifier must be an object")
+    require_exact_object_fields(
+        trusted,
+        {"apiVersion", "kind", "statement", "signature"},
+        f"{label} trusted verifier",
+    )
+    require(
+        trusted.get("apiVersion") == "serverware.vendorTeeVerification/v1"
+        and trusted.get("kind") == "ServerwareVendorTeeVerification",
+        f"{label} trusted verifier type mismatch",
+    )
+    verifier_statement = trusted.get("statement")
+    require(isinstance(verifier_statement, dict), f"{label} verifier statement must be an object")
+    require_exact_object_fields(
+        verifier_statement,
+        {
+            "verifier_key_id",
+            "outcome",
+            "environment",
+            "trust_basis",
+            "vendor_quote_verified",
+            "certificate_chain_verified",
+            "revocation_checked",
+            "debug",
+            "verified_at_unix",
+            "expires_at_unix",
+            "tee_platform",
+            "quote_provider",
+            "vendor_quote_sha256",
+            "server_statement_sha256",
+            "response_signing_key_id",
+            "attested_claims",
+        },
+        f"{label} verifier statement",
+    )
+    verifier_key_id = ed25519_public_key_id(
+        trusted_verifier_public_key_pem,
+        f"{label} trust root",
+    )
+    require(
+        verifier_statement.get("verifier_key_id") == verifier_key_id,
+        f"{label} verifier key is not the configured trust root",
+    )
+    verify_ed25519(
+        trusted_verifier_public_key_pem,
+        str(trusted.get("signature") or ""),
+        canonical_json(verifier_statement).encode("utf-8"),
+        f"{label} trusted verifier",
+    )
+    exact = {
+        "outcome": "verified",
+        "environment": "production",
+        "trust_basis": "vendor-root-certificate-chain",
+        "vendor_quote_verified": True,
+        "certificate_chain_verified": True,
+        "revocation_checked": True,
+        "debug": False,
+        "tee_platform": platform_value,
+        "quote_provider": provider,
+        "vendor_quote_sha256": quote_digest,
+        "server_statement_sha256": statement_digest,
+        "response_signing_key_id": response_signing_key_id,
+        "attested_claims": expected_attested_claims,
+    }
+    for field, expected in exact.items():
+        require(verifier_statement.get(field) == expected, f"{label} verifier {field} mismatch")
+    verified_at = require_unix_time(verifier_statement.get("verified_at_unix"), f"{label} verification time")
+    expires_at = require_unix_time(verifier_statement.get("expires_at_unix"), f"{label} verification expiry")
+    require(verified_at <= now + PROXY_PROOF_FUTURE_SKEW_SECONDS, f"{label} verification time is in the future")
+    require(now - verified_at <= max_age_seconds, f"{label} verifier receipt is stale")
+    require(expires_at >= now and expires_at > verified_at, f"{label} verifier receipt is expired")
+    require(
+        expires_at - verified_at <= PROXY_PROOF_MAX_AGE_LIMIT_SECONDS,
+        f"{label} verifier validity window is too long",
+    )
+    return {
+        "platform": platform_value,
+        "provider": provider,
+        "quote_sha256": quote_digest,
+        "trusted_verifier_key_id": verifier_key_id,
+        "verified_at_unix": verified_at,
+        "expires_at_unix": expires_at,
+    }
+
+
+def verify_production_response_observation_proof(
+    document: dict[str, Any],
+    *,
+    observation_body_snapshot: FileSnapshot,
+    trusted_verifier_public_key_pem: str,
+    trusted_collector_public_key_pem: str,
+    trusted_control_plane_response_signing_public_key_pem: str,
+    expected_control_plane_response_signing_public_key_id: str,
+    policy_snapshot: PolicySnapshot,
+    expected_principal_id: str,
+    expected_server_instance_id: str,
+    expected_client_nonce: str,
+    expected_client_request_digest: str,
+    expected_request_digest: str,
+    expected_operation_digest: str,
+    expected_tls_channel_binding: str,
+    expected_policy_digest: str,
+    expected_runtime_manifest_digest: str,
+    expected_binary_digest: str,
+    expected_release_digest: str,
+    expected_image_signatures_digest: str,
+    expected_source_tree_digest: str,
+    expected_response_signing_key_id: str,
+    expected_tee_platform: str,
+    expected_quote_provider: str,
+    max_age_seconds: int,
+) -> dict[str, Any]:
+    label = "response observation proof"
+    assert_no_secret_fields(document)
+    require(1 <= max_age_seconds <= PROXY_PROOF_MAX_AGE_LIMIT_SECONDS, f"{label} max age is invalid")
+    require(isinstance(document, dict), f"{label} must be an object")
+    require_exact_object_fields(
+        document,
+        {"apiVersion", "kind", "captured_at_unix", "request", "response", "runtime_proof", "collector"},
+        label,
+    )
+    require(
+        document.get("apiVersion") == "serverware.responseObservationProof/v1"
+        and document.get("kind") == "ServerwareResponseObservationProof",
+        f"{label} has the wrong type",
+    )
+    now = int(time.time())
+    captured_at = require_unix_time(document.get("captured_at_unix"), f"{label} capture time")
+    require(captured_at <= now + PROXY_PROOF_FUTURE_SKEW_SECONDS, f"{label} capture time is in the future")
+    require(now - captured_at <= max_age_seconds, f"{label} capture is stale")
+    nonce_bytes = require_base64url_bytes(expected_client_nonce, f"{label} expected nonce", minimum_bytes=32)
+    require(len(nonce_bytes) == 32, f"{label} expected nonce must contain exactly 32 bytes")
+    nonce_expires_at = int.from_bytes(
+        nonce_bytes[:RESPONSE_OBSERVATION_NONCE_EXPIRY_BYTES], "big"
+    )
+    require(
+        any(nonce_bytes[RESPONSE_OBSERVATION_NONCE_EXPIRY_BYTES:]),
+        f"{label} expected nonce random bytes must not be all zero",
+    )
+    require(
+        nonce_expires_at + PROXY_PROOF_FUTURE_SKEW_SECONDS >= captured_at,
+        f"{label} expected nonce expired before the response capture",
+    )
+    require(
+        nonce_expires_at
+        <= captured_at
+        + RESPONSE_OBSERVATION_NONCE_MAX_LIFETIME_SECONDS
+        + PROXY_PROOF_FUTURE_SKEW_SECONDS,
+        f"{label} expected nonce expiry exceeds the bounded freshness window",
+    )
+    tls_bytes = require_base64url_bytes(
+        expected_tls_channel_binding,
+        f"{label} expected TLS exporter",
+        minimum_bytes=32,
+    )
+    require(len(tls_bytes) == 32, f"{label} expected TLS exporter must contain exactly 32 bytes")
+
+    external_request = verify_observation_request(document.get("request"), statement_form=False)
+    external_response = verify_observation_response(document.get("response"), f"{label} collector response")
+    require(
+        external_response["body_digest"] == observation_body_snapshot.sha256,
+        f"{label} collector response body digest does not match the separately published body",
+    )
+    require(
+        external_response["body_bytes"] == len(observation_body_snapshot.data),
+        f"{label} collector response body byte count does not match the separately published body",
+    )
+    expected_client_request_digest = require_sha256(
+        expected_client_request_digest,
+        f"{label} expected client request digest",
+    )
+    require(
+        external_request["aggregate_digest"] == expected_client_request_digest,
+        f"{label} request aggregate does not match the independently pinned client request digest",
+    )
+
+    collector = document.get("collector")
+    require(isinstance(collector, dict), f"{label} collector must be an object")
+    require_exact_object_fields(
+        collector,
+        {"algorithm", "key_id", "public_key_pem", "signature", "capture_digest"},
+        f"{label} collector",
+    )
+    require(collector.get("algorithm") == "Ed25519", f"{label} collector algorithm mismatch")
+    collector_public_key_pem = collector.get("public_key_pem")
+    require(isinstance(collector_public_key_pem, str), f"{label} collector public key is missing")
+    collector_der = ed25519_public_key_der(collector_public_key_pem, f"{label} collector")
+    trusted_collector_der = ed25519_public_key_der(
+        trusted_collector_public_key_pem,
+        f"{label} trusted collector",
+    )
+    require(collector_der == trusted_collector_der, f"{label} collector key is not the configured trust root")
+    collector_key_id = sha256_prefixed_bytes(collector_der)
+    require(collector.get("key_id") == collector_key_id, f"{label} collector key ID mismatch")
+    capture = {field: document[field] for field in document if field != "collector"}
+    capture_digest = require_sha256(collector.get("capture_digest"), f"{label} collector capture digest")
+    require(capture_digest == sha256_prefixed_json(capture), f"{label} collector capture digest mismatch")
+    verify_ed25519(
+        collector_public_key_pem,
+        str(collector.get("signature") or ""),
+        canonical_json(capture).encode("utf-8"),
+        f"{label} collector",
+    )
+
+    runtime = document.get("runtime_proof")
+    require(isinstance(runtime, dict), f"{label} runtime proof must be an object; terminal proof evidence is required")
+    require_exact_object_fields(
+        runtime,
+        {"apiVersion", "kind", "server_statement", "server_statement_sha256", "server_signature", "vendor_tee"},
+        f"{label} runtime proof",
+    )
+    require(
+        runtime.get("apiVersion") == OBSERVATION_RUNTIME_PROOF_API_VERSION
+        and runtime.get("kind") == "ServerwareResponseObservationRuntimeProof",
+        f"{label} runtime proof has the wrong type",
+    )
+    statement = runtime.get("server_statement")
+    require(isinstance(statement, dict), f"{label} server statement must be an object")
+    require_exact_object_fields(
+        statement,
+        {
+            "apiVersion",
+            "issued_at_unix",
+            "observation_id",
+            "client_nonce",
+            "request",
+            "policy",
+            "principal_id",
+            "route_id",
+            "request_digest",
+            "operation_digest",
+            "credential",
+            "authorization",
+            "response_path",
+            "upstream_attempt",
+            "upstream_observation",
+            "emitted_response",
+            "runtime_manifest_digest",
+            "data_plane_binary_digest",
+            "release_digest",
+            "server_instance",
+            "tls_channel_binding",
+            "observation_authority",
+        },
+        f"{label} server statement",
+    )
+    require(statement.get("apiVersion") == OBSERVATION_STATEMENT_API_VERSION, f"{label} statement version mismatch")
+    issued_at = require_unix_time(statement.get("issued_at_unix"), f"{label} statement issue time")
+    require(issued_at <= now + PROXY_PROOF_FUTURE_SKEW_SECONDS, f"{label} statement issue time is in the future")
+    require(now - issued_at <= max_age_seconds, f"{label} statement is stale")
+    require(issued_at <= captured_at + PROXY_PROOF_FUTURE_SKEW_SECONDS, f"{label} statement postdates capture")
+    require(statement.get("client_nonce") == expected_client_nonce, f"{label} statement nonce mismatch")
+    observation_id = require_sha256(statement.get("observation_id"), f"{label} observation ID")
+    require(
+        observation_id
+        == sha256_prefixed_json(
+            {"client_nonce": expected_client_nonce, "contract": OBSERVATION_STATEMENT_API_VERSION}
+        ),
+        f"{label} observation ID commitment mismatch",
+    )
+
+    statement_request = verify_observation_request(statement.get("request"), statement_form=True)
+    require(
+        external_request
+        == {field: value for field, value in statement_request.items() if field != "body_observation"},
+        f"{label} collector request does not exactly match the signed request commitments",
+    )
+    emitted_response = verify_observation_response(
+        statement.get("emitted_response"),
+        f"{label} emitted response",
+    )
+    require(external_response == emitted_response, f"{label} collector response does not exactly match emitted response")
+
+    policy = statement.get("policy")
+    require(isinstance(policy, dict), f"{label} policy observation must be an object")
+    require_exact_object_fields(
+        policy,
+        {"digest", "snapshot_epoch", "decision_state", "completion_state"},
+        f"{label} policy observation",
+    )
+    policy_digest = require_sha256(policy.get("digest"), f"{label} policy digest")
+    require(policy_digest == expected_policy_digest == policy_snapshot.hash, f"{label} policy digest mismatch")
+    require_uint64(policy.get("snapshot_epoch"), f"{label} policy snapshot epoch")
+    require(
+        policy.get("decision_state") == "allowed" and policy.get("completion_state") == "same-active",
+        f"{label} production completion requires an allowed decision from the same active policy snapshot",
+    )
+    principal_id = require_observation_identifier(statement.get("principal_id"), f"{label} principal ID")
+    route_id = require_observation_identifier(statement.get("route_id"), f"{label} route ID")
+    require(principal_id == expected_principal_id, f"{label} principal mismatch")
+    matched_route = require_proxy_policy_route(
+        policy_snapshot,
+        principal_id=principal_id,
+        route_id=route_id,
+    )
+    matched_route_id = matched_route.id
+    require(route_id == matched_route_id, f"{label} route mismatch")
+    request_digest = require_sha256(statement.get("request_digest"), f"{label} dispatched request digest")
+    operation_digest = require_sha256(statement.get("operation_digest"), f"{label} operation digest")
+    require(request_digest == expected_request_digest, f"{label} dispatched request digest mismatch")
+    require(operation_digest == expected_operation_digest, f"{label} operation digest mismatch")
+
+    credential = statement.get("credential")
+    require(isinstance(credential, dict), f"{label} credential observation must be an object")
+    require_exact_object_fields(credential, {"state", "binding_digest"}, f"{label} credential observation")
+    credential_state = credential.get("state")
+    require(credential_state in {"not-required", "injected"}, f"{label} credential was not dispatch-ready")
+    if matched_route.credential_ref is None:
+        require(
+            credential_state == "not-required"
+            and credential.get("binding_digest") is None,
+            f"{label} credential evidence does not match the credentialless signed route",
+        )
+    else:
+        require(
+            credential_state == "injected",
+            f"{label} credentialed signed route lacks injected credential evidence",
+        )
+
+    authorization = statement.get("authorization")
+    require(isinstance(authorization, dict), f"{label} authorization observation must be an object")
+    require_exact_object_fields(
+        authorization,
+        {
+            "state",
+            "binding_digest",
+            "release_authority",
+            "control_plane_authorization_receipt",
+            "control_plane_authorization_receipt_sha256",
+        },
+        f"{label} authorization observation",
+    )
+    authorization_state = authorization.get("state")
+    require(
+        authorization_state
+        in {
+            "not-evaluated",
+            "denied",
+            "reserved",
+            "dispatching",
+            "completed-forwarded",
+            "completion-unknown",
+        },
+        f"{label} authorization state is invalid",
+    )
+    full_authorization_states = {"dispatching", "completed-forwarded", "completion-unknown"}
+    full_authorization = authorization_state in full_authorization_states
+    require(
+        full_authorization or not route_requires_atomic_authorization(matched_route),
+        f"{label} signed route requires atomic credential, JIT, or shared-quota authorization evidence",
+    )
+    authorization_fields = (
+        authorization.get("binding_digest"),
+        authorization.get("release_authority"),
+        authorization.get("control_plane_authorization_receipt"),
+        authorization.get("control_plane_authorization_receipt_sha256"),
+    )
+    require(
+        all(value is not None for value in authorization_fields)
+        if full_authorization
+        else all(value is None for value in authorization_fields),
+        f"{label} authorization evidence nullability does not match authorization state",
+    )
+    release_authority: dict[str, Any] | None = None
+    authorization_binding_digest: str | None = None
+    receipt: Any = None
+    receipt_digest: str | None = None
+    if full_authorization:
+        release_authority = verify_proxy_release_authority(
+            authorization.get("release_authority"),
+            expected_request_digest=request_digest,
+            expected_operation_digest=operation_digest,
+            latest_observation_at_unix=issued_at,
+        )
+        require(
+            release_authority["credential_ref"] == matched_route.credential_ref,
+            f"{label} release authority credential does not match the signed route",
+        )
+        jit_required = (matched_route.jit or {}).get("required") is True
+        require(
+            (
+                release_authority["grant_id"] is not None
+                and release_authority["approval_id"] is not None
+            )
+            == jit_required,
+            f"{label} release authority JIT evidence does not match the signed route",
+        )
+        authorization_binding_digest = require_sha256(
+            authorization.get("binding_digest"),
+            f"{label} authorization binding digest",
+        )
+        require(
+            authorization_binding_digest == release_authority["consumption_identity_digest"],
+            f"{label} authorization binding digest mismatch",
+        )
+        receipt = authorization.get("control_plane_authorization_receipt")
+        receipt_digest = require_sha256(
+            authorization.get("control_plane_authorization_receipt_sha256"),
+            f"{label} control-plane authorization receipt digest",
+        )
+        require(
+            receipt_digest == sha256_prefixed_json(receipt),
+            f"{label} control-plane authorization receipt digest mismatch",
+        )
+        if credential_state == "not-required":
+            require(
+                credential.get("binding_digest") is None
+                and release_authority["credential_ref"] is None
+                and release_authority["credential_version"] == 0,
+                f"{label} credential-free observation disagrees with release authority",
+            )
+        else:
+            credential_binding = require_sha256(
+                credential.get("binding_digest"),
+                f"{label} credential binding digest",
+            )
+            require(
+                credential_binding
+                == sha256_prefixed_json(
+                    {
+                        "credential_ref": release_authority["credential_ref"],
+                        "credential_version": release_authority["credential_version"],
+                    }
+                ),
+                f"{label} credential binding digest mismatch",
+            )
+    else:
+        require(
+            credential_state == "not-required" and credential.get("binding_digest") is None,
+            f"{label} dispatch without atomic authorization must be credentialless",
+        )
+
+    response_path = statement.get("response_path")
+    upstream_attempt = statement.get("upstream_attempt")
+    require(response_path in OBSERVATION_RESPONSE_PATHS, f"{label} response path is invalid")
+    require(upstream_attempt in OBSERVATION_UPSTREAM_ATTEMPTS, f"{label} upstream attempt state is invalid")
+    require(
+        response_path in {"complete-upstream-response-released", "complete-upstream-response-blocked"}
+        and upstream_attempt == "complete",
+        f"{label} production completion requires a complete upstream response observation",
+    )
+    require(
+        authorization_state not in {"denied", "reserved"},
+        f"{label} denied or reserved authorization cannot accompany a post-dispatch response path",
+    )
+    upstream = verify_observation_upstream(
+        statement.get("upstream_observation"),
+        attempt=upstream_attempt,
+    )
+
+    server_instance = statement.get("server_instance")
+    require(isinstance(server_instance, dict), f"{label} server instance must be an object")
+    require_exact_object_fields(server_instance, {"id", "identity_digest"}, f"{label} server instance")
+    require(server_instance.get("id") == expected_server_instance_id, f"{label} server instance mismatch")
+    server_identity_digest = require_sha256(
+        server_instance.get("identity_digest"),
+        f"{label} server instance identity digest",
+    )
+    require(
+        server_identity_digest == sha256_prefixed_bytes(expected_server_instance_id.encode("utf-8")),
+        f"{label} server instance identity digest mismatch",
+    )
+    tls = statement.get("tls_channel_binding")
+    require(isinstance(tls, dict), f"{label} TLS channel binding must be an object")
+    require_exact_object_fields(tls, {"type", "label", "value"}, f"{label} TLS channel binding")
+    require(
+        tls
+        == {
+            "type": "tls-exporter",
+            "label": OBSERVATION_TLS_EXPORTER_LABEL,
+            "value": expected_tls_channel_binding,
+        },
+        f"{label} TLS exporter binding mismatch",
+    )
+    authority = statement.get("observation_authority")
+    require(isinstance(authority, dict), f"{label} observation authority must be an object")
+    require_exact_object_fields(
+        authority,
+        {"source", "upstream_truth", "downstream_delivery"},
+        f"{label} observation authority",
+    )
+    require(
+        authority
+        == {
+            "source": "gate-authored",
+            "upstream_truth": "not-independently-observed",
+            "downstream_delivery": "not-claimed",
+        },
+        f"{label} observation authority overclaims its evidence",
+    )
+    bindings = {
+        "runtime_manifest_digest": require_sha256(
+            statement.get("runtime_manifest_digest"),
+            f"{label} runtime manifest digest",
+        ),
+        "data_plane_binary_digest": require_sha256(
+            statement.get("data_plane_binary_digest"),
+            f"{label} data-plane binary digest",
+        ),
+        "release_digest": require_sha256(statement.get("release_digest"), f"{label} release digest"),
+    }
+    require(bindings["runtime_manifest_digest"] == expected_runtime_manifest_digest, f"{label} runtime manifest mismatch")
+    require(bindings["data_plane_binary_digest"] == expected_binary_digest, f"{label} data-plane binary mismatch")
+    require(bindings["release_digest"] == expected_release_digest, f"{label} release digest mismatch")
+
+    statement_digest = require_sha256(runtime.get("server_statement_sha256"), f"{label} statement digest")
+    require(statement_digest == sha256_prefixed_json(statement), f"{label} statement digest mismatch")
+    server_signature = runtime.get("server_signature")
+    require(isinstance(server_signature, dict), f"{label} server signature must be an object")
+    require_exact_object_fields(
+        server_signature,
+        {"algorithm", "key_id", "public_key_pem", "signature"},
+        f"{label} server signature",
+    )
+    require(server_signature.get("algorithm") == "Ed25519", f"{label} server signature algorithm mismatch")
+    response_public_key_pem = server_signature.get("public_key_pem")
+    require(isinstance(response_public_key_pem, str), f"{label} response signing public key is missing")
+    response_signing_key_id = ed25519_public_key_id(response_public_key_pem, f"{label} response signer")
+    require(server_signature.get("key_id") == response_signing_key_id, f"{label} response signer key ID mismatch")
+    require(response_signing_key_id == expected_response_signing_key_id, f"{label} response signer does not match attested runtime")
+    verify_ed25519(
+        response_public_key_pem,
+        str(server_signature.get("signature") or ""),
+        canonical_json(statement).encode("utf-8"),
+        f"{label} server statement",
+    )
+
+    expected_attested_claims = {
+        "server_statement_sha256": statement_digest,
+        "server_statement_api_version": OBSERVATION_STATEMENT_API_VERSION,
+        "issued_at_unix": issued_at,
+        "observation_id": observation_id,
+        "client_nonce_sha256": sha256_prefixed_bytes(nonce_bytes),
+        "request_aggregate_digest": statement_request["aggregate_digest"],
+        "response_path": response_path,
+        "upstream_attempt": upstream_attempt,
+        "upstream_observation_digest": upstream["aggregate_digest"] if upstream is not None else None,
+        "emitted_response_digest": emitted_response["aggregate_digest"],
+        "policy_digest": policy_digest,
+        **bindings,
+        "server_instance_id": expected_server_instance_id,
+        "server_instance_identity_digest": server_identity_digest,
+        "tls_exporter_label": OBSERVATION_TLS_EXPORTER_LABEL,
+        "tls_channel_binding_sha256": sha256_prefixed_bytes(expected_tls_channel_binding.encode("utf-8")),
+        "response_signing_key_id": response_signing_key_id,
+        "observation_source": "gate-authored",
+    }
+    vendor_summary = verify_observation_vendor_tee(
+        runtime.get("vendor_tee"),
+        trusted_verifier_public_key_pem=trusted_verifier_public_key_pem,
+        expected_tee_platform=expected_tee_platform,
+        expected_quote_provider=expected_quote_provider,
+        statement_digest=statement_digest,
+        response_signing_key_id=response_signing_key_id,
+        expected_attested_claims=expected_attested_claims,
+        max_age_seconds=max_age_seconds,
+        now=now,
+    )
+    control_plane_key_id = ed25519_public_key_id(
+        trusted_control_plane_response_signing_public_key_pem,
+        f"{label} control-plane response signing trust root",
+    )
+    require(
+        control_plane_key_id == expected_control_plane_response_signing_public_key_id,
+        f"{label} control-plane response signing trust root ID mismatch",
+    )
+    control_plane: dict[str, Any] | None = None
+    if full_authorization:
+        control_plane = verify_control_plane_authorization_receipt(
+            receipt,
+            trusted_public_key_pem=trusted_control_plane_response_signing_public_key_pem,
+            expected_trusted_public_key_id=expected_control_plane_response_signing_public_key_id,
+            expected_release_authority=release_authority,
+            expected_principal_id=expected_principal_id,
+            expected_route_id=matched_route_id,
+            expected_runtime_manifest_digest=expected_runtime_manifest_digest,
+            expected_policy_digest=expected_policy_digest,
+            expected_provenance_digest=expected_release_digest,
+            expected_image_signatures_digest=expected_image_signatures_digest,
+            expected_source_tree_digest=expected_source_tree_digest,
+        )
+        require(
+            control_plane["signing_key_id"] == control_plane_key_id,
+            f"{label} control-plane receipt signer mismatch",
+        )
+        verify_route_authorization_evidence(
+            matched_route,
+            release_authority,
+            control_plane,
+            label=label,
+        )
+    for proof_role, proof_key_id in (
+        ("external collector", collector_key_id),
+        ("response statement signer", response_signing_key_id),
+        ("vendor TEE verifier", vendor_summary["trusted_verifier_key_id"]),
+    ):
+        require(
+            not hmac.compare_digest(control_plane_key_id, proof_key_id),
+            f"control-plane response signing trust root must be independent from the observation proof {proof_role} key",
+        )
+    return {
+        "proof_contract": "observation-v1",
+        "apiVersion": document.get("apiVersion"),
+        "server_statement_api_version": statement.get("apiVersion"),
+        "server_statement_sha256": statement_digest,
+        "captured_at_unix": captured_at,
+        "issued_at_unix": issued_at,
+        "observation_id": observation_id,
+        "client_nonce_sha256": sha256_prefixed_bytes(nonce_bytes),
+        "client_request_digest": external_request["aggregate_digest"],
+        "request_digest": request_digest,
+        "operation_digest": operation_digest,
+        "principal_id": principal_id,
+        "route_id": route_id,
+        "response_path": response_path,
+        "upstream_attempt": upstream_attempt,
+        "authorization_state": authorization_state,
+        "observation_authority": authority,
+        "upstream_status": upstream["status"] if upstream is not None else None,
+        "emitted_response_status": emitted_response["status"],
+        "emitted_body_digest": emitted_response["body_digest"],
+        "emitted_body_bytes": emitted_response["body_bytes"],
+        "observed_body_artifact_sha256": observation_body_snapshot.sha256,
+        "observed_body_artifact_bytes": len(observation_body_snapshot.data),
+        "release_authority": release_authority,
+        "authorization_binding_digest": authorization_binding_digest,
+        "control_plane_response_signing_key_id": control_plane_key_id,
+        "control_plane_authorization_receipt": control_plane,
+        "control_plane_authorization_receipt_sha256": receipt_digest,
+        **bindings,
+        "server_instance_id": expected_server_instance_id,
+        "tls_channel_binding_sha256": sha256_prefixed_bytes(expected_tls_channel_binding.encode("utf-8")),
+        "collector_signing_key_id": collector_key_id,
+        "response_signing_key_id": response_signing_key_id,
+        "trusted_verifier_key_id": vendor_summary["trusted_verifier_key_id"],
+        "vendor_tee_platform": vendor_summary["platform"],
+        "vendor_quote_provider": vendor_summary["provider"],
+        "vendor_quote_sha256": vendor_summary["quote_sha256"],
+        "collector_signature_verified": True,
+        "server_statement_signature_verified": True,
+        "vendor_quote_verified": True,
+        "terminal_runtime_proof_bound": True,
+        "strict_collector_capture_bound": True,
+        "credentialless_dispatch_bound": not full_authorization,
+        "release_authority_bound": full_authorization,
+        "embedded_control_plane_authorization_receipt_bound": full_authorization,
+        "signed_policy_route_bound": True,
+        "release_artifacts_bound": True,
+    }
+
+
 def verify_production_proxy_response_proof(
     document: dict[str, Any],
     *,
     proof_contract: str = "buffered-v3",
     streamed_body_snapshot: FileSnapshot | None = None,
+    observation_body_snapshot: FileSnapshot | None = None,
     expected_operation_context_digest: str | None = None,
     **verification_inputs: Any,
 ) -> dict[str, Any]:
     require(
         proof_contract in PROXY_PROOF_CONTRACTS,
-        "proxy proof contract must be independently selected as buffered-v3 or streaming-v1",
+        "proxy proof contract must be independently selected as buffered-v3, observation-v1, or streaming-v1",
     )
     if proof_contract == "buffered-v3":
         require(
@@ -8048,10 +9163,36 @@ def verify_production_proxy_response_proof(
             expected_operation_context_digest is None,
             "buffered-v3 verification must not select a streaming operation context digest",
         )
+        require(
+            observation_body_snapshot is None,
+            "buffered-v3 verification must not consume an observation body artifact",
+        )
         return verify_production_buffered_proxy_response_proof(
             document,
             **verification_inputs,
         )
+    if proof_contract == "observation-v1":
+        require(
+            streamed_body_snapshot is None,
+            "observation-v1 verification must not consume a streaming body artifact",
+        )
+        require(
+            expected_operation_context_digest is None,
+            "observation-v1 verification must not select a streaming operation context digest",
+        )
+        require(
+            observation_body_snapshot is not None,
+            "observation-v1 verification requires a separately snapshotted body artifact",
+        )
+        return verify_production_response_observation_proof(
+            document,
+            observation_body_snapshot=observation_body_snapshot,
+            **verification_inputs,
+        )
+    require(
+        observation_body_snapshot is None,
+        "streaming-v1 verification must not consume an observation body artifact",
+    )
     require(
         streamed_body_snapshot is not None,
         "streaming-v1 verification requires a separately snapshotted body artifact",
@@ -8930,6 +10071,8 @@ def main() -> None:
     parser.add_argument("--proxy-proof-contract", choices=sorted(PROXY_PROOF_CONTRACTS), default=None)
     parser.add_argument("--proxy-stream-body", default=None)
     parser.add_argument("--proxy-max-stream-bytes", type=int, default=None)
+    parser.add_argument("--proxy-observation-body", default=None)
+    parser.add_argument("--proxy-max-observation-body-bytes", type=int, default=None)
     parser.add_argument("--proxy-proof-verifier-public-key", default=None)
     parser.add_argument("--proxy-collector-public-key", default=None)
     parser.add_argument("--proxy-server-instance-id", default=None)
@@ -9056,6 +10199,35 @@ def main() -> None:
             1 <= args.proxy_max_stream_bytes <= MAX_PROXY_STREAM_BODY_BYTES,
             f"--proxy-max-stream-bytes must be between 1 and {MAX_PROXY_STREAM_BODY_BYTES}",
         )
+        require(
+            args.proxy_observation_body is None
+            and args.proxy_max_observation_body_bytes is None,
+            "streaming-v1 completion does not accept observation body settings",
+        )
+    elif args.proxy_proof_contract == "observation-v1":
+        require(
+            args.proxy_stream_body is None and args.proxy_max_stream_bytes is None,
+            "observation-v1 completion does not accept streaming body settings",
+        )
+        require(
+            args.proxy_operation_context_digest is None,
+            "observation-v1 completion does not accept a streaming operation context digest",
+        )
+        require(
+            bool(args.proxy_observation_body),
+            "observation-v1 completion requires --proxy-observation-body",
+        )
+        require(
+            isinstance(args.proxy_max_observation_body_bytes, int),
+            "observation-v1 completion requires --proxy-max-observation-body-bytes",
+        )
+        require(
+            1
+            <= args.proxy_max_observation_body_bytes
+            <= MAX_PROXY_OBSERVATION_BODY_BYTES,
+            "--proxy-max-observation-body-bytes must be between 1 and "
+            f"{MAX_PROXY_OBSERVATION_BODY_BYTES}",
+        )
     else:
         require(
             args.proxy_stream_body is None and args.proxy_max_stream_bytes is None,
@@ -9064,6 +10236,11 @@ def main() -> None:
         require(
             args.proxy_operation_context_digest is None,
             "buffered-v3 completion does not accept a streaming operation context digest",
+        )
+        require(
+            args.proxy_observation_body is None
+            and args.proxy_max_observation_body_bytes is None,
+            "buffered-v3 completion does not accept observation body settings",
         )
     require(
         bool(args.proxy_proof_verifier_public_key),
@@ -9130,6 +10307,8 @@ def main() -> None:
     }
     if args.proxy_proof_contract == "streaming-v1":
         paths["proxy_stream_body"] = Path(args.proxy_stream_body)
+    elif args.proxy_proof_contract == "observation-v1":
+        paths["proxy_observation_body"] = Path(args.proxy_observation_body)
     if args.hardware_assurance:
         paths["hardware_assurance"] = Path(args.hardware_assurance)
         paths["hardware_assurance_trusted_public_key"] = Path(args.hardware_assurance_trusted_public_key)
@@ -9164,6 +10343,8 @@ def main() -> None:
             max_bytes = POLICY_BUNDLE_MAX_BYTES
         elif key == "proxy_stream_body":
             max_bytes = args.proxy_max_stream_bytes
+        elif key == "proxy_observation_body":
+            max_bytes = args.proxy_max_observation_body_bytes
         else:
             max_bytes = COMPLETION_INPUT_MAX_BYTES
         input_limits[key] = (key.replace("_", " "), max_bytes)
@@ -9292,6 +10473,8 @@ def main() -> None:
         proxy_proof_contract=args.proxy_proof_contract,
         proxy_stream_body=args.proxy_stream_body,
         proxy_max_stream_bytes=args.proxy_max_stream_bytes,
+        proxy_observation_body=args.proxy_observation_body,
+        proxy_max_observation_body_bytes=args.proxy_max_observation_body_bytes,
         proxy_operation_context_digest=args.proxy_operation_context_digest,
         p99_limit_ms=args.p99_limit_ms,
         docker_executable=args.docker_executable,
@@ -9664,6 +10847,9 @@ def main() -> None:
         proxy_response_proof,
         proof_contract=production_env_binding["proxy_proof_contract"],
         streamed_body_snapshot=final_file_snapshots.get("proxy_stream_body"),
+        observation_body_snapshot=final_file_snapshots.get(
+            "proxy_observation_body"
+        ),
         expected_operation_context_digest=production_env_binding[
             "proxy_operation_context_digest"
         ],
@@ -9698,6 +10884,17 @@ def main() -> None:
         expected_quote_provider=str(nitro_summary["provider"]),
         max_age_seconds=args.proxy_proof_max_age_seconds,
     )
+    if production_env_binding["proxy_proof_contract"] == "observation-v1":
+        observation_body_snapshot = final_file_snapshots["proxy_observation_body"]
+        proxy_response_summary["observed_body_artifact"] = {
+            "path": str(observation_body_snapshot.path),
+            "sha256": observation_body_snapshot.sha256,
+            "bytes": len(observation_body_snapshot.data),
+            "max_bytes": production_env_binding[
+                "proxy_max_observation_body_bytes"
+            ],
+        }
+        proxy_response_summary["observed_body_artifact_bound"] = True
     require(
         proxy_response_summary["collector_signing_key_id"]
         == production_env_binding["expected_proxy_collector_key_id"],
@@ -9739,8 +10936,8 @@ def main() -> None:
                     "external_checkpoint_trusted_public_key_id"
                 ],
                 "control_plane_response_signer": proxy_response_summary[
-                    "control_plane_authorization_receipt"
-                ]["signing_key_id"],
+                    "control_plane_response_signing_key_id"
+                ],
                 "policy_identity_signer": production_env_binding[
                     "policy_trusted_public_key_id"
                 ],

@@ -29,6 +29,8 @@ use serverware_decision_gate::{
     MAX_REQUESTS_PER_BOOT as CUSTODY_MAX_REQUESTS_PER_BOOT,
     MAX_STATEMENT_AGE_SECONDS as CUSTODY_MAX_STATEMENT_AGE_SECONDS,
     PROTOCOL_API_VERSION as CUSTODY_PROTOCOL_API_VERSION,
+    RESPONSE_OBSERVATION_PROOF_RESERVE_OPERATION as CUSTODY_RESPONSE_OBSERVATION_PROOF_RESERVE_OPERATION,
+    RESPONSE_OBSERVATION_PROOF_SIGN_OPERATION as CUSTODY_RESPONSE_OBSERVATION_PROOF_SIGN_OPERATION,
     RESPONSE_PROOF_SIGN_OPERATION as CUSTODY_RESPONSE_PROOF_SIGN_OPERATION,
     STREAMING_RESPONSE_PROOF_SIGN_OPERATION as CUSTODY_STREAMING_RESPONSE_PROOF_SIGN_OPERATION,
 };
@@ -72,6 +74,8 @@ const MAX_CONTROL_PLANE_RELEASE_AUTHORIZATION_RESPONSE_BYTES: u64 = 32 * 1024;
 const MAX_CONTROL_PLANE_AUTHORIZATION_RECEIPT_BODY_BYTES: usize = 32 * 1024;
 const MAX_CONTROL_PLANE_AUDIT_ACK_BODY_BYTES: u64 = 32 * 1024;
 const MAX_CONTROL_PLANE_AUDIT_BATCH_BODY_BYTES: usize = 1536 * 1024;
+const RESPONSE_OBSERVATION_NONCE_EXPIRY_BYTES: usize = 4;
+const RESPONSE_OBSERVATION_NONCE_MAX_LIFETIME_SECONDS: u64 = 330;
 const MAX_CONTROL_PLANE_RESPONSE_STATEMENT_BYTES: usize = 8 * 1024;
 const MAX_CONTROL_PLANE_RESPONSE_HEADER_BYTES: usize = 16 * 1024;
 const CONTROL_PLANE_AUTHORIZATION_RECEIPT_API_VERSION: &str =
@@ -128,14 +132,22 @@ const DEFAULT_RESPONSE_WRITE_DEADLINE_MS: u64 = 120_000;
 const SOCKET_IO_SLICE: Duration = Duration::from_secs(1);
 const RESPONSE_PROOF_EXPORTER_LABEL: &[u8] = b"EXPORTER-Serverware-Proxy-Response-v1";
 const STREAM_RESPONSE_PROOF_EXPORTER_LABEL: &[u8] = b"EXPORTER-Serverware-Proxy-Stream-v1";
+const RESPONSE_OBSERVATION_EXPORTER_LABEL: &[u8] = b"EXPORTER-Serverware-Response-Observation-v1";
 const SERVERWARE_INTERNAL_HEADER_PREFIX: &str = "x-serverware-";
 const RESPONSE_PROOF_NONCE_HEADER: &str = "x-serverware-proof-nonce";
 const STREAM_RESPONSE_PROOF_NONCE_HEADER: &str = "x-serverware-stream-proof-nonce";
+const RESPONSE_OBSERVATION_NONCE_HEADER: &str = "x-serverware-observation-nonce";
 const STREAM_RESPONSE_PROOF_B64_TRAILER: &str = "X-Serverware-Stream-Proof-B64";
 const STREAM_RESPONSE_PROOF_SHA256_TRAILER: &str = "X-Serverware-Stream-Proof-SHA256";
 const STREAM_RESPONSE_PROOF_TRAILER_DECLARATION: &str =
     "X-Serverware-Stream-Proof-B64, X-Serverware-Stream-Proof-SHA256";
+const RESPONSE_OBSERVATION_PROOF_B64_TRAILER: &str = "X-Serverware-Observation-Proof-B64";
+const RESPONSE_OBSERVATION_PROOF_SHA256_TRAILER: &str = "X-Serverware-Observation-Proof-SHA256";
+const RESPONSE_OBSERVATION_PROOF_TRAILER_DECLARATION: &str =
+    "X-Serverware-Observation-Proof-B64, X-Serverware-Observation-Proof-SHA256";
 const MAX_STREAM_RESPONSE_RUNTIME_PROOF_BYTES: usize = 96 * 1024;
+const MAX_RESPONSE_OBSERVATION_RUNTIME_PROOF_BYTES: usize = 128 * 1024;
+const MAX_LOCAL_RESPONSE_OBSERVATION_NONCES: usize = 65_536;
 const RESPONSE_PROOF_CUSTODY_SOCKET_ENV: &str = "SERVERWARE_RESPONSE_PROOF_CUSTODY_SOCKET";
 const RESPONSE_PROOF_CUSTODY_EXPECTED_UID_ENV: &str =
     "SERVERWARE_RESPONSE_PROOF_CUSTODY_EXPECTED_UID";
@@ -852,7 +864,10 @@ struct IncomingRequest {
 struct RequestHead {
     method: String,
     target: String,
+    http_version: String,
     headers: BTreeMap<String, String>,
+    raw_headers_digest: Option<String>,
+    raw_header_count: u64,
     content_length: usize,
     has_content_length: bool,
     prefetched_body: Vec<u8>,
@@ -904,11 +919,153 @@ struct StreamingResponseProofContext {
 enum ResponseProofKind {
     Buffered,
     Streaming,
+    Observation,
 }
 
 enum ResponseProofRequestContext<'a> {
     Buffered(&'a ResponseProofContext),
     Streaming(&'a StreamingResponseProofContext),
+    Observation(&'a ResponseObservationContext),
+}
+
+#[derive(Clone)]
+struct ResponseObservationContext {
+    client_nonce: String,
+    client_nonce_bytes: Vec<u8>,
+    nonce_expires_at_epoch_ms: u64,
+    tls_exporter: String,
+    method: String,
+    target_digest: String,
+    query_present: bool,
+    query_digest: String,
+    headers_digest: String,
+    header_count: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+struct ResponseObservationUpstream {
+    status: u16,
+    headers_digest: String,
+    header_count: u64,
+    body_state: &'static str,
+    body_digest: Option<String>,
+    body_bytes: Option<u64>,
+    aggregate_digest: String,
+}
+
+#[derive(Clone, Debug)]
+struct ResponseObservationTrace {
+    policy_decision_state: &'static str,
+    principal_id: Option<String>,
+    route_id: Option<String>,
+    request_digest: Option<String>,
+    operation_digest: Option<String>,
+    credential_state: &'static str,
+    credential_binding_digest: Option<String>,
+    authorization_state: &'static str,
+    authorization_context: Option<ResponseProofAuthorizationContext>,
+    response_path: &'static str,
+    upstream_attempt: &'static str,
+    upstream_observation: Option<ResponseObservationUpstream>,
+}
+
+impl ResponseObservationTrace {
+    fn new() -> Self {
+        Self {
+            policy_decision_state: "not-evaluated",
+            principal_id: None,
+            route_id: None,
+            request_digest: None,
+            operation_digest: None,
+            credential_state: "not-evaluated",
+            credential_binding_digest: None,
+            authorization_state: "not-evaluated",
+            authorization_context: None,
+            response_path: "local-reject-no-upstream-attempt",
+            upstream_attempt: "not-started",
+            upstream_observation: None,
+        }
+    }
+
+    fn observe_decision(&mut self, decision: &Value) {
+        let allowed = decision
+            .get("allowed")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        self.policy_decision_state = if allowed { "allowed" } else { "denied" };
+        self.principal_id = decision
+            .get("principal_id")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        self.route_id = decision
+            .get("route_id")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        self.request_digest = decision
+            .get("request_digest")
+            .and_then(Value::as_str)
+            .filter(|value| is_sha256_digest(value))
+            .map(str::to_string);
+        self.operation_digest = decision
+            .get("operation_digest")
+            .and_then(Value::as_str)
+            .filter(|value| is_sha256_digest(value))
+            .map(str::to_string);
+        if allowed {
+            self.response_path = "authorized-not-attempted";
+            self.credential_state = if decision
+                .get("credential_ref")
+                .and_then(Value::as_str)
+                .is_some()
+            {
+                "lease-unavailable"
+            } else {
+                "not-required"
+            };
+        } else {
+            self.authorization_state = "denied";
+        }
+    }
+
+    fn observe_upstream_headers(&mut self, status: StatusCode, headers: &HeaderMap) {
+        let (headers_digest, header_count) = response_observation_header_map_digest(headers);
+        let mut observation = ResponseObservationUpstream {
+            status: status.as_u16(),
+            headers_digest,
+            header_count,
+            body_state: "unread",
+            body_digest: None,
+            body_bytes: None,
+            aggregate_digest: String::new(),
+        };
+        observation.aggregate_digest = response_observation_upstream_aggregate(&observation);
+        self.upstream_attempt = "headers-observed-body-incomplete";
+        self.upstream_observation = Some(observation);
+        self.response_path = "post-dispatch-local-failure";
+    }
+
+    fn observe_upstream_body(&mut self, body: &[u8]) {
+        let Some(observation) = self.upstream_observation.as_mut() else {
+            return;
+        };
+        observation.body_state = "complete";
+        observation.body_digest = Some(sha256_prefixed(body));
+        observation.body_bytes = Some(body.len() as u64);
+        observation.aggregate_digest = response_observation_upstream_aggregate(observation);
+        self.upstream_attempt = "complete";
+    }
+
+    fn observe_upstream_body_incomplete(&mut self, body: &[u8]) {
+        let Some(observation) = self.upstream_observation.as_mut() else {
+            return;
+        };
+        observation.body_state = "incomplete";
+        observation.body_digest = Some(sha256_prefixed(body));
+        observation.body_bytes = Some(body.len() as u64);
+        observation.aggregate_digest = response_observation_upstream_aggregate(observation);
+        self.upstream_attempt = "headers-observed-body-incomplete";
+        self.response_path = "post-dispatch-local-failure";
+    }
 }
 
 struct StreamingResponseProofRequest<'a> {
@@ -1185,10 +1342,18 @@ struct GateState {
     release_provenance_path: Option<String>,
     image_signatures_path: Option<String>,
     response_proof_signer: ResponseProofSigner,
+    response_observation_nonce_reservations:
+        Mutex<HashMap<String, LocalResponseObservationReservation>>,
     response_proof_public_key_pem: String,
     response_proof_signing_key_id: String,
     response_proof_attestation_command: Option<String>,
     server_instance_id: Option<String>,
+}
+
+struct LocalResponseObservationReservation {
+    request_aggregate_digest: String,
+    expires_at: Instant,
+    statement_digest: Option<String>,
 }
 
 enum ResponseProofSigner {
@@ -1341,6 +1506,33 @@ impl ResponseProofSigner {
             Self::Custody(signer) => {
                 let operation = signer.health.begin_sign();
                 let result = signer.sign_streaming(statement, authorization_binding);
+                match &result {
+                    Ok(_) => signer.health.record_sign_success(operation),
+                    Err(error) => signer.health.record_sign_failure(operation, error),
+                }
+                result
+            }
+        }
+    }
+
+    fn sign_observation(
+        &self,
+        statement: &Value,
+        authorization_binding: Option<&ReleaseAuthorizationBinding>,
+    ) -> Result<String, String> {
+        match self {
+            Self::LocalEphemeral(signing_key) => {
+                let canonical_statement = custody_canonical_json_bytes(statement)
+                    .map_err(|err| format!("canonicalize response observation proof: {err}"))?;
+                Ok(format!(
+                    "ed25519:{}",
+                    general_purpose::URL_SAFE_NO_PAD
+                        .encode(signing_key.sign(&canonical_statement).to_bytes())
+                ))
+            }
+            Self::Custody(signer) => {
+                let operation = signer.health.begin_sign();
+                let result = signer.sign_observation(statement, authorization_binding);
                 match &result {
                     Ok(_) => signer.health.record_sign_success(operation),
                     Err(error) => signer.health.record_sign_failure(operation, error),
@@ -1769,6 +1961,8 @@ impl CustodyResponseProofSigner {
                 "startup":CUSTODY_HELLO_OPERATION,
                 "sign":CUSTODY_RESPONSE_PROOF_SIGN_OPERATION,
                 "streaming_sign":CUSTODY_STREAMING_RESPONSE_PROOF_SIGN_OPERATION,
+                "observation_reserve":CUSTODY_RESPONSE_OBSERVATION_PROOF_RESERVE_OPERATION,
+                "observation_sign":CUSTODY_RESPONSE_OBSERVATION_PROOF_SIGN_OPERATION,
             },
             "limits":{
                 "max_frame_bytes":CUSTODY_MAX_FRAME_BYTES,
@@ -1843,6 +2037,14 @@ struct CustodySignResult {
     statement_digest: String,
     signature: String,
     key_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CustodyObservationReserveResult {
+    observation_id: String,
+    request_aggregate_digest: String,
+    reserved_until_epoch_ms: u64,
 }
 
 #[derive(Debug)]
@@ -8340,6 +8542,22 @@ fn policy_trust_is_fresh(state: &GateState) -> bool {
         <= POLICY_TRUST_MAX_AGE
 }
 
+fn policy_trust_supports_publication_window(state: &GateState, window: Duration) -> bool {
+    if !matches!(
+        state.policy_trust_root_source,
+        PolicyTrustRootSource::AttestedControlPlane { .. }
+    ) {
+        return true;
+    }
+    state
+        .policy_trust_last_success
+        .lock()
+        .expect("policy trust last-success mutex poisoned")
+        .elapsed()
+        .checked_add(window)
+        .is_some_and(|age| age <= POLICY_TRUST_MAX_AGE)
+}
+
 fn snapshot_is_active(state: &GateState, snapshot: &Arc<Snapshot>) -> bool {
     if !policy_trust_is_fresh(state) {
         return false;
@@ -8981,6 +9199,35 @@ fn digest_json(value: &Value) -> String {
     sha256_prefixed(canonical_json(value).as_bytes())
 }
 
+fn response_observation_header_map_digest(headers: &HeaderMap) -> (String, u64) {
+    let mut canonical: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut count = 0u64;
+    for name in headers.keys() {
+        let values = headers
+            .get_all(name)
+            .iter()
+            .map(|value| general_purpose::URL_SAFE_NO_PAD.encode(value.as_bytes()))
+            .collect::<Vec<_>>();
+        count = count.saturating_add(values.len() as u64);
+        canonical.insert(name.as_str().to_ascii_lowercase(), values);
+    }
+    (
+        digest_json(&serde_json::to_value(canonical).expect("header digest serialization")),
+        count,
+    )
+}
+
+fn response_observation_upstream_aggregate(observation: &ResponseObservationUpstream) -> String {
+    digest_json(&json!({
+        "status":observation.status,
+        "headers_digest":observation.headers_digest,
+        "header_count":observation.header_count,
+        "body_state":observation.body_state,
+        "body_digest":observation.body_digest,
+        "body_bytes":observation.body_bytes,
+    }))
+}
+
 fn digest_json_ensure_ascii(value: &Value) -> String {
     sha256_prefixed(canonical_json_ensure_ascii(value).as_bytes())
 }
@@ -9544,6 +9791,8 @@ fn validate_custody_hello_response(
         CUSTODY_HELLO_OPERATION.to_string(),
         CUSTODY_RESPONSE_PROOF_SIGN_OPERATION.to_string(),
         CUSTODY_STREAMING_RESPONSE_PROOF_SIGN_OPERATION.to_string(),
+        CUSTODY_RESPONSE_OBSERVATION_PROOF_RESERVE_OPERATION.to_string(),
+        CUSTODY_RESPONSE_OBSERVATION_PROOF_SIGN_OPERATION.to_string(),
     ];
     if result.capabilities != expected_capabilities {
         return Err("custody hello capabilities mismatch".to_string());
@@ -9798,7 +10047,7 @@ impl CustodyResponseProofSigner {
         self.sign_operation(
             CUSTODY_RESPONSE_PROOF_SIGN_OPERATION,
             statement,
-            authorization_binding,
+            Some(authorization_binding),
         )
     }
 
@@ -9810,15 +10059,82 @@ impl CustodyResponseProofSigner {
         self.sign_operation(
             CUSTODY_STREAMING_RESPONSE_PROOF_SIGN_OPERATION,
             statement,
+            Some(authorization_binding),
+        )
+    }
+
+    fn sign_observation(
+        &self,
+        statement: &Value,
+        authorization_binding: Option<&ReleaseAuthorizationBinding>,
+    ) -> Result<String, String> {
+        self.sign_operation(
+            CUSTODY_RESPONSE_OBSERVATION_PROOF_SIGN_OPERATION,
+            statement,
             authorization_binding,
         )
+    }
+
+    fn reserve_observation(
+        &self,
+        client_nonce: &str,
+        observation_id: &str,
+        request_aggregate_digest: &str,
+        expected_expiry_epoch_ms: u64,
+    ) -> Result<(), String> {
+        let operation = CUSTODY_RESPONSE_OBSERVATION_PROOF_RESERVE_OPERATION;
+        let deadline = custody_deadline_after(CUSTODY_IO_DEADLINE)?;
+        let mut stream = connect_custody_socket(&self.socket_path, self.expected_uid, deadline)
+            .map_err(|err| match err {
+                CustodyHelloAttemptError::Retryable(err) | CustodyHelloAttemptError::Fatal(err) => {
+                    err
+                }
+            })?;
+        let request_id = canonical_custody_request_id()?;
+        let request = CustodyRequest {
+            api_version: CUSTODY_PROTOCOL_API_VERSION.to_string(),
+            request_id: request_id.clone(),
+            boot_id: Some(self.boot_id.clone()),
+            operation: operation.to_string(),
+            params: json!({
+                "client_nonce":client_nonce,
+                "observation_id":observation_id,
+                "request_aggregate_digest":request_aggregate_digest,
+            }),
+        };
+        let response = custody_exchange(&mut stream, &request, deadline)?;
+        let (_, result): (String, CustodyObservationReserveResult) =
+            decode_successful_custody_response(
+                &response,
+                &request_id,
+                operation,
+                Some(&self.boot_id),
+                deadline,
+            )?;
+        if result.observation_id != observation_id
+            || result.request_aggregate_digest != request_aggregate_digest
+            || result.reserved_until_epoch_ms != expected_expiry_epoch_ms
+        {
+            return Err("custody response observation reservation binding mismatch".to_string());
+        }
+        let now_epoch_ms = u64::try_from(now_epoch_ms())
+            .map_err(|_| "current epoch does not fit response observation reservation")?;
+        let maximum_expiry = now_epoch_ms
+            .checked_add(RESPONSE_OBSERVATION_NONCE_MAX_LIFETIME_SECONDS.saturating_mul(1000))
+            .ok_or("response observation reservation maximum expiry overflow")?;
+        if result.reserved_until_epoch_ms <= now_epoch_ms
+            || result.reserved_until_epoch_ms > maximum_expiry
+        {
+            return Err("custody response observation reservation expiry is invalid".to_string());
+        }
+        Ok(())
     }
 
     fn sign_operation(
         &self,
         operation: &str,
         statement: &Value,
-        authorization_binding: &ReleaseAuthorizationBinding,
+        authorization_binding: Option<&ReleaseAuthorizationBinding>,
     ) -> Result<String, String> {
         let deadline = custody_deadline_after(CUSTODY_IO_DEADLINE)?;
         let mut stream = connect_custody_socket(&self.socket_path, self.expected_uid, deadline)
@@ -9941,15 +10257,100 @@ fn requested_response_proof_kind(
     let lowered = lower_headers(headers);
     let buffered = lowered.contains_key(RESPONSE_PROOF_NONCE_HEADER);
     let streaming = lowered.contains_key(STREAM_RESPONSE_PROOF_NONCE_HEADER);
-    match (buffered, streaming) {
-        (true, true) => Err(
-            "buffered and streaming response proof nonce headers are mutually exclusive"
-                .to_string(),
-        ),
-        (true, false) => Ok(Some(ResponseProofKind::Buffered)),
-        (false, true) => Ok(Some(ResponseProofKind::Streaming)),
-        (false, false) => Ok(None),
+    let observation = lowered.contains_key(RESPONSE_OBSERVATION_NONCE_HEADER);
+    match (buffered, streaming, observation) {
+        (true, false, false) => Ok(Some(ResponseProofKind::Buffered)),
+        (false, true, false) => Ok(Some(ResponseProofKind::Streaming)),
+        (false, false, true) => Ok(Some(ResponseProofKind::Observation)),
+        (false, false, false) => Ok(None),
+        _ => Err("response proof nonce headers are mutually exclusive".to_string()),
     }
+}
+
+fn validate_response_observation_nonce_bytes(bytes: &[u8]) -> Result<u64, String> {
+    if bytes.len() != 32 {
+        return Err("response observation nonce must contain exactly 32 bytes".to_string());
+    }
+    let expires_at_epoch_seconds = u32::from_be_bytes(
+        bytes[..RESPONSE_OBSERVATION_NONCE_EXPIRY_BYTES]
+            .try_into()
+            .expect("response observation nonce expiry width"),
+    );
+    if bytes[RESPONSE_OBSERVATION_NONCE_EXPIRY_BYTES..]
+        .iter()
+        .all(|byte| *byte == 0)
+    {
+        return Err("response observation nonce random bytes must not be all zero".to_string());
+    }
+    let expires_at_epoch_ms = u64::from(expires_at_epoch_seconds).saturating_mul(1000);
+    let now_epoch_ms = u64::try_from(now_epoch_ms())
+        .map_err(|_| "current epoch does not fit response observation nonce validation")?;
+    if expires_at_epoch_ms <= now_epoch_ms {
+        return Err("response observation nonce is expired".to_string());
+    }
+    if expires_at_epoch_ms
+        > now_epoch_ms
+            .saturating_add(RESPONSE_OBSERVATION_NONCE_MAX_LIFETIME_SECONDS.saturating_mul(1000))
+    {
+        return Err(
+            "response observation nonce expiry exceeds the bounded freshness window".to_string(),
+        );
+    }
+    Ok(expires_at_epoch_ms)
+}
+
+fn response_observation_context(
+    state: &GateState,
+    head: &RequestHead,
+    tls: &ServerConnection,
+) -> Result<Option<ResponseObservationContext>, String> {
+    let lowered = lower_headers(&head.headers);
+    let Some(client_nonce) = lowered.get(RESPONSE_OBSERVATION_NONCE_HEADER) else {
+        return Ok(None);
+    };
+    if state.response_proof_attestation_command.is_none() || state.server_instance_id.is_none() {
+        return Err("response observation proof service is not configured".to_string());
+    }
+    if head.method != head.method.to_ascii_uppercase() {
+        return Err("response observation method must be uppercase".to_string());
+    }
+    if head.http_version != "HTTP/1.1" {
+        return Err("response observation requests require HTTP/1.1".to_string());
+    }
+    if client_nonce.contains('=') {
+        return Err("response observation nonce must use unpadded base64url".to_string());
+    }
+    let client_nonce_bytes = general_purpose::URL_SAFE_NO_PAD
+        .decode(client_nonce.as_bytes())
+        .map_err(|_| "response observation nonce is not valid base64url".to_string())?;
+    let nonce_expires_at_epoch_ms = validate_response_observation_nonce_bytes(&client_nonce_bytes)?;
+    let exporter = tls
+        .export_keying_material(
+            [0u8; 32],
+            RESPONSE_OBSERVATION_EXPORTER_LABEL,
+            Some(client_nonce_bytes.as_slice()),
+        )
+        .map_err(|err| format!("derive response observation TLS exporter: {err}"))?;
+    let (query_present, query) = head
+        .target
+        .split_once('?')
+        .map(|(_, query)| (true, query))
+        .unwrap_or((false, ""));
+    Ok(Some(ResponseObservationContext {
+        client_nonce: client_nonce.to_string(),
+        client_nonce_bytes,
+        nonce_expires_at_epoch_ms,
+        tls_exporter: general_purpose::URL_SAFE_NO_PAD.encode(exporter),
+        method: head.method.clone(),
+        target_digest: sha256_prefixed(head.target.as_bytes()),
+        query_present,
+        query_digest: sha256_prefixed(query.as_bytes()),
+        headers_digest: head
+            .raw_headers_digest
+            .clone()
+            .ok_or("response observation raw header commitment is unavailable")?,
+        header_count: head.raw_header_count,
+    }))
 }
 
 fn decode_streaming_response_proof_nonce(client_nonce: &str) -> Result<Vec<u8>, String> {
@@ -10663,6 +11064,536 @@ fn encode_streaming_response_runtime_proof(
     let runtime_proof_digest = sha256_prefixed(&runtime_proof_bytes);
     let runtime_proof_b64 = general_purpose::URL_SAFE_NO_PAD.encode(runtime_proof_bytes);
     Ok((runtime_proof_b64, runtime_proof_digest))
+}
+
+fn response_observation_id(client_nonce: &str) -> String {
+    digest_json(&json!({
+        "contract":"serverware.responseObservationStatement/v1",
+        "client_nonce":client_nonce,
+    }))
+}
+
+fn response_observation_request(context: &ResponseObservationContext, body: &[u8]) -> Value {
+    let mut request = json!({
+        "method":context.method,
+        "target_digest":context.target_digest,
+        "query_present":context.query_present,
+        "query_digest":context.query_digest,
+        "headers_digest":context.headers_digest,
+        "header_count":context.header_count,
+        "body_digest":sha256_prefixed(body),
+        "body_bytes":body.len() as u64,
+        "body_observation":"complete-buffered",
+    });
+    let aggregate_digest = digest_json(&request);
+    request
+        .as_object_mut()
+        .expect("response observation request is an object")
+        .insert(
+            "aggregate_digest".to_string(),
+            Value::String(aggregate_digest),
+        );
+    request
+}
+
+fn reserve_response_observation_nonce(
+    state: &GateState,
+    context: &ResponseObservationContext,
+    request: &Value,
+) -> Result<(), String> {
+    let observation_id = response_observation_id(&context.client_nonce);
+    let request_aggregate_digest = request
+        .get("aggregate_digest")
+        .and_then(Value::as_str)
+        .filter(|value| is_sha256_digest(value))
+        .ok_or("response observation request aggregate is unavailable")?;
+    match &state.response_proof_signer {
+        ResponseProofSigner::LocalEphemeral(_) => {
+            let now = Instant::now();
+            let wall_now_epoch_ms = u64::try_from(now_epoch_ms())
+                .map_err(|_| "current epoch does not fit response observation reservation")?;
+            let mut reservations = state
+                .response_observation_nonce_reservations
+                .lock()
+                .map_err(|_| "response observation nonce reservation state is unavailable")?;
+            reservations.retain(|_, reservation| reservation.expires_at > now);
+            if reservations.contains_key(&observation_id) {
+                return Err("response observation nonce was already reserved".to_string());
+            }
+            if reservations.len() >= MAX_LOCAL_RESPONSE_OBSERVATION_NONCES {
+                return Err(
+                    "response observation nonce reservation capacity is exhausted".to_string(),
+                );
+            }
+            let retention = Duration::from_millis(
+                context
+                    .nonce_expires_at_epoch_ms
+                    .checked_sub(wall_now_epoch_ms)
+                    .ok_or("response observation nonce expired before reservation")?,
+            );
+            let expires_at = now
+                .checked_add(retention)
+                .ok_or("response observation nonce reservation expiry overflow")?;
+            reservations.insert(
+                observation_id,
+                LocalResponseObservationReservation {
+                    request_aggregate_digest: request_aggregate_digest.to_string(),
+                    expires_at,
+                    statement_digest: None,
+                },
+            );
+            Ok(())
+        }
+        ResponseProofSigner::Custody(signer) => signer.reserve_observation(
+            &context.client_nonce,
+            &observation_id,
+            request_aggregate_digest,
+            context.nonce_expires_at_epoch_ms,
+        ),
+    }
+}
+
+fn consume_local_response_observation_reservation(
+    state: &GateState,
+    observation_id: &str,
+    request_aggregate_digest: &str,
+    statement_digest: &str,
+) -> Result<(), String> {
+    if !matches!(
+        &state.response_proof_signer,
+        ResponseProofSigner::LocalEphemeral(_)
+    ) {
+        return Ok(());
+    }
+    let now = Instant::now();
+    let mut reservations = state
+        .response_observation_nonce_reservations
+        .lock()
+        .map_err(|_| "response observation nonce reservation state is unavailable")?;
+    reservations.retain(|_, reservation| reservation.expires_at > now);
+    let reservation = reservations
+        .get_mut(observation_id)
+        .ok_or("response observation signing requires a live local nonce reservation")?;
+    if reservation.request_aggregate_digest != request_aggregate_digest {
+        return Err(
+            "response observation request aggregate does not match its local reservation"
+                .to_string(),
+        );
+    }
+    match reservation.statement_digest.as_deref() {
+        None => {
+            reservation.statement_digest = Some(statement_digest.to_string());
+            Ok(())
+        }
+        Some(existing) if existing == statement_digest => Ok(()),
+        Some(_) => Err(
+            "response observation nonce is already bound to a different local statement"
+                .to_string(),
+        ),
+    }
+}
+
+fn response_observation_wire_headers(
+    parsed: &ParsedBufferedResponse<'_>,
+) -> BTreeMap<String, String> {
+    let mut headers = parsed
+        .headers
+        .iter()
+        .filter(|(name, _)| {
+            !matches!(
+                name.as_str(),
+                "connection"
+                    | "content-length"
+                    | "trailer"
+                    | "transfer-encoding"
+                    | "x-serverware-observation-proof-b64"
+                    | "x-serverware-observation-proof-sha256"
+            )
+        })
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect::<BTreeMap<_, _>>();
+    headers.insert("connection".to_string(), "close".to_string());
+    headers.insert(
+        "trailer".to_string(),
+        RESPONSE_OBSERVATION_PROOF_TRAILER_DECLARATION.to_string(),
+    );
+    headers.insert("transfer-encoding".to_string(), "chunked".to_string());
+    headers
+}
+
+fn response_observation_emitted_response(
+    parsed: &ParsedBufferedResponse<'_>,
+    wire_headers: &BTreeMap<String, String>,
+) -> Value {
+    let mut response = json!({
+        "status":parsed.status,
+        "headers_digest":digest_json(
+            &serde_json::to_value(wire_headers).expect("response observation headers serialize")
+        ),
+        "header_count":wire_headers.len() as u64,
+        "body_digest":sha256_prefixed(parsed.body),
+        "body_bytes":parsed.body.len() as u64,
+    });
+    let aggregate_digest = digest_json(&response);
+    response
+        .as_object_mut()
+        .expect("response observation emitted response is an object")
+        .insert(
+            "aggregate_digest".to_string(),
+            Value::String(aggregate_digest),
+        );
+    response
+}
+
+fn response_observation_authorization(trace: &ResponseObservationTrace) -> Value {
+    let Some(context) = trace.authorization_context.as_ref() else {
+        return json!({
+            "state":trace.authorization_state,
+            "binding_digest":null,
+            "release_authority":null,
+            "control_plane_authorization_receipt":null,
+            "control_plane_authorization_receipt_sha256":null,
+        });
+    };
+    let binding = serde_json::to_value(&context.authorization_binding)
+        .expect("response observation authorization binding serializes");
+    let receipt = serde_json::to_value(&context.control_plane_authorization_receipt)
+        .expect("response observation authorization receipt serializes");
+    json!({
+        "state":trace.authorization_state,
+        "binding_digest":digest_json_ensure_ascii(&binding),
+        "release_authority":context.release_authority,
+        "control_plane_authorization_receipt":receipt,
+        "control_plane_authorization_receipt_sha256":digest_json(&receipt),
+    })
+}
+
+fn build_response_observation_runtime_proof(
+    state: &GateState,
+    snapshot: &Arc<Snapshot>,
+    context: &ResponseObservationContext,
+    request: &Value,
+    trace: &ResponseObservationTrace,
+    parsed: &ParsedBufferedResponse<'_>,
+    wire_headers: &BTreeMap<String, String>,
+) -> Result<(String, String), String> {
+    if !snapshot_is_active(state, snapshot) {
+        return Err(
+            "policy snapshot revoked before response observation proof completion".to_string(),
+        );
+    }
+    let emitted_response = response_observation_emitted_response(parsed, wire_headers);
+    let provenance_digest = release_provenance_digest(&state.release_provenance_path);
+    let release_digest = provenance_digest
+        .as_str()
+        .filter(|value| is_sha256_digest(value))
+        .ok_or("response observation proof requires release provenance")?
+        .to_string();
+    let image_signature_digest = image_signatures_digest(&state.image_signatures_path);
+    let source_digest = source_tree_digest(&state.release_provenance_path);
+    let runtime_manifest = build_runtime_manifest(
+        state,
+        snapshot,
+        &provenance_digest,
+        &image_signature_digest,
+        &source_digest,
+    );
+    let runtime_manifest_digest = sha256_prefixed(canonical_json(&runtime_manifest).as_bytes());
+    let server_instance_id = state
+        .server_instance_id
+        .as_deref()
+        .ok_or("response observation proof server instance is not configured")?;
+    let server_instance_identity_digest = sha256_prefixed(server_instance_id.as_bytes());
+    let observation_id = response_observation_id(&context.client_nonce);
+    let issued_at_unix = now_epoch_ms() / 1000;
+    let statement = json!({
+        "apiVersion":"serverware.responseObservationStatement/v1",
+        "issued_at_unix":issued_at_unix,
+        "observation_id":observation_id,
+        "client_nonce":context.client_nonce,
+        "request":request,
+        "policy":{
+            "digest":snapshot.hash,
+            "snapshot_epoch":snapshot.epoch,
+            "decision_state":trace.policy_decision_state,
+            "completion_state":"same-active",
+        },
+        "principal_id":trace.principal_id,
+        "route_id":trace.route_id,
+        "request_digest":trace.request_digest,
+        "operation_digest":trace.operation_digest,
+        "credential":{
+            "state":trace.credential_state,
+            "binding_digest":trace.credential_binding_digest,
+        },
+        "authorization":response_observation_authorization(trace),
+        "response_path":trace.response_path,
+        "upstream_attempt":trace.upstream_attempt,
+        "upstream_observation":trace.upstream_observation,
+        "emitted_response":emitted_response,
+        "runtime_manifest_digest":runtime_manifest_digest,
+        "data_plane_binary_digest":state.binary_digest,
+        "release_digest":release_digest,
+        "server_instance":{
+            "id":server_instance_id,
+            "identity_digest":server_instance_identity_digest,
+        },
+        "tls_channel_binding":{
+            "type":"tls-exporter",
+            "label":String::from_utf8_lossy(RESPONSE_OBSERVATION_EXPORTER_LABEL),
+            "value":context.tls_exporter,
+        },
+        "observation_authority":{
+            "source":"gate-authored",
+            "upstream_truth":"not-independently-observed",
+            "downstream_delivery":"not-claimed",
+        },
+    });
+    let canonical_statement = canonical_json(&statement);
+    let statement_digest = sha256_prefixed(canonical_statement.as_bytes());
+    consume_local_response_observation_reservation(
+        state,
+        &observation_id,
+        request
+            .get("aggregate_digest")
+            .and_then(Value::as_str)
+            .ok_or("response observation request aggregate is unavailable")?,
+        &statement_digest,
+    )?;
+    let signature = state.response_proof_signer.sign_observation(
+        &statement,
+        trace
+            .authorization_context
+            .as_ref()
+            .map(|context| &context.authorization_binding),
+    )?;
+    let attested_claims = json!({
+        "server_statement_sha256":statement_digest,
+        "server_statement_api_version":"serverware.responseObservationStatement/v1",
+        "issued_at_unix":issued_at_unix,
+        "observation_id":observation_id,
+        "client_nonce_sha256":sha256_prefixed(&context.client_nonce_bytes),
+        "request_aggregate_digest":request.get("aggregate_digest"),
+        "response_path":trace.response_path,
+        "upstream_attempt":trace.upstream_attempt,
+        "upstream_observation_digest":trace.upstream_observation.as_ref().map(|value| &value.aggregate_digest),
+        "emitted_response_digest":emitted_response.get("aggregate_digest"),
+        "policy_digest":snapshot.hash,
+        "runtime_manifest_digest":runtime_manifest_digest,
+        "data_plane_binary_digest":state.binary_digest,
+        "release_digest":release_digest,
+        "server_instance_id":server_instance_id,
+        "server_instance_identity_digest":server_instance_identity_digest,
+        "tls_exporter_label":String::from_utf8_lossy(RESPONSE_OBSERVATION_EXPORTER_LABEL),
+        "tls_channel_binding_sha256":sha256_prefixed(context.tls_exporter.as_bytes()),
+        "response_signing_key_id":state.response_proof_signing_key_id,
+        "observation_source":"gate-authored",
+    });
+    let attestation_request = json!({
+        "apiVersion":"serverware.responseObservationProofAttestationRequest/v1",
+        "kind":"ServerwareResponseObservationProofAttestationRequest",
+        "server_statement_sha256":statement_digest,
+        "response_signing_key_id":state.response_proof_signing_key_id,
+        "response_signing_public_key_pem":state.response_proof_public_key_pem,
+        "attested_claims":attested_claims,
+    });
+    let attestation_command = state
+        .response_proof_attestation_command
+        .as_deref()
+        .ok_or("response observation proof attestation command is not configured")?;
+    let attestation = run_bounded_json_command(
+        attestation_command,
+        &attestation_request,
+        "response observation proof attestation",
+    )?;
+    let vendor_tee = attestation
+        .get("vendor_tee")
+        .filter(|value| value.is_object())
+        .cloned()
+        .ok_or("response observation proof attestation output is missing vendor_tee")?;
+    let runtime_proof = json!({
+        "apiVersion":"serverware.responseObservationRuntimeProof/v1",
+        "kind":"ServerwareResponseObservationRuntimeProof",
+        "server_statement":statement,
+        "server_statement_sha256":statement_digest,
+        "server_signature":{
+            "algorithm":"Ed25519",
+            "key_id":state.response_proof_signing_key_id,
+            "public_key_pem":state.response_proof_public_key_pem,
+            "signature":signature,
+        },
+        "vendor_tee":vendor_tee,
+    });
+    let runtime_proof_bytes = canonical_json(&runtime_proof).into_bytes();
+    if runtime_proof_bytes.len() > MAX_RESPONSE_OBSERVATION_RUNTIME_PROOF_BYTES {
+        return Err(format!(
+            "response observation runtime proof exceeds {MAX_RESPONSE_OBSERVATION_RUNTIME_PROOF_BYTES} bytes"
+        ));
+    }
+    let runtime_proof_digest = sha256_prefixed(&runtime_proof_bytes);
+    let runtime_proof_b64 = general_purpose::URL_SAFE_NO_PAD.encode(runtime_proof_bytes);
+    Ok((runtime_proof_b64, runtime_proof_digest))
+}
+
+fn response_observation_wire_head(status: u16, headers: &BTreeMap<String, String>) -> Vec<u8> {
+    let reason = StatusCode::from_u16(status)
+        .ok()
+        .and_then(|status| status.canonical_reason())
+        .unwrap_or("Status");
+    let mut output = format!("HTTP/1.1 {status} {reason}\r\n").into_bytes();
+    for (name, value) in headers {
+        output.extend_from_slice(name.as_bytes());
+        output.extend_from_slice(b": ");
+        output.extend_from_slice(value.as_bytes());
+        output.extend_from_slice(b"\r\n");
+    }
+    output.extend_from_slice(b"\r\n");
+    output
+}
+
+fn response_observation_terminal(runtime_proof_b64: &str, runtime_proof_digest: &str) -> Vec<u8> {
+    format!(
+        "0\r\n{RESPONSE_OBSERVATION_PROOF_B64_TRAILER}: {runtime_proof_b64}\r\n{RESPONSE_OBSERVATION_PROOF_SHA256_TRAILER}: {runtime_proof_digest}\r\n\r\n"
+    )
+    .into_bytes()
+}
+
+fn write_response_observation_for_active_snapshot<W: TerminalDeadlineWrite + ?Sized>(
+    state: &GateState,
+    snapshot: &Arc<Snapshot>,
+    writer: &mut W,
+    segments: &[&[u8]],
+) -> Result<(), String> {
+    if !policy_trust_supports_publication_window(state, SOCKET_IO_SLICE) {
+        return Err(
+            "policy trust cannot remain fresh for bounded response observation publication"
+                .to_string(),
+        );
+    }
+    let active = state
+        .snapshot
+        .read()
+        .expect("policy snapshot lock poisoned");
+    if active.epoch != snapshot.epoch || !Arc::ptr_eq(&active, snapshot) {
+        return Err("policy snapshot revoked before response observation publication".to_string());
+    }
+    let deadline = Instant::now()
+        .checked_add(SOCKET_IO_SLICE)
+        .ok_or("response observation publication deadline overflow")?;
+    writer.set_terminal_write_deadline(Some(deadline));
+    let result = (|| {
+        for segment in segments {
+            let mut remaining = *segment;
+            while !remaining.is_empty() {
+                if Instant::now() >= deadline {
+                    return Err(
+                        "response observation publication exceeded its bounded I/O slice"
+                            .to_string(),
+                    );
+                }
+                if !policy_trust_is_fresh(state) {
+                    return Err(
+                        "policy trust expired during response observation publication".to_string(),
+                    );
+                }
+                match writer.write(remaining) {
+                    Ok(0) => {
+                        return Err(
+                            "response observation publication made no write progress".to_string()
+                        )
+                    }
+                    Ok(written) => remaining = &remaining[written..],
+                    Err(err) if err.kind() == io::ErrorKind::Interrupted => {
+                        return Err(
+                            "response observation publication write slice elapsed".to_string()
+                        )
+                    }
+                    Err(err) => {
+                        return Err(format!("write response observation publication: {err}"))
+                    }
+                }
+            }
+        }
+        if Instant::now() >= deadline {
+            return Err(
+                "response observation publication exceeded its bounded I/O slice".to_string(),
+            );
+        }
+        match writer.flush() {
+            Ok(()) => {}
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => {
+                return Err("response observation publication flush slice elapsed".to_string())
+            }
+            Err(err) => return Err(format!("flush response observation publication: {err}")),
+        }
+        if Instant::now() >= deadline {
+            return Err(
+                "response observation publication exceeded its bounded I/O slice".to_string(),
+            );
+        }
+        if !policy_trust_is_fresh(state) {
+            return Err("policy trust expired during response observation publication".to_string());
+        }
+        Ok(())
+    })();
+    writer.set_terminal_write_deadline(None);
+    result
+}
+
+fn write_response_observation_proof(
+    state: &GateState,
+    snapshot: &Arc<Snapshot>,
+    writer: &mut dyn TerminalDeadlineWrite,
+    context: &ResponseObservationContext,
+    request: &Value,
+    trace: &ResponseObservationTrace,
+    response: &[u8],
+) -> Result<String, String> {
+    let parsed = parse_buffered_response(response)?;
+    let wire_headers = response_observation_wire_headers(&parsed);
+    let head = response_observation_wire_head(parsed.status, &wire_headers);
+    let body_chunk = if parsed.body.is_empty() {
+        Vec::new()
+    } else {
+        let mut chunk = format!("{:x}\r\n", parsed.body.len()).into_bytes();
+        chunk.extend_from_slice(parsed.body);
+        chunk.extend_from_slice(b"\r\n");
+        chunk
+    };
+    let assembly_operation = state.response_proof_signer.begin_proof_assembly();
+    let assembly_result = (|| {
+        let (runtime_proof_b64, runtime_proof_digest) = build_response_observation_runtime_proof(
+            state,
+            snapshot,
+            context,
+            request,
+            trace,
+            &parsed,
+            &wire_headers,
+        )?;
+        let terminal = response_observation_terminal(&runtime_proof_b64, &runtime_proof_digest);
+        write_response_observation_for_active_snapshot(
+            state,
+            snapshot,
+            writer,
+            &[&head, &body_chunk, &terminal],
+        )?;
+        Ok::<_, String>(runtime_proof_digest)
+    })();
+    match assembly_result {
+        Ok(runtime_proof_digest) => {
+            state
+                .response_proof_signer
+                .record_proof_assembly_success(assembly_operation);
+            Ok(runtime_proof_digest)
+        }
+        Err(error) => {
+            state
+                .response_proof_signer
+                .record_proof_assembly_failure(assembly_operation, &error);
+            Err(error)
+        }
+    }
 }
 
 fn validate_streaming_response_proof_snapshot(
@@ -12121,6 +13052,7 @@ fn credential_lease_upstream_send_timeout(
 #[derive(Debug)]
 enum UpstreamSendError {
     CredentialAuthority(&'static str),
+    RequestBuild(String),
     Request(String),
 }
 
@@ -12153,7 +13085,7 @@ fn send_upstream_request_with_current_lease_and_timeout(
         let (client, request) = builder.build_split();
         let mut request = request
             .map_err(redacted_reqwest_error)
-            .map_err(UpstreamSendError::Request)?;
+            .map_err(UpstreamSendError::RequestBuild)?;
         let authority = acquire_upstream_send_authority(state, snapshot, binding)
             .map_err(UpstreamSendError::CredentialAuthority)?;
         if !policy_trust_is_fresh(state) {
@@ -12305,6 +13237,17 @@ fn credential_lease_background_candidates(
     candidates
 }
 
+fn active_credential_lease_background_candidates(
+    state: &GateState,
+    snapshot: &Arc<Snapshot>,
+    renew_before: Duration,
+) -> Vec<CredentialLeaseScope> {
+    if !snapshot_is_active(state, snapshot) {
+        return Vec::new();
+    }
+    credential_lease_background_candidates(state, snapshot, renew_before)
+}
+
 fn credential_generations_ready(state: &GateState, snapshot: &Arc<Snapshot>) -> bool {
     let generations = state
         .credential_generations
@@ -12374,7 +13317,7 @@ fn start_credential_lease_renewal(
         .name("credential-lease-renewal-coordinator".to_string())
         .spawn(move || loop {
             let snapshot = current_snapshot(&state);
-            for scope in credential_lease_background_candidates(
+            for scope in active_credential_lease_background_candidates(
                 &state,
                 &snapshot,
                 CREDENTIAL_LEASE_RENEW_BEFORE,
@@ -12743,7 +13686,10 @@ fn prepare_upstream_for_buffered_forward(
         &RequestHead {
             method: request.method.clone(),
             target: request.target.clone(),
+            http_version: "HTTP/1.1".to_string(),
             headers: request.headers.clone(),
+            raw_headers_digest: None,
+            raw_header_count: 0,
             content_length: request.body.len(),
             has_content_length: true,
             prefetched_body: Vec::new(),
@@ -16582,7 +17528,8 @@ fn prepare_request_operation_context(
             },
         )?;
     let proof_requested = normalized_headers.contains_key(RESPONSE_PROOF_NONCE_HEADER)
-        || normalized_headers.contains_key(STREAM_RESPONSE_PROOF_NONCE_HEADER);
+        || normalized_headers.contains_key(STREAM_RESPONSE_PROOF_NONCE_HEADER)
+        || normalized_headers.contains_key(RESPONSE_OBSERVATION_NONCE_HEADER);
     if proof_requested != req.client_request_digest.is_some() {
         return Err(json!({
             "error":"invalid_response_proof_request_binding",
@@ -21580,7 +22527,7 @@ fn fetch_gmail_metadata_child(
                 record: gmail_metadata_child_record(request_digest, None, "blocked_credential"),
             };
         }
-        Err(UpstreamSendError::Request(_)) => {
+        Err(UpstreamSendError::RequestBuild(_) | UpstreamSendError::Request(_)) => {
             return GmailMetadataChildResult::Dropped {
                 record: gmail_metadata_child_record(request_digest, None, "dropped_transport"),
             };
@@ -24501,7 +25448,7 @@ fn validate_response_proof_route_preflight(
     let streaming =
         streaming_response_policy(&response_policy_for_route(route_match.route)).is_some();
     match (proof_kind, streaming) {
-        (ResponseProofKind::Buffered, true) => {
+        (ResponseProofKind::Buffered | ResponseProofKind::Observation, true) => {
             Err("response_proof_requires_buffered_response_route")
         }
         (ResponseProofKind::Streaming, false) => {
@@ -26274,10 +27221,14 @@ fn finalize_upstream_response(
     streaming_response_proof: Option<StreamingResponseProofExecution<'_>>,
     gmail_metadata_fanout: Option<&GmailMetadataFanoutExecution<'_>>,
     gmail_proof_commit_output: Option<&mut Option<Vec<String>>>,
+    mut response_observation: Option<&mut ResponseObservationTrace>,
     _keep_alive: bool,
 ) -> ForwardResult {
     let status = response.status();
     let upstream_headers = response.headers().clone();
+    if let Some(observation) = response_observation.as_deref_mut() {
+        observation.observe_upstream_headers(status, &upstream_headers);
+    }
     let content_type = response
         .headers()
         .get("content-type")
@@ -26527,6 +27478,9 @@ fn finalize_upstream_response(
         .read_to_end(&mut body)
     {
         Ok(_) if body.len() as u64 <= response_body_limit => {
+            if let Some(observation) = response_observation.as_mut() {
+                observation.observe_upstream_body(&body);
+            }
             if let Some(output) = response_proof_upstream_output {
                 let body_digest = sha256_prefixed(&body);
                 let selected_raw_policy_headers_b64 = response_proof_raw_headers
@@ -26543,7 +27497,7 @@ fn finalize_upstream_response(
                     canonical_digest,
                 });
             }
-            ForwardResult::Buffered(validate_forward_response(
+            let response = validate_forward_response(
                 state,
                 snapshot,
                 decision,
@@ -26556,17 +27510,35 @@ fn finalize_upstream_response(
                 response_secret_guard,
                 gmail_metadata_fanout,
                 gmail_proof_commit_output,
+            );
+            if let Some(observation) = response_observation.as_deref_mut() {
+                let released = parse_buffered_response(&response)
+                    .is_ok_and(|parsed| parsed.headers.contains_key("x-serverware-policy-hash"));
+                observation.response_path = if released {
+                    "complete-upstream-response-released"
+                } else {
+                    "complete-upstream-response-blocked"
+                };
+            }
+            ForwardResult::Buffered(response)
+        }
+        Ok(_) => {
+            if let Some(observation) = response_observation {
+                observation.observe_upstream_body_incomplete(&body);
+            }
+            ForwardResult::Buffered(block_forward_response(
+                state,
+                decision,
+                request_method,
+                upstream_url,
+                status,
+                json!({"error":"response_body_too_large","maxBodyBytes":response_body_limit}),
             ))
         }
-        Ok(_) => ForwardResult::Buffered(block_forward_response(
-            state,
-            decision,
-            request_method,
-            upstream_url,
-            status,
-            json!({"error":"response_body_too_large","maxBodyBytes":response_body_limit}),
-        )),
         Err(err) => {
+            if let Some(observation) = response_observation {
+                observation.observe_upstream_body_incomplete(&body);
+            }
             let detail = err.to_string();
             enqueue_audit(
                 state,
@@ -26597,6 +27569,7 @@ fn forward_absolute_request_inner<'a>(
     response_proof_upstream_output: Option<&mut Option<ResponseProofUpstreamResponse>>,
     stream_writer: Option<&'a mut dyn TerminalDeadlineWrite>,
     streaming_response_proof_request: Option<StreamingResponseProofRequest<'a>>,
+    mut response_observation: Option<&mut ResponseObservationTrace>,
     keep_alive: bool,
 ) -> ForwardResult {
     macro_rules! buffered {
@@ -26652,6 +27625,9 @@ fn forward_absolute_request_inner<'a>(
         decision_request,
         authenticated_principal_id,
     );
+    if let Some(observation) = response_observation.as_deref_mut() {
+        observation.observe_decision(&decision);
+    }
     if !decision
         .get("allowed")
         .and_then(Value::as_bool)
@@ -26681,6 +27657,11 @@ fn forward_absolute_request_inner<'a>(
             json!({"error":"release_authorization_context_invalid","detail":err}),
         )),
     };
+    if release_authorization.is_some() {
+        if let Some(observation) = response_observation.as_deref_mut() {
+            observation.authorization_state = "reserved";
+        }
+    }
     if client_request_digest.is_some()
         && decision
             .get("client_request_digest")
@@ -26692,7 +27673,9 @@ fn forward_absolute_request_inner<'a>(
             json!({"error":"response_proof_request_binding_mismatch"}),
         ));
     }
-    let response_proof_kind = if streaming_response_proof_request.is_some() {
+    let response_proof_kind = if response_observation.is_some() {
+        Some(ResponseProofKind::Observation)
+    } else if streaming_response_proof_request.is_some() {
         Some(ResponseProofKind::Streaming)
     } else if response_proof_authorization_output.is_some() {
         Some(ResponseProofKind::Buffered)
@@ -26700,6 +27683,8 @@ fn forward_absolute_request_inner<'a>(
         None
     };
     let response_proof_requested = response_proof_kind.is_some();
+    let response_proof_requires_authority =
+        response_proof_kind.is_some_and(|kind| kind != ResponseProofKind::Observation);
     let mut upstream_url = target_url;
     apply_rewrite(
         &mut upstream_url,
@@ -26733,6 +27718,9 @@ fn forward_absolute_request_inner<'a>(
         (Some(ResponseProofKind::Streaming), false, false) => {
             Some("stream_response_proof_requires_streaming_response_route")
         }
+        (Some(ResponseProofKind::Observation), false, true) => {
+            Some("response_observation_proof_requires_buffered_response_route")
+        }
         _ => None,
     };
     if let Some(error) = proof_route_error {
@@ -26759,10 +27747,22 @@ fn forward_absolute_request_inner<'a>(
             json!({"error":error}),
         ));
     }
-    if response_proof_requested && release_authorization.is_none() {
+    if response_proof_requires_authority && release_authorization.is_none() {
         buffered!(json_status_response(
             StatusCode::SERVICE_UNAVAILABLE,
             json!({"error":"response_proof_release_authority_unavailable"}),
+        ));
+    }
+    if response_proof_kind == Some(ResponseProofKind::Observation)
+        && decision
+            .get("credential_ref")
+            .and_then(Value::as_str)
+            .is_some()
+        && release_authorization.is_none()
+    {
+        buffered!(json_status_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"error":"response_observation_proof_release_authority_unavailable"}),
         ));
     }
     let injection_plan = decision
@@ -26818,9 +27818,21 @@ fn forward_absolute_request_inner<'a>(
                 ));
             }
         };
+        if let Some(observation) = response_observation.as_deref_mut() {
+            observation.credential_state = "lease-acquired";
+            observation.credential_binding_digest = Some(digest_json(&json!({
+                "credential_ref":credential_ref,
+                "credential_version":credential_version,
+            })));
+        }
         credential_release_binding = Some(credential_lease_release_binding(&lease));
         match apply_credential_injection(&mut headers, &mut upstream_url, injection_plan, &lease) {
-            Ok(guard) => response_secret_guard = guard,
+            Ok(guard) => {
+                response_secret_guard = guard;
+                if let Some(observation) = response_observation.as_deref_mut() {
+                    observation.credential_state = "injected";
+                }
+            }
             Err(err) => {
                 enqueue_audit(
                     state,
@@ -26902,6 +27914,10 @@ fn forward_absolute_request_inner<'a>(
         match release.dispatch(snapshot) {
             Ok(observation) => release_dispatch_observation = Some(observation),
             Err(err) => {
+                if let Some(observation) = response_observation.as_deref_mut() {
+                    observation.authorization_state = "denied";
+                    observation.response_path = "dispatch-denied-no-upstream-attempt";
+                }
                 buffered!(json_status_response(
                     StatusCode::SERVICE_UNAVAILABLE,
                     json!({"error":"release_authorization_dispatch_failed","detail":err}),
@@ -26910,7 +27926,7 @@ fn forward_absolute_request_inner<'a>(
         }
     }
     let mut completed_response_proof_authorization = None;
-    if response_proof_requested {
+    if response_proof_requires_authority || release_authorization.is_some() {
         let Some(release) = release_authorization.as_ref() else {
             buffered!(json_status_response(
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -26939,6 +27955,10 @@ fn forward_absolute_request_inner<'a>(
         if let Some(output) = response_proof_authorization_output {
             *output = Some(authorization_context.clone());
         }
+        if let Some(observation) = response_observation.as_deref_mut() {
+            observation.authorization_state = "dispatching";
+            observation.authorization_context = Some(authorization_context.clone());
+        }
         completed_response_proof_authorization = Some(authorization_context);
     }
     let response = match send_upstream_request_with_current_lease(
@@ -26948,14 +27968,47 @@ fn forward_absolute_request_inner<'a>(
         builder,
         response_proof_requested,
     ) {
-        Ok(response) => response,
+        Ok(response) => {
+            if let Some(observation) = response_observation.as_deref_mut() {
+                observation.upstream_attempt = "started-no-response";
+                observation.response_path = "upstream-attempt-outcome-unknown";
+            }
+            response
+        }
         Err(UpstreamSendError::CredentialAuthority(error)) => {
+            if let Some(observation) = response_observation.as_deref_mut() {
+                observation.response_path = "authorized-not-attempted";
+            }
             buffered!(json_status_response(
                 StatusCode::SERVICE_UNAVAILABLE,
                 json!({"error":error}),
             ));
         }
+        Err(UpstreamSendError::RequestBuild(detail)) => {
+            if let Some(observation) = response_observation.as_deref_mut() {
+                observation.response_path = "authorized-not-attempted";
+            }
+            enqueue_audit(
+                state,
+                "data_plane.response.blocked",
+                decision_audit_event(
+                    &decision,
+                    &request_method,
+                    &upstream_url,
+                    "blocked",
+                    json!({"stage":"upstream_request_build","error":"upstream_request_failed","detail":detail}),
+                ),
+            );
+            buffered!(json_status_response(
+                StatusCode::BAD_GATEWAY,
+                json!({"error":"upstream_request_failed"}),
+            ));
+        }
         Err(UpstreamSendError::Request(detail)) => {
+            if let Some(observation) = response_observation.as_deref_mut() {
+                observation.upstream_attempt = "started-no-response";
+                observation.response_path = "upstream-attempt-outcome-unknown";
+            }
             enqueue_audit(
                 state,
                 "data_plane.response.blocked",
@@ -26976,10 +28029,17 @@ fn forward_absolute_request_inner<'a>(
     if !gmail_metadata_list {
         if let Some(release) = release_authorization.as_mut() {
             if let Err(err) = release.complete_forwarded() {
+                if let Some(observation) = response_observation.as_deref_mut() {
+                    observation.authorization_state = "completion-unknown";
+                    observation.response_path = "post-dispatch-local-failure";
+                }
                 buffered!(json_status_response(
                     StatusCode::SERVICE_UNAVAILABLE,
                     json!({"error":"release_authorization_completion_failed","detail":err}),
                 ));
+            }
+            if let Some(observation) = response_observation.as_deref_mut() {
+                observation.authorization_state = "completed-forwarded";
             }
         }
     }
@@ -27025,6 +28085,7 @@ fn forward_absolute_request_inner<'a>(
         streaming_response_proof,
         gmail_metadata_fanout.as_ref(),
         Some(&mut gmail_proof_commit),
+        response_observation,
         keep_alive,
     );
     if gmail_metadata_list {
@@ -27360,7 +28421,7 @@ fn forward_absolute_streaming_request_to(
                 json!({"error":error}),
             ));
         }
-        Err(UpstreamSendError::Request(detail)) => {
+        Err(UpstreamSendError::RequestBuild(detail) | UpstreamSendError::Request(detail)) => {
             let (body_sha256, body_bytes) = request_stream_stats_snapshot(&stats);
             let (mutated_body_sha256, mutated_body_bytes) = output_stats
                 .as_ref()
@@ -27470,6 +28531,7 @@ fn forward_absolute_streaming_request_to(
         response,
         &response_secret_guard,
         Some(writer),
+        None,
         None,
         None,
         None,
@@ -27787,7 +28849,7 @@ fn forward_intercepted_streaming_request_to<R: Read + Write + TerminalDeadlineWr
         )
         .map_err(|error| match error {
             UpstreamSendError::CredentialAuthority(error) => error.to_string(),
-            UpstreamSendError::Request(error) => error,
+            UpstreamSendError::RequestBuild(error) | UpstreamSendError::Request(error) => error,
         })
     });
     if ready_receiver.recv().is_err() {
@@ -27999,6 +29061,7 @@ fn forward_intercepted_streaming_request_to<R: Read + Write + TerminalDeadlineWr
         None,
         None,
         None,
+        None,
         keep_alive,
     ) {
         ForwardResult::Buffered(response) => {
@@ -28021,6 +29084,7 @@ fn forward_absolute_request_to<W: TerminalDeadlineWrite>(
     let proof_kind = response_proof.as_ref().map(|proof| match proof {
         ResponseProofRequestContext::Buffered(_) => ResponseProofKind::Buffered,
         ResponseProofRequestContext::Streaming(_) => ResponseProofKind::Streaming,
+        ResponseProofRequestContext::Observation(_) => ResponseProofKind::Observation,
     });
     if let Some(proof_kind) = proof_kind {
         if let Some(route_match) =
@@ -28048,6 +29112,38 @@ fn forward_absolute_request_to<W: TerminalDeadlineWrite>(
             }
         }
     }
+    let observation_request = match response_proof.as_ref() {
+        Some(ResponseProofRequestContext::Observation(context)) => {
+            Some(response_observation_request(context, &request.body))
+        }
+        _ => None,
+    };
+    if let (Some(ResponseProofRequestContext::Observation(context)), Some(observation_request)) =
+        (response_proof.as_ref(), observation_request.as_ref())
+    {
+        if let Err(error) = reserve_response_observation_nonce(state, context, observation_request)
+        {
+            enqueue_audit(
+                state,
+                "data_plane.response_observation_proof.denied",
+                json!({
+                    "component":"serverware-decision-gate-rs",
+                    "outcome":"denied",
+                    "stage":"pre_upstream",
+                    "error":"response_observation_nonce_rejected",
+                    "detail":error,
+                    "client_nonce_sha256":sha256_prefixed(&context.client_nonce_bytes),
+                    "policy_hash":snapshot.hash,
+                }),
+            );
+            let response = json_status_response(
+                StatusCode::CONFLICT,
+                json!({"error":"response_observation_nonce_rejected"}),
+            );
+            let _ = write_snapshot_guarded_response(state, snapshot, writer, &response);
+            return false;
+        }
+    }
     let client_request_digest = if let Some(proof) = response_proof.as_ref() {
         let digest = match proof {
             ResponseProofRequestContext::Buffered(context) => {
@@ -28056,6 +29152,11 @@ fn forward_absolute_request_to<W: TerminalDeadlineWrite>(
             ResponseProofRequestContext::Streaming(context) => {
                 streaming_client_proof_request_digest(&request, context)
             }
+            ResponseProofRequestContext::Observation(_) => Ok(digest_json(
+                observation_request
+                    .as_ref()
+                    .expect("response observation request binding exists"),
+            )),
         };
         match digest {
             Ok(digest) => Some(digest),
@@ -28096,6 +29197,7 @@ fn forward_absolute_request_to<W: TerminalDeadlineWrite>(
     };
     let mut response_proof_authorization = None;
     let mut response_proof_upstream = None;
+    let mut response_observation_trace = ResponseObservationTrace::new();
     let result = match response_proof.as_ref() {
         Some(ResponseProofRequestContext::Buffered(_)) => forward_absolute_request_inner(
             state,
@@ -28105,6 +29207,7 @@ fn forward_absolute_request_to<W: TerminalDeadlineWrite>(
             client_request_digest.as_deref(),
             Some(&mut response_proof_authorization),
             Some(&mut response_proof_upstream),
+            None,
             None,
             None,
             keep_alive,
@@ -28127,9 +29230,23 @@ fn forward_absolute_request_to<W: TerminalDeadlineWrite>(
                     expected_client_request_digest,
                     writer,
                 }),
+                None,
                 keep_alive,
             )
         }
+        Some(ResponseProofRequestContext::Observation(_)) => forward_absolute_request_inner(
+            state,
+            snapshot,
+            request,
+            authenticated_principal_id,
+            client_request_digest.as_deref(),
+            None,
+            None,
+            None,
+            None,
+            Some(&mut response_observation_trace),
+            false,
+        ),
         None => forward_absolute_request_inner(
             state,
             snapshot,
@@ -28140,11 +29257,54 @@ fn forward_absolute_request_to<W: TerminalDeadlineWrite>(
             None,
             Some(writer),
             None,
+            None,
             keep_alive,
         ),
     };
     match result {
         ForwardResult::Buffered(mut response) => {
+            if let Some(ResponseProofRequestContext::Observation(context)) = response_proof.as_ref()
+            {
+                let Some(request) = observation_request.as_ref() else {
+                    return false;
+                };
+                match write_response_observation_proof(
+                    state,
+                    snapshot,
+                    writer,
+                    context,
+                    request,
+                    &response_observation_trace,
+                    &response,
+                ) {
+                    Ok(runtime_proof_sha256) => enqueue_audit(
+                        state,
+                        "data_plane.response_observation_proof.emitted",
+                        json!({
+                            "component":"serverware-decision-gate-rs",
+                            "outcome":"emitted",
+                            "client_nonce_sha256":sha256_prefixed(&context.client_nonce_bytes),
+                            "client_request_digest":client_request_digest,
+                            "policy_hash":snapshot.hash,
+                            "response_path":response_observation_trace.response_path,
+                            "runtime_proof_sha256":runtime_proof_sha256,
+                            "response_signing_key_id":state.response_proof_signing_key_id,
+                        }),
+                    ),
+                    Err(err) => enqueue_audit(
+                        state,
+                        "data_plane.response_observation_proof.failed",
+                        json!({
+                            "component":"serverware-decision-gate-rs",
+                            "outcome":"incomplete",
+                            "error":"response_observation_proof_unavailable",
+                            "detail":err,
+                            "policy_hash":snapshot.hash,
+                        }),
+                    ),
+                }
+                return false;
+            }
             let mut attached_proof = None;
             if let Some(ResponseProofRequestContext::Buffered(context)) = response_proof.as_ref() {
                 let Some(expected_client_request_digest) = client_request_digest.as_deref() else {
@@ -28486,10 +29646,21 @@ fn read_request_head_from<R: Read>(
         }
     }
     enrollment_session_id_from_headers(&headers)?;
+    let request_line_bytes = request_line.len() + 2;
+    let observation_requested = headers.contains_key(RESPONSE_OBSERVATION_NONCE_HEADER);
+    let raw_headers_digest =
+        observation_requested.then(|| sha256_prefixed(&buffer[request_line_bytes..header_end - 2]));
     Ok(RequestHead {
         method,
         target,
+        http_version: version.to_string(),
         headers,
+        raw_headers_digest,
+        raw_header_count: if observation_requested {
+            header_count as u64
+        } else {
+            0
+        },
         content_length,
         has_content_length,
         prefetched_body: buffer[header_end..].to_vec(),
@@ -29009,7 +30180,11 @@ fn handle_connect_request(
                 break;
             }
         };
-        if proof_kind.is_some() && head.method != "GET" {
+        if matches!(
+            proof_kind,
+            Some(ResponseProofKind::Buffered | ResponseProofKind::Streaming)
+        ) && head.method != "GET"
+        {
             let response = json_status_response(
                 StatusCode::BAD_REQUEST,
                 json!({"error":"response_proof_requires_safe_method"}),
@@ -29018,7 +30193,11 @@ fn handle_connect_request(
             let _ = tls.flush();
             break;
         }
-        if proof_kind.is_some() && head.content_length != 0 {
+        if matches!(
+            proof_kind,
+            Some(ResponseProofKind::Buffered | ResponseProofKind::Streaming)
+        ) && head.content_length != 0
+        {
             let response = json_status_response(
                 StatusCode::BAD_REQUEST,
                 json!({"error":"response_proof_requires_empty_body"}),
@@ -29029,6 +30208,7 @@ fn handle_connect_request(
         }
         let mut buffered_response_proof = None;
         let mut streaming_response_proof = None;
+        let mut response_observation_proof = None;
         let proof_context_result = match proof_kind {
             Some(ResponseProofKind::Buffered) => {
                 response_proof_context(&state, &head.headers, &tls.conn)
@@ -29037,6 +30217,10 @@ fn handle_connect_request(
             Some(ResponseProofKind::Streaming) => {
                 streaming_response_proof_context(&state, &head.headers, &tls.conn)
                     .map(|context| streaming_response_proof = context)
+            }
+            Some(ResponseProofKind::Observation) => {
+                response_observation_context(&state, &head, &tls.conn)
+                    .map(|context| response_observation_proof = context)
             }
             None => Ok(()),
         };
@@ -29148,6 +30332,11 @@ fn handle_connect_request(
                                 streaming_response_proof
                                     .as_ref()
                                     .map(ResponseProofRequestContext::Streaming)
+                            })
+                            .or_else(|| {
+                                response_observation_proof
+                                    .as_ref()
+                                    .map(ResponseProofRequestContext::Observation)
                             });
                         forward_absolute_request_to(
                             &state,
@@ -30505,6 +31694,7 @@ fn main() -> Result<(), String> {
         release_provenance_path,
         image_signatures_path,
         response_proof_signer,
+        response_observation_nonce_reservations: Mutex::new(HashMap::new()),
         response_proof_public_key_pem,
         response_proof_signing_key_id,
         response_proof_attestation_command,
@@ -30725,6 +31915,8 @@ mod tests {
                     CUSTODY_HELLO_OPERATION,
                     CUSTODY_RESPONSE_PROOF_SIGN_OPERATION,
                     CUSTODY_STREAMING_RESPONSE_PROOF_SIGN_OPERATION,
+                    CUSTODY_RESPONSE_OBSERVATION_PROOF_RESERVE_OPERATION,
+                    CUSTODY_RESPONSE_OBSERVATION_PROOF_SIGN_OPERATION,
                 ],
                 "limits":{
                     "maxFrameBytes":CUSTODY_MAX_FRAME_BYTES,
@@ -31260,6 +32452,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             false,
         ) {
             ForwardResult::Buffered(response) => {
@@ -31318,6 +32511,7 @@ mod tests {
             &url,
             response,
             &ResponseSecretGuard::default(),
+            None,
             None,
             None,
             None,
@@ -31559,6 +32753,7 @@ mod tests {
             release_provenance_path: None,
             image_signatures_path: None,
             response_proof_signer,
+            response_observation_nonce_reservations: Mutex::new(HashMap::new()),
             response_proof_public_key_pem,
             response_proof_signing_key_id,
             response_proof_attestation_command: None,
@@ -34732,6 +35927,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             false,
         );
         let response = match result {
@@ -35733,6 +36929,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             false,
         );
         let ForwardResult::Buffered(response) = result else {
@@ -35806,6 +37003,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             false,
         );
         let ForwardResult::Buffered(response) = result else {
@@ -35871,7 +37069,7 @@ mod tests {
                 else {
                     continue;
                 };
-                if request.len() >= header_end + 1 {
+                if request.len() > header_end {
                     break;
                 }
             }
@@ -35935,7 +37133,10 @@ mod tests {
         let absolute_request = RequestHead {
             method: "POST".to_string(),
             target: format!("http://rebind.invalid:{}/resource", absolute_address.port()),
+            http_version: "HTTP/1.1".to_string(),
             headers: BTreeMap::new(),
+            raw_headers_digest: None,
+            raw_header_count: 0,
             content_length: 1,
             has_content_length: true,
             prefetched_body: Vec::new(),
@@ -35971,7 +37172,10 @@ mod tests {
         let connect_request = RequestHead {
             method: "POST".to_string(),
             target: format!("http://rebind.invalid:{}/resource", connect_address.port()),
+            http_version: "HTTP/1.1".to_string(),
             headers: BTreeMap::new(),
+            raw_headers_digest: None,
+            raw_header_count: 0,
             content_length: 1,
             has_content_length: true,
             prefetched_body: b"x".to_vec(),
@@ -36544,6 +37748,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             false,
         );
         let ForwardResult::Buffered(response) = response else {
@@ -36779,6 +37984,7 @@ mod tests {
                 client_ip: Some("127.0.0.1".to_string()),
             },
             Some("agent:test"),
+            None,
             None,
             None,
             None,
@@ -37086,6 +38292,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             false,
         );
         let response = match result {
@@ -37194,6 +38401,7 @@ mod tests {
                 client_ip: Some("127.0.0.1".to_string()),
             },
             Some("agent:test"),
+            None,
             None,
             None,
             None,
@@ -37314,6 +38522,7 @@ mod tests {
                 client_ip: Some("127.0.0.1".to_string()),
             },
             Some("agent:test"),
+            None,
             None,
             None,
             None,
@@ -37864,6 +39073,32 @@ mod tests {
         .expect("request head");
         assert_eq!(buffered_route_body_limit(&snapshot, &head, None), 0);
         assert!(read_request_body_from_head(&mut Cursor::new(Vec::<u8>::new()), head, 0).is_err());
+    }
+
+    #[test]
+    fn request_head_preserves_raw_header_commitments_across_inherited_context() {
+        let ordinary = parse_head(
+            b"GET /resource HTTP/1.1\r\nHost: example.test\r\nConnection: close\r\n\r\n",
+        )
+        .expect("ordinary request head");
+        assert!(ordinary.raw_headers_digest.is_none());
+        assert_eq!(ordinary.raw_header_count, 0);
+
+        let raw_headers = b"Host: example.test\r\nX-Serverware-Observation-Nonce: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\r\nConnection: close\r\n";
+        let mut wire = b"GET /resource HTTP/1.1\r\n".to_vec();
+        wire.extend_from_slice(raw_headers);
+        wire.extend_from_slice(b"\r\n");
+        let mut head = parse_head(&wire).expect("observation request head");
+        assert_eq!(head.raw_header_count, 3);
+        assert_eq!(head.raw_headers_digest, Some(sha256_prefixed(raw_headers)));
+
+        head.headers.insert(
+            ENROLLMENT_SESSION_HEADER.to_string(),
+            format!("sha256:{}", "a".repeat(64)),
+        );
+        assert_eq!(head.headers.len(), 4);
+        assert_eq!(head.raw_header_count, 3);
+        assert_eq!(head.raw_headers_digest, Some(sha256_prefixed(raw_headers)));
     }
 
     #[test]
@@ -40126,6 +41361,430 @@ mod tests {
     }
 
     #[test]
+    fn observation_proof_nonce_domain_is_mutually_exclusive() {
+        let observation = BTreeMap::from([(
+            RESPONSE_OBSERVATION_NONCE_HEADER.to_string(),
+            general_purpose::URL_SAFE_NO_PAD.encode([8u8; 32]),
+        )]);
+        assert_eq!(
+            requested_response_proof_kind(&observation).expect("observation proof kind"),
+            Some(ResponseProofKind::Observation)
+        );
+
+        for headers in [
+            BTreeMap::from([
+                (
+                    RESPONSE_PROOF_NONCE_HEADER.to_string(),
+                    "buffered".to_string(),
+                ),
+                (
+                    RESPONSE_OBSERVATION_NONCE_HEADER.to_string(),
+                    "observation".to_string(),
+                ),
+            ]),
+            BTreeMap::from([
+                (
+                    STREAM_RESPONSE_PROOF_NONCE_HEADER.to_string(),
+                    "streaming".to_string(),
+                ),
+                (
+                    RESPONSE_OBSERVATION_NONCE_HEADER.to_string(),
+                    "observation".to_string(),
+                ),
+            ]),
+            BTreeMap::from([
+                (
+                    RESPONSE_PROOF_NONCE_HEADER.to_string(),
+                    "buffered".to_string(),
+                ),
+                (
+                    STREAM_RESPONSE_PROOF_NONCE_HEADER.to_string(),
+                    "streaming".to_string(),
+                ),
+                (
+                    RESPONSE_OBSERVATION_NONCE_HEADER.to_string(),
+                    "observation".to_string(),
+                ),
+            ]),
+        ] {
+            assert!(requested_response_proof_kind(&headers)
+                .expect_err("proof nonce domains must be exclusive")
+                .contains("mutually exclusive"));
+        }
+    }
+
+    #[test]
+    fn observation_request_commitment_binds_every_observed_request_dimension() {
+        let context = ResponseObservationContext {
+            client_nonce: general_purpose::URL_SAFE_NO_PAD.encode([9u8; 32]),
+            client_nonce_bytes: vec![9u8; 32],
+            nonce_expires_at_epoch_ms: u64::try_from(now_epoch_ms()).unwrap() + 300_000,
+            tls_exporter: general_purpose::URL_SAFE_NO_PAD.encode([10u8; 32]),
+            method: "POST".to_string(),
+            target_digest: sha256_prefixed(b"/resource?limit=10"),
+            query_present: true,
+            query_digest: sha256_prefixed(b"limit=10"),
+            headers_digest: sha256_prefixed(b"Host: example.test\r\nX-Exact: value\r\n"),
+            header_count: 2,
+        };
+        let body = [0u8, 1, 0xff, b'x'];
+        let baseline = response_observation_request(&context, &body);
+        assert_eq!(baseline["body_observation"], "complete-buffered");
+        assert_eq!(baseline["body_bytes"], body.len() as u64);
+        assert_eq!(baseline["body_digest"], sha256_prefixed(&body));
+
+        let baseline_digest = baseline["aggregate_digest"]
+            .as_str()
+            .expect("aggregate digest");
+        let mutations = [
+            {
+                let mut value = context.clone();
+                value.method = "PUT".to_string();
+                response_observation_request(&value, &body)
+            },
+            {
+                let mut value = context.clone();
+                value.target_digest = sha256_prefixed(b"/resource?limit=9");
+                response_observation_request(&value, &body)
+            },
+            {
+                let mut value = context.clone();
+                value.query_present = false;
+                response_observation_request(&value, &body)
+            },
+            {
+                let mut value = context.clone();
+                value.query_digest = sha256_prefixed(b"limit=9");
+                response_observation_request(&value, &body)
+            },
+            {
+                let mut value = context.clone();
+                value.headers_digest = sha256_prefixed(b"Host: example.test\r\n");
+                response_observation_request(&value, &body)
+            },
+            {
+                let mut value = context.clone();
+                value.header_count += 1;
+                response_observation_request(&value, &body)
+            },
+            response_observation_request(&context, &[0u8, 1, 0xfe, b'x']),
+        ];
+        for mutation in mutations {
+            assert_ne!(
+                mutation["aggregate_digest"].as_str(),
+                Some(baseline_digest),
+                "every observed request mutation must change the aggregate commitment"
+            );
+        }
+    }
+
+    #[test]
+    fn local_observation_nonce_reservation_is_exclusive_and_expiring() {
+        let snapshot = test_snapshot(1);
+        let state = test_gate_state(snapshot);
+        let context = ResponseObservationContext {
+            client_nonce: general_purpose::URL_SAFE_NO_PAD.encode([13u8; 32]),
+            client_nonce_bytes: vec![13u8; 32],
+            nonce_expires_at_epoch_ms: u64::try_from(now_epoch_ms()).unwrap() + 300_000,
+            tls_exporter: general_purpose::URL_SAFE_NO_PAD.encode([14u8; 32]),
+            method: "POST".to_string(),
+            target_digest: sha256_prefixed(b"/resource"),
+            query_present: false,
+            query_digest: sha256_prefixed(b""),
+            headers_digest: sha256_prefixed(b"Host: example.test\r\n"),
+            header_count: 1,
+        };
+        let request = response_observation_request(&context, b"request");
+        reserve_response_observation_nonce(&state, &context, &request)
+            .expect("first nonce reservation");
+        assert!(
+            reserve_response_observation_nonce(&state, &context, &request)
+                .expect_err("identical replay must be rejected")
+                .contains("already reserved")
+        );
+
+        let mut changed = request.clone();
+        changed["body_digest"] = Value::String(sha256_prefixed(b"changed"));
+        assert!(
+            reserve_response_observation_nonce(&state, &context, &changed)
+                .expect_err("changed replay must be rejected before request validation")
+                .contains("already reserved")
+        );
+
+        state
+            .response_observation_nonce_reservations
+            .lock()
+            .expect("nonce reservations")
+            .values_mut()
+            .for_each(|reservation| {
+                reservation.expires_at = Instant::now()
+                    .checked_sub(Duration::from_secs(1))
+                    .expect("past instant")
+            });
+        reserve_response_observation_nonce(&state, &context, &request)
+            .expect("expired local reservation is reclaimable");
+        let observation_id = response_observation_id(&context.client_nonce);
+        let request_digest = request["aggregate_digest"]
+            .as_str()
+            .expect("request aggregate digest");
+        consume_local_response_observation_reservation(
+            &state,
+            &observation_id,
+            request_digest,
+            &sha256_prefixed(b"statement-a"),
+        )
+        .expect("consume local reservation");
+        consume_local_response_observation_reservation(
+            &state,
+            &observation_id,
+            request_digest,
+            &sha256_prefixed(b"statement-a"),
+        )
+        .expect("idempotent local signing");
+        assert!(consume_local_response_observation_reservation(
+            &state,
+            &observation_id,
+            request_digest,
+            &sha256_prefixed(b"statement-b"),
+        )
+        .expect_err("local reservation cannot authorize a second statement")
+        .contains("different local statement"));
+    }
+
+    #[test]
+    fn observation_trace_distinguishes_no_attempt_incomplete_and_complete_upstream() {
+        let mut trace = ResponseObservationTrace::new();
+        assert_eq!(trace.upstream_attempt, "not-started");
+        assert_eq!(trace.response_path, "local-reject-no-upstream-attempt");
+        assert!(trace.upstream_observation.is_none());
+
+        let mut headers = HeaderMap::new();
+        headers.insert("content-type", HeaderValue::from_static("application/json"));
+        headers.append("set-cookie", HeaderValue::from_static("a=1"));
+        headers.append("set-cookie", HeaderValue::from_static("b=2"));
+        trace.observe_upstream_headers(StatusCode::BAD_GATEWAY, &headers);
+        assert_eq!(trace.upstream_attempt, "headers-observed-body-incomplete");
+        assert_eq!(trace.response_path, "post-dispatch-local-failure");
+        let incomplete = trace
+            .upstream_observation
+            .as_ref()
+            .expect("incomplete upstream observation");
+        assert_eq!(incomplete.status, 502);
+        assert_eq!(incomplete.header_count, 3);
+        assert_eq!(incomplete.body_state, "unread");
+        assert!(incomplete.body_digest.is_none());
+        assert!(incomplete.body_bytes.is_none());
+
+        let incomplete_aggregate = incomplete.aggregate_digest.clone();
+        trace.observe_upstream_body_incomplete(b"partial");
+        let partial = trace
+            .upstream_observation
+            .as_ref()
+            .expect("partial upstream observation");
+        assert_eq!(partial.body_state, "incomplete");
+        assert_eq!(partial.body_digest, Some(sha256_prefixed(b"partial")));
+        assert_eq!(partial.body_bytes, Some(7));
+        assert_ne!(partial.aggregate_digest, incomplete_aggregate);
+
+        let partial_aggregate = partial.aggregate_digest.clone();
+        trace.observe_upstream_body(b"upstream error");
+        assert_eq!(trace.upstream_attempt, "complete");
+        let complete = trace
+            .upstream_observation
+            .as_ref()
+            .expect("complete upstream observation");
+        assert_eq!(complete.body_state, "complete");
+        assert_eq!(
+            complete.body_digest.as_deref(),
+            Some(sha256_prefixed(b"upstream error").as_str())
+        );
+        assert_eq!(complete.body_bytes, Some(14));
+        assert_ne!(complete.aggregate_digest, partial_aggregate);
+    }
+
+    #[test]
+    fn observation_wire_is_connection_terminal_and_proof_last() {
+        let response = b"HTTP/1.1 201 Created\r\nContent-Length: 3\r\nConnection: keep-alive\r\nX-Test: visible\r\n\r\nabc";
+        let parsed = parse_buffered_response(response).expect("buffered response");
+        let headers = response_observation_wire_headers(&parsed);
+        assert_eq!(headers.get("connection").map(String::as_str), Some("close"));
+        assert_eq!(
+            headers.get("transfer-encoding").map(String::as_str),
+            Some("chunked")
+        );
+        assert_eq!(
+            headers.get("trailer").map(String::as_str),
+            Some(RESPONSE_OBSERVATION_PROOF_TRAILER_DECLARATION)
+        );
+        assert!(!headers.contains_key("content-length"));
+        assert_eq!(headers.get("x-test").map(String::as_str), Some("visible"));
+
+        let proof = general_purpose::URL_SAFE_NO_PAD.encode(b"{\"proof\":true}");
+        let proof_digest = sha256_prefixed(b"{\"proof\":true}");
+        let mut wire = response_observation_wire_head(parsed.status, &headers);
+        wire.extend_from_slice(b"3\r\nabc\r\n");
+        let terminal = response_observation_terminal(&proof, &proof_digest);
+        wire.extend_from_slice(&terminal);
+        assert!(wire.ends_with(&terminal));
+        assert_eq!(
+            wire.windows(RESPONSE_OBSERVATION_PROOF_B64_TRAILER.len())
+                .filter(|window| *window == RESPONSE_OBSERVATION_PROOF_B64_TRAILER.as_bytes())
+                .count(),
+            2,
+            "the name appears once in Trailer and once in the terminal trailer"
+        );
+        assert!(terminal.starts_with(b"0\r\n"));
+        assert!(terminal.ends_with(b"\r\n\r\n"));
+    }
+
+    #[test]
+    fn observation_publication_linearizes_before_snapshot_revocation() {
+        struct BlockingObservationWriter {
+            entered: Option<SyncSender<()>>,
+            release: Receiver<()>,
+            bytes: Vec<u8>,
+        }
+
+        impl Write for BlockingObservationWriter {
+            fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+                if let Some(entered) = self.entered.take() {
+                    entered.send(()).expect("announce observation write");
+                    self.release.recv().expect("release observation write");
+                }
+                self.bytes.extend_from_slice(buffer);
+                Ok(buffer.len())
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        impl TerminalDeadlineWrite for BlockingObservationWriter {
+            fn set_terminal_write_deadline(&mut self, _deadline: Option<Instant>) {}
+        }
+
+        let snapshot = test_snapshot(1);
+        let state = Arc::new(test_gate_state(Arc::clone(&snapshot)));
+        let (entered_tx, entered_rx) = mpsc::sync_channel(0);
+        let (release_tx, release_rx) = mpsc::sync_channel(0);
+        let (write_done_tx, write_done_rx) = mpsc::sync_channel(0);
+        let write_state = Arc::clone(&state);
+        let write_snapshot = Arc::clone(&snapshot);
+        let writer = thread::spawn(move || {
+            let mut inner = BlockingObservationWriter {
+                entered: Some(entered_tx),
+                release: release_rx,
+                bytes: Vec::new(),
+            };
+            let result = write_response_observation_for_active_snapshot(
+                &write_state,
+                &write_snapshot,
+                &mut inner,
+                &[b"head", b"body", b"terminal-proof"],
+            );
+            write_done_tx
+                .send((result, inner.bytes))
+                .expect("report observation publication");
+        });
+        entered_rx.recv().expect("observation write entered");
+
+        let (revoking_tx, revoking_rx) = mpsc::sync_channel(0);
+        let (revoked_tx, revoked_rx) = mpsc::sync_channel(0);
+        let revoke_state = Arc::clone(&state);
+        let revoker = thread::spawn(move || {
+            revoking_tx.send(()).expect("report revocation attempt");
+            *revoke_state.snapshot.write().expect("snapshot lock") = test_snapshot(2);
+            revoked_tx.send(()).expect("report snapshot revocation");
+        });
+        revoking_rx.recv().expect("snapshot revocation attempted");
+        assert!(
+            revoked_rx.recv_timeout(Duration::from_millis(100)).is_err(),
+            "snapshot replacement must not split observation publication"
+        );
+        release_tx
+            .send(())
+            .expect("release observation publication");
+        let (result, bytes) = write_done_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("observation publication completed");
+        result.expect("observation must publish before queued revocation");
+        assert_eq!(bytes, b"headbodyterminal-proof");
+        revoked_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("snapshot revocation completed after observation publication");
+        writer.join().expect("observation writer");
+        revoker.join().expect("snapshot revoker");
+    }
+
+    #[test]
+    fn observation_publication_requires_freshness_for_the_full_io_window() {
+        let snapshot = test_snapshot(1);
+        let mut state = test_gate_state(Arc::clone(&snapshot));
+        state.policy_trust_root_source = PolicyTrustRootSource::AttestedControlPlane {
+            url: "https://control.invalid/attestation".to_string(),
+            expected_quote_key_id: None,
+            verifier: None,
+        };
+        *state
+            .policy_trust_last_success
+            .lock()
+            .expect("policy trust last-success mutex") = Instant::now()
+            .checked_sub(
+                POLICY_TRUST_MAX_AGE
+                    .checked_sub(Duration::from_millis(500))
+                    .expect("trust age fixture"),
+            )
+            .expect("trust timestamp fixture");
+        let mut wire = Vec::new();
+        let error = write_response_observation_for_active_snapshot(
+            &state,
+            &snapshot,
+            &mut wire,
+            &[b"terminal-proof"],
+        )
+        .expect_err("nearly expired trust cannot authorize bounded publication");
+        assert!(error.contains("cannot remain fresh"));
+        assert!(wire.is_empty());
+    }
+
+    #[test]
+    fn observation_assembly_failure_emits_no_terminal_proof() {
+        let snapshot = test_snapshot(1);
+        let state = test_gate_state(Arc::clone(&snapshot));
+        let context = ResponseObservationContext {
+            client_nonce: general_purpose::URL_SAFE_NO_PAD.encode([11u8; 32]),
+            client_nonce_bytes: vec![11u8; 32],
+            nonce_expires_at_epoch_ms: u64::try_from(now_epoch_ms()).unwrap() + 300_000,
+            tls_exporter: general_purpose::URL_SAFE_NO_PAD.encode([12u8; 32]),
+            method: "POST".to_string(),
+            target_digest: sha256_prefixed(b"/resource"),
+            query_present: false,
+            query_digest: sha256_prefixed(b""),
+            headers_digest: sha256_prefixed(b"Host: example.test\r\n"),
+            header_count: 1,
+        };
+        let request = response_observation_request(&context, b"request");
+        let trace = ResponseObservationTrace::new();
+        let mut wire = Vec::new();
+        let error = write_response_observation_proof(
+            &state,
+            &snapshot,
+            &mut wire,
+            &context,
+            &request,
+            &trace,
+            b"HTTP/1.1 403 Forbidden\r\nContent-Length: 7\r\n\r\ndenied!",
+        )
+        .expect_err("missing release evidence must fail before response publication");
+        assert!(error.contains("release provenance"));
+        assert!(
+            wire.is_empty(),
+            "proof assembly failure must publish no response bytes"
+        );
+    }
+
+    #[test]
     fn streaming_client_proof_request_is_canonically_domain_separated() {
         let buffered_nonce = "buffered-nonce";
         let streaming_nonce = "streaming-nonce";
@@ -40193,6 +41852,13 @@ mod tests {
             validate_response_proof_route_preflight(&streaming_match, ResponseProofKind::Buffered),
             Err("response_proof_requires_buffered_response_route")
         );
+        assert_eq!(
+            validate_response_proof_route_preflight(
+                &streaming_match,
+                ResponseProofKind::Observation
+            ),
+            Err("response_proof_requires_buffered_response_route")
+        );
 
         let mut gmail = streaming;
         gmail.adapter_type = "gmail.v1".to_string();
@@ -40213,7 +41879,11 @@ mod tests {
             route: &gmail,
             params: BTreeMap::from([("user".to_string(), "me".to_string())]),
         };
-        for kind in [ResponseProofKind::Buffered, ResponseProofKind::Streaming] {
+        for kind in [
+            ResponseProofKind::Buffered,
+            ResponseProofKind::Streaming,
+            ResponseProofKind::Observation,
+        ] {
             assert_eq!(
                 validate_response_proof_route_preflight(&gmail_list_match, kind),
                 Err("gmail_metadata_fetch_response_proof_unsupported")
@@ -46134,9 +47804,22 @@ mod tests {
             .expect("credential lease activity")
             .insert(scope.clone(), Instant::now());
         assert_eq!(
-            credential_lease_background_candidates(&state, &snapshot, Duration::from_secs(1)),
+            active_credential_lease_background_candidates(
+                &state,
+                &snapshot,
+                Duration::from_secs(1)
+            ),
             vec![scope]
         );
+
+        let replacement = Arc::new((*snapshot).clone());
+        *state.snapshot.write().expect("policy snapshot") = replacement;
+        assert!(active_credential_lease_background_candidates(
+            &state,
+            &snapshot,
+            Duration::from_secs(1)
+        )
+        .is_empty());
     }
 
     #[test]

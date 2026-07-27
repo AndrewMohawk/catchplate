@@ -1,0 +1,972 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/response-observation-proof.v1.schema.json",
+  "title": "Serverware Response Observation Proof v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "kind",
+    "captured_at_unix",
+    "request",
+    "response",
+    "runtime_proof",
+    "collector"
+  ],
+  "properties": {
+    "apiVersion": {"const": "serverware.responseObservationProof/v1"},
+    "kind": {"const": "ServerwareResponseObservationProof"},
+    "captured_at_unix": {"$ref": "#/$defs/positiveUint64"},
+    "request": {"$ref": "#/$defs/collectorRequest"},
+    "response": {"$ref": "#/$defs/observedResponse"},
+    "runtime_proof": {"$ref": "#/$defs/runtimeProof"},
+    "collector": {"$ref": "#/$defs/collector"}
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "base64url": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 131072,
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "nonce32": {
+      "type": "string",
+      "minLength": 43,
+      "maxLength": 43,
+      "pattern": "^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$"
+    },
+    "boundedString": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[^\\u0000-\\u001F\\u007F]+$"
+    },
+    "identifier": {
+      "allOf": [
+        {"$ref": "#/$defs/boundedString"},
+        {"pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@-]*$"}
+      ]
+    },
+    "httpMethod": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[!#$%&'*+.^_`|~0-9A-Z-]+$"
+    },
+    "uint64": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 18446744073709551615
+    },
+    "positiveUint64": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 18446744073709551615
+    },
+    "bodyBytes": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 16777216
+    },
+    "headerCount": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 65535
+    },
+    "httpStatus": {
+      "type": "integer",
+      "minimum": 200,
+      "maximum": 599
+    },
+    "ed25519Pem": {
+      "type": "string",
+      "minLength": 112,
+      "maxLength": 256,
+      "pattern": "^-----BEGIN PUBLIC KEY-----\n[A-Za-z0-9+/]{59}=\n-----END PUBLIC KEY-----\n$"
+    },
+    "ed25519SignatureText": {
+      "type": "string",
+      "pattern": "^ed25519:[A-Za-z0-9_-]{85}[AQgw]$"
+    },
+    "ed25519Signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "key_id", "public_key_pem", "signature"],
+      "properties": {
+        "algorithm": {"const": "Ed25519"},
+        "key_id": {"$ref": "#/$defs/sha256"},
+        "public_key_pem": {"$ref": "#/$defs/ed25519Pem"},
+        "signature": {"$ref": "#/$defs/ed25519SignatureText"}
+      }
+    },
+    "releaseAuthority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authority_mode",
+        "grant_id",
+        "approval_id",
+        "credential_ref",
+        "credential_version",
+        "request_digest",
+        "operation_digest",
+        "attempt_id",
+        "consumption_identity_digest",
+        "authorization_state_at_upstream_dispatch",
+        "authorization_state_observed_at_epoch_ms",
+        "reservation_expires_at_epoch_ms",
+        "dispatch_expires_at_epoch_ms"
+      ],
+      "properties": {
+        "authority_mode": {"const": "atomic"},
+        "grant_id": {
+          "anyOf": [{"$ref": "#/$defs/identifier"}, {"type": "null"}]
+        },
+        "approval_id": {
+          "anyOf": [{"$ref": "#/$defs/identifier"}, {"type": "null"}]
+        },
+        "credential_ref": {
+          "anyOf": [{"$ref": "#/$defs/identifier"}, {"type": "null"}]
+        },
+        "credential_version": {"$ref": "#/$defs/uint64"},
+        "request_digest": {"$ref": "#/$defs/sha256"},
+        "operation_digest": {"$ref": "#/$defs/sha256"},
+        "attempt_id": {"$ref": "#/$defs/sha256"},
+        "consumption_identity_digest": {"$ref": "#/$defs/sha256"},
+        "authorization_state_at_upstream_dispatch": {"const": "dispatching"},
+        "authorization_state_observed_at_epoch_ms": {"$ref": "#/$defs/positiveUint64"},
+        "reservation_expires_at_epoch_ms": {
+          "anyOf": [{"$ref": "#/$defs/positiveUint64"}, {"type": "null"}]
+        },
+        "dispatch_expires_at_epoch_ms": {"$ref": "#/$defs/positiveUint64"}
+      }
+    },
+    "receiptRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "path", "query", "nonce", "body_b64", "body_sha256"],
+      "properties": {
+        "method": {"const": "POST"},
+        "path": {"const": "/api/data-plane/release-authorizations/dispatch"},
+        "query": {"const": ""},
+        "nonce": {"$ref": "#/$defs/nonce32"},
+        "body_b64": {"$ref": "#/$defs/base64url"},
+        "body_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "receiptResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "body_b64",
+        "body_sha256",
+        "response_signing_key_id",
+        "statement_b64",
+        "statement_sha256",
+        "signature"
+      ],
+      "properties": {
+        "status": {"const": 200},
+        "body_b64": {"$ref": "#/$defs/base64url"},
+        "body_sha256": {"$ref": "#/$defs/sha256"},
+        "response_signing_key_id": {"$ref": "#/$defs/sha256"},
+        "statement_b64": {"$ref": "#/$defs/base64url"},
+        "statement_sha256": {"$ref": "#/$defs/sha256"},
+        "signature": {"$ref": "#/$defs/ed25519SignatureText"}
+      }
+    },
+    "controlPlaneAuthorizationReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "kind",
+        "principal_id",
+        "route_id",
+        "release_authority",
+        "request",
+        "response"
+      ],
+      "properties": {
+        "apiVersion": {"const": "serverware.controlPlaneAuthorizationReceipt/v1"},
+        "kind": {"const": "ControlPlaneAuthorizationReceipt"},
+        "principal_id": {"$ref": "#/$defs/identifier"},
+        "route_id": {"$ref": "#/$defs/identifier"},
+        "release_authority": {"$ref": "#/$defs/releaseAuthority"},
+        "request": {"$ref": "#/$defs/receiptRequest"},
+        "response": {"$ref": "#/$defs/receiptResponse"}
+      }
+    },
+    "observedRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "method",
+        "target_digest",
+        "query_present",
+        "query_digest",
+        "headers_digest",
+        "header_count",
+        "body_digest",
+        "body_bytes",
+        "body_observation",
+        "aggregate_digest"
+      ],
+      "properties": {
+        "method": {"$ref": "#/$defs/httpMethod"},
+        "target_digest": {"$ref": "#/$defs/sha256"},
+        "query_present": {"type": "boolean"},
+        "query_digest": {"$ref": "#/$defs/sha256"},
+        "headers_digest": {"$ref": "#/$defs/sha256"},
+        "header_count": {"$ref": "#/$defs/headerCount"},
+        "body_digest": {"$ref": "#/$defs/sha256"},
+        "body_bytes": {"$ref": "#/$defs/bodyBytes"},
+        "body_observation": {"const": "complete-buffered"},
+        "aggregate_digest": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "collectorRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "method",
+        "target_digest",
+        "query_present",
+        "query_digest",
+        "headers_digest",
+        "header_count",
+        "body_digest",
+        "body_bytes",
+        "aggregate_digest"
+      ],
+      "properties": {
+        "method": {"$ref": "#/$defs/httpMethod"},
+        "target_digest": {"$ref": "#/$defs/sha256"},
+        "query_present": {"type": "boolean"},
+        "query_digest": {"$ref": "#/$defs/sha256"},
+        "headers_digest": {"$ref": "#/$defs/sha256"},
+        "header_count": {"$ref": "#/$defs/headerCount"},
+        "body_digest": {"$ref": "#/$defs/sha256"},
+        "body_bytes": {"$ref": "#/$defs/bodyBytes"},
+        "aggregate_digest": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["digest", "snapshot_epoch", "decision_state", "completion_state"],
+      "properties": {
+        "digest": {"$ref": "#/$defs/sha256"},
+        "snapshot_epoch": {"$ref": "#/$defs/uint64"},
+        "decision_state": {"enum": ["not-evaluated", "denied", "allowed"]},
+        "completion_state": {"const": "same-active"}
+      }
+    },
+    "credential": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "binding_digest"],
+      "properties": {
+        "state": {
+          "enum": [
+            "not-evaluated",
+            "not-required",
+            "lease-unavailable",
+            "lease-acquired",
+            "injected",
+            "invalidated-before-dispatch"
+          ]
+        },
+        "binding_digest": {
+          "anyOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "state": {"enum": ["not-evaluated", "not-required", "lease-unavailable"]},
+            "binding_digest": {"type": "null"}
+          }
+        },
+        {
+          "properties": {
+            "state": {"enum": ["lease-acquired", "injected", "invalidated-before-dispatch"]},
+            "binding_digest": {"$ref": "#/$defs/sha256"}
+          }
+        }
+      ]
+    },
+    "authorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "binding_digest",
+        "release_authority",
+        "control_plane_authorization_receipt",
+        "control_plane_authorization_receipt_sha256"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "not-evaluated",
+            "denied",
+            "reserved",
+            "dispatching",
+            "completed-forwarded",
+            "completion-unknown"
+          ]
+        },
+        "binding_digest": {
+          "anyOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]
+        },
+        "release_authority": {
+          "anyOf": [{"$ref": "#/$defs/releaseAuthority"}, {"type": "null"}]
+        },
+        "control_plane_authorization_receipt": {
+          "anyOf": [{"$ref": "#/$defs/controlPlaneAuthorizationReceipt"}, {"type": "null"}]
+        },
+        "control_plane_authorization_receipt_sha256": {
+          "anyOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "state": {"enum": ["not-evaluated", "denied", "reserved"]},
+            "binding_digest": {"type": "null"},
+            "release_authority": {"type": "null"},
+            "control_plane_authorization_receipt": {"type": "null"},
+            "control_plane_authorization_receipt_sha256": {"type": "null"}
+          }
+        },
+        {
+          "properties": {
+            "state": {"enum": ["dispatching", "completed-forwarded", "completion-unknown"]},
+            "binding_digest": {"$ref": "#/$defs/sha256"},
+            "release_authority": {"$ref": "#/$defs/releaseAuthority"},
+            "control_plane_authorization_receipt": {"$ref": "#/$defs/controlPlaneAuthorizationReceipt"},
+            "control_plane_authorization_receipt_sha256": {"$ref": "#/$defs/sha256"}
+          }
+        }
+      ]
+    },
+    "upstreamObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "headers_digest",
+        "header_count",
+        "body_state",
+        "body_digest",
+        "body_bytes",
+        "aggregate_digest"
+      ],
+      "properties": {
+        "status": {"$ref": "#/$defs/httpStatus"},
+        "headers_digest": {"$ref": "#/$defs/sha256"},
+        "header_count": {"$ref": "#/$defs/headerCount"},
+        "body_state": {"enum": ["unread", "incomplete", "complete"]},
+        "body_digest": {
+          "anyOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]
+        },
+        "body_bytes": {
+          "anyOf": [{"$ref": "#/$defs/bodyBytes"}, {"type": "null"}]
+        },
+        "aggregate_digest": {"$ref": "#/$defs/sha256"}
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "body_state": {"const": "unread"},
+            "body_digest": {"type": "null"},
+            "body_bytes": {"type": "null"}
+          }
+        },
+        {
+          "properties": {
+            "body_state": {"enum": ["incomplete", "complete"]},
+            "body_digest": {"$ref": "#/$defs/sha256"},
+            "body_bytes": {"$ref": "#/$defs/bodyBytes"}
+          }
+        }
+      ]
+    },
+    "observedResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "headers_digest",
+        "header_count",
+        "body_digest",
+        "body_bytes",
+        "aggregate_digest"
+      ],
+      "properties": {
+        "status": {"$ref": "#/$defs/httpStatus"},
+        "headers_digest": {"$ref": "#/$defs/sha256"},
+        "header_count": {"$ref": "#/$defs/headerCount"},
+        "body_digest": {"$ref": "#/$defs/sha256"},
+        "body_bytes": {"$ref": "#/$defs/bodyBytes"},
+        "aggregate_digest": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "serverInstance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "identity_digest"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 256,
+          "pattern": "^spiffe://[^\\u0000-\\u0020\\u007F]+$"
+        },
+        "identity_digest": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "tlsChannelBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "label", "value"],
+      "properties": {
+        "type": {"const": "tls-exporter"},
+        "label": {"const": "EXPORTER-Serverware-Response-Observation-v1"},
+        "value": {"$ref": "#/$defs/nonce32"}
+      }
+    },
+    "observationAuthority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "upstream_truth", "downstream_delivery"],
+      "properties": {
+        "source": {"const": "gate-authored"},
+        "upstream_truth": {"const": "not-independently-observed"},
+        "downstream_delivery": {"const": "not-claimed"}
+      }
+    },
+    "statement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "issued_at_unix",
+        "observation_id",
+        "client_nonce",
+        "request",
+        "policy",
+        "principal_id",
+        "route_id",
+        "request_digest",
+        "operation_digest",
+        "credential",
+        "authorization",
+        "response_path",
+        "upstream_attempt",
+        "upstream_observation",
+        "emitted_response",
+        "runtime_manifest_digest",
+        "data_plane_binary_digest",
+        "release_digest",
+        "server_instance",
+        "tls_channel_binding",
+        "observation_authority"
+      ],
+      "properties": {
+        "apiVersion": {"const": "serverware.responseObservationStatement/v1"},
+        "issued_at_unix": {"$ref": "#/$defs/positiveUint64"},
+        "observation_id": {"$ref": "#/$defs/sha256"},
+        "client_nonce": {"$ref": "#/$defs/nonce32"},
+        "request": {"$ref": "#/$defs/observedRequest"},
+        "policy": {"$ref": "#/$defs/policy"},
+        "principal_id": {
+          "anyOf": [{"$ref": "#/$defs/identifier"}, {"type": "null"}]
+        },
+        "route_id": {
+          "anyOf": [{"$ref": "#/$defs/identifier"}, {"type": "null"}]
+        },
+        "request_digest": {
+          "anyOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]
+        },
+        "operation_digest": {
+          "anyOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]
+        },
+        "credential": {"$ref": "#/$defs/credential"},
+        "authorization": {"$ref": "#/$defs/authorization"},
+        "response_path": {
+          "enum": [
+            "local-reject-no-upstream-attempt",
+            "dispatch-denied-no-upstream-attempt",
+            "authorized-not-attempted",
+            "upstream-attempt-outcome-unknown",
+            "complete-upstream-response-released",
+            "complete-upstream-response-blocked",
+            "post-dispatch-local-failure"
+          ]
+        },
+        "upstream_attempt": {
+          "enum": [
+            "not-started",
+            "started-no-response",
+            "headers-observed-body-incomplete",
+            "complete"
+          ]
+        },
+        "upstream_observation": {
+          "anyOf": [{"$ref": "#/$defs/upstreamObservation"}, {"type": "null"}]
+        },
+        "emitted_response": {"$ref": "#/$defs/observedResponse"},
+        "runtime_manifest_digest": {"$ref": "#/$defs/sha256"},
+        "data_plane_binary_digest": {"$ref": "#/$defs/sha256"},
+        "release_digest": {"$ref": "#/$defs/sha256"},
+        "server_instance": {"$ref": "#/$defs/serverInstance"},
+        "tls_channel_binding": {"$ref": "#/$defs/tlsChannelBinding"},
+        "observation_authority": {"$ref": "#/$defs/observationAuthority"}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "authorization": {
+                "properties": {
+                  "state": {"enum": ["dispatching", "completed-forwarded", "completion-unknown"]}
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "policy": {"properties": {"decision_state": {"const": "allowed"}}},
+              "principal_id": {"$ref": "#/$defs/identifier"},
+              "route_id": {"$ref": "#/$defs/identifier"},
+              "request_digest": {"$ref": "#/$defs/sha256"},
+              "operation_digest": {"$ref": "#/$defs/sha256"},
+              "credential": {
+                "oneOf": [
+                  {
+                    "properties": {
+                      "state": {"const": "not-required"},
+                      "binding_digest": {"type": "null"}
+                    }
+                  },
+                  {
+                    "properties": {
+                      "state": {"const": "injected"},
+                      "binding_digest": {"$ref": "#/$defs/sha256"}
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "response_path": {
+                "enum": [
+                  "authorized-not-attempted",
+                  "upstream-attempt-outcome-unknown",
+                  "complete-upstream-response-released",
+                  "complete-upstream-response-blocked",
+                  "post-dispatch-local-failure"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "policy": {"properties": {"decision_state": {"const": "allowed"}}},
+              "principal_id": {"$ref": "#/$defs/identifier"},
+              "route_id": {"$ref": "#/$defs/identifier"},
+              "request_digest": {"$ref": "#/$defs/sha256"},
+              "operation_digest": {"$ref": "#/$defs/sha256"},
+              "credential": {
+                "oneOf": [
+                  {
+                    "properties": {
+                      "state": {"const": "not-required"},
+                      "binding_digest": {"type": "null"}
+                    }
+                  },
+                  {
+                    "properties": {
+                      "state": {"const": "injected"},
+                      "binding_digest": {"$ref": "#/$defs/sha256"}
+                    }
+                  }
+                ]
+              },
+              "authorization": {
+                "properties": {
+                  "state": {
+                    "enum": [
+                      "not-evaluated",
+                      "dispatching",
+                      "completed-forwarded",
+                      "completion-unknown"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "allOf": [
+              {
+                "properties": {
+                  "response_path": {
+                    "enum": [
+                      "authorized-not-attempted",
+                      "upstream-attempt-outcome-unknown",
+                      "complete-upstream-response-released",
+                      "complete-upstream-response-blocked",
+                      "post-dispatch-local-failure"
+                    ]
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "authorization": {
+                    "properties": {"state": {"const": "not-evaluated"}}
+                  }
+                }
+              }
+            ]
+          },
+          "then": {
+            "properties": {
+              "credential": {
+                "properties": {
+                  "state": {"const": "not-required"},
+                  "binding_digest": {"type": "null"}
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {"properties": {"upstream_attempt": {"const": "not-started"}}},
+          "then": {"properties": {"upstream_observation": {"type": "null"}}}
+        },
+        {
+          "if": {"properties": {"upstream_attempt": {"const": "started-no-response"}}},
+          "then": {"properties": {"upstream_observation": {"type": "null"}}}
+        },
+        {
+          "if": {
+            "properties": {"upstream_attempt": {"const": "headers-observed-body-incomplete"}}
+          },
+          "then": {
+            "properties": {
+              "upstream_observation": {
+                "allOf": [
+                  {"$ref": "#/$defs/upstreamObservation"},
+                  {"properties": {"body_state": {"enum": ["unread", "incomplete"]}}}
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {"properties": {"upstream_attempt": {"const": "complete"}}},
+          "then": {
+            "properties": {
+              "upstream_observation": {
+                "allOf": [
+                  {"$ref": "#/$defs/upstreamObservation"},
+                  {"properties": {"body_state": {"const": "complete"}}}
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "response_path": {
+                "enum": [
+                  "local-reject-no-upstream-attempt",
+                  "dispatch-denied-no-upstream-attempt",
+                  "authorized-not-attempted"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "upstream_attempt": {"const": "not-started"},
+              "upstream_observation": {"type": "null"}
+            }
+          }
+        },
+        {
+          "if": {"properties": {"response_path": {"const": "upstream-attempt-outcome-unknown"}}},
+          "then": {
+            "properties": {
+              "upstream_attempt": {
+                "enum": ["started-no-response", "headers-observed-body-incomplete"]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "response_path": {
+                "enum": [
+                  "complete-upstream-response-released",
+                  "complete-upstream-response-blocked"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "upstream_attempt": {"const": "complete"},
+              "upstream_observation": {
+                "allOf": [
+                  {"$ref": "#/$defs/upstreamObservation"},
+                  {"properties": {"body_state": {"const": "complete"}}}
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    "attestedClaims": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "server_statement_sha256",
+        "server_statement_api_version",
+        "issued_at_unix",
+        "observation_id",
+        "client_nonce_sha256",
+        "request_aggregate_digest",
+        "response_path",
+        "upstream_attempt",
+        "upstream_observation_digest",
+        "emitted_response_digest",
+        "policy_digest",
+        "runtime_manifest_digest",
+        "data_plane_binary_digest",
+        "release_digest",
+        "server_instance_id",
+        "server_instance_identity_digest",
+        "tls_exporter_label",
+        "tls_channel_binding_sha256",
+        "response_signing_key_id",
+        "observation_source"
+      ],
+      "properties": {
+        "server_statement_sha256": {"$ref": "#/$defs/sha256"},
+        "server_statement_api_version": {"const": "serverware.responseObservationStatement/v1"},
+        "issued_at_unix": {"$ref": "#/$defs/positiveUint64"},
+        "observation_id": {"$ref": "#/$defs/sha256"},
+        "client_nonce_sha256": {"$ref": "#/$defs/sha256"},
+        "request_aggregate_digest": {"$ref": "#/$defs/sha256"},
+        "response_path": {
+          "enum": [
+            "local-reject-no-upstream-attempt",
+            "dispatch-denied-no-upstream-attempt",
+            "authorized-not-attempted",
+            "upstream-attempt-outcome-unknown",
+            "complete-upstream-response-released",
+            "complete-upstream-response-blocked",
+            "post-dispatch-local-failure"
+          ]
+        },
+        "upstream_attempt": {
+          "enum": [
+            "not-started",
+            "started-no-response",
+            "headers-observed-body-incomplete",
+            "complete"
+          ]
+        },
+        "upstream_observation_digest": {
+          "anyOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]
+        },
+        "emitted_response_digest": {"$ref": "#/$defs/sha256"},
+        "policy_digest": {"$ref": "#/$defs/sha256"},
+        "runtime_manifest_digest": {"$ref": "#/$defs/sha256"},
+        "data_plane_binary_digest": {"$ref": "#/$defs/sha256"},
+        "release_digest": {"$ref": "#/$defs/sha256"},
+        "server_instance_id": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 256,
+          "pattern": "^spiffe://[^\\u0000-\\u0020\\u007F]+$"
+        },
+        "server_instance_identity_digest": {"$ref": "#/$defs/sha256"},
+        "tls_exporter_label": {"const": "EXPORTER-Serverware-Response-Observation-v1"},
+        "tls_channel_binding_sha256": {"$ref": "#/$defs/sha256"},
+        "response_signing_key_id": {"$ref": "#/$defs/sha256"},
+        "observation_source": {"const": "gate-authored"}
+      }
+    },
+    "quote": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format", "body_b64"],
+      "properties": {
+        "format": {"$ref": "#/$defs/identifier"},
+        "body_b64": {
+          "allOf": [
+            {"$ref": "#/$defs/base64url"},
+            {"minLength": 86}
+          ]
+        }
+      }
+    },
+    "developmentVerifierStatement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "outcome",
+        "environment",
+        "debug",
+        "server_statement_sha256",
+        "response_signing_key_id",
+        "attested_claims"
+      ],
+      "properties": {
+        "outcome": {"const": "development-fixture"},
+        "environment": {"const": "development"},
+        "debug": {"const": true},
+        "server_statement_sha256": {"$ref": "#/$defs/sha256"},
+        "response_signing_key_id": {"$ref": "#/$defs/sha256"},
+        "attested_claims": {"$ref": "#/$defs/attestedClaims"}
+      }
+    },
+    "productionVerifierStatement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "verifier_key_id",
+        "outcome",
+        "environment",
+        "trust_basis",
+        "vendor_quote_verified",
+        "certificate_chain_verified",
+        "revocation_checked",
+        "debug",
+        "verified_at_unix",
+        "expires_at_unix",
+        "tee_platform",
+        "quote_provider",
+        "vendor_quote_sha256",
+        "server_statement_sha256",
+        "response_signing_key_id",
+        "attested_claims"
+      ],
+      "properties": {
+        "verifier_key_id": {"$ref": "#/$defs/sha256"},
+        "outcome": {"const": "verified"},
+        "environment": {"const": "production"},
+        "trust_basis": {"const": "vendor-root-certificate-chain"},
+        "vendor_quote_verified": {"const": true},
+        "certificate_chain_verified": {"const": true},
+        "revocation_checked": {"const": true},
+        "debug": {"const": false},
+        "verified_at_unix": {"$ref": "#/$defs/positiveUint64"},
+        "expires_at_unix": {"$ref": "#/$defs/positiveUint64"},
+        "tee_platform": {"$ref": "#/$defs/identifier"},
+        "quote_provider": {"$ref": "#/$defs/identifier"},
+        "vendor_quote_sha256": {"$ref": "#/$defs/sha256"},
+        "server_statement_sha256": {"$ref": "#/$defs/sha256"},
+        "response_signing_key_id": {"$ref": "#/$defs/sha256"},
+        "attested_claims": {"$ref": "#/$defs/attestedClaims"}
+      }
+    },
+    "developmentTrustedVerifier": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["apiVersion", "kind", "statement", "signature"],
+      "properties": {
+        "apiVersion": {"const": "serverware.vendorTeeVerification/v1"},
+        "kind": {"const": "ServerwareVendorTeeVerification"},
+        "statement": {"$ref": "#/$defs/developmentVerifierStatement"},
+        "signature": {"type": "null"}
+      }
+    },
+    "productionTrustedVerifier": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["apiVersion", "kind", "statement", "signature"],
+      "properties": {
+        "apiVersion": {"const": "serverware.vendorTeeVerification/v1"},
+        "kind": {"const": "ServerwareVendorTeeVerification"},
+        "statement": {"$ref": "#/$defs/productionVerifierStatement"},
+        "signature": {"$ref": "#/$defs/ed25519SignatureText"}
+      }
+    },
+    "vendorTee": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["platform", "provider", "quote_sha256", "quote", "trusted_verifier"],
+      "properties": {
+        "platform": {"$ref": "#/$defs/identifier"},
+        "provider": {"$ref": "#/$defs/identifier"},
+        "quote_sha256": {"$ref": "#/$defs/sha256"},
+        "quote": {"$ref": "#/$defs/quote"},
+        "trusted_verifier": {
+          "oneOf": [
+            {"$ref": "#/$defs/developmentTrustedVerifier"},
+            {"$ref": "#/$defs/productionTrustedVerifier"}
+          ]
+        }
+      }
+    },
+    "runtimeProof": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "kind",
+        "server_statement",
+        "server_statement_sha256",
+        "server_signature",
+        "vendor_tee"
+      ],
+      "properties": {
+        "apiVersion": {"const": "serverware.responseObservationRuntimeProof/v1"},
+        "kind": {"const": "ServerwareResponseObservationRuntimeProof"},
+        "server_statement": {"$ref": "#/$defs/statement"},
+        "server_statement_sha256": {"$ref": "#/$defs/sha256"},
+        "server_signature": {"$ref": "#/$defs/ed25519Signature"},
+        "vendor_tee": {"$ref": "#/$defs/vendorTee"}
+      }
+    },
+    "collector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "algorithm",
+        "key_id",
+        "public_key_pem",
+        "signature",
+        "capture_digest"
+      ],
+      "properties": {
+        "algorithm": {"const": "Ed25519"},
+        "key_id": {"$ref": "#/$defs/sha256"},
+        "public_key_pem": {"$ref": "#/$defs/ed25519Pem"},
+        "signature": {"$ref": "#/$defs/ed25519SignatureText"},
+        "capture_digest": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  }
+}

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import base64
 import fcntl
 import hashlib
 import os
@@ -9,6 +10,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -22,6 +24,12 @@ import test_production_readiness as production_readiness_test  # noqa: E402
 import test_nitro_kms_evidence as nitro_evidence_test  # noqa: E402
 import launch_authorization  # noqa: E402
 import run_production_readiness  # noqa: E402
+
+
+def test_temp_root() -> Path:
+    root = ROOT / ".tmp"
+    root.mkdir(mode=0o700, exist_ok=True)
+    return root
 
 
 def clean_subprocess_env() -> dict[str, str]:
@@ -103,6 +111,148 @@ def run_runner_in_environment(
 
 def detail(result: subprocess.CompletedProcess[bytes]) -> str:
     return result.stdout.decode("utf-8", errors="replace") + result.stderr.decode("utf-8", errors="replace")
+
+
+def verify_final_observation_body_revalidation(
+    tmp: Path,
+    collector_args: SimpleNamespace,
+    observation_body: Path,
+) -> None:
+    collected_digest = collector_args.collected_proxy_observation_body_sha256
+    collected_bytes = collector_args.collected_proxy_observation_body_bytes
+    if collected_digest is None or collected_bytes != 4:
+        raise AssertionError("observation collector fixture did not retain its body measurement")
+
+    original_bootstrap_validator = (
+        run_production_readiness.validate_bootstrap_receipt_summary
+    )
+    original_bootstrap_identity = (
+        run_production_readiness.bootstrap_launch_authorization_identity
+    )
+    run_production_readiness.validate_bootstrap_receipt_summary = lambda _value: None
+    run_production_readiness.bootstrap_launch_authorization_identity = (
+        lambda _value: "fixture-launch-authorization"
+    )
+    try:
+        for label, mutated_body, expected_error in (
+            (
+                "changed",
+                b"same",
+                "artifact proxy_observation_body digest does not match current bytes",
+            ),
+            (
+                "oversized",
+                b"body!",
+                "must contain between 0 and 4 bytes",
+            ),
+        ):
+            proof_path = tmp / f"final-observation-{label}-completion.json"
+            generation = hashlib.sha256(label.encode("ascii")).hexdigest()[:32]
+            digest_path = run_production_readiness.completion_proof_digest_path(
+                proof_path, generation
+            )
+            generated_at = int(time.time())
+            proof = {
+                "apiVersion": "serverware.completionProof/v5",
+                "kind": "ServerwareCompletionProof",
+                "ok": True,
+                "verification_passed": True,
+                "verification_mode": "final",
+                "result_scope": "final-completion",
+                "readiness_only": False,
+                "readiness_ok": True,
+                "completion_status": "hardware-backed-release-completion",
+                "release_completion": "pass",
+                "final_completion": True,
+                "hardware_proof": True,
+                "assurance_ceiling": {"final_completion": True},
+                "generated_at_unix": generated_at,
+                "artifacts": {
+                    "proxy_observation_body": {
+                        "path": str(observation_body),
+                        "sha256": collected_digest,
+                    }
+                },
+                "production_readiness": {},
+                "production_readiness_config": {},
+                "current_completion_host": {},
+                "production_env_binding": {},
+                "running_production_containers": {},
+                "production_host_preflight": {},
+                "bootstrap_launcher": {"sealed": True, "fixture": True},
+                "nitro_kms_evidence": {},
+                "nitro_evidence_binding": {},
+                "hardware_assurance_evidence": {},
+                "final_challenge_consumption": {
+                    "consumed": True,
+                    "completion_identity": {
+                        "launch_authorization": "fixture-launch-authorization"
+                    },
+                },
+                "production_images_build": {},
+                "production_images_published": {},
+                "release_provenance": {},
+                "image_signatures": {},
+                "benchmark": {},
+                "release_security_evidence": {},
+                "production_proxy_response_proof": {},
+                "proof_path": str(proof_path),
+                "integrity_metadata": {
+                    "generation": generation,
+                    "detached_sha256_path": str(digest_path),
+                    "scope": "checksum-only",
+                    "independently_authenticated": False,
+                    "authenticity_requires_external_signature_or_checkpoint": True,
+                },
+            }
+            run_production_readiness.write_private_json(proof_path, proof)
+            digest_path.write_text(
+                run_production_readiness.sha256_prefixed_file(proof_path) + "\n",
+                encoding="ascii",
+            )
+            digest_path.chmod(0o600)
+            observation_body.write_bytes(mutated_body)
+            collector_args.runner_started_at_unix = generated_at
+            collector_args.pre_run_completion_proof_state = {"exists": False}
+            try:
+                run_production_readiness.verify_completion_output(
+                    proof_path, collector_args
+                )
+            except ValueError as exc:
+                if expected_error not in str(exc):
+                    raise
+            else:
+                raise AssertionError(
+                    f"final completion accepted an observation body {label} after collection"
+                )
+            if label == "changed" and (
+                observation_body.stat().st_size != collected_bytes
+                or run_production_readiness.sha256_prefixed_file(observation_body)
+                == collected_digest
+                or collector_args.collected_proxy_observation_body_sha256
+                != collected_digest
+            ):
+                raise AssertionError(
+                    "same-length observation mutation did not exercise fresh digest revalidation"
+                )
+            if label == "oversized" and (
+                observation_body.stat().st_size <= collected_bytes
+                or collector_args.proxy_max_observation_body_bytes
+                != collected_bytes
+                or collector_args.collected_proxy_observation_body_bytes
+                != collected_bytes
+            ):
+                raise AssertionError(
+                    "oversized observation mutation did not exercise fresh byte-count revalidation"
+                )
+    finally:
+        run_production_readiness.validate_bootstrap_receipt_summary = (
+            original_bootstrap_validator
+        )
+        run_production_readiness.bootstrap_launch_authorization_identity = (
+            original_bootstrap_identity
+        )
+        observation_body.write_bytes(b"body")
 
 
 def verify_launcher_style_helper_import() -> None:
@@ -597,6 +747,155 @@ def verify_sealed_bootstrap_receipt_contract() -> None:
     run_production_readiness.load_launch_authority_identity = original_key_loader
 
 
+def verify_proxy_trust_input_path_security() -> None:
+    with tempfile.TemporaryDirectory(
+        dir=test_temp_root(),
+        prefix="readiness-trust-paths-",
+    ) as raw_tmp:
+        root = Path(raw_tmp)
+        output_paths = {"proxy proof output": str(root / "proof.json")}
+        inputs = {
+            "proxy CA bundle": root / "ca.pem",
+            "proxy collector private key": root / "collector-key.pem",
+            "proxy collector public key": root / "collector-key.pub.pem",
+            "proxy verifier public key": root / "verifier.pub.pem",
+        }
+        for label, path in inputs.items():
+            path.write_bytes(f"{label}\n".encode("ascii"))
+            path.chmod(0o600 if label == "proxy collector private key" else 0o644)
+        run_production_readiness.validate_proxy_artifact_path_separation(
+            output_paths,
+            {label: str(path) for label, path in inputs.items()},
+        )
+
+        symlinked = root / "ca-link.pem"
+        symlinked.symlink_to(inputs["proxy CA bundle"])
+        symlink_inputs = {**inputs, "proxy CA bundle": symlinked}
+        try:
+            run_production_readiness.validate_proxy_artifact_path_separation(
+                output_paths,
+                {label: str(path) for label, path in symlink_inputs.items()},
+            )
+        except ValueError as exc:
+            if "without following symlinks" not in str(exc):
+                raise
+        else:
+            raise AssertionError("runner accepted a symlinked proxy trust input")
+
+        hardlink = root / "ca-hardlink.pem"
+        os.link(inputs["proxy CA bundle"], hardlink)
+        try:
+            run_production_readiness.validate_proxy_artifact_path_separation(
+                output_paths,
+                {label: str(path) for label, path in inputs.items()},
+            )
+        except ValueError as exc:
+            if "single-link regular file" not in str(exc):
+                raise
+        else:
+            raise AssertionError("runner accepted a multi-link proxy trust input")
+        hardlink.unlink()
+
+        fifo = root / "ca.fifo"
+        os.mkfifo(fifo, 0o600)
+        fifo_inputs = {**inputs, "proxy CA bundle": fifo}
+        try:
+            run_production_readiness.validate_proxy_artifact_path_separation(
+                output_paths,
+                {label: str(path) for label, path in fifo_inputs.items()},
+            )
+        except ValueError as exc:
+            if "single-link regular file" not in str(exc):
+                raise
+        else:
+            raise AssertionError("runner accepted a FIFO proxy trust input")
+
+        unsafe_parent = root / "unsafe"
+        unsafe_parent.mkdir(mode=0o770)
+        unsafe_parent.chmod(0o770)
+        unsafe_ca = unsafe_parent / "ca.pem"
+        unsafe_ca.write_bytes(b"unsafe\n")
+        unsafe_ca.chmod(0o600)
+        unsafe_inputs = {**inputs, "proxy CA bundle": unsafe_ca}
+        try:
+            run_production_readiness.validate_proxy_artifact_path_separation(
+                output_paths,
+                {label: str(path) for label, path in unsafe_inputs.items()},
+            )
+        except ValueError as exc:
+            if "must not be writable by group/other" not in str(exc):
+                raise
+        else:
+            raise AssertionError("runner accepted a writable proxy trust ancestor")
+
+        alias_parent = root / "trust-alias"
+        alias_parent.symlink_to(root, target_is_directory=True)
+        alias_inputs = {
+            **inputs,
+            "proxy CA bundle": alias_parent / inputs["proxy CA bundle"].name,
+        }
+        try:
+            run_production_readiness.validate_proxy_artifact_path_separation(
+                output_paths,
+                {label: str(path) for label, path in alias_inputs.items()},
+            )
+        except ValueError as exc:
+            if "without following symlinks" not in str(exc):
+                raise
+        else:
+            raise AssertionError("runner accepted a symlinked proxy trust ancestor")
+
+        normalized_alias = str(root) + "//proof.json"
+        try:
+            run_production_readiness.validate_proxy_artifact_path_separation(
+                {"proxy proof output": normalized_alias},
+                {label: str(path) for label, path in inputs.items()},
+            )
+        except ValueError as exc:
+            if "normalized and absolute" not in str(exc):
+                raise
+        else:
+            raise AssertionError("runner accepted a non-normalized proxy output path")
+
+        replaceable = root / "replaceable.pem"
+        displaced = root / "opened-replaceable.pem"
+        replaceable.write_bytes(b"opened bytes")
+        replaceable.chmod(0o600)
+        original_read_fd_bytes = run_production_readiness.read_fd_bytes
+
+        def replace_after_open(
+            descriptor: int,
+            opened: os.stat_result,
+            label: str,
+            *,
+            max_bytes: int,
+        ) -> bytes:
+            replaceable.rename(displaced)
+            replaceable.write_bytes(b"replacement")
+            replaceable.chmod(0o600)
+            return original_read_fd_bytes(
+                descriptor,
+                opened,
+                label,
+                max_bytes=max_bytes,
+            )
+
+        run_production_readiness.read_fd_bytes = replace_after_open
+        try:
+            run_production_readiness.read_regular_file_once(
+                replaceable,
+                "proxy CA bundle",
+                max_bytes=1024,
+            )
+        except ValueError as exc:
+            if "changed while being read" not in str(exc):
+                raise
+        else:
+            raise AssertionError("runner accepted a replaced trust-input pathname")
+        finally:
+            run_production_readiness.read_fd_bytes = original_read_fd_bytes
+
+
 def main() -> None:
     verify_launcher_style_helper_import()
     for invalid_path in ("relative/path", "/", "/tmp/../etc/passwd", "/tmp//receipt", "/tmp/receipt/"):
@@ -607,7 +906,11 @@ def main() -> None:
         else:
             raise AssertionError(f"bootstrap receipt accepted a non-normalized path: {invalid_path}")
     verify_sealed_bootstrap_receipt_contract()
-    with tempfile.TemporaryDirectory() as tmp_raw:
+    verify_proxy_trust_input_path_security()
+    with tempfile.TemporaryDirectory(
+        dir=test_temp_root(),
+        prefix="readiness-runner-",
+    ) as tmp_raw:
         tmp = Path(tmp_raw).resolve()
         expected_client_request_digest = "sha256:" + "a" * 64
         expected_request_digest = "sha256:" + "b" * 64
@@ -734,8 +1037,45 @@ def main() -> None:
                 "SERVERWARE_PROXY_EXPECTED_CLIENT_REQUEST_DIGEST": expected_client_request_digest,
                 "SERVERWARE_PROXY_EXPECTED_REQUEST_DIGEST": expected_request_digest,
                 "SERVERWARE_PROXY_EXPECTED_OPERATION_DIGEST": expected_operation_digest,
-        }
+                }
+        for setting in (
+            "SERVERWARE_PROXY_PROOF_CA_BUNDLE",
+            "SERVERWARE_PROXY_PROOF_COLLECTOR_PRIVATE_KEY",
+            "SERVERWARE_PROXY_PROOF_COLLECTOR_PUBLIC_KEY",
+            "SERVERWARE_PROXY_PROOF_VERIFIER_PUBLIC_KEY",
+        ):
+            path = Path(minimal_values[setting])
+            path.write_bytes(f"{setting}\n".encode("ascii"))
+            path.chmod(
+                0o600
+                if setting == "SERVERWARE_PROXY_PROOF_COLLECTOR_PRIVATE_KEY"
+                else 0o644
+            )
         write_env(minimal_env, minimal_values)
+        missing_readiness_contract_env = tmp / "missing-readiness-proof-contract.env"
+        write_env(
+            missing_readiness_contract_env,
+            {
+                key: value
+                for key, value in minimal_values.items()
+                if key != run_production_readiness.PROXY_PROOF_CONTRACT_ENV
+            },
+        )
+        missing_readiness_contract = run_runner(
+            "--env-file",
+            str(missing_readiness_contract_env),
+            "--dry-run",
+            *security_args,
+        )
+        if (
+            missing_readiness_contract.returncode == 0
+            or run_production_readiness.PROXY_PROOF_CONTRACT_ENV
+            not in detail(missing_readiness_contract)
+        ):
+            raise AssertionError(
+                "runner accepted readiness verification without an env-pinned proof contract: "
+                + detail(missing_readiness_contract)
+            )
         runner_claims = tmp / "runner-claims.json"
         runner_claims.write_text(
             canonical_json(nitro_evidence_test.claims()) + "\n",
@@ -996,6 +1336,367 @@ def main() -> None:
                     + detail(boundary_result)
                 )
 
+        observation_body_path = tmp / "proxy-observation-response-body.bin"
+        observation_env = tmp / "observation.env"
+        write_env(
+            observation_env,
+            {
+                **minimal_values,
+                "SERVERWARE_PROXY_PROOF_CONTRACT": "observation-v1",
+                run_production_readiness.PROXY_OBSERVATION_BODY_FILE_ENV: str(
+                    observation_body_path
+                ),
+                run_production_readiness.PROXY_PROOF_MAX_OBSERVATION_BODY_BYTES_ENV: "4096",
+            },
+        )
+        observation_dry_run = run_runner(
+            "--env-file",
+            str(observation_env),
+            "--dry-run",
+            *security_args,
+        )
+        if observation_dry_run.returncode != 0:
+            raise AssertionError(
+                "runner rejected a complete observation proof configuration: "
+                + detail(observation_dry_run)
+            )
+        mismatched_readiness_contract = run_runner(
+            "--env-file",
+            str(observation_env),
+            "--dry-run",
+            "--proxy-proof-contract",
+            "buffered-v3",
+            *security_args,
+        )
+        if (
+            mismatched_readiness_contract.returncode == 0
+            or "--proxy-proof-contract must match"
+            not in detail(mismatched_readiness_contract)
+        ):
+            raise AssertionError(
+                "runner accepted a readiness CLI contract downgrade against observation-v1: "
+                + detail(mismatched_readiness_contract)
+            )
+        observation_plan = json.loads(observation_dry_run.stdout.decode("utf-8"))
+        observation_collector_argv = observation_plan["commands"][-2]["argv"]
+        observation_completion_argv = observation_plan["commands"][-1]["argv"]
+        observation_nonce = observation_collector_argv[
+            observation_collector_argv.index("--nonce") + 1
+        ]
+        observation_nonce_bytes = base64.urlsafe_b64decode(
+            observation_nonce + "=" * (-len(observation_nonce) % 4)
+        )
+        observation_nonce_expiry = int.from_bytes(
+            observation_nonce_bytes[:4], "big"
+        )
+        nonce_check_time = int(time.time())
+        if (
+            "--observation" not in observation_collector_argv
+            or observation_collector_argv[
+                observation_collector_argv.index("--body-out") + 1
+            ]
+            != str(observation_body_path)
+            or observation_collector_argv[
+                observation_collector_argv.index(
+                    "--max-observation-body-bytes"
+                )
+                + 1
+            ]
+            != "4096"
+            or len(observation_nonce_bytes) != 32
+            or not any(observation_nonce_bytes[4:])
+            or not nonce_check_time < observation_nonce_expiry <= nonce_check_time + 330
+            or "--stream" in observation_collector_argv
+            or "--max-stream-bytes" in observation_collector_argv
+            or observation_completion_argv[
+                observation_completion_argv.index("--proxy-proof-contract") + 1
+            ]
+            != "observation-v1"
+            or observation_completion_argv[
+                observation_completion_argv.index("--proxy-observation-body") + 1
+            ]
+            != str(observation_body_path)
+            or observation_completion_argv[
+                observation_completion_argv.index(
+                    "--proxy-max-observation-body-bytes"
+                )
+                + 1
+            ]
+            != "4096"
+            or "--proxy-stream-body" in observation_completion_argv
+            or "--proxy-max-stream-bytes" in observation_completion_argv
+            or "--proxy-operation-context-digest" in observation_completion_argv
+        ):
+            raise AssertionError(
+                "runner did not propagate the independently selected observation proof contract: "
+                f"collector={observation_collector_argv} completion={observation_completion_argv}"
+            )
+        for missing_setting in (
+            run_production_readiness.PROXY_OBSERVATION_BODY_FILE_ENV,
+            run_production_readiness.PROXY_PROOF_MAX_OBSERVATION_BODY_BYTES_ENV,
+        ):
+            incomplete_observation_env = (
+                tmp / f"missing-{missing_setting.lower()}.env"
+            )
+            incomplete_values = {
+                **minimal_values,
+                "SERVERWARE_PROXY_PROOF_CONTRACT": "observation-v1",
+                run_production_readiness.PROXY_OBSERVATION_BODY_FILE_ENV: str(
+                    observation_body_path
+                ),
+                run_production_readiness.PROXY_PROOF_MAX_OBSERVATION_BODY_BYTES_ENV: "4096",
+            }
+            incomplete_values.pop(missing_setting)
+            write_env(incomplete_observation_env, incomplete_values)
+            incomplete_observation = run_runner(
+                "--env-file",
+                str(incomplete_observation_env),
+                "--dry-run",
+                *security_args,
+            )
+            if (
+                incomplete_observation.returncode == 0
+                or missing_setting not in detail(incomplete_observation)
+            ):
+                raise AssertionError(
+                    f"runner accepted observation-v1 without {missing_setting}: "
+                    + detail(incomplete_observation)
+                )
+        for observation_limit, should_succeed in (
+            (0, False),
+            (1, True),
+            (run_production_readiness.MAX_PROXY_OBSERVATION_BODY_BYTES, True),
+            (run_production_readiness.MAX_PROXY_OBSERVATION_BODY_BYTES + 1, False),
+        ):
+            boundary_env = tmp / f"observation-limit-{observation_limit}.env"
+            write_env(
+                boundary_env,
+                {
+                    **minimal_values,
+                    "SERVERWARE_PROXY_PROOF_CONTRACT": "observation-v1",
+                    run_production_readiness.PROXY_OBSERVATION_BODY_FILE_ENV: str(
+                        observation_body_path
+                    ),
+                    run_production_readiness.PROXY_PROOF_MAX_OBSERVATION_BODY_BYTES_ENV: str(
+                        observation_limit
+                    ),
+                },
+            )
+            boundary_result = run_runner(
+                "--env-file", str(boundary_env), "--dry-run", *security_args
+            )
+            if should_succeed and boundary_result.returncode != 0:
+                raise AssertionError(
+                    "runner rejected a valid observation body byte ceiling: "
+                    + detail(boundary_result)
+                )
+            if not should_succeed and (
+                boundary_result.returncode == 0
+                or "max observation body bytes" not in detail(boundary_result)
+            ):
+                raise AssertionError(
+                    "runner accepted an invalid observation body byte ceiling: "
+                    + detail(boundary_result)
+                )
+        for label, body_path, limit, expected_error in (
+            (
+                "relative-body",
+                "relative-observation-body.bin",
+                "4096",
+                "must be an absolute path",
+            ),
+            (
+                "colliding-body",
+                minimal_values["SERVERWARE_PROXY_RESPONSE_PROOF_FILE"],
+                "4096",
+                "must use different filesystem locations",
+            ),
+            (
+                "non-integer-limit",
+                str(observation_body_path),
+                "many",
+                "must be an integer",
+            ),
+        ):
+            invalid_observation_env = tmp / f"invalid-observation-{label}.env"
+            write_env(
+                invalid_observation_env,
+                {
+                    **minimal_values,
+                    "SERVERWARE_PROXY_PROOF_CONTRACT": "observation-v1",
+                    run_production_readiness.PROXY_OBSERVATION_BODY_FILE_ENV: body_path,
+                    run_production_readiness.PROXY_PROOF_MAX_OBSERVATION_BODY_BYTES_ENV: limit,
+                },
+            )
+            invalid_observation = run_runner(
+                "--env-file",
+                str(invalid_observation_env),
+                "--dry-run",
+                *security_args,
+            )
+            if (
+                invalid_observation.returncode == 0
+                or expected_error not in detail(invalid_observation)
+            ):
+                raise AssertionError(
+                    f"runner accepted invalid observation setting {label}: "
+                    + detail(invalid_observation)
+                )
+        dotdot_alias_env = tmp / "observation-dotdot-output-alias.env"
+        write_env(
+            dotdot_alias_env,
+            {
+                **minimal_values,
+                "SERVERWARE_PROXY_PROOF_CONTRACT": "observation-v1",
+                run_production_readiness.PROXY_OBSERVATION_BODY_FILE_ENV: str(
+                    tmp / "body-alias" / ".." / "proxy-response-proof.json"
+                ),
+                run_production_readiness.PROXY_PROOF_MAX_OBSERVATION_BODY_BYTES_ENV: "4096",
+            },
+        )
+        rejected_dotdot_alias = run_runner(
+            "--env-file",
+            str(dotdot_alias_env),
+            "--dry-run",
+            *security_args,
+        )
+        if (
+            rejected_dotdot_alias.returncode == 0
+            or "path must be normalized and absolute"
+            not in detail(rejected_dotdot_alias)
+        ):
+            raise AssertionError(
+                "runner accepted proof/body output aliases through a '..' path: "
+                + detail(rejected_dotdot_alias)
+            )
+
+        alias_parent = tmp / "observation-artifact-parent"
+        alias_parent.mkdir()
+        alias_parent_link = tmp / "observation-artifact-parent-link"
+        alias_parent_link.symlink_to(alias_parent, target_is_directory=True)
+        symlink_parent_alias_env = tmp / "observation-symlink-parent-alias.env"
+        write_env(
+            symlink_parent_alias_env,
+            {
+                **minimal_values,
+                "SERVERWARE_PROXY_RESPONSE_PROOF_FILE": str(
+                    alias_parent / "shared-output"
+                ),
+                "SERVERWARE_PROXY_PROOF_CONTRACT": "observation-v1",
+                run_production_readiness.PROXY_OBSERVATION_BODY_FILE_ENV: str(
+                    alias_parent_link / "shared-output"
+                ),
+                run_production_readiness.PROXY_PROOF_MAX_OBSERVATION_BODY_BYTES_ENV: "4096",
+            },
+        )
+        rejected_symlink_parent_alias = run_runner(
+            "--env-file",
+            str(symlink_parent_alias_env),
+            "--dry-run",
+            *security_args,
+        )
+        if (
+            rejected_symlink_parent_alias.returncode == 0
+            or "ancestor could not be opened without following symlinks"
+            not in detail(rejected_symlink_parent_alias)
+        ):
+            raise AssertionError(
+                "runner accepted proof/body output aliases through a symlinked parent: "
+                + detail(rejected_symlink_parent_alias)
+            )
+
+        hardlink_proof = tmp / "observation-hardlink-proof.json"
+        hardlink_body = tmp / "observation-hardlink-body.bin"
+        hardlink_proof.write_bytes(b"fixture")
+        os.link(hardlink_proof, hardlink_body)
+        hardlink_alias_env = tmp / "observation-hardlink-output-alias.env"
+        write_env(
+            hardlink_alias_env,
+            {
+                **minimal_values,
+                "SERVERWARE_PROXY_RESPONSE_PROOF_FILE": str(hardlink_proof),
+                "SERVERWARE_PROXY_PROOF_CONTRACT": "observation-v1",
+                run_production_readiness.PROXY_OBSERVATION_BODY_FILE_ENV: str(
+                    hardlink_body
+                ),
+                run_production_readiness.PROXY_PROOF_MAX_OBSERVATION_BODY_BYTES_ENV: "4096",
+            },
+        )
+        rejected_hardlink_alias = run_runner(
+            "--env-file",
+            str(hardlink_alias_env),
+            "--dry-run",
+            *security_args,
+        )
+        if (
+            rejected_hardlink_alias.returncode == 0
+            or "must be a single-link regular file"
+            not in detail(rejected_hardlink_alias)
+        ):
+            raise AssertionError(
+                "runner accepted proof/body outputs sharing an existing inode: "
+                + detail(rejected_hardlink_alias)
+            )
+        observation_with_stream_setting = tmp / "observation-with-stream-setting.env"
+        write_env(
+            observation_with_stream_setting,
+            {
+                **minimal_values,
+                "SERVERWARE_PROXY_PROOF_CONTRACT": "observation-v1",
+                run_production_readiness.PROXY_OBSERVATION_BODY_FILE_ENV: str(
+                    observation_body_path
+                ),
+                run_production_readiness.PROXY_PROOF_MAX_OBSERVATION_BODY_BYTES_ENV: "4096",
+                "SERVERWARE_PROXY_EXPECTED_OPERATION_CONTEXT_DIGEST": expected_operation_context_digest,
+            },
+        )
+        rejected_observation_stream_setting = run_runner(
+            "--env-file",
+            str(observation_with_stream_setting),
+            "--dry-run",
+            *security_args,
+        )
+        if (
+            rejected_observation_stream_setting.returncode == 0
+            or "only valid with proxy proof contract streaming-v1"
+            not in detail(rejected_observation_stream_setting)
+        ):
+            raise AssertionError(
+                "runner accepted a streaming-only operation context for observation-v1: "
+                + detail(rejected_observation_stream_setting)
+            )
+        streaming_with_observation_setting = (
+            tmp / "streaming-with-observation-setting.env"
+        )
+        write_env(
+            streaming_with_observation_setting,
+            {
+                **minimal_values,
+                "SERVERWARE_PROXY_PROOF_CONTRACT": "streaming-v1",
+                "SERVERWARE_PROXY_STREAM_BODY_FILE": str(streaming_body_path),
+                "SERVERWARE_PROXY_PROOF_MAX_STREAM_BYTES": "4096",
+                "SERVERWARE_PROXY_EXPECTED_OPERATION_CONTEXT_DIGEST": expected_operation_context_digest,
+                run_production_readiness.PROXY_OBSERVATION_BODY_FILE_ENV: str(
+                    observation_body_path
+                ),
+            },
+        )
+        rejected_streaming_observation_setting = run_runner(
+            "--env-file",
+            str(streaming_with_observation_setting),
+            "--dry-run",
+            *security_args,
+        )
+        if (
+            rejected_streaming_observation_setting.returncode == 0
+            or "only valid with proxy proof contract observation-v1"
+            not in detail(rejected_streaming_observation_setting)
+        ):
+            raise AssertionError(
+                "runner accepted an observation-only body path for streaming-v1: "
+                + detail(rejected_streaming_observation_setting)
+            )
+
         buffered_with_stream_setting = tmp / "buffered-with-stream-setting.env"
         write_env(
             buffered_with_stream_setting,
@@ -1012,7 +1713,7 @@ def main() -> None:
         )
         if (
             rejected_buffered_stream_setting.returncode == 0
-            or "only valid with proxy proof contract streaming-v1"
+            or "matching proxy proof contracts"
             not in detail(rejected_buffered_stream_setting)
         ):
             raise AssertionError(
@@ -1029,12 +1730,39 @@ def main() -> None:
         )
         if (
             rejected_buffered_stream_cli.returncode == 0
-            or "only valid with proxy proof contract streaming-v1"
+            or "matching proxy proof contracts"
             not in detail(rejected_buffered_stream_cli)
         ):
             raise AssertionError(
                 "runner accepted a streaming-only CLI pin for buffered-v3: "
                 + detail(rejected_buffered_stream_cli)
+            )
+        buffered_with_observation_setting = (
+            tmp / "buffered-with-observation-setting.env"
+        )
+        write_env(
+            buffered_with_observation_setting,
+            {
+                **minimal_values,
+                run_production_readiness.PROXY_OBSERVATION_BODY_FILE_ENV: str(
+                    observation_body_path
+                ),
+            },
+        )
+        rejected_buffered_observation_setting = run_runner(
+            "--env-file",
+            str(buffered_with_observation_setting),
+            "--dry-run",
+            *security_args,
+        )
+        if (
+            rejected_buffered_observation_setting.returncode == 0
+            or "matching proxy proof contracts"
+            not in detail(rejected_buffered_observation_setting)
+        ):
+            raise AssertionError(
+                "runner accepted an observation-only body path for buffered-v3: "
+                + detail(rejected_buffered_observation_setting)
             )
 
         invalid_contract_env = tmp / "invalid-proof-contract.env"
@@ -1045,7 +1773,7 @@ def main() -> None:
         invalid_contract = run_runner(
             "--env-file", str(invalid_contract_env), "--dry-run", *security_args
         )
-        if invalid_contract.returncode == 0 or "buffered-v3 or streaming-v1" not in detail(
+        if invalid_contract.returncode == 0 or "observation-v1" not in detail(
             invalid_contract
         ):
             raise AssertionError(
@@ -1078,6 +1806,8 @@ def main() -> None:
             proxy_proof_contract="buffered-v3",
             proxy_stream_body=None,
             proxy_max_stream_bytes=None,
+            proxy_observation_body=None,
+            proxy_max_observation_body_bytes=None,
             proxy_proof_summary_out=str(collector_summary_path),
         )
         collector_command = {
@@ -1188,6 +1918,239 @@ def main() -> None:
         collector_args.proxy_proof_contract = "buffered-v3"
         collector_args.proxy_stream_body = None
         collector_args.proxy_max_stream_bytes = None
+
+        observation_body = tmp / "collector-observation-body.bin"
+        observation_body.write_bytes(b"body")
+        observation_body_digest = run_production_readiness.sha256_prefixed_file(
+            observation_body
+        )
+        observation_response = {
+            "status": 200,
+            "headers_digest": "sha256:" + "4" * 64,
+            "header_count": 3,
+            "body_digest": observation_body_digest,
+            "body_bytes": 4,
+            "aggregate_digest": "sha256:" + "5" * 64,
+        }
+        observation_statement = {
+            "issued_at_unix": int(time.time()),
+            "client_nonce": "n" * 43,
+            "request": {"aggregate_digest": expected_client_request_digest},
+            "request_digest": expected_request_digest,
+            "operation_digest": expected_operation_digest,
+            "emitted_response": observation_response,
+            "server_instance": {"id": "spiffe://prod/instance"},
+            "tls_channel_binding": {
+                "type": "tls-exporter",
+                "label": "EXPORTER-Serverware-Response-Observation-v1",
+                "value": "t" * 43,
+            },
+        }
+        observation_artifact = {
+            "apiVersion": "serverware.responseObservationProof/v1",
+            "kind": "ServerwareResponseObservationProof",
+            "captured_at_unix": int(time.time()),
+            "request": {"aggregate_digest": expected_client_request_digest},
+            "response": observation_response,
+            "runtime_proof": {"server_statement": observation_statement},
+            "collector": {},
+        }
+        collector_proof.write_text(
+            canonical_json(observation_artifact) + "\n", encoding="utf-8"
+        )
+        observation_collector_summary = {
+            "ok": True,
+            "observation_verified": True,
+            "client_nonce": "n" * 43,
+            "request_aggregate_digest": expected_client_request_digest,
+            "response_aggregate_digest": observation_response["aggregate_digest"],
+            "response_status": 200,
+            "server_instance_id": "spiffe://prod/instance",
+            "proof_path": str(collector_proof),
+            "proof_sha256": run_production_readiness.sha256_prefixed_file(
+                collector_proof
+            ),
+            "proof_contract": "observation-v1",
+            "body_path": str(observation_body),
+            "body_sha256": observation_body_digest,
+            "body_bytes": 4,
+        }
+        collector_args.proxy_proof_contract = "observation-v1"
+        collector_args.proxy_observation_body = str(observation_body)
+        collector_args.proxy_max_observation_body_bytes = 4
+        collector_args.proxy_proof_summary_out = str(
+            tmp / "observation-collector-summary.json"
+        )
+
+        def observation_collector_command(
+            summary: dict[str, object],
+        ) -> dict[str, object]:
+            return {
+                "label": "fixture-observation-collector",
+                "argv": [
+                    sys.executable,
+                    "-c",
+                    f"import json; print(json.dumps({summary!r}))",
+                ],
+            }
+
+        accepted_observation_summary = run_production_readiness.run_collector(
+            observation_collector_command(observation_collector_summary),
+            collector_args,
+            clean_subprocess_env(),
+        )
+        if (
+            accepted_observation_summary != observation_collector_summary
+            or collector_args.collected_proxy_observation_body_sha256
+            != observation_body_digest
+            or collector_args.collected_proxy_observation_body_bytes != 4
+            or collector_args.collected_proxy_tls_channel_binding != "t" * 43
+            or collector_args.collected_proxy_proof_contract != "observation-v1"
+        ):
+            raise AssertionError(
+                "runner did not retain the verified observation body, TLS exporter, and selected contract"
+            )
+
+        observation_summary_mutations = {
+            "missing verification": {
+                **observation_collector_summary,
+                "observation_verified": False,
+            },
+            "body path swap": {
+                **observation_collector_summary,
+                "body_path": str(tmp / "different-observation-body.bin"),
+            },
+            "body digest swap": {
+                **observation_collector_summary,
+                "body_sha256": "sha256:" + "0" * 64,
+            },
+            "body count swap": {
+                **observation_collector_summary,
+                "body_bytes": 3,
+            },
+            "response aggregate swap": {
+                **observation_collector_summary,
+                "response_aggregate_digest": "sha256:" + "0" * 64,
+            },
+            "contract downgrade": {
+                **observation_collector_summary,
+                "proof_contract": "buffered-v3",
+            },
+        }
+        for label, mutated_summary in observation_summary_mutations.items():
+            rejected_summary_path = (
+                tmp / f"rejected-observation-{label.replace(' ', '-')}.json"
+            )
+            collector_args.proxy_proof_summary_out = str(rejected_summary_path)
+            try:
+                run_production_readiness.run_collector(
+                    observation_collector_command(mutated_summary),
+                    collector_args,
+                    clean_subprocess_env(),
+                )
+            except ValueError:
+                pass
+            else:
+                raise AssertionError(
+                    f"runner accepted observation collector summary mutation: {label}"
+                )
+            if rejected_summary_path.exists():
+                raise AssertionError(
+                    f"runner persisted rejected observation collector summary: {label}"
+                )
+        malformed_observation_artifact = json.loads(
+            json.dumps(observation_artifact)
+        )
+        malformed_observation_artifact["external_capture"] = {
+            "client_nonce": "n" * 43
+        }
+        collector_proof.write_text(
+            canonical_json(malformed_observation_artifact) + "\n",
+            encoding="utf-8",
+        )
+        malformed_artifact_summary = {
+            **observation_collector_summary,
+            "proof_sha256": run_production_readiness.sha256_prefixed_file(
+                collector_proof
+            ),
+        }
+        try:
+            run_production_readiness.run_collector(
+                observation_collector_command(malformed_artifact_summary),
+                collector_args,
+                clean_subprocess_env(),
+            )
+        except ValueError as exc:
+            if "top-level shape" not in str(exc):
+                raise
+        else:
+            raise AssertionError(
+                "runner accepted an observation proof with buffered/streaming artifact shape"
+            )
+        collector_proof.write_text(
+            canonical_json(observation_artifact) + "\n", encoding="utf-8"
+        )
+        observation_body.write_bytes(b"same")
+        collector_args.proxy_proof_summary_out = str(
+            tmp / "mutated-observation-body-summary.json"
+        )
+        try:
+            run_production_readiness.run_collector(
+                observation_collector_command(observation_collector_summary),
+                collector_args,
+                clean_subprocess_env(),
+            )
+        except ValueError as exc:
+            if "body digest" not in str(exc):
+                raise
+        else:
+            raise AssertionError(
+                "runner accepted a same-length substituted observation body"
+            )
+        observation_body.write_bytes(b"body")
+        collector_args.verification_mode = "final"
+        collector_args.proxy_proof_summary_out = str(
+            tmp / "final-observation-collector-summary.json"
+        )
+        run_production_readiness.run_collector(
+            observation_collector_command(observation_collector_summary),
+            collector_args,
+            clean_subprocess_env(),
+        )
+        if collector_args.collector_proof_contract != {
+            "proof_contract": "observation-v1",
+            "server_statement_sha256": "sha256:"
+            + hashlib.sha256(
+                canonical_json(observation_statement).encode("utf-8")
+            ).hexdigest(),
+            "captured_at_unix": observation_artifact["captured_at_unix"],
+            "issued_at_unix": observation_statement["issued_at_unix"],
+            "client_nonce_sha256": run_production_readiness.sha256_prefixed_base64url(
+                "n" * 43, "fixture nonce"
+            ),
+            "tls_channel_binding_sha256": "sha256:"
+            + hashlib.sha256(("t" * 43).encode("utf-8")).hexdigest(),
+            "observed_body_artifact_sha256": observation_body_digest,
+            "observed_body_artifact_bytes": 4,
+            "emitted_body_digest": observation_body_digest,
+            "emitted_body_bytes": 4,
+        }:
+            raise AssertionError(
+                "runner final mode did not retain the observation artifact/body contract"
+            )
+        verify_final_observation_body_revalidation(
+            tmp,
+            collector_args,
+            observation_body,
+        )
+        collector_args.verification_mode = "readiness"
+        collector_args.proxy_proof_contract = "buffered-v3"
+        collector_args.proxy_observation_body = None
+        collector_args.proxy_max_observation_body_bytes = None
+        collector_proof.write_bytes(b'{"fixture":"proof"}\n')
+        collector_summary["proof_sha256"] = (
+            run_production_readiness.sha256_prefixed_file(collector_proof)
+        )
 
         mismatched_collector_summary = {
             **collector_summary,
@@ -1675,6 +2638,88 @@ def main() -> None:
                 raise AssertionError(
                     f"runner accepted caller-selected final streaming setting {option}: "
                     + detail(substituted_streaming)
+                )
+
+        final_observation_body = tmp / "final-proxy-observation-body.bin"
+        final_observation_env_file = tmp / "final-observation-authority.env"
+        final_observation_values = {
+            **final_env_values,
+            "SERVERWARE_PROXY_PROOF_CONTRACT": "observation-v1",
+            run_production_readiness.PROXY_OBSERVATION_BODY_FILE_ENV: str(
+                final_observation_body
+            ),
+            run_production_readiness.PROXY_PROOF_MAX_OBSERVATION_BODY_BYTES_ENV: "8192",
+        }
+        write_env(final_observation_env_file, final_observation_values)
+        final_observation_run = run_runner(
+            "--env-file",
+            str(final_observation_env_file),
+            "--dry-run",
+            "--verification-mode",
+            "final",
+            *security_args,
+        )
+        if final_observation_run.returncode != 0:
+            raise AssertionError(
+                "runner rejected env-pinned final observation proof settings: "
+                + detail(final_observation_run)
+            )
+        final_observation_plan = json.loads(
+            final_observation_run.stdout.decode("utf-8")
+        )
+        final_observation_collector = final_observation_plan["commands"][-2][
+            "argv"
+        ]
+        final_observation_completion = final_observation_plan["commands"][-1][
+            "argv"
+        ]
+        if (
+            "--observation" not in final_observation_collector
+            or final_observation_collector[
+                final_observation_collector.index("--body-out") + 1
+            ]
+            != str(final_observation_body)
+            or final_observation_completion[
+                final_observation_completion.index("--proxy-proof-contract") + 1
+            ]
+            != "observation-v1"
+            or final_observation_completion[
+                final_observation_completion.index(
+                    "--proxy-max-observation-body-bytes"
+                )
+                + 1
+            ]
+            != "8192"
+            or "--proxy-operation-context-digest" in final_observation_completion
+        ):
+            raise AssertionError(
+                "runner did not derive final observation commands from the hashed environment"
+            )
+        final_observation_overrides = {
+            "--proxy-proof-contract": "buffered-v3",
+            "--proxy-observation-body": str(
+                tmp / "caller-observation-body.bin"
+            ),
+            "--proxy-max-observation-body-bytes": "8191",
+        }
+        for option, value in final_observation_overrides.items():
+            substituted_observation = run_runner(
+                "--env-file",
+                str(final_observation_env_file),
+                "--dry-run",
+                "--verification-mode",
+                "final",
+                option,
+                value,
+                *security_args,
+            )
+            if (
+                substituted_observation.returncode == 0
+                or "must match" not in detail(substituted_observation)
+            ):
+                raise AssertionError(
+                    f"runner accepted caller-selected final observation setting {option}: "
+                    + detail(substituted_observation)
                 )
 
         missing_final_contract_env = tmp / "missing-final-proof-contract.env"
@@ -2195,7 +3240,7 @@ def main() -> None:
         missing_proof_env = tmp / "missing-proof.env"
         write_env(missing_proof_env, {"SERVERWARE_RELEASE_CHANNEL": "prod"})
         rejected_missing_proof = run_runner("--env-file", str(missing_proof_env), "--dry-run", *security_args)
-        if rejected_missing_proof.returncode == 0 or "missing production proxy proof settings" not in detail(
+        if rejected_missing_proof.returncode == 0 or "SERVERWARE_PROXY_PROOF_CONTRACT must be pinned" not in detail(
             rejected_missing_proof
         ):
             raise AssertionError(f"runner accepted missing proxy proof settings: {detail(rejected_missing_proof)}")
@@ -2205,6 +3250,7 @@ def main() -> None:
             key: value
             for key, value in {
                 "SERVERWARE_RELEASE_CHANNEL": "prod",
+                "SERVERWARE_PROXY_PROOF_CONTRACT": "buffered-v3",
                 "SERVERWARE_PROXY_RESPONSE_PROOF_FILE": str(tmp / "proxy-response-proof.json"),
                 "SERVERWARE_PROXY_PROOF_COLLECTOR_COMMAND": "/opt/serverware/bin/serverware-proof-client",
                 "SERVERWARE_PROXY_PROOF_ADDRESS": "proxy.prod.internal:9090",

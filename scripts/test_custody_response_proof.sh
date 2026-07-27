@@ -15,6 +15,7 @@ export SERVERWARE_AUDIT_ANCHOR_HOST_PORT=0
 export SERVERWARE_DECISION_GATE_PROXY_HOST_PORT=0
 export SERVERWARE_DECISION_GATE_DIRECT_HOST_PORT=0
 export SERVERWARE_DECISION_GATE_MANAGEMENT_HOST_PORT=0
+export SERVERWARE_DECISION_GATE_DEV_IMAGE="${COMPOSE_PROJECT_NAME}-decision-gate-rs:dev"
 
 COMPOSE=(docker compose -p "$COMPOSE_PROJECT_NAME" --profile custody -f docker-compose.yml -f docker-compose.custody.yml)
 LOCAL_COMPOSE=(docker compose -p "$COMPOSE_PROJECT_NAME" -f docker-compose.yml)
@@ -224,13 +225,13 @@ refresh_gate_urls() {
 }
 
 prepare_gate_images() {
-  local image_name=""
   local binary_digest=""
 
   PROJECT_IMAGES_BUILT=1
-  "${COMPOSE[@]}" build custody-runtime decision-gate-rs
-  image_name="${COMPOSE_PROJECT_NAME}-decision-gate-rs"
-  GATE_IMAGE="$(docker image inspect --format '{{.Id}}' "$image_name")"
+  "${COMPOSE[@]}" build decision-gate-rs
+  GATE_IMAGE="$(
+    docker image inspect --format '{{.Id}}' "$SERVERWARE_DECISION_GATE_DEV_IMAGE"
+  )"
   binary_digest="$(
     docker run --rm --entrypoint sha256sum "$GATE_IMAGE" \
       /usr/local/bin/serverware-decision-gate | awk '{print $1}'
@@ -240,6 +241,61 @@ prepare_gate_images() {
     return 1
   fi
   export SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST="sha256:$binary_digest"
+}
+
+assert_shared_gate_image_identity() {
+  local phase="$1"
+  local custody_container=""
+  local gate_container=""
+
+  custody_container="$("${COMPOSE[@]}" ps --status running -q custody-runtime)"
+  gate_container="$("${COMPOSE[@]}" ps --status running -q decision-gate-rs)"
+  if [[ -z "$custody_container" || "$custody_container" == *$'\n'* \
+    || -z "$gate_container" || "$gate_container" == *$'\n'* ]]; then
+    echo "custody/gate image identity check did not find one running container per service during $phase" >&2
+    return 1
+  fi
+  python3 - \
+    "$custody_container" \
+    "$gate_container" \
+    "$SERVERWARE_DECISION_GATE_DEV_IMAGE" \
+    "$GATE_IMAGE" \
+    "$phase" <<'PY'
+import json
+import subprocess
+import sys
+
+custody_id, gate_id, expected_ref, expected_image_id, phase = sys.argv[1:]
+custody, gate = json.loads(
+    subprocess.check_output(
+        ["docker", "inspect", custody_id, gate_id],
+        text=True,
+    )
+)
+for service, container in (
+    ("custody-runtime", custody),
+    ("decision-gate-rs", gate),
+):
+    labels = (container.get("Config") or {}).get("Labels") or {}
+    assert labels.get("com.docker.compose.service") == service, (
+        phase,
+        service,
+        labels,
+    )
+    assert (container.get("Config") or {}).get("Image") == expected_ref, (
+        phase,
+        service,
+        (container.get("Config") or {}).get("Image"),
+        expected_ref,
+    )
+    assert container.get("Image") == expected_image_id, (
+        phase,
+        service,
+        container.get("Image"),
+        expected_image_id,
+    )
+assert custody["Image"] == gate["Image"], (phase, custody["Image"], gate["Image"])
+PY
 }
 
 restore_ordinary_gate() {
@@ -253,7 +309,7 @@ restore_ordinary_gate() {
   if ! "${COMPOSE[@]}" rm -sf custody-runtime decision-gate-rs >/dev/null; then
     return 1
   fi
-  if ! "${LOCAL_COMPOSE[@]}" up -d --force-recreate decision-gate-rs >/dev/null; then
+  if ! "${LOCAL_COMPOSE[@]}" up -d --no-build --force-recreate decision-gate-rs >/dev/null; then
     return 1
   fi
   if ! refresh_gate_urls; then
@@ -642,10 +698,11 @@ if [[ -z "$CLIENT_IMAGE" ]]; then
   exit 1
 fi
 
-"${COMPOSE[@]}" up -d --force-recreate custody-runtime decision-gate-rs
+"${COMPOSE[@]}" up -d --no-build --force-recreate custody-runtime decision-gate-rs
 refresh_gate_urls
 wait_for_custody_gate
 custody_container="$(wait_for_custody_socket)"
+assert_shared_gate_image_identity "initial custody startup"
 COMPOSE_PROJECT_NAME="$COMPOSE_PROJECT_NAME" \
   COMPOSE_FILE="docker-compose.yml:docker-compose.custody.yml" \
   COMPOSE_PROFILES=custody \
@@ -672,9 +729,14 @@ if [[ "$(docker inspect --format '{{.HostConfig.NetworkMode}}' "$custody_contain
   exit 1
 fi
 gate_container="$("${COMPOSE[@]}" ps -q decision-gate-rs)"
-GATE_IMAGE="$("${COMPOSE[@]}" images -q decision-gate-rs)"
-if [[ -z "$GATE_IMAGE" ]]; then
+compose_gate_image="$("${COMPOSE[@]}" images -q decision-gate-rs)"
+if [[ -z "$compose_gate_image" || "$compose_gate_image" == *$'\n'* ]]; then
   echo "decision-gate client image is unavailable" >&2
+  exit 1
+fi
+compose_gate_image="$(docker image inspect --format '{{.Id}}' "$compose_gate_image")"
+if [[ "$compose_gate_image" != "$GATE_IMAGE" ]]; then
+  echo "decision-gate client image identity does not match the built shared image" >&2
   exit 1
 fi
 docker cp "$gate_container:/data/decision-gate-ca-cert.pem" "$GATE_CA"
@@ -838,8 +900,9 @@ assert status["probe_failure_count"] >= 1, health
 assert status["sign_failure_count"] == 0, health
 PY
 
-"${COMPOSE[@]}" up -d --force-recreate custody-runtime >/dev/null
+"${COMPOSE[@]}" up -d --no-build --force-recreate custody-runtime >/dev/null
 custody_container="$(wait_for_custody_socket)"
+assert_shared_gate_image_identity "custody restart"
 docker exec "$custody_container" cat /var/lib/serverware-custody/manifest.json \
   > "$LEDGER_AFTER_RESTART"
 python3 - "$LEDGER_BEFORE_RESTART" "$LEDGER_AFTER_RESTART" <<'PY'
@@ -877,9 +940,10 @@ assert after["healthy"] is False, after
 assert after["probe_failure_count"] > before["probe_failure_count"], (before, after)
 PY
 
-"${COMPOSE[@]}" up -d --force-recreate decision-gate-rs >/dev/null
+"${COMPOSE[@]}" up -d --no-build --force-recreate decision-gate-rs >/dev/null
 refresh_gate_urls
 wait_for_custody_gate
+assert_shared_gate_image_identity "coordinated gate restart"
 curl -fsS "$MANAGEMENT_BASE/attestation?nonce=custody-after" \
   > "$ATTESTATION_AFTER"
 run_proof "$RECOVERED_PROOF" "$RECOVERED_SUMMARY"

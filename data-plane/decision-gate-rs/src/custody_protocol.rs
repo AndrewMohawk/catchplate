@@ -28,6 +28,11 @@ pub const RESPONSE_PROOF_SIGN_OPERATION: &str = "responseProof.sign/v2";
 pub const STREAMING_RESPONSE_PROOF_SIGN_OPERATION: &str = "streamingResponseProof.sign/v1";
 pub const STREAMING_RESPONSE_STATEMENT_API_VERSION: &str =
     "serverware.streamingResponseStatement/v1";
+pub const RESPONSE_OBSERVATION_PROOF_RESERVE_OPERATION: &str =
+    "responseObservationProof.reserve/v1";
+pub const RESPONSE_OBSERVATION_PROOF_SIGN_OPERATION: &str = "responseObservationProof.sign/v1";
+pub const RESPONSE_OBSERVATION_STATEMENT_API_VERSION: &str =
+    "serverware.responseObservationStatement/v1";
 pub const MAX_FRAME_BYTES: usize = 256 * 1024;
 pub const IO_DEADLINE: Duration = Duration::from_secs(2);
 pub const MAX_CONCURRENT_CONNECTIONS: usize = 32;
@@ -45,6 +50,8 @@ const MAX_OPERATION_BYTES: usize = 64;
 const MAX_SERVER_INSTANCE_ID_BYTES: usize = 1024;
 const MAX_HEADER_VALUE_BYTES: usize = 8 * 1024;
 const MAX_RAW_HEADER_VALUES: usize = 128;
+const MAX_OBSERVATION_BODY_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_OBSERVATION_HEADER_COUNT: u64 = 65_535;
 const MAX_AUTHORIZATION_RECEIPT_BODY_BYTES: usize = 32 * 1024;
 const MAX_SIGNED_RESPONSE_STATEMENT_BYTES: usize = 8 * 1024;
 const MAX_RELEASE_AUTHORIZATION_BINDING_BYTES: usize = 64 * 1024;
@@ -53,11 +60,18 @@ const MAX_CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ID_FILE_BYTES: usize = 72;
 const MAX_ATTEMPT_STATEMENT_BINDINGS: usize = MAX_REQUESTS_PER_BOOT;
 const MAX_ATTEMPT_LEDGER_RECORD_BYTES: usize = 1024;
 const MAX_ATTEMPT_LEDGER_MANIFEST_BYTES: usize = 1024;
+const RESPONSE_OBSERVATION_RESERVATION_LEDGER_DOMAIN: &str =
+    "serverware.responseObservationNonceReservation/v1";
+const OBSERVATION_STATEMENT_RETENTION_MARGIN_SECONDS: u64 = 1;
 const ATTEMPT_LEDGER_DIRECTORY_MODE: u32 = 0o700;
 const ATTEMPT_LEDGER_FILE_MODE: u32 = 0o600;
 const ATTEMPT_LEDGER_API_VERSION: &str = "serverware.custodyAttemptLedger/v2";
 const ATTEMPT_LEDGER_MANIFEST_FILE: &str = "manifest.json";
 const ATTEMPT_LEDGER_LOCK_FILE: &str = "ledger.lock";
+const RESPONSE_OBSERVATION_NONCE_EXPIRY_BYTES: usize = 4;
+const RESPONSE_OBSERVATION_NONCE_RANDOM_BYTES: usize = 28;
+pub const RESPONSE_OBSERVATION_NONCE_CLIENT_LIFETIME_SECONDS: u64 = 300;
+pub const RESPONSE_OBSERVATION_NONCE_MAX_LIFETIME_SECONDS: u64 = 330;
 const MAX_RELEASE_AUTHORIZATION_LIFETIME_MS: u64 = 300_000;
 const AUTHORIZATION_RECEIPT_API_VERSION: &str = "serverware.controlPlaneAuthorizationReceipt/v1";
 const RELEASE_AUTHORIZATION_DISPATCH_PATH: &str = "/api/data-plane/release-authorizations/dispatch";
@@ -152,6 +166,282 @@ struct SignParams {
 struct StreamingSignParams {
     statement: StreamingResponseStatement,
     authorization_binding: ReleaseAuthorizationBinding,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ResponseObservationSignParams {
+    statement: ResponseObservationStatement,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    authorization_binding: Option<ReleaseAuthorizationBinding>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ResponseObservationReserveParams {
+    client_nonce: String,
+    observation_id: String,
+    request_aggregate_digest: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ResponseObservationStatement {
+    #[serde(rename = "apiVersion")]
+    api_version: String,
+    issued_at_unix: u64,
+    observation_id: String,
+    client_nonce: String,
+    request: ObservedRequest,
+    policy: ObservedPolicy,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    principal_id: Option<String>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    route_id: Option<String>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    request_digest: Option<String>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    operation_digest: Option<String>,
+    credential: ObservedCredential,
+    authorization: ObservedAuthorization,
+    response_path: ResponsePath,
+    upstream_attempt: UpstreamAttempt,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    upstream_observation: Option<UpstreamObservation>,
+    emitted_response: EmittedResponse,
+    runtime_manifest_digest: String,
+    data_plane_binary_digest: String,
+    release_digest: String,
+    server_instance: ServerInstance,
+    tls_channel_binding: ResponseObservationTlsChannelBinding,
+    observation_authority: ObservationAuthority,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ObservedRequest {
+    method: String,
+    target_digest: String,
+    query_present: bool,
+    query_digest: String,
+    headers_digest: String,
+    header_count: u64,
+    body_digest: String,
+    body_bytes: u64,
+    body_observation: RequestBodyObservation,
+    aggregate_digest: String,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+enum RequestBodyObservation {
+    CompleteBuffered,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ObservedPolicy {
+    digest: String,
+    snapshot_epoch: u64,
+    decision_state: PolicyDecisionState,
+    completion_state: PolicyCompletionState,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+enum PolicyDecisionState {
+    NotEvaluated,
+    Denied,
+    Allowed,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+enum PolicyCompletionState {
+    SameActive,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ObservedCredential {
+    state: CredentialState,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    binding_digest: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+enum CredentialState {
+    NotEvaluated,
+    NotRequired,
+    LeaseUnavailable,
+    LeaseAcquired,
+    Injected,
+    InvalidatedBeforeDispatch,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ObservedAuthorization {
+    state: AuthorizationState,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    binding_digest: Option<String>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    release_authority: Option<ReleaseAuthority>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    control_plane_authorization_receipt: Option<ControlPlaneAuthorizationReceipt>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    control_plane_authorization_receipt_sha256: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+enum AuthorizationState {
+    NotEvaluated,
+    Denied,
+    Reserved,
+    Dispatching,
+    CompletedForwarded,
+    CompletionUnknown,
+}
+
+impl AuthorizationState {
+    fn is_before_dispatch(self) -> bool {
+        matches!(self, Self::NotEvaluated | Self::Denied | Self::Reserved)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+enum ResponsePath {
+    LocalRejectNoUpstreamAttempt,
+    DispatchDeniedNoUpstreamAttempt,
+    AuthorizedNotAttempted,
+    UpstreamAttemptOutcomeUnknown,
+    CompleteUpstreamResponseReleased,
+    CompleteUpstreamResponseBlocked,
+    PostDispatchLocalFailure,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+enum UpstreamAttempt {
+    NotStarted,
+    StartedNoResponse,
+    HeadersObservedBodyIncomplete,
+    Complete,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct UpstreamObservation {
+    status: u16,
+    headers_digest: String,
+    header_count: u64,
+    body_state: UpstreamBodyState,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    body_digest: Option<String>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    body_bytes: Option<u64>,
+    aggregate_digest: String,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+enum UpstreamBodyState {
+    Unread,
+    Incomplete,
+    Complete,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct EmittedResponse {
+    status: u16,
+    headers_digest: String,
+    header_count: u64,
+    body_digest: String,
+    body_bytes: u64,
+    aggregate_digest: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ResponseObservationTlsChannelBinding {
+    #[serde(rename = "type")]
+    binding_type: String,
+    label: String,
+    value: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ObservationAuthority {
+    source: ObservationSource,
+    upstream_truth: UpstreamTruth,
+    downstream_delivery: DownstreamDelivery,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+enum ObservationSource {
+    GateAuthored,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+enum UpstreamTruth {
+    NotIndependentlyObserved,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+enum DownstreamDelivery {
+    NotClaimed,
+}
+
+#[derive(Serialize)]
+struct ObservedRequestAggregate<'a> {
+    method: &'a str,
+    target_digest: &'a str,
+    query_present: bool,
+    query_digest: &'a str,
+    headers_digest: &'a str,
+    header_count: u64,
+    body_digest: &'a str,
+    body_bytes: u64,
+    body_observation: RequestBodyObservation,
+}
+
+#[derive(Serialize)]
+struct UpstreamObservationAggregate<'a> {
+    status: u16,
+    headers_digest: &'a str,
+    header_count: u64,
+    body_state: UpstreamBodyState,
+    body_digest: Option<&'a str>,
+    body_bytes: Option<u64>,
+}
+
+#[derive(Serialize)]
+struct EmittedResponseAggregate<'a> {
+    status: u16,
+    headers_digest: &'a str,
+    header_count: u64,
+    body_digest: &'a str,
+    body_bytes: u64,
+}
+
+#[derive(Serialize)]
+struct CredentialBindingCommitment<'a> {
+    credential_ref: &'a str,
+    credential_version: u64,
+}
+
+#[derive(Serialize)]
+struct ObservationIdCommitment<'a> {
+    client_nonce: &'a str,
+    contract: &'static str,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -572,7 +862,7 @@ struct HelloResult<'a> {
     public_key_pem: &'a str,
     key_id: &'a str,
     control_plane_response_signing_key_id: Option<&'a str>,
-    capabilities: [&'static str; 3],
+    capabilities: [&'static str; 5],
     limits: RuntimeLimits,
     hardware_proof: bool,
 }
@@ -593,6 +883,27 @@ struct SignResult<'a> {
     statement_digest: String,
     signature: String,
     key_id: &'a str,
+}
+
+#[derive(Serialize)]
+struct ResponseObservationReserveResult<'a> {
+    observation_id: &'a str,
+    request_aggregate_digest: &'a str,
+    reserved_until_epoch_ms: u64,
+}
+
+struct ReservedObservationSigning<'a> {
+    observation_id: &'a str,
+    request_aggregate_digest: &'a str,
+    final_ledger_key: &'a str,
+    retain_until_epoch_ms: u64,
+    validation_epoch_ms: u64,
+}
+
+#[derive(Serialize)]
+struct ObservationReservationLedgerKeyCommitment<'a> {
+    domain: &'static str,
+    observation_id: &'a str,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -637,6 +948,12 @@ struct AttemptStatementLedger {
     manifest: AttemptLedgerManifestPayload,
     max_bindings: usize,
     poisoned: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LedgerClaimReplayPolicy {
+    Idempotent,
+    RejectObservationNonce,
 }
 
 pub struct CustodyRuntime {
@@ -828,6 +1145,8 @@ impl CustodyRuntime {
                         HELLO_OPERATION,
                         RESPONSE_PROOF_SIGN_OPERATION,
                         STREAMING_RESPONSE_PROOF_SIGN_OPERATION,
+                        RESPONSE_OBSERVATION_PROOF_RESERVE_OPERATION,
+                        RESPONSE_OBSERVATION_PROOF_SIGN_OPERATION,
                     ],
                     limits: RuntimeLimits {
                         max_frame_bytes: MAX_FRAME_BYTES,
@@ -962,9 +1281,130 @@ impl CustodyRuntime {
                     validation_epoch_ms,
                 )
             }
+            RESPONSE_OBSERVATION_PROOF_RESERVE_OPERATION => {
+                let validation_epoch_ms = current_epoch_ms()?;
+                if let Err(error) = self.validate_sign_request_envelope(
+                    request,
+                    RESPONSE_OBSERVATION_PROOF_RESERVE_OPERATION,
+                ) {
+                    self.observe_attempt_ledger_clock(validation_epoch_ms)?;
+                    return Err(error);
+                }
+                let _validation = self.response_proof_validation.lock().map_err(|_| {
+                    ProtocolError::new(
+                        "internal_state_error",
+                        "response proof validation serialization is unavailable",
+                    )
+                })?;
+                let params = match from_value_strict::<ResponseObservationReserveParams>(
+                    request.params.clone(),
+                    "responseObservationProof.reserve/v1 params",
+                ) {
+                    Ok(params) => params,
+                    Err(error) => {
+                        self.observe_attempt_ledger_clock(validation_epoch_ms)?;
+                        return Err(error);
+                    }
+                };
+                let reservation_ledger_key =
+                    match validate_response_observation_reserve_params(&params) {
+                        Ok(reservation_ledger_key) => reservation_ledger_key,
+                        Err(error) => {
+                            self.observe_attempt_ledger_clock(validation_epoch_ms)?;
+                            return Err(error);
+                        }
+                    };
+                let reserved_until_epoch_ms = self.reserve_observation_nonce(
+                    &reservation_ledger_key,
+                    &params.client_nonce,
+                    &params.request_aggregate_digest,
+                    validation_epoch_ms,
+                )?;
+                serde_json::to_value(ResponseObservationReserveResult {
+                    observation_id: &params.observation_id,
+                    request_aggregate_digest: &params.request_aggregate_digest,
+                    reserved_until_epoch_ms,
+                })
+                .map_err(|error| {
+                    ProtocolError::new(
+                        "internal_serialization_error",
+                        format!("serialize response observation reservation: {error}"),
+                    )
+                })
+            }
+            RESPONSE_OBSERVATION_PROOF_SIGN_OPERATION => {
+                self.validate_sign_request_envelope(
+                    request,
+                    RESPONSE_OBSERVATION_PROOF_SIGN_OPERATION,
+                )?;
+                let params = from_value_strict::<ResponseObservationSignParams>(
+                    request.params.clone(),
+                    "responseObservationProof.sign/v1 params",
+                )?;
+                let _validation = self.response_proof_validation.lock().map_err(|_| {
+                    ProtocolError::new(
+                        "internal_state_error",
+                        "response proof validation serialization is unavailable",
+                    )
+                })?;
+                let validation_epoch_ms = current_epoch_ms()?;
+                let validated = (|| {
+                    validate_response_observation_statement_at(
+                        &params.statement,
+                        params.authorization_binding.as_ref(),
+                        self.control_plane_response_verifying_key.as_ref(),
+                        validation_epoch_ms,
+                    )?;
+                    let ledger_key = params
+                        .authorization_binding
+                        .as_ref()
+                        .map(|binding| binding.attempt_id.clone())
+                        .unwrap_or_else(|| params.statement.observation_id.clone());
+                    let canonical_statement = canonical_json_bytes(&params.statement)?;
+                    let statement_digest = sha256_prefixed(&canonical_statement);
+                    let retain_until_epoch_ms = params
+                        .statement
+                        .issued_at_unix
+                        .saturating_add(
+                            MAX_STATEMENT_AGE_SECONDS
+                                .saturating_add(OBSERVATION_STATEMENT_RETENTION_MARGIN_SECONDS),
+                        )
+                        .saturating_mul(1000);
+                    Ok::<_, ProtocolError>((
+                        ledger_key,
+                        canonical_statement,
+                        statement_digest,
+                        retain_until_epoch_ms,
+                    ))
+                })();
+                let (
+                    ledger_key,
+                    canonical_statement,
+                    statement_digest,
+                    retain_until_epoch_ms,
+                ) = match validated {
+                    Ok(validated) => validated,
+                    Err(error) => {
+                        self.observe_attempt_ledger_clock(validation_epoch_ms)?;
+                        return Err(error);
+                    }
+                };
+                let reservation = ReservedObservationSigning {
+                    observation_id: &params.statement.observation_id,
+                    request_aggregate_digest: &params.statement.request.aggregate_digest,
+                    final_ledger_key: &ledger_key,
+                    retain_until_epoch_ms,
+                    validation_epoch_ms,
+                };
+                self.sign_reserved_observation_statement(
+                    &reservation,
+                    canonical_statement,
+                    statement_digest,
+                )
+            }
             _ => Err(ProtocolError::new(
                 "unknown_operation",
-                "operation must be hello/v1, responseProof.sign/v2, or streamingResponseProof.sign/v1",
+                "operation must be hello/v1, responseProof.sign/v2, streamingResponseProof.sign/v1, responseObservationProof.reserve/v1, or responseObservationProof.sign/v1",
             )),
         }
     }
@@ -1005,6 +1445,54 @@ impl CustodyRuntime {
             retain_until_epoch_ms,
             validation_epoch_ms,
         )?;
+        self.encode_signature_result(canonical_statement, statement_digest)
+    }
+
+    fn sign_reserved_observation_statement(
+        &self,
+        reservation: &ReservedObservationSigning<'_>,
+        canonical_statement: Vec<u8>,
+        statement_digest: String,
+    ) -> Result<Value, ProtocolError> {
+        let reservation_ledger_key =
+            response_observation_reservation_ledger_key(reservation.observation_id)?;
+        let mut ledger = self.attempt_statement_ledger.lock().map_err(|_| {
+            ProtocolError::new(
+                "internal_state_error",
+                "response observation reservation state is unavailable",
+            )
+        })?;
+        let now_epoch_ms = current_epoch_ms().inspect_err(|_| {
+            let _ = ledger.advance_max_observed_time(reservation.validation_epoch_ms);
+        })?;
+        if now_epoch_ms < reservation.validation_epoch_ms {
+            ledger.advance_max_observed_time(reservation.validation_epoch_ms)?;
+            return Err(attempt_ledger_error(
+                "attempt_ledger_clock_rollback",
+                format!(
+                    "wall clock {now_epoch_ms} moved backward after observation validation at {}",
+                    reservation.validation_epoch_ms
+                ),
+            ));
+        }
+        ledger.prune_expired(now_epoch_ms)?;
+        ledger.claim_reserved_observation_statement(
+            &reservation_ledger_key,
+            reservation.request_aggregate_digest,
+            reservation.final_ledger_key,
+            &statement_digest,
+            reservation.retain_until_epoch_ms,
+            now_epoch_ms,
+        )?;
+        drop(ledger);
+        self.encode_signature_result(canonical_statement, statement_digest)
+    }
+
+    fn encode_signature_result(
+        &self,
+        canonical_statement: Vec<u8>,
+        statement_digest: String,
+    ) -> Result<Value, ProtocolError> {
         let signature = self.signing_key.sign(&canonical_statement);
         serde_json::to_value(SignResult {
             statement_digest,
@@ -1097,6 +1585,70 @@ impl CustodyRuntime {
             retain_until_epoch_ms,
             now_epoch_ms,
         )
+    }
+
+    fn reserve_observation_nonce(
+        &self,
+        reservation_ledger_key: &str,
+        client_nonce: &str,
+        request_aggregate_digest: &str,
+        minimum_epoch_ms: u64,
+    ) -> Result<u64, ProtocolError> {
+        self.reserve_observation_nonce_with_clock(
+            reservation_ledger_key,
+            client_nonce,
+            request_aggregate_digest,
+            minimum_epoch_ms,
+            current_epoch_ms,
+        )
+    }
+
+    fn reserve_observation_nonce_with_clock(
+        &self,
+        reservation_ledger_key: &str,
+        client_nonce: &str,
+        request_aggregate_digest: &str,
+        minimum_epoch_ms: u64,
+        clock: impl FnOnce() -> Result<u64, ProtocolError>,
+    ) -> Result<u64, ProtocolError> {
+        let mut ledger = self.attempt_statement_ledger.lock().map_err(|_| {
+            ProtocolError::new(
+                "internal_state_error",
+                "response observation reservation state is unavailable",
+            )
+        })?;
+        let now_epoch_ms = match clock() {
+            Ok(now_epoch_ms) => now_epoch_ms,
+            Err(error) => {
+                ledger.advance_max_observed_time(minimum_epoch_ms)?;
+                return Err(error);
+            }
+        };
+        if now_epoch_ms < minimum_epoch_ms {
+            ledger.advance_max_observed_time(minimum_epoch_ms)?;
+            return Err(attempt_ledger_error(
+                "attempt_ledger_clock_rollback",
+                format!(
+                    "wall clock {now_epoch_ms} moved backward after reservation validation at {minimum_epoch_ms}"
+                ),
+            ));
+        }
+        ledger.prune_expired(now_epoch_ms)?;
+        let reserved_until_epoch_ms =
+            match validate_response_observation_nonce(client_nonce, now_epoch_ms) {
+                Ok(expires_at_epoch_ms) => expires_at_epoch_ms,
+                Err(error) => {
+                    ledger.advance_max_observed_time(now_epoch_ms)?;
+                    return Err(error);
+                }
+            };
+        ledger.claim_exclusive(
+            reservation_ledger_key,
+            request_aggregate_digest,
+            reserved_until_epoch_ms,
+            now_epoch_ms,
+        )?;
+        Ok(reserved_until_epoch_ms)
     }
 
     fn observe_attempt_ledger_clock(&self, observed_epoch_ms: u64) -> Result<(), ProtocolError> {
@@ -1227,7 +1779,6 @@ impl AttemptStatementLedger {
                 "attempt ledger manifest is missing; normal runtime startup never creates fresh state",
             ));
         }
-
         let manifest = load_attempt_ledger_manifest(&manifest_path)?;
         if now_epoch_ms < manifest.max_observed_epoch_ms {
             return Err(attempt_ledger_error(
@@ -1323,6 +1874,145 @@ impl AttemptStatementLedger {
         retain_until_epoch_ms: u64,
         now_epoch_ms: u64,
     ) -> Result<(), ProtocolError> {
+        self.claim_with_replay_policy(
+            attempt_id,
+            statement_digest,
+            retain_until_epoch_ms,
+            now_epoch_ms,
+            LedgerClaimReplayPolicy::Idempotent,
+        )
+    }
+
+    fn claim_exclusive(
+        &mut self,
+        reservation_ledger_key: &str,
+        request_aggregate_digest: &str,
+        reserved_until_epoch_ms: u64,
+        now_epoch_ms: u64,
+    ) -> Result<(), ProtocolError> {
+        self.claim_with_replay_policy(
+            reservation_ledger_key,
+            request_aggregate_digest,
+            reserved_until_epoch_ms,
+            now_epoch_ms,
+            LedgerClaimReplayPolicy::RejectObservationNonce,
+        )
+    }
+
+    fn claim_reserved_observation_statement(
+        &mut self,
+        reservation_ledger_key: &str,
+        request_aggregate_digest: &str,
+        final_ledger_key: &str,
+        statement_digest: &str,
+        retain_until_epoch_ms: u64,
+        now_epoch_ms: u64,
+    ) -> Result<(), ProtocolError> {
+        self.ensure_available()?;
+        if now_epoch_ms < self.manifest.max_observed_epoch_ms {
+            return Err(attempt_ledger_error(
+                "attempt_ledger_clock_rollback",
+                format!(
+                    "wall clock {now_epoch_ms} precedes durable observation high-water mark {}",
+                    self.manifest.max_observed_epoch_ms
+                ),
+            ));
+        }
+        self.prune_expired(now_epoch_ms)?;
+        let reserved = self
+            .bindings
+            .get(reservation_ledger_key)
+            .cloned()
+            .ok_or_else(|| {
+                ProtocolError::new(
+                    "observation_reservation_missing",
+                    "response observation signing requires a live pre-upstream nonce reservation",
+                )
+            })?;
+        let reservation_is_fresh = reserved.statement_digest == request_aggregate_digest;
+        if !reservation_is_fresh && reserved.statement_digest != statement_digest {
+            self.advance_max_observed_time(now_epoch_ms)?;
+            return Err(ProtocolError::new(
+                "observation_reservation_substitution",
+                "response observation nonce is reserved or durably bound to different request or statement commitments",
+            ));
+        }
+
+        self.claim(
+            final_ledger_key,
+            statement_digest,
+            retain_until_epoch_ms,
+            now_epoch_ms,
+        )?;
+        if !reservation_is_fresh {
+            return Ok(());
+        }
+
+        if retain_until_epoch_ms <= now_epoch_ms {
+            self.advance_max_observed_time(now_epoch_ms)?;
+            return Err(ProtocolError::new(
+                "attempt_statement_expired",
+                "response observation expired before its reservation could be consumed",
+            ));
+        }
+        let replacement = AttemptBindingPayload {
+            api_version: ATTEMPT_LEDGER_API_VERSION.to_string(),
+            attempt_id: reservation_ledger_key.to_string(),
+            statement_digest: statement_digest.to_string(),
+            retain_until_epoch_ms,
+        };
+        let old_checksum = checksum_payload(&reserved)?;
+        let replacement_checksum = checksum_payload(&replacement)?;
+        let mut next_manifest = self.manifest.clone();
+        next_manifest.commit_sequence =
+            next_manifest
+                .commit_sequence
+                .checked_add(1)
+                .ok_or_else(|| {
+                    attempt_ledger_error(
+                        "attempt_ledger_corrupt",
+                        "ledger commit sequence is exhausted",
+                    )
+                })?;
+        next_manifest.max_observed_epoch_ms = now_epoch_ms;
+        let mut accumulator = decode_accumulator(&next_manifest.active_bindings_accumulator)?;
+        xor_accumulator(&mut accumulator, checksum_bytes(&old_checksum)?);
+        xor_accumulator(&mut accumulator, checksum_bytes(&replacement_checksum)?);
+        next_manifest.active_bindings_accumulator =
+            general_purpose::URL_SAFE_NO_PAD.encode(accumulator);
+        if let Some(directory) = self.directory.as_deref() {
+            if let Err(error) =
+                replace_attempt_binding_record(directory, &replacement, &replacement_checksum)
+            {
+                self.poisoned = true;
+                return Err(error);
+            }
+            if let Err(error) = persist_attempt_ledger_manifest(directory, &next_manifest) {
+                self.poisoned = true;
+                return Err(error);
+            }
+        }
+
+        self.expiry_index.remove(&(
+            reserved.retain_until_epoch_ms,
+            reservation_ledger_key.to_string(),
+        ));
+        self.expiry_index
+            .insert((retain_until_epoch_ms, reservation_ledger_key.to_string()));
+        self.bindings
+            .insert(reservation_ledger_key.to_string(), replacement);
+        self.manifest = next_manifest;
+        Ok(())
+    }
+
+    fn claim_with_replay_policy(
+        &mut self,
+        attempt_id: &str,
+        statement_digest: &str,
+        retain_until_epoch_ms: u64,
+        now_epoch_ms: u64,
+        replay_policy: LedgerClaimReplayPolicy,
+    ) -> Result<(), ProtocolError> {
         self.ensure_available()?;
         if now_epoch_ms < self.manifest.max_observed_epoch_ms {
             return Err(attempt_ledger_error(
@@ -1340,6 +2030,12 @@ impl AttemptStatementLedger {
             .map(|existing| existing.statement_digest.clone())
         {
             self.advance_max_observed_time(now_epoch_ms)?;
+            if replay_policy == LedgerClaimReplayPolicy::RejectObservationNonce {
+                return Err(ProtocolError::new(
+                    "observation_nonce_replay",
+                    "response observation nonce already has a live durable reservation",
+                ));
+            }
             if existing_statement_digest != statement_digest {
                 return Err(ProtocolError::new(
                     "attempt_statement_substitution",
@@ -1891,6 +2587,25 @@ fn persist_attempt_binding_record(
         checksum: checksum.to_string(),
     };
     write_atomic_ledger_file(&path, &canonical_json_bytes(&record)?, false)
+}
+
+fn replace_attempt_binding_record(
+    directory: &Path,
+    payload: &AttemptBindingPayload,
+    checksum: &str,
+) -> Result<(), ProtocolError> {
+    let path = directory.join(attempt_binding_filename(&payload.attempt_id)?);
+    if fs::symlink_metadata(&path).is_err() {
+        return Err(attempt_ledger_error(
+            "attempt_ledger_corrupt",
+            format!("missing reservation binding record {}", path.display()),
+        ));
+    }
+    let record = AttemptBindingRecord {
+        payload: payload.clone(),
+        checksum: checksum.to_string(),
+    };
+    write_atomic_ledger_file(&path, &canonical_json_bytes(&record)?, true)
 }
 
 fn persist_attempt_ledger_manifest(
@@ -2467,6 +3182,14 @@ where
     })
 }
 
+fn deserialize_required_nullable<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer)
+}
+
 pub fn validate_response_statement(
     statement: &ProxyResponseStatement,
 ) -> Result<(), ProtocolError> {
@@ -2611,6 +3334,653 @@ fn validate_response_statement_inner(
         TLS_EXPORTER_BYTES,
         TLS_EXPORTER_BYTES,
     )?;
+    Ok(())
+}
+
+fn validate_response_observation_reserve_params(
+    params: &ResponseObservationReserveParams,
+) -> Result<String, ProtocolError> {
+    validate_base64url("client_nonce", &params.client_nonce, 32, 32)?;
+    validate_sha256_digest("observation_id", &params.observation_id)?;
+    validate_sha256_digest("request_aggregate_digest", &params.request_aggregate_digest)?;
+    let expected_observation_id = response_observation_id(&params.client_nonce)?;
+    if params.observation_id != expected_observation_id {
+        return Err(invalid_statement(
+            "observation_id does not match the response-observation nonce commitment",
+        ));
+    }
+    response_observation_reservation_ledger_key(&params.observation_id)
+}
+
+fn response_observation_reservation_ledger_key(
+    observation_id: &str,
+) -> Result<String, ProtocolError> {
+    validate_sha256_digest("observation_id", observation_id)?;
+    Ok(sha256_prefixed(&canonical_json_bytes(
+        &ObservationReservationLedgerKeyCommitment {
+            domain: RESPONSE_OBSERVATION_RESERVATION_LEDGER_DOMAIN,
+            observation_id,
+        },
+    )?))
+}
+
+fn response_observation_id(client_nonce: &str) -> Result<String, ProtocolError> {
+    Ok(sha256_prefixed(&canonical_json_bytes(
+        &ObservationIdCommitment {
+            client_nonce,
+            contract: RESPONSE_OBSERVATION_STATEMENT_API_VERSION,
+        },
+    )?))
+}
+
+fn validate_response_observation_nonce(
+    client_nonce: &str,
+    now_epoch_ms: u64,
+) -> Result<u64, ProtocolError> {
+    validate_base64url("client_nonce", client_nonce, 32, 32)?;
+    let nonce = general_purpose::URL_SAFE_NO_PAD
+        .decode(client_nonce)
+        .map_err(|_| {
+            ProtocolError::new(
+                "invalid_response_observation_nonce",
+                "client_nonce is not a valid structured response observation nonce",
+            )
+        })?;
+    let expires_at_epoch_seconds = u32::from_be_bytes(
+        nonce[..RESPONSE_OBSERVATION_NONCE_EXPIRY_BYTES]
+            .try_into()
+            .expect("validated nonce expiry width"),
+    );
+    let expires_at_epoch_ms = u64::from(expires_at_epoch_seconds).saturating_mul(1000);
+    if nonce[RESPONSE_OBSERVATION_NONCE_EXPIRY_BYTES..]
+        .iter()
+        .all(|byte| *byte == 0)
+    {
+        return Err(ProtocolError::new(
+            "invalid_response_observation_nonce",
+            format!(
+                "client_nonce must contain {RESPONSE_OBSERVATION_NONCE_RANDOM_BYTES} random bytes after its expiry"
+            ),
+        ));
+    }
+    if expires_at_epoch_ms <= now_epoch_ms {
+        return Err(ProtocolError::new(
+            "observation_nonce_expired",
+            "response observation nonce is outside its bounded freshness window",
+        ));
+    }
+    let maximum_expiry_epoch_ms = now_epoch_ms
+        .saturating_add(RESPONSE_OBSERVATION_NONCE_MAX_LIFETIME_SECONDS.saturating_mul(1000));
+    if expires_at_epoch_ms > maximum_expiry_epoch_ms {
+        return Err(ProtocolError::new(
+            "observation_nonce_expiry_out_of_bounds",
+            format!(
+                "response observation nonce expiry exceeds the {RESPONSE_OBSERVATION_NONCE_MAX_LIFETIME_SECONDS}-second custody bound"
+            ),
+        ));
+    }
+    Ok(expires_at_epoch_ms)
+}
+
+fn validate_response_observation_statement_at(
+    statement: &ResponseObservationStatement,
+    authorization_binding: Option<&ReleaseAuthorizationBinding>,
+    control_plane_response_verifying_key: Option<&VerifyingKey>,
+    now_epoch_ms: u64,
+) -> Result<(), ProtocolError> {
+    if statement.api_version != RESPONSE_OBSERVATION_STATEMENT_API_VERSION {
+        return Err(invalid_statement(
+            "apiVersion must be serverware.responseObservationStatement/v1",
+        ));
+    }
+    if statement.policy.completion_state != PolicyCompletionState::SameActive {
+        return Err(invalid_statement(
+            "policy.completion_state must be same-active",
+        ));
+    }
+    let now = now_epoch_ms / 1000;
+    if statement.issued_at_unix == 0
+        || statement.issued_at_unix > now.saturating_add(30)
+        || now.saturating_sub(statement.issued_at_unix) > MAX_STATEMENT_AGE_SECONDS
+    {
+        return Err(invalid_statement(
+            "issued_at_unix is outside the allowed clock window",
+        ));
+    }
+    validate_sha256_digest("observation_id", &statement.observation_id)?;
+    validate_base64url("client_nonce", &statement.client_nonce, 32, 32)?;
+    let expected_observation_id = response_observation_id(&statement.client_nonce)?;
+    if statement.observation_id != expected_observation_id {
+        return Err(invalid_statement(
+            "observation_id does not match the response-observation nonce commitment",
+        ));
+    }
+    for (name, value) in [
+        ("principal_id", statement.principal_id.as_deref()),
+        ("route_id", statement.route_id.as_deref()),
+    ] {
+        if let Some(value) = value {
+            validate_bounded_identity(name, value)?;
+        }
+    }
+    for (name, digest) in [
+        ("request_digest", statement.request_digest.as_deref()),
+        ("operation_digest", statement.operation_digest.as_deref()),
+        (
+            "credential.binding_digest",
+            statement.credential.binding_digest.as_deref(),
+        ),
+        (
+            "authorization.binding_digest",
+            statement.authorization.binding_digest.as_deref(),
+        ),
+        (
+            "authorization.control_plane_authorization_receipt_sha256",
+            statement
+                .authorization
+                .control_plane_authorization_receipt_sha256
+                .as_deref(),
+        ),
+    ] {
+        if let Some(digest) = digest {
+            validate_sha256_digest(name, digest)?;
+        }
+    }
+    for (name, digest) in [
+        ("policy.digest", &statement.policy.digest),
+        (
+            "runtime_manifest_digest",
+            &statement.runtime_manifest_digest,
+        ),
+        (
+            "data_plane_binary_digest",
+            &statement.data_plane_binary_digest,
+        ),
+        ("release_digest", &statement.release_digest),
+        (
+            "server_instance.identity_digest",
+            &statement.server_instance.identity_digest,
+        ),
+    ] {
+        validate_sha256_digest(name, digest)?;
+    }
+
+    validate_observed_request(&statement.request)?;
+    validate_response_observation_path(statement)?;
+    validate_emitted_response(&statement.emitted_response)?;
+    validate_server_instance(&statement.server_instance)?;
+    if statement.tls_channel_binding.binding_type != "tls-exporter"
+        || statement.tls_channel_binding.label != "EXPORTER-Serverware-Response-Observation-v1"
+    {
+        return Err(invalid_statement(
+            "tls_channel_binding must use the response-observation TLS exporter domain",
+        ));
+    }
+    validate_base64url(
+        "tls_channel_binding.value",
+        &statement.tls_channel_binding.value,
+        TLS_EXPORTER_BYTES,
+        TLS_EXPORTER_BYTES,
+    )?;
+
+    validate_observation_authorization(
+        statement,
+        authorization_binding,
+        control_plane_response_verifying_key,
+        now_epoch_ms,
+    )
+}
+
+fn validate_observed_request(request: &ObservedRequest) -> Result<(), ProtocolError> {
+    validate_http_method(&request.method)?;
+    if request.header_count > MAX_OBSERVATION_HEADER_COUNT
+        || request.body_bytes > MAX_OBSERVATION_BODY_BYTES
+    {
+        return Err(invalid_statement(
+            "request observation count exceeds the bounded contract",
+        ));
+    }
+    for (name, digest) in [
+        ("request.target_digest", &request.target_digest),
+        ("request.query_digest", &request.query_digest),
+        ("request.headers_digest", &request.headers_digest),
+        ("request.body_digest", &request.body_digest),
+        ("request.aggregate_digest", &request.aggregate_digest),
+    ] {
+        validate_sha256_digest(name, digest)?;
+    }
+    let aggregate = ObservedRequestAggregate {
+        method: &request.method,
+        target_digest: &request.target_digest,
+        query_present: request.query_present,
+        query_digest: &request.query_digest,
+        headers_digest: &request.headers_digest,
+        header_count: request.header_count,
+        body_digest: &request.body_digest,
+        body_bytes: request.body_bytes,
+        body_observation: request.body_observation,
+    };
+    if request.aggregate_digest != sha256_prefixed(&canonical_json_bytes(&aggregate)?) {
+        return Err(invalid_statement(
+            "request.aggregate_digest does not match the complete request observation",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_response_observation_path(
+    statement: &ResponseObservationStatement,
+) -> Result<(), ProtocolError> {
+    let observation = statement.upstream_observation.as_ref();
+    match statement.upstream_attempt {
+        UpstreamAttempt::NotStarted | UpstreamAttempt::StartedNoResponse => {
+            if observation.is_some() {
+                return Err(invalid_statement(
+                    "upstream_observation must be null before response headers are observed",
+                ));
+            }
+        }
+        UpstreamAttempt::HeadersObservedBodyIncomplete => {
+            let observation = observation.ok_or_else(|| {
+                invalid_statement(
+                    "headers-observed-body-incomplete requires an upstream_observation",
+                )
+            })?;
+            validate_upstream_observation(observation)?;
+            if observation.body_state == UpstreamBodyState::Complete {
+                return Err(invalid_statement(
+                    "headers-observed-body-incomplete cannot contain a complete upstream body",
+                ));
+            }
+        }
+        UpstreamAttempt::Complete => {
+            let observation = observation.ok_or_else(|| {
+                invalid_statement("complete upstream_attempt requires an upstream_observation")
+            })?;
+            validate_upstream_observation(observation)?;
+            if observation.body_state != UpstreamBodyState::Complete {
+                return Err(invalid_statement(
+                    "complete upstream_attempt requires a complete upstream body",
+                ));
+            }
+        }
+    }
+
+    match statement.response_path {
+        ResponsePath::LocalRejectNoUpstreamAttempt
+        | ResponsePath::DispatchDeniedNoUpstreamAttempt
+        | ResponsePath::AuthorizedNotAttempted => {
+            if statement.upstream_attempt != UpstreamAttempt::NotStarted || observation.is_some() {
+                return Err(invalid_statement(
+                    "no-upstream response path requires not-started and a null upstream observation",
+                ));
+            }
+        }
+        ResponsePath::UpstreamAttemptOutcomeUnknown => {
+            if !matches!(
+                statement.upstream_attempt,
+                UpstreamAttempt::StartedNoResponse | UpstreamAttempt::HeadersObservedBodyIncomplete
+            ) {
+                return Err(invalid_statement(
+                    "upstream-attempt-outcome-unknown has an invalid upstream attempt state",
+                ));
+            }
+        }
+        ResponsePath::CompleteUpstreamResponseReleased
+        | ResponsePath::CompleteUpstreamResponseBlocked => {
+            if statement.upstream_attempt != UpstreamAttempt::Complete
+                || !observation.is_some_and(|value| value.body_state == UpstreamBodyState::Complete)
+            {
+                return Err(invalid_statement(
+                    "complete upstream response path requires a complete upstream observation",
+                ));
+            }
+        }
+        ResponsePath::PostDispatchLocalFailure => {
+            if statement.upstream_attempt == UpstreamAttempt::NotStarted {
+                return Err(invalid_statement(
+                    "post-dispatch local failure requires an upstream attempt",
+                ));
+            }
+        }
+    }
+
+    let authorized_path = matches!(
+        statement.response_path,
+        ResponsePath::AuthorizedNotAttempted
+            | ResponsePath::UpstreamAttemptOutcomeUnknown
+            | ResponsePath::CompleteUpstreamResponseReleased
+            | ResponsePath::CompleteUpstreamResponseBlocked
+            | ResponsePath::PostDispatchLocalFailure
+    );
+    if authorized_path {
+        if statement.authorization.state.is_before_dispatch()
+            && !(statement.authorization.state == AuthorizationState::NotEvaluated
+                && statement.credential.state == CredentialState::NotRequired)
+        {
+            return Err(invalid_statement(
+                "authorized response path requires dispatch authorization or a credentialless route",
+            ));
+        }
+    } else if !statement.authorization.state.is_before_dispatch() {
+        return Err(invalid_statement(
+            "pre-dispatch response path cannot contain dispatched authorization state",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_upstream_observation(observation: &UpstreamObservation) -> Result<(), ProtocolError> {
+    validate_http_status("upstream_observation.status", observation.status)?;
+    if observation.header_count > MAX_OBSERVATION_HEADER_COUNT
+        || observation
+            .body_bytes
+            .is_some_and(|count| count > MAX_OBSERVATION_BODY_BYTES)
+    {
+        return Err(invalid_statement(
+            "upstream observation count exceeds the bounded contract",
+        ));
+    }
+    for (name, digest) in [
+        (
+            "upstream_observation.headers_digest",
+            Some(observation.headers_digest.as_str()),
+        ),
+        (
+            "upstream_observation.body_digest",
+            observation.body_digest.as_deref(),
+        ),
+        (
+            "upstream_observation.aggregate_digest",
+            Some(observation.aggregate_digest.as_str()),
+        ),
+    ] {
+        if let Some(digest) = digest {
+            validate_sha256_digest(name, digest)?;
+        }
+    }
+    let has_body_digest = observation.body_digest.is_some();
+    let has_body_bytes = observation.body_bytes.is_some();
+    if has_body_digest != has_body_bytes
+        || (observation.body_state == UpstreamBodyState::Unread && has_body_digest)
+        || (observation.body_state != UpstreamBodyState::Unread && !has_body_digest)
+    {
+        return Err(invalid_statement(
+            "upstream_observation body state and nullable body fields are inconsistent",
+        ));
+    }
+    let aggregate = UpstreamObservationAggregate {
+        status: observation.status,
+        headers_digest: &observation.headers_digest,
+        header_count: observation.header_count,
+        body_state: observation.body_state,
+        body_digest: observation.body_digest.as_deref(),
+        body_bytes: observation.body_bytes,
+    };
+    if observation.aggregate_digest != sha256_prefixed(&canonical_json_bytes(&aggregate)?) {
+        return Err(invalid_statement(
+            "upstream_observation.aggregate_digest does not match the upstream observation",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_emitted_response(response: &EmittedResponse) -> Result<(), ProtocolError> {
+    validate_http_status("emitted_response.status", response.status)?;
+    if response.header_count > MAX_OBSERVATION_HEADER_COUNT
+        || response.body_bytes > MAX_OBSERVATION_BODY_BYTES
+    {
+        return Err(invalid_statement(
+            "emitted response count exceeds the bounded contract",
+        ));
+    }
+    for (name, digest) in [
+        ("emitted_response.headers_digest", &response.headers_digest),
+        ("emitted_response.body_digest", &response.body_digest),
+        (
+            "emitted_response.aggregate_digest",
+            &response.aggregate_digest,
+        ),
+    ] {
+        validate_sha256_digest(name, digest)?;
+    }
+    let aggregate = EmittedResponseAggregate {
+        status: response.status,
+        headers_digest: &response.headers_digest,
+        header_count: response.header_count,
+        body_digest: &response.body_digest,
+        body_bytes: response.body_bytes,
+    };
+    if response.aggregate_digest != sha256_prefixed(&canonical_json_bytes(&aggregate)?) {
+        return Err(invalid_statement(
+            "emitted_response.aggregate_digest does not match the emitted response",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_observation_authorization(
+    statement: &ResponseObservationStatement,
+    authorization_binding: Option<&ReleaseAuthorizationBinding>,
+    control_plane_response_verifying_key: Option<&VerifyingKey>,
+    now_epoch_ms: u64,
+) -> Result<(), ProtocolError> {
+    let authorization = &statement.authorization;
+    let has_no_dispatch_evidence = authorization.binding_digest.is_none()
+        && authorization.release_authority.is_none()
+        && authorization.control_plane_authorization_receipt.is_none()
+        && authorization
+            .control_plane_authorization_receipt_sha256
+            .is_none();
+    let binding_is_null = authorization_binding.is_none();
+    if binding_is_null != (authorization.state.is_before_dispatch() && has_no_dispatch_evidence) {
+        return Err(invalid_statement(
+            "authorization_binding nullability does not match the authorization state and evidence",
+        ));
+    }
+    let authorized_path = matches!(
+        statement.response_path,
+        ResponsePath::AuthorizedNotAttempted
+            | ResponsePath::UpstreamAttemptOutcomeUnknown
+            | ResponsePath::CompleteUpstreamResponseReleased
+            | ResponsePath::CompleteUpstreamResponseBlocked
+            | ResponsePath::PostDispatchLocalFailure
+    );
+    if authorized_path {
+        if statement.policy.decision_state != PolicyDecisionState::Allowed {
+            return Err(invalid_statement(
+                "authorized response path requires an allowed policy decision",
+            ));
+        }
+        for (name, value) in [
+            ("principal_id", statement.principal_id.as_deref()),
+            ("route_id", statement.route_id.as_deref()),
+        ] {
+            let value = value.ok_or_else(|| {
+                invalid_statement(format!("authorized observation is missing {name}"))
+            })?;
+            validate_bounded_identity(name, value)?;
+        }
+        for (name, value) in [
+            ("request_digest", statement.request_digest.as_deref()),
+            ("operation_digest", statement.operation_digest.as_deref()),
+        ] {
+            validate_sha256_digest(
+                name,
+                value.ok_or_else(|| {
+                    invalid_statement(format!("authorized observation is missing {name}"))
+                })?,
+            )?;
+        }
+    }
+    let Some(binding) = authorization_binding else {
+        if authorized_path
+            && (authorization.state != AuthorizationState::NotEvaluated
+                || statement.credential.state != CredentialState::NotRequired
+                || statement.credential.binding_digest.is_some())
+        {
+            return Err(invalid_statement(
+                "credentialless authorized observation has invalid authorization or credential state",
+            ));
+        }
+        return Ok(());
+    };
+    if authorization.state.is_before_dispatch()
+        || authorization.binding_digest.is_none()
+        || authorization.release_authority.is_none()
+        || authorization.control_plane_authorization_receipt.is_none()
+        || authorization
+            .control_plane_authorization_receipt_sha256
+            .is_none()
+    {
+        return Err(invalid_statement(
+            "authorized observation requires complete dispatch authorization evidence",
+        ));
+    }
+    if statement.policy.decision_state != PolicyDecisionState::Allowed {
+        return Err(invalid_statement(
+            "dispatch authorization requires an allowed policy decision",
+        ));
+    }
+    let principal_id = statement
+        .principal_id
+        .as_deref()
+        .ok_or_else(|| invalid_statement("authorized observation is missing principal_id"))?;
+    let route_id = statement
+        .route_id
+        .as_deref()
+        .ok_or_else(|| invalid_statement("authorized observation is missing route_id"))?;
+    let request_digest = statement
+        .request_digest
+        .as_deref()
+        .ok_or_else(|| invalid_statement("authorized observation is missing request_digest"))?;
+    let operation_digest = statement
+        .operation_digest
+        .as_deref()
+        .ok_or_else(|| invalid_statement("authorized observation is missing operation_digest"))?;
+    let release_authority = authorization
+        .release_authority
+        .as_ref()
+        .expect("complete dispatch evidence checked above");
+    let receipt = authorization
+        .control_plane_authorization_receipt
+        .as_ref()
+        .expect("complete dispatch evidence checked above");
+    let binding_digest = sha256_prefixed(&canonical_json_ensure_ascii_bytes(binding)?);
+    if authorization.binding_digest.as_deref() != Some(binding_digest.as_str()) {
+        return Err(invalid_statement(
+            "authorization.binding_digest does not match authorization_binding",
+        ));
+    }
+    let receipt_digest = sha256_prefixed(&canonical_json_bytes(receipt)?);
+    if authorization
+        .control_plane_authorization_receipt_sha256
+        .as_deref()
+        != Some(receipt_digest.as_str())
+    {
+        return Err(invalid_statement(
+            "control_plane_authorization_receipt_sha256 does not match the receipt",
+        ));
+    }
+    if binding.principal_id != principal_id
+        || binding.route_id != route_id
+        || binding.request_digest != request_digest
+        || binding.operation_digest.as_deref() != Some(operation_digest)
+        || binding.policy_hash != statement.policy.digest
+    {
+        return Err(invalid_statement(
+            "response observation statement does not agree with authorization_binding",
+        ));
+    }
+    if binding.credential_id.is_empty() {
+        if binding.credential_version != 0
+            || statement.credential.state != CredentialState::NotRequired
+            || statement.credential.binding_digest.is_some()
+        {
+            return Err(invalid_statement(
+                "credential observation does not agree with credentialless authorization_binding",
+            ));
+        }
+    } else {
+        let credential_binding_digest =
+            sha256_prefixed(&canonical_json_bytes(&CredentialBindingCommitment {
+                credential_ref: &binding.credential_id,
+                credential_version: binding.credential_version,
+            })?);
+        if statement.credential.state != CredentialState::Injected
+            || statement.credential.binding_digest.as_deref()
+                != Some(credential_binding_digest.as_str())
+        {
+            return Err(invalid_statement(
+                "credential observation does not agree with authorization_binding",
+            ));
+        }
+    }
+    let verifying_key = control_plane_response_verifying_key.ok_or_else(|| {
+        ProtocolError::new(
+            "control_plane_response_key_unavailable",
+            "responseObservationProof.sign/v1 requires a pinned control-plane response public key for authorized observations",
+        )
+    })?;
+    let authority_view = ResponseStatementAuthorityView {
+        issued_at_unix: statement.issued_at_unix,
+        principal_id,
+        route_id,
+        request_digest,
+        operation_digest,
+        release_authority,
+        control_plane_authorization_receipt: receipt,
+        policy_digest: &statement.policy.digest,
+        release_digest: &statement.release_digest,
+    };
+    validate_release_authority(&authority_view)?;
+    validate_control_plane_authorization_receipt(
+        &authority_view,
+        Some(verifying_key),
+        now_epoch_ms,
+    )?;
+    validate_release_authorization_binding(&authority_view, binding)
+}
+
+fn validate_http_method(method: &str) -> Result<(), ProtocolError> {
+    if method.is_empty()
+        || method.len() > 64
+        || method.bytes().any(|byte| byte.is_ascii_lowercase())
+        || !method.bytes().all(|byte| {
+            byte.is_ascii_uppercase()
+                || byte.is_ascii_digit()
+                || matches!(
+                    byte,
+                    b'!' | b'#'
+                        | b'$'
+                        | b'%'
+                        | b'&'
+                        | b'\''
+                        | b'*'
+                        | b'+'
+                        | b'-'
+                        | b'.'
+                        | b'^'
+                        | b'_'
+                        | b'`'
+                        | b'|'
+                        | b'~'
+                )
+        })
+    {
+        return Err(invalid_statement(
+            "request.method must be a bounded uppercase ASCII HTTP token",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_http_status(name: &str, status: u16) -> Result<(), ProtocolError> {
+    if !(200..=599).contains(&status) {
+        return Err(invalid_statement(format!(
+            "{name} must be a valid HTTP status"
+        )));
+    }
     Ok(())
 }
 
@@ -3985,6 +5355,13 @@ mod tests {
     }
 
     fn statement_signed_by(response_signing_key: &SigningKey) -> ProxyResponseStatement {
+        statement_signed_by_with_attempt(response_signing_key, digest(11))
+    }
+
+    fn statement_signed_by_with_attempt(
+        response_signing_key: &SigningKey,
+        attempt_id: String,
+    ) -> ProxyResponseStatement {
         let issued_at_unix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("clock")
@@ -3999,7 +5376,6 @@ mod tests {
         let release_digest = digest(8);
         let principal_id = "agent:custody-test".to_string();
         let route_id = "route:custody-test".to_string();
-        let attempt_id = digest(11);
         let authorization_binding = ReleaseAuthorizationBinding {
             attempt_id: attempt_id.clone(),
             flow_id: attempt_id.clone(),
@@ -4380,6 +5756,282 @@ mod tests {
             statement,
             authorization_binding,
             &pinned_control_plane_response_verifying_key(),
+            statement.issued_at_unix * 1000,
+        )
+    }
+
+    fn response_observation_statement(
+    ) -> (ResponseObservationStatement, ReleaseAuthorizationBinding) {
+        response_observation_statement_with_attempt(digest(11))
+    }
+
+    fn response_observation_statement_with_attempt(
+        attempt_id: String,
+    ) -> (ResponseObservationStatement, ReleaseAuthorizationBinding) {
+        let buffered =
+            statement_signed_by_with_attempt(&control_plane_response_signing_key(), attempt_id);
+        let authorization_binding = authorization_binding_for_statement(&buffered);
+        let authorization_binding_digest = sha256_prefixed(
+            &canonical_json_ensure_ascii_bytes(&authorization_binding)
+                .expect("canonical observation authorization binding"),
+        );
+        let credential_binding_digest = sha256_prefixed(
+            &canonical_json_bytes(&CredentialBindingCommitment {
+                credential_ref: &authorization_binding.credential_id,
+                credential_version: authorization_binding.credential_version,
+            })
+            .expect("canonical observation credential binding"),
+        );
+        let request = ObservedRequest {
+            method: "POST".to_string(),
+            target_digest: digest(21),
+            query_present: true,
+            query_digest: digest(22),
+            headers_digest: digest(23),
+            header_count: 7,
+            body_digest: digest(24),
+            body_bytes: 19,
+            body_observation: RequestBodyObservation::CompleteBuffered,
+            aggregate_digest: String::new(),
+        };
+        let upstream_observation = UpstreamObservation {
+            status: 200,
+            headers_digest: digest(25),
+            header_count: 3,
+            body_state: UpstreamBodyState::Complete,
+            body_digest: Some(digest(26)),
+            body_bytes: Some(23),
+            aggregate_digest: String::new(),
+        };
+        let emitted_response = EmittedResponse {
+            status: 200,
+            headers_digest: digest(27),
+            header_count: 4,
+            body_digest: digest(28),
+            body_bytes: 17,
+            aggregate_digest: String::new(),
+        };
+        let client_nonce = general_purpose::URL_SAFE_NO_PAD.encode([30u8; 32]);
+        let observation_id = sha256_prefixed(
+            &canonical_json_bytes(&ObservationIdCommitment {
+                client_nonce: &client_nonce,
+                contract: RESPONSE_OBSERVATION_STATEMENT_API_VERSION,
+            })
+            .expect("canonical observation ID commitment"),
+        );
+        let mut observation = ResponseObservationStatement {
+            api_version: RESPONSE_OBSERVATION_STATEMENT_API_VERSION.to_string(),
+            issued_at_unix: buffered.issued_at_unix,
+            observation_id,
+            client_nonce,
+            request,
+            policy: ObservedPolicy {
+                digest: buffered.policy_digest.clone(),
+                snapshot_epoch: 7,
+                decision_state: PolicyDecisionState::Allowed,
+                completion_state: PolicyCompletionState::SameActive,
+            },
+            principal_id: Some(buffered.principal_id.clone()),
+            route_id: Some(buffered.route_id.clone()),
+            request_digest: Some(buffered.request_digest.clone()),
+            operation_digest: Some(buffered.operation_digest.clone()),
+            credential: ObservedCredential {
+                state: CredentialState::Injected,
+                binding_digest: Some(credential_binding_digest),
+            },
+            authorization: ObservedAuthorization {
+                state: AuthorizationState::CompletedForwarded,
+                binding_digest: Some(authorization_binding_digest),
+                release_authority: Some(buffered.release_authority),
+                control_plane_authorization_receipt: Some(
+                    buffered.control_plane_authorization_receipt,
+                ),
+                control_plane_authorization_receipt_sha256: None,
+            },
+            response_path: ResponsePath::CompleteUpstreamResponseReleased,
+            upstream_attempt: UpstreamAttempt::Complete,
+            upstream_observation: Some(upstream_observation),
+            emitted_response,
+            runtime_manifest_digest: buffered.runtime_manifest_digest,
+            data_plane_binary_digest: buffered.data_plane_binary_digest,
+            release_digest: buffered.release_digest,
+            server_instance: buffered.server_instance,
+            tls_channel_binding: ResponseObservationTlsChannelBinding {
+                binding_type: "tls-exporter".to_string(),
+                label: "EXPORTER-Serverware-Response-Observation-v1".to_string(),
+                value: general_purpose::URL_SAFE_NO_PAD.encode([31u8; 32]),
+            },
+            observation_authority: ObservationAuthority {
+                source: ObservationSource::GateAuthored,
+                upstream_truth: UpstreamTruth::NotIndependentlyObserved,
+                downstream_delivery: DownstreamDelivery::NotClaimed,
+            },
+        };
+        refresh_response_observation_aggregates(&mut observation);
+        observation
+            .authorization
+            .control_plane_authorization_receipt_sha256 = Some(sha256_prefixed(
+            &canonical_json_bytes(
+                observation
+                    .authorization
+                    .control_plane_authorization_receipt
+                    .as_ref()
+                    .expect("observation receipt"),
+            )
+            .expect("canonical observation receipt"),
+        ));
+        (observation, authorization_binding)
+    }
+
+    fn local_response_observation_statement() -> ResponseObservationStatement {
+        let (mut observation, _) = response_observation_statement();
+        observation.policy.decision_state = PolicyDecisionState::Denied;
+        observation.principal_id = None;
+        observation.route_id = None;
+        observation.request_digest = None;
+        observation.operation_digest = None;
+        observation.credential = ObservedCredential {
+            state: CredentialState::NotEvaluated,
+            binding_digest: None,
+        };
+        observation.authorization = ObservedAuthorization {
+            state: AuthorizationState::Denied,
+            binding_digest: None,
+            release_authority: None,
+            control_plane_authorization_receipt: None,
+            control_plane_authorization_receipt_sha256: None,
+        };
+        observation.response_path = ResponsePath::LocalRejectNoUpstreamAttempt;
+        observation.upstream_attempt = UpstreamAttempt::NotStarted;
+        observation.upstream_observation = None;
+        observation.emitted_response.status = 403;
+        refresh_response_observation_aggregates(&mut observation);
+        observation
+    }
+
+    fn refresh_response_observation_aggregates(statement: &mut ResponseObservationStatement) {
+        statement.request.aggregate_digest = sha256_prefixed(
+            &canonical_json_bytes(&ObservedRequestAggregate {
+                method: &statement.request.method,
+                target_digest: &statement.request.target_digest,
+                query_present: statement.request.query_present,
+                query_digest: &statement.request.query_digest,
+                headers_digest: &statement.request.headers_digest,
+                header_count: statement.request.header_count,
+                body_digest: &statement.request.body_digest,
+                body_bytes: statement.request.body_bytes,
+                body_observation: statement.request.body_observation,
+            })
+            .expect("request observation aggregate"),
+        );
+        if let Some(upstream) = statement.upstream_observation.as_mut() {
+            upstream.aggregate_digest = sha256_prefixed(
+                &canonical_json_bytes(&UpstreamObservationAggregate {
+                    status: upstream.status,
+                    headers_digest: &upstream.headers_digest,
+                    header_count: upstream.header_count,
+                    body_state: upstream.body_state,
+                    body_digest: upstream.body_digest.as_deref(),
+                    body_bytes: upstream.body_bytes,
+                })
+                .expect("upstream observation aggregate"),
+            );
+        }
+        statement.emitted_response.aggregate_digest = sha256_prefixed(
+            &canonical_json_bytes(&EmittedResponseAggregate {
+                status: statement.emitted_response.status,
+                headers_digest: &statement.emitted_response.headers_digest,
+                header_count: statement.emitted_response.header_count,
+                body_digest: &statement.emitted_response.body_digest,
+                body_bytes: statement.emitted_response.body_bytes,
+            })
+            .expect("emitted response aggregate"),
+        );
+    }
+
+    fn response_observation_request_bytes(
+        runtime: &CustodyRuntime,
+        id: u8,
+        statement: ResponseObservationStatement,
+        authorization_binding: Option<ReleaseAuthorizationBinding>,
+    ) -> Vec<u8> {
+        canonical_json_bytes(&json!({
+            "apiVersion": PROTOCOL_API_VERSION,
+            "bootId": runtime.boot_id(),
+            "operation": RESPONSE_OBSERVATION_PROOF_SIGN_OPERATION,
+            "params": {
+                "statement": statement,
+                "authorization_binding": authorization_binding,
+            },
+            "requestId": request_id(id),
+        }))
+        .expect("canonical response observation request")
+    }
+
+    fn response_observation_reserve_params(
+        statement: &ResponseObservationStatement,
+    ) -> ResponseObservationReserveParams {
+        ResponseObservationReserveParams {
+            client_nonce: statement.client_nonce.clone(),
+            observation_id: statement.observation_id.clone(),
+            request_aggregate_digest: statement.request.aggregate_digest.clone(),
+        }
+    }
+
+    fn structured_response_observation_nonce(
+        expires_at_epoch_seconds: u32,
+        random_byte: u8,
+    ) -> String {
+        assert_ne!(random_byte, 0, "test nonce randomness must be non-zero");
+        let mut nonce = [0u8; MIN_CLIENT_NONCE_BYTES];
+        nonce[..RESPONSE_OBSERVATION_NONCE_EXPIRY_BYTES]
+            .copy_from_slice(&expires_at_epoch_seconds.to_be_bytes());
+        nonce[RESPONSE_OBSERVATION_NONCE_EXPIRY_BYTES..].fill(random_byte);
+        general_purpose::URL_SAFE_NO_PAD.encode(nonce)
+    }
+
+    fn fresh_response_observation_reserve_params(
+        statement: &mut ResponseObservationStatement,
+        random_byte: u8,
+    ) -> (ResponseObservationReserveParams, u64) {
+        let now_epoch_seconds = current_epoch_ms().expect("nonce generation clock") / 1000;
+        let expires_at_epoch_seconds = now_epoch_seconds
+            .checked_add(RESPONSE_OBSERVATION_NONCE_CLIENT_LIFETIME_SECONDS)
+            .and_then(|value| u32::try_from(value).ok())
+            .expect("test nonce expiry fits u32");
+        statement.client_nonce =
+            structured_response_observation_nonce(expires_at_epoch_seconds, random_byte);
+        statement.observation_id =
+            response_observation_id(&statement.client_nonce).expect("structured observation ID");
+        (
+            response_observation_reserve_params(statement),
+            u64::from(expires_at_epoch_seconds).saturating_mul(1000),
+        )
+    }
+
+    fn response_observation_reserve_request_bytes(
+        runtime: &CustodyRuntime,
+        id: u8,
+        params: &ResponseObservationReserveParams,
+    ) -> Vec<u8> {
+        canonical_json_bytes(&json!({
+            "apiVersion": PROTOCOL_API_VERSION,
+            "bootId": runtime.boot_id(),
+            "operation": RESPONSE_OBSERVATION_PROOF_RESERVE_OPERATION,
+            "params": params,
+            "requestId": request_id(id),
+        }))
+        .expect("canonical response observation reservation request")
+    }
+
+    fn validate_test_response_observation(
+        statement: &ResponseObservationStatement,
+        authorization_binding: Option<&ReleaseAuthorizationBinding>,
+    ) -> Result<(), ProtocolError> {
+        validate_response_observation_statement_at(
+            statement,
+            authorization_binding,
+            Some(&pinned_control_plane_response_verifying_key()),
             statement.issued_at_unix * 1000,
         )
     }
@@ -6099,7 +7751,7 @@ mod tests {
     }
 
     #[test]
-    fn custody_exposes_exact_buffered_and_streaming_signing_capabilities() {
+    fn custody_exposes_exact_ordered_signing_capabilities() {
         let runtime = runtime();
         let hello = json!({
             "apiVersion": PROTOCOL_API_VERSION,
@@ -6119,6 +7771,8 @@ mod tests {
                 HELLO_OPERATION,
                 RESPONSE_PROOF_SIGN_OPERATION,
                 STREAMING_RESPONSE_PROOF_SIGN_OPERATION,
+                RESPONSE_OBSERVATION_PROOF_RESERVE_OPERATION,
+                RESPONSE_OBSERVATION_PROOF_SIGN_OPERATION,
             ])
         );
 
@@ -6135,6 +7789,950 @@ mod tests {
                 .expect("legacy response"),
         );
         assert_eq!(legacy_response["error"]["code"], "unknown_operation");
+    }
+
+    #[test]
+    fn response_observation_nonce_validation_enforces_bounded_structured_expiry() {
+        let now_epoch_ms = 1_000_000;
+        let valid_expiry_seconds = u32::try_from(now_epoch_ms / 1000)
+            .expect("synthetic epoch")
+            .saturating_add(
+                u32::try_from(RESPONSE_OBSERVATION_NONCE_CLIENT_LIFETIME_SECONDS)
+                    .expect("client lifetime"),
+            );
+        let valid = structured_response_observation_nonce(valid_expiry_seconds, 7);
+        assert_eq!(
+            validate_response_observation_nonce(&valid, now_epoch_ms)
+                .expect("valid structured nonce"),
+            u64::from(valid_expiry_seconds) * 1000
+        );
+
+        let expired = structured_response_observation_nonce(999, 8);
+        assert_eq!(
+            validate_response_observation_nonce(&expired, now_epoch_ms)
+                .expect_err("expired structured nonce")
+                .code,
+            "observation_nonce_expired"
+        );
+        let too_far =
+            structured_response_observation_nonce(valid_expiry_seconds.saturating_add(31), 9);
+        assert_eq!(
+            validate_response_observation_nonce(&too_far, now_epoch_ms)
+                .expect_err("far-future structured nonce")
+                .code,
+            "observation_nonce_expiry_out_of_bounds"
+        );
+    }
+
+    #[test]
+    fn response_observation_reservation_is_exclusive_and_returns_exact_commitments() {
+        let runtime = runtime();
+        let mut statement = local_response_observation_statement();
+        let (params, issued_expiry_epoch_ms) =
+            fresh_response_observation_reserve_params(&mut statement, 11);
+        let first = response_value(
+            &runtime
+                .handle_canonical_request(&response_observation_reserve_request_bytes(
+                    &runtime, 111, &params,
+                ))
+                .expect("first reservation response"),
+        );
+        assert_eq!(first["ok"], true, "unexpected response: {first}");
+        let result = first["result"].as_object().expect("reservation result");
+        assert_eq!(
+            result.keys().map(String::as_str).collect::<HashSet<_>>(),
+            HashSet::from([
+                "observation_id",
+                "request_aggregate_digest",
+                "reserved_until_epoch_ms",
+            ])
+        );
+        assert_eq!(result["observation_id"], params.observation_id);
+        assert_eq!(
+            result["request_aggregate_digest"],
+            params.request_aggregate_digest
+        );
+        let reserved_until_epoch_ms = result["reserved_until_epoch_ms"]
+            .as_u64()
+            .expect("reservation expiry");
+        assert_eq!(reserved_until_epoch_ms, issued_expiry_epoch_ms);
+
+        let identical_replay = response_value(
+            &runtime
+                .handle_canonical_request(&response_observation_reserve_request_bytes(
+                    &runtime, 112, &params,
+                ))
+                .expect("identical replay response"),
+        );
+        assert_eq!(
+            identical_replay["error"]["code"],
+            "observation_nonce_replay"
+        );
+
+        let mut changed = params.clone();
+        changed.request_aggregate_digest = digest(97);
+        let changed_replay = response_value(
+            &runtime
+                .handle_canonical_request(&response_observation_reserve_request_bytes(
+                    &runtime, 113, &changed,
+                ))
+                .expect("changed replay response"),
+        );
+        assert_eq!(changed_replay["error"], identical_replay["error"]);
+    }
+
+    #[test]
+    fn response_observation_reservation_rejects_malformed_or_substituted_params() {
+        let runtime = runtime();
+        let mut statement = local_response_observation_statement();
+        let (params, _) = fresh_response_observation_reserve_params(&mut statement, 12);
+
+        let mut unknown = serde_json::to_value(&params).expect("reservation params");
+        unknown["unexpected"] = json!(true);
+        let response = response_value(
+            &runtime
+                .handle_canonical_request(
+                    &canonical_json_bytes(&json!({
+                        "apiVersion":PROTOCOL_API_VERSION,
+                        "bootId":runtime.boot_id(),
+                        "operation":RESPONSE_OBSERVATION_PROOF_RESERVE_OPERATION,
+                        "params":unknown,
+                        "requestId":request_id(114),
+                    }))
+                    .expect("unknown reservation param request"),
+                )
+                .expect("unknown reservation param response"),
+        );
+        assert_eq!(response["error"]["code"], "invalid_operation_params");
+
+        let mut malformed_nonce = params.clone();
+        malformed_nonce.client_nonce = general_purpose::URL_SAFE_NO_PAD.encode([1u8; 31]);
+        let response = response_value(
+            &runtime
+                .handle_canonical_request(&response_observation_reserve_request_bytes(
+                    &runtime,
+                    115,
+                    &malformed_nonce,
+                ))
+                .expect("malformed nonce response"),
+        );
+        assert_eq!(response["error"]["code"], "invalid_response_statement");
+
+        let mut forged_nonce = params.clone();
+        let future_expiry = u32::try_from(current_epoch_ms().expect("nonce clock") / 1000)
+            .expect("current nonce epoch")
+            .saturating_add(
+                u32::try_from(RESPONSE_OBSERVATION_NONCE_CLIENT_LIFETIME_SECONDS)
+                    .expect("client lifetime"),
+            );
+        let mut zero_random_nonce = [0u8; 32];
+        zero_random_nonce[..RESPONSE_OBSERVATION_NONCE_EXPIRY_BYTES]
+            .copy_from_slice(&future_expiry.to_be_bytes());
+        forged_nonce.client_nonce = general_purpose::URL_SAFE_NO_PAD.encode(zero_random_nonce);
+        forged_nonce.observation_id =
+            response_observation_id(&forged_nonce.client_nonce).expect("forged observation ID");
+        let response = response_value(
+            &runtime
+                .handle_canonical_request(&response_observation_reserve_request_bytes(
+                    &runtime,
+                    123,
+                    &forged_nonce,
+                ))
+                .expect("forged nonce response"),
+        );
+        assert_eq!(
+            response["error"]["code"],
+            "invalid_response_observation_nonce"
+        );
+
+        let mut substituted_id = params.clone();
+        substituted_id.observation_id = digest(98);
+        let response = response_value(
+            &runtime
+                .handle_canonical_request(&response_observation_reserve_request_bytes(
+                    &runtime,
+                    116,
+                    &substituted_id,
+                ))
+                .expect("substituted observation response"),
+        );
+        assert_eq!(response["error"]["code"], "invalid_response_statement");
+        assert!(response["error"]["message"]
+            .as_str()
+            .expect("substitution message")
+            .contains("nonce commitment"));
+
+        let mut malformed_digest = params;
+        malformed_digest.request_aggregate_digest = "sha256:ABC".to_string();
+        let response = response_value(
+            &runtime
+                .handle_canonical_request(&response_observation_reserve_request_bytes(
+                    &runtime,
+                    117,
+                    &malformed_digest,
+                ))
+                .expect("malformed aggregate response"),
+        );
+        assert_eq!(response["error"]["code"], "invalid_response_statement");
+        assert!(
+            runtime
+                .attempt_statement_ledger
+                .lock()
+                .expect("reservation ledger")
+                .manifest
+                .max_observed_epoch_ms
+                > 0,
+            "rejected reservation work must latch its wall-clock observation"
+        );
+    }
+
+    #[test]
+    fn response_observation_reservation_survives_restart() {
+        let directory = ledger_directory("observation-reservation-restart");
+        let first_runtime = persistent_runtime(&directory, 71, 81);
+        let mut statement = local_response_observation_statement();
+        let (params, _) = fresh_response_observation_reserve_params(&mut statement, 13);
+        let accepted = response_value(
+            &first_runtime
+                .handle_canonical_request(&response_observation_reserve_request_bytes(
+                    &first_runtime,
+                    118,
+                    &params,
+                ))
+                .expect("persistent reservation response"),
+        );
+        assert_eq!(accepted["ok"], true, "unexpected response: {accepted}");
+        drop(first_runtime);
+
+        let second_runtime = persistent_runtime(&directory, 72, 82);
+        let replay = response_value(
+            &second_runtime
+                .handle_canonical_request(&response_observation_reserve_request_bytes(
+                    &second_runtime,
+                    118,
+                    &params,
+                ))
+                .expect("restart replay response"),
+        );
+        assert_eq!(replay["error"]["code"], "observation_nonce_replay");
+        drop(second_runtime);
+        fs::remove_dir_all(directory).expect("remove reservation restart ledger fixture");
+    }
+
+    #[test]
+    fn response_observation_nonce_reuse_after_reservation_expiry_and_pruning_is_rejected() {
+        let runtime = runtime();
+        let issued_at_epoch_ms = 10_000;
+        let expires_at_epoch_seconds = u32::try_from(issued_at_epoch_ms / 1000)
+            .expect("synthetic issue epoch")
+            .saturating_add(
+                u32::try_from(RESPONSE_OBSERVATION_NONCE_CLIENT_LIFETIME_SECONDS)
+                    .expect("client lifetime"),
+            );
+        let expires_at_epoch_ms = u64::from(expires_at_epoch_seconds) * 1000;
+        let client_nonce = structured_response_observation_nonce(expires_at_epoch_seconds, 14);
+        let mut statement = local_response_observation_statement();
+        statement.client_nonce = client_nonce;
+        statement.observation_id =
+            response_observation_id(&statement.client_nonce).expect("synthetic observation ID");
+        let params = response_observation_reserve_params(&statement);
+        let reservation_key =
+            validate_response_observation_reserve_params(&params).expect("reservation key");
+        assert_ne!(reservation_key, params.observation_id);
+        assert_eq!(
+            runtime
+                .reserve_observation_nonce_with_clock(
+                    &reservation_key,
+                    &params.client_nonce,
+                    &params.request_aggregate_digest,
+                    issued_at_epoch_ms,
+                    || Ok(issued_at_epoch_ms),
+                )
+                .expect("first exclusive reservation"),
+            expires_at_epoch_ms
+        );
+        assert_eq!(
+            runtime
+                .reserve_observation_nonce_with_clock(
+                    &reservation_key,
+                    &params.client_nonce,
+                    &params.request_aggregate_digest,
+                    issued_at_epoch_ms + 1,
+                    || Ok(issued_at_epoch_ms + 1),
+                )
+                .expect_err("identical live reservation must fail")
+                .code,
+            "observation_nonce_replay"
+        );
+        let mut changed_digest = params.clone();
+        changed_digest.request_aggregate_digest = digest(99);
+        assert_eq!(
+            runtime
+                .reserve_observation_nonce_with_clock(
+                    &reservation_key,
+                    &changed_digest.client_nonce,
+                    &changed_digest.request_aggregate_digest,
+                    issued_at_epoch_ms + 2,
+                    || Ok(issued_at_epoch_ms + 2),
+                )
+                .expect_err("changed live reservation must fail")
+                .code,
+            "observation_nonce_replay"
+        );
+        {
+            let mut ledger = runtime
+                .attempt_statement_ledger
+                .lock()
+                .expect("reservation ledger");
+            ledger
+                .prune_expired(expires_at_epoch_ms)
+                .expect("prune nominally expired reservation");
+            assert!(!ledger.bindings.contains_key(&reservation_key));
+        }
+        let post_prune_reuse = runtime
+            .reserve_observation_nonce_with_clock(
+                &reservation_key,
+                &params.client_nonce,
+                &params.request_aggregate_digest,
+                expires_at_epoch_ms,
+                || Ok(expires_at_epoch_ms),
+            )
+            .expect_err("expired nonce must remain unusable after tombstone pruning");
+        assert_eq!(post_prune_reuse.code, "observation_nonce_expired");
+        assert!(!runtime
+            .attempt_statement_ledger
+            .lock()
+            .expect("reservation ledger")
+            .bindings
+            .contains_key(&reservation_key));
+    }
+
+    #[test]
+    fn concurrent_response_observation_reservations_have_one_exclusive_winner() {
+        let runtime = std::sync::Arc::new(runtime());
+        let mut statement = local_response_observation_statement();
+        let (params, _) = fresh_response_observation_reserve_params(&mut statement, 15);
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let mut workers = Vec::new();
+        for id in [121, 122] {
+            let runtime = std::sync::Arc::clone(&runtime);
+            let barrier = std::sync::Arc::clone(&barrier);
+            let params = params.clone();
+            workers.push(std::thread::spawn(move || {
+                let request = response_observation_reserve_request_bytes(&runtime, id, &params);
+                barrier.wait();
+                response_value(
+                    &runtime
+                        .handle_canonical_request(&request)
+                        .expect("concurrent reservation response"),
+                )
+            }));
+        }
+        let responses = workers
+            .into_iter()
+            .map(|worker| worker.join().expect("reservation worker"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            responses
+                .iter()
+                .filter(|response| response["ok"] == true)
+                .count(),
+            1
+        );
+        assert_eq!(
+            responses
+                .iter()
+                .filter(|response| response["error"]["code"] == "observation_nonce_replay")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn response_observation_reservation_clock_failures_latch_validation_time() {
+        let runtime = runtime();
+        let issued_at_epoch_ms = 500;
+        let expiry_seconds = u32::try_from(issued_at_epoch_ms / 1000)
+            .expect("synthetic issue epoch")
+            .saturating_add(
+                u32::try_from(RESPONSE_OBSERVATION_NONCE_CLIENT_LIFETIME_SECONDS)
+                    .expect("client lifetime"),
+            );
+        let client_nonce = structured_response_observation_nonce(expiry_seconds, 16);
+        let mut statement = local_response_observation_statement();
+        statement.client_nonce = client_nonce;
+        statement.observation_id =
+            response_observation_id(&statement.client_nonce).expect("clock-test observation ID");
+        let params = response_observation_reserve_params(&statement);
+        let reservation_key =
+            validate_response_observation_reserve_params(&params).expect("reservation key");
+        let unavailable = runtime
+            .reserve_observation_nonce_with_clock(
+                &reservation_key,
+                &params.client_nonce,
+                &params.request_aggregate_digest,
+                1_000,
+                || {
+                    Err(ProtocolError::new(
+                        "clock_unavailable",
+                        "test clock failure",
+                    ))
+                },
+            )
+            .expect_err("clock failure must reject reservation");
+        assert_eq!(unavailable.code, "clock_unavailable");
+        assert_eq!(
+            runtime
+                .attempt_statement_ledger
+                .lock()
+                .expect("reservation ledger")
+                .manifest
+                .max_observed_epoch_ms,
+            1_000
+        );
+
+        let rollback = runtime
+            .reserve_observation_nonce_with_clock(
+                &reservation_key,
+                &params.client_nonce,
+                &params.request_aggregate_digest,
+                2_000,
+                || Ok(1_999),
+            )
+            .expect_err("clock rollback must reject reservation");
+        assert_eq!(rollback.code, "attempt_ledger_clock_rollback");
+        assert_eq!(
+            runtime
+                .attempt_statement_ledger
+                .lock()
+                .expect("reservation ledger")
+                .manifest
+                .max_observed_epoch_ms,
+            2_000
+        );
+    }
+
+    #[test]
+    fn response_observation_reservation_does_not_collide_with_final_signing() {
+        let runtime = runtime();
+        let mut statement = local_response_observation_statement();
+        let (params, _) = fresh_response_observation_reserve_params(&mut statement, 17);
+        let reservation_key =
+            validate_response_observation_reserve_params(&params).expect("reservation key");
+        let reserved = response_value(
+            &runtime
+                .handle_canonical_request(&response_observation_reserve_request_bytes(
+                    &runtime, 119, &params,
+                ))
+                .expect("reservation response"),
+        );
+        assert_eq!(reserved["ok"], true, "unexpected response: {reserved}");
+        let signed = response_value(
+            &runtime
+                .handle_canonical_request(&response_observation_request_bytes(
+                    &runtime,
+                    120,
+                    statement.clone(),
+                    None,
+                ))
+                .expect("final observation signing response"),
+        );
+        assert_eq!(signed["ok"], true, "unexpected response: {signed}");
+        let ledger = runtime
+            .attempt_statement_ledger
+            .lock()
+            .expect("observation ledger");
+        assert!(ledger.bindings.contains_key(&reservation_key));
+        assert!(ledger.bindings.contains_key(&statement.observation_id));
+    }
+
+    #[test]
+    fn response_observation_signing_requires_the_exact_live_reservation() {
+        let runtime = runtime();
+        let mut statement = local_response_observation_statement();
+        let (reservation, _) = fresh_response_observation_reserve_params(&mut statement, 21);
+
+        let unreserved = response_value(
+            &runtime
+                .handle_canonical_request(&response_observation_request_bytes(
+                    &runtime,
+                    124,
+                    statement.clone(),
+                    None,
+                ))
+                .expect("unreserved observation response"),
+        );
+        assert_eq!(
+            unreserved["error"]["code"],
+            "observation_reservation_missing"
+        );
+
+        let reserved = response_value(
+            &runtime
+                .handle_canonical_request(&response_observation_reserve_request_bytes(
+                    &runtime,
+                    125,
+                    &reservation,
+                ))
+                .expect("reservation response"),
+        );
+        assert_eq!(reserved["ok"], true, "unexpected response: {reserved}");
+
+        statement.request.body_digest = digest(93);
+        refresh_response_observation_aggregates(&mut statement);
+        let substituted = response_value(
+            &runtime
+                .handle_canonical_request(&response_observation_request_bytes(
+                    &runtime, 126, statement, None,
+                ))
+                .expect("substituted observation response"),
+        );
+        assert_eq!(
+            substituted["error"]["code"],
+            "observation_reservation_substitution"
+        );
+    }
+
+    #[test]
+    fn response_observation_contract_rejects_unknown_fields_enums_and_missing_nullables() {
+        let unknown_field_runtime = runtime();
+        let statement = local_response_observation_statement();
+        let mut unknown_field = serde_json::to_value(&statement).expect("observation value");
+        unknown_field["request"]["unexpected"] = json!(true);
+        let request = canonical_json_bytes(&json!({
+            "apiVersion":PROTOCOL_API_VERSION,
+            "bootId":unknown_field_runtime.boot_id(),
+            "operation":RESPONSE_OBSERVATION_PROOF_SIGN_OPERATION,
+            "params":{"statement":unknown_field,"authorization_binding":null},
+            "requestId":request_id(100),
+        }))
+        .expect("unknown-field request");
+        let response = response_value(
+            &unknown_field_runtime
+                .handle_canonical_request(&request)
+                .expect("unknown-field response"),
+        );
+        assert_eq!(response["error"]["code"], "invalid_operation_params");
+
+        let unknown_enum_runtime = runtime();
+        let mut unknown_enum = serde_json::to_value(&statement).expect("observation value");
+        unknown_enum["response_path"] = json!("future-response-path");
+        let request = canonical_json_bytes(&json!({
+            "apiVersion":PROTOCOL_API_VERSION,
+            "bootId":unknown_enum_runtime.boot_id(),
+            "operation":RESPONSE_OBSERVATION_PROOF_SIGN_OPERATION,
+            "params":{"statement":unknown_enum,"authorization_binding":null},
+            "requestId":request_id(101),
+        }))
+        .expect("unknown-enum request");
+        let response = response_value(
+            &unknown_enum_runtime
+                .handle_canonical_request(&request)
+                .expect("unknown-enum response"),
+        );
+        assert_eq!(response["error"]["code"], "invalid_operation_params");
+
+        let missing_nullable_runtime = runtime();
+        let mut missing_nullable = serde_json::to_value(statement).expect("observation value");
+        missing_nullable
+            .as_object_mut()
+            .expect("observation object")
+            .remove("principal_id");
+        let request = canonical_json_bytes(&json!({
+            "apiVersion":PROTOCOL_API_VERSION,
+            "bootId":missing_nullable_runtime.boot_id(),
+            "operation":RESPONSE_OBSERVATION_PROOF_SIGN_OPERATION,
+            "params":{"statement":missing_nullable,"authorization_binding":null},
+            "requestId":request_id(102),
+        }))
+        .expect("missing-nullable request");
+        let response = response_value(
+            &missing_nullable_runtime
+                .handle_canonical_request(&request)
+                .expect("missing-nullable response"),
+        );
+        assert_eq!(response["error"]["code"], "invalid_operation_params");
+    }
+
+    #[test]
+    fn response_observation_rejects_invalid_authorization_and_body_nullability() {
+        let (mut observation, binding) = response_observation_statement();
+        observation.authorization.release_authority = None;
+        assert!(
+            validate_test_response_observation(&observation, Some(&binding))
+                .expect_err("missing release authority must fail")
+                .message
+                .contains("complete dispatch authorization evidence")
+        );
+
+        let mut observation = local_response_observation_statement();
+        observation.response_path = ResponsePath::UpstreamAttemptOutcomeUnknown;
+        observation.upstream_attempt = UpstreamAttempt::HeadersObservedBodyIncomplete;
+        observation.upstream_observation = Some(UpstreamObservation {
+            status: 502,
+            headers_digest: digest(32),
+            header_count: 2,
+            body_state: UpstreamBodyState::Unread,
+            body_digest: Some(digest(33)),
+            body_bytes: Some(0),
+            aggregate_digest: String::new(),
+        });
+        refresh_response_observation_aggregates(&mut observation);
+        assert!(validate_test_response_observation(&observation, None)
+            .expect_err("unread body with digest must fail")
+            .message
+            .contains("nullable body fields"));
+
+        let mut missing_binding = serde_json::to_value(local_response_observation_statement())
+            .expect("local observation value");
+        let missing_binding_runtime = runtime();
+        let request = canonical_json_bytes(&json!({
+            "apiVersion":PROTOCOL_API_VERSION,
+            "bootId":missing_binding_runtime.boot_id(),
+            "operation":RESPONSE_OBSERVATION_PROOF_SIGN_OPERATION,
+            "params":{"statement":missing_binding.take()},
+            "requestId":request_id(103),
+        }))
+        .expect("missing binding request");
+        let response = response_value(
+            &missing_binding_runtime
+                .handle_canonical_request(&request)
+                .expect("missing binding response"),
+        );
+        assert_eq!(response["error"]["code"], "invalid_operation_params");
+
+        let mut oversized = local_response_observation_statement();
+        oversized.request.body_bytes = MAX_OBSERVATION_BODY_BYTES + 1;
+        refresh_response_observation_aggregates(&mut oversized);
+        assert!(validate_test_response_observation(&oversized, None)
+            .expect_err("observation body count must be bounded")
+            .message
+            .contains("bounded contract"));
+
+        let mut informational = local_response_observation_statement();
+        informational.emitted_response.status = 199;
+        refresh_response_observation_aggregates(&mut informational);
+        assert!(validate_test_response_observation(&informational, None)
+            .expect_err("informational status cannot be a final observed response")
+            .message
+            .contains("valid HTTP status"));
+    }
+
+    #[test]
+    fn response_observation_rejects_substituted_observation_id() {
+        let mut observation = local_response_observation_statement();
+        assert_eq!(
+            observation.observation_id,
+            sha256_prefixed(
+                &canonical_json_bytes(&json!({
+                    "client_nonce":observation.client_nonce.clone(),
+                    "contract":"serverware.responseObservationStatement/v1",
+                }))
+                .expect("canonical nonce-only observation commitment")
+            )
+        );
+        observation.observation_id = digest(35);
+        assert!(validate_test_response_observation(&observation, None)
+            .expect_err("substituted observation ID must fail")
+            .message
+            .contains("nonce commitment"));
+    }
+
+    #[test]
+    fn response_observation_enforces_complete_and_unknown_upstream_states() {
+        let mut unknown = local_response_observation_statement();
+        unknown.policy.decision_state = PolicyDecisionState::Allowed;
+        unknown.credential = ObservedCredential {
+            state: CredentialState::NotRequired,
+            binding_digest: None,
+        };
+        unknown.authorization.state = AuthorizationState::NotEvaluated;
+        unknown.principal_id = Some("principal:credentialless".to_string());
+        unknown.route_id = Some("route:credentialless".to_string());
+        unknown.request_digest = Some(digest(91));
+        unknown.operation_digest = Some(digest(92));
+        unknown.response_path = ResponsePath::UpstreamAttemptOutcomeUnknown;
+        unknown.upstream_attempt = UpstreamAttempt::StartedNoResponse;
+        validate_test_response_observation(&unknown, None)
+            .expect("credentialless request may have an unknown upstream outcome");
+
+        let mut policy_denied = unknown.clone();
+        policy_denied.policy.decision_state = PolicyDecisionState::Denied;
+        assert!(validate_test_response_observation(&policy_denied, None)
+            .expect_err("credentialless upstream attempt requires allowed policy")
+            .message
+            .contains("allowed policy"));
+        for field in ["principal", "route", "request", "operation"] {
+            let mut missing = unknown.clone();
+            match field {
+                "principal" => missing.principal_id = None,
+                "route" => missing.route_id = None,
+                "request" => missing.request_digest = None,
+                "operation" => missing.operation_digest = None,
+                _ => unreachable!(),
+            }
+            assert!(validate_test_response_observation(&missing, None)
+                .expect_err("credentialless upstream attempt requires complete identity")
+                .message
+                .contains("missing"));
+        }
+
+        let mut denied = unknown.clone();
+        denied.authorization.state = AuthorizationState::Denied;
+        assert!(validate_test_response_observation(&denied, None)
+            .expect_err("denied authorization cannot have crossed dispatch")
+            .message
+            .contains("credentialless route"));
+
+        unknown.upstream_attempt = UpstreamAttempt::Complete;
+        assert!(validate_test_response_observation(&unknown, None)
+            .expect_err("complete attempt requires an observation")
+            .message
+            .contains("requires an upstream_observation"));
+
+        let (mut complete, binding) = response_observation_statement();
+        complete.response_path = ResponsePath::CompleteUpstreamResponseBlocked;
+        complete
+            .upstream_observation
+            .as_mut()
+            .expect("upstream observation")
+            .body_state = UpstreamBodyState::Incomplete;
+        refresh_response_observation_aggregates(&mut complete);
+        assert!(
+            validate_test_response_observation(&complete, Some(&binding))
+                .expect_err("complete path cannot carry an incomplete body")
+                .message
+                .contains("requires a complete upstream body")
+        );
+    }
+
+    #[test]
+    fn response_observation_rejects_lowercase_request_method() {
+        let mut observation = local_response_observation_statement();
+        observation.request.method = "post".to_string();
+        refresh_response_observation_aggregates(&mut observation);
+        assert!(validate_test_response_observation(&observation, None)
+            .expect_err("lowercase request method must fail")
+            .message
+            .contains("uppercase ASCII HTTP token"));
+    }
+
+    #[test]
+    fn response_observation_attempt_keys_cannot_rebind_buffered_or_streaming_contracts() {
+        let observation_first_runtime = runtime();
+        let (mut observation, binding) = response_observation_statement();
+        let (reservation, _) = fresh_response_observation_reserve_params(&mut observation, 18);
+        let reserved = response_value(
+            &observation_first_runtime
+                .handle_canonical_request(&response_observation_reserve_request_bytes(
+                    &observation_first_runtime,
+                    103,
+                    &reservation,
+                ))
+                .expect("observation reservation response"),
+        );
+        assert_eq!(reserved["ok"], true, "unexpected response: {reserved}");
+        let accepted = response_value(
+            &observation_first_runtime
+                .handle_canonical_request(&response_observation_request_bytes(
+                    &observation_first_runtime,
+                    104,
+                    observation,
+                    Some(binding),
+                ))
+                .expect("observation response"),
+        );
+        assert_eq!(accepted["ok"], true);
+        let rejected = response_value(
+            &observation_first_runtime
+                .handle_canonical_request(&request_bytes(
+                    &observation_first_runtime,
+                    105,
+                    statement(),
+                ))
+                .expect("buffered collision response"),
+        );
+        assert_eq!(rejected["error"]["code"], "attempt_statement_substitution");
+
+        let streaming_first_runtime = runtime();
+        let (streaming, streaming_binding) = streaming_statement();
+        let accepted = response_value(
+            &streaming_first_runtime
+                .handle_canonical_request(&streaming_request_bytes(
+                    &streaming_first_runtime,
+                    106,
+                    streaming,
+                    streaming_binding,
+                ))
+                .expect("streaming response"),
+        );
+        assert_eq!(accepted["ok"], true);
+        let (mut observation, binding) = response_observation_statement();
+        let (reservation, _) = fresh_response_observation_reserve_params(&mut observation, 19);
+        let reserved = response_value(
+            &streaming_first_runtime
+                .handle_canonical_request(&response_observation_reserve_request_bytes(
+                    &streaming_first_runtime,
+                    107,
+                    &reservation,
+                ))
+                .expect("observation reservation response"),
+        );
+        assert_eq!(reserved["ok"], true, "unexpected response: {reserved}");
+        let rejected = response_value(
+            &streaming_first_runtime
+                .handle_canonical_request(&response_observation_request_bytes(
+                    &streaming_first_runtime,
+                    108,
+                    observation,
+                    Some(binding),
+                ))
+                .expect("observation collision response"),
+        );
+        assert_eq!(rejected["error"]["code"], "attempt_statement_substitution");
+    }
+
+    #[test]
+    fn same_observation_nonce_is_idempotent_and_rejects_a_different_statement() {
+        let runtime = runtime();
+        let mut observation = local_response_observation_statement();
+        let (reservation, _) = fresh_response_observation_reserve_params(&mut observation, 20);
+        let reserved = response_value(
+            &runtime
+                .handle_canonical_request(&response_observation_reserve_request_bytes(
+                    &runtime,
+                    107,
+                    &reservation,
+                ))
+                .expect("local observation reservation response"),
+        );
+        assert_eq!(reserved["ok"], true, "unexpected response: {reserved}");
+        let observation_id = observation.observation_id.clone();
+        let client_nonce = observation.client_nonce.clone();
+        let expected_retain_until_epoch_ms = observation
+            .issued_at_unix
+            .saturating_add(MAX_STATEMENT_AGE_SECONDS.saturating_add(1))
+            .saturating_mul(1000);
+        let expected_digest =
+            sha256_prefixed(&canonical_json_bytes(&observation).expect("local observation"));
+        for id in [108, 109] {
+            let response = response_value(
+                &runtime
+                    .handle_canonical_request(&response_observation_request_bytes(
+                        &runtime,
+                        id,
+                        observation.clone(),
+                        None,
+                    ))
+                    .expect("idempotent local observation response"),
+            );
+            assert_eq!(response["result"]["statementDigest"], expected_digest);
+        }
+        assert_eq!(
+            runtime
+                .attempt_statement_ledger
+                .lock()
+                .expect("observation ledger")
+                .bindings
+                .get(&observation_id)
+                .expect("local observation binding")
+                .retain_until_epoch_ms,
+            expected_retain_until_epoch_ms
+        );
+
+        let mut changed = observation;
+        changed.emitted_response.body_digest = digest(34);
+        refresh_response_observation_aggregates(&mut changed);
+        assert_eq!(changed.client_nonce, client_nonce);
+        assert_eq!(changed.observation_id, observation_id);
+        let response = response_value(
+            &runtime
+                .handle_canonical_request(&response_observation_request_bytes(
+                    &runtime, 110, changed, None,
+                ))
+                .expect("changed local observation response"),
+        );
+        assert_eq!(
+            response["error"]["code"],
+            "observation_reservation_substitution"
+        );
+    }
+
+    #[test]
+    fn authorized_observation_reservation_is_consumed_across_attempts_and_restart() {
+        let directory = ledger_directory("observation-consumed-restart");
+        let first_runtime = persistent_runtime(&directory, 73, 83);
+        let (mut first, first_binding) = response_observation_statement_with_attempt(digest(70));
+        let (reservation, _) = fresh_response_observation_reserve_params(&mut first, 22);
+        let reserved = response_value(
+            &first_runtime
+                .handle_canonical_request(&response_observation_reserve_request_bytes(
+                    &first_runtime,
+                    127,
+                    &reservation,
+                ))
+                .expect("authorized observation reservation response"),
+        );
+        assert_eq!(reserved["ok"], true, "unexpected response: {reserved}");
+        let signed = response_value(
+            &first_runtime
+                .handle_canonical_request(&response_observation_request_bytes(
+                    &first_runtime,
+                    128,
+                    first.clone(),
+                    Some(first_binding),
+                ))
+                .expect("authorized observation signing response"),
+        );
+        assert_eq!(signed["ok"], true, "unexpected response: {signed}");
+        drop(first_runtime);
+
+        let second_runtime = persistent_runtime(&directory, 74, 84);
+        let (mut second, second_binding) = response_observation_statement_with_attempt(digest(71));
+        second.client_nonce = first.client_nonce;
+        second.observation_id = first.observation_id;
+        second.request = first.request;
+        let replay = response_value(
+            &second_runtime
+                .handle_canonical_request(&response_observation_request_bytes(
+                    &second_runtime,
+                    129,
+                    second,
+                    Some(second_binding),
+                ))
+                .expect("consumed observation replay response"),
+        );
+        assert_eq!(
+            replay["error"]["code"],
+            "observation_reservation_substitution"
+        );
+        assert!(
+            !second_runtime
+                .attempt_statement_ledger
+                .lock()
+                .expect("observation ledger")
+                .bindings
+                .contains_key(&digest(71)),
+            "a rejected second attempt must not acquire a durable attempt binding"
+        );
+        drop(second_runtime);
+        fs::remove_dir_all(directory).expect("remove consumed observation ledger fixture");
+    }
+
+    #[test]
+    fn authorized_response_observation_validates_exact_release_binding() {
+        let (observation, binding) = response_observation_statement();
+        validate_test_response_observation(&observation, Some(&binding))
+            .expect("authorized observation with exact binding");
+
+        let mut substituted = binding;
+        substituted.operation_context = json!({"operation":"custody.substituted"});
+        assert!(
+            validate_test_response_observation(&observation, Some(&substituted))
+                .expect_err("substituted full binding must fail")
+                .message
+                .contains("authorization.binding_digest")
+        );
     }
 
     #[test]

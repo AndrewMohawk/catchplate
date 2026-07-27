@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import ast
 import base64
 import hashlib
 import io
@@ -205,6 +206,61 @@ def test_final_file_snapshots() -> None:
         else:
             raise AssertionError("final verification accepted a symlinked input")
 
+        fifo_path = tmp / "blocking-final-input.fifo"
+        os.mkfifo(fifo_path)
+        fifo_probe_code = "\n".join(
+            (
+                "import sys",
+                "from pathlib import Path",
+                "sys.path.insert(0, 'scripts')",
+                "import verify_release_completion as verifier",
+                "try:",
+                "    verifier.snapshot_regular_file(Path(sys.argv[1]), 'FIFO completion input', max_bytes=1024)",
+                "except ValueError as exc:",
+                "    if 'must be a regular file' not in str(exc):",
+                "        raise",
+                "else:",
+                "    raise AssertionError('snapshot_regular_file accepted a FIFO')",
+            )
+        )
+        try:
+            fifo_probe = subprocess.run(
+                [sys.executable, "-c", fifo_probe_code, str(fifo_path)],
+                cwd=ROOT,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+                timeout=5,
+                env=clean_subprocess_env(),
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise AssertionError(
+                "snapshot_regular_file blocked while rejecting a FIFO"
+            ) from exc
+        if fifo_probe.returncode != 0:
+            raise AssertionError(
+                "snapshot_regular_file failed to reject a FIFO promptly: "
+                + detail(fifo_probe)
+            )
+
+        hardlink_source = tmp / "hardlink-source.json"
+        hardlink_alias = tmp / "hardlink-alias.json"
+        hardlink_source.write_bytes(b'{"artifact":"shared-inode"}\n')
+        os.link(hardlink_source, hardlink_alias)
+        try:
+            verify_release_completion.snapshot_regular_file(
+                hardlink_source,
+                "hardlinked completion artifact",
+                max_bytes=1024,
+            )
+        except ValueError as exc:
+            if "hardlink aliases" not in str(exc):
+                raise AssertionError(
+                    f"hardlinked final inputs failed for the wrong reason: {exc}"
+                ) from exc
+        else:
+            raise AssertionError("snapshot_regular_file accepted a hardlinked input")
+
         proxy_snapshot_paths = {
             "proxy_response_proof": tmp / "proxy-response-proof.json",
             "proxy_collector_public_key": tmp / "proxy-collector.pub.pem",
@@ -317,6 +373,38 @@ def test_final_file_snapshots() -> None:
                 raise AssertionError(f"oversized final input failed for the wrong reason: {exc}") from exc
         else:
             raise AssertionError("final verification accepted an oversized input")
+
+
+def test_final_mode_observation_signing_key_dereference() -> None:
+    source_tree = ast.parse(
+        (ROOT / "scripts/verify_release_completion.py").read_text(encoding="utf-8")
+    )
+    role_values: list[ast.expr] = []
+    for node in ast.walk(source_tree):
+        if not isinstance(node, ast.Dict):
+            continue
+        for key, value in zip(node.keys, node.values):
+            if (
+                isinstance(key, ast.Constant)
+                and key.value == "control_plane_response_signer"
+            ):
+                role_values.append(value)
+    if len(role_values) != 1:
+        raise AssertionError(
+            "final mode must define exactly one control-plane response signer role"
+        )
+    role_value = role_values[0]
+    if not (
+        isinstance(role_value, ast.Subscript)
+        and isinstance(role_value.value, ast.Name)
+        and role_value.value.id == "proxy_response_summary"
+        and isinstance(role_value.slice, ast.Constant)
+        and role_value.slice.value == "control_plane_response_signing_key_id"
+    ):
+        raise AssertionError(
+            "final mode must use the stable observation summary signing key ID "
+            "without dereferencing the optional authorization receipt"
+        )
 
 
 def test_release_provenance_input_snapshot() -> None:
@@ -1077,6 +1165,7 @@ PROXY_PRINCIPAL_ID = "agent:payments"
 ALTERNATE_PROXY_PRINCIPAL_ID = "agent:billing"
 PROXY_CLIENT_NONCE = b64e(b"n" * 32)
 PROXY_TLS_CHANNEL_BINDING = b64e(b"t" * 32)
+OBSERVATION_RESPONSE_BODY = b'{"accepted":true}'
 PROXY_CLIENT_REQUEST_DIGEST = sha256_prefixed_json(
     {
         "apiVersion": "serverware.clientProofRequest/v1",
@@ -1413,6 +1502,271 @@ def proxy_response_proof(
     )
     document["server_statement"]["control_plane_authorization_receipt"] = receipt
     resign_proxy_response_proof(document)
+    return document
+
+
+def observation_attested_claims(document: dict[str, Any]) -> dict[str, Any]:
+    statement = document["runtime_proof"]["server_statement"]
+    statement_digest = sha256_prefixed_json(statement)
+    upstream = statement["upstream_observation"]
+    return {
+        "server_statement_sha256": statement_digest,
+        "server_statement_api_version": "serverware.responseObservationStatement/v1",
+        "issued_at_unix": statement["issued_at_unix"],
+        "observation_id": statement["observation_id"],
+        "client_nonce_sha256": sha256_prefixed_bytes(b64d(statement["client_nonce"])),
+        "request_aggregate_digest": statement["request"]["aggregate_digest"],
+        "response_path": statement["response_path"],
+        "upstream_attempt": statement["upstream_attempt"],
+        "upstream_observation_digest": (
+            upstream["aggregate_digest"] if upstream is not None else None
+        ),
+        "emitted_response_digest": statement["emitted_response"]["aggregate_digest"],
+        "policy_digest": statement["policy"]["digest"],
+        "runtime_manifest_digest": statement["runtime_manifest_digest"],
+        "data_plane_binary_digest": statement["data_plane_binary_digest"],
+        "release_digest": statement["release_digest"],
+        "server_instance_id": statement["server_instance"]["id"],
+        "server_instance_identity_digest": statement["server_instance"]["identity_digest"],
+        "tls_exporter_label": "EXPORTER-Serverware-Response-Observation-v1",
+        "tls_channel_binding_sha256": sha256_prefixed_bytes(
+            statement["tls_channel_binding"]["value"].encode("utf-8")
+        ),
+        "response_signing_key_id": proxy_response_key_info()["key_id"],
+        "observation_source": "gate-authored",
+    }
+
+
+def sign_observation_collector(document: dict[str, Any]) -> None:
+    capture = {field: value for field, value in document.items() if field != "collector"}
+    key_info = proxy_collector_key_info()
+    document["collector"] = {
+        "algorithm": "Ed25519",
+        "key_id": key_info["key_id"],
+        "public_key_pem": key_info["public_key_pem"],
+        "signature": "ed25519:"
+        + b64e(key_info["key"].sign(canonical_json(capture).encode("utf-8"))),
+        "capture_digest": sha256_prefixed_json(capture),
+    }
+
+
+def resign_observation_proof(document: dict[str, Any]) -> None:
+    runtime = document["runtime_proof"]
+    statement = runtime["server_statement"]
+    statement_digest = sha256_prefixed_json(statement)
+    response_key = proxy_response_key_info()
+    runtime["server_statement_sha256"] = statement_digest
+    runtime["server_signature"] = {
+        "algorithm": "Ed25519",
+        "key_id": response_key["key_id"],
+        "public_key_pem": response_key["public_key_pem"],
+        "signature": "ed25519:"
+        + b64e(response_key["key"].sign(canonical_json(statement).encode("utf-8"))),
+    }
+    vendor = runtime["vendor_tee"]
+    vendor["quote_sha256"] = sha256_prefixed_json(vendor["quote"])
+    verifier_key = proxy_vendor_verifier_key_info()
+    verifier_statement = vendor["trusted_verifier"]["statement"]
+    verifier_statement.update(
+        {
+            "verifier_key_id": verifier_key["key_id"],
+            "tee_platform": vendor["platform"],
+            "quote_provider": vendor["provider"],
+            "vendor_quote_sha256": vendor["quote_sha256"],
+            "server_statement_sha256": statement_digest,
+            "response_signing_key_id": response_key["key_id"],
+            "attested_claims": observation_attested_claims(document),
+        }
+    )
+    vendor["trusted_verifier"]["signature"] = "ed25519:" + b64e(
+        verifier_key["key"].sign(canonical_json(verifier_statement).encode("utf-8"))
+    )
+    sign_observation_collector(document)
+
+
+def response_observation_proof(
+    provenance_digest: str,
+    *,
+    now: int | None = None,
+) -> dict[str, Any]:
+    captured_at = int(time.time()) if now is None else now
+    observation_nonce = b64e(
+        (captured_at + 300).to_bytes(4, "big") + b"n" * 28
+    )
+    request = {
+        "method": "POST",
+        "target_digest": sha256_prefixed_bytes(b"/v1/messages?limit=1"),
+        "query_present": True,
+        "query_digest": sha256_prefixed_bytes(b"limit=1"),
+        "headers_digest": sha256_prefixed_bytes(b"host: api.example\r\ncontent-type: application/json\r\n"),
+        "header_count": 2,
+        "body_digest": sha256_prefixed_bytes(b'{"ok":1}'),
+        "body_bytes": len(b'{"ok":1}'),
+        "body_observation": "complete-buffered",
+    }
+    request["aggregate_digest"] = sha256_prefixed_json(request)
+    emitted = {
+        "status": 200,
+        "headers_digest": sha256_prefixed_json(
+            {
+                "connection": "close",
+                "content-type": "application/json",
+                "trailer": "X-Serverware-Observation-Proof-B64, X-Serverware-Observation-Proof-SHA256",
+                "transfer-encoding": "chunked",
+            }
+        ),
+        "header_count": 4,
+        "body_digest": sha256_prefixed_bytes(OBSERVATION_RESPONSE_BODY),
+        "body_bytes": len(OBSERVATION_RESPONSE_BODY),
+    }
+    emitted["aggregate_digest"] = sha256_prefixed_json(emitted)
+    upstream = {
+        "status": 429,
+        "headers_digest": sha256_prefixed_json(
+            {"content-type": ["application/json"], "retry-after": ["60"]}
+        ),
+        "header_count": 2,
+        "body_state": "complete",
+        "body_digest": sha256_prefixed_bytes(b'{"error":"rate-limit"}'),
+        "body_bytes": len(b'{"error":"rate-limit"}'),
+    }
+    upstream["aggregate_digest"] = sha256_prefixed_json(upstream)
+    binding_digest = digest("b")
+    release_authority = {
+        "authority_mode": "atomic",
+        "grant_id": None,
+        "approval_id": None,
+        "credential_ref": "cred-demo-bearer",
+        "credential_version": 7,
+        "request_digest": PROXY_REQUEST_DIGEST,
+        "operation_digest": PROXY_OPERATION_DIGEST,
+        "attempt_id": digest("a"),
+        "consumption_identity_digest": binding_digest,
+        "authorization_state_at_upstream_dispatch": "dispatching",
+        "authorization_state_observed_at_epoch_ms": captured_at * 1000,
+        "reservation_expires_at_epoch_ms": captured_at * 1000 + 300_000,
+        "dispatch_expires_at_epoch_ms": captured_at * 1000 + 300_000,
+    }
+    statement = {
+        "apiVersion": "serverware.responseObservationStatement/v1",
+        "issued_at_unix": captured_at,
+        "observation_id": sha256_prefixed_json(
+            {
+                "client_nonce": observation_nonce,
+                "contract": "serverware.responseObservationStatement/v1",
+            }
+        ),
+        "client_nonce": observation_nonce,
+        "request": request,
+        "policy": {
+            "digest": POLICY_DIGEST,
+            "snapshot_epoch": 7,
+            "decision_state": "allowed",
+            "completion_state": "same-active",
+        },
+        "principal_id": PROXY_PRINCIPAL_ID,
+        "route_id": "demo.echo",
+        "request_digest": PROXY_REQUEST_DIGEST,
+        "operation_digest": PROXY_OPERATION_DIGEST,
+        "credential": {
+            "state": "injected",
+            "binding_digest": sha256_prefixed_json(
+                {"credential_ref": "cred-demo-bearer", "credential_version": 7}
+            ),
+        },
+        "authorization": {
+            "state": "completed-forwarded",
+            "binding_digest": binding_digest,
+            "release_authority": release_authority,
+            "control_plane_authorization_receipt": {},
+            "control_plane_authorization_receipt_sha256": digest("0"),
+        },
+        "response_path": "complete-upstream-response-released",
+        "upstream_attempt": "complete",
+        "upstream_observation": upstream,
+        "emitted_response": emitted,
+        "runtime_manifest_digest": digest("7"),
+        "data_plane_binary_digest": digest("9"),
+        "release_digest": provenance_digest,
+        "server_instance": {
+            "id": PROXY_SERVER_INSTANCE_ID,
+            "identity_digest": sha256_prefixed_bytes(PROXY_SERVER_INSTANCE_ID.encode("utf-8")),
+        },
+        "tls_channel_binding": {
+            "type": "tls-exporter",
+            "label": "EXPORTER-Serverware-Response-Observation-v1",
+            "value": PROXY_TLS_CHANNEL_BINDING,
+        },
+        "observation_authority": {
+            "source": "gate-authored",
+            "upstream_truth": "not-independently-observed",
+            "downstream_delivery": "not-claimed",
+        },
+    }
+    receipt_source = {"server_statement": clone_document(statement)}
+    receipt_source["server_statement"]["release_authority"] = release_authority
+    receipt = control_plane_authorization_receipt(receipt_source)
+    statement["authorization"]["control_plane_authorization_receipt"] = receipt
+    statement["authorization"]["control_plane_authorization_receipt_sha256"] = (
+        sha256_prefixed_json(receipt)
+    )
+    quote = {
+        "format": "aws-nitro-attestation-document",
+        "body_b64": b64e(b"test-only opaque observation quote bytes " * 4),
+    }
+    document = {
+        "apiVersion": "serverware.responseObservationProof/v1",
+        "kind": "ServerwareResponseObservationProof",
+        "captured_at_unix": captured_at,
+        "request": {field: value for field, value in request.items() if field != "body_observation"},
+        "response": clone_document(emitted),
+        "runtime_proof": {
+            "apiVersion": "serverware.responseObservationRuntimeProof/v1",
+            "kind": "ServerwareResponseObservationRuntimeProof",
+            "server_statement": statement,
+            "server_statement_sha256": digest("0"),
+            "server_signature": {},
+            "vendor_tee": {
+                "platform": "aws-nitro",
+                "provider": "aws-nitro-enclaves",
+                "quote_sha256": sha256_prefixed_json(quote),
+                "quote": quote,
+                "trusted_verifier": {
+                    "apiVersion": "serverware.vendorTeeVerification/v1",
+                    "kind": "ServerwareVendorTeeVerification",
+                    "statement": {
+                        "outcome": "verified",
+                        "environment": "production",
+                        "trust_basis": "vendor-root-certificate-chain",
+                        "vendor_quote_verified": True,
+                        "certificate_chain_verified": True,
+                        "revocation_checked": True,
+                        "debug": False,
+                        "verified_at_unix": captured_at,
+                        "expires_at_unix": captured_at + 300,
+                    },
+                    "signature": "",
+                },
+            },
+        },
+        "collector": {},
+    }
+    resign_observation_proof(document)
+    return document
+
+
+def credentialless_response_observation_proof(provenance_digest: str) -> dict[str, Any]:
+    document = response_observation_proof(provenance_digest)
+    statement = document["runtime_proof"]["server_statement"]
+    statement["credential"] = {"state": "not-required", "binding_digest": None}
+    statement["authorization"] = {
+        "state": "not-evaluated",
+        "binding_digest": None,
+        "release_authority": None,
+        "control_plane_authorization_receipt": None,
+        "control_plane_authorization_receipt_sha256": None,
+    }
+    resign_observation_proof(document)
     return document
 
 
@@ -1861,6 +2215,8 @@ def write_production_env_files(
     proxy_client_request_digest: str = PROXY_CLIENT_REQUEST_DIGEST,
     proxy_stream_body: Path | None = None,
     proxy_max_stream_bytes: int | None = None,
+    proxy_observation_body: Path | None = None,
+    proxy_max_observation_body_bytes: int | None = None,
 ) -> None:
     selected_images_value = images_value or production_images_env_value()
     selected_readiness_value = readiness_value or selected_images_value
@@ -1933,6 +2289,21 @@ def write_production_env_files(
             f"{verify_release_completion.PROXY_STREAM_OPERATION_CONTEXT_DIGEST_ENV_KEY}="
             f"{PROXY_OPERATION_CONTEXT_DIGEST}\n"
         )
+    observation_settings = ""
+    if proxy_proof_contract == "observation-v1":
+        if (
+            proxy_observation_body is None
+            or proxy_max_observation_body_bytes is None
+        ):
+            raise AssertionError(
+                "observation fixture env requires a body path and byte limit"
+            )
+        observation_settings = (
+            f"{verify_release_completion.PROXY_OBSERVATION_BODY_ENV_KEY}="
+            f"{proxy_observation_body}\n"
+            f"{verify_release_completion.PROXY_OBSERVATION_MAX_BYTES_ENV_KEY}="
+            f"{proxy_max_observation_body_bytes}\n"
+        )
     (tmp / "production.env").write_text(
         f"SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST={digest('9')}\n"
         f"SERVERWARE_DATA_PLANE_INSTANCE_ID={PROXY_SERVER_INSTANCE_ID}\n"
@@ -1945,6 +2316,7 @@ def write_production_env_files(
         f"SERVERWARE_PROXY_PROOF_MAX_AGE_SECONDS=300\n"
         f"{verify_release_completion.PROXY_PROOF_CONTRACT_ENV_KEY}={proxy_proof_contract}\n"
         f"{stream_settings}"
+        f"{observation_settings}"
         f"SERVERWARE_COMPLETION_P99_LIMIT_MS=20.0\n"
         f"{run_production_readiness.FINAL_LAUNCHER_CONTRACT_ENV}={run_production_readiness.FINAL_LAUNCHER_CONTRACT}\n"
         f"SERVERWARE_ATTESTATION_HELPER_DIR={helper_dir}\n"
@@ -4101,6 +4473,10 @@ def run_verifier(
     proxy_proof_contract: str = "buffered-v3",
     proxy_stream_body: Path | None = None,
     proxy_max_stream_bytes: int | None = None,
+    proxy_observation_body: Path | None = None,
+    proxy_max_observation_body_bytes: int | None = None,
+    proxy_client_request_digest: str | None = None,
+    proxy_client_nonce: str | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
     env = clean_subprocess_env()
     if allow_host_bypass:
@@ -4119,12 +4495,12 @@ def run_verifier(
             "--proxy-server-instance-id",
             PROXY_SERVER_INSTANCE_ID,
             "--proxy-client-nonce",
-            PROXY_CLIENT_NONCE,
+            proxy_client_nonce or PROXY_CLIENT_NONCE,
             "--proxy-client-request-digest",
             (
                 PROXY_STREAM_CLIENT_REQUEST_DIGEST
                 if proxy_proof_contract == "streaming-v1"
-                else PROXY_CLIENT_REQUEST_DIGEST
+                else proxy_client_request_digest or PROXY_CLIENT_REQUEST_DIGEST
             ),
             "--proxy-request-digest",
             PROXY_REQUEST_DIGEST,
@@ -4144,6 +4520,22 @@ def run_verifier(
                     str(proxy_max_stream_bytes),
                     "--proxy-operation-context-digest",
                     PROXY_OPERATION_CONTEXT_DIGEST,
+                ]
+            )
+        elif proxy_proof_contract == "observation-v1":
+            if (
+                proxy_observation_body is None
+                or proxy_max_observation_body_bytes is None
+            ):
+                raise AssertionError(
+                    "observation verifier fixture requires body path and byte limit"
+                )
+            proxy_proof_args.extend(
+                [
+                    "--proxy-observation-body",
+                    str(proxy_observation_body),
+                    "--proxy-max-observation-body-bytes",
+                    str(proxy_max_observation_body_bytes),
                 ]
             )
     hardware_expected_challenge_args: list[str] = []
@@ -4402,6 +4794,394 @@ def verify_streaming_proxy_fixture(
     )
 
 
+def verify_observation_proxy_fixture(
+    tmp: Path,
+    document: dict[str, Any],
+    *,
+    proof_contract: str = "observation-v1",
+    expected_client_request_digest: str | None = None,
+    expected_client_nonce: str | None = None,
+    observation_body: bytes = OBSERVATION_RESPONSE_BODY,
+) -> dict[str, Any]:
+    runtime = document.get("runtime_proof")
+    runtime = runtime if isinstance(runtime, dict) else {}
+    statement = runtime.get("server_statement")
+    statement = statement if isinstance(statement, dict) else {}
+    policy_snapshot = verify_release_completion.verify_and_compile_policy_snapshot(
+        verify_release_completion.snapshot_regular_file(
+            tmp / "policy-bundle.json",
+            "observation fixture policy bundle",
+            max_bytes=verify_release_completion.POLICY_BUNDLE_MAX_BYTES,
+        ),
+        verify_release_completion.snapshot_regular_file(
+            tmp / "policy-signing.pub.pem",
+            "observation fixture policy trust root",
+            max_bytes=verify_release_completion.FINAL_TRUST_ROOT_MAX_BYTES,
+        ),
+        expected_policy_digest=POLICY_DIGEST,
+    )
+    observation_body_path = tmp / "direct-observation-response-body.bin"
+    observation_body_path.write_bytes(observation_body)
+    observation_body_snapshot = verify_release_completion.snapshot_regular_file(
+        observation_body_path,
+        "observation fixture response body",
+        max_bytes=verify_release_completion.MAX_PROXY_OBSERVATION_BODY_BYTES,
+        allow_empty=True,
+    )
+    return verify_release_completion.verify_production_proxy_response_proof(
+        document,
+        proof_contract=proof_contract,
+        observation_body_snapshot=(
+            observation_body_snapshot
+            if proof_contract == "observation-v1"
+            else None
+        ),
+        trusted_verifier_public_key_pem=proxy_vendor_verifier_key_info()["public_key_pem"],
+        trusted_collector_public_key_pem=proxy_collector_key_info()["public_key_pem"],
+        trusted_control_plane_response_signing_public_key_pem=(
+            control_plane_response_signing_key_info()["public_key_pem"]
+        ),
+        expected_control_plane_response_signing_public_key_id=(
+            control_plane_response_signing_key_info()["key_id"]
+        ),
+        policy_snapshot=policy_snapshot,
+        expected_principal_id=PROXY_PRINCIPAL_ID,
+        expected_server_instance_id=PROXY_SERVER_INSTANCE_ID,
+        expected_client_nonce=(
+            expected_client_nonce
+            or statement.get("client_nonce")
+            or PROXY_CLIENT_NONCE
+        ),
+        expected_client_request_digest=(
+            expected_client_request_digest
+            or document.get("request", {}).get("aggregate_digest")
+            or PROXY_CLIENT_REQUEST_DIGEST
+        ),
+        expected_request_digest=PROXY_REQUEST_DIGEST,
+        expected_operation_digest=PROXY_OPERATION_DIGEST,
+        expected_tls_channel_binding=PROXY_TLS_CHANNEL_BINDING,
+        expected_policy_digest=POLICY_DIGEST,
+        expected_runtime_manifest_digest=digest("7"),
+        expected_binary_digest=digest("9"),
+        expected_release_digest=(
+            statement.get("release_digest", digest("8"))
+        ),
+        expected_image_signatures_digest=IMAGE_SIGNATURES_DIGEST,
+        expected_source_tree_digest=SOURCE_TREE_DIGEST,
+        expected_response_signing_key_id=proxy_response_key_info()["key_id"],
+        expected_tee_platform="aws-nitro",
+        expected_quote_provider="aws-nitro-enclaves",
+        max_age_seconds=300,
+    )
+
+
+def test_response_observation_proof_requirements(
+    tmp: Path,
+    provenance_digest: str,
+) -> None:
+    valid = response_observation_proof(provenance_digest)
+    valid_nonce = valid["runtime_proof"]["server_statement"]["client_nonce"]
+    summary = verify_observation_proxy_fixture(tmp, valid)
+    expected_control_plane_key_id = control_plane_response_signing_key_info()[
+        "key_id"
+    ]
+    if (
+        summary.get("proof_contract") != "observation-v1"
+        or summary.get("terminal_runtime_proof_bound") is not True
+        or summary.get("strict_collector_capture_bound") is not True
+        or summary.get("upstream_status") != 429
+        or summary.get("response_path") != "complete-upstream-response-released"
+        or summary.get("observation_authority")
+        != {
+            "source": "gate-authored",
+            "upstream_truth": "not-independently-observed",
+            "downstream_delivery": "not-claimed",
+        }
+        or summary.get("control_plane_response_signing_key_id")
+        != expected_control_plane_key_id
+    ):
+        raise AssertionError(f"observation proof summary omitted strict bindings: {summary}")
+
+    credentialless = credentialless_response_observation_proof(provenance_digest)
+    try:
+        verify_observation_proxy_fixture(tmp, credentialless)
+    except ValueError as exc:
+        if "credentialed signed route" not in str(exc) and "atomic credential" not in str(exc):
+            raise AssertionError(
+                f"credentialless route bypass failed ambiguously: {exc}"
+            ) from exc
+    else:
+        raise AssertionError(
+            "observation verifier accepted credentialless evidence for a credentialed route"
+        )
+
+    def rejected(
+        document: dict[str, Any],
+        expected_error: str,
+        description: str,
+        *,
+        contract: str = "observation-v1",
+        client_digest: str | None = None,
+        body: bytes = OBSERVATION_RESPONSE_BODY,
+    ) -> None:
+        candidate_statement = (
+            (document.get("runtime_proof") or {}).get("server_statement") or {}
+        )
+        try:
+            verify_observation_proxy_fixture(
+                tmp,
+                document,
+                proof_contract=contract,
+                expected_client_request_digest=client_digest,
+                expected_client_nonce=(
+                    candidate_statement.get("client_nonce") or valid_nonce
+                ),
+                observation_body=body,
+            )
+        except ValueError as exc:
+            if expected_error not in str(exc):
+                raise AssertionError(
+                    f"{description} failed for the wrong reason: {exc}"
+                ) from exc
+            return
+        raise AssertionError(f"observation verifier accepted {description}")
+
+    rejected(
+        valid,
+        "wrong apiVersion",
+        "observation proof under buffered-v3",
+        contract="buffered-v3",
+        client_digest=valid["request"]["aggregate_digest"],
+    )
+    buffered = proxy_response_proof(provenance_digest)
+    rejected(
+        buffered,
+        "fields do not match the contract",
+        "buffered proof under observation-v1",
+        client_digest=PROXY_CLIENT_REQUEST_DIGEST,
+    )
+    rejected(
+        valid,
+        "body digest",
+        "same-length substituted observation body",
+        body=b"{" + b"x" * (len(OBSERVATION_RESPONSE_BODY) - 2) + b"}",
+    )
+    malformed_nonce = clone_document(valid)
+    malformed_statement = malformed_nonce["runtime_proof"]["server_statement"]
+    malformed_statement["client_nonce"] = b64e(
+        (malformed_nonce["captured_at_unix"] + 300).to_bytes(4, "big")
+        + b"\0" * 28
+    )
+    malformed_statement["observation_id"] = sha256_prefixed_json(
+        {
+            "client_nonce": malformed_statement["client_nonce"],
+            "contract": "serverware.responseObservationStatement/v1",
+        }
+    )
+    resign_observation_proof(malformed_nonce)
+    rejected(
+        malformed_nonce,
+        "random bytes must not be all zero",
+        "structured nonce without random entropy",
+    )
+
+    for field, replacement in (
+        ("target_digest", digest("e")),
+        ("headers_digest", digest("d")),
+        ("header_count", 3),
+        ("body_digest", digest("c")),
+        ("body_bytes", 99),
+    ):
+        mutated = clone_document(valid)
+        mutated["request"][field] = replacement
+        sign_observation_collector(mutated)
+        rejected(
+            mutated,
+            "collector request aggregate digest mismatch",
+            f"collector request {field} mutation",
+            client_digest=valid["request"]["aggregate_digest"],
+        )
+
+    for field, replacement in (
+        ("headers_digest", digest("c")),
+        ("header_count", 5),
+        ("body_digest", digest("b")),
+        ("body_bytes", 101),
+    ):
+        mutated = clone_document(valid)
+        mutated["response"][field] = replacement
+        sign_observation_collector(mutated)
+        rejected(
+            mutated,
+            "collector response aggregate digest mismatch",
+            f"collector response {field} mutation",
+        )
+
+    upstream_mutation = clone_document(valid)
+    upstream_mutation["runtime_proof"]["server_statement"]["upstream_observation"]["status"] = 200
+    resign_observation_proof(upstream_mutation)
+    rejected(
+        upstream_mutation,
+        "upstream observation aggregate digest mismatch",
+        "re-signed upstream status mutation",
+    )
+
+    state_mutation = clone_document(valid)
+    state_statement = state_mutation["runtime_proof"]["server_statement"]
+    state_statement["upstream_attempt"] = "headers-observed-body-incomplete"
+    resign_observation_proof(state_mutation)
+    rejected(
+        state_mutation,
+        "requires a complete upstream response observation",
+        "re-signed upstream state mutation",
+    )
+
+    for forbidden_state in ("denied", "reserved"):
+        forbidden = clone_document(credentialless)
+        forbidden["runtime_proof"]["server_statement"]["authorization"]["state"] = (
+            forbidden_state
+        )
+        resign_observation_proof(forbidden)
+        rejected(
+            forbidden,
+            "credentialed signed route",
+            f"credentialless post-dispatch {forbidden_state} authorization",
+        )
+    missing_atomic_evidence = clone_document(credentialless)
+    missing_atomic_evidence["runtime_proof"]["server_statement"]["authorization"][
+        "state"
+    ] = "dispatching"
+    resign_observation_proof(missing_atomic_evidence)
+    rejected(
+        missing_atomic_evidence,
+        "credentialed signed route",
+        "dispatching authorization without full atomic evidence",
+    )
+    injected_without_authority = clone_document(valid)
+    injected_statement = injected_without_authority["runtime_proof"]["server_statement"]
+    injected_statement["authorization"] = clone_document(
+        credentialless["runtime_proof"]["server_statement"]["authorization"]
+    )
+    resign_observation_proof(injected_without_authority)
+    rejected(
+        injected_without_authority,
+        "requires atomic",
+        "injected credential without atomic authorization evidence",
+    )
+
+    missing_terminal = clone_document(valid)
+    missing_terminal["runtime_proof"] = None
+    sign_observation_collector(missing_terminal)
+    rejected(
+        missing_terminal,
+        "terminal proof evidence is required",
+        "capture without terminal runtime proof",
+    )
+    missing_collector = clone_document(valid)
+    missing_collector.pop("collector")
+    rejected(
+        missing_collector,
+        "fields do not match the contract",
+        "capture without strict collector evidence",
+    )
+    bad_capture_digest = clone_document(valid)
+    bad_capture_digest["collector"]["capture_digest"] = digest("0")
+    rejected(
+        bad_capture_digest,
+        "collector capture digest mismatch",
+        "collector capture digest substitution",
+    )
+    unknown_top = clone_document(valid)
+    unknown_top["terminal_proof"] = True
+    rejected(unknown_top, "fields do not match the contract", "unknown top-level field")
+    unknown_nested = clone_document(valid)
+    unknown_nested["runtime_proof"]["server_statement"]["request"]["raw_body"] = "secret"
+    sign_observation_collector(unknown_nested)
+    rejected(
+        unknown_nested,
+        "fields do not match the contract",
+        "unknown nested statement field",
+    )
+
+
+def test_route_authorization_evidence_contract() -> None:
+    route = SimpleNamespace(
+        credential_ref="credential:tweet",
+        jit={"required": True},
+        constraints=(
+            {
+                "id": "tweet-daily",
+                "type": "rateLimit",
+                "store": "shared",
+                "phase": "request",
+                "max": 1,
+                "calendarWindow": "utcDay",
+            },
+        ),
+    )
+    authority = {
+        "credential_ref": "credential:tweet",
+        "grant_id": "grant:tweet",
+        "approval_id": "approval:tweet",
+    }
+    receipt = {
+        "quotas": [
+            {
+                "constraintId": "tweet-daily",
+                "max": 1,
+                "windowKind": "utcDay",
+                "calendarWindow": "utcDay",
+            }
+        ]
+    }
+    verify_release_completion.verify_route_authorization_evidence(
+        route,
+        authority,
+        receipt,
+        label="route authorization fixture",
+    )
+    for description, mutated_authority, mutated_receipt, expected in (
+        (
+            "credential substitution",
+            {**authority, "credential_ref": "credential:other"},
+            receipt,
+            "credential",
+        ),
+        (
+            "missing JIT approval",
+            {**authority, "grant_id": None, "approval_id": None},
+            receipt,
+            "JIT",
+        ),
+        (
+            "quota limit substitution",
+            authority,
+            {"quotas": [{**receipt["quotas"][0], "max": 2}]},
+            "maximum",
+        ),
+        (
+            "missing quota",
+            authority,
+            {"quotas": []},
+            "quota count",
+        ),
+    ):
+        try:
+            verify_release_completion.verify_route_authorization_evidence(
+                route,
+                mutated_authority,
+                mutated_receipt,
+                label="route authorization fixture",
+            )
+        except ValueError as exc:
+            if expected not in str(exc):
+                raise AssertionError(
+                    f"{description} failed ambiguously: {exc}"
+                ) from exc
+        else:
+            raise AssertionError(f"route authorization accepted {description}")
+
+
 def test_streaming_proxy_response_proof_requirements(
     tmp: Path,
     provenance_digest: str,
@@ -4617,6 +5397,142 @@ def test_streaming_release_completion_cli(
         raise AssertionError(
             "release completion accepted a mutated separately published stream body: "
             + detail(mutated_body)
+        )
+
+    write_production_env_files(tmp)
+    write_production_config_files(tmp)
+    write(tmp / "production-readiness.json", production_readiness(nitro, tmp))
+    write(tmp / "production-host-preflight.json", production_host_preflight(tmp))
+    write(tmp / "proxy-response-proof.json", buffered_document)
+
+
+def test_observation_release_completion_cli(
+    tmp: Path,
+    nitro: dict[str, Any],
+    provenance_digest: str,
+    buffered_document: dict[str, Any],
+) -> None:
+    observation = response_observation_proof(provenance_digest)
+    client_digest = observation["request"]["aggregate_digest"]
+    observation_nonce = observation["runtime_proof"]["server_statement"]["client_nonce"]
+    observation_body_path = tmp / "proxy-observation-response-body.bin"
+    observation_body_path.write_bytes(OBSERVATION_RESPONSE_BODY)
+    observation_body_limit = len(OBSERVATION_RESPONSE_BODY)
+    write(tmp / "proxy-response-proof.json", observation)
+    write_production_env_files(
+        tmp,
+        proxy_proof_contract="observation-v1",
+        proxy_client_request_digest=client_digest,
+        proxy_observation_body=observation_body_path,
+        proxy_max_observation_body_bytes=observation_body_limit,
+    )
+    write_production_config_files(tmp)
+    write(tmp / "production-readiness.json", production_readiness(nitro, tmp))
+    write(tmp / "production-host-preflight.json", production_host_preflight(tmp))
+    accepted = run_verifier(
+        tmp,
+        proxy_proof_contract="observation-v1",
+        proxy_client_request_digest=client_digest,
+        proxy_client_nonce=observation_nonce,
+        proxy_observation_body=observation_body_path,
+        proxy_max_observation_body_bytes=observation_body_limit,
+    )
+    if accepted.returncode != 0:
+        raise AssertionError(
+            f"release completion rejected a valid pinned observation proof: {detail(accepted)}"
+        )
+    completion = json.loads(accepted.stdout.decode("utf-8"))
+    proxy_summary = completion.get("production_proxy_response_proof") or {}
+    if (
+        proxy_summary.get("proof_contract") != "observation-v1"
+        or proxy_summary.get("terminal_runtime_proof_bound") is not True
+        or proxy_summary.get("strict_collector_capture_bound") is not True
+        or proxy_summary.get("credentialless_dispatch_bound") is not False
+        or proxy_summary.get("release_authority_bound") is not True
+        or proxy_summary.get("embedded_control_plane_authorization_receipt_bound")
+        is not True
+        or completion.get("production_env_binding", {}).get("proxy_proof_contract")
+        != "observation-v1"
+        or completion.get("production_env_binding", {}).get(
+            "proxy_observation_body"
+        )
+        != str(observation_body_path)
+        or completion.get("production_env_binding", {}).get(
+            "proxy_max_observation_body_bytes"
+        )
+        != observation_body_limit
+        or proxy_summary.get("observed_body_artifact")
+        != {
+            "path": str(observation_body_path),
+            "sha256": sha256_file(observation_body_path),
+            "bytes": len(OBSERVATION_RESPONSE_BODY),
+            "max_bytes": observation_body_limit,
+        }
+        or proxy_summary.get("observed_body_artifact_bound") is not True
+    ):
+        raise AssertionError(
+            f"release completion omitted observation proof/env bindings: {completion}"
+        )
+    downgraded = run_verifier(tmp)
+    if downgraded.returncode == 0 or "proxy proof contract" not in detail(downgraded):
+        raise AssertionError(
+            "release completion accepted a buffered-v3 CLI downgrade against an observation-v1 env: "
+            + detail(downgraded)
+        )
+
+    fresh_observation = response_observation_proof(provenance_digest)
+    fresh_client_digest = fresh_observation["request"]["aggregate_digest"]
+    fresh_observation_nonce = fresh_observation["runtime_proof"]["server_statement"][
+        "client_nonce"
+    ]
+    if fresh_client_digest != client_digest:
+        raise AssertionError(
+            "fresh observation proof changed the pinned client request digest"
+        )
+    write(tmp / "proxy-response-proof.json", fresh_observation)
+    observation_body_path.write_bytes(b"{" + b"x" * (len(OBSERVATION_RESPONSE_BODY) - 2) + b"}")
+    mutated_body = run_verifier(
+        tmp,
+        proxy_proof_contract="observation-v1",
+        proxy_client_request_digest=client_digest,
+        proxy_client_nonce=fresh_observation_nonce,
+        proxy_observation_body=observation_body_path,
+        proxy_max_observation_body_bytes=observation_body_limit,
+    )
+    if mutated_body.returncode == 0 or "body digest" not in detail(mutated_body):
+        raise AssertionError(
+            "release completion accepted a same-length substituted observation body: "
+            + detail(mutated_body)
+        )
+    observation_body_path.write_bytes(OBSERVATION_RESPONSE_BODY + b"!")
+    oversized_body = run_verifier(
+        tmp,
+        proxy_proof_contract="observation-v1",
+        proxy_client_request_digest=client_digest,
+        proxy_client_nonce=fresh_observation_nonce,
+        proxy_observation_body=observation_body_path,
+        proxy_max_observation_body_bytes=observation_body_limit,
+    )
+    if oversized_body.returncode == 0 or "exceeds" not in detail(oversized_body):
+        raise AssertionError(
+            "release completion accepted an observation body above the configured bound: "
+            + detail(oversized_body)
+        )
+    observation_body_path.unlink()
+    missing_body = run_verifier(
+        tmp,
+        proxy_proof_contract="observation-v1",
+        proxy_client_request_digest=client_digest,
+        proxy_client_nonce=fresh_observation_nonce,
+        proxy_observation_body=observation_body_path,
+        proxy_max_observation_body_bytes=observation_body_limit,
+    )
+    if missing_body.returncode == 0 or "could not be opened" not in detail(
+        missing_body
+    ):
+        raise AssertionError(
+            "release completion accepted a missing observation body snapshot: "
+            + detail(missing_body)
         )
 
     write_production_env_files(tmp)
@@ -5768,6 +6684,7 @@ def test_live_runtime_projection_and_container_artifact_binding() -> None:
         "serverware": digest("a"),
         "audit-anchor": digest("a"),
         "decision-gate-rs": digest("b"),
+        "custody-runtime": digest("b"),
     }
     verified_config_ids = (
         verify_release_completion.verify_running_image_config_ids(
@@ -6066,7 +6983,9 @@ def main() -> None:
     verify_release_artifact_authority_contracts()
     verify_cosign_ecdsa_signature_compatibility()
     verify_ed25519_signature_canonicalization()
+    test_route_authorization_evidence_contract()
     test_final_file_snapshots()
+    test_final_mode_observation_signing_key_dereference()
     test_release_provenance_input_snapshot()
     test_measured_preflight_module_replacement_race()
     test_final_production_env_binding()
@@ -6146,6 +7065,16 @@ def main() -> None:
         (tmp / "proxy-collector-public-key.pem").write_text(
             proxy_collector_key_info()["public_key_pem"],
             encoding="ascii",
+        )
+        test_response_observation_proof_requirements(
+            tmp,
+            provenance_summary["provenance_digest"],
+        )
+        test_observation_release_completion_cli(
+            tmp,
+            nitro,
+            provenance_summary["provenance_digest"],
+            valid_proxy_response_proof,
         )
         test_streaming_proxy_response_proof_requirements(
             tmp,

@@ -202,17 +202,24 @@ def main() -> None:
             'id="enrollment-output"',
             "/api/agents/enrollment",
             "copyEnrollment()",
-            "downloadEnrollment()",
+            "downloadEnrollment(binding.packetText)",
             'id="enrollment-copy-agent-instructions"',
             "function agentInstructionText(packet)",
             "function copyAgentInstructions()",
             "packet.agentHandoff?.instructionsText",
             "Enrollment packet is missing signed agent instructions",
             "state.enrollmentPacket",
+            "state.enrollmentPacketText",
+            "state.enrollmentPacketFileSha256",
+            "enrollmentPacketText: state.enrollmentPacketText",
+            "enrollmentPacketFileSha256: state.enrollmentPacketFileSha256",
             "copyEnrollmentVerifier",
             "Generate an enrollment packet first so the verifier is bound to its pins",
+            "async function currentEnrollmentBinding()",
             "async function downloadEnrollmentBinding()",
-            "const packetFilename = downloadEnrollment(packetText);",
+            "X-Serverware-Enrollment-Packet-SHA256",
+            "Enrollment response bytes do not match the authenticated digest",
+            "Enrollment packet bytes changed after the authenticated response",
             "crypto.subtle.digest('SHA-256'",
             "set -eu",
             "SERVERWARE_PACKET_SHA256",
@@ -273,8 +280,8 @@ def main() -> None:
 
         try:
             enrollment_binding_fn = ui_html.split(
-                "async function downloadEnrollmentBinding()", 1
-            )[1].split("\n\n    async function deleteCredential", 1)[0]
+                "async function currentEnrollmentBinding()", 1
+            )[1].split("\n\n    async function downloadEnrollmentBinding", 1)[0]
             agent_instruction_copy_fn = ui_html.split(
                 "async function copyAgentInstructions()", 1
             )[1].split("\n\n    function enrollmentFilename", 1)[0]
@@ -284,13 +291,16 @@ def main() -> None:
         except IndexError as exc:
             raise AssertionError("could not isolate enrollment verifier handoff") from exc
         binding_order = (
-            "enrollmentPacketText(packet)",
-            "downloadEnrollment(packetText)",
+            "state.enrollmentPacketText",
+            "state.enrollmentPacketFileSha256",
             "crypto.subtle.digest('SHA-256'",
+            "observedPacketSha256 !== packetSha256",
         )
         binding_positions = [enrollment_binding_fn.index(marker) for marker in binding_order]
         if binding_positions != sorted(binding_positions):
-            raise AssertionError("portal must hash the exact bytes written to the enrollment download")
+            raise AssertionError(
+                "portal must verify the retained exact response bytes against the authenticated server digest"
+            )
         agent_instruction_order = (
             "await downloadEnrollmentBinding()",
             "SERVERWARE_PACKET_SHA256",
@@ -576,10 +586,17 @@ def main() -> None:
             "function renderControlPlaneApprovals()",
             "function safeControlPlaneRequest(request)",
             "safeControlPlaneRequest(item.request)",
+            "item.required_approver_roles",
+            "item.can_approve",
+            "item.can_deny",
+            "item.approve_block_reason",
+            "item.deny_block_reason",
             "requester_id",
             "payload_digest",
             "`/api/control-plane/approvals/${id}/${decision}`",
             "A different authorized operator must decide pending mutations",
+            "function reviewPendingMutationApproval()",
+            "`control-plane-approval-${pendingMutation.approvalId}`",
             'id="control-plane-status-filter"',
             'id="control-plane-search"',
             "queueStatusRank",
@@ -596,6 +613,10 @@ def main() -> None:
         for marker in queue_markers:
             if marker not in ui_html:
                 raise AssertionError(f"portal control-plane approval queue marker missing: {marker}")
+        if "A different authorized operator must approve this request." not in app_source:
+            raise AssertionError(
+                "control-plane approval API must explain requester separation"
+            )
         for filter_id in ("control-plane-status-filter", "jit-approval-status-filter"):
             filter_markup = ui_html.split(f'id="{filter_id}"', 1)[1].split("</select>", 1)[0]
             if '<option value="pending">Pending</option>' not in filter_markup.split(">", 1)[1]:
@@ -732,6 +753,9 @@ def main() -> None:
             'id="setup-principal"',
             'id="setup-credential"',
             'id="setup-route-id"',
+            'id="setup-proxy-url"',
+            'id="setup-proxy-egress-cidrs"',
+            "Use localhost only when the agent runs on this Serverware host.",
             'id="setup-configuration-status"',
             'id="setup-runtime-status"',
             'id="setup-hardware-status"',
@@ -757,6 +781,8 @@ def main() -> None:
             "async function bindSetupCredential()",
             "function previewSetupAssignment()",
             "function generateSetupEnrollment()",
+            "$('enrollment-proxy-url').value = $('setup-proxy-url').value.trim()",
+            "$('enrollment-egress-cidrs').value = $('setup-proxy-egress-cidrs').value.trim()",
             "function verifySetupEvidence()",
             "async function submitSetupEnrollmentReceipt()",
             "async function issueSetupAttestationChallenge()",

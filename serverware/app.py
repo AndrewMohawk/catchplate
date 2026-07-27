@@ -4526,7 +4526,7 @@ def control_plane_admin_token_rotate(
 def control_plane_approvals(
     status: str | None = None,
     limit: int = Query(100, ge=1, le=500),
-    _: AdminIdentity = Depends(
+    identity: AdminIdentity = Depends(
         require_role(
             "auditor",
             "policy_publisher",
@@ -4536,7 +4536,38 @@ def control_plane_approvals(
         )
     ),
 ) -> list[dict[str, Any]]:
-    return db.list_control_plane_approvals(status=status, limit=limit)
+    results: list[dict[str, Any]] = []
+    for item in db.list_control_plane_approvals(status=status, limit=limit):
+        required_roles = _control_plane_approval_roles(str(item["action"]))
+        pending = item.get("status") == "pending"
+        has_role = identity.has_any_role(required_roles)
+        is_requester = item.get("requester_id") == identity.user_id
+        can_approve = pending and has_role and not is_requester
+        can_deny = pending and has_role
+        approve_block_reason = None
+        deny_block_reason = None
+        if not pending:
+            approve_block_reason = f"Approval is already {item.get('status')}."
+            deny_block_reason = approve_block_reason
+        elif not has_role:
+            role_text = " or ".join(sorted(required_roles))
+            approve_block_reason = f"Requires role: {role_text}."
+            deny_block_reason = approve_block_reason
+        elif is_requester:
+            approve_block_reason = (
+                "A different authorized operator must approve this request."
+            )
+        results.append(
+            {
+                **item,
+                "required_approver_roles": sorted(required_roles),
+                "can_approve": can_approve,
+                "can_deny": can_deny,
+                "approve_block_reason": approve_block_reason,
+                "deny_block_reason": deny_block_reason,
+            }
+        )
+    return results
 
 
 @app.post("/api/control-plane/approvals/{approval_id}/approve")
@@ -7836,7 +7867,7 @@ def setup_verification(
 def agent_enrollment(
     payload: AgentEnrollmentCreate,
     identity: AdminIdentity = Depends(require_role("policy_author")),
-) -> dict[str, Any]:
+) -> Response:
     snapshot = get_policy_snapshot()
     if snapshot is None:
         raise HTTPException(status_code=503, detail="policy bundle missing")
@@ -7892,7 +7923,17 @@ def agent_enrollment(
             ca_install_session=install_session,
         )
         _bind_enrollment_session_packet(str(session["id"]), packet)
-        return packet
+        packet_bytes = (_canonical_json(packet) + "\n").encode("ascii")
+        packet_file_sha256 = "sha256:" + hashlib.sha256(packet_bytes).hexdigest()
+        return Response(
+            content=packet_bytes,
+            media_type="application/json",
+            headers={
+                "Cache-Control": "no-store",
+                "X-Content-Type-Options": "nosniff",
+                "X-Serverware-Enrollment-Packet-SHA256": packet_file_sha256,
+            },
+        )
     except AgentEnrollmentError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -13590,6 +13631,8 @@ UI_HTML = r"""
             <div><label for="setup-credential">Credential</label><select id="setup-credential" name="credentialId"></select></div>
             <div><label for="setup-route-id">Route ID</label><input id="setup-route-id" name="routeId" required maxlength="256"></div>
             <div id="setup-approvers-row" hidden><label for="setup-approvers">JIT approvers</label><input id="setup-approvers" name="approvers" maxlength="4096" placeholder="user:release-manager"></div>
+            <div><label for="setup-proxy-url">Agent-visible proxy URL</label><input id="setup-proxy-url" name="proxyUrl" value="http://localhost:8080" required><span class="hint">Use localhost only when the agent runs on this Serverware host.</span></div>
+            <div><label for="setup-proxy-egress-cidrs">Pinned proxy IP CIDRs</label><textarea id="setup-proxy-egress-cidrs" name="proxyEgressCidrs" required>127.0.0.1/32</textarea></div>
           </div>
           <div id="setup-template-summary" class="policy-effect" role="region" aria-label="Selected restriction effect" aria-live="polite"></div>
           <div class="setup-actions">
@@ -13721,8 +13764,8 @@ UI_HTML = r"""
           <label for="enrollment-output">Packet JSON</label>
           <textarea id="enrollment-output" class="output" readonly></textarea>
           <div class="toolbar" style="margin-top:8px">
-            <button class="secondary" type="button" onclick="runUiAction('Copy enrollment', copyEnrollment)">Copy</button>
-            <button class="secondary" type="button" onclick="downloadEnrollment()">Download</button>
+            <button class="secondary" type="button" onclick="runUiAction('Copy enrollment', copyEnrollment)">Copy exact packet</button>
+            <button class="secondary" type="button" onclick="runUiAction('Download enrollment', downloadEnrollmentBinding)">Download</button>
             <button id="enrollment-copy-agent-instructions" class="secondary" type="button" onclick="runUiAction('Copy agent instructions', copyAgentInstructions)">Copy agent instructions</button>
           </div>
         </section>
@@ -13860,7 +13903,7 @@ UI_HTML = r"""
     </div>
   </main>
   <script>
-    let state = {credentials: [], pendingOAuthCredentials: [], oauthIssuanceUncertainties: [], routes: [], approvals: [], controlPlaneApprovals: [], logs: [], ca_ready: false, oauthProviders: [], policyPrincipals: [], enrollmentPacket: null, setupSessions: [], setupSession: null, setupChallenge: null, oauthSetupSessionId: null, setupVerification: null, approvalReview: null, activePolicy: null, policyCandidate: null, policyCanary: null, auditSearchResult: null, auditChain: null, attestation: null, authStatus: null};
+    let state = {credentials: [], pendingOAuthCredentials: [], oauthIssuanceUncertainties: [], routes: [], approvals: [], controlPlaneApprovals: [], logs: [], ca_ready: false, oauthProviders: [], policyPrincipals: [], enrollmentPacket: null, enrollmentPacketText: null, enrollmentPacketFileSha256: null, setupSessions: [], setupSession: null, setupChallenge: null, oauthSetupSessionId: null, setupVerification: null, approvalReview: null, activePolicy: null, policyCandidate: null, policyCanary: null, auditSearchResult: null, auditChain: null, attestation: null, authStatus: null};
     let pendingMutation = null;
     let refreshInFlight = null;
     let hasRendered = false;
@@ -14430,6 +14473,9 @@ UI_HTML = r"""
 
     async function api(path, options = {}) {
       if (!requireAdminToken()) throw new Error('admin token required');
+      const captureAuthenticatedResponse = options.captureAuthenticatedResponse === true;
+      const fetchOptions = {...options};
+      delete fetchOptions.captureAuthenticatedResponse;
       const method = String(options.method || 'GET').toUpperCase();
       const unsafe = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method);
       const csrf = unsafe ? await ensureCsrfToken() : null;
@@ -14439,7 +14485,7 @@ UI_HTML = r"""
         ...(csrf ? {'X-Serverware-CSRF-Token': csrf} : {}),
         ...(options.headers || {})
       };
-      const res = await fetch(path, {...options, method, headers, credentials: 'same-origin'});
+      const res = await fetch(path, {...fetchOptions, method, headers, credentials: 'same-origin'});
       const text = res.status === 204 ? '' : await res.text();
       let payload = null;
       if (text) {
@@ -14454,6 +14500,14 @@ UI_HTML = r"""
       }
       if (!res.ok) throw new ApiError(res.status, payload);
       if (res.status === 204) return null;
+      if (captureAuthenticatedResponse) {
+        return {
+          payload,
+          exactText: text,
+          contentType: res.headers.get('Content-Type'),
+          enrollmentPacketFileSha256: res.headers.get('X-Serverware-Enrollment-Packet-SHA256')
+        };
+      }
       return payload;
     }
 
@@ -14481,13 +14535,23 @@ UI_HTML = r"""
         target.replaceChildren();
         return;
       }
+      const approval = (state.controlPlaneApprovals || []).find((item) => item.id === pendingMutation.approvalId);
+      const requiredRoles = (approval?.required_approver_roles || []).join(' or ');
       const summary = document.createElement('span');
-      summary.textContent = `${pendingMutation.label} awaits approval ${pendingMutation.approvalId}.`;
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.textContent = 'Continue approved request';
-      button.addEventListener('click', () => runUiAction('Continue mutation', continuePendingMutation));
-      target.replaceChildren(summary, button);
+      summary.textContent = approval?.status === 'pending'
+        ? `${pendingMutation.label} awaits a different ${requiredRoles || 'authorized'} operator (${pendingMutation.approvalId}).`
+        : `${pendingMutation.label} approval ${pendingMutation.approvalId} is ${approval?.status || 'not loaded'}.`;
+      const reviewButton = document.createElement('button');
+      reviewButton.type = 'button';
+      reviewButton.className = 'secondary';
+      reviewButton.textContent = 'Review approval';
+      reviewButton.addEventListener('click', () => runUiAction('Review pending mutation', reviewPendingMutationApproval));
+      const continueButton = document.createElement('button');
+      continueButton.type = 'button';
+      continueButton.textContent = 'Continue approved request';
+      continueButton.disabled = approval?.status !== 'approved';
+      continueButton.addEventListener('click', () => runUiAction('Continue mutation', continuePendingMutation));
+      target.replaceChildren(summary, reviewButton, continueButton);
     }
 
     async function controlPlaneAssertion(challengeDetail) {
@@ -14566,6 +14630,19 @@ UI_HTML = r"""
       return completed;
     }
 
+    async function reviewPendingMutationApproval() {
+      if (!pendingMutation) throw new Error('No control-plane mutation is waiting');
+      await refresh();
+      $('control-plane-status-filter').value = 'all';
+      renderControlPlaneApprovals();
+      const refreshedRow = document.getElementById(`control-plane-approval-${pendingMutation.approvalId}`);
+      if (!refreshedRow) throw new Error('Pending approval does not match the current queue filter');
+      const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+      refreshedRow.scrollIntoView({behavior: reducedMotion ? 'auto' : 'smooth', block: 'start'});
+      refreshedRow.focus({preventScroll: true});
+      return {approvalId: pendingMutation.approvalId};
+    }
+
     async function finishMutation(mutation, result) {
       if (mutation.kind === 'oauth-start') {
         sessionStorage.removeItem(oauthDraftKey);
@@ -14606,6 +14683,8 @@ UI_HTML = r"""
       refreshInFlight = (async () => {
         const retained = {
           enrollmentPacket: state.enrollmentPacket,
+          enrollmentPacketText: state.enrollmentPacketText,
+          enrollmentPacketFileSha256: state.enrollmentPacketFileSha256,
           setupSession: state.setupSession,
           setupChallenge: state.setupChallenge,
           oauthSetupSessionId: state.oauthSetupSessionId,
@@ -14638,6 +14717,8 @@ UI_HTML = r"""
         }
         const latest = {
           enrollmentPacket: state.enrollmentPacket,
+          enrollmentPacketText: state.enrollmentPacketText,
+          enrollmentPacketFileSha256: state.enrollmentPacketFileSha256,
           setupSession: state.setupSession,
           setupChallenge: state.setupChallenge,
           oauthSetupSessionId: state.oauthSetupSessionId,
@@ -15251,16 +15332,27 @@ UI_HTML = r"""
         .sort((left, right) => queueStatusRank(left.status) - queueStatusRank(right.status) || String(right.created_at || '').localeCompare(String(left.created_at || '')));
       $('control-plane-approvals').innerHTML = rows.map((item) => {
         const decisionId = `control-plane-note-${item.id}`;
+        const rowId = `control-plane-approval-${item.id}`;
         const resource = item.resource_id ? `<br><code>${esc(item.resource_id)}</code>` : '';
         const summary = safeControlPlaneRequest(item.request);
+        const requiredRoles = (item.required_approver_roles || []).join(' or ');
+        const approveBlocked = item.can_approve !== true;
+        const denyBlocked = item.can_deny !== true;
+        const approveBlockId = `control-plane-approve-block-${item.id}`;
+        const denyBlockId = `control-plane-deny-block-${item.id}`;
+        const approveAttributes = approveBlocked ? `disabled aria-disabled="true" aria-describedby="${approveBlockId}"` : '';
+        const denyAttributes = denyBlocked ? `disabled aria-disabled="true" aria-describedby="${denyBlockId}"` : '';
         const actions = item.status === 'pending' ? `
           <label class="sr-only" for="${decisionId}">Approval decision note</label>
           <input id="${decisionId}" placeholder="Decision note" maxlength="500">
           <div class="toolbar" style="margin-top:6px">
-            <button type="button" onclick="runUiAction('Approve control-plane mutation', () => decideControlPlaneApproval('${item.id}', 'approve'))">Approve</button>
-            <button class="danger" type="button" onclick="runUiAction('Deny control-plane mutation', () => decideControlPlaneApproval('${item.id}', 'deny'))">Deny</button>
-          </div>` : `<span class="muted">${esc(item.decision_note || 'Decided')}</span>`;
-        return `<tr>
+            <button type="button" onclick="runUiAction('Approve control-plane mutation', () => decideControlPlaneApproval('${item.id}', 'approve'))" ${approveAttributes}>Approve</button>
+            <button class="danger" type="button" onclick="runUiAction('Deny control-plane mutation', () => decideControlPlaneApproval('${item.id}', 'deny'))" ${denyAttributes}>Deny</button>
+            ${approveBlocked ? `<span id="${approveBlockId}" class="approval-block-reason">${esc(item.approve_block_reason || 'Approval is unavailable.')}</span>` : ''}
+            ${denyBlocked ? `<span id="${denyBlockId}" class="approval-block-reason">${esc(item.deny_block_reason || 'Denial is unavailable.')}</span>` : ''}
+          </div>
+          <span class="muted">Required role: ${esc(requiredRoles || 'unavailable')}</span>` : `<span class="muted">${esc(item.decision_note || 'Decided')}</span>`;
+        return `<tr id="${esc(rowId)}" tabindex="-1">
           <td data-label="Status">${pill(item.status)}</td>
           <td data-label="Mutation"><strong>${esc(item.action)}</strong>${resource}<br><code>${esc(item.payload_digest)}</code><br><code class="json">${json(summary)}</code></td>
           <td data-label="Requester"><code>${esc(item.requester_id)}</code></td>
@@ -15955,11 +16047,29 @@ UI_HTML = r"""
       const form = new FormData($('agent-enrollment-form'));
       const proxyEgressCidrs = parseProxyEgressCidrs(form.get('proxyEgressCidrs'));
       const enrollmentNonce = generateEnrollmentNonce();
-      state.enrollmentPacket = await api('/api/agents/enrollment', {method: 'POST', body: JSON.stringify({
+      state.enrollmentPacket = null;
+      state.enrollmentPacketText = null;
+      state.enrollmentPacketFileSha256 = null;
+      renderEnrollmentOutput();
+      const response = await api('/api/agents/enrollment', {method: 'POST', captureAuthenticatedResponse: true, body: JSON.stringify({
         principalId: form.get('principalId'), proxyUrl: form.get('proxyUrl'), proxyEgressCidrs,
         namespace: form.get('namespace') || 'serverware-agents', caMountPath: form.get('caMountPath') || '/etc/serverware/serverware-ca.pem', podSelector: JSON.parse(form.get('podSelector') || '{}'),
         nonce: enrollmentNonce, ttlSeconds: 300
       })});
+      if (response.contentType?.split(';', 1)[0].trim().toLowerCase() !== 'application/json') {
+        throw new Error('Enrollment response media type is not application/json');
+      }
+      if (!/^sha256:[0-9a-f]{64}$/.test(response.enrollmentPacketFileSha256 || '')) {
+        throw new Error('Enrollment response is missing its authenticated exact-byte digest');
+      }
+      const packetDigestBytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(response.exactText));
+      const observedPacketSha256 = 'sha256:' + Array.from(new Uint8Array(packetDigestBytes), (byte) => byte.toString(16).padStart(2, '0')).join('');
+      if (observedPacketSha256 !== response.enrollmentPacketFileSha256) {
+        throw new Error('Enrollment response bytes do not match the authenticated digest');
+      }
+      state.enrollmentPacket = response.payload;
+      state.enrollmentPacketText = response.exactText;
+      state.enrollmentPacketFileSha256 = response.enrollmentPacketFileSha256;
       renderEnrollmentOutput();
       renderSetupWorkflow();
       return state.enrollmentPacket;
@@ -15970,6 +16080,8 @@ UI_HTML = r"""
       if (!setupAssignmentIsActive(selection)) throw new Error('Activate the exact principal, route, and credential assignment first');
       if (state.setupSession?.phase !== 'policy_activated') throw new Error('The durable setup run has not recorded policy activation');
       $('enrollment-principal').value = selection.principalId;
+      $('enrollment-proxy-url').value = $('setup-proxy-url').value.trim();
+      $('enrollment-egress-cidrs').value = $('setup-proxy-egress-cidrs').value.trim();
       const packet = await generateEnrollmentFromForm();
       const enrollmentSessionId = packet?.ca?.installSession?.id;
       if (!enrollmentSessionId || !packet?.nonce) throw new Error('Enrollment packet is missing its setup bindings');
@@ -16216,8 +16328,9 @@ UI_HTML = r"""
     }
 
     async function copyEnrollment() {
-      if (!state.enrollmentPacket) return;
-      await navigator.clipboard.writeText(JSON.stringify(state.enrollmentPacket, null, 2));
+      const binding = await currentEnrollmentBinding();
+      await navigator.clipboard.writeText(binding.packetText);
+      return {copied: true, packetSha256: binding.packetSha256};
     }
 
     function agentInstructionText(packet) {
@@ -16255,14 +16368,10 @@ UI_HTML = r"""
       return `serverware-enrollment-${principal}.json`;
     }
 
-    function enrollmentPacketText(packet) {
-      return JSON.stringify(packet, null, 2) + '\n';
-    }
-
-    function downloadEnrollment(packetText = null) {
-      if (!state.enrollmentPacket) return;
-      const filename = enrollmentFilename(state.enrollmentPacket);
-      const blob = new Blob([packetText || enrollmentPacketText(state.enrollmentPacket)], {type: 'application/json'});
+    function downloadEnrollment(packetText) {
+      if (typeof packetText !== 'string' || !packetText) return;
+      const filename = enrollmentFilename(JSON.parse(packetText));
+      const blob = new Blob([packetText], {type: 'application/json'});
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
@@ -16274,14 +16383,30 @@ UI_HTML = r"""
       return filename;
     }
 
-    async function downloadEnrollmentBinding() {
+    async function currentEnrollmentBinding() {
       const packet = state.enrollmentPacket;
       if (!packet) throw new Error('Generate an enrollment packet first so the verifier is bound to its pins');
-      const packetText = enrollmentPacketText(packet);
-      const packetFilename = downloadEnrollment(packetText);
+      const packetText = state.enrollmentPacketText;
+      const packetSha256 = state.enrollmentPacketFileSha256;
+      if (typeof packetText !== 'string' || !packetText || !/^sha256:[0-9a-f]{64}$/.test(packetSha256 || '')) {
+        throw new Error('Enrollment packet is missing its authenticated exact-byte response binding');
+      }
       const packetDigestBytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(packetText));
-      const packetSha256 = 'sha256:' + Array.from(new Uint8Array(packetDigestBytes), (byte) => byte.toString(16).padStart(2, '0')).join('');
-      return {packet, packetText, packetFilename, packetSha256};
+      const observedPacketSha256 = 'sha256:' + Array.from(new Uint8Array(packetDigestBytes), (byte) => byte.toString(16).padStart(2, '0')).join('');
+      if (observedPacketSha256 !== packetSha256) {
+        throw new Error('Enrollment packet bytes changed after the authenticated response');
+      }
+      const parsedPacket = JSON.parse(packetText);
+      if (JSON.stringify(parsedPacket) !== JSON.stringify(packet)) {
+        throw new Error('Enrollment packet state differs from the authenticated response');
+      }
+      return {packet: parsedPacket, packetText, packetSha256};
+    }
+
+    async function downloadEnrollmentBinding() {
+      const binding = await currentEnrollmentBinding();
+      const packetFilename = downloadEnrollment(binding.packetText);
+      return {...binding, packetFilename};
     }
 
     async function deleteCredential(id) {

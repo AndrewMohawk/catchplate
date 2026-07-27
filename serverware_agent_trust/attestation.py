@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import argparse
 import base64
+import copy
 import hashlib
 import json
+import math
 import os
 import re
 import secrets
@@ -37,7 +39,13 @@ SESSION_ID_RE = re.compile(r"[A-Za-z0-9_-]{24,128}")
 
 
 def canonical_json(value: Any) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    )
 
 
 def b64d(value: str) -> bytes:
@@ -57,21 +65,40 @@ def _reject_json_constant(value: str) -> Any:
     raise ValueError(f"JSON contains non-standard constant {value!r}")
 
 
+def _parse_finite_json_float(value: str) -> float:
+    parsed = float(value)
+    if not math.isfinite(parsed):
+        raise ValueError(f"JSON number is not finite: {value!r}")
+    return parsed
+
+
+def strict_json_loads(raw: bytes | str, *, label: str) -> Any:
+    if isinstance(raw, bytes):
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValueError(f"{label} is not valid UTF-8 JSON") from exc
+    elif isinstance(raw, str):
+        text = raw
+    else:
+        raise TypeError("strict JSON input must be bytes or text")
+    try:
+        return json.loads(
+            text,
+            object_pairs_hook=_reject_duplicate_keys,
+            parse_constant=_reject_json_constant,
+            parse_float=_parse_finite_json_float,
+        )
+    except (json.JSONDecodeError, OverflowError, RecursionError) as exc:
+        raise ValueError(f"{label} is not valid JSON") from exc
+
+
 def load_enrollment_packet(path: Path) -> dict[str, Any]:
     with path.open("rb") as packet_file:
         raw = packet_file.read(MAX_ENROLLMENT_PACKET_BYTES + 1)
     if len(raw) > MAX_ENROLLMENT_PACKET_BYTES:
         raise ValueError(f"enrollment packet exceeds {MAX_ENROLLMENT_PACKET_BYTES} bytes")
-    try:
-        value = json.loads(
-            raw.decode("utf-8"),
-            object_pairs_hook=_reject_duplicate_keys,
-            parse_constant=_reject_json_constant,
-        )
-    except UnicodeDecodeError as exc:
-        raise ValueError("enrollment packet is not valid UTF-8 JSON") from exc
-    except json.JSONDecodeError as exc:
-        raise ValueError("enrollment packet is not valid JSON") from exc
+    value = strict_json_loads(raw, label="enrollment packet")
     if not isinstance(value, dict):
         raise ValueError("enrollment packet must be a JSON object")
     return value
@@ -362,7 +389,10 @@ def request_json(
         max_bytes=8 * 1024 * 1024,
         allow_loopback_http_tokens=bool(admin_token or headers),
     )
-    return json.loads(response.body)
+    value = strict_json_loads(response.body, label="HTTP response")
+    if not isinstance(value, dict):
+        raise ValueError("HTTP response must be a JSON object")
+    return value
 
 
 def request_bytes(
@@ -384,7 +414,7 @@ def request_bytes(
 
 
 def signature_payload(bundle: dict[str, Any]) -> dict[str, Any]:
-    copied = json.loads(json.dumps(bundle))
+    copied = copy.deepcopy(bundle)
     metadata = copied.get("metadata")
     if isinstance(metadata, dict):
         metadata.pop("signature", None)
@@ -590,10 +620,7 @@ def run_json_command(
     if result.returncode != 0:
         detail = result.stderr.decode("utf-8", errors="replace").strip()
         raise ValueError(f"{label} failed with exit {result.returncode}: {detail}")
-    try:
-        value = json.loads(result.stdout.decode("utf-8"))
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"{label} returned invalid JSON") from exc
+    value = strict_json_loads(result.stdout, label=f"{label} output")
     if not isinstance(value, dict):
         raise ValueError(f"{label} must return a JSON object")
     return value, executable_sha256
@@ -712,6 +739,204 @@ def verify_policy_high_water(attestation: dict[str, Any]) -> dict[str, Any]:
     if high_water.get("store") not in {"sqlite", "postgres"}:
         raise ValueError("policy high-water store is invalid")
     return high_water
+
+
+def _require_secure_publication_support() -> None:
+    required_flags = ("O_CLOEXEC", "O_DIRECTORY", "O_NOFOLLOW")
+    if os.name != "posix" or any(not hasattr(os, flag) for flag in required_flags):
+        raise ValueError("secure CA publication is unavailable on this platform")
+    if any(function not in os.supports_dir_fd for function in (os.mkdir, os.open)):
+        raise ValueError("secure CA publication requires descriptor-relative filesystem operations")
+
+
+def _publication_path_parts(path: Path) -> tuple[str, list[str], str]:
+    raw_path = os.fspath(path)
+    if not raw_path or raw_path.endswith(os.sep):
+        raise ValueError("CA output path must name a file")
+    parsed = Path(raw_path)
+    if parsed.is_absolute():
+        if parsed.anchor != os.sep:
+            raise ValueError("CA output path has an unsupported absolute-path form")
+        base = os.sep
+        parts = list(parsed.parts[1:])
+    else:
+        base = "."
+        parts = list(parsed.parts)
+    if not parts or any(part in {"", ".", ".."} for part in parts):
+        raise ValueError("CA output path cannot contain empty, dot, or parent components")
+    return base, parts[:-1], parts[-1]
+
+
+def _open_publication_parent(path: Path, *, create: bool) -> tuple[int, str]:
+    _require_secure_publication_support()
+    base, parent_parts, leaf = _publication_path_parts(path)
+    directory_flags = (
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    )
+    current_fd = os.open(base, directory_flags)
+    try:
+        for component in parent_parts:
+            try:
+                child_fd = os.open(
+                    component,
+                    directory_flags,
+                    dir_fd=current_fd,
+                )
+            except FileNotFoundError:
+                if not create:
+                    raise
+                try:
+                    os.mkdir(component, 0o700, dir_fd=current_fd)
+                    os.fsync(current_fd)
+                except FileExistsError as exc:
+                    raise ValueError(
+                        "CA output parent component appeared during publication"
+                    ) from exc
+                try:
+                    child_fd = os.open(
+                        component,
+                        directory_flags,
+                        dir_fd=current_fd,
+                    )
+                except OSError as exc:
+                    raise ValueError(
+                        "CA output parent component cannot be opened without following symlinks"
+                    ) from exc
+                os.fchmod(child_fd, 0o700)
+            except OSError as exc:
+                raise ValueError(
+                    "CA output parent component cannot be opened without following symlinks"
+                ) from exc
+            child_stat = os.fstat(child_fd)
+            if not stat.S_ISDIR(child_stat.st_mode):
+                os.close(child_fd)
+                raise ValueError("CA output parent component is not a directory")
+            os.close(current_fd)
+            current_fd = child_fd
+        return current_fd, leaf
+    except BaseException:
+        os.close(current_fd)
+        raise
+
+
+def _write_all(file_descriptor: int, payload: bytes) -> None:
+    remaining = memoryview(payload)
+    while remaining:
+        try:
+            written = os.write(file_descriptor, remaining)
+        except InterruptedError:
+            continue
+        if written <= 0:
+            raise OSError("CA output write made no progress")
+        remaining = remaining[written:]
+
+
+def _verify_published_ca_path(
+    path: Path,
+    *,
+    expected_parent: os.stat_result,
+    expected_file: os.stat_result,
+) -> None:
+    parent_fd, leaf = _open_publication_parent(path, create=False)
+    file_fd: int | None = None
+    try:
+        observed_parent = os.fstat(parent_fd)
+        if (
+            observed_parent.st_dev,
+            observed_parent.st_ino,
+        ) != (
+            expected_parent.st_dev,
+            expected_parent.st_ino,
+        ):
+            raise ValueError("CA output parent was substituted during publication")
+        file_fd = os.open(
+            leaf,
+            os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=parent_fd,
+        )
+        observed_file = os.fstat(file_fd)
+        if (
+            observed_file.st_dev,
+            observed_file.st_ino,
+        ) != (
+            expected_file.st_dev,
+            expected_file.st_ino,
+        ):
+            raise ValueError("CA output leaf was substituted during publication")
+        if not stat.S_ISREG(observed_file.st_mode) or observed_file.st_nlink != 1:
+            raise ValueError("CA output must remain a non-hardlinked regular file")
+        if (
+            observed_file.st_uid,
+            observed_file.st_gid,
+        ) != (
+            expected_file.st_uid,
+            expected_file.st_gid,
+        ):
+            raise ValueError("CA output ownership changed during publication")
+        if stat.S_IMODE(observed_file.st_mode) != 0o600:
+            raise ValueError("CA output permissions changed during publication")
+    finally:
+        if file_fd is not None:
+            os.close(file_fd)
+        os.close(parent_fd)
+
+
+def publish_verified_ca(path: Path, payload: bytes) -> None:
+    parent_fd, leaf = _open_publication_parent(path, create=True)
+    file_fd: int | None = None
+    try:
+        expected_parent = os.fstat(parent_fd)
+        try:
+            file_fd = os.open(
+                leaf,
+                os.O_WRONLY
+                | os.O_CREAT
+                | os.O_EXCL
+                | os.O_NOFOLLOW
+                | os.O_CLOEXEC,
+                0o600,
+                dir_fd=parent_fd,
+            )
+        except FileExistsError as exc:
+            raise ValueError("CA output path already exists") from exc
+        initial_file = os.fstat(file_fd)
+        if not stat.S_ISREG(initial_file.st_mode) or initial_file.st_nlink != 1:
+            raise ValueError("CA output must be a newly created non-hardlinked regular file")
+        if hasattr(os, "geteuid") and initial_file.st_uid != os.geteuid():
+            raise ValueError("CA output is not owned by the current effective user")
+
+        os.fchmod(file_fd, 0o600)
+        _write_all(file_fd, payload)
+        os.fsync(file_fd)
+        final_file = os.fstat(file_fd)
+        if (
+            final_file.st_dev,
+            final_file.st_ino,
+        ) != (
+            initial_file.st_dev,
+            initial_file.st_ino,
+        ):
+            raise ValueError("CA output descriptor identity changed during publication")
+        if (
+            not stat.S_ISREG(final_file.st_mode)
+            or final_file.st_nlink != 1
+            or final_file.st_uid != initial_file.st_uid
+            or final_file.st_gid != initial_file.st_gid
+            or stat.S_IMODE(final_file.st_mode) != 0o600
+        ):
+            raise ValueError(
+                "CA output ownership, links, or permissions changed during publication"
+            )
+        os.fsync(parent_fd)
+        _verify_published_ca_path(
+            path,
+            expected_parent=expected_parent,
+            expected_file=final_file,
+        )
+    finally:
+        if file_fd is not None:
+            os.close(file_fd)
+        os.close(parent_fd)
 
 
 def main() -> None:
@@ -872,9 +1097,7 @@ def main() -> None:
             raise ValueError("enrollment packet CA SPKI hash mismatch")
 
     ca_out = Path(args.ca_out)
-    ca_out.parent.mkdir(parents=True, exist_ok=True)
-    ca_out.write_bytes(ca_pem)
-    os.chmod(ca_out, 0o600)
+    publish_verified_ca(ca_out, ca_pem)
 
     print(
         json.dumps(

@@ -17,6 +17,7 @@ import tempfile
 import threading
 import time
 from dataclasses import replace
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import quote, urlsplit
@@ -44,6 +45,15 @@ MANAGEMENT_TOKEN = "browser-oauth-management-token"
 GOOGLE_NAME = "Browser Gmail OAuth"
 X_NAME = "Browser X OAuth"
 X_JIT_ROUTE_ID = "browser.x.post.one-per-day.jit"
+NPM_JIT_ROUTE_ID = "browser.npm.common-writes.jit"
+NPM_CREDENTIAL_ID = "cred-demo-bearer"
+NPM_PACKAGE_NAME = "@scope/serverware-browser"
+NPM_PACKAGE_PATH = "@scope%2fserverware-browser"
+NPM_PACKAGE_VERSION = "1.2.3"
+NPM_REMAINING_VERSION = "1.2.2"
+NPM_REVISION = "42-deadbeef"
+NPM_TOKEN_KEY = "token-key-browser-001"
+NPM_FIXTURE_BEARER = "demo-token-from-vault"
 GOOGLE_SCOPES = [
     "openid",
     "email",
@@ -484,6 +494,320 @@ def _assert_redirect_validation(work_dir: Path) -> None:
         raise AssertionError(
             f"simulator accepted an unsafe redirect origin: {origin!r}"
         )
+
+
+def _npm_publish_document() -> dict[str, Any]:
+    tarball = b"serverware-browser-npm-fixture-v1"
+    integrity = "sha512-" + base64.b64encode(
+        hashlib.sha512(tarball).digest()
+    ).decode("ascii")
+    return {
+        "_id": NPM_PACKAGE_NAME,
+        "name": NPM_PACKAGE_NAME,
+        "dist-tags": {"latest": NPM_PACKAGE_VERSION},
+        "versions": {
+            NPM_PACKAGE_VERSION: {
+                "name": NPM_PACKAGE_NAME,
+                "version": NPM_PACKAGE_VERSION,
+                "dist": {"integrity": integrity},
+            }
+        },
+        "_attachments": {
+            f"serverware-browser-{NPM_PACKAGE_VERSION}.tgz": {
+                "content_type": "application/octet-stream",
+                "data": base64.b64encode(tarball).decode("ascii"),
+                "length": len(tarball),
+            }
+        },
+    }
+
+
+def _npm_unpublish_document() -> dict[str, Any]:
+    return {
+        "_id": NPM_PACKAGE_NAME,
+        "_rev": NPM_REVISION,
+        "name": NPM_PACKAGE_NAME,
+        "dist-tags": {"latest": NPM_REMAINING_VERSION},
+        "versions": {
+            NPM_REMAINING_VERSION: {
+                "name": NPM_PACKAGE_NAME,
+                "version": NPM_REMAINING_VERSION,
+            }
+        },
+    }
+
+
+def _npm_metadata_document() -> dict[str, Any]:
+    return {
+        "_id": NPM_PACKAGE_NAME,
+        "_rev": NPM_REVISION,
+        "name": NPM_PACKAGE_NAME,
+        "dist-tags": {"latest": NPM_PACKAGE_VERSION},
+        "versions": {
+            NPM_PACKAGE_VERSION: {
+                "name": NPM_PACKAGE_NAME,
+                "version": NPM_PACKAGE_VERSION,
+                "deprecated": "Use the supported replacement package",
+            }
+        },
+    }
+
+
+class _NpmRegistryFixture:
+    def __init__(self, simulator: OAuthProviderSimulator) -> None:
+        self._lock = threading.Lock()
+        self._events: list[dict[str, Any]] = []
+        self._counts = {
+            "npm.publish": 0,
+            "npm.unpublish": 0,
+            "npm.distTagWrite": 0,
+            "npm.tokenWrite": 0,
+            "npm.metadataWrite": 0,
+            "npm.tokenCreate": 0,
+            "rejected": 0,
+        }
+        fixture = self
+
+        class Handler(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def do_GET(self) -> None:  # noqa: N802
+                fixture._handle(self)
+
+            def do_POST(self) -> None:  # noqa: N802
+                fixture._handle(self)
+
+            def do_PUT(self) -> None:  # noqa: N802
+                fixture._handle(self)
+
+            def do_DELETE(self) -> None:  # noqa: N802
+                fixture._handle(self)
+
+            def log_message(self, _format: str, *_args: Any) -> None:
+                return
+
+        self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self._server.daemon_threads = True
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
+        context.load_cert_chain(
+            certfile=str(simulator.server_cert_path),
+            keyfile=str(simulator.server_key_path),
+        )
+        self._server.socket = context.wrap_socket(
+            self._server.socket,
+            server_side=True,
+        )
+        self.port = int(self._server.server_address[1])
+        self._thread = threading.Thread(
+            target=self._server.serve_forever,
+            name="serverware-browser-npm-registry",
+            daemon=True,
+        )
+        self._started = False
+
+    @staticmethod
+    def _strict_body(handler: BaseHTTPRequestHandler) -> bytes:
+        transfer_encoding = handler.headers.get("Transfer-Encoding")
+        if transfer_encoding:
+            raise ValueError("transfer_encoding_denied")
+        raw_length = handler.headers.get("Content-Length")
+        if raw_length is None:
+            return b""
+        if not raw_length.isdigit():
+            raise ValueError("content_length_invalid")
+        length = int(raw_length)
+        if length > 16 * 1024 * 1024:
+            raise ValueError("body_too_large")
+        body = handler.rfile.read(length)
+        if len(body) != length:
+            raise ValueError("body_truncated")
+        return body
+
+    @staticmethod
+    def _json_body(body: bytes) -> Any:
+        if not body:
+            return None
+        return json.loads(body.decode("utf-8"))
+
+    @staticmethod
+    def _response_for(operation: str) -> dict[str, Any]:
+        if operation == "npm.publish":
+            return {
+                "package": NPM_PACKAGE_NAME,
+                "version": NPM_PACKAGE_VERSION,
+                "published": True,
+            }
+        if operation == "npm.unpublish":
+            return {
+                "ok": True,
+                "package": NPM_PACKAGE_NAME,
+                "revision": NPM_REVISION,
+                "unpublished": True,
+            }
+        if operation == "npm.distTagWrite":
+            return {
+                "ok": True,
+                "package": NPM_PACKAGE_NAME,
+                "version": NPM_PACKAGE_VERSION,
+                "tag": "latest",
+                "dist_tag_written": True,
+            }
+        if operation == "npm.tokenWrite":
+            return {"ok": True, "token_revoked": True}
+        if operation == "npm.metadataWrite":
+            return {
+                "ok": True,
+                "package": NPM_PACKAGE_NAME,
+                "metadata_updated": True,
+            }
+        raise ValueError("unsupported_fixture_operation")
+
+    @staticmethod
+    def _classify(method: str, path: str, body: Any) -> str:
+        package_path = f"/{NPM_PACKAGE_PATH}"
+        if method == "PUT" and path == package_path:
+            if body == _npm_publish_document():
+                return "npm.publish"
+            if body == _npm_metadata_document():
+                return "npm.metadataWrite"
+        if (
+            method == "PUT"
+            and path == f"{package_path}/-rev/{NPM_REVISION}"
+            and body == _npm_unpublish_document()
+        ):
+            return "npm.unpublish"
+        if (
+            method == "PUT"
+            and path
+            == f"/-/package/{NPM_PACKAGE_PATH}/dist-tags/latest"
+            and body == NPM_PACKAGE_VERSION
+        ):
+            return "npm.distTagWrite"
+        if (
+            method == "DELETE"
+            and path == f"/-/npm/v1/tokens/token/{NPM_TOKEN_KEY}"
+            and body is None
+        ):
+            return "npm.tokenWrite"
+        if method == "POST" and path == "/-/npm/v1/tokens":
+            return "npm.tokenCreate"
+        raise ValueError("fixture_request_unclassified")
+
+    def _send_json(
+        self,
+        handler: BaseHTTPRequestHandler,
+        status: int,
+        payload: dict[str, Any],
+    ) -> None:
+        body = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode(
+            "utf-8"
+        )
+        handler.send_response(status)
+        handler.send_header("Content-Type", "application/json")
+        handler.send_header("Content-Length", str(len(body)))
+        handler.send_header("Connection", "close")
+        handler.end_headers()
+        handler.wfile.write(body)
+        handler.close_connection = True
+
+    def _handle(self, handler: BaseHTTPRequestHandler) -> None:
+        method = handler.command.upper()
+        path = urlsplit(handler.path).path
+        operation: str | None = None
+        body_sha256: str | None = None
+        try:
+            body_bytes = self._strict_body(handler)
+            body_sha256 = "sha256:" + hashlib.sha256(body_bytes).hexdigest()
+            body = self._json_body(body_bytes)
+            authorization = handler.headers.get("Authorization")
+            if authorization != f"Bearer {NPM_FIXTURE_BEARER}":
+                raise PermissionError("credential_injection_missing")
+            operation = self._classify(method, path, body)
+            if operation == "npm.tokenCreate":
+                with self._lock:
+                    self._counts[operation] += 1
+                    self._events.append(
+                        {
+                            "operation": operation,
+                            "method": method,
+                            "path": path,
+                            "bodySha256": body_sha256,
+                            "authorizationPresent": True,
+                            "authorizationScheme": "Bearer",
+                            "unexpected": True,
+                        }
+                    )
+                self._send_json(
+                    handler,
+                    500,
+                    {"error": "token_creation_must_not_reach_registry"},
+                )
+                return
+            response = self._response_for(operation)
+            with self._lock:
+                self._counts[operation] += 1
+                self._events.append(
+                    {
+                        "operation": operation,
+                        "method": method,
+                        "path": path,
+                        "bodySha256": body_sha256,
+                        "authorizationPresent": True,
+                        "authorizationScheme": "Bearer",
+                    }
+                )
+            self._send_json(handler, 200, response)
+        except PermissionError as exc:
+            with self._lock:
+                self._counts["rejected"] += 1
+                self._events.append(
+                    {
+                        "operation": operation,
+                        "method": method,
+                        "path": path,
+                        "bodySha256": body_sha256,
+                        "authorizationPresent": False,
+                        "reason": str(exc),
+                    }
+                )
+            self._send_json(handler, 401, {"error": "registry_credential_required"})
+        except Exception as exc:
+            with self._lock:
+                self._counts["rejected"] += 1
+                self._events.append(
+                    {
+                        "operation": operation,
+                        "method": method,
+                        "path": path,
+                        "bodySha256": body_sha256,
+                        "reason": str(exc),
+                    }
+                )
+            self._send_json(handler, 400, {"error": "registry_fixture_rejected"})
+
+    def start(self) -> None:
+        self._thread.start()
+        self._started = True
+
+    def observations(self) -> dict[str, Any]:
+        with self._lock:
+            return json.loads(
+                json.dumps(
+                    {"counts": self._counts, "events": self._events},
+                    sort_keys=True,
+                )
+            )
+
+    def close(self) -> None:
+        if not self._started:
+            self._server.server_close()
+            return
+        self._server.shutdown()
+        self._server.server_close()
+        self._thread.join(timeout=10)
+        _require(not self._thread.is_alive(), "npm registry fixture did not stop")
+        self._started = False
 
 
 class _UvicornThread:
@@ -1511,7 +1835,11 @@ def _preview_stage_activate_policy(
 
 
 def _assert_policy_evidence(
-    policy: dict[str, Any], google_id: str, x_id: str, simulator: OAuthProviderSimulator
+    policy: dict[str, Any],
+    google_id: str,
+    x_id: str,
+    simulator: OAuthProviderSimulator,
+    npm_registry: _NpmRegistryFixture,
 ) -> None:
     bundle = policy["bundle"]
     defaults = bundle.get("defaults") or {}
@@ -1551,6 +1879,7 @@ def _assert_policy_evidence(
     gmail = routes["browser.gmail.last-30-days"]
     x_search = routes["browser.x.search.seven-days"]
     x_post = routes[X_JIT_ROUTE_ID]
+    npm_writes = routes[NPM_JIT_ROUTE_ID]
     _require(gmail["match"]["methods"] == ["GET"], "Gmail route is not read-only")
     _require(
         gmail["match"].get("host") == "127.0.0.1"
@@ -1622,6 +1951,53 @@ def _assert_policy_evidence(
         and authn.get("allowedAuthenticatorClasses") == ["dev"]
         and authn.get("requireHardwareAttestation") is False,
         "X posting route lost its one-use reviewer WebAuthn JIT binding",
+    )
+    npm_operations = {
+        "npm.publish",
+        "npm.unpublish",
+        "npm.distTagWrite",
+        "npm.tokenWrite",
+        "npm.metadataWrite",
+    }
+    npm_operation_policy = next(
+        (
+            item
+            for item in npm_writes.get("constraints", [])
+            if item.get("type") == "operationPolicy"
+        ),
+        {},
+    )
+    npm_jit = npm_writes.get("jit") or {}
+    npm_authn = (npm_jit.get("approvers") or {}).get("authn") or {}
+    _require(
+        npm_writes.get("credentialRef") == NPM_CREDENTIAL_ID
+        and npm_writes.get("match", {}).get("host") == "127.0.0.1"
+        and npm_writes.get("match", {}).get("port") == npm_registry.port
+        and npm_writes.get("match", {}).get("resolvedCidrs")
+        == ["127.0.0.1/32"]
+        and set(npm_writes.get("match", {}).get("methods") or [])
+        == {"PUT", "POST", "DELETE"}
+        and set(npm_writes.get("adapter", {}).get("config", {}).get("operations") or [])
+        == {"publish", "unpublish", "distTagWrite", "tokenWrite", "metadataWrite"}
+        and set(npm_operation_policy.get("allowedOperations") or [])
+        == npm_operations
+        and "npm.tokenCreate"
+        not in set(npm_operation_policy.get("allowedOperations") or []),
+        "npm route lost its exact local authority or closed five-operation allowlist",
+    )
+    _require(
+        npm_jit.get("required") is True
+        and npm_jit.get("mode") == "perOperation"
+        and npm_jit.get("maxUses") == 1
+        and npm_jit.get("consumeOn") == "forwardStart"
+        and npm_jit.get("binding", {}).get("type") == "operationDigest"
+        and "operation" in set(npm_jit.get("binding", {}).get("fields") or [])
+        and (npm_jit.get("approvers") or {}).get("users") == ["user:demo"]
+        and npm_authn.get("webauthnRequired") is True
+        and npm_authn.get("userVerification") == "required"
+        and npm_authn.get("allowedAuthenticatorClasses") == ["hardware"]
+        and npm_authn.get("requireHardwareAttestation") is True,
+        "npm route lost immutable operation-bound one-use reviewer WebAuthn JIT",
     )
 
 
@@ -2165,6 +2541,233 @@ def _x_jit_route(simulator: OAuthProviderSimulator) -> dict[str, Any]:
     }
 
 
+def _npm_jit_route(registry: _NpmRegistryFixture) -> dict[str, Any]:
+    return {
+        "match": {
+            "scheme": "https",
+            "host": "127.0.0.1",
+            "port": registry.port,
+            "resolvedCidrs": ["127.0.0.1/32"],
+            "methods": ["PUT", "POST", "DELETE"],
+            "paths": [
+                "/{package}",
+                "/{package}/-rev/{revision}",
+                "/-/package/{package}/dist-tags/{tag}",
+                "/-/npm/v1/tokens",
+                "/-/npm/v1/tokens/token/{token}",
+            ],
+        },
+        "adapter": {
+            "type": "npm.registry",
+            "config": {
+                "request": {
+                    "allowedHeaders": [
+                        "accept",
+                        "accept-encoding",
+                        "content-type",
+                        "npm-auth-type",
+                        "npm-command",
+                        "npm-in-ci",
+                        "npm-otp",
+                        "npm-scope",
+                        "npm-session",
+                        "user-agent",
+                    ],
+                    "allowedQueryKeys": [],
+                    "allowedMediaTypes": ["application/json"],
+                    "maxBodyBytes": 16_777_216,
+                },
+                "operations": [
+                    "publish",
+                    "unpublish",
+                    "distTagWrite",
+                    "tokenWrite",
+                    "metadataWrite",
+                ],
+                "response": {
+                    "mode": "json",
+                    "maxBodyBytes": 65_536,
+                    "allowedFields": [
+                        "ok",
+                        "package",
+                        "version",
+                        "published",
+                        "revision",
+                        "unpublished",
+                        "tag",
+                        "dist_tag_written",
+                        "token_revoked",
+                        "metadata_updated",
+                    ],
+                    "allowedHeaders": [],
+                    "error": {
+                        "mode": "json",
+                        "maxBodyBytes": 65_536,
+                        "allowedFields": ["error", "reason", "code"],
+                        "allowedHeaders": [],
+                        "onInvalid": "block",
+                    },
+                },
+            },
+        },
+        "constraints": [
+            {
+                "id": "browser-npm-five-write-classes",
+                "type": "operationPolicy",
+                "allowedOperations": [
+                    "npm.publish",
+                    "npm.unpublish",
+                    "npm.distTagWrite",
+                    "npm.tokenWrite",
+                    "npm.metadataWrite",
+                ],
+            },
+            {
+                "id": "browser-npm-publish-identity",
+                "type": "responseBinding",
+                "phase": "response",
+                "operations": ["npm.publish"],
+                "successStatusCodes": [200],
+                "contentTypes": ["application/json"],
+                "bindings": [
+                    {
+                        "id": "package-name",
+                        "operationField": "packageName",
+                        "responseField": "package",
+                        "comparison": "exactString",
+                    },
+                    {
+                        "id": "package-version",
+                        "operationField": "packageVersion",
+                        "responseField": "version",
+                        "comparison": "exactString",
+                    },
+                ],
+            },
+            {
+                "id": "browser-npm-publish-success",
+                "type": "responseJson",
+                "phase": "response",
+                "operations": ["npm.publish"],
+                "required": True,
+                "fields": {
+                    "published": {
+                        "required": True,
+                        "type": "boolean",
+                        "equals": True,
+                    }
+                },
+            },
+        ],
+        "jit": {
+            "required": True,
+            "mode": "perOperation",
+            "ttlSeconds": 300,
+            "maxUses": 1,
+            "consumeOn": "forwardStart",
+            "binding": {
+                "type": "operationDigest",
+                "fields": [
+                    "principal",
+                    "routeId",
+                    "credentialRef",
+                    "credentialVersion",
+                    "policyHash",
+                    "method",
+                    "authority",
+                    "path",
+                    "query",
+                    "selectedHeaders",
+                    "bodySha256",
+                    "operation",
+                    "packageName",
+                    "packageVersion",
+                    "tarballIntegrity",
+                ],
+            },
+            "approvers": {
+                "quorum": 1,
+                "users": ["user:demo"],
+                "authn": {
+                    "webauthnRequired": True,
+                    "userVerification": "required",
+                    "allowedAuthenticatorClasses": ["hardware"],
+                    "requireHardwareAttestation": True,
+                },
+            },
+        },
+    }
+
+
+def _npm_request_bytes(
+    registry: _NpmRegistryFixture,
+    operation: str,
+) -> tuple[bytes, dict[str, Any]]:
+    if operation == "npm.publish":
+        method = "PUT"
+        path = f"/{NPM_PACKAGE_PATH}"
+        command = "publish"
+        body_value: Any = _npm_publish_document()
+    elif operation == "npm.unpublish":
+        method = "PUT"
+        path = f"/{NPM_PACKAGE_PATH}/-rev/{NPM_REVISION}"
+        command = "unpublish"
+        body_value = _npm_unpublish_document()
+    elif operation == "npm.distTagWrite":
+        method = "PUT"
+        path = f"/-/package/{NPM_PACKAGE_PATH}/dist-tags/latest"
+        command = "dist-tag"
+        body_value = NPM_PACKAGE_VERSION
+    elif operation == "npm.tokenWrite":
+        method = "DELETE"
+        path = f"/-/npm/v1/tokens/token/{NPM_TOKEN_KEY}"
+        command = "token-revoke"
+        body_value = None
+    elif operation == "npm.metadataWrite":
+        method = "PUT"
+        path = f"/{NPM_PACKAGE_PATH}"
+        command = "deprecate"
+        body_value = _npm_metadata_document()
+    elif operation == "npm.tokenCreate":
+        method = "POST"
+        path = "/-/npm/v1/tokens"
+        command = "token-create"
+        body_value = {
+            "name": "serverware-browser-token",
+            "readonly": False,
+            "cidr_whitelist": [],
+        }
+    else:
+        raise AssertionError(f"unsupported npm browser operation: {operation}")
+
+    body = (
+        b""
+        if body_value is None
+        else json.dumps(body_value, sort_keys=True, separators=(",", ":")).encode(
+            "utf-8"
+        )
+    )
+    headers = (
+        f"{method} {path} HTTP/1.1\r\n"
+        f"Host: 127.0.0.1:{registry.port}\r\n"
+        "Accept: application/json\r\n"
+        f"Npm-Command: {command}\r\n"
+        f"User-Agent: serverware-browser-rust-{command}\r\n"
+    )
+    if body_value is not None:
+        headers += (
+            "Content-Type: application/json\r\n"
+            f"Content-Length: {len(body)}\r\n"
+        )
+    headers += "Connection: close\r\n\r\n"
+    expected_response = (
+        {}
+        if operation == "npm.tokenCreate"
+        else _NpmRegistryFixture._response_for(operation)
+    )
+    return headers.encode("ascii") + body, expected_response
+
+
 def _localized_read_route(
     page: Any,
     *,
@@ -2643,10 +3246,453 @@ def _exercise_rust_jit(
     }
 
 
+def _exercise_one_npm_jit_operation(
+    *,
+    gate: _DecisionGateProcess,
+    operator_page: Any,
+    reviewer_page: Any,
+    browser_observations: list[dict[str, Any]],
+    public_url: str,
+    registry: _NpmRegistryFixture,
+    policy_hash: str,
+    credential_version: int,
+    operation: str,
+) -> dict[str, Any]:
+    from serverware import db
+
+    immutable_request, expected_response = _npm_request_bytes(registry, operation)
+    request_bytes_sha256 = (
+        "sha256:" + hashlib.sha256(immutable_request).hexdigest()
+    )
+    _, _, body = immutable_request.partition(b"\r\n\r\n")
+    body_sha256 = "sha256:" + hashlib.sha256(body).hexdigest()
+    before = _jit_state_snapshot(NPM_JIT_ROUTE_ID, NPM_CREDENTIAL_ID)
+    registry_before = registry.observations()
+
+    first = _send_connect_tls_request(
+        gate,
+        authority_host="127.0.0.1",
+        authority_port=registry.port,
+        request_bytes=immutable_request,
+    )
+    decision = first["json"]
+    _require(
+        first["status"] == 428
+        and isinstance(decision, dict)
+        and decision.get("action") == "jit_required"
+        and decision.get("allowed") is False
+        and (decision.get("payload") or {}).get("error")
+        == "jit_grant_unavailable"
+        and decision.get("route_id") == NPM_JIT_ROUTE_ID
+        and decision.get("principal_id") == "agent:demo"
+        and decision.get("policy_hash") == policy_hash
+        and isinstance(decision.get("approval_id"), str)
+        and decision.get("approval_url")
+        == f"/approvals/{decision.get('approval_id')}"
+        and decision.get("approval_status") == "pending"
+        and decision.get("approval_created") is True
+        and str(decision.get("request_digest") or "").startswith("sha256:")
+        and str(decision.get("operation_digest") or "").startswith("sha256:")
+        and (decision.get("jit") or {}).get("grant_store")
+        == "atomic_release_authorization",
+        f"{operation} initial Rust request did not create an exact JIT 428: {first}",
+    )
+    approval_id = decision["approval_id"]
+    after_428 = _jit_state_snapshot(NPM_JIT_ROUTE_ID, NPM_CREDENTIAL_ID)
+    approval_rows = [
+        item for item in after_428["approvals"] if item["id"] == approval_id
+    ]
+    _require(
+        len(after_428["approvals"]) == len(before["approvals"]) + 1
+        and len(approval_rows) == 1
+        and approval_rows[0]["status"] == "pending"
+        and approval_rows[0]["principal_id"] == "agent:demo"
+        and approval_rows[0]["credential_id"] == NPM_CREDENTIAL_ID
+        and approval_rows[0]["credential_version"] == credential_version
+        and approval_rows[0]["policy_hash"] == policy_hash
+        and approval_rows[0]["request_digest"] == decision["request_digest"]
+        and approval_rows[0]["operation_digest"] == decision["operation_digest"]
+        and after_428["credential"] == before["credential"]
+        and after_428["reviewReceipts"] == before["reviewReceipts"]
+        and after_428["grants"] == before["grants"]
+        and after_428["attempts"] == before["attempts"]
+        and after_428["credentialIssuances"] == before["credentialIssuances"]
+        and after_428["quotaReservations"] == before["quotaReservations"]
+        and after_428["grantConsumptions"] == before["grantConsumptions"]
+        and after_428["rateLimitCounters"] == before["rateLimitCounters"]
+        and after_428["releaseEventCount"] == before["releaseEventCount"]
+        and registry.observations() == registry_before,
+        f"{operation} initial 428 caused credential, release, or upstream effects",
+    )
+
+    denied_review = _api_result(
+        operator_page,
+        f"/api/approvals/{approval_id}/review",
+    )
+    denied_approve = _api_result(
+        operator_page,
+        f"/api/approvals/{approval_id}/approve",
+        method="POST",
+        payload={"reviewReceiptId": "00000000-0000-4000-8000-000000000000"},
+    )
+    _require(
+        denied_review["status"] == 403 and denied_approve["status"] == 403,
+        f"{operation} requester was not denied review and approval",
+    )
+    _require(
+        _jit_state_snapshot(NPM_JIT_ROUTE_ID, NPM_CREDENTIAL_ID) == after_428,
+        f"{operation} requester denials mutated JIT state",
+    )
+
+    assertion_requests_before = sum(
+        1
+        for item in browser_observations
+        if item.get("type") == "request"
+        and item.get("method") == "POST"
+        and "/api/dev/webauthn/assertion" in item.get("url", "")
+    )
+    exact_approval_url = public_url + decision["approval_url"]
+    response = reviewer_page.goto(exact_approval_url, wait_until="domcontentloaded")
+    _require(
+        response is not None and response.status == 200,
+        f"{operation} reviewer deep link did not return the portal",
+    )
+    reviewer_page.locator("#admin-token").fill(ADMIN_TOKEN)
+    reviewer_page.locator("#admin-token").dispatch_event("change")
+    _wait_for_portal(
+        reviewer_page,
+        public_url,
+        expected_url=exact_approval_url,
+    )
+    reviewer_page.wait_for_function(
+        "(id) => state.approvalReview?.id === id && state.approvalReview?.review_receipt?.id",
+        arg=approval_id,
+        timeout=DEFAULT_TIMEOUT_MS,
+    )
+    review = reviewer_page.evaluate("() => state.approvalReview")
+    receipt_id = (review.get("review_receipt") or {}).get("id")
+    operation_fields = review.get("normalized_operation_fields") or {}
+    _require(
+        review.get("id") == approval_id
+        and review.get("status") == "pending"
+        and review.get("route_id") == NPM_JIT_ROUTE_ID
+        and review.get("principal_id") == "agent:demo"
+        and review.get("credential_ref") == NPM_CREDENTIAL_ID
+        and review.get("credential_version") == credential_version
+        and review.get("policy_hash") == policy_hash
+        and review.get("body_hash") == body_sha256
+        and (review.get("retry_semantics") or {}).get("request_digest")
+        == decision["request_digest"]
+        and (review.get("retry_semantics") or {}).get("operation_digest")
+        == decision["operation_digest"]
+        and (review.get("retry_semantics") or {}).get("agent_action")
+        == "retry-identical-request-through-proxy"
+        and (review.get("retry_semantics") or {}).get(
+            "agent_receives_secret_or_token"
+        )
+        is False
+        and operation_fields.get("operation") == operation
+        and isinstance(receipt_id, str),
+        f"{operation} browser review did not expose its exact safe operation binding: {review}",
+    )
+    if operation in {
+        "npm.publish",
+        "npm.unpublish",
+        "npm.distTagWrite",
+        "npm.metadataWrite",
+    }:
+        _require(
+            operation_fields.get("packageName") == NPM_PACKAGE_NAME,
+            f"{operation} review lost its package binding: {operation_fields}",
+        )
+    if operation == "npm.publish":
+        _require(
+            operation_fields.get("packageVersion") == NPM_PACKAGE_VERSION
+            and str(operation_fields.get("tarballIntegrity") or "").startswith(
+                "sha512-"
+            ),
+            f"{operation} review lost its version or derived integrity binding",
+        )
+    active_receipt = db.get_active_approval_review_receipt(
+        receipt_id,
+        approval_request_id=approval_id,
+        reviewer_id="user:demo",
+    )
+    _require(
+        active_receipt is not None
+        and active_receipt["review_digest"] == review.get("review_digest"),
+        f"{operation} reviewer did not receive the active exact-review receipt",
+    )
+
+    reviewer_page.locator("#approval-review-actions").get_by_role(
+        "button",
+        name="Approve",
+        exact=True,
+    ).click()
+    reviewer_page.wait_for_function(
+        "(id) => state.approvalReview?.id === id && state.approvalReview?.status === 'approved'",
+        arg=approval_id,
+        timeout=DEFAULT_TIMEOUT_MS,
+    )
+    approved = _assert_single_approval_decision(
+        reviewer_page,
+        browser_observations,
+        approval_id,
+        "approve",
+        expected_request_count=2,
+        expected_denied_count=1,
+    )
+    stored_approval = db.get_approval_request(approval_id)
+    authn = (stored_approval or {}).get("approval_authn") or {}
+    assertion_requests_after = sum(
+        1
+        for item in browser_observations
+        if item.get("type") == "request"
+        and item.get("method") == "POST"
+        and "/api/dev/webauthn/assertion" in item.get("url", "")
+    )
+    operation_options_requests = [
+        item
+        for item in browser_observations
+        if item.get("type") == "request"
+        and item.get("method") == "POST"
+        and f"/api/approvals/{approval_id}/webauthn/options"
+        in item.get("url", "")
+    ]
+    _require(
+        approved.get("approved_by") == "user:demo"
+        and authn.get("method") == "webauthn"
+        and authn.get("user_id") == "user:demo"
+        and authn.get("user_verified") is True
+        and authn.get("review_receipt_id") == receipt_id
+        and len(operation_options_requests) == 1
+        and assertion_requests_after == assertion_requests_before + 1
+        and db.get_active_approval_review_receipt(
+            receipt_id,
+            approval_request_id=approval_id,
+            reviewer_id="user:demo",
+        )
+        is None,
+        f"{operation} did not consume one browser WebAuthn review authority",
+    )
+
+    approved_state = _jit_state_snapshot(NPM_JIT_ROUTE_ID, NPM_CREDENTIAL_ID)
+    grants = [
+        item
+        for item in approved_state["grants"]
+        if item["approval_request_id"] == approval_id
+    ]
+    _require(
+        len(grants) == 1
+        and grants[0]["state"] == "active"
+        and grants[0]["uses_remaining"] == 1
+        and approved_state["attempts"] == before["attempts"],
+        f"{operation} approval did not create exactly one unused grant",
+    )
+
+    retry = _send_connect_tls_request(
+        gate,
+        authority_host="127.0.0.1",
+        authority_port=registry.port,
+        request_bytes=immutable_request,
+    )
+    _require(
+        first["sentRequestSha256"]
+        == retry["sentRequestSha256"]
+        == request_bytes_sha256
+        and first["sentRequestLength"]
+        == retry["sentRequestLength"]
+        == len(immutable_request)
+        and retry["status"] == 200
+        and retry["json"] == expected_response,
+        f"{operation} approved byte-identical retry failed: {retry}",
+    )
+    after_success = _jit_state_snapshot(NPM_JIT_ROUTE_ID, NPM_CREDENTIAL_ID)
+    registry_success = registry.observations()
+    attempts = [
+        item
+        for item in after_success["attempts"]
+        if item["approval_request_id"] == approval_id
+    ]
+    consumptions = [
+        item
+        for item in after_success["grantConsumptions"]
+        if item["approval_request_id"] == approval_id
+    ]
+    success_grants = [
+        item
+        for item in after_success["grants"]
+        if item["approval_request_id"] == approval_id
+    ]
+    issuance_attempt_ids = {
+        item["attempt_id"] for item in after_success["credentialIssuances"]
+    }
+    operation_events = [
+        item
+        for item in registry_success["events"]
+        if item.get("operation") == operation
+    ]
+    _require(
+        len(after_success["attempts"]) == len(before["attempts"]) + 1
+        and len(attempts) == 1
+        and attempts[0]["state"] == "committed"
+        and attempts[0]["completion_outcome"] == "forwarded"
+        and attempts[0]["request_digest"] == decision["request_digest"]
+        and attempts[0]["operation_digest"] == decision["operation_digest"]
+        and attempts[0]["attempt_id"] in issuance_attempt_ids
+        and len(after_success["credentialIssuances"])
+        == len(before["credentialIssuances"]) + 1
+        and after_success["quotaReservations"] == before["quotaReservations"]
+        and len(after_success["grantConsumptions"])
+        == len(before["grantConsumptions"]) + 1
+        and len(consumptions) == 1
+        and consumptions[0]["uses_remaining_before"] == 1
+        and consumptions[0]["uses_remaining_after"] == 0
+        and len(success_grants) == 1
+        and success_grants[0]["state"] == "consumed"
+        and success_grants[0]["uses_remaining"] == 0
+        and after_success["credential"] == before["credential"]
+        and after_success["releaseEventCount"] > before["releaseEventCount"]
+        and registry_success["counts"][operation]
+        == registry_before["counts"][operation] + 1
+        and registry_success["counts"]["rejected"]
+        == registry_before["counts"]["rejected"]
+        and len(operation_events) == 1
+        and operation_events[0]["bodySha256"] == body_sha256
+        and operation_events[0]["authorizationPresent"] is True
+        and operation_events[0]["authorizationScheme"] == "Bearer",
+        f"{operation} approved retry lost atomic release or upstream evidence",
+    )
+
+    third = _send_connect_tls_request(
+        gate,
+        authority_host="127.0.0.1",
+        authority_port=registry.port,
+        request_bytes=immutable_request,
+    )
+    third_decision = third["json"]
+    after_third = _jit_state_snapshot(NPM_JIT_ROUTE_ID, NPM_CREDENTIAL_ID)
+    _require(
+        third["status"] == 428
+        and isinstance(third_decision, dict)
+        and third_decision.get("action") == "jit_required"
+        and third_decision.get("approval_created") is True
+        and third_decision.get("approval_id") != approval_id
+        and len(after_third["approvals"]) == len(after_success["approvals"]) + 1
+        and after_third["attempts"] == after_success["attempts"]
+        and after_third["credentialIssuances"]
+        == after_success["credentialIssuances"]
+        and after_third["quotaReservations"] == after_success["quotaReservations"]
+        and after_third["grantConsumptions"]
+        == after_success["grantConsumptions"]
+        and after_third["rateLimitCounters"]
+        == after_success["rateLimitCounters"]
+        and registry.observations() == registry_success,
+        f"{operation} one-use grant did not produce a fresh side-effect-free 428",
+    )
+    return {
+        "operation": operation,
+        "approvalId": approval_id,
+        "freshApprovalId": third_decision["approval_id"],
+        "requestBytesSha256": request_bytes_sha256,
+        "requestBytesLength": len(immutable_request),
+        "requestDigest": decision["request_digest"],
+        "operationDigest": decision["operation_digest"],
+        "retryStatus": retry["status"],
+    }
+
+
+def _exercise_rust_npm(
+    *,
+    gate: _DecisionGateProcess,
+    operator_page: Any,
+    reviewer_page: Any,
+    browser_observations: list[dict[str, Any]],
+    public_url: str,
+    registry: _NpmRegistryFixture,
+    policy_hash: str,
+    credential_version: int,
+) -> dict[str, Any]:
+    operations = [
+        "npm.publish",
+        "npm.unpublish",
+        "npm.distTagWrite",
+        "npm.tokenWrite",
+        "npm.metadataWrite",
+    ]
+    journeys = [
+        _exercise_one_npm_jit_operation(
+            gate=gate,
+            operator_page=operator_page,
+            reviewer_page=reviewer_page,
+            browser_observations=browser_observations,
+            public_url=public_url,
+            registry=registry,
+            policy_hash=policy_hash,
+            credential_version=credential_version,
+            operation=operation,
+        )
+        for operation in operations
+    ]
+    _require(
+        len({item["requestBytesSha256"] for item in journeys}) == len(operations)
+        and len({item["requestDigest"] for item in journeys}) == len(operations)
+        and len({item["operationDigest"] for item in journeys}) == len(operations),
+        "npm operation journeys did not retain distinct immutable request bindings",
+    )
+
+    before_token_create = _jit_state_snapshot(
+        NPM_JIT_ROUTE_ID,
+        NPM_CREDENTIAL_ID,
+    )
+    registry_before_token_create = registry.observations()
+    token_create_request, _ = _npm_request_bytes(registry, "npm.tokenCreate")
+    token_create = _send_connect_tls_request(
+        gate,
+        authority_host="127.0.0.1",
+        authority_port=registry.port,
+        request_bytes=token_create_request,
+    )
+    token_create_payload = token_create["json"] or {}
+    _require(
+        token_create["status"] == 403
+        and token_create_payload.get("action") == "deny"
+        and (token_create_payload.get("payload") or {}).get("error")
+        == "npm_token_creation_denied"
+        and _jit_state_snapshot(NPM_JIT_ROUTE_ID, NPM_CREDENTIAL_ID)
+        == before_token_create
+        and registry.observations() == registry_before_token_create,
+        f"npm token creation did not fail before JIT, credential release, or upstream: {token_create}",
+    )
+
+    final_registry = registry.observations()
+    _require(
+        all(final_registry["counts"][operation] == 1 for operation in operations)
+        and final_registry["counts"]["npm.tokenCreate"] == 0
+        and final_registry["counts"]["rejected"] == 0
+        and len(final_registry["events"]) == len(operations),
+        f"npm registry did not observe exactly the five approved write classes: {final_registry}",
+    )
+    return {
+        "routeId": NPM_JIT_ROUTE_ID,
+        "credentialId": NPM_CREDENTIAL_ID,
+        "credentialVersion": credential_version,
+        "writeClasses": journeys,
+        "tokenCreation": {
+            "status": token_create["status"],
+            "error": "npm_token_creation_denied",
+            "requestBytesSha256": token_create["sentRequestSha256"],
+            "preSideEffectDenied": True,
+        },
+        "registryCounts": final_registry["counts"],
+    }
+
+
 def _run_browser_journey(
     public_url: str,
     data_dir: Path,
     simulator: OAuthProviderSimulator,
+    npm_registry: _NpmRegistryFixture,
     screenshots_dir: Path | None,
     decision_gate_binary: Path,
     decision_gate_digest: str,
@@ -2960,18 +4006,27 @@ def _run_browser_journey(
                 ),
             )
             api_documents.append(x_read_policy)
-            final_policy = _preview_stage_activate_policy(
+            x_write_policy = _preview_stage_activate_policy(
                 page,
                 template="custom_json",
                 route_id=X_JIT_ROUTE_ID,
                 credential_id=x_credential["id"],
                 custom_route=_x_jit_route(simulator),
             )
+            api_documents.append(x_write_policy)
+            final_policy = _preview_stage_activate_policy(
+                page,
+                template="custom_json",
+                route_id=NPM_JIT_ROUTE_ID,
+                credential_id=NPM_CREDENTIAL_ID,
+                custom_route=_npm_jit_route(npm_registry),
+            )
             _assert_policy_evidence(
                 final_policy,
                 google_credential["id"],
                 x_credential["id"],
                 simulator,
+                npm_registry,
             )
             if screenshots_dir is not None:
                 _capture_element_screenshot(
@@ -2986,12 +4041,20 @@ def _run_browser_journey(
             from serverware import db
 
             stored_x_credential = db.get_credential(x_credential["id"])
+            stored_npm_credential = db.get_credential(NPM_CREDENTIAL_ID)
             _require(
                 stored_x_credential is not None,
                 "callback-created X credential disappeared before Rust startup",
             )
+            _require(
+                stored_npm_credential is not None,
+                "seeded npm credential disappeared before Rust startup",
+            )
             x_credential_version = int(
                 stored_x_credential["credential_version"]
+            )
+            npm_credential_version = int(
+                stored_npm_credential["credential_version"]
             )
             gate = _DecisionGateProcess(
                 binary=decision_gate_binary,
@@ -3015,11 +4078,66 @@ def _run_browser_journey(
                 screenshots_dir=screenshots_dir,
             )
             api_documents.append(rust_jit)
+            rust_npm = _exercise_rust_npm(
+                gate=gate,
+                operator_page=page,
+                reviewer_page=reviewer_page,
+                browser_observations=browser_observations,
+                public_url=public_url,
+                registry=npm_registry,
+                policy_hash=final_policy_api["policy_hash"],
+                credential_version=npm_credential_version,
+            )
+            api_documents.append(rust_npm)
             gate.close()
             gate = None
             install_enrollment_attestation_fixture()
             page.locator("#enrollment-principal").select_option("agent:demo")
-            page.locator("#agent-enrollment-form button[type='submit']").click()
+            with page.expect_response(
+                lambda item: item.request.method == "POST"
+                and item.url.endswith("/api/agents/enrollment"),
+                timeout=DEFAULT_TIMEOUT_MS,
+            ) as enrollment_response_info:
+                page.locator("#agent-enrollment-form button[type='submit']").click()
+            enrollment_response = enrollment_response_info.value
+            enrollment_response_bytes = enrollment_response.body()
+            enrollment_response_sha256 = enrollment_response.headers.get(
+                "x-serverware-enrollment-packet-sha256"
+            )
+            observed_enrollment_response_sha256 = (
+                "sha256:"
+                + hashlib.sha256(enrollment_response_bytes).hexdigest()
+            )
+            _require(
+                enrollment_response.status == 200
+                and {
+                    item.strip()
+                    for item in enrollment_response.headers.get(
+                        "cache-control", ""
+                    ).split(",")
+                    if item.strip()
+                }
+                == {"no-store"}
+                and {
+                    item.strip()
+                    for item in enrollment_response.headers.get(
+                        "x-content-type-options", ""
+                    ).split(",")
+                    if item.strip()
+                }
+                == {"nosniff"}
+                and enrollment_response.headers.get("content-type", "")
+                .split(";", 1)[0]
+                .strip()
+                .lower()
+                == "application/json"
+                and enrollment_response_sha256
+                == observed_enrollment_response_sha256,
+                "enrollment API response did not authenticate its exact canonical "
+                f"bytes: status={enrollment_response.status}, "
+                f"headers={enrollment_response.headers}, "
+                f"observedSha256={observed_enrollment_response_sha256}",
+            )
             try:
                 page.wait_for_function(
                     """
@@ -3072,9 +4190,16 @@ def _run_browser_journey(
             )
             enrollment_packet = json.loads(packet_bytes)
             state_packet = page.evaluate("() => state.enrollmentPacket")
+            state_packet_text = page.evaluate("() => state.enrollmentPacketText")
+            state_packet_sha256 = page.evaluate(
+                "() => state.enrollmentPacketFileSha256"
+            )
             _require(
-                enrollment_packet == state_packet,
-                "downloaded enrollment packet differs from the generated browser state",
+                packet_bytes == enrollment_response_bytes
+                and state_packet_text.encode("utf-8") == enrollment_response_bytes
+                and state_packet_sha256 == enrollment_response_sha256
+                and enrollment_packet == state_packet,
+                "downloaded enrollment packet differs from the authenticated API response bytes",
             )
             _require(
                 download.suggested_filename
@@ -3091,9 +4216,7 @@ def _run_browser_journey(
                 and unknown_route_canaries[0].get("expectedStatus") == 403,
                 "enrollment packet does not bind one fail-closed unknown-route canary",
             )
-            enrollment_packet_sha256 = (
-                "sha256:" + hashlib.sha256(packet_bytes).hexdigest()
-            )
+            enrollment_packet_sha256 = enrollment_response_sha256
             api_documents.append(enrollment_packet)
             _require(
                 not final_bootstrap.get("pendingOAuthCredentials"),
@@ -3172,6 +4295,27 @@ def _run_browser_journey(
                 len(jit_separation_denials) == 2,
                 "browser journey did not observe operator review and approval denials",
             )
+            npm_approval_ids = {
+                item["approvalId"] for item in rust_npm["writeClasses"]
+            }
+            npm_jit_separation_denials = [
+                item
+                for item in browser_observations
+                if item.get("type") == "response"
+                and item.get("status") == 403
+                and any(
+                    re.search(
+                        rf"/api/approvals/{re.escape(approval_id)}/(?:review|approve)$",
+                        str(item.get("url") or ""),
+                    )
+                    for approval_id in npm_approval_ids
+                )
+            ]
+            _require(
+                len(npm_jit_separation_denials) == 2 * len(npm_approval_ids),
+                "browser journey did not observe requester review and approval denials "
+                "for every npm write class",
+            )
             expected_console_428 = (
                 "Failed to load resource: the server responded with a status of 428 "
                 "(Precondition Required)"
@@ -3187,7 +4331,7 @@ def _run_browser_journey(
             ]
             _require(
                 console_errors.count(expected_console_428) == 2
-                and console_errors.count(expected_console_403) == 6
+                and console_errors.count(expected_console_403) == 16
                 and not unexpected_console_errors,
                 f"browser console errors occurred: {console_errors}",
             )
@@ -3230,11 +4374,13 @@ def _run_browser_journey(
                     "unknownRouteCanary": unknown_route_canaries[0],
                 },
                 "rustJit": rust_jit,
+                "rustNpm": rust_npm,
                 "policyHash": final_policy_api["policy_hash"],
                 "routes": [
                     "browser.gmail.last-30-days",
                     "browser.x.search.seven-days",
                     X_JIT_ROUTE_ID,
+                    NPM_JIT_ROUTE_ID,
                 ],
                 "providerCounts": observations["counts"],
                 "testAssurance": {
@@ -3247,13 +4393,21 @@ def _run_browser_journey(
                     "jitOrigin": "measured-host-rust-connect-tls",
                     "dataPlaneBinaryDigest": decision_gate_digest,
                     "byteIdenticalRetry": True,
-                    "oneUseGrantRuntimeAsserted": True,
+                    "oneUseGrantSequentialRuntimeAsserted": True,
                     "oauthActivationChallenges": len(
                         expected_activation_challenges
                     ),
                     "oauthSeparationDenials": len(expected_separation_denials),
                     "jitSeparationDenials": len(jit_separation_denials),
+                    "npmJitSeparationDenials": len(
+                        npm_jit_separation_denials
+                    ),
+                    "npmWriteClassesThroughRust": len(
+                        rust_npm["writeClasses"]
+                    ),
+                    "npmTokenCreationDeniedPreSideEffect": True,
                     "downloadedPacketExactBytesVerified": True,
+                    "enrollmentResponseDigestHeaderVerified": True,
                     "unknownRouteRuntimeAsserted": True,
                 },
                 "screenshots": str(screenshots_dir)
@@ -3327,6 +4481,7 @@ def main() -> None:
             redirect_base_url=public_url,
             authorization_token_ttl_seconds=300,
         )
+        npm_registry: _NpmRegistryFixture | None = None
         portal: _UvicornThread | None = None
         original_providers: Any = None
         original_request_bytes: Any = None
@@ -3337,6 +4492,8 @@ def main() -> None:
         try:
             simulator.start()
             _assert_simulator_contract(simulator)
+            npm_registry = _NpmRegistryFixture(simulator)
+            npm_registry.start()
             _configure_environment(
                 tmp / "serverware",
                 public_url,
@@ -3455,6 +4612,7 @@ def main() -> None:
                 public_url,
                 tmp / "serverware",
                 simulator,
+                npm_registry,
                 screenshots_dir,
                 decision_gate_binary,
                 decision_gate_digest,
@@ -3478,6 +4636,8 @@ def main() -> None:
                 app_module.attestation_document = original_attestation_document
             if app_module is not None:
                 app_module.app.dependency_overrides.clear()
+            if npm_registry is not None:
+                npm_registry.close()
             simulator.close()
 
 

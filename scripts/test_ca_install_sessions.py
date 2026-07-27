@@ -5,6 +5,7 @@ import concurrent.futures
 import hashlib
 import json
 import os
+import socket
 import subprocess
 import sys
 import tempfile
@@ -16,6 +17,294 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+
+
+def expect_value_error(label: str, func: Any, expected_detail: str) -> None:
+    try:
+        func()
+    except (OSError, ValueError) as exc:
+        if expected_detail not in str(exc):
+            raise AssertionError(f"{label} failed with wrong error: {exc}") from exc
+        return
+    raise AssertionError(f"{label} unexpectedly succeeded")
+
+
+def raw_http_call(response_bytes: bytes, callback: Any) -> Any:
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    listener.settimeout(5)
+    port = listener.getsockname()[1]
+    server_errors: list[BaseException] = []
+
+    def serve_once() -> None:
+        try:
+            connection, _ = listener.accept()
+            with connection:
+                connection.settimeout(5)
+                request = bytearray()
+                while b"\r\n\r\n" not in request:
+                    chunk = connection.recv(4096)
+                    if not chunk:
+                        break
+                    request.extend(chunk)
+                    if len(request) > 64 * 1024:
+                        raise AssertionError("raw HTTP fixture received an oversized request")
+                connection.sendall(response_bytes)
+                connection.shutdown(socket.SHUT_WR)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        except BaseException as exc:
+            server_errors.append(exc)
+
+    thread = threading.Thread(target=serve_once, daemon=True)
+    thread.start()
+    try:
+        return callback(f"http://127.0.0.1:{port}/trust")
+    finally:
+        listener.close()
+        thread.join(timeout=5)
+        if thread.is_alive():
+            raise AssertionError("raw HTTP fixture did not terminate")
+        if server_errors:
+            raise AssertionError(f"raw HTTP fixture failed: {server_errors[0]}")
+
+
+def framed_http_response(
+    body: bytes,
+    *,
+    headers: tuple[tuple[str, str], ...] = (),
+) -> bytes:
+    lines = [
+        b"HTTP/1.1 200 OK",
+        f"Content-Length: {len(body)}".encode("ascii"),
+        b"Connection: close",
+    ]
+    lines.extend(f"{name}: {value}".encode("ascii") for name, value in headers)
+    return b"\r\n".join(lines) + b"\r\n\r\n" + body
+
+
+def exercise_installed_trust_client_security(root: Path) -> None:
+    from serverware_agent_trust import attestation as trust_attestation
+    from serverware_agent_trust.http import request_bytes as trust_request_bytes
+
+    publication_root = root / "installed-client-publication"
+    publication_root.mkdir(mode=0o700)
+    payload = b"-----BEGIN CERTIFICATE-----\nfixture\n-----END CERTIFICATE-----\n"
+
+    output = publication_root / "nested" / "private" / "serverware-ca.pem"
+    trust_attestation.publish_verified_ca(output, payload)
+    output_stat = output.stat(follow_symlinks=False)
+    if (
+        output.read_bytes() != payload
+        or output_stat.st_nlink != 1
+        or output_stat.st_mode & 0o777 != 0o600
+    ):
+        raise AssertionError("secure CA publication did not preserve bytes, mode, and link count")
+
+    preexisting = publication_root / "preexisting.pem"
+    preexisting.write_bytes(b"sentinel-preexisting")
+    preexisting.chmod(0o640)
+    preexisting_stat = preexisting.stat(follow_symlinks=False)
+    expect_value_error(
+        "pre-existing CA output",
+        lambda: trust_attestation.publish_verified_ca(preexisting, payload),
+        "already exists",
+    )
+    if (
+        preexisting.read_bytes() != b"sentinel-preexisting"
+        or preexisting.stat(follow_symlinks=False).st_ino != preexisting_stat.st_ino
+        or preexisting.stat(follow_symlinks=False).st_mode & 0o777 != 0o640
+    ):
+        raise AssertionError("pre-existing CA output was modified")
+
+    symlink_target = publication_root / "leaf-symlink-target"
+    symlink_target.write_bytes(b"sentinel-leaf-symlink")
+    symlink_output = publication_root / "leaf-symlink.pem"
+    symlink_output.symlink_to(symlink_target)
+    expect_value_error(
+        "leaf symlink CA output",
+        lambda: trust_attestation.publish_verified_ca(symlink_output, payload),
+        "already exists",
+    )
+    if symlink_target.read_bytes() != b"sentinel-leaf-symlink":
+        raise AssertionError("leaf symlink target was modified")
+
+    hardlink_source = publication_root / "hardlink-source"
+    hardlink_source.write_bytes(b"sentinel-hardlink")
+    hardlink_output = publication_root / "hardlink-output.pem"
+    os.link(hardlink_source, hardlink_output)
+    hardlink_stat = hardlink_source.stat(follow_symlinks=False)
+    expect_value_error(
+        "pre-existing hardlink CA output",
+        lambda: trust_attestation.publish_verified_ca(hardlink_output, payload),
+        "already exists",
+    )
+    if (
+        hardlink_source.read_bytes() != b"sentinel-hardlink"
+        or hardlink_source.stat(follow_symlinks=False).st_ino != hardlink_stat.st_ino
+        or hardlink_source.stat(follow_symlinks=False).st_nlink != 2
+    ):
+        raise AssertionError("pre-existing hardlinked CA output was modified")
+
+    parent_target = publication_root / "parent-symlink-target"
+    parent_target.mkdir()
+    parent_symlink = publication_root / "parent-symlink"
+    parent_symlink.symlink_to(parent_target, target_is_directory=True)
+    expect_value_error(
+        "parent symlink CA output",
+        lambda: trust_attestation.publish_verified_ca(
+            parent_symlink / "serverware-ca.pem",
+            payload,
+        ),
+        "without following symlinks",
+    )
+    if (parent_target / "serverware-ca.pem").exists():
+        raise AssertionError("parent symlink redirected CA publication")
+
+    race_parent = publication_root / "race-parent"
+    race_parent.mkdir()
+    detached_parent = publication_root / "race-parent-detached"
+    attacker_parent = publication_root / "race-parent-attacker"
+    attacker_parent.mkdir()
+    race_output = race_parent / "serverware-ca.pem"
+    original_write_all = trust_attestation._write_all
+
+    def substitute_parent(file_descriptor: int, value: bytes) -> None:
+        original_write_all(file_descriptor, value)
+        race_parent.rename(detached_parent)
+        race_parent.symlink_to(attacker_parent, target_is_directory=True)
+
+    trust_attestation._write_all = substitute_parent
+    try:
+        expect_value_error(
+            "concurrent parent substitution",
+            lambda: trust_attestation.publish_verified_ca(race_output, payload),
+            "without following symlinks",
+        )
+    finally:
+        trust_attestation._write_all = original_write_all
+    if (attacker_parent / "serverware-ca.pem").exists():
+        raise AssertionError("concurrent parent substitution redirected CA publication")
+
+    leaf_race_parent = publication_root / "leaf-race-parent"
+    leaf_race_parent.mkdir()
+    leaf_race_target = publication_root / "leaf-race-target"
+    leaf_race_target.write_bytes(b"sentinel-leaf-race")
+    leaf_race_output = leaf_race_parent / "serverware-ca.pem"
+
+    def substitute_leaf(file_descriptor: int, value: bytes) -> None:
+        original_write_all(file_descriptor, value)
+        leaf_race_output.unlink()
+        leaf_race_output.symlink_to(leaf_race_target)
+
+    trust_attestation._write_all = substitute_leaf
+    try:
+        expect_value_error(
+            "concurrent leaf substitution",
+            lambda: trust_attestation.publish_verified_ca(leaf_race_output, payload),
+            "changed during publication",
+        )
+    finally:
+        trust_attestation._write_all = original_write_all
+    if leaf_race_target.read_bytes() != b"sentinel-leaf-race":
+        raise AssertionError("concurrent leaf substitution modified the attacker target")
+
+    def request(response: bytes) -> Any:
+        return raw_http_call(
+            response,
+            lambda url: trust_request_bytes(url, timeout=5, max_bytes=4096),
+        )
+
+    success_body = b'{"ok":true}'
+    success = request(
+        framed_http_response(
+            success_body,
+            headers=(("Content-Type", "application/json"),),
+        )
+    )
+    if success.body != success_body or success.headers.get("content-type") != "application/json":
+        raise AssertionError("strict HTTP client rejected or changed a valid framed response")
+
+    malformed_responses = (
+        (
+            "duplicate singleton header",
+            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nContent-Length: 2\r\n"
+            b"Connection: close\r\n\r\n{}",
+            "duplicate Content-Length",
+        ),
+        (
+            "duplicate security header",
+            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n"
+            b"X-Serverware-Receipt: one\r\nX-Serverware-Receipt: two\r\n\r\n{}",
+            "duplicate X-Serverware-Receipt",
+        ),
+        (
+            "whitespace before colon",
+            b"HTTP/1.1 200 OK\r\nContent-Length : 2\r\nConnection: close\r\n\r\n{}",
+            "malformed",
+        ),
+        (
+            "malformed header name",
+            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nBad Header: value\r\n"
+            b"Connection: close\r\n\r\n{}",
+            "malformed",
+        ),
+        (
+            "content-length plus transfer-encoding",
+            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nTransfer-Encoding: chunked\r\n"
+            b"Connection: close\r\n\r\n2\r\n{}\r\n0\r\n\r\n",
+            "both Content-Length and Transfer-Encoding",
+        ),
+        (
+            "missing response framing",
+            b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n{}",
+            "requires unambiguous Content-Length framing",
+        ),
+        (
+            "truncated response body",
+            b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\n{}",
+            "ended before Content-Length",
+        ),
+        (
+            "trailing response bytes",
+            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}trailing",
+            "bytes after Content-Length",
+        ),
+    )
+    for label, response, expected in malformed_responses:
+        expect_value_error(label, lambda response=response: request(response), expected)
+
+    duplicate_json = framed_http_response(b'{"value":1,"value":2}')
+    expect_value_error(
+        "duplicate JSON response key",
+        lambda: raw_http_call(duplicate_json, trust_attestation.request_json),
+        "duplicate key",
+    )
+    nested_duplicate_json = framed_http_response(
+        b'{"outer":{"value":1,"value":2}}'
+    )
+    expect_value_error(
+        "nested duplicate JSON response key",
+        lambda: raw_http_call(
+            nested_duplicate_json,
+            trust_attestation.request_json,
+        ),
+        "duplicate key",
+    )
+    invalid_constant = framed_http_response(b'{"value":NaN}')
+    expect_value_error(
+        "non-standard JSON response constant",
+        lambda: raw_http_call(invalid_constant, trust_attestation.request_json),
+        "non-standard constant",
+    )
+    overflowing_number = framed_http_response(b'{"value":1e10000}')
+    expect_value_error(
+        "overflowing JSON response number",
+        lambda: raw_http_call(overflowing_number, trust_attestation.request_json),
+        "not finite",
+    )
 
 
 def expect_http_error(label: str, func: Any, expected_status: int, expected_detail: str) -> None:
@@ -70,6 +359,7 @@ def main() -> None:
         from serverware import app as app_module
         from serverware import db
         from serverware.auth import AdminIdentity
+        from serverware_agent_trust import enrollment_tooling_contract
         from verify_attestation import (
             canonical_json,
             enrollment_install_session,
@@ -77,6 +367,7 @@ def main() -> None:
             verify_enrollment_measurements,
         )
 
+        exercise_installed_trust_client_security(Path(tmp).resolve())
         db.init_db()
         identity = AdminIdentity("user:admin", frozenset({"admin", "auditor"}), "admin-token-header")
         write_test_ca(app_module.MITMPROXY_CONF_DIR / "mitmproxy-ca-cert.pem")
@@ -400,6 +691,7 @@ def main() -> None:
             "apiVersion": "serverware.agentEnrollment/v1",
             "kind": "AgentEnrollment",
             "nonce": session["nonce"],
+            "tooling": enrollment_tooling_contract(),
             "serverware": {"controlPlaneUrl": "https://serverware.example"},
             "ca": {
                 "installSession": {
@@ -429,6 +721,7 @@ def main() -> None:
                 "nonce": session["nonce"],
                 "packetSha256": packet_digest,
                 "statementSha256": statement_digest,
+                "checks": ["tooling-contract", "tooling-version"],
             },
         }
         packet_path = Path(tmp) / "verified-enrollment.json"
@@ -499,6 +792,8 @@ def main() -> None:
                     "measurement-pins",
                     "packet-expiry",
                     "packet-signature",
+                    "tooling-contract",
+                    "tooling-version",
                     "downloaded-file-digest",
                     "expected-principal",
                     "expected-nonce",

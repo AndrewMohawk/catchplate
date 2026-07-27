@@ -40,8 +40,10 @@ def expect_http_error(
     raise AssertionError(f"{label} unexpectedly succeeded")
 
 
-def candidate_bundle(policy_bundle: Any, sequence: int) -> dict[str, Any]:
-    bundle = policy_bundle.demo_policy_bundle("cred-demo-bearer")
+def candidate_bundle(
+    policy_bundle: Any, sequence: int, credential_id: str
+) -> dict[str, Any]:
+    bundle = policy_bundle.demo_policy_bundle(credential_id)
     bundle["metadata"]["sequence"] = sequence
     return bundle
 
@@ -186,10 +188,10 @@ def main() -> None:
         )
 
         credential_payload = app_module.CredentialCreate(
-            name="Production Google OAuth",
+            name="Production demo API token",
             kind="bearer",
             secret="super-secret-token",
-            metadata={"scope": "gmail.readonly"},
+            metadata={"provider": "demo", "scopes": ["demo"]},
         )
         pending_detail = expect_http_error(
             "credential create without second approval",
@@ -212,6 +214,56 @@ def main() -> None:
             )
         if pending["payload_digest"] != pending_detail["payloadDigest"]:
             raise AssertionError(f"approval payload digest mismatch: {pending}")
+
+        requester_view = next(
+            item
+            for item in app_module.control_plane_approvals(
+                status=None, limit=100, identity=requester
+            )
+            if item["id"] == approval_id
+        )
+        if (
+            requester_view["required_approver_roles"] != ["credential_owner"]
+            or requester_view["can_approve"] is not False
+            or requester_view["can_deny"] is not True
+            or "different authorized operator"
+            not in str(requester_view["approve_block_reason"])
+        ):
+            raise AssertionError(
+                f"requester approval queue authority is misleading: {requester_view}"
+            )
+        approver_view = next(
+            item
+            for item in app_module.control_plane_approvals(
+                status=None, limit=100, identity=credential_approver
+            )
+            if item["id"] == approval_id
+        )
+        if (
+            approver_view["can_approve"] is not True
+            or approver_view["can_deny"] is not True
+            or approver_view["approve_block_reason"] is not None
+            or approver_view["deny_block_reason"] is not None
+        ):
+            raise AssertionError(
+                f"authorized approval queue authority is misleading: {approver_view}"
+            )
+        wrong_role_view = next(
+            item
+            for item in app_module.control_plane_approvals(
+                status=None, limit=100, identity=wrong_approver
+            )
+            if item["id"] == approval_id
+        )
+        if (
+            wrong_role_view["can_approve"] is not False
+            or wrong_role_view["can_deny"] is not False
+            or "Requires role: credential_owner."
+            != wrong_role_view["approve_block_reason"]
+        ):
+            raise AssertionError(
+                f"wrong-role approval queue authority is misleading: {wrong_role_view}"
+            )
 
         expect_http_error(
             "control-plane self approval",
@@ -372,9 +424,11 @@ def main() -> None:
         if retried_route["name"] != rollback_route.name:
             raise AssertionError("route approval was not reusable after rollback")
 
-        policy_bundle.write_policy_bundle(candidate_bundle(policy_bundle, 1))
+        policy_bundle.write_policy_bundle(
+            candidate_bundle(policy_bundle, 1, str(created["id"]))
+        )
         publish_payload = app_module.PolicyPublishRequest(
-            bundle=candidate_bundle(policy_bundle, 2), dryRun=[]
+            bundle=candidate_bundle(policy_bundle, 2, str(created["id"])), dryRun=[]
         )
         policy_pending = expect_http_error(
             "policy publish without second approval",
@@ -414,7 +468,7 @@ def main() -> None:
         policy_before_rollback = policy_bundle.get_policy_snapshot()
         high_water_before_rollback = db.get_policy_high_water()
         rollback_publish = app_module.PolicyPublishRequest(
-            bundle=candidate_bundle(policy_bundle, 3), dryRun=[]
+            bundle=candidate_bundle(policy_bundle, 3, str(created["id"])), dryRun=[]
         )
         policy_rollback_detail = expect_http_error(
             "policy rollback approval request",
@@ -462,7 +516,10 @@ def main() -> None:
 
         def approved_policy_publish(sequence: int) -> Any:
             candidate = app_module.PolicyPublishRequest(
-                bundle=candidate_bundle(policy_bundle, sequence), dryRun=[]
+                bundle=candidate_bundle(
+                    policy_bundle, sequence, str(created["id"])
+                ),
+                dryRun=[],
             )
             detail = expect_http_error(
                 f"policy sequence {sequence} approval request",

@@ -567,6 +567,37 @@ struct Principal {
     proxy_authorization: Option<ProxyAuthorizationPolicy>,
 }
 
+struct ConnectAuthentication {
+    principal_id: String,
+    client_ip: Option<String>,
+    required_header_digests: BTreeMap<String, String>,
+    proxy_authorization_binding: Option<ConnectProxyAuthorizationBinding>,
+    identity_policy_digest: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ConnectProxyAuthorizationBinding {
+    LegacyExactSha256(String),
+    BearerTokenSha256(String),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ConnectAuthenticationError {
+    PrincipalRevoked,
+    IdentityPolicyChanged,
+    SelectorRejected,
+}
+
+impl ConnectAuthenticationError {
+    fn code(self) -> &'static str {
+        match self {
+            Self::PrincipalRevoked => "connect_principal_revoked",
+            Self::IdentityPolicyChanged => "connect_identity_policy_changed",
+            Self::SelectorRejected => "connect_identity_selector_rejected",
+        }
+    }
+}
+
 #[derive(Clone)]
 struct Credential {
     provider: String,
@@ -3626,7 +3657,12 @@ fn bearer_token_from_proxy_authorization<'a>(header: &'a str, scheme: &str) -> O
 }
 
 impl ProxyAuthorizationPolicy {
-    fn matches(&self, client_ip: Option<&str>, header: Option<&str>) -> bool {
+    fn matches_at(
+        &self,
+        client_ip: Option<&str>,
+        header: Option<&str>,
+        now_epoch_ms: u128,
+    ) -> bool {
         let Some(header) = header else {
             return false;
         };
@@ -3637,7 +3673,7 @@ impl ProxyAuthorizationPolicy {
                 source_cidrs,
                 expires_at_ms,
             } => {
-                if expires_at_ms.is_some_and(|expires_at_ms| now_epoch_ms() >= expires_at_ms) {
+                if expires_at_ms.is_some_and(|expires_at_ms| now_epoch_ms >= expires_at_ms) {
                     return false;
                 }
                 if !ip_in_any_network(client_ip, source_cidrs) {
@@ -3650,21 +3686,204 @@ impl ProxyAuthorizationPolicy {
             }
         }
     }
+
+    fn identity_policy_value(&self) -> Value {
+        match self {
+            Self::LegacyExact(expected) => json!({
+                "type":"legacyExact",
+                "valueSha256":sha256_prefixed(expected.as_bytes()),
+            }),
+            Self::BearerToken {
+                token_sha256,
+                source_cidrs,
+                expires_at_ms,
+            } => json!({
+                "type":"bearerToken",
+                "tokenSha256":token_sha256,
+                "sourceCidrs":canonical_cidr_strings(source_cidrs),
+                "expiresAtEpochMs":expires_at_ms.map(|value| value.to_string()),
+            }),
+        }
+    }
 }
 
 impl Principal {
-    fn matches(&self, client_ip: Option<&str>, headers: &BTreeMap<String, String>) -> bool {
+    fn matches_at(
+        &self,
+        client_ip: Option<&str>,
+        headers: &BTreeMap<String, String>,
+        now_epoch_ms: u128,
+    ) -> bool {
         if !ip_in_any_network(client_ip, &self.source_cidrs) {
             return false;
         }
         self.required_headers.iter().all(|(name, expected)| {
             headers.get(name).map(String::as_str) == Some(expected.as_str())
         }) && self.proxy_authorization.as_ref().is_none_or(|policy| {
-            policy.matches(
+            policy.matches_at(
                 client_ip,
                 headers.get("proxy-authorization").map(String::as_str),
+                now_epoch_ms,
             )
         })
+    }
+
+    fn matches(&self, client_ip: Option<&str>, headers: &BTreeMap<String, String>) -> bool {
+        self.matches_at(client_ip, headers, now_epoch_ms())
+    }
+
+    fn identity_policy_digest(&self) -> String {
+        digest_json_ensure_ascii(&json!({
+            "principalId":self.id,
+            "sourceCidrs":canonical_cidr_strings(&self.source_cidrs),
+            "requiredHeaders":self.required_headers,
+            "proxyAuthorization":self
+                .proxy_authorization
+                .as_ref()
+                .map(ProxyAuthorizationPolicy::identity_policy_value),
+        }))
+    }
+
+    fn matches_connect_binding_at(
+        &self,
+        client_ip: Option<&str>,
+        required_header_digests: &BTreeMap<String, String>,
+        proxy_authorization_binding: Option<&ConnectProxyAuthorizationBinding>,
+        now_epoch_ms: u128,
+    ) -> bool {
+        if !ip_in_any_network(client_ip, &self.source_cidrs)
+            || required_header_digests.len() != self.required_headers.len()
+            || !self.required_headers.iter().all(|(name, expected)| {
+                required_header_digests.get(name).is_some_and(|provided| {
+                    constant_time_eq(provided, &sha256_prefixed(expected.as_bytes()))
+                })
+            })
+        {
+            return false;
+        }
+        match (
+            self.proxy_authorization.as_ref(),
+            proxy_authorization_binding,
+        ) {
+            (None, None) => true,
+            (
+                Some(ProxyAuthorizationPolicy::LegacyExact(expected)),
+                Some(ConnectProxyAuthorizationBinding::LegacyExactSha256(provided)),
+            ) => constant_time_eq(provided, &sha256_prefixed(expected.as_bytes())),
+            (
+                Some(ProxyAuthorizationPolicy::BearerToken {
+                    token_sha256,
+                    source_cidrs,
+                    expires_at_ms,
+                }),
+                Some(ConnectProxyAuthorizationBinding::BearerTokenSha256(provided)),
+            ) => {
+                !expires_at_ms.is_some_and(|expires_at_ms| now_epoch_ms >= expires_at_ms)
+                    && ip_in_any_network(client_ip, source_cidrs)
+                    && constant_time_eq(provided, token_sha256)
+            }
+            _ => false,
+        }
+    }
+}
+
+fn canonical_cidr_strings(networks: &[IpNet]) -> Vec<String> {
+    let mut values = networks.iter().map(ToString::to_string).collect::<Vec<_>>();
+    values.sort();
+    values
+}
+
+impl ConnectAuthentication {
+    fn capture(
+        snapshot: &Snapshot,
+        principal_id: &str,
+        client_ip: Option<&str>,
+        headers: &BTreeMap<String, String>,
+    ) -> Result<Self, ConnectAuthenticationError> {
+        Self::capture_at(snapshot, principal_id, client_ip, headers, now_epoch_ms())
+    }
+
+    fn capture_at(
+        snapshot: &Snapshot,
+        principal_id: &str,
+        client_ip: Option<&str>,
+        headers: &BTreeMap<String, String>,
+        now_epoch_ms: u128,
+    ) -> Result<Self, ConnectAuthenticationError> {
+        let principal = snapshot
+            .principals
+            .iter()
+            .find(|principal| principal.id == principal_id)
+            .ok_or(ConnectAuthenticationError::PrincipalRevoked)?;
+        let headers = lower_headers(headers);
+        if !principal.matches_at(client_ip, &headers, now_epoch_ms) {
+            return Err(ConnectAuthenticationError::SelectorRejected);
+        }
+        let mut required_header_digests = BTreeMap::new();
+        for name in principal.required_headers.keys() {
+            if let Some(value) = headers.get(name) {
+                required_header_digests.insert(name.clone(), sha256_prefixed(value.as_bytes()));
+            }
+        }
+        let proxy_authorization_binding = match principal.proxy_authorization.as_ref() {
+            Some(ProxyAuthorizationPolicy::LegacyExact(_)) => headers
+                .get("proxy-authorization")
+                .map(|value| {
+                    ConnectProxyAuthorizationBinding::LegacyExactSha256(sha256_prefixed(
+                        value.as_bytes(),
+                    ))
+                })
+                .ok_or(ConnectAuthenticationError::SelectorRejected)
+                .map(Some)?,
+            Some(ProxyAuthorizationPolicy::BearerToken { .. }) => {
+                let token = headers
+                    .get("proxy-authorization")
+                    .and_then(|header| bearer_token_from_proxy_authorization(header, "Bearer"))
+                    .ok_or(ConnectAuthenticationError::SelectorRejected)?;
+                Some(ConnectProxyAuthorizationBinding::BearerTokenSha256(
+                    sha256_prefixed(token.as_bytes()),
+                ))
+            }
+            None => None,
+        };
+        Ok(Self {
+            principal_id: principal.id.clone(),
+            client_ip: client_ip.map(ToString::to_string),
+            required_header_digests,
+            proxy_authorization_binding,
+            identity_policy_digest: principal.identity_policy_digest(),
+        })
+    }
+
+    fn revalidate<'a>(
+        &self,
+        snapshot: &'a Snapshot,
+    ) -> Result<&'a Principal, ConnectAuthenticationError> {
+        self.revalidate_at(snapshot, now_epoch_ms())
+    }
+
+    fn revalidate_at<'a>(
+        &self,
+        snapshot: &'a Snapshot,
+        now_epoch_ms: u128,
+    ) -> Result<&'a Principal, ConnectAuthenticationError> {
+        let principal = snapshot
+            .principals
+            .iter()
+            .find(|principal| principal.id == self.principal_id)
+            .ok_or(ConnectAuthenticationError::PrincipalRevoked)?;
+        if principal.identity_policy_digest() != self.identity_policy_digest {
+            return Err(ConnectAuthenticationError::IdentityPolicyChanged);
+        }
+        if !principal.matches_connect_binding_at(
+            self.client_ip.as_deref(),
+            &self.required_header_digests,
+            self.proxy_authorization_binding.as_ref(),
+            now_epoch_ms,
+        ) {
+            return Err(ConnectAuthenticationError::SelectorRejected);
+        }
+        Ok(principal)
     }
 }
 
@@ -3683,13 +3902,12 @@ impl Snapshot {
         let scheme = url.scheme().to_ascii_lowercase();
         let host = url.host_str()?.trim_end_matches('.').to_ascii_lowercase();
         let port = url.port_or_known_default()?;
-        let normalized_method = method.to_ascii_uppercase();
         let mut matches = Vec::new();
         for route in &self.routes {
             if route.scheme != scheme || route.host != host || route.port != port {
                 continue;
             }
-            if !route.methods.contains(&normalized_method) {
+            if !route.methods.contains(method) {
                 continue;
             }
             if !route
@@ -9009,6 +9227,14 @@ fn with_enrollment_session_id(mut value: Value, enrollment_session_id: Option<&s
     value
 }
 
+fn validate_canonical_http_method(method: &str) -> Result<(), String> {
+    Method::from_bytes(method.as_bytes()).map_err(|err| format!("invalid method: {err}"))?;
+    if method != method.to_ascii_uppercase() {
+        return Err("request method must use canonical uppercase ASCII form".to_string());
+    }
+    Ok(())
+}
+
 fn query_pairs(url: &Url) -> Vec<(String, String)> {
     let mut pairs = url
         .query_pairs()
@@ -9016,6 +9242,17 @@ fn query_pairs(url: &Url) -> Vec<(String, String)> {
         .collect::<Vec<_>>();
     pairs.sort();
     pairs
+}
+
+fn duplicate_query_key(url: &Url) -> Option<String> {
+    let mut seen = HashSet::new();
+    for (key, _) in url.query_pairs() {
+        let key = key.into_owned();
+        if !seen.insert(key.clone()) {
+            return Some(key);
+        }
+    }
+    None
 }
 
 fn connection_nominated_headers(headers: &BTreeMap<String, String>) -> HashSet<String> {
@@ -9191,8 +9428,8 @@ fn canonical_client_proof_request_for_version(
     request: &IncomingRequest,
     api_version: &'static str,
 ) -> Result<CanonicalSafeProofRequest, String> {
-    let method = request.method.to_ascii_uppercase();
-    if method != "GET" {
+    validate_canonical_http_method(&request.method)?;
+    if request.method != "GET" {
         return Err("response proof requires GET".to_string());
     }
     if !request.body.is_empty() {
@@ -9210,9 +9447,12 @@ fn canonical_client_proof_request_for_version(
     {
         return Err("response proof request URL is not a canonical HTTP authority".to_string());
     }
+    if let Some(key) = duplicate_query_key(&url) {
+        return Err(format!("response proof request repeats query key {key}"));
+    }
     Ok(CanonicalSafeProofRequest {
         api_version,
-        method,
+        method: request.method.clone(),
         scheme: url.scheme().to_ascii_lowercase(),
         authority: canonical_authority(&url),
         path: url.path().to_string(),
@@ -14518,10 +14758,12 @@ fn prepare_upstream_for_forward(
     target_url: &Url,
     authenticated_principal_id: Option<&str>,
 ) -> Result<Option<PreparedUpstream>, UpstreamPreparationError> {
-    if validate_request_target_path(&request.target).is_err()
+    if validate_canonical_http_method(&request.method).is_err()
+        || validate_request_target_path(&request.target).is_err()
         || !target_url.username().is_empty()
         || target_url.password().is_some()
         || target_url.fragment().is_some()
+        || duplicate_query_key(target_url).is_some()
     {
         return Ok(None);
     }
@@ -17147,7 +17389,7 @@ fn canonical_request(
         "credential_version": credential_version.to_string(),
         "policy_hash": policy_hash,
         "request": {
-            "method": req.method.to_ascii_uppercase(),
+            "method": req.method,
             "scheme": url.scheme(),
             "authority": canonical_authority(url),
             "path": url.path(),
@@ -21864,6 +22106,14 @@ fn decide_internal_with_mode(
     preview: bool,
 ) -> Value {
     let started = Instant::now();
+    if let Err(detail) = validate_canonical_http_method(&req.method) {
+        return deny(
+            400,
+            "noncanonical request method",
+            json!({"error":"noncanonical_method","detail":detail}),
+            started,
+        );
+    }
     if !policy_trust_is_fresh(state) {
         return deny(
             503,
@@ -21912,6 +22162,14 @@ fn decide_internal_with_mode(
             400,
             "invalid url authority",
             json!({"error":"invalid_url_authority"}),
+            started,
+        );
+    }
+    if let Some(key) = duplicate_query_key(&url) {
+        return deny(
+            400,
+            "duplicate query key denied",
+            json!({"error":"duplicate_query_key_denied","key":key}),
             started,
         );
     }
@@ -23400,8 +23658,8 @@ fn status_from_decision(decision: &Value) -> StatusCode {
 }
 
 fn apply_rewrite(url: &mut Url, rewrite: &Value) {
+    let mut existing = url.query_pairs().into_owned().collect::<Vec<_>>();
     if let Some(query) = rewrite.get("query").and_then(Value::as_object) {
-        let mut existing = url.query_pairs().into_owned().collect::<Vec<_>>();
         for (key, value) in query {
             existing.retain(|(existing_key, _)| existing_key != key);
             if value.is_null() {
@@ -23411,7 +23669,11 @@ fn apply_rewrite(url: &mut Url, rewrite: &Value) {
                 existing.push((key.clone(), value.to_string()));
             }
         }
-        url.query_pairs_mut().clear().extend_pairs(existing.iter());
+    }
+    existing.sort();
+    url.set_query(None);
+    if !existing.is_empty() {
+        url.query_pairs_mut().extend_pairs(existing.iter());
     }
 }
 
@@ -31092,7 +31354,7 @@ fn read_request_head_from<R: Read>(
         return Err("request line must contain exactly method, target, and version".to_string());
     }
     let method = parts[0].to_string();
-    Method::from_bytes(method.as_bytes()).map_err(|err| format!("invalid method: {err}"))?;
+    validate_canonical_http_method(&method)?;
     let target = parts[1].to_string();
     if target.bytes().any(|byte| byte < 0x20 || byte == 0x7f) {
         return Err("request target contains a control byte".to_string());
@@ -31513,6 +31775,7 @@ fn handle_connect_request(
     request: IncomingRequest,
 ) {
     let client_ip = request.client_ip.clone();
+    let connect_target = request.target.clone();
     let decision = connect_preflight(
         &snapshot,
         request.client_ip.as_deref(),
@@ -31557,7 +31820,37 @@ fn handle_connect_request(
         let _ = stream.flush();
         return;
     }
-    let (host, port) = match connect_authority(&request.target) {
+    let Some(principal_id) = decision.get("principal_id").and_then(Value::as_str) else {
+        let response = json_status_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            json!({"error":"connect_authentication_context_missing"}),
+        );
+        let _ = stream.write_all(&response);
+        let _ = stream.flush();
+        return;
+    };
+    let connect_authentication = match ConnectAuthentication::capture(
+        &snapshot,
+        principal_id,
+        request.client_ip.as_deref(),
+        &request.headers,
+    ) {
+        Ok(authentication) => authentication,
+        Err(error) => {
+            let response = json_status_response(
+                StatusCode::FORBIDDEN,
+                json!({"error":"connect_identity_revalidation_failed","reason":error.code()}),
+            );
+            let _ = stream.write_all(&response);
+            let _ = stream.flush();
+            return;
+        }
+    };
+    let enrollment_session_id = decision
+        .get("enrollment_session_id")
+        .and_then(Value::as_str)
+        .map(ToString::to_string);
+    let (host, port) = match connect_authority(&connect_target) {
         Ok(parsed) => parsed,
         Err(err) => {
             let response = json_status_response(
@@ -31578,13 +31871,13 @@ fn handle_connect_request(
                 json!({
                     "component":"serverware-decision-gate-rs",
                     "method":"CONNECT",
-                    "target":request.target,
+                    "target":connect_target,
                     "authority":authority_string(&host, port),
                     "outcome":"denied",
                     "stage":"mitm_ca",
                     "error":"mitm_ca_unavailable",
                     "detail":err.clone(),
-                    "client_ip":request.client_ip,
+                    "client_ip":client_ip,
                     "policy_hash":current_snapshot(&state).hash.clone(),
                 }),
             );
@@ -31606,13 +31899,13 @@ fn handle_connect_request(
                 json!({
                     "component":"serverware-decision-gate-rs",
                     "method":"CONNECT",
-                    "target":request.target,
+                    "target":connect_target,
                     "authority":authority_string(&host, port),
                     "outcome":"denied",
                     "stage":"mitm_tls",
                     "error":"mitm_tls_init_failed",
                     "detail":err.to_string(),
-                    "client_ip":request.client_ip,
+                    "client_ip":client_ip,
                     "policy_hash":current_snapshot(&state).hash.clone(),
                 }),
             );
@@ -31625,6 +31918,7 @@ fn handle_connect_request(
             return;
         }
     };
+    drop(request);
     if stream
         .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
         .is_err()
@@ -31637,19 +31931,11 @@ fn handle_connect_request(
         "data_plane.connect.established",
         connect_audit_event(
             &decision,
-            &request.target,
-            request.client_ip.as_deref(),
+            &connect_target,
+            client_ip.as_deref(),
             "established",
         ),
     );
-    let authenticated_principal_id = decision
-        .get("principal_id")
-        .and_then(Value::as_str)
-        .map(ToString::to_string);
-    let enrollment_session_id = decision
-        .get("enrollment_session_id")
-        .and_then(Value::as_str)
-        .map(ToString::to_string);
     let mut tls = StreamOwned::new(tls_conn, stream);
     let mut handled_requests = 0u64;
     loop {
@@ -31668,6 +31954,42 @@ fn handle_connect_request(
                 break;
             }
         };
+        let request_snapshot = current_snapshot(&state);
+        if let Err(error) = connect_authentication.revalidate(&request_snapshot) {
+            handled_requests += 1;
+            enqueue_audit(
+                &state,
+                "data_plane.connect.reauthentication_denied",
+                json!({
+                    "component":"serverware-decision-gate-rs",
+                    "method":"CONNECT",
+                    "target":connect_target,
+                    "authority":authority,
+                    "outcome":"denied",
+                    "stage":"inner_request_identity_revalidation",
+                    "error":"connect_identity_revalidation_failed",
+                    "reason":error.code(),
+                    "principal_id":connect_authentication.principal_id,
+                    "client_ip":client_ip,
+                    "policy_hash":request_snapshot.hash,
+                    "snapshot_epoch":request_snapshot.epoch,
+                }),
+            );
+            let response = override_response_connection(
+                json_status_response(
+                    StatusCode::FORBIDDEN,
+                    json!({
+                        "error":"connect_identity_revalidation_failed",
+                        "reason":error.code(),
+                        "policy_hash":request_snapshot.hash,
+                    }),
+                ),
+                false,
+            );
+            let _ = tls.write_all(&response);
+            let _ = tls.flush();
+            break;
+        }
         let close_after = request_head_wants_close(&head);
         let mut head = head;
         if let Err(err) =
@@ -31785,11 +32107,10 @@ fn handle_connect_request(
         let forwarded = match connect_inner_absolute_target(&authority, &head.target, &host, port) {
             Ok(target) => {
                 head.target = target;
-                let request_snapshot = current_snapshot(&state);
                 match request_streaming_preflight(
                     &request_snapshot,
                     &head,
-                    authenticated_principal_id.as_deref(),
+                    Some(connect_authentication.principal_id.as_str()),
                 ) {
                     RequestStreamingPreflight::Stream(policy) => {
                         if proof_kind.is_some() {
@@ -31807,7 +32128,7 @@ fn handle_connect_request(
                             head,
                             &mut tls,
                             policy,
-                            authenticated_principal_id.as_deref(),
+                            Some(connect_authentication.principal_id.as_str()),
                             !close_after,
                         )
                     }
@@ -31821,7 +32142,7 @@ fn handle_connect_request(
                         let body_limit = buffered_route_body_limit(
                             &request_snapshot,
                             &head,
-                            authenticated_principal_id.as_deref(),
+                            Some(connect_authentication.principal_id.as_str()),
                         );
                         let inner = match read_request_body_from_head(&mut tls, head, body_limit) {
                             Ok(inner) => inner,
@@ -31855,7 +32176,7 @@ fn handle_connect_request(
                             &state,
                             &request_snapshot,
                             inner,
-                            authenticated_principal_id.as_deref(),
+                            Some(connect_authentication.principal_id.as_str()),
                             !close_after,
                             &mut tls,
                             response_proof,
@@ -31891,8 +32212,8 @@ fn handle_connect_request(
             "data_plane.connect.keep_alive",
             connect_audit_event(
                 &decision,
-                &request.target,
-                request.client_ip.as_deref(),
+                &connect_target,
+                client_ip.as_deref(),
                 "keep_alive",
             )
             .as_object()
@@ -34303,6 +34624,102 @@ mod tests {
                 }),
             }],
         })
+    }
+
+    #[test]
+    fn open_connect_tunnel_revalidates_token_expiry_and_identity_policy() {
+        let mut snapshot = (*test_snapshot(1)).clone();
+        snapshot.principals[0] = Principal {
+            id: "agent:test".to_string(),
+            source_cidrs: vec!["127.0.0.0/8".parse().expect("principal CIDR")],
+            required_headers: BTreeMap::from([("x-agent-class".to_string(), "build".to_string())]),
+            proxy_authorization: Some(ProxyAuthorizationPolicy::BearerToken {
+                token_sha256: sha256_prefixed(b"tunnel-secret"),
+                source_cidrs: vec!["127.0.0.1/32".parse().expect("token CIDR")],
+                expires_at_ms: Some(2_000),
+            }),
+        };
+        let connect_headers = BTreeMap::from([
+            ("Host".to_string(), "example.test:443".to_string()),
+            (
+                "Proxy-Authorization".to_string(),
+                "Bearer tunnel-secret".to_string(),
+            ),
+            ("User-Agent".to_string(), "must-not-be-retained".to_string()),
+            ("X-Agent-Class".to_string(), "build".to_string()),
+        ]);
+        let authentication = ConnectAuthentication::capture_at(
+            &snapshot,
+            "agent:test",
+            Some("127.0.0.1"),
+            &connect_headers,
+            1_000,
+        )
+        .expect("initial CONNECT authentication");
+
+        assert_eq!(
+            authentication.required_header_digests,
+            BTreeMap::from([("x-agent-class".to_string(), sha256_prefixed(b"build"),)])
+        );
+        assert_eq!(
+            authentication.proxy_authorization_binding,
+            Some(ConnectProxyAuthorizationBinding::BearerTokenSha256(
+                sha256_prefixed(b"tunnel-secret"),
+            ))
+        );
+        authentication
+            .revalidate_at(&snapshot, 1_999)
+            .expect("same open tunnel before token expiry");
+        assert_eq!(
+            authentication
+                .revalidate_at(&snapshot, 2_000)
+                .err()
+                .expect("expired token must close the open tunnel"),
+            ConnectAuthenticationError::SelectorRejected
+        );
+
+        let mut unrelated_policy_change = snapshot.clone();
+        unrelated_policy_change.epoch = 2;
+        unrelated_policy_change.hash = "sha256:policy-2".to_string();
+        unrelated_policy_change.routes[0]
+            .methods
+            .insert("PUT".to_string());
+        authentication
+            .revalidate_at(&unrelated_policy_change, 1_500)
+            .expect("route-only policy change keeps valid identity");
+
+        let mut changed_identity_policy = unrelated_policy_change.clone();
+        changed_identity_policy.principals[0]
+            .required_headers
+            .insert("x-agent-class".to_string(), "release".to_string());
+        assert_eq!(
+            authentication
+                .revalidate_at(&changed_identity_policy, 1_500)
+                .err()
+                .expect("identity policy change must close the open tunnel"),
+            ConnectAuthenticationError::IdentityPolicyChanged
+        );
+
+        let mut changed_cidr_policy = unrelated_policy_change.clone();
+        changed_cidr_policy.principals[0].source_cidrs =
+            vec!["10.0.0.0/8".parse().expect("changed principal CIDR")];
+        assert_eq!(
+            authentication
+                .revalidate_at(&changed_cidr_policy, 1_500)
+                .err()
+                .expect("CIDR policy change must close the open tunnel"),
+            ConnectAuthenticationError::IdentityPolicyChanged
+        );
+
+        let mut revoked_principal = unrelated_policy_change;
+        revoked_principal.principals.clear();
+        assert_eq!(
+            authentication
+                .revalidate_at(&revoked_principal, 1_500)
+                .err()
+                .expect("principal removal must close the open tunnel"),
+            ConnectAuthenticationError::PrincipalRevoked
+        );
     }
 
     fn test_dispatch_evidence(
@@ -38524,6 +38941,91 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_query_reversal_is_denied_before_jit_and_grant_consumption() {
+        let mut snapshot = (*test_snapshot(1)).clone();
+        snapshot.routes[0].adapter_config["request"]["allowedQueryKeys"] = json!(["mode"]);
+        snapshot.routes[0].jit = json!({
+            "required":true,
+            "ttlSeconds":30,
+            "maxUses":1,
+        });
+        let snapshot = Arc::new(snapshot);
+        let resolver = Arc::new(SequencedUpstreamResolver::new(vec![Ok(vec![
+            "127.0.0.1:443".parse().expect("test upstream address"),
+        ])]));
+        let mut state = test_gate_state(Arc::clone(&snapshot));
+        state.upstream_resolver = resolver.clone();
+        state.grants.lock().expect("grant cache").insert(
+            "sha256:unrelated-approved-grant".to_string(),
+            Grant {
+                id: "grant:unrelated".to_string(),
+                approval_id: Some("approval:unrelated".to_string()),
+                max_uses: 1,
+                ttl_seconds: 30,
+                uses_remaining: 1,
+                expires_at_ms: now_epoch_ms() + 30_000,
+            },
+        );
+        let request = |query: &str| DecisionRequest {
+            client_ip: None,
+            method: "GET".to_string(),
+            url: format!("https://example.test/resource?{query}"),
+            headers: BTreeMap::new(),
+            body: String::new(),
+            body_sha256: Some(sha256_prefixed(b"")),
+            forwarded_body_length: Some(0),
+            forwarded_body_utf8_valid: Some(true),
+            credential_metadata: BTreeMap::new(),
+            gmail_proofs: Vec::new(),
+            client_request_digest: None,
+        };
+
+        let duplicate_head = parse_head(
+            b"GET https://example.test/resource?mode=read&mode=delete HTTP/1.1\r\nHost: example.test\r\n\r\n",
+        )
+        .expect("duplicate-query request head");
+        let duplicate_url = Url::parse(&duplicate_head.target).expect("duplicate-query URL");
+        assert!(prepare_upstream_for_forward(
+            &state,
+            &snapshot,
+            &duplicate_head,
+            &duplicate_url,
+            Some("agent:test"),
+        )
+        .expect("duplicate-query preflight")
+        .is_none());
+        assert_eq!(resolver.calls(), 0);
+        assert_eq!(resolver.remaining_answers(), 1);
+
+        for query in ["mode=read&mode=delete", "mode=delete&mode=read"] {
+            let denied = decide_internal(&state, &snapshot, request(query), Some("agent:test"));
+            assert_eq!(denied["status_code"], 400);
+            assert_eq!(denied["payload"]["error"], "duplicate_query_key_denied");
+            assert_eq!(denied["payload"]["key"], "mode");
+            assert!(denied.get("request_digest").is_none());
+            assert!(denied.get("operation_digest").is_none());
+            assert!(denied.get("approval_id").is_none());
+        }
+        assert_eq!(
+            state
+                .grants
+                .lock()
+                .expect("grant cache")
+                .values()
+                .next()
+                .expect("unrelated grant")
+                .uses_remaining,
+            1
+        );
+        assert!(state
+            .constraint_rate_counters
+            .lock()
+            .expect("rate counters")
+            .is_empty());
+        assert!(state.audit_queue.lock().expect("audit queue").is_empty());
+    }
+
+    #[test]
     fn denied_request_audit_promotes_canonical_payload_error() {
         let route = test_snapshot(1).routes[0].clone();
         let decision = deny(
@@ -41667,6 +42169,28 @@ mod tests {
     }
 
     #[test]
+    fn request_methods_must_be_canonical_before_policy_or_forwarding() {
+        let parse_error = parse_head(b"get /resource HTTP/1.1\r\nHost: example.test\r\n\r\n")
+            .err()
+            .expect("lowercase wire method must fail");
+        assert!(parse_error.contains("canonical uppercase ASCII"));
+
+        let snapshot = test_snapshot(1);
+        let state = test_gate_state(Arc::clone(&snapshot));
+        let mut request = correlated_test_decision_request("A_-0123456789abcdefghijk");
+        request.method = "gEt".to_string();
+        let denied = decide_internal(&state, &snapshot, request, Some("agent:test"));
+        assert_eq!(denied["status_code"], 400);
+        assert_eq!(denied["payload"]["error"], "noncanonical_method");
+        assert!(state.grants.lock().expect("grant cache").is_empty());
+        assert!(state
+            .constraint_rate_counters
+            .lock()
+            .expect("rate counters")
+            .is_empty());
+    }
+
+    #[test]
     fn request_head_preserves_raw_header_commitments_across_inherited_context() {
         let ordinary = parse_head(
             b"GET /resource HTTP/1.1\r\nHost: example.test\r\nConnection: close\r\n\r\n",
@@ -43454,6 +43978,14 @@ mod tests {
             tighten_gmail_query("from:alice newer_than:90d label:inbox", 7),
             "from:alice newer_than:7d label:inbox"
         );
+        let mut first = Url::parse("https://example.test/resource?b=2&a=%7E").expect("first URL");
+        let mut equivalent =
+            Url::parse("https://example.test/resource?a=~&b=2").expect("equivalent URL");
+        assert_eq!(query_pairs(&first), query_pairs(&equivalent));
+        apply_rewrite(&mut first, &json!({}));
+        apply_rewrite(&mut equivalent, &json!({}));
+        assert_eq!(first.as_str(), equivalent.as_str());
+
         let mut url =
             Url::parse("https://example.test/resource?q=one&q=two&start_time=recent").expect("URL");
         apply_rewrite(&mut url, &json!({"query":{"max_results":"10"}}));
@@ -48320,7 +48852,7 @@ mod tests {
     fn client_proof_request_binding_is_canonical_and_sanitized() {
         let mut request = IncomingRequest {
             method: "GET".to_string(),
-            target: "https://EXAMPLE.test.:443/resource?b=2&a=x&a=%7E".to_string(),
+            target: "https://EXAMPLE.test.:443/resource?b=2&a=%7E".to_string(),
             headers: BTreeMap::from([
                 (
                     "Authorization".to_string(),
@@ -48360,15 +48892,11 @@ mod tests {
         assert_eq!(canonical["scheme"], "https");
         assert_eq!(canonical["authority"], "example.test");
         assert_eq!(canonical["path"], "/resource");
-        assert_eq!(
-            canonical["query"],
-            json!([["a", "x"], ["a", "~"], ["b", "2"]])
-        );
+        assert_eq!(canonical["query"], json!([["a", "~"], ["b", "2"]]));
         assert_eq!(canonical["headers"], json!({"x-visible":"visible"}));
         assert_eq!(canonical["body_sha256"], sha256_prefixed(b""));
         let digest = client_proof_request_digest(&request, &context).expect("request digest");
 
-        request.target = "https://example.test/resource?a=~&b=2&a=x".to_string();
         request.headers.insert(
             "X-Serverware-Proof-Nonce".to_string(),
             "different-nonce".to_string(),
@@ -48381,6 +48909,11 @@ mod tests {
             client_proof_request_digest(&request, &equivalent_context).expect("equivalent digest");
         assert_eq!(digest, equivalent_digest);
 
+        request.target = "https://example.test/resource?a=~&b=2".to_string();
+        let reordered_unique_digest =
+            client_proof_request_digest(&request, &equivalent_context).expect("reordered digest");
+        assert_eq!(digest, reordered_unique_digest);
+
         request
             .headers
             .insert("X-Visible".to_string(), "changed".to_string());
@@ -48388,6 +48921,9 @@ mod tests {
             .expect("changed request digest");
         assert_ne!(digest, changed);
 
+        request.target = "https://example.test/resource?mode=read&mode=delete".to_string();
+        assert!(canonical_client_proof_request(&request).is_err());
+        request.target = "https://example.test/resource?a=~&b=2".to_string();
         request.method = "POST".to_string();
         assert!(canonical_client_proof_request(&request).is_err());
         request.method = "HEAD".to_string();

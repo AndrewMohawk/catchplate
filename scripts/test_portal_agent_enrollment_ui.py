@@ -634,7 +634,8 @@ def main() -> None:
             "x-one-post-per-day",
             "calendarWindow",
             "utcDay",
-            "npm.publish.yubikey-jit",
+            "x.full-bounded-read",
+            "npm.common-writes.yubikey-jit",
             "'query', 'selectedHeaders', 'bodySha256'",
             "example.slack.chat_post.hourly",
             "slack-response-binding",
@@ -1039,7 +1040,10 @@ const esc=(value)=>String(value??'').replace(/[&<>"']/g,'');
 const policyTemplates={gmail_recent:{provider:'google',injection:{type:'bearer',field:'access_token'},match:{scheme:'https',host:'gmail.googleapis.com',port:443,methods:['GET'],paths:['/gmail/v1/users/{user}/messages']},adapter:{type:'gmail.v1',config:{}},constraints:[]}};
 let state={
   activePolicy:{ready:true,policy_hash:'base-hash',bundle:{metadata:{sequence:1},credentials:[],routes:[]}},
-  credentials:[{id:'cred-google',name:'Google fixture',kind:'oauth2',metadata:{oauth:true,provider_identity_verified:true,provider_id:'google',provider_account:'operator@example.com',provider_subject:'google-subject-123',scopes:['gmail.readonly']}}],
+  credentials:[
+    {id:'cred-google',name:'Google fixture',kind:'oauth2',metadata:{oauth:true,provider_identity_verified:true,provider_id:'google',provider_account:'operator@example.com',provider_subject:'google-subject-123',scopes:['gmail.readonly']}},
+    {id:'cred-google-inactive',name:'Inactive Google fixture',kind:'oauth2',lifecycle_status:'revocation_pending',metadata:{oauth:true,provider_identity_verified:true,provider_id:'google',provider_account:'inactive@example.com',provider_subject:'google-subject-inactive',scopes:['gmail.readonly']}}
+  ],
   policyPrincipals:[{id:'agent:mail-reader',routeCount:2}],
   oauthProviders:[{id:'google',displayName:'Google',configured:true,defaultScopes:['openid','email'],redirectUri:'https://serverware.test/callback'}]
 };
@@ -1097,6 +1101,7 @@ if(!elements['enrollment-principal'].innerHTML.includes('agent:mail-reader'))pro
 if(!elements['policy-principal'].innerHTML.includes('agent:mail-reader'))process.exit(23);
 if(!elements['policy-credential'].innerHTML.includes('cred-google'))process.exit(24);
 if(elements['policy-credential'].value!=='cred-google'||elements['policy-credential'].disabled)process.exit(25);
+if(elements['policy-credential'].innerHTML.includes('cred-google-inactive'))process.exit(38);
 renderOAuthDefaults(true);
 if(elements['oauth-scopes'].value!=='openid\nemail'||elements['oauth-scopes'].value.includes('\\n'))process.exit(26);
 if(oauthCredentialProviderSubject(state.credentials[0])!=='google-subject-123')process.exit(27);
@@ -1181,6 +1186,7 @@ function credentialToJson(value){return value;}
             if set(templates) != {
                 "gmail_recent",
                 "x_read_recent",
+                "x_full_bounded_read",
                 "x_one_post_daily",
                 "npm_write_mfa",
                 "slack_chat_post",
@@ -1195,6 +1201,7 @@ function credentialToJson(value){return value;}
             specialized_profiles = {
                 "gmail_recent": ("gmail.v1", None),
                 "x_read_recent": ("x.v2", "recentSearchOnly"),
+                "x_full_bounded_read": ("x.v2", "readOnly"),
                 "x_one_post_daily": ("x.v2", "controlledWrite"),
                 "npm_write_mfa": ("npm.registry", None),
             }
@@ -1214,21 +1221,82 @@ function credentialToJson(value){return value;}
                         f"actual={canonical_json(actual_request)}"
                     )
 
-            npm_template = templates["npm_write_mfa"]
-            if npm_template.get("match") != {
-                "scheme": "https",
-                "host": "registry.npmjs.org",
-                "port": 443,
-                "methods": ["PUT"],
-                "paths": ["/{package}"],
-            }:
+            canonical_examples = json.loads(
+                (ROOT / "policies" / "credential-limits.examples.json").read_text()
+            )
+            canonical_routes = {
+                route["id"]: route for route in canonical_examples["routes"]
+            }
+            canonical_credentials = {
+                credential["id"]: credential
+                for credential in canonical_examples["credentials"]
+            }
+
+            def assert_exact_policy_parity(
+                template_id: str,
+                route_id: str,
+                *,
+                credential_derived_app_ids: bool = False,
+                operator_selected_approvers: bool = False,
+            ) -> None:
+                template = templates[template_id]
+                canonical_route = canonical_routes[route_id]
+                policy_fields = ("match", "adapter", "constraints", "jit")
+                actual = {
+                    key: copy.deepcopy(template[key])
+                    for key in policy_fields
+                    if key in template
+                }
+                expected = {
+                    key: copy.deepcopy(canonical_route[key])
+                    for key in policy_fields
+                    if key in canonical_route
+                }
+                if credential_derived_app_ids:
+                    expected["adapter"]["config"].pop("appIds", None)
+                if operator_selected_approvers:
+                    expected["jit"]["approvers"]["users"] = []
+                if actual != expected:
+                    raise AssertionError(
+                        f"portal and canonical policy drifted: {template_id}: "
+                        f"expected={canonical_json(expected)} actual={canonical_json(actual)}"
+                    )
+
+            assert_exact_policy_parity(
+                "x_full_bounded_read",
+                "example.x.full_bounded_read",
+                credential_derived_app_ids=True,
+            )
+            assert_exact_policy_parity(
+                "npm_write_mfa",
+                "example.npm.publish.yubikey_jit",
+                operator_selected_approvers=True,
+            )
+            expected_x_read_scopes = [
+                scope
+                for scope in canonical_credentials["cred-x"]["scopes"]
+                if scope not in {"offline.access", "tweet.write"}
+            ]
+            if (
+                templates["x_full_bounded_read"].get("requiredScopes")
+                != expected_x_read_scopes
+            ):
                 raise AssertionError(
-                    f"public npm template is not exact publish-only: {npm_template.get('match')}"
+                    "X full-read template scopes drifted from the canonical read-only scope set"
                 )
+
+            npm_template = templates["npm_write_mfa"]
             npm_config = npm_template["adapter"]["config"]
-            if npm_config.get("operations") != ["publish"]:
+            expected_npm_operations = [
+                "publish",
+                "unpublish",
+                "distTagWrite",
+                "tokenWrite",
+                "metadataWrite",
+            ]
+            if npm_config.get("operations") != expected_npm_operations:
                 raise AssertionError(
-                    f"public npm template claims non-publish operations: {npm_config.get('operations')}"
+                    f"public npm template does not cover all canonical writes: {npm_config.get('operations')}"
                 )
             if (
                 npm_config.get("publishResponseContract")
@@ -1266,9 +1334,9 @@ function credentialToJson(value){return value;}
             )
             if not npm_operation_policy or npm_operation_policy.get(
                 "allowedOperations"
-            ) != ["npm.publish"]:
+            ) != [f"npm.{operation}" for operation in expected_npm_operations]:
                 raise AssertionError(
-                    f"public npm template does not allow only npm.publish: {npm_constraints}"
+                    f"public npm template does not allow all canonical npm writes: {npm_constraints}"
                 )
             npm_jit = npm_template.get("jit") or {}
             npm_authn = (npm_jit.get("approvers") or {}).get("authn") or {}
@@ -1459,11 +1527,6 @@ function credentialToJson(value){return value;}
                 ],
             }:
                 raise AssertionError("Object-store template does not bind the returned object identity")
-
-            canonical_examples = json.loads(
-                (ROOT / "policies" / "credential-limits.examples.json").read_text()
-            )
-            canonical_routes = {route["id"]: route for route in canonical_examples["routes"]}
 
             def assert_utc_calendar_quota(
                 constraints: list[dict], constraint_id: str, *, label: str

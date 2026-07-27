@@ -67,7 +67,7 @@ assert payload["data"] == [{"id": "tweet-1", "text": "demo"}], payload
 for key in ("authorization", "authorization_sha256", "proxy_authorization", "serverware_agent", "cookie", "path", "query"):
     assert key not in payload, payload
 
-status, payload = request("/gmail/v1/users/me/messages?omitInternalDate=1")
+status, payload = request("/gmail/v1/users/me/messages?q=subject%3Aserverware-fixture-omit-internal-date")
 assert status == 200, payload
 assert len(payload["messages"]) == 2, payload
 assert_gmail_redaction(payload, "validated")
@@ -83,21 +83,22 @@ assert payload["id"] == "recent-message-1", payload
 assert payload["payload"]["headers"][0]["name"] == "From", payload
 assert "body" not in payload["payload"], payload
 
-status, payload = request("/gmail/v1/users/me/messages?metadataNotFound=1")
+status, payload = request("/gmail/v1/users/me/messages?q=subject%3Aserverware-fixture-metadata-not-found")
 assert status == 200, payload
 assert [item["id"] for item in payload["messages"]] == ["recent-message-1"], payload
 
-status, payload = request("/gmail/v1/users/me/messages?duplicateMessageId=1")
+status, payload = request("/gmail/v1/users/me/messages?q=subject%3Aserverware-fixture-duplicate-message-id")
 assert status == 502, payload
 assert payload == {"error": "gmail_metadata_fetch_duplicate_id"}, payload
 
-status, payload = request("/gmail/v1/users/me/messages?oldInternalDate=1")
+status, payload = request("/gmail/v1/users/me/messages?q=subject%3Aserverware-fixture-old-internal-date")
 assert status == 502, payload
 assert payload == {"error": "gmail_response_too_old", "max_days": 30}, payload
 
 status, payload = request("/gmail/v1/users/me/messages/old-list-message-1")
 assert status == 403, payload
-assert payload["error"] == "gmail_message_age_not_proven", payload
+denial = payload.get("payload") if isinstance(payload.get("payload"), dict) else payload
+assert denial["error"] == "gmail_message_age_not_proven", payload
 
 print(json.dumps({"ok": True, "response_validation": "pass"}, sort_keys=True))
 PY

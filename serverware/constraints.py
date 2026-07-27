@@ -27,6 +27,7 @@ SUPPORTED_REQUEST_CONSTRAINTS = {
     "formBody",
 }
 SUPPORTED_RESPONSE_CONSTRAINTS = {"responseDateWindow", "responseJson", "responseBinding"}
+SUPPORTED_CONSTRAINTS = SUPPORTED_REQUEST_CONSTRAINTS | SUPPORTED_RESPONSE_CONSTRAINTS
 MIN_I64 = -(2**63)
 MAX_I64 = 2**63 - 1
 _MAX_LOCAL_RATE_COUNTER_ENTRIES = 65_536
@@ -62,6 +63,9 @@ def evaluate_request_constraints(
     skip_shared_rate_limits: bool = False,
     skip_rate_limits: bool = False,
 ) -> PolicyDecision:
+    vocabulary_denial = _validate_constraint_vocabulary(route, status_code=503)
+    if vocabulary_denial is not None:
+        return vocabulary_denial
     for constraint in route.constraints:
         constraint_type = str(constraint.get("type") or "")
         if constraint_type not in SUPPORTED_REQUEST_CONSTRAINTS:
@@ -100,7 +104,7 @@ def evaluate_request_constraints(
         elif constraint_type == "formBody":
             decision = _enforce_form_body(constraint, flow)
         else:
-            decision = PolicyDecision(True)
+            return _unsupported_constraint_denial(constraint, status_code=503)
 
         if not decision.allowed:
             return decision
@@ -114,6 +118,9 @@ def evaluate_response_constraints(
     *,
     constraint_types: set[str] | None = None,
 ) -> PolicyDecision:
+    vocabulary_denial = _validate_constraint_vocabulary(route, status_code=502)
+    if vocabulary_denial is not None:
+        return vocabulary_denial
     binding_evidence: list[dict[str, str]] = []
     raw_operation_fields = flow.metadata.get("serverware_operation") or {}
     operation_fields = (
@@ -162,7 +169,7 @@ def evaluate_response_constraints(
         elif constraint_type == "responseBinding":
             decision = _enforce_response_binding(constraint, flow, operation_fields)
         else:
-            decision = PolicyDecision(True)
+            return _unsupported_constraint_denial(constraint, status_code=502)
         if not decision.allowed:
             return decision
         if constraint_type == "responseBinding":
@@ -178,6 +185,40 @@ def _phase_includes(constraint: dict[str, Any], phase: str) -> bool:
     if configured == "both":
         return True
     return configured == phase
+
+
+def _unsupported_constraint_denial(
+    constraint: dict[str, Any], *, status_code: int
+) -> PolicyDecision:
+    return _deny(
+        constraint,
+        "constraint type is not supported by the runtime",
+        "constraint_type_unsupported_at_runtime",
+        statusCode=status_code,
+    )
+
+
+def _validate_constraint_vocabulary(
+    route: Any, *, status_code: int
+) -> PolicyDecision | None:
+    for constraint in route.constraints:
+        constraint_type = constraint.get("type")
+        if not isinstance(constraint_type, str) or constraint_type not in SUPPORTED_CONSTRAINTS:
+            return _unsupported_constraint_denial(
+                constraint,
+                status_code=status_code,
+            )
+        expected_phase = (
+            "response"
+            if constraint_type in SUPPORTED_RESPONSE_CONSTRAINTS
+            else "request"
+        )
+        if constraint.get("phase", "request") != expected_phase:
+            return _unsupported_constraint_denial(
+                constraint,
+                status_code=status_code,
+            )
+    return None
 
 
 def _deny(constraint: dict[str, Any], reason: str, error: str, **payload: Any) -> PolicyDecision:
@@ -336,6 +377,9 @@ def _constraint_matches_operation(
 def evaluate_response_binding_sources(
     route: Any, operation_fields: dict[str, Any]
 ) -> PolicyDecision:
+    vocabulary_denial = _validate_constraint_vocabulary(route, status_code=503)
+    if vocabulary_denial is not None:
+        return vocabulary_denial
     for constraint in route.constraints:
         if constraint.get("type") != "responseBinding":
             continue

@@ -213,7 +213,7 @@ PY
 
 gmail_missing_date_code="$(curl -sS -o "$TMP_DIR/gmail-pending-list.json" -w "%{http_code}" \
   --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
-  "https://demo-upstream:8443/gmail/v1/users/me/messages?q=from%3Asecurity%40example.com&omitInternalDate=1")"
+  "https://demo-upstream:8443/gmail/v1/users/me/messages?q=subject%3Aserverware-fixture-omit-internal-date")"
 if [[ "$gmail_missing_date_code" != "200" ]]; then
   echo "expected Gmail list metadata hydration to succeed, got $gmail_missing_date_code" >&2
   cat "$TMP_DIR/gmail-pending-list.json" >&2
@@ -243,7 +243,7 @@ assert "body" not in data["payload"], data
 PY
 
 curl -fsS --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
-  "https://demo-upstream:8443/gmail/v1/users/me/messages?metadataNotFound=1" \
+  "https://demo-upstream:8443/gmail/v1/users/me/messages?q=subject%3Aserverware-fixture-metadata-not-found" \
   > "$TMP_DIR/gmail-missing-metadata-list.json"
 python3 - "$TMP_DIR/gmail-missing-metadata-list.json" <<'PY'
 import json, sys

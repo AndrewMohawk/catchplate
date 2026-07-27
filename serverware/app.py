@@ -13368,6 +13368,29 @@ UI_HTML = r"""
           {id: 'x-search-response-last-7-days', type: 'responseDateWindow', phase: 'response', items: ['data'], dateFields: ['created_at'], formats: ['rfc3339', 'date'], maxAgeDays: 7, required: true}
         ]
       },
+      x_full_bounded_read: {
+        label: 'X all currently cataloged bounded reads',
+        routeId: 'x.full-bounded-read',
+        provider: 'x',
+        requiredScopes: ['block.read', 'bookmark.read', 'dm.read', 'follows.read', 'like.read', 'list.read', 'mute.read', 'space.read', 'timeline.read', 'tweet.read', 'users.read'],
+        injection: {type: 'bearer', field: 'access_token'},
+        match: {scheme: 'https', host: 'api.x.com', port: 443, methods: ['GET'], paths: ['/2/**']},
+        adapter: {type: 'x.v2', config: {
+          request: {
+            allowedHeaders: ['accept', 'accept-encoding', 'content-type', 'user-agent'],
+            allowedQueryKeys: ['analytics.fields', 'chat_conversation.fields', 'chat_message_event.fields', 'command', 'community.fields', 'compliance_job.fields', 'connection.fields', 'days', 'dm_event.fields', 'end_time', 'endpoints', 'engagement.fields', 'event_types', 'exclude', 'expansions', 'granularity', 'ids', 'list.fields', 'max_age_hours', 'max_results', 'max_trends', 'media.fields', 'media_analytics.fields', 'media_id', 'media_keys', 'news.fields', 'next_token', 'note.fields', 'pagination_token', 'personalized_trend.fields', 'place.fields', 'poll.fields', 'post_selection', 'public_key.fields', 'query', 'requested_metrics', 'search_count.fields', 'since_id', 'sort_order', 'space.fields', 'start_time', 'state', 'status', 'test_mode', 'topic.fields', 'trend.fields', 'tweet.fields', 'tweet_ids', 'type', 'until_id', 'usage.fields', 'user.fields', 'user_ids', 'usernames', 'webhook_config.fields'],
+            allowedMediaTypes: [],
+            maxBodyBytes: 0
+          },
+          mode: 'readOnly',
+          blockWrites: true,
+          allowedReadOperations: ['accountActivity.read', 'activity.read', 'analytics.read', 'bookmarks.read', 'chat.read', 'communities.read', 'compliance.read', 'connections.read', 'directMessages.read', 'insights.read', 'lists.read', 'media.read', 'news.read', 'notes.read', 'schema.read', 'search.read', 'spaces.read', 'trends.read', 'tweets.read', 'usage.read', 'users.read', 'webhooks.read'],
+          response: {mode: 'json', maxBodyBytes: 16777216, allowedFields: ['data', 'includes', 'meta', 'errors', 'title', 'detail', 'type', 'status'], allowedHeaders: [], error: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['title', 'detail', 'type', 'status', 'errors.title', 'errors.detail', 'errors.type', 'errors.value'], allowedHeaders: ['retry-after'], onInvalid: 'block'}}
+        }},
+        constraints: [
+          {id: 'all-currently-cataloged-bounded-x-reads', type: 'operationPolicy', allowedOperations: ['accountActivity.read', 'activity.read', 'analytics.read', 'bookmarks.read', 'chat.read', 'communities.read', 'compliance.read', 'connections.read', 'directMessages.read', 'insights.read', 'lists.read', 'media.read', 'news.read', 'notes.read', 'schema.read', 'search.read', 'spaces.read', 'trends.read', 'tweets.read', 'usage.read', 'users.read', 'webhooks.read']}
+        ]
+      },
       x_one_post_daily: {
         label: 'X one text post per UTC calendar day, resetting at 00:00 UTC',
         routeId: 'x.post.one-per-day',
@@ -13383,14 +13406,14 @@ UI_HTML = r"""
         ]
       },
       npm_write_mfa: {
-        label: 'npm publish with YubiKey JIT',
-        routeId: 'npm.publish.yubikey-jit',
+        label: 'npm common writes with YubiKey JIT',
+        routeId: 'npm.common-writes.yubikey-jit',
         provider: 'npm',
         injection: {type: 'bearer'},
-        match: {scheme: 'https', host: 'registry.npmjs.org', port: 443, methods: ['PUT'], paths: ['/{package}']},
-        adapter: {type: 'npm.registry', config: {request: {allowedHeaders: ['accept', 'accept-encoding', 'content-type', 'npm-auth-type', 'npm-command', 'npm-in-ci', 'npm-otp', 'npm-scope', 'npm-session', 'user-agent'], allowedQueryKeys: [], allowedMediaTypes: ['application/json'], maxBodyBytes: 16777216}, operations: ['publish'], publishResponseContract: 'npm-public-registry-receipt-v1', response: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['ok', 'published'], allowedHeaders: [], error: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['error', 'reason', 'code'], allowedHeaders: ['retry-after', 'www-authenticate'], onInvalid: 'block'}}}},
-        constraints: [{id: 'npm-only-publish', type: 'operationPolicy', allowedOperations: ['npm.publish'], deniedOperations: ['npm.unpublish', 'npm.distTagWrite', 'npm.tokenWrite', 'npm.metadataWrite']}],
-        jit: {required: true, mode: 'perOperation', ttlSeconds: 30, maxUses: 1, consumeOn: 'forwardStart', binding: {type: 'operationDigest', fields: ['principal', 'routeId', 'credentialRef', 'credentialVersion', 'policyHash', 'method', 'authority', 'path', 'query', 'selectedHeaders', 'bodySha256', 'packageName', 'packageVersion', 'tarballIntegrity']}, approvers: {quorum: 1, users: [], authn: {webauthnRequired: true, userVerification: 'required', allowedAuthenticatorClasses: ['yubikey', 'hardware'], requireHardwareAttestation: true}}}
+        match: {scheme: 'https', host: 'registry.npmjs.org', port: 443, methods: ['PUT', 'POST', 'DELETE'], paths: ['/{package}', '/{package}/-rev/{revision}', '/{package}/-/{tarball}/-rev/{revision}', '/-/package/{package}/dist-tags/{tag}', '/-/package/{package}/access', '/-/npm/v1/tokens', '/-/npm/v1/tokens/token/{token}', '/-/npm/v1/user', '/-/team/{scope}/{team}/package']},
+        adapter: {type: 'npm.registry', config: {request: {allowedHeaders: ['accept', 'accept-encoding', 'content-type', 'npm-auth-type', 'npm-command', 'npm-in-ci', 'npm-otp', 'npm-scope', 'npm-session', 'user-agent'], allowedQueryKeys: [], allowedMediaTypes: ['application/json'], maxBodyBytes: 16777216}, operations: ['publish', 'unpublish', 'distTagWrite', 'tokenWrite', 'metadataWrite'], publishResponseContract: 'npm-public-registry-receipt-v1', response: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['ok', 'published'], allowedHeaders: [], error: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['error', 'reason', 'code'], allowedHeaders: ['retry-after', 'www-authenticate'], onInvalid: 'block'}}}},
+        constraints: [{id: 'npm-common-writes-require-jit', type: 'operationPolicy', allowedOperations: ['npm.publish', 'npm.unpublish', 'npm.distTagWrite', 'npm.tokenWrite', 'npm.metadataWrite']}],
+        jit: {required: true, mode: 'perOperation', ttlSeconds: 30, maxUses: 1, consumeOn: 'forwardStart', binding: {type: 'operationDigest', fields: ['principal', 'routeId', 'credentialRef', 'credentialVersion', 'policyHash', 'method', 'authority', 'path', 'query', 'selectedHeaders', 'bodySha256', 'operation', 'packageName', 'packageVersion', 'tarballIntegrity']}, approvers: {quorum: 1, users: [], authn: {webauthnRequired: true, userVerification: 'required', allowedAuthenticatorClasses: ['yubikey', 'hardware'], requireHardwareAttestation: true}}}
       },
       slack_chat_post: {
         label: 'Slack bounded message post',
@@ -14231,6 +14254,10 @@ UI_HTML = r"""
       const activeCredentials = state.activePolicy && state.activePolicy.bundle ? state.activePolicy.bundle.credentials || [] : [];
       activeCredentials.forEach((item) => items.set(item.id, {id: item.id, label: `${item.id} (active bundle)`, activeCredential: item, storedCredential: null}));
       (state.credentials || []).forEach((item) => {
+        if ((item.lifecycle_status || 'active') !== 'active') {
+          items.delete(item.id);
+          return;
+        }
         const current = items.get(item.id) || {id: item.id, activeCredential: null};
         const identity = item.metadata?.provider_account || item.metadata?.account || item.metadata?.account_email || item.metadata?.provider_subject || item.metadata?.subject || '';
         const provider = item.metadata?.provider_id || '';

@@ -611,19 +611,20 @@ async def csv_redact(request: Request) -> StreamingResponse:
 async def gmail_messages(request: Request) -> dict[str, Any]:
     _record_request(request)
     view = request_view(request)
-    if request.query_params.get("omitInternalDate") == "1":
+    fixture_query = request.query_params.get("q") or ""
+    if "serverware-fixture-omit-internal-date" in fixture_query:
         view["messages"] = [
             gmail_list_item("pending-message-1"),
             gmail_list_item("pending-message-2"),
         ]
-    elif request.query_params.get("oldInternalDate") == "1":
+    elif "serverware-fixture-old-internal-date" in fixture_query:
         view["messages"] = [gmail_list_item("old-list-message-1")]
-    elif request.query_params.get("metadataNotFound") == "1":
+    elif "serverware-fixture-metadata-not-found" in fixture_query:
         view["messages"] = [
             gmail_list_item("recent-message-1"),
             gmail_list_item("missing-message-1"),
         ]
-    elif request.query_params.get("duplicateMessageId") == "1":
+    elif "serverware-fixture-duplicate-message-id" in fixture_query:
         view["messages"] = [
             gmail_list_item("duplicate-message-1"),
             gmail_list_item("duplicate-message-1"),

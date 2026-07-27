@@ -82,7 +82,7 @@ status, payload = gate_request(raw)
 assert status == 200, payload
 
 raw = (
-    "GET https://demo-upstream:8443/gmail/v1/users/me/messages?oldInternalDate=1 HTTP/1.1\r\n"
+    "GET https://demo-upstream:8443/gmail/v1/users/me/messages?q=subject%3Aserverware-fixture-old-internal-date HTTP/1.1\r\n"
     "Host: demo-upstream:8443\r\n"
     "X-Serverware-Agent: demo-agent\r\n"
     "Connection: close\r\n\r\n"

@@ -373,7 +373,7 @@ python3 -m pip wheel --wheel-dir dist .
 sha256sum dist/*
 
 python3 -m pip install --no-index --find-links /trusted/serverware-dist \
-  serverware-enrollment==0.1.0
+  serverware-enrollment==0.2.0
 ```
 
 The `dist/` directory contains the minimal `serverware_agent_trust` wheel and its platform-specific dependency wheels. It does not contain the Serverware control plane or the generic repository scripts. The installed package exposes `serverware-enrollment` for packet generation, exact packet verification, authenticated-instruction emission, and independent setup-receipt signing, plus `serverware-attestation` for scoped CA installation. Generate an agent enrollment packet after policy publish and CA verification:

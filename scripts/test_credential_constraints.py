@@ -262,6 +262,45 @@ def assert_response_binding_denied(
         assert value not in rendered_denial, rendered_denial
 
 
+def assert_runtime_constraint_vocabulary_fails_closed() -> None:
+    item = flow("GET", "https://example.test/resource", response={"ok": True})
+    for malformed in (
+        {"id": "unknown", "type": "futureConstraint", "phase": "request"},
+        {"id": "missing-type", "phase": "request"},
+        {"id": "non-string", "type": 7, "phase": "request"},
+        {"id": "non-string-phase", "type": "operationPolicy", "phase": 7},
+        {"id": "response-as-request", "type": "responseJson", "phase": "request"},
+        {"id": "request-as-response", "type": "operationPolicy", "phase": "response"},
+    ):
+        malformed_route = SimpleNamespace(
+            id="route:malformed",
+            credential_ref=None,
+            constraints=[malformed],
+        )
+        request = evaluate_request_constraints(
+            item,
+            malformed_route,
+            principal_id="agent:test",
+            credential_ref=None,
+            credential_version=0,
+            operation_fields={"operation": "generic.request"},
+            consume_rate_limits=False,
+        )
+        assert_denied(request, "constraint_type_unsupported_at_runtime")
+        assert request.status_code == 503
+
+        response = evaluate_response_constraints(item, malformed_route)
+        assert_denied(response, "constraint_type_unsupported_at_runtime")
+        assert response.status_code == 502
+
+        source = evaluate_response_binding_sources(
+            malformed_route,
+            {"operation": "generic.request"},
+        )
+        assert_denied(source, "constraint_type_unsupported_at_runtime")
+        assert source.status_code == 503
+
+
 def schema_validation_available() -> bool:
     try:
         import jsonschema  # noqa: F401
@@ -695,6 +734,7 @@ def run_proxy_transport_assertions() -> None:
 
 
 def main() -> None:
+    assert_runtime_constraint_vocabulary_fails_closed()
     if PROXY_TRANSPORT_ONLY:
         run_proxy_transport_assertions()
         return

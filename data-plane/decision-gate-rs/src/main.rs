@@ -1044,6 +1044,11 @@ impl ResponseObservationTrace {
         self.response_path = "post-dispatch-local-failure";
     }
 
+    fn observe_dispatch_transition_unknown(&mut self) {
+        self.authorization_state = "completion-unknown";
+        self.response_path = "authorized-not-attempted";
+    }
+
     fn observe_upstream_body(&mut self, body: &[u8]) {
         let Some(observation) = self.upstream_observation.as_mut() else {
             return;
@@ -17589,6 +17594,46 @@ fn constraint_error(constraint: &Value, error: &str, reason: &str) -> Value {
     constraint_payload(constraint, error, reason, Map::new())
 }
 
+fn supported_constraint_type(kind: &str) -> bool {
+    matches!(
+        kind,
+        "rateLimit"
+            | "operationPolicy"
+            | "queryDateWindow"
+            | "queryNumericBounds"
+            | "requestTimeWindow"
+            | "requestValue"
+            | "jsonBody"
+            | "formBody"
+            | "responseDateWindow"
+            | "responseJson"
+            | "responseBinding"
+    )
+}
+
+fn constraint_type_phase_is_valid(constraint: &Value, kind: &str) -> bool {
+    let expected_phase = match kind {
+        "responseDateWindow" | "responseJson" | "responseBinding" => "response",
+        _ => "request",
+    };
+    match constraint.get("phase") {
+        None => expected_phase == "request",
+        Some(Value::String(phase)) => phase == expected_phase,
+        Some(_) => false,
+    }
+}
+
+fn unsupported_runtime_constraint(constraint: &Value, status_code: u16) -> Value {
+    let mut extra = Map::new();
+    extra.insert("status_code".to_string(), json!(status_code));
+    constraint_payload(
+        constraint,
+        "constraint_type_unsupported_at_runtime",
+        "constraint type is not supported by the runtime",
+        extra,
+    )
+}
+
 fn canonical_i64(value: &str) -> Option<i64> {
     let digits = if value == "0" {
         return Some(0);
@@ -19976,8 +20021,14 @@ fn evaluate_request_constraints(
 ) -> Result<(), Value> {
     for constraint in &route.constraints {
         let Some(kind) = constraint.get("type").and_then(Value::as_str) else {
-            continue;
+            return Err(unsupported_runtime_constraint(constraint, 503));
         };
+        if !supported_constraint_type(kind) {
+            return Err(unsupported_runtime_constraint(constraint, 503));
+        }
+        if !constraint_type_phase_is_valid(constraint, kind) {
+            return Err(unsupported_runtime_constraint(constraint, 503));
+        }
         if !constraint_phase_includes(constraint, "request") {
             continue;
         }
@@ -20006,7 +20057,7 @@ fn evaluate_request_constraints(
             }
             "jsonBody" => enforce_json_body(constraint, req, headers)?,
             "formBody" => enforce_form_body(constraint, req, headers)?,
-            _ => {}
+            _ => return Err(unsupported_runtime_constraint(constraint, 503)),
         }
     }
     Ok(())
@@ -20022,8 +20073,14 @@ fn evaluate_request_semantic_constraints(
 ) -> Result<(), Value> {
     for constraint in &route.constraints {
         let Some(kind) = constraint.get("type").and_then(Value::as_str) else {
-            continue;
+            return Err(unsupported_runtime_constraint(constraint, 503));
         };
+        if !supported_constraint_type(kind) {
+            return Err(unsupported_runtime_constraint(constraint, 503));
+        }
+        if !constraint_type_phase_is_valid(constraint, kind) {
+            return Err(unsupported_runtime_constraint(constraint, 503));
+        }
         if !constraint_phase_includes(constraint, "request") || kind == "rateLimit" {
             continue;
         }
@@ -20037,7 +20094,7 @@ fn evaluate_request_semantic_constraints(
             }
             "jsonBody" => enforce_json_body(constraint, req, headers)?,
             "formBody" => enforce_form_body(constraint, req, headers)?,
-            _ => {}
+            _ => return Err(unsupported_runtime_constraint(constraint, 503)),
         }
     }
     Ok(())
@@ -20400,8 +20457,14 @@ fn validate_response_constraints_for_type(
 ) -> Result<(), Value> {
     for constraint in &route.constraints {
         let Some(kind) = constraint.get("type").and_then(Value::as_str) else {
-            continue;
+            return Err(unsupported_runtime_constraint(constraint, 502));
         };
+        if !supported_constraint_type(kind) {
+            return Err(unsupported_runtime_constraint(constraint, 502));
+        }
+        if !constraint_type_phase_is_valid(constraint, kind) {
+            return Err(unsupported_runtime_constraint(constraint, 502));
+        }
         if required_type.is_some_and(|required| required != kind) {
             continue;
         }
@@ -20453,7 +20516,7 @@ fn validate_response_constraints_for_type(
                 };
                 enforce_response_binding(constraint, body, operation)?;
             }
-            _ => {}
+            _ => return Err(unsupported_runtime_constraint(constraint, 502)),
         }
     }
     Ok(())
@@ -27915,12 +27978,11 @@ fn forward_absolute_request_inner<'a>(
             Ok(observation) => release_dispatch_observation = Some(observation),
             Err(err) => {
                 if let Some(observation) = response_observation.as_deref_mut() {
-                    observation.authorization_state = "denied";
-                    observation.response_path = "dispatch-denied-no-upstream-attempt";
+                    observation.observe_dispatch_transition_unknown();
                 }
                 buffered!(json_status_response(
                     StatusCode::SERVICE_UNAVAILABLE,
-                    json!({"error":"release_authorization_dispatch_failed","detail":err}),
+                    json!({"error":"release_authorization_dispatch_transition_unknown","detail":err}),
                 ));
             }
         }
@@ -28403,7 +28465,7 @@ fn forward_absolute_streaming_request_to(
         if let Err(err) = release.dispatch(snapshot) {
             write_buffered!(json_status_response(
                 StatusCode::SERVICE_UNAVAILABLE,
-                json!({"error":"release_authorization_dispatch_failed","detail":err}),
+                json!({"error":"release_authorization_dispatch_transition_unknown","detail":err}),
             ));
         }
     }
@@ -28876,7 +28938,7 @@ fn forward_intercepted_streaming_request_to<R: Read + Write + TerminalDeadlineWr
             let _ = sender_thread.join();
             write_buffered!(json_status_response(
                 StatusCode::SERVICE_UNAVAILABLE,
-                json!({"error":"release_authorization_dispatch_failed","detail":err}),
+                json!({"error":"release_authorization_dispatch_transition_unknown","detail":err}),
             ));
         }
     }
@@ -36441,6 +36503,76 @@ mod tests {
         route
     }
 
+    #[test]
+    fn runtime_constraint_dispatch_fails_closed_after_admission_bypass() {
+        let snapshot = test_snapshot(1);
+        let state = test_gate_state(Arc::clone(&snapshot));
+        let request = DecisionRequest {
+            client_ip: None,
+            method: "GET".to_string(),
+            url: "https://example.test/resource".to_string(),
+            headers: BTreeMap::new(),
+            body: String::new(),
+            body_sha256: Some(sha256_prefixed(b"")),
+            forwarded_body_length: Some(0),
+            forwarded_body_utf8_valid: Some(true),
+            credential_metadata: BTreeMap::new(),
+            gmail_proofs: Vec::new(),
+            client_request_digest: None,
+        };
+        let url = Url::parse(&request.url).expect("test URL");
+
+        for constraint in [
+            json!({"id":"unknown","type":"futureConstraint","phase":"request"}),
+            json!({"id":"missing-type","phase":"request"}),
+            json!({"id":"non-string","type":7,"phase":"request"}),
+            json!({"id":"non-string-phase","type":"operationPolicy","phase":7}),
+            json!({"id":"wrong-request-phase","type":"responseJson","phase":"request"}),
+        ] {
+            let mut route = snapshot.routes[0].clone();
+            route.constraints = vec![constraint];
+            let mut operation = json!({"operation":"generic.request"});
+            let error = evaluate_request_constraints(
+                &state,
+                &route,
+                &request,
+                &BTreeMap::new(),
+                &url,
+                &BTreeMap::new(),
+                "agent:test",
+                None,
+                0,
+                &snapshot.hash,
+                &mut operation,
+                false,
+                false,
+                false,
+            )
+            .expect_err("unadmitted request constraint must fail closed");
+            assert_eq!(error["error"], "constraint_type_unsupported_at_runtime");
+            assert_eq!(error["status_code"], 503);
+        }
+
+        for constraint in [
+            json!({"id":"unknown","type":"futureConstraint","phase":"response"}),
+            json!({"id":"missing-type","phase":"response"}),
+            json!({"id":"non-string","type":7,"phase":"response"}),
+            json!({"id":"non-string-phase","type":"responseJson","phase":7}),
+            json!({"id":"wrong-response-phase","type":"operationPolicy","phase":"response"}),
+        ] {
+            let mut route = snapshot.routes[0].clone();
+            route.constraints = vec![constraint];
+            let error = validate_response_constraints(
+                &route,
+                br#"{"safe":true}"#,
+                Some(&json!({"operation":"generic.request"})),
+            )
+            .expect_err("unadmitted response constraint must fail closed");
+            assert_eq!(error["error"], "constraint_type_unsupported_at_runtime");
+            assert_eq!(error["status_code"], 502);
+        }
+    }
+
     struct SlowIo {
         input: Cursor<Vec<u8>>,
         output: Vec<u8>,
@@ -41600,6 +41732,21 @@ mod tests {
         );
         assert_eq!(complete.body_bytes, Some(14));
         assert_ne!(complete.aggregate_digest, partial_aggregate);
+    }
+
+    #[test]
+    fn observation_trace_never_relabels_dispatch_transition_ambiguity_as_denial() {
+        let mut trace = ResponseObservationTrace::new();
+        trace.policy_decision_state = "allowed";
+        trace.authorization_state = "reserved";
+        trace.response_path = "authorized-not-attempted";
+
+        trace.observe_dispatch_transition_unknown();
+
+        assert_eq!(trace.authorization_state, "completion-unknown");
+        assert_eq!(trace.response_path, "authorized-not-attempted");
+        assert_eq!(trace.upstream_attempt, "not-started");
+        assert!(trace.upstream_observation.is_none());
     }
 
     #[test]

@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import json
 import os
+import subprocess
 import sys
 import tempfile
+import types
 import unittest
 from contextlib import ExitStack, nullcontext
 from pathlib import Path
@@ -19,6 +22,31 @@ os.environ["SERVERWARE_AUDIT_STORE_BACKEND"] = "sqlite"
 os.environ["SERVERWARE_GRANT_STORE_BACKEND"] = "sqlite"
 
 from serverware import control_plane_runner, control_plane_startup  # noqa: E402
+
+
+_SERVICE_CREDENTIALS = (
+    ("SERVERWARE_ADMIN_TOKEN", "ADMIN_TOKEN"),
+    ("SERVERWARE_WEBAUTHN_BOOTSTRAP_TOKEN", "WEBAUTHN_BOOTSTRAP_TOKEN"),
+    (
+        "SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN",
+        "DATA_PLANE_CREDENTIAL_LEASE_TOKEN",
+    ),
+    ("SERVERWARE_DATA_PLANE_AUDIT_TOKEN", "DATA_PLANE_AUDIT_INGEST_TOKEN"),
+    (
+        "SERVERWARE_DATA_PLANE_GRANT_CONSUME_TOKEN",
+        "DATA_PLANE_GRANT_CONSUME_TOKEN",
+    ),
+    (
+        "SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN",
+        "DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN",
+    ),
+    (
+        "SERVERWARE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN",
+        "DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN",
+    ),
+    ("SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN", "DATA_PLANE_MANAGEMENT_TOKEN"),
+    ("SERVERWARE_AUDIT_ANCHOR_TOKEN", "AUDIT_ANCHOR_TOKEN"),
+)
 
 
 _PRODUCTION_CONFIGURATION = {
@@ -49,6 +77,264 @@ _PRODUCTION_CONFIGURATION = {
     "MASTER_KEY_UNSEAL_COMMAND": "unseal-master-key",
     "NITRO_NSM_UNSEAL_COMMAND_TEMPLATE": "nsm-unseal {ciphertext}",
 }
+
+
+class ServiceCredentialConfigurationTests(unittest.TestCase):
+    def _credential_values(self) -> dict[str, str]:
+        return {
+            name: f"test-{index:02d}-{name.lower()}-credential"
+            for index, (name, _) in enumerate(_SERVICE_CREDENTIALS)
+        }
+
+    def _subprocess_env(self, data_dir: str) -> dict[str, str]:
+        allowed = {
+            "HOME",
+            "LANG",
+            "LC_ALL",
+            "LC_CTYPE",
+            "PATH",
+            "SYSTEMROOT",
+            "TEMP",
+            "TMP",
+            "TMPDIR",
+            "TZ",
+        }
+        env = {name: value for name, value in os.environ.items() if name in allowed}
+        env.update(
+            {
+                "PYTHONPATH": str(ROOT),
+                "SERVERWARE_DATA_DIR": data_dir,
+                "SERVERWARE_RELEASE_CHANNEL": "production",
+                "SERVERWARE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED": "1",
+                "SERVERWARE_DATA_PLANE_INSTANCE_ID": (
+                    "spiffe://prod.serverware.internal/decision-gate/test"
+                ),
+            }
+        )
+        return env
+
+    def _run_config(
+        self,
+        env: dict[str, str],
+        source: str,
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, "-c", source],
+            cwd=ROOT,
+            env=env,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+    def test_all_service_credentials_load_from_files(self) -> None:
+        values = self._credential_values()
+        with tempfile.TemporaryDirectory() as tmp:
+            env = self._subprocess_env(tmp)
+            for index, (name, _) in enumerate(_SERVICE_CREDENTIALS):
+                path = Path(tmp) / f"credential-{index}"
+                path.write_text(values[name], encoding="utf-8")
+                path.chmod(0o440 if index % 2 else 0o400)
+                env[f"{name}_FILE"] = str(path)
+
+            attributes = {name: attribute for name, attribute in _SERVICE_CREDENTIALS}
+            source = (
+                "import json\n"
+                "from serverware import auth, config\n"
+                "config.validate_internal_service_auth()\n"
+                f"attributes = {attributes!r}\n"
+                "values = {name: getattr(config, attribute) "
+                "for name, attribute in attributes.items()}\n"
+                "values['admin_runtime'] = auth.admin_token()\n"
+                "values['admin_external'] = config.ADMIN_TOKEN_EXTERNALLY_CONFIGURED\n"
+                "values['admin_source'] = config.ADMIN_TOKEN_SOURCE\n"
+                "values['admin_file'] = str(config.ADMIN_TOKEN_FILE_PATH)\n"
+                "values['audit_anchor_source'] = config.AUDIT_ANCHOR_TOKEN_SOURCE\n"
+                "values['audit_anchor_file'] = str(config.AUDIT_ANCHOR_TOKEN_FILE_PATH)\n"
+                "print(json.dumps(values, sort_keys=True))\n"
+            )
+            result = self._run_config(env, source)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        loaded = json.loads(result.stdout)
+        self.assertEqual(
+            {name: loaded[name] for name, _ in _SERVICE_CREDENTIALS},
+            values,
+        )
+        self.assertEqual(loaded["admin_runtime"], values["SERVERWARE_ADMIN_TOKEN"])
+        self.assertIs(loaded["admin_external"], True)
+        self.assertEqual(loaded["admin_source"], "file")
+        self.assertEqual(
+            loaded["admin_file"],
+            str(Path(tmp) / "credential-0"),
+        )
+        self.assertEqual(loaded["audit_anchor_source"], "file")
+        self.assertEqual(
+            loaded["audit_anchor_file"],
+            str(Path(tmp) / f"credential-{len(_SERVICE_CREDENTIALS) - 1}"),
+        )
+
+    def test_env_and_file_presence_are_mutually_exclusive_even_when_blank(
+        self,
+    ) -> None:
+        values = self._credential_values()
+        with tempfile.TemporaryDirectory() as tmp:
+            for name, _ in _SERVICE_CREDENTIALS:
+                with self.subTest(name=name):
+                    env = self._subprocess_env(tmp)
+                    env.update(values)
+                    env[name] = ""
+                    env[f"{name}_FILE"] = ""
+                    result = self._run_config(env, "import serverware.config\n")
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(f"must not set both {name} and {name}_FILE", result.stderr)
+                    self.assertNotIn(values[name], result.stderr)
+
+    def test_development_defaults_and_direct_value_semantics_are_preserved(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = self._subprocess_env(tmp)
+            env["SERVERWARE_RELEASE_CHANNEL"] = "dev"
+            env.pop("SERVERWARE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED")
+            env.pop("SERVERWARE_DATA_PLANE_INSTANCE_ID")
+            env["SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN"] = (
+                " direct-data-plane-token "
+            )
+            env["SERVERWARE_WEBAUTHN_BOOTSTRAP_TOKEN"] = " direct-bootstrap-token "
+            source = (
+                "import json\n"
+                "from serverware import config\n"
+                "print(json.dumps({"
+                "'admin': config.ADMIN_TOKEN, "
+                "'admin_external': config.ADMIN_TOKEN_EXTERNALLY_CONFIGURED, "
+                "'admin_source': config.ADMIN_TOKEN_SOURCE, "
+                "'audit_anchor': config.AUDIT_ANCHOR_TOKEN, "
+                "'audit_anchor_source': config.AUDIT_ANCHOR_TOKEN_SOURCE, "
+                "'data_plane': config.DATA_PLANE_CREDENTIAL_LEASE_TOKEN, "
+                "'bootstrap': config.WEBAUTHN_BOOTSTRAP_TOKEN"
+                "}, sort_keys=True))\n"
+            )
+            result = self._run_config(env, source)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        loaded = json.loads(result.stdout)
+        self.assertEqual(
+            loaded,
+            {
+                "admin": "",
+                "admin_external": False,
+                "admin_source": "generated-file",
+                "audit_anchor": "",
+                "audit_anchor_source": "unconfigured",
+                "bootstrap": " direct-bootstrap-token ",
+                "data_plane": "direct-data-plane-token",
+            },
+        )
+
+    def test_production_rejects_weak_or_duplicate_service_credentials(self) -> None:
+        values = self._credential_values()
+        with tempfile.TemporaryDirectory() as tmp:
+            weak_env = self._subprocess_env(tmp)
+            weak_env.update(values)
+            weak_env["SERVERWARE_AUDIT_ANCHOR_TOKEN"] = "too-short"
+            weak = self._run_config(
+                weak_env,
+                "from serverware import config\nconfig.validate_internal_service_auth()\n",
+            )
+            self.assertNotEqual(weak.returncode, 0)
+            self.assertIn("SERVERWARE_AUDIT_ANCHOR_TOKEN", weak.stderr)
+            self.assertNotIn("too-short", weak.stderr)
+
+            duplicate_env = self._subprocess_env(tmp)
+            duplicate_env.update(values)
+            duplicate_env["SERVERWARE_WEBAUTHN_BOOTSTRAP_TOKEN"] = values[
+                "SERVERWARE_ADMIN_TOKEN"
+            ]
+            duplicate = self._run_config(
+                duplicate_env,
+                "from serverware import config\nconfig.validate_internal_service_auth()\n",
+            )
+            self.assertNotEqual(duplicate.returncode, 0)
+            self.assertIn("distinct internal service credentials", duplicate.stderr)
+            self.assertNotIn(values["SERVERWARE_ADMIN_TOKEN"], duplicate.stderr)
+
+    def test_service_credential_file_modes_and_content_are_strict(self) -> None:
+        from serverware import config
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for mode in (0o400, 0o440, 0o600, 0o640):
+                with self.subTest(accepted_mode=oct(mode)):
+                    path = root / f"accepted-{mode:o}"
+                    path.write_text("valid-service-credential", encoding="utf-8")
+                    path.chmod(mode)
+                    self.assertEqual(
+                        config._read_service_credential_file(
+                            path, setting_name="TEST_TOKEN_FILE"
+                        ),
+                        "valid-service-credential",
+                    )
+
+            rejected_content = {
+                "trailing-newline": b"valid-service-credential\n",
+                "leading-space": b" valid-service-credential",
+                "embedded-control": b"valid\x00service-credential",
+                "invalid-utf8": b"\xff\xfe",
+                "oversized": b"x" * (config.MAX_SERVICE_CREDENTIAL_FILE_BYTES + 1),
+            }
+            for label, payload in rejected_content.items():
+                with self.subTest(rejected_content=label):
+                    path = root / label
+                    path.write_bytes(payload)
+                    path.chmod(0o640)
+                    with self.assertRaises(RuntimeError):
+                        config._read_service_credential_file(
+                            path, setting_name="TEST_TOKEN_FILE"
+                        )
+
+            for mode in (0o444, 0o660):
+                with self.subTest(rejected_mode=oct(mode)):
+                    path = root / f"rejected-{mode:o}"
+                    path.write_text("valid-service-credential", encoding="utf-8")
+                    path.chmod(mode)
+                    with self.assertRaisesRegex(RuntimeError, "mode 0400"):
+                        config._read_service_credential_file(
+                            path, setting_name="TEST_TOKEN_FILE"
+                        )
+
+            target = root / "symlink-target"
+            target.write_text("valid-service-credential", encoding="utf-8")
+            target.chmod(0o400)
+            symlink = root / "symlink"
+            symlink.symlink_to(target)
+            with self.assertRaisesRegex(RuntimeError, "symlink"):
+                config._read_service_credential_file(
+                    symlink, setting_name="TEST_TOKEN_FILE"
+                )
+
+    def test_service_credential_file_rejects_metadata_drift(self) -> None:
+        from serverware import config
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "credential"
+            path.write_text("valid-service-credential", encoding="utf-8")
+            path.chmod(0o400)
+            before = path.stat()
+            after = types.SimpleNamespace(
+                st_dev=before.st_dev,
+                st_ino=before.st_ino,
+                st_mode=before.st_mode,
+                st_size=before.st_size,
+                st_mtime_ns=before.st_mtime_ns + 1,
+                st_ctime_ns=before.st_ctime_ns,
+            )
+            with (
+                patch.object(config.os, "fstat", side_effect=[before, after]),
+                self.assertRaisesRegex(RuntimeError, "changed while it was being read"),
+            ):
+                config._read_service_credential_file(
+                    path, setting_name="TEST_TOKEN_FILE"
+                )
 
 
 class ControlPlaneStartupTests(unittest.TestCase):

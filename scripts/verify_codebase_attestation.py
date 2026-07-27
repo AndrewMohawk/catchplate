@@ -23,6 +23,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
 import serverware_source_tree
+import verify_production_readiness
 from serverware.http_client import request_bytes as bounded_request_bytes
 
 
@@ -474,7 +475,16 @@ def git_commit(root: Path) -> str | None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Verify that a Serverware server is attesting this source tree and signing responses.")
     parser.add_argument("--base", default="http://localhost:3000", help="Serverware control-plane base URL")
-    parser.add_argument("--admin-token", default=os.getenv("SERVERWARE_ADMIN_TOKEN"), help="admin/auditor token")
+    parser.add_argument(
+        "--admin-token",
+        default=os.getenv("SERVERWARE_ADMIN_TOKEN"),
+        help="development-only direct admin/auditor token",
+    )
+    parser.add_argument(
+        "--admin-token-file",
+        default=os.getenv("SERVERWARE_ADMIN_TOKEN_FILE"),
+        help="admin/auditor token file",
+    )
     parser.add_argument("--source-root", default=str(ROOT), help="local source tree to compare with release provenance")
     parser.add_argument(
         "--release-signing-trusted-key",
@@ -491,8 +501,34 @@ def main() -> None:
     parser.add_argument("--allow-missing-image-signatures", action="store_true")
     args = parser.parse_args()
 
-    if not args.admin_token:
-        raise SystemExit("--admin-token or SERVERWARE_ADMIN_TOKEN is required")
+    base = args.base.rstrip("/")
+    token_sources: dict[str, str] = {}
+    if args.admin_token is not None:
+        token_sources["SERVERWARE_ADMIN_TOKEN"] = args.admin_token
+    if args.admin_token_file is not None:
+        token_sources["SERVERWARE_ADMIN_TOKEN_FILE"] = args.admin_token_file
+    if base.startswith("https://"):
+        args.admin_token = (
+            verify_production_readiness.load_service_credential_for_tool(
+                token_sources,
+                "SERVERWARE_ADMIN_TOKEN",
+                require_file=True,
+            )
+        )
+    else:
+        local_uid = os.geteuid()
+        local_gid = os.getegid()
+        args.admin_token = (
+            verify_production_readiness.load_service_credential_for_tool(
+                token_sources,
+                "SERVERWARE_ADMIN_TOKEN",
+                require_file=False,
+                expected_control_plane_uid=local_uid,
+                expected_control_plane_gid=local_gid,
+                expected_shared_owner_uid=local_uid,
+                expected_shared_gid=local_gid,
+            )
+        )
     if not args.release_signing_trusted_key:
         raise SystemExit("--release-signing-trusted-key is required")
     if not args.image_signing_trusted_key and not args.allow_missing_image_signatures:
@@ -505,7 +541,6 @@ def main() -> None:
         "release signing trust root",
     )
 
-    base = args.base.rstrip("/")
     admin_headers = {"X-Serverware-Admin-Token": args.admin_token}
     nonce = secrets.token_urlsafe(24)
     body, proof_headers = request_bytes(f"{base}/attestation?nonce={nonce}", headers={"X-Serverware-Response-Nonce": nonce})

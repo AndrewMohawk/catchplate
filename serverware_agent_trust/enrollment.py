@@ -21,6 +21,11 @@ from cryptography.exceptions import InvalidSignature  # noqa: E402
 from cryptography.hazmat.primitives import serialization  # noqa: E402
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey  # noqa: E402
 
+from . import (  # noqa: E402
+    ENROLLMENT_CLI_COMMAND,
+    __version__,
+    validate_enrollment_tooling,
+)
 from .attestation import (  # noqa: E402
     enrollment_install_session,
     spki_hash_from_public_key_pem,
@@ -241,6 +246,11 @@ def enrollment_nonce(packet: dict[str, object]) -> str:
 def verify_packet(packet: dict[str, object], attestation: dict[str, object], nonce: str) -> dict[str, object]:
     if not isinstance(packet, dict):
         raise ValueError("enrollment packet must be a JSON object")
+    if (
+        packet.get("apiVersion") != "serverware.agentEnrollment/v1"
+        or packet.get("kind") != "AgentEnrollment"
+    ):
+        raise ValueError("enrollment packet schema is unsupported")
     if "verificationReceipt" in packet:
         raise ValueError("enrollment packet already contains an untrusted verificationReceipt")
     if packet.get("nonce") != nonce or attestation.get("nonce") != nonce:
@@ -300,6 +310,7 @@ def verify_packet(packet: dict[str, object], attestation: dict[str, object], non
         public_key.verify(b64d(signature.split(":", 1)[1]), canonical_json(statement).encode("utf-8"))
     except (InvalidSignature, TypeError, ValueError) as exc:
         raise ValueError("enrollment packet signature verification failed") from exc
+    validate_enrollment_tooling(packet)
     return {
         "apiVersion": "serverware.agentEnrollmentVerification/v1",
         "kind": "AgentEnrollmentVerification",
@@ -312,6 +323,9 @@ def verify_packet(packet: dict[str, object], attestation: dict[str, object], non
         "runtimeManifestDigest": pinning["runtimeManifestDigest"],
         "responseSigningKeyId": response_key_id,
         "checks": [
+            "packet-schema",
+            "tooling-contract",
+            "tooling-version",
             "attestation-nonce",
             "attestation-quote",
             "runtime-manifest",
@@ -437,6 +451,7 @@ def verify_previously_verified_packet(
         attestation=attestation,
         response_key_id=response_key_id,
     )
+    validate_enrollment_tooling(packet)
     verify_enrollment_measurements(
         packet,
         attestation=attestation,
@@ -590,6 +605,11 @@ def emit_packet(packet: dict[str, object]) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Generate or verify a Serverware agent enrollment packet, or sign a setup receipt."
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"{ENROLLMENT_CLI_COMMAND} {__version__}",
     )
     parser.add_argument("--base", default=os.getenv("SERVERWARE_PUBLIC_URL", "http://localhost:3000"))
     parser.add_argument("--admin-token", default=os.getenv("SERVERWARE_ADMIN_TOKEN", "dev-admin-token"))

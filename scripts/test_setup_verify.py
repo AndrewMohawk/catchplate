@@ -827,6 +827,20 @@ def main() -> None:
                 raise AssertionError(
                     f"exact runtime evidence did not remain distinct from hardware: {runtime_verified}"
                 )
+            if runtime_verified.get("runtimeEvidenceAssurance") != {
+                "classification": "authenticated-correlated-telemetry",
+                "independentExecutionAttestation": False,
+                "producerIdentity": "scoped-bearer-and-server-derived-instance",
+                "summary": (
+                    "The compatibility runtimeVerified field means the required "
+                    "gateway and authoritative-store telemetry correlated. It does "
+                    "not independently attest which measured code authored those events."
+                ),
+            }:
+                raise AssertionError(
+                    "runtime verification did not disclose its authenticated-telemetry "
+                    f"assurance ceiling: {runtime_verified}"
+                )
             if (
                 runtime_verified["fullyVerified"]
                 or runtime_verified["nextAction"] != "verify_on_hardware_backed_deployment"

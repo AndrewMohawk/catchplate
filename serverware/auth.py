@@ -21,7 +21,9 @@ from serverware import db
 from serverware.rbac import RBACRoleValidationError, normalize_rbac_roles
 from serverware.config import (
     ADMIN_ROLES,
+    ADMIN_TOKEN,
     ADMIN_TOKEN_PATH,
+    ADMIN_TOKEN_SOURCE,
     ADMIN_USER_ID,
     OIDC_ALLOWED_ALGORITHMS,
     OIDC_AUDIENCE,
@@ -77,9 +79,8 @@ class AdminIdentity:
 
 @lru_cache(maxsize=1)
 def admin_token() -> str:
-    env_token = os.getenv("SERVERWARE_ADMIN_TOKEN")
-    if env_token:
-        return env_token
+    if ADMIN_TOKEN:
+        return ADMIN_TOKEN
     ensure_data_dirs()
     if ADMIN_TOKEN_PATH.exists():
         return ADMIN_TOKEN_PATH.read_text().strip()
@@ -96,8 +97,8 @@ def check_admin_token(candidate: str | None) -> bool:
 
 
 def rotate_generated_admin_token() -> dict[str, str]:
-    if os.getenv("SERVERWARE_ADMIN_TOKEN"):
-        raise RuntimeError("environment-provided admin token cannot be rotated at runtime")
+    if ADMIN_TOKEN:
+        raise RuntimeError("externally provided admin token cannot be rotated at runtime")
     old_token = admin_token()
     token = secrets.token_urlsafe(32)
     ensure_data_dirs()
@@ -579,10 +580,11 @@ def require_role(*roles: str) -> Callable[..., AdminIdentity]:
 
 
 def admin_status() -> dict[str, object]:
+    token_source = ADMIN_TOKEN_SOURCE if ADMIN_TOKEN else "generated-file"
     return {
         "admin_auth_required": True,
-        "token_source": "env" if os.getenv("SERVERWARE_ADMIN_TOKEN") else "generated-file",
-        "generated_token_path": None if os.getenv("SERVERWARE_ADMIN_TOKEN") else str(ADMIN_TOKEN_PATH),
+        "token_source": token_source,
+        "generated_token_path": None if ADMIN_TOKEN else str(ADMIN_TOKEN_PATH),
         "admin_user_id": ADMIN_USER_ID,
         "admin_roles": list(ADMIN_ROLES),
         "oidc": {

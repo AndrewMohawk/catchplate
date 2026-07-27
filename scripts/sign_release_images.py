@@ -25,6 +25,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
 import serverware_source_tree
+import verify_production_readiness
 from serverware.http_client import request_bytes
 
 FIXTURE_COMMAND_MARKERS = ("fixture", "cosign_fixture.py", "sigstore_fixture.py")
@@ -516,7 +517,16 @@ def main() -> None:
     parser.add_argument("--gate", default=os.getenv("DECISION_GATE_BASE", "http://localhost:9090"))
     parser.add_argument("--anchor", default=os.getenv("SERVERWARE_RELEASE_ANCHOR_BASE", os.getenv("AUDIT_ANCHOR_BASE", "http://localhost:9100")))
     parser.add_argument("--anchor-ca-bundle", default=os.getenv("SERVERWARE_RELEASE_ANCHOR_CA_BUNDLE", ""))
-    parser.add_argument("--anchor-token", default=os.getenv("SERVERWARE_AUDIT_ANCHOR_TOKEN", "dev-audit-anchor-token"))
+    parser.add_argument(
+        "--anchor-token",
+        default=os.getenv("SERVERWARE_AUDIT_ANCHOR_TOKEN"),
+        help="development-only direct audit-anchor token",
+    )
+    parser.add_argument(
+        "--anchor-token-file",
+        default=os.getenv("SERVERWARE_AUDIT_ANCHOR_TOKEN_FILE"),
+        help="production audit-anchor-token file",
+    )
     parser.add_argument("--signature-provider", default=os.getenv("SERVERWARE_IMAGE_SIGNATURE_PROVIDER", "dev-ed25519"))
     parser.add_argument("--image-sign-command", default=os.getenv("SERVERWARE_IMAGE_SIGN_COMMAND", ""))
     parser.add_argument("--image-verify-command", default=os.getenv("SERVERWARE_IMAGE_VERIFY_COMMAND", ""))
@@ -567,6 +577,35 @@ def main() -> None:
             "production image signing requires SERVERWARE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY "
             "or --release-signing-trusted-key"
         )
+    anchor_sources: dict[str, str] = {}
+    if args.anchor_token is not None:
+        anchor_sources["SERVERWARE_AUDIT_ANCHOR_TOKEN"] = args.anchor_token
+    if args.anchor_token_file is not None:
+        anchor_sources["SERVERWARE_AUDIT_ANCHOR_TOKEN_FILE"] = args.anchor_token_file
+    if production_refs:
+        args.anchor_token = (
+            verify_production_readiness.load_service_credential_for_tool(
+                anchor_sources,
+                "SERVERWARE_AUDIT_ANCHOR_TOKEN",
+                require_file=True,
+            )
+        )
+    elif anchor_sources:
+        local_uid = os.geteuid()
+        local_gid = os.getegid()
+        args.anchor_token = (
+            verify_production_readiness.load_service_credential_for_tool(
+                anchor_sources,
+                "SERVERWARE_AUDIT_ANCHOR_TOKEN",
+                require_file=False,
+                expected_control_plane_uid=local_uid,
+                expected_control_plane_gid=local_gid,
+                expected_shared_owner_uid=local_uid,
+                expected_shared_gid=local_gid,
+            )
+        )
+    else:
+        args.anchor_token = "dev-audit-anchor-token"
     provenance_path = ROOT / args.provenance
     document = json.loads(provenance_path.read_text(encoding="utf-8"))
     verify_release_provenance(

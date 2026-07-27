@@ -163,11 +163,49 @@ else:
 PY
 
 run_version="1.2.$(date +%s)"
-npm_body="{\"name\":\"demo-package\",\"dist-tags\":{\"latest\":\"$run_version\"},\"versions\":{\"$run_version\":{\"version\":\"$run_version\",\"dist\":{\"integrity\":\"sha512-demo\"}}}}"
+npm_body="$(python3 - "$run_version" <<'PY'
+import base64
+import hashlib
+import json
+import sys
+
+version = sys.argv[1]
+tarball = f"serverware npm publish fixture {version}\n".encode("ascii")
+integrity = "sha512-" + base64.b64encode(hashlib.sha512(tarball).digest()).decode("ascii")
+print(
+    json.dumps(
+        {
+            "name": "demo-package",
+            "dist-tags": {"latest": version},
+            "tarball_integrity": integrity,
+            "versions": {
+                version: {
+                    "name": "demo-package",
+                    "version": version,
+                    "_integrity": integrity,
+                    "dist": {"integrity": integrity},
+                }
+            },
+            "_attachments": {
+                f"demo-package-{version}.tgz": {
+                    "content_type": "application/octet-stream",
+                    "data": base64.b64encode(tarball).decode("ascii"),
+                    "length": len(tarball),
+                }
+            },
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+)
+PY
+)"
 npm_url="https://demo-upstream:8443/npm/demo-package"
-python3 - "$GATE" "$npm_body" "$TMP_DIR/decision-gate-approval-required.json" "$GATE_HOST" "$GATE_PORT" <<'PY'
+python3 - "$GATE" "$npm_body" "$TMP_DIR/decision-gate-approval-required.json" "$TMP_DIR/decision-gate-approval-request.raw" "$GATE_HOST" "$GATE_PORT" <<'PY'
+import hashlib
 import json
 import os
+from pathlib import Path
 import socket
 import subprocess
 import sys
@@ -176,8 +214,9 @@ import urllib.request
 gate = sys.argv[1].rstrip("/")
 body = sys.argv[2]
 output_path = sys.argv[3]
-gate_host = sys.argv[4]
-gate_port = int(sys.argv[5])
+raw_request_path = Path(sys.argv[4])
+gate_host = sys.argv[5]
+gate_port = int(sys.argv[6])
 management_token = os.environ.get("SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN", "").strip() or "dev-rust-management-token"
 
 
@@ -207,16 +246,7 @@ def mutation_store():
     return json.loads(raw)
 
 
-def forward():
-    body_bytes = body.encode()
-    raw = (
-        "PUT https://demo-upstream:8443/npm/demo-package HTTP/1.1\r\n"
-        "Host: demo-upstream:8443\r\n"
-        "X-Serverware-Agent: demo-agent\r\n"
-        "Content-Type: application/json\r\n"
-        f"Content-Length: {len(body_bytes)}\r\n"
-        "Connection: close\r\n\r\n"
-    ).encode() + body_bytes
+def forward(raw: bytes):
     with socket.create_connection((gate_host, gate_port), timeout=10) as sock:
         sock.sendall(raw)
         response = b""
@@ -257,6 +287,16 @@ payload = {
     "body": body,
     "preview": True,
 }
+body_bytes = body.encode()
+raw_request = (
+    "PUT https://demo-upstream:8443/npm/demo-package HTTP/1.1\r\n"
+    "Host: demo-upstream:8443\r\n"
+    "X-Serverware-Agent: demo-agent\r\n"
+    "Content-Type: application/json\r\n"
+    f"Content-Length: {len(body_bytes)}\r\n"
+    "Connection: close\r\n\r\n"
+).encode() + body_bytes
+raw_request_path.write_bytes(raw_request)
 before = mutation_store()
 preview = post(f"{gate}/v1/decide", payload, management_token)
 assert preview["action"] == "jit_required", preview
@@ -267,7 +307,7 @@ assert preview["approval_id"] is None, preview
 assert mutation_store() == before, (before, mutation_store())
 
 before_actual = mutation_store()
-status, approval = forward()
+status, approval = forward(raw_request)
 assert status == 428, approval
 assert approval["action"] == "jit_required" and approval["allowed"] is False, approval
 assert approval["approval_id"], approval
@@ -287,6 +327,9 @@ assert after_actual["quota"] == before_actual["quota"], (before_actual, after_ac
 assert after_actual["grants"] == before_actual["grants"], (before_actual, after_actual)
 assert after_actual["approvals"] == before_actual["approvals"] + 1, (before_actual, after_actual)
 approval["_test_client_ip"] = payload["clientIp"]
+approval["_test_raw_request_sha256"] = "sha256:" + hashlib.sha256(
+    raw_request
+).hexdigest()
 json.dump(approval, open(output_path, "w", encoding="utf-8"))
 PY
 
@@ -339,10 +382,11 @@ curl -fsS "${ADMIN_HEADER[@]}" -H "Content-Type: application/json" -X POST \
   --data @"$TMP_DIR/decision-gate-approval-approve.json" \
   "$BASE/api/approvals/$approval_id/approve?ttl_seconds=30" > "$TMP_DIR/decision-gate-approval-approved.json"
 
-python3 - "$TMP_DIR/decision-gate-approval-approved.json" "$TMP_DIR/decision-gate-approval-required.json" "$GATE" "$BASE" "$npm_body" "$GATE_HOST" "$GATE_PORT" <<'PY'
+python3 - "$TMP_DIR/decision-gate-approval-approved.json" "$TMP_DIR/decision-gate-approval-required.json" "$TMP_DIR/decision-gate-approval-request.raw" "$GATE" "$BASE" "$npm_body" "$GATE_HOST" "$GATE_PORT" <<'PY'
 import hashlib
 import json
 import os
+from pathlib import Path
 import socket
 import subprocess
 import sys
@@ -351,17 +395,21 @@ import urllib.request
 
 approved = json.load(open(sys.argv[1]))
 required = json.load(open(sys.argv[2]))
-gate = sys.argv[3].rstrip("/")
-base = sys.argv[4].rstrip("/")
-body = sys.argv[5]
-gate_host = sys.argv[6]
-gate_port = int(sys.argv[7])
+raw_request = Path(sys.argv[3]).read_bytes()
+gate = sys.argv[4].rstrip("/")
+base = sys.argv[5].rstrip("/")
+body = sys.argv[6]
+gate_host = sys.argv[7]
+gate_port = int(sys.argv[8])
 management_token = os.environ.get("SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN", "").strip() or "dev-rust-management-token"
 rate_limit_token = os.environ.get("SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN", "").strip() or "dev-rate-limit-consume-token"
 publish = approved.get("data_plane_grant_publish") or {}
 assert approved["id"] == required["approval_id"], (approved, required)
 assert approved["request_digest"] == required["request_digest"], (approved, required)
 assert approved["operation_digest"] == required["operation_digest"], (approved, required)
+assert "sha256:" + hashlib.sha256(raw_request).hexdigest() == required[
+    "_test_raw_request_sha256"
+], required
 assert publish == {"enabled": True, "ok": True, "error": None}, approved
 
 decision_payload = {
@@ -404,17 +452,8 @@ def control_post(path, payload, token):
 
 
 def forward() -> tuple[int, dict]:
-    body_bytes = body.encode()
-    raw = (
-        "PUT https://demo-upstream:8443/npm/demo-package HTTP/1.1\r\n"
-        "Host: demo-upstream:8443\r\n"
-        "X-Serverware-Agent: demo-agent\r\n"
-        "Content-Type: application/json\r\n"
-        f"Content-Length: {len(body_bytes)}\r\n"
-        "Connection: close\r\n\r\n"
-    ).encode() + body_bytes
     with socket.create_connection((gate_host, gate_port), timeout=10) as sock:
-        sock.sendall(raw)
+        sock.sendall(raw_request)
         response = b""
         while True:
             chunk = sock.recv(4096)
@@ -433,6 +472,13 @@ def release_store() -> dict:
       'forwarded', (SELECT COUNT(*) FROM release_authorization_attempts WHERE route_id = 'demo.npm.publish.jit' AND state = 'committed' AND completion_outcome = 'forwarded'),
       'nonterminal', (SELECT COUNT(*) FROM release_authorization_attempts WHERE route_id = 'demo.npm.publish.jit' AND state IN ('reserved', 'dispatching')),
       'uncorrelated', (SELECT COUNT(*) FROM release_authorization_attempts WHERE route_id = 'demo.npm.publish.jit' AND attempt_id <> flow_id),
+      'credential_issuances', (
+        SELECT COUNT(*)
+        FROM release_authorization_credential_issuances AS issuance
+        INNER JOIN release_authorization_attempts AS attempt
+          ON attempt.attempt_id = issuance.attempt_id
+        WHERE attempt.route_id = 'demo.npm.publish.jit'
+      ),
       'quota_count', (SELECT COALESCE(SUM(count), 0) FROM rate_limit_counters WHERE route_id = 'demo.npm.publish.jit'),
       'approvals', (SELECT COUNT(*) FROM approval_requests WHERE route_id = 'demo.npm.publish.jit'),
       'grant_state', (SELECT state FROM approval_grants WHERE id = '{grant_id}'),
@@ -504,6 +550,7 @@ assert after_forward["attempts"] == before_forward["attempts"] + 1, (before_forw
 assert after_forward["forwarded"] == before_forward["forwarded"] + 1, (before_forward, after_forward)
 assert after_forward["nonterminal"] == before_forward["nonterminal"], (before_forward, after_forward)
 assert after_forward["uncorrelated"] == before_forward["uncorrelated"], (before_forward, after_forward)
+assert after_forward["credential_issuances"] == before_forward["credential_issuances"] + 1, (before_forward, after_forward)
 assert after_forward["grant_state"] == "consumed", after_forward
 assert after_forward["grant_uses"] == 0, after_forward
 assert after_forward["grant_reservation"] is None, after_forward

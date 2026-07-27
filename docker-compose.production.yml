@@ -2,6 +2,8 @@ services:
   serverware:
     image: ${SERVERWARE_CONTROL_PLANE_IMAGE:?set immutable control-plane image digest ref}
     user: "65532:65532"
+    group_add:
+      - "65530"
     init: true
     read_only: true
     cap_drop:
@@ -62,7 +64,7 @@ services:
       SERVERWARE_X_OAUTH_REDIRECT_URI: ${SERVERWARE_X_OAUTH_REDIRECT_URI:?set exact X OAuth callback URI}
       SERVERWARE_WEB_TLS_CERT_FILE: /run/serverware/tls/serverware.crt
       SERVERWARE_WEB_TLS_KEY_FILE: /run/serverware/tls/serverware.key
-      SERVERWARE_ADMIN_TOKEN: ${SERVERWARE_ADMIN_TOKEN:?set admin token}
+      SERVERWARE_ADMIN_TOKEN_FILE: /run/secrets/serverware-admin-token
       SERVERWARE_OIDC_ENABLED: "1"
       SERVERWARE_OIDC_ISSUER: ${SERVERWARE_OIDC_ISSUER:?set OIDC issuer}
       SERVERWARE_OIDC_AUDIENCE: ${SERVERWARE_OIDC_AUDIENCE:?set OIDC audience}
@@ -112,7 +114,7 @@ services:
       SERVERWARE_CONTROL_PLANE_MUTATION_ALLOWED_AUTHENTICATOR_CLASSES: "yubikey,hardware"
       SERVERWARE_CONTROL_PLANE_TWO_PERSON_REQUIRED: "1"
       SERVERWARE_CONTROL_PLANE_TWO_PERSON_ACTIONS: ${SERVERWARE_CONTROL_PLANE_TWO_PERSON_ACTIONS:?set protected mutation actions}
-      SERVERWARE_WEBAUTHN_BOOTSTRAP_TOKEN: ${SERVERWARE_WEBAUTHN_BOOTSTRAP_TOKEN:?set first-enrollment bootstrap token}
+      SERVERWARE_WEBAUTHN_BOOTSTRAP_TOKEN_FILE: /run/secrets/serverware-webauthn-bootstrap-token
       SERVERWARE_POLICY_PUBLISH_DRY_RUN_REQUIRED: "1"
       SERVERWARE_POLICY_CANARY_REQUIRED: "1"
       SERVERWARE_POLICY_CANARY_MIN_OBSERVATION_SECONDS: ${SERVERWARE_POLICY_CANARY_MIN_OBSERVATION_SECONDS:?set staged-policy observation window}
@@ -130,15 +132,15 @@ services:
       SERVERWARE_RELEASE_AUTHORIZATION_DISPATCH_TTL_SECONDS: ${SERVERWARE_RELEASE_AUTHORIZATION_DISPATCH_TTL_SECONDS:-30}
       SERVERWARE_RELEASE_AUTHORIZATION_RECONCILE_LIMIT: ${SERVERWARE_RELEASE_AUTHORIZATION_RECONCILE_LIMIT:-100}
       SERVERWARE_DATA_PLANE_INSTANCE_ID: ${SERVERWARE_DATA_PLANE_INSTANCE_ID:?set data-plane SPIFFE instance ID}
-      SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN: ${SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN:?set credential-lease token}
-      SERVERWARE_DATA_PLANE_AUDIT_TOKEN: ${SERVERWARE_DATA_PLANE_AUDIT_TOKEN:?set audit-ingest token}
-      SERVERWARE_DATA_PLANE_GRANT_CONSUME_TOKEN: ${SERVERWARE_DATA_PLANE_GRANT_CONSUME_TOKEN:?set grant-consume token}
-      SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN: ${SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN:?set rate-limit-consume token}
-      SERVERWARE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN: ${SERVERWARE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN:?set release-authorization token}
-      SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN: ${SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN:?set Rust management token}
+      SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN_FILE: /run/secrets/serverware-data-plane-credential-lease-token
+      SERVERWARE_DATA_PLANE_AUDIT_TOKEN_FILE: /run/secrets/serverware-data-plane-audit-token
+      SERVERWARE_DATA_PLANE_GRANT_CONSUME_TOKEN_FILE: /run/secrets/serverware-data-plane-grant-consume-token
+      SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN_FILE: /run/secrets/serverware-data-plane-rate-limit-consume-token
+      SERVERWARE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN_FILE: /run/secrets/serverware-data-plane-release-authorization-token
+      SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN_FILE: /run/secrets/serverware-data-plane-management-token
       SERVERWARE_AUDIT_ANCHOR_URL: https://audit-anchor:9100/anchors
       SERVERWARE_AUDIT_ANCHOR_CA_BUNDLE: /run/serverware/tls/ca.pem
-      SERVERWARE_AUDIT_ANCHOR_TOKEN: ${SERVERWARE_AUDIT_ANCHOR_TOKEN:?set audit-anchor token}
+      SERVERWARE_AUDIT_ANCHOR_TOKEN_FILE: /run/secrets/serverware-audit-anchor-token
       SERVERWARE_AUDIT_ANCHOR_INTERVAL_SECONDS: ${SERVERWARE_AUDIT_ANCHOR_INTERVAL_SECONDS:-2}
       SERVERWARE_AUDIT_ANCHOR_TIMEOUT_SECONDS: ${SERVERWARE_AUDIT_ANCHOR_TIMEOUT_SECONDS:-10}
       SERVERWARE_DATA_PLANE_LEASE_RECIPIENT_ATTESTATION_REQUIRED: "1"
@@ -181,6 +183,15 @@ services:
       - ${SERVERWARE_X_OAUTH_CLIENT_SECRET_FILE:?set X OAuth client secret file}:/run/secrets/serverware-x-oauth-client-secret:ro
       - ${SERVERWARE_OIDC_CLIENT_SECRET_FILE:?set OIDC client secret file}:/run/secrets/serverware-oidc-client-secret:ro
       - ${SERVERWARE_RESPONSE_SIGNING_PRIVATE_KEY_FILE:?set response signing private key file}:/run/secrets/serverware-response-signing-key:ro
+      - ${SERVERWARE_ADMIN_TOKEN_FILE:?set admin token file}:/run/secrets/serverware-admin-token:ro
+      - ${SERVERWARE_WEBAUTHN_BOOTSTRAP_TOKEN_FILE:?set first-enrollment bootstrap token file}:/run/secrets/serverware-webauthn-bootstrap-token:ro
+      - ${SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN_FILE:?set credential-lease token file}:/run/secrets/serverware-data-plane-credential-lease-token:ro
+      - ${SERVERWARE_DATA_PLANE_AUDIT_TOKEN_FILE:?set audit-ingest token file}:/run/secrets/serverware-data-plane-audit-token:ro
+      - ${SERVERWARE_DATA_PLANE_GRANT_CONSUME_TOKEN_FILE:?set grant-consume token file}:/run/secrets/serverware-data-plane-grant-consume-token:ro
+      - ${SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN_FILE:?set rate-limit-consume token file}:/run/secrets/serverware-data-plane-rate-limit-consume-token:ro
+      - ${SERVERWARE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN_FILE:?set release-authorization token file}:/run/secrets/serverware-data-plane-release-authorization-token:ro
+      - ${SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN_FILE:?set Rust management token file}:/run/secrets/serverware-data-plane-management-token:ro
+      - ${SERVERWARE_AUDIT_ANCHOR_TOKEN_FILE:?set audit-anchor token file}:/run/secrets/serverware-audit-anchor-token:ro
       - ${SERVERWARE_SETUP_ENROLLMENT_VERIFIER_PUBLIC_KEY:?set enrollment verifier public key}:/run/serverware/setup-trust/enrollment-verifier.pub.pem:ro
       - ${SERVERWARE_SETUP_HARDWARE_VERIFIER_PUBLIC_KEY:?set hardware verifier public key}:/run/serverware/setup-trust/hardware-verifier.pub.pem:ro
       - ${SERVERWARE_SETUP_FINAL_AUTHORITY_PUBLIC_KEY:?set final authority public key}:/run/serverware/setup-trust/final-authority.pub.pem:ro
@@ -206,6 +217,8 @@ services:
 
   audit-anchor:
     image: ${SERVERWARE_CONTROL_PLANE_IMAGE:?set immutable control-plane image digest ref}
+    group_add:
+      - "65530"
     init: true
     read_only: true
     cap_drop:
@@ -222,7 +235,7 @@ services:
         hard: 0
     command: ["scripts/audit_anchor_sink.py"]
     environment:
-      SERVERWARE_AUDIT_ANCHOR_TOKEN: ${SERVERWARE_AUDIT_ANCHOR_TOKEN:?set anchor token}
+      SERVERWARE_AUDIT_ANCHOR_TOKEN_FILE: /run/secrets/serverware-audit-anchor-token
       SERVERWARE_AUDIT_ANCHOR_PATH: /anchors/transparency-log.jsonl
       SERVERWARE_TRANSPARENCY_LOG_SIGNING_KEY: /anchors/transparency-log-ed25519.pem
       SERVERWARE_TRANSPARENCY_CHECKPOINT_COMMAND: ${SERVERWARE_TRANSPARENCY_CHECKPOINT_COMMAND:?set transparency checkpoint command}
@@ -232,6 +245,7 @@ services:
     volumes:
       - serverware-audit-anchors:/anchors
       - ${SERVERWARE_AUDIT_ANCHOR_TLS_DIR:?set audit-anchor TLS directory}:/run/serverware/anchor-tls:ro
+      - ${SERVERWARE_AUDIT_ANCHOR_TOKEN_FILE:?set audit-anchor token file}:/run/secrets/serverware-audit-anchor-token:ro
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=32m
     networks:
@@ -313,12 +327,12 @@ services:
       SERVERWARE_CONTROL_PLANE_RATE_LIMIT_CONSUME_URL: ${SERVERWARE_CONTROL_PLANE_RATE_LIMIT_CONSUME_URL:?set shared rate-limit URL}
       SERVERWARE_CONTROL_PLANE_RELEASE_AUTHORIZATION_BASE_URL: https://serverware:3000/api/data-plane/release-authorizations
       SERVERWARE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED: "1"
-      SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN: ${SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN:?set credential-lease token}
-      SERVERWARE_DATA_PLANE_AUDIT_TOKEN: ${SERVERWARE_DATA_PLANE_AUDIT_TOKEN:?set audit-ingest token}
-      SERVERWARE_DATA_PLANE_GRANT_CONSUME_TOKEN: ${SERVERWARE_DATA_PLANE_GRANT_CONSUME_TOKEN:?set grant-consume token}
-      SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN: ${SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN:?set rate-limit-consume token}
-      SERVERWARE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN: ${SERVERWARE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN:?set release-authorization token}
-      SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN: ${SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN:?set Rust management token}
+      SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN_FILE: /run/secrets/serverware-data-plane-credential-lease-token
+      SERVERWARE_DATA_PLANE_AUDIT_TOKEN_FILE: /run/secrets/serverware-data-plane-audit-token
+      SERVERWARE_DATA_PLANE_GRANT_CONSUME_TOKEN_FILE: /run/secrets/serverware-data-plane-grant-consume-token
+      SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN_FILE: /run/secrets/serverware-data-plane-rate-limit-consume-token
+      SERVERWARE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN_FILE: /run/secrets/serverware-data-plane-release-authorization-token
+      SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN_FILE: /run/secrets/serverware-data-plane-management-token
       SERVERWARE_DECISION_GATE_HOST: 0.0.0.0
       SERVERWARE_DECISION_GATE_PORT: "9090"
       SERVERWARE_DECISION_GATE_MANAGEMENT_HOST: 127.0.0.1
@@ -331,7 +345,7 @@ services:
       SERVERWARE_POLICY_MIN_ROLLBACK_EPOCH: ${SERVERWARE_POLICY_MIN_ROLLBACK_EPOCH:?set signed minimum policy rollback epoch}
       SERVERWARE_DECISION_GATE_PROXY_WORKERS: "16"
     ports:
-      - "8080:9090"
+      - "${SERVERWARE_PROXY_BIND_ADDRESS:?set explicit production proxy bind address}:8080:9090"
     volumes:
       - serverware-gate-materials:/run/serverware/gate:ro
       - serverware-gate-state:/var/lib/serverware
@@ -341,6 +355,12 @@ services:
       - ${SERVERWARE_NITRO_ROOT_CERT:?set Nitro root certificate}:/run/serverware/nitro/nitro-root.pem:ro
       - ${SERVERWARE_RELEASE_PROVENANCE_FILE:?set release provenance artifact path}:/run/serverware/release/release-provenance.json:ro
       - ${SERVERWARE_IMAGE_SIGNATURES_FILE:?set image signatures artifact path}:/run/serverware/release/image-signatures.json:ro
+      - ${SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN_FILE:?set credential-lease token file}:/run/secrets/serverware-data-plane-credential-lease-token:ro
+      - ${SERVERWARE_DATA_PLANE_AUDIT_TOKEN_FILE:?set audit-ingest token file}:/run/secrets/serverware-data-plane-audit-token:ro
+      - ${SERVERWARE_DATA_PLANE_GRANT_CONSUME_TOKEN_FILE:?set grant-consume token file}:/run/secrets/serverware-data-plane-grant-consume-token:ro
+      - ${SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN_FILE:?set rate-limit-consume token file}:/run/secrets/serverware-data-plane-rate-limit-consume-token:ro
+      - ${SERVERWARE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN_FILE:?set release-authorization token file}:/run/secrets/serverware-data-plane-release-authorization-token:ro
+      - ${SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN_FILE:?set Rust management token file}:/run/secrets/serverware-data-plane-management-token:ro
     devices:
       - /dev/nsm:/dev/nsm
     tmpfs:

@@ -38,6 +38,7 @@ import build_production_images
 import merge_production_images_env
 import publish_production_images
 import run_production_readiness
+import verify_production_readiness
 import verify_reproducible_builds
 
 DEV_SERVICES = (
@@ -1585,10 +1586,24 @@ def main() -> None:
         default=os.getenv("SERVERWARE_RELEASE_ANCHOR_CA_BUNDLE", ""),
     )
     parser.add_argument(
-        "--admin-token", default=os.getenv("SERVERWARE_ADMIN_TOKEN", "dev-admin-token")
+        "--admin-token",
+        default=os.getenv("SERVERWARE_ADMIN_TOKEN"),
+        help="development-only direct admin token",
     )
     parser.add_argument(
-        "--anchor-token", default=os.getenv("SERVERWARE_AUDIT_ANCHOR_TOKEN", "")
+        "--admin-token-file",
+        default=os.getenv("SERVERWARE_ADMIN_TOKEN_FILE"),
+        help="production admin-token file",
+    )
+    parser.add_argument(
+        "--anchor-token",
+        default=os.getenv("SERVERWARE_AUDIT_ANCHOR_TOKEN"),
+        help="development-only direct audit-anchor token",
+    )
+    parser.add_argument(
+        "--anchor-token-file",
+        default=os.getenv("SERVERWARE_AUDIT_ANCHOR_TOKEN_FILE"),
+        help="production audit-anchor-token file",
     )
     parser.add_argument("--env-file", default="ops/production-readiness.env")
     parser.add_argument("--compose-file", default="docker-compose.production.yml")
@@ -1627,8 +1642,47 @@ def main() -> None:
         args.anchor = args.anchor or loaded_env.get(
             "SERVERWARE_RELEASE_ANCHOR_BASE", ""
         )
-        args.anchor_token = args.anchor_token or loaded_env.get(
-            "SERVERWARE_AUDIT_ANCHOR_TOKEN", ""
+        admin_sources: dict[str, str] = {}
+        anchor_sources: dict[str, str] = {}
+        if args.admin_token is not None:
+            admin_sources["SERVERWARE_ADMIN_TOKEN"] = args.admin_token
+        elif "SERVERWARE_ADMIN_TOKEN" in loaded_env:
+            admin_sources["SERVERWARE_ADMIN_TOKEN"] = loaded_env[
+                "SERVERWARE_ADMIN_TOKEN"
+            ]
+        if args.admin_token_file is not None:
+            admin_sources["SERVERWARE_ADMIN_TOKEN_FILE"] = args.admin_token_file
+        elif "SERVERWARE_ADMIN_TOKEN_FILE" in loaded_env:
+            admin_sources["SERVERWARE_ADMIN_TOKEN_FILE"] = loaded_env[
+                "SERVERWARE_ADMIN_TOKEN_FILE"
+            ]
+        if args.anchor_token is not None:
+            anchor_sources["SERVERWARE_AUDIT_ANCHOR_TOKEN"] = args.anchor_token
+        elif "SERVERWARE_AUDIT_ANCHOR_TOKEN" in loaded_env:
+            anchor_sources["SERVERWARE_AUDIT_ANCHOR_TOKEN"] = loaded_env[
+                "SERVERWARE_AUDIT_ANCHOR_TOKEN"
+            ]
+        if args.anchor_token_file is not None:
+            anchor_sources["SERVERWARE_AUDIT_ANCHOR_TOKEN_FILE"] = (
+                args.anchor_token_file
+            )
+        elif "SERVERWARE_AUDIT_ANCHOR_TOKEN_FILE" in loaded_env:
+            anchor_sources["SERVERWARE_AUDIT_ANCHOR_TOKEN_FILE"] = loaded_env[
+                "SERVERWARE_AUDIT_ANCHOR_TOKEN_FILE"
+            ]
+        args.admin_token = (
+            verify_production_readiness.load_service_credential_for_tool(
+                admin_sources,
+                "SERVERWARE_ADMIN_TOKEN",
+                require_file=True,
+            )
+        )
+        args.anchor_token = (
+            verify_production_readiness.load_service_credential_for_tool(
+                anchor_sources,
+                "SERVERWARE_AUDIT_ANCHOR_TOKEN",
+                require_file=True,
+            )
         )
         args.anchor_ca_bundle = args.anchor_ca_bundle or loaded_env.get(
             "SERVERWARE_RELEASE_ANCHOR_CA_BUNDLE", ""
@@ -1682,7 +1736,46 @@ def main() -> None:
         anchor_verify = None
     else:
         args.anchor = args.anchor or "http://localhost:9100"
-        args.anchor_token = args.anchor_token or "dev-audit-anchor-token"
+        local_uid = os.geteuid()
+        local_gid = os.getegid()
+        admin_sources = {}
+        anchor_sources = {}
+        if args.admin_token is not None:
+            admin_sources["SERVERWARE_ADMIN_TOKEN"] = args.admin_token
+        if args.admin_token_file is not None:
+            admin_sources["SERVERWARE_ADMIN_TOKEN_FILE"] = args.admin_token_file
+        if args.anchor_token is not None:
+            anchor_sources["SERVERWARE_AUDIT_ANCHOR_TOKEN"] = args.anchor_token
+        if args.anchor_token_file is not None:
+            anchor_sources["SERVERWARE_AUDIT_ANCHOR_TOKEN_FILE"] = (
+                args.anchor_token_file
+            )
+        args.admin_token = (
+            verify_production_readiness.load_service_credential_for_tool(
+                admin_sources,
+                "SERVERWARE_ADMIN_TOKEN",
+                require_file=False,
+                expected_control_plane_uid=local_uid,
+                expected_control_plane_gid=local_gid,
+                expected_shared_owner_uid=local_uid,
+                expected_shared_gid=local_gid,
+            )
+            if admin_sources
+            else "dev-admin-token"
+        )
+        args.anchor_token = (
+            verify_production_readiness.load_service_credential_for_tool(
+                anchor_sources,
+                "SERVERWARE_AUDIT_ANCHOR_TOKEN",
+                require_file=False,
+                expected_control_plane_uid=local_uid,
+                expected_control_plane_gid=local_gid,
+                expected_shared_owner_uid=local_uid,
+                expected_shared_gid=local_gid,
+            )
+            if anchor_sources
+            else "dev-audit-anchor-token"
+        )
         compose_files = os.environ.get("COMPOSE_FILE", "docker-compose.yml").split(os.pathsep)
         compose_profiles = sorted(
             value

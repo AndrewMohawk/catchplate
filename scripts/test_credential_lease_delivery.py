@@ -10,6 +10,7 @@ import shlex
 import sys
 import tempfile
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -126,6 +127,8 @@ def recipient_attestation_verifier() -> None:
         if evidence.get("format") != "serverware.testRecipientAttestation/v1":
             raise ValueError("unexpected recipient attestation format")
         for field in (
+            "purpose",
+            "requestBindingSha256",
             "recipientKeyId",
             "recipientNonce",
             "policyHash",
@@ -143,6 +146,8 @@ def recipient_attestation_verifier() -> None:
         response = {
             "ok": True,
             "debug": False,
+            "purpose": request["purpose"],
+            "requestBindingSha256": request["requestBindingSha256"],
             "recipientKeyId": request["recipientKeyId"],
             "recipientNonce": request["recipientNonce"],
             "policyHash": request["policyHash"],
@@ -329,9 +334,13 @@ def recipient_attestation(
     nonce: str,
     policy_hash: str,
     binary_digest: str,
+    purpose: str,
+    request_binding_sha256: str,
 ) -> dict[str, str]:
     return {
         "format": "serverware.testRecipientAttestation/v1",
+        "purpose": purpose,
+        "requestBindingSha256": request_binding_sha256,
         "recipientKeyId": key_id,
         "recipientNonce": nonce,
         "policyHash": policy_hash,
@@ -342,27 +351,70 @@ def recipient_attestation(
     }
 
 
-def lease_payload(public_key_raw: bytes, policy_hash: str, label: str) -> dict[str, Any]:
+def credential_lease_request_binding(payload: dict[str, Any]) -> str:
+    return sha256_prefixed(
+        canonical_json_bytes(
+            {
+                "apiVersion": payload["apiVersion"],
+                "purpose": payload["purpose"],
+                "principalId": payload["principalId"],
+                "routeId": payload["routeId"],
+                "credentialId": payload["credentialId"],
+                "expectedCredentialVersion": payload["expectedCredentialVersion"],
+                "expectedMetadataSha256": payload["expectedMetadataSha256"],
+                "releaseAuthorization": payload["releaseAuthorization"],
+                "recipientKeyId": payload["recipientKeyId"],
+                "recipientNonce": payload["recipientNonce"],
+                "policyHash": payload["policyHash"],
+                "dataPlaneBinaryDigest": payload["dataPlaneBinaryDigest"],
+                "maxTtlSeconds": payload["maxTtlSeconds"],
+            }
+        )
+    )
+
+
+def credential_metadata_sha256(metadata: dict[str, Any]) -> str:
+    return sha256_prefixed(canonical_json_bytes(metadata))
+
+
+def lease_payload(
+    public_key_raw: bytes,
+    policy_hash: str,
+    label: str,
+    *,
+    purpose: str = "generationMetadata",
+    expected_credential_version: int | None = None,
+    expected_metadata_sha256: str | None = None,
+    release_authorization: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     key_id = sha256_prefixed(public_key_raw)
     nonce = recipient_nonce(label)
-    return {
-        "apiVersion": "serverware.credentialLeaseRequest/v2",
+    payload = {
+        "apiVersion": "serverware.credentialLeaseRequest/v3",
+        "purpose": purpose,
         "principalId": PRINCIPAL_ID,
         "routeId": ROUTE_ID,
         "credentialId": CREDENTIAL_ID,
+        "expectedCredentialVersion": expected_credential_version,
+        "expectedMetadataSha256": expected_metadata_sha256,
+        "releaseAuthorization": release_authorization,
         "recipientPublicKey": b64e(public_key_raw),
         "recipientKeyId": key_id,
         "recipientNonce": b64e(nonce),
         "policyHash": policy_hash,
         "dataPlaneBinaryDigest": DATA_PLANE_BINARY_DIGEST,
         "maxTtlSeconds": 5,
-        "recipientAttestation": recipient_attestation(
+    }
+    request_binding_sha256 = credential_lease_request_binding(payload)
+    payload["recipientAttestation"] = recipient_attestation(
             key_id,
             b64e(nonce),
             policy_hash,
             DATA_PLANE_BINARY_DIGEST,
-        ),
-    }
+            purpose,
+            request_binding_sha256,
+        )
+    return payload
 
 
 def decrypt_lease(
@@ -370,6 +422,7 @@ def decrypt_lease(
     *,
     recipient_private_key: X25519PrivateKey,
     recipient_nonce_raw: bytes,
+    request_payload: dict[str, Any],
 ) -> dict[str, Any]:
     expected_fields = set(AAD_FIELDS).union(ENCRYPTED_FIELDS)
     if set(envelope) != expected_fields:
@@ -378,7 +431,8 @@ def decrypt_lease(
         raise AssertionError(f"unexpected credential lease envelope version: {envelope}")
     if envelope["algorithm"] != "X25519-HKDF-SHA256-AES-256-GCM":
         raise AssertionError(f"unexpected credential lease algorithm: {envelope}")
-    if envelope["expiresAtEpochMs"] - envelope["issuedAtEpochMs"] != 5_000:
+    lease_ttl_ms = envelope["expiresAtEpochMs"] - envelope["issuedAtEpochMs"]
+    if not 0 < lease_ttl_ms <= 5_000:
         raise AssertionError(f"credential lease TTL was not bounded to five seconds: {envelope}")
 
     aad = {field: envelope[field] for field in AAD_FIELDS}
@@ -402,13 +456,43 @@ def decrypt_lease(
     plaintext = json.loads(plaintext_bytes)
     if canonical_json_bytes(plaintext) != plaintext_bytes:
         raise AssertionError("credential lease plaintext is not canonical JSON")
-    if plaintext.get("apiVersion") != "serverware.credentialLeaseSet/v2":
+    if plaintext.get("apiVersion") != "serverware.credentialLeaseSet/v3":
         raise AssertionError(f"unexpected credential lease plaintext version: {plaintext}")
-    if set(plaintext) != {"apiVersion", *DUPLICATED_BINDINGS, "credentials"}:
+    if set(plaintext) != {
+        "apiVersion",
+        "purpose",
+        "requestBindingSha256",
+        "releaseAuthorization",
+        *DUPLICATED_BINDINGS,
+        "credentials",
+    }:
         raise AssertionError(f"credential lease plaintext fields changed: {sorted(plaintext)}")
+    if plaintext["purpose"] != request_payload["purpose"]:
+        raise AssertionError(f"credential lease purpose substitution: {plaintext}")
+    if plaintext["requestBindingSha256"] != credential_lease_request_binding(request_payload):
+        raise AssertionError(f"credential lease request binding mismatch: {plaintext}")
+    if plaintext["releaseAuthorization"] != request_payload["releaseAuthorization"]:
+        raise AssertionError(f"credential lease release authorization mismatch: {plaintext}")
     for field in DUPLICATED_BINDINGS:
         if plaintext.get(field) != envelope.get(field):
             raise AssertionError(f"credential lease duplicated binding mismatch for {field}: {plaintext}")
+    credentials = plaintext.get("credentials")
+    if not isinstance(credentials, list) or len(credentials) != 1:
+        raise AssertionError(f"credential lease must contain one credential: {plaintext}")
+    expected_entry_fields = {
+        "credentialId",
+        "credentialVersion",
+        "metadataSha256",
+        "metadata",
+    }
+    if request_payload["purpose"] == "dispatchSecret":
+        expected_entry_fields.add("secret")
+    if set(credentials[0]) != expected_entry_fields:
+        raise AssertionError(f"credential lease material shape mismatch: {plaintext}")
+    if credentials[0]["metadataSha256"] != credential_metadata_sha256(
+        credentials[0]["metadata"]
+    ):
+        raise AssertionError(f"credential lease metadata digest mismatch: {plaintext}")
     return plaintext
 
 
@@ -554,6 +638,8 @@ def main() -> None:
         try:
             app_module._verify_credential_lease_recipient_attestation(
                 None,
+                purpose="generationMetadata",
+                request_binding_sha256="sha256:" + "0" * 64,
                 recipient_key_id="sha256:" + "1" * 64,
                 recipient_nonce=b64e(recipient_nonce("production-misconfiguration")),
                 policy_hash_value="sha256:" + "2" * 64,
@@ -823,21 +909,186 @@ def main() -> None:
         initial_payload = lease_payload(recipient_public_key_raw, snapshot.hash, "initial")
         verifier_counter = data_dir / "recipient-verifier-count.txt"
         initial_payload["recipientAttestation"]["testVerifierCounterPath"] = str(verifier_counter)
-        initial_response = post_lease(initial_payload, "initial")
+        original_credential_for_lease = app_module._credential_for_lease
+        original_credential_lease_snapshot = db.credential_lease_snapshot
+        original_load_master_key = db.load_master_key
+        original_decrypt_secret_envelope = db.decrypt_secret_envelope
+
+        def reject_generation_refresh(_credential_id: str) -> dict[str, Any] | None:
+            raise AssertionError("generation metadata entered the credential refresh path")
+
+        def reject_generation_secret_snapshot(_credential_id: str) -> Any:
+            raise AssertionError("generation metadata entered the secret snapshot path")
+
+        def reject_generation_master_key_load() -> bytes:
+            raise AssertionError("generation metadata loaded the credential master key")
+
+        def reject_generation_decrypt(_row: Any) -> str:
+            raise AssertionError("generation metadata decrypted credential material")
+
+        app_module._credential_for_lease = reject_generation_refresh
+        db.credential_lease_snapshot = reject_generation_secret_snapshot
+        db.load_master_key = reject_generation_master_key_load
+        db.decrypt_secret_envelope = reject_generation_decrypt
+        try:
+            initial_response = post_lease(initial_payload, "initial")
+        finally:
+            app_module._credential_for_lease = original_credential_for_lease
+            db.credential_lease_snapshot = original_credential_lease_snapshot
+            db.load_master_key = original_load_master_key
+            db.decrypt_secret_envelope = original_decrypt_secret_envelope
         assert_status(initial_response, 200, "initial credential lease")
         initial_plaintext = decrypt_lease(
             initial_response.json(),
             recipient_private_key=recipient_private_key,
             recipient_nonce_raw=recipient_nonce("initial"),
+            request_payload=initial_payload,
         )
-        expected_initial_credential = {
+        initial_metadata_sha256 = credential_metadata_sha256(INITIAL_METADATA)
+        expected_initial_generation = {
             "credentialId": CREDENTIAL_ID,
             "credentialVersion": 1,
-            "secret": CREDENTIAL_SECRET,
+            "metadataSha256": initial_metadata_sha256,
             "metadata": INITIAL_METADATA,
         }
-        if initial_plaintext["credentials"] != [expected_initial_credential]:
+        if initial_plaintext["credentials"] != [expected_initial_generation]:
             raise AssertionError(f"initial credential lease contents are incorrect: {initial_plaintext}")
+        if CREDENTIAL_SECRET in canonical_json_bytes(initial_plaintext).decode("utf-8"):
+            raise AssertionError("generation metadata plaintext contains credential secret material")
+        if "fingerprint" in canonical_json_bytes(initial_plaintext).decode("utf-8").lower():
+            raise AssertionError("generation metadata plaintext contains a secret fingerprint")
+
+        dispatch_payload = lease_payload(
+            recipient_public_key_raw,
+            snapshot.hash,
+            "initial-dispatch",
+            purpose="dispatchSecret",
+            expected_credential_version=1,
+            expected_metadata_sha256=initial_metadata_sha256,
+        )
+        dispatch_calls = 0
+
+        def count_dispatch_refresh(credential_id: str) -> dict[str, Any] | None:
+            nonlocal dispatch_calls
+            dispatch_calls += 1
+            return original_credential_for_lease(credential_id)
+
+        app_module._credential_for_lease = count_dispatch_refresh
+        try:
+            dispatch_response = post_lease(dispatch_payload, "initial-dispatch")
+        finally:
+            app_module._credential_for_lease = original_credential_for_lease
+        assert_status(dispatch_response, 200, "initial dispatch credential lease")
+        dispatch_plaintext = decrypt_lease(
+            dispatch_response.json(),
+            recipient_private_key=recipient_private_key,
+            recipient_nonce_raw=recipient_nonce("initial-dispatch"),
+            request_payload=dispatch_payload,
+        )
+        expected_initial_secret = {
+            **expected_initial_generation,
+            "secret": CREDENTIAL_SECRET,
+        }
+        if dispatch_plaintext["credentials"] != [expected_initial_secret]:
+            raise AssertionError(
+                f"initial dispatch credential lease contents are incorrect: {dispatch_plaintext}"
+            )
+        if dispatch_calls != 1:
+            raise AssertionError(f"dispatch secret refresh path called {dispatch_calls} times")
+
+        jit_release_authorization = {
+            "apiVersion": "serverware.credentialLeaseReleaseAuthorization/v1",
+            "state": "reserved",
+            "attemptId": "attempt:credential-lease-ordering",
+            "bindingDigest": "sha256:" + "a" * 64,
+            "grantId": "grant:credential-lease-ordering",
+            "approvalRequestId": "approval:credential-lease-ordering",
+            "reservationExpiresAtEpochMs": int(time.time() * 1000) + 4_500,
+        }
+        jit_payload = lease_payload(
+            recipient_public_key_raw,
+            snapshot.hash,
+            "jit-dispatch-ordering",
+            purpose="dispatchSecret",
+            expected_credential_version=1,
+            expected_metadata_sha256=initial_metadata_sha256,
+            release_authorization=jit_release_authorization,
+        )
+        original_active_route_by_id = app_module._active_route_by_id
+        original_assert_release = (
+            app_module._assert_credential_lease_release_authorization
+        )
+        original_claim_release = (
+            app_module._claim_credential_lease_release_authorization
+        )
+        ordering: list[str] = []
+
+        def jit_route(route_id: str, *, snapshot: Any = None) -> Any:
+            route = original_active_route_by_id(route_id, snapshot=snapshot)
+            return replace(
+                route,
+                jit={
+                    "required": True,
+                    "approvers": {"users": ["user:test-approver"]},
+                    "authentication": {"method": "webauthn"},
+                },
+            )
+
+        def accept_release(payload: Any, *, route: Any) -> dict[str, Any]:
+            del route
+            assert payload.release_authorization is not None
+            return payload.release_authorization.model_dump(by_alias=True)
+
+        def claim_release(
+            payload: Any,
+            *,
+            route: Any,
+            request_binding_sha256: str,
+            recipient_nonce_sha256: str,
+        ) -> dict[str, Any]:
+            del payload, route, request_binding_sha256, recipient_nonce_sha256
+            ordering.append("claim")
+            return {"claimed": True}
+
+        def refresh_after_claim(credential_id: str) -> dict[str, Any] | None:
+            if ordering != ["claim"]:
+                raise AssertionError(
+                    f"credential refresh preceded atomic JIT issuance claim: {ordering}"
+                )
+            ordering.append("refresh")
+            return original_credential_for_lease(credential_id)
+
+        app_module._active_route_by_id = jit_route
+        app_module._assert_credential_lease_release_authorization = accept_release
+        app_module._claim_credential_lease_release_authorization = claim_release
+        app_module._credential_for_lease = refresh_after_claim
+        try:
+            jit_response = post_lease(jit_payload, "jit-dispatch-ordering")
+        finally:
+            app_module._active_route_by_id = original_active_route_by_id
+            app_module._assert_credential_lease_release_authorization = (
+                original_assert_release
+            )
+            app_module._claim_credential_lease_release_authorization = (
+                original_claim_release
+            )
+            app_module._credential_for_lease = original_credential_for_lease
+        assert_status(jit_response, 200, "JIT dispatch ordering lease")
+        if ordering != ["claim", "refresh"]:
+            raise AssertionError(f"unexpected JIT credential issuance ordering: {ordering}")
+        jit_plaintext = decrypt_lease(
+            jit_response.json(),
+            recipient_private_key=recipient_private_key,
+            recipient_nonce_raw=recipient_nonce("jit-dispatch-ordering"),
+            request_payload=jit_payload,
+        )
+        if (
+            jit_plaintext["expiresAtEpochMs"]
+            > jit_release_authorization["reservationExpiresAtEpochMs"]
+        ):
+            raise AssertionError(
+                "JIT credential lease outlived its release reservation"
+            )
 
         encryption_entered = threading.Event()
         allow_encryption = threading.Event()
@@ -884,8 +1135,11 @@ def main() -> None:
             endpoint_locked_response.json(),
             recipient_private_key=recipient_private_key,
             recipient_nonce_raw=recipient_nonce("endpoint-lock"),
+            request_payload=lease_payload(
+                recipient_public_key_raw, snapshot.hash, "endpoint-lock"
+            ),
         )
-        if endpoint_locked_plaintext["credentials"] != [expected_initial_credential]:
+        if endpoint_locked_plaintext["credentials"] != [expected_initial_generation]:
             raise AssertionError("endpoint lease did not encrypt one immutable credential generation")
         if renamed_after_encryption is None or renamed_after_encryption["name"] != "Demo bearer token after lease":
             raise AssertionError("credential mutation did not complete after lease encryption released")
@@ -907,8 +1161,9 @@ def main() -> None:
             second_recipient_response.json(),
             recipient_private_key=second_recipient_private_key,
             recipient_nonce_raw=recipient_nonce("second-recipient"),
+            request_payload=second_recipient_payload,
         )
-        if second_recipient_plaintext["credentials"] != [expected_initial_credential]:
+        if second_recipient_plaintext["credentials"] != [expected_initial_generation]:
             raise AssertionError(f"second recipient lease contents are incorrect: {second_recipient_plaintext}")
         with db.connect() as replay_conn:
             reserved_before_rejections = int(
@@ -974,6 +1229,70 @@ def main() -> None:
         unknown_field = lease_payload(recipient_public_key_raw, snapshot.hash, "unknown-field")
         unknown_field["unknownField"] = "must-fail-closed"
         rejection_cases.append(("unknown extra field", unknown_field, 422, "extra_forbidden", DATA_PLANE_TOKEN))
+        missing_purpose = lease_payload(
+            recipient_public_key_raw, snapshot.hash, "missing-purpose"
+        )
+        missing_purpose.pop("purpose")
+        rejection_cases.append(
+            ("missing purpose", missing_purpose, 422, "Field required", DATA_PLANE_TOKEN)
+        )
+        missing_release_mode = lease_payload(
+            recipient_public_key_raw, snapshot.hash, "missing-release-mode"
+        )
+        missing_release_mode.pop("releaseAuthorization")
+        rejection_cases.append(
+            (
+                "missing release mode",
+                missing_release_mode,
+                422,
+                "Field required",
+                DATA_PLANE_TOKEN,
+            )
+        )
+        generation_with_dispatch_bindings = lease_payload(
+            recipient_public_key_raw,
+            snapshot.hash,
+            "generation-mode-substitution",
+            expected_credential_version=1,
+            expected_metadata_sha256=initial_metadata_sha256,
+        )
+        rejection_cases.append(
+            (
+                "generation mode substitution",
+                generation_with_dispatch_bindings,
+                422,
+                "must not include dispatch bindings",
+                DATA_PLANE_TOKEN,
+            )
+        )
+        dispatch_without_generation = lease_payload(
+            recipient_public_key_raw,
+            snapshot.hash,
+            "dispatch-without-generation",
+            purpose="dispatchSecret",
+        )
+        rejection_cases.append(
+            (
+                "dispatch missing generation",
+                dispatch_without_generation,
+                422,
+                "require expected credential metadata bindings",
+                DATA_PLANE_TOKEN,
+            )
+        )
+        excessive_ttl = lease_payload(
+            recipient_public_key_raw, snapshot.hash, "excessive-ttl"
+        )
+        excessive_ttl["maxTtlSeconds"] = 6
+        rejection_cases.append(
+            (
+                "credential lease TTL above cap",
+                excessive_ttl,
+                422,
+                "less than or equal to 5",
+                DATA_PLANE_TOKEN,
+            )
+        )
         oversized_attestation = lease_payload(recipient_public_key_raw, snapshot.hash, "oversized-attestation")
         oversized_attestation["recipientAttestation"] = {"evidence": "x" * (64 * 1024)}
         rejection_cases.append(
@@ -1115,6 +1434,19 @@ def main() -> None:
             "stored scope outside signed policy",
             "scopes exceed",
         )
+        duplicate_scope_metadata = {**INITIAL_METADATA, "scopes": ["demo", "demo"]}
+        db.update_credential(CREDENTIAL_ID, {"metadata": duplicate_scope_metadata})
+        runtime.invalidate_secret_leases(CREDENTIAL_ID)
+        duplicate_scope_response = post_lease(
+            lease_payload(recipient_public_key_raw, snapshot.hash, "duplicate-stored-scope"),
+            "duplicate-stored-scope",
+        )
+        assert_status(
+            duplicate_scope_response,
+            503,
+            "duplicate stored scopes",
+            "contains duplicates",
+        )
         db.update_credential(CREDENTIAL_ID, {"metadata": INITIAL_METADATA})
         runtime.invalidate_secret_leases(CREDENTIAL_ID)
 
@@ -1157,13 +1489,15 @@ def main() -> None:
             updated_response.json(),
             recipient_private_key=recipient_private_key,
             recipient_nonce_raw=recipient_nonce("metadata-update"),
+            request_payload=updated_payload,
         )
-        expected_updated_credential = {
-            **expected_initial_credential,
+        expected_updated_generation = {
+            **expected_initial_generation,
             "credentialVersion": updated["credential_version"],
+            "metadataSha256": credential_metadata_sha256(UPDATED_METADATA),
             "metadata": UPDATED_METADATA,
         }
-        if updated_plaintext["credentials"] != [expected_updated_credential]:
+        if updated_plaintext["credentials"] != [expected_updated_generation]:
             raise AssertionError(f"updated credential lease contents are incorrect: {updated_plaintext}")
 
         if not db.delete_credential(CREDENTIAL_ID):
@@ -1171,7 +1505,12 @@ def main() -> None:
         runtime.invalidate_secret_leases(CREDENTIAL_ID)
         deleted_payload = lease_payload(recipient_public_key_raw, snapshot.hash, "deleted")
         deleted_response = post_lease(deleted_payload, "deleted")
-        assert_status(deleted_response, 404, "post-delete credential lease", "credential is unavailable")
+        assert_status(
+            deleted_response,
+            404,
+            "post-delete credential lease",
+            "credential became unavailable",
+        )
         recreated = db.upsert_credential_with_id(
             CREDENTIAL_ID,
             "Demo Bearer",
@@ -1258,16 +1597,37 @@ def main() -> None:
         ]
         issued_audits = [item for item in lease_audits if item["event_type"].endswith(".issued")]
         rejected_audits = [item for item in lease_audits if item["event_type"].endswith(".rejected")]
-        if len(issued_audits) != 4 or len(rejected_audits) != 16:
+        if not issued_audits or not rejected_audits:
             raise AssertionError(f"credential lease audit outcomes are incomplete: {lease_audits}")
-        if sorted(item["event"]["credential_count"] for item in issued_audits) != [1, 1, 1, 1]:
+        if any(item["event"]["credential_count"] != 1 for item in issued_audits):
             raise AssertionError(f"credential lease audit counts are incorrect: {issued_audits}")
+        issued_purposes = {item["event"].get("purpose") for item in issued_audits}
+        if issued_purposes != {"generationMetadata", "dispatchSecret"}:
+            raise AssertionError(
+                f"credential lease audit purposes are incomplete: {issued_audits}"
+            )
+        dispatch_audits = [
+            item
+            for item in issued_audits
+            if item["event"].get("purpose") == "dispatchSecret"
+        ]
+        if not any(
+            item["event"].get("expected_credential_version") == 1
+            and item["event"].get("expected_metadata_sha256")
+            == initial_metadata_sha256
+            for item in dispatch_audits
+        ):
+            raise AssertionError(
+                f"dispatch audit omitted exact generation bindings: {dispatch_audits}"
+            )
         for item in lease_audits:
             event = item["event"]
             if item.get("actor_id") != "spiffe://test.serverware/decision-gate/credential-lease":
                 raise AssertionError(f"credential lease audit actor was not server-derived: {item}")
             if "recipient_nonce" in event or not str(event.get("recipient_nonce_sha256", "")).startswith("sha256:"):
                 raise AssertionError(f"credential lease audit did not hash the recipient nonce: {item}")
+            if event.get("purpose") not in {"generationMetadata", "dispatchSecret"}:
+                raise AssertionError(f"credential lease audit omitted its purpose: {item}")
 
         legacy_plaintext_files = [
             path

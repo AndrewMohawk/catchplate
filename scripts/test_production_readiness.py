@@ -319,6 +319,10 @@ def readiness_command(*extra: str) -> list[str]:
         str(TEST_CONTROL_PLANE_UID),
         "--expected-control-plane-gid",
         str(TEST_CONTROL_PLANE_GID),
+        "--expected-shared-service-credential-owner-uid",
+        str(TEST_CONTROL_PLANE_UID),
+        "--expected-shared-service-credential-gid",
+        str(TEST_CONTROL_PLANE_GID),
         *extra,
     ]
 
@@ -389,9 +393,9 @@ def run_failure_output(env: dict[str, str], expected: str) -> None:
             raise AssertionError(f"production readiness failure artifact omitted the failure reason: {artifact}")
 
 
-def expect_failure(env: dict[str, str], expected: str) -> None:
+def expect_failure(env: dict[str, str], expected: str, *extra: str) -> None:
     result = subprocess.run(
-        readiness_command(),
+        readiness_command(*extra),
         cwd=ROOT,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -682,6 +686,69 @@ def good_env() -> dict[str, str]:
     return env
 
 
+def verify_file_backed_service_credentials() -> None:
+    def replace_credential(path: Path, value: str, mode: int) -> None:
+        path.chmod(0o600)
+        path.write_text(value, encoding="utf-8")
+        path.chmod(mode)
+
+    with tempfile.TemporaryDirectory(prefix="serverware-service-credentials-") as tmp:
+        root = Path(tmp)
+        env = good_env()
+        paths: dict[str, Path] = {}
+        values: dict[str, str] = {}
+        for index, name in enumerate(readiness.CONTROL_PLANE_SERVICE_CREDENTIAL_NAMES):
+            value = env.pop(name)
+            path = root / f"credential-{index}"
+            path.write_text(value, encoding="utf-8")
+            path.chmod(0o440 if name in readiness.SHARED_SERVICE_CREDENTIAL_NAMES else 0o400)
+            env[f"{name}_FILE"] = str(path)
+            paths[name] = path
+            values[name] = value
+        run_readiness(env)
+
+        dual_source = dict(env)
+        dual_source["SERVERWARE_ADMIN_TOKEN"] = ""
+        expect_failure(dual_source, "must not set both SERVERWARE_ADMIN_TOKEN")
+
+        admin_path = paths["SERVERWARE_ADMIN_TOKEN"]
+        replace_credential(
+            admin_path,
+            values["SERVERWARE_ADMIN_TOKEN"] + "\n",
+            0o400,
+        )
+        expect_failure(env, "without whitespace or control characters")
+        replace_credential(admin_path, values["SERVERWARE_ADMIN_TOKEN"], 0o400)
+        admin_path.chmod(0o440)
+        expect_failure(env, "must use mode 0400 or 0600")
+        admin_path.chmod(0o400)
+
+        duplicate_path = paths["SERVERWARE_AUDIT_ANCHOR_TOKEN"]
+        duplicate_secret = values["SERVERWARE_ADMIN_TOKEN"]
+        replace_credential(duplicate_path, duplicate_secret, 0o440)
+        expect_failure_without_secret(env, "service credentials must be distinct", duplicate_secret)
+        replace_credential(
+            duplicate_path,
+            values["SERVERWARE_AUDIT_ANCHOR_TOKEN"],
+            0o440,
+        )
+        duplicate_path.chmod(0o400)
+        expect_failure(env, "must use mode 0440")
+        duplicate_path.chmod(0o440)
+
+        wrong_owner = (TEST_CONTROL_PLANE_UID + 1) % (readiness.MAX_POSIX_ID + 1)
+        expect_failure(
+            env,
+            "must be owned by UID/GID",
+            "--expected-shared-service-credential-owner-uid",
+            str(wrong_owner),
+        )
+
+        relative_path = dict(env)
+        relative_path["SERVERWARE_WEBAUTHN_BOOTSTRAP_TOKEN_FILE"] = "relative-token"
+        expect_failure(relative_path, "must be an absolute path")
+
+
 def final_challenge_env() -> dict[str, str]:
     env = good_env()
     env.update(
@@ -895,6 +962,7 @@ def run_shared_store_probe_helper() -> None:
         raise AssertionError(f"metadata probe did not require shared quota table: {calls}")
     release_tables = {
         "release_authorization_attempts",
+        "release_authorization_credential_issuances",
         "release_authorization_quota_reservations",
         "release_authorization_events",
     }
@@ -936,6 +1004,7 @@ def assert_atomic_release_compose_gate() -> None:
             r"\$\{([A-Z0-9_]+):\?[^}]*\}:[^\n]+", compose_text
         ):
             compose_env[name] = f"/tmp/{name.lower().replace('_', '-')}"
+        compose_env["SERVERWARE_PROXY_BIND_ADDRESS"] = "127.0.0.1"
         result = subprocess.run(
             [
                 "docker",
@@ -996,6 +1065,60 @@ def assert_atomic_release_compose_gate() -> None:
             ) is not True:
                 raise AssertionError(
                     "production Compose must mount one read-only response-signing key"
+                )
+            expected_credentials = {
+                "serverware": readiness.CONTROL_PLANE_SERVICE_CREDENTIAL_NAMES,
+                "decision-gate-rs": readiness.INTERNAL_SERVICE_TOKEN_NAMES,
+                "audit-anchor": ("SERVERWARE_AUDIT_ANCHOR_TOKEN",),
+            }
+            for service_name, credential_names in expected_credentials.items():
+                service = model["services"][service_name]
+                service_env = service.get("environment") or {}
+                service_volumes = service.get("volumes") or []
+                for credential_name in credential_names:
+                    if credential_name in service_env:
+                        raise AssertionError(
+                            f"production Compose exposes {credential_name} in {service_name}"
+                        )
+                    file_name = f"{credential_name}_FILE"
+                    target = "/run/secrets/" + credential_name.lower().replace("_", "-")
+                    if service_env.get(file_name) != target:
+                        raise AssertionError(
+                            f"production Compose does not configure {service_name} {file_name}"
+                        )
+                    mounts = [
+                        volume
+                        for volume in service_volumes
+                        if volume.get("target") == target
+                    ]
+                    if len(mounts) != 1 or mounts[0].get("read_only") is not True:
+                        raise AssertionError(
+                            f"production Compose must mount one read-only {file_name} for {service_name}"
+                        )
+            if "65530" not in {str(value) for value in serverware.get("group_add") or []}:
+                raise AssertionError(
+                    "production control plane must join the shared service-credential GID"
+                )
+            audit_anchor = model["services"]["audit-anchor"]
+            if "65530" not in {
+                str(value) for value in audit_anchor.get("group_add") or []
+            }:
+                raise AssertionError(
+                    "production audit anchor must join the shared service-credential GID"
+                )
+            proxy_ports = model["services"]["decision-gate-rs"].get("ports") or []
+            expected_proxy_ports = [
+                port
+                for port in proxy_ports
+                if str(port.get("published")) == "8080"
+                and int(port.get("target") or 0) == 9090
+                and port.get("protocol") == "tcp"
+            ]
+            if len(expected_proxy_ports) != 1 or expected_proxy_ports[0].get(
+                "host_ip"
+            ) != "127.0.0.1":
+                raise AssertionError(
+                    "production agent proxy must use the explicit loopback bind address"
                 )
 
 
@@ -1121,6 +1244,7 @@ def verify_response_key_runtime_readability() -> None:
 def main() -> None:
     assert_atomic_release_compose_gate()
     verify_response_key_runtime_readability()
+    verify_file_backed_service_credentials()
     passed = run_readiness(good_env())
     if passed.get("mode") != "config":
         raise AssertionError(f"unexpected readiness mode: {passed}")

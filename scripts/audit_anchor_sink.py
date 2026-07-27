@@ -27,9 +27,10 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey,
 from fastapi import FastAPI, Header, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator
 
+from serverware.config import AUDIT_ANCHOR_TOKEN as ANCHOR_TOKEN
+
 
 ANCHOR_PATH = Path(os.getenv("SERVERWARE_AUDIT_ANCHOR_PATH", "/anchors/transparency-log.jsonl"))
-ANCHOR_TOKEN = os.getenv("SERVERWARE_AUDIT_ANCHOR_TOKEN", "")
 SIGNING_KEY_PATH = Path(os.getenv("SERVERWARE_TRANSPARENCY_LOG_SIGNING_KEY", "/anchors/transparency-log-ed25519.pem"))
 CHECKPOINT_COMMAND = os.getenv("SERVERWARE_TRANSPARENCY_CHECKPOINT_COMMAND", "").strip()
 CHECKPOINT_REQUIRED = os.getenv("SERVERWARE_TRANSPARENCY_CHECKPOINT_REQUIRED", "0").lower() in {"1", "true", "yes"}

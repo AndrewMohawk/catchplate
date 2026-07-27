@@ -233,7 +233,7 @@ _OAUTH_REVOCATION_RECONCILE_INTERVAL_SECONDS = 15
 _oauth_revocation_worker_lock = threading.Lock()
 _oauth_revocation_worker_started = False
 _credential_lease_audit_lock = threading.Lock()
-_credential_lease_audit_last: dict[tuple[str, str, str, str, str, str, str], float] = {}
+_credential_lease_audit_last: dict[tuple[str, ...], float] = {}
 _CREDENTIAL_LEASE_AUDIT_INTERVAL_SECONDS = 60.0
 _CREDENTIAL_LEASE_REQUEST_MAX_BYTES = 96 * 1024
 _CREDENTIAL_LEASE_PLAINTEXT_MAX_BYTES = 4 * 1024 * 1024
@@ -829,15 +829,47 @@ def _data_plane_audit_secret_path(
     return None
 
 
+class CredentialLeaseReleaseAuthorization(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    api_version: Literal[
+        "serverware.credentialLeaseReleaseAuthorization/v1"
+    ] = Field(alias="apiVersion")
+    state: Literal["reserved"]
+    attempt_id: str = Field(
+        alias="attemptId", min_length=1, max_length=256
+    )
+    binding_digest: str = Field(
+        alias="bindingDigest", pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    grant_id: str | None = Field(alias="grantId", max_length=512)
+    approval_request_id: str | None = Field(
+        alias="approvalRequestId", max_length=512
+    )
+    reservation_expires_at_epoch_ms: int = Field(
+        alias="reservationExpiresAtEpochMs", ge=1
+    )
+
+
 class CredentialLeaseRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
-    api_version: Literal["serverware.credentialLeaseRequest/v2"] = Field(
+    api_version: Literal["serverware.credentialLeaseRequest/v3"] = Field(
         alias="apiVersion"
     )
+    purpose: Literal["generationMetadata", "dispatchSecret"]
     principal_id: str = Field(alias="principalId", min_length=1, max_length=256)
     route_id: str = Field(alias="routeId", min_length=1, max_length=256)
     credential_id: str = Field(alias="credentialId", min_length=1, max_length=256)
+    expected_credential_version: int | None = Field(
+        alias="expectedCredentialVersion", ge=1
+    )
+    expected_metadata_sha256: str | None = Field(
+        alias="expectedMetadataSha256", pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    release_authorization: CredentialLeaseReleaseAuthorization | None = Field(
+        alias="releaseAuthorization"
+    )
     recipient_public_key: str = Field(
         alias="recipientPublicKey", min_length=1, max_length=43
     )
@@ -847,13 +879,29 @@ class CredentialLeaseRequest(BaseModel):
     data_plane_binary_digest: str = Field(
         alias="dataPlaneBinaryDigest", min_length=1, max_length=71
     )
-    max_ttl_seconds: int = Field(alias="maxTtlSeconds", ge=1, le=10)
+    max_ttl_seconds: int = Field(alias="maxTtlSeconds", ge=1, le=5)
     recipient_attestation: dict[str, Any] | None = Field(
         default=None, alias="recipientAttestation"
     )
 
     @model_validator(mode="after")
     def validate_recipient_attestation_size(self) -> CredentialLeaseRequest:
+        if self.purpose == "generationMetadata":
+            if (
+                self.expected_credential_version is not None
+                or self.expected_metadata_sha256 is not None
+                or self.release_authorization is not None
+            ):
+                raise ValueError(
+                    "generationMetadata requests must not include dispatch bindings"
+                )
+        elif (
+            self.expected_credential_version is None
+            or self.expected_metadata_sha256 is None
+        ):
+            raise ValueError(
+                "dispatchSecret requests require expected credential metadata bindings"
+            )
         if self.recipient_attestation is None:
             return self
         try:
@@ -1866,6 +1914,32 @@ def _assert_approver_allowed(identity: AdminIdentity, jit: dict[str, Any]) -> No
         )
 
 
+def _approval_review_authority_metadata(approval_id: str) -> dict[str, Any] | None:
+    with db.connect() as conn:
+        row = conn.execute(
+            """
+            SELECT id, route_id, method, url, status, requested_at, expires_at,
+                   approved_until, decision_note, principal_id, credential_id,
+                   credential_version, policy_hash, request_digest,
+                   operation_digest, grant_ttl_seconds, grant_max_uses,
+                   approved_by
+            FROM approval_requests
+            WHERE id = ?
+            """,
+            (approval_id,),
+        ).fetchone()
+    return db.approval_public_summary(dict(row)) if row else None
+
+
+def _assert_approval_reviewer_allowed(
+    identity: AdminIdentity, approval: dict[str, Any]
+) -> None:
+    if not identity.has_any_role({"approver"}):
+        raise HTTPException(status_code=403, detail="required role: approver")
+    jit = _approval_jit_policy(approval, require_current_policy=True)
+    _assert_approver_allowed(identity, jit)
+
+
 def _webauthn_required(authn_policy: dict[str, Any]) -> bool:
     return bool(authn_policy.get("webauthnRequired"))
 
@@ -1941,6 +2015,8 @@ async def _bounded_credential_lease_request(request: Request) -> CredentialLease
 def _verify_credential_lease_recipient_attestation(
     evidence: dict[str, Any] | None,
     *,
+    purpose: Literal["generationMetadata", "dispatchSecret"],
+    request_binding_sha256: str,
     recipient_key_id: str,
     recipient_nonce: str,
     policy_hash_value: str,
@@ -1981,6 +2057,8 @@ def _verify_credential_lease_recipient_attestation(
 
     verifier_input = {
         "recipientAttestation": evidence,
+        "purpose": purpose,
+        "requestBindingSha256": request_binding_sha256,
         "recipientKeyId": recipient_key_id,
         "recipientNonce": recipient_nonce,
         "policyHash": policy_hash_value,
@@ -2073,6 +2151,8 @@ def _verify_credential_lease_recipient_attestation(
             status_code=403, detail="recipient attestation verification failed"
         )
     expected_bindings = {
+        "purpose": purpose,
+        "requestBindingSha256": request_binding_sha256,
         "recipientKeyId": recipient_key_id,
         "recipientNonce": recipient_nonce,
         "policyHash": policy_hash_value,
@@ -5690,7 +5770,7 @@ def _build_setup_verification(payload: SetupVerificationRequest) -> dict[str, An
                 "runtime.credentialRelease",
                 passed=release_evidence is not None,
                 required=False,
-                summary="A durable pre-release audit event proves the gateway authorized this exact assignment for dispatch before the upstream send.",
+                summary="A durable authenticated telemetry event records that the gateway authorized this exact assignment for dispatch before the upstream send.",
                 evidence=release_evidence,
             ),
             _setup_check(
@@ -5765,6 +5845,16 @@ def _build_setup_verification(payload: SetupVerificationRequest) -> dict[str, An
         "assignmentDigest": assignment_digest,
         "configurationReady": required_checks_pass,
         "runtimeVerified": runtime_verified,
+        "runtimeEvidenceAssurance": {
+            "classification": "authenticated-correlated-telemetry",
+            "independentExecutionAttestation": False,
+            "producerIdentity": "scoped-bearer-and-server-derived-instance",
+            "summary": (
+                "The compatibility runtimeVerified field means the required "
+                "gateway and authoritative-store telemetry correlated. It does "
+                "not independently attest which measured code authored those events."
+            ),
+        },
         "hardwareVerified": hardware_verified,
         "fullyVerified": runtime_verified and hardware_verified,
         "nextAction": next_action,
@@ -9660,17 +9750,39 @@ def approvals(
 @app.get("/api/approvals/{approval_id}/review")
 def approval_review(
     approval_id: str,
-    identity: AdminIdentity = Depends(require_role("approver", "auditor")),
+    identity: AdminIdentity = Depends(require_role("approver")),
 ) -> dict[str, Any]:
+    authority = _approval_review_authority_metadata(approval_id)
+    if not authority:
+        raise HTTPException(status_code=404, detail="approval not found")
+    if not identity.has_any_role({"approver"}):
+        raise HTTPException(status_code=403, detail="required role: approver")
+    if authority["status"] != "pending" or _approval_is_expired(authority):
+        return {
+            **authority,
+            "review_detail_available": False,
+            "review_receipt": None,
+        }
+    _assert_approval_reviewer_allowed(identity, authority)
+
     approval = db.get_approval_request(approval_id)
     if not approval:
         raise HTTPException(status_code=404, detail="approval not found")
+    if approval["status"] != "pending" or _approval_is_expired(approval):
+        return {
+            **db.approval_public_summary(approval),
+            "review_detail_available": False,
+            "review_receipt": None,
+        }
+    _assert_approval_reviewer_allowed(identity, approval)
+
     review = _approval_review_document(approval)
     review_digest = "sha256:" + hashlib.sha256(
         _canonical_json(review).encode("utf-8")
     ).hexdigest()
     receipt = None
     if approval["status"] == "pending" and not _approval_is_expired(approval):
+        _assert_approval_reviewer_allowed(identity, approval)
         try:
             receipt = db.issue_approval_review_receipt(
                 approval_request_id=approval_id,
@@ -10482,6 +10594,19 @@ def _record_credential_lease_audit(
         ).hexdigest(),
         "policy_hash": payload.policy_hash,
         "data_plane_binary_digest": payload.data_plane_binary_digest,
+        "purpose": payload.purpose,
+        "expected_credential_version": payload.expected_credential_version,
+        "expected_metadata_sha256": payload.expected_metadata_sha256,
+        "release_attempt_id": (
+            payload.release_authorization.attempt_id
+            if payload.release_authorization is not None
+            else None
+        ),
+        "release_binding_digest": (
+            payload.release_authorization.binding_digest
+            if payload.release_authorization is not None
+            else None
+        ),
         "principal_id": payload.principal_id,
         "route_id": payload.route_id,
         "credential_id": payload.credential_id,
@@ -10503,7 +10628,7 @@ def _record_credential_lease_audit(
 def _should_record_credential_lease_issuance(
     payload: CredentialLeaseRequest,
     credentials: list[dict[str, Any]],
-) -> tuple[str, str, str, str, str, str, str] | None:
+) -> tuple[str, ...] | None:
     state_digest = (
         "sha256:"
         + hashlib.sha256(
@@ -10516,12 +10641,23 @@ def _should_record_credential_lease_issuance(
         ).hexdigest()
     )
     key = (
+        payload.purpose,
         payload.recipient_key_id,
         payload.policy_hash,
         payload.data_plane_binary_digest,
         payload.principal_id,
         payload.route_id,
         payload.credential_id,
+        (
+            payload.release_authorization.attempt_id
+            if payload.release_authorization is not None
+            else ""
+        ),
+        (
+            payload.release_authorization.binding_digest
+            if payload.release_authorization is not None
+            else ""
+        ),
         state_digest,
     )
     now = time.monotonic()
@@ -10996,6 +11132,334 @@ def _assert_credential_lease_route_binding(
     return credential_policy
 
 
+_CREDENTIAL_LEASE_PUBLIC_METADATA_FIELDS = frozenset(
+    {
+        "app_id",
+        "expires_at_epoch_ms",
+        "injection_field",
+        "injection_name",
+        "injection_prefix",
+        "managed",
+        "oauth",
+        "provider",
+        "provider_id",
+        "provider_subject",
+        "scope",
+        "scopes",
+        "subject",
+        "username",
+        "x_app_id",
+    }
+)
+_CREDENTIAL_LEASE_PUBLIC_METADATA_BOOLEAN_FIELDS = frozenset({"managed", "oauth"})
+_CREDENTIAL_LEASE_PUBLIC_METADATA_STRING_FIELDS = (
+    _CREDENTIAL_LEASE_PUBLIC_METADATA_FIELDS
+    - _CREDENTIAL_LEASE_PUBLIC_METADATA_BOOLEAN_FIELDS
+    - {"expires_at_epoch_ms", "scopes"}
+)
+
+
+def _credential_lease_request_binding_sha256(
+    payload: CredentialLeaseRequest,
+) -> str:
+    release_authorization = (
+        payload.release_authorization.model_dump(by_alias=True)
+        if payload.release_authorization is not None
+        else None
+    )
+    return "sha256:" + hashlib.sha256(
+        _canonical_json(
+            {
+                "apiVersion": payload.api_version,
+                "purpose": payload.purpose,
+                "principalId": payload.principal_id,
+                "routeId": payload.route_id,
+                "credentialId": payload.credential_id,
+                "expectedCredentialVersion": payload.expected_credential_version,
+                "expectedMetadataSha256": payload.expected_metadata_sha256,
+                "releaseAuthorization": release_authorization,
+                "recipientKeyId": payload.recipient_key_id,
+                "recipientNonce": payload.recipient_nonce,
+                "policyHash": payload.policy_hash,
+                "dataPlaneBinaryDigest": payload.data_plane_binary_digest,
+                "maxTtlSeconds": payload.max_ttl_seconds,
+            }
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _credential_lease_secret_patterns(secret: str) -> tuple[str, ...]:
+    values = {secret}
+    try:
+        parsed = json.loads(secret)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        parsed = None
+
+    def collect(value: Any) -> None:
+        if isinstance(value, str) and value:
+            values.add(value)
+        elif isinstance(value, dict):
+            for item in value.values():
+                collect(item)
+        elif isinstance(value, list):
+            for item in value:
+                collect(item)
+
+    collect(parsed)
+    patterns: set[str] = set()
+    for value in values:
+        if not value:
+            continue
+        raw = value.encode("utf-8")
+        digest = hashlib.sha256(raw).hexdigest()
+        patterns.update(
+            {
+                value,
+                json.dumps(value, ensure_ascii=True)[1:-1],
+                base64.b64encode(raw).decode("ascii"),
+                base64.urlsafe_b64encode(raw).decode("ascii").rstrip("="),
+                digest,
+                f"sha256:{digest}",
+            }
+        )
+    return tuple(sorted((item for item in patterns if item), key=len, reverse=True))
+
+
+def _credential_lease_public_metadata(credential: dict[str, Any]) -> dict[str, Any]:
+    raw_metadata = credential.get("metadata") or {}
+    if not isinstance(raw_metadata, dict):
+        raise HTTPException(status_code=503, detail="credential metadata is invalid")
+    metadata = {
+        key: raw_metadata[key]
+        for key in sorted(_CREDENTIAL_LEASE_PUBLIC_METADATA_FIELDS)
+        if key in raw_metadata
+    }
+    for key, value in metadata.items():
+        if key in _CREDENTIAL_LEASE_PUBLIC_METADATA_BOOLEAN_FIELDS:
+            if not isinstance(value, bool):
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"credential public metadata field {key} must be boolean",
+                )
+        elif key in _CREDENTIAL_LEASE_PUBLIC_METADATA_STRING_FIELDS:
+            if not isinstance(value, str) or not value or len(value.encode("utf-8")) > 4096:
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"credential public metadata field {key} must be a bounded non-empty string",
+                )
+        elif key == "expires_at_epoch_ms":
+            if (
+                not isinstance(value, int)
+                or isinstance(value, bool)
+                or value < 1
+            ):
+                raise HTTPException(
+                    status_code=503,
+                    detail="credential public metadata field expires_at_epoch_ms must be positive",
+                )
+        elif key == "scopes":
+            if (
+                not isinstance(value, list)
+                or len(value) > 128
+                or any(
+                    not isinstance(item, str)
+                    or not item
+                    or len(item.encode("utf-8")) > 4096
+                    for item in value
+                )
+                or len(set(value)) != len(value)
+            ):
+                raise HTTPException(
+                    status_code=503,
+                    detail="credential public metadata field scopes must be a bounded unique string array",
+                )
+    try:
+        encoded = _canonical_json(metadata)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=503, detail="credential public metadata is invalid"
+        ) from exc
+    if len(encoded.encode("utf-8")) > 64 * 1024:
+        raise HTTPException(
+            status_code=503, detail="credential public metadata exceeds 64 KiB"
+        )
+    secret = str(credential.get("secret") or "")
+    if secret and any(pattern in encoded for pattern in _credential_lease_secret_patterns(secret)):
+        raise HTTPException(
+            status_code=503,
+            detail="credential public metadata contains secret-derived material",
+        )
+    if _data_plane_audit_secret_path(metadata) is not None:
+        raise HTTPException(
+            status_code=503, detail="credential public metadata contains secret material"
+        )
+    return metadata
+
+
+def _credential_lease_metadata_sha256(metadata: dict[str, Any]) -> str:
+    return "sha256:" + hashlib.sha256(
+        _canonical_json(metadata).encode("utf-8")
+    ).hexdigest()
+
+
+def _assert_credential_lease_release_authorization(
+    payload: CredentialLeaseRequest,
+    *,
+    route: Any,
+) -> dict[str, Any] | None:
+    release = payload.release_authorization
+    jit = route.jit if isinstance(route.jit, dict) else {}
+    jit_required = jit.get("required") is True
+    if payload.purpose == "generationMetadata":
+        if release is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="generation metadata cannot carry release authorization",
+            )
+        return None
+    if not jit_required:
+        if release is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="non-JIT credential dispatch cannot carry JIT release authorization",
+            )
+        return None
+    if not ATOMIC_RELEASE_AUTHORIZATION_ENABLED:
+        raise HTTPException(
+            status_code=503,
+            detail="credential-bearing JIT requires atomic release authorization",
+        )
+    if release is None:
+        raise HTTPException(
+            status_code=409,
+            detail="JIT dispatch secret requires exact release authorization",
+        )
+    if release.grant_id is None or release.approval_request_id is None:
+        raise HTTPException(
+            status_code=409,
+            detail="JIT dispatch secret requires paired grant and approval authority",
+        )
+
+    now_epoch_ms = time.time_ns() // 1_000_000
+    try:
+        with db.connect() as conn:
+            row = db._release_attempt_row(conn, release.attempt_id)
+            if row is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="credential lease release authorization was not found",
+                )
+            expected = {
+                "attempt_id": release.attempt_id,
+                "binding_digest": release.binding_digest,
+                "state": "reserved",
+                "principal_id": payload.principal_id,
+                "route_id": payload.route_id,
+                "credential_id": payload.credential_id,
+                "credential_version": payload.expected_credential_version,
+                "policy_hash": payload.policy_hash,
+                "grant_id": release.grant_id,
+                "approval_request_id": release.approval_request_id,
+                "reservation_expires_at_epoch_ms": (
+                    release.reservation_expires_at_epoch_ms
+                ),
+            }
+            for field, expected_value in expected.items():
+                actual = row[field]
+                if field in {
+                    "credential_version",
+                    "reservation_expires_at_epoch_ms",
+                }:
+                    actual = int(actual)
+                if isinstance(expected_value, str):
+                    if not isinstance(actual, str) or not hmac.compare_digest(
+                        actual, expected_value
+                    ):
+                        raise HTTPException(
+                            status_code=409,
+                            detail="credential lease release authorization binding mismatch",
+                        )
+                elif actual != expected_value:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="credential lease release authorization binding mismatch",
+                    )
+            if int(row["reservation_expires_at_epoch_ms"]) <= now_epoch_ms:
+                raise HTTPException(
+                    status_code=409,
+                    detail="credential lease release authorization expired",
+                )
+            authority_reason = db._release_attempt_authority_reason(
+                conn,
+                row,
+                now_epoch_ms=now_epoch_ms,
+                required_approver_roles={"approver"},
+                allowed_approver_ids=(
+                    set((jit.get("approvers") or {}).get("users") or []) or None
+                ),
+                require_approver_webauthn=_webauthn_required(
+                    _approval_authn_policy(jit)
+                ),
+            )
+            if authority_reason is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="credential lease release authorization is no longer active",
+                )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="credential lease release authorization is unavailable",
+        ) from exc
+    return release.model_dump(by_alias=True)
+
+
+def _claim_credential_lease_release_authorization(
+    payload: CredentialLeaseRequest,
+    *,
+    route: Any,
+    request_binding_sha256: str,
+    recipient_nonce_sha256: str,
+) -> dict[str, Any] | None:
+    release = payload.release_authorization
+    if payload.purpose != "dispatchSecret" or release is None:
+        return None
+    jit = route.jit if isinstance(route.jit, dict) else {}
+    if jit.get("required") is not True:
+        return None
+    try:
+        return db.claim_release_credential_issuance(
+            attempt_id=release.attempt_id,
+            binding_digest=release.binding_digest,
+            request_binding_sha256=request_binding_sha256,
+            recipient_key_id=payload.recipient_key_id,
+            recipient_nonce_sha256=recipient_nonce_sha256,
+            principal_id=payload.principal_id,
+            route_id=payload.route_id,
+            credential_id=payload.credential_id,
+            credential_version=int(payload.expected_credential_version or 0),
+            policy_hash=payload.policy_hash,
+            grant_id=str(release.grant_id or ""),
+            approval_request_id=str(release.approval_request_id or ""),
+            reservation_expires_at_epoch_ms=(
+                release.reservation_expires_at_epoch_ms
+            ),
+            required_approver_roles={"approver"},
+            allowed_approver_ids=(
+                set((jit.get("approvers") or {}).get("users") or []) or None
+            ),
+            require_approver_webauthn=_webauthn_required(
+                _approval_authn_policy(jit)
+            ),
+        )
+    except db.ReleaseAuthorizationConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except db.ReleaseAuthorizationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @app.post("/api/data-plane/credential-leases")
 def data_plane_credential_leases(
     payload: CredentialLeaseRequest = Depends(_bounded_credential_lease_request),
@@ -11008,6 +11472,11 @@ def data_plane_credential_leases(
                 status_code=503, detail="active signed policy bundle is unavailable"
             )
         credential_policy = _assert_credential_lease_route_binding(payload, snapshot)
+        route = _active_route_by_id(payload.route_id, snapshot=snapshot)
+        release_authorization = _assert_credential_lease_release_authorization(
+            payload, route=route
+        )
+        request_binding_sha256 = _credential_lease_request_binding_sha256(payload)
         if not EXPECTED_DATA_PLANE_BINARY_DIGEST:
             raise HTTPException(
                 status_code=503,
@@ -11039,18 +11508,20 @@ def data_plane_credential_leases(
                 status_code=400,
                 detail="recipientKeyId does not match recipientPublicKey",
             )
-        issued_at_epoch_ms = time.time_ns() // 1_000_000
+        request_received_at_epoch_ms = time.time_ns() // 1_000_000
         recipient_nonce_sha256 = "sha256:" + hashlib.sha256(recipient_nonce).hexdigest()
         if db.credential_lease_nonce_reserved(
             payload.recipient_key_id,
             recipient_nonce_sha256,
-            now_epoch_ms=issued_at_epoch_ms,
+            now_epoch_ms=request_received_at_epoch_ms,
         ):
             raise HTTPException(
                 status_code=409, detail="recipient nonce has already been used"
             )
         _verify_credential_lease_recipient_attestation(
             payload.recipient_attestation,
+            purpose=payload.purpose,
+            request_binding_sha256=request_binding_sha256,
             recipient_key_id=expected_recipient_key_id,
             recipient_nonce=payload.recipient_nonce,
             policy_hash_value=snapshot.hash,
@@ -11062,7 +11533,7 @@ def data_plane_credential_leases(
         replay_result = db.reserve_credential_lease_nonce(
             payload.recipient_key_id,
             recipient_nonce_sha256,
-            now_epoch_ms=issued_at_epoch_ms,
+            now_epoch_ms=request_received_at_epoch_ms,
         )
         if replay_result == "replay":
             raise HTTPException(
@@ -11077,21 +11548,41 @@ def data_plane_credential_leases(
                 status_code=503, detail="credential lease TTL is not configured safely"
             )
 
-        ttl_ms = max(
-            1,
-            int(
-                min(float(payload.max_ttl_seconds), SECRET_LEASE_TTL_SECONDS, 10.0)
-                * 1000
-            ),
-        )
-        expires_at_epoch_ms = issued_at_epoch_ms + ttl_ms
-
-        credential = _credential_for_lease(payload.credential_id)
-        if not credential:
-            raise HTTPException(
-                status_code=404, detail="requested credential is unavailable"
+        claimed_release_authorization = (
+            _claim_credential_lease_release_authorization(
+                payload,
+                route=route,
+                request_binding_sha256=request_binding_sha256,
+                recipient_nonce_sha256=recipient_nonce_sha256,
             )
-        _assert_credential_policy_binding(credential, credential_policy)
+        )
+
+        prepared_credential: dict[str, Any] | None = None
+        if payload.purpose == "dispatchSecret":
+            prepared_credential = _credential_for_lease(payload.credential_id)
+            if not prepared_credential:
+                raise HTTPException(
+                    status_code=404, detail="requested credential is unavailable"
+                )
+            _assert_credential_policy_binding(prepared_credential, credential_policy)
+            prepared_metadata = _credential_lease_public_metadata(
+                prepared_credential
+            )
+            prepared_metadata_sha256 = _credential_lease_metadata_sha256(
+                prepared_metadata
+            )
+            if (
+                int(prepared_credential.get("credential_version") or 0)
+                != payload.expected_credential_version
+                or not hmac.compare_digest(
+                    prepared_metadata_sha256,
+                    payload.expected_metadata_sha256 or "",
+                )
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="credential generation or metadata changed before secret release",
+                )
 
         current_snapshot = get_policy_snapshot()
         if current_snapshot is None:
@@ -11101,14 +11592,56 @@ def data_plane_credential_leases(
         current_credential_policy = _assert_credential_lease_route_binding(
             payload, current_snapshot
         )
-        with db.credential_lease_snapshot(payload.credential_id) as current_credential:
+        current_route = _active_route_by_id(payload.route_id, snapshot=current_snapshot)
+        current_release_authorization = (
+            _assert_credential_lease_release_authorization(
+                payload, route=current_route
+            )
+        )
+        if current_release_authorization != release_authorization:
+            raise HTTPException(
+                status_code=409,
+                detail="credential lease release authorization changed during issuance",
+            )
+        if release_authorization is not None and claimed_release_authorization is None:
+            raise HTTPException(
+                status_code=409,
+                detail="JIT credential issuance has no atomic recipient claim",
+            )
+
+        issued_at_epoch_ms = time.time_ns() // 1_000_000
+        ttl_ms = max(
+            1,
+            int(
+                min(float(payload.max_ttl_seconds), SECRET_LEASE_TTL_SECONDS, 5.0)
+                * 1000
+            ),
+        )
+        expires_at_epoch_ms = issued_at_epoch_ms + ttl_ms
+        if release_authorization is not None:
+            expires_at_epoch_ms = min(
+                expires_at_epoch_ms,
+                int(release_authorization["reservationExpiresAtEpochMs"]),
+            )
+        if expires_at_epoch_ms <= issued_at_epoch_ms:
+            raise HTTPException(
+                status_code=409,
+                detail="credential lease release authorization expired during issuance",
+            )
+
+        credential_snapshot = (
+            db.credential_generation_snapshot
+            if payload.purpose == "generationMetadata"
+            else db.credential_lease_snapshot
+        )
+        with credential_snapshot(payload.credential_id) as current_credential:
             if not current_credential:
                 raise HTTPException(
                     status_code=404, detail="requested credential became unavailable"
                 )
-            if int(current_credential.get("credential_version") or 0) != int(
-                credential.get("credential_version") or 0
-            ):
+            if prepared_credential is not None and int(
+                current_credential.get("credential_version") or 0
+            ) != int(prepared_credential.get("credential_version") or 0):
                 raise HTTPException(
                     status_code=409,
                     detail="credential changed during lease authorization",
@@ -11116,18 +11649,30 @@ def data_plane_credential_leases(
             _assert_credential_policy_binding(
                 current_credential, current_credential_policy
             )
-            credential = current_credential
-            metadata = credential.get("metadata") or {}
-            credentials = [
-                {
-                    "credentialId": payload.credential_id,
-                    "credentialVersion": int(credential["credential_version"]),
-                    "secret": _credential_secret_for_lease(
-                        credential, current_credential_policy
-                    ),
-                    "metadata": metadata,
-                }
-            ]
+            metadata = _credential_lease_public_metadata(current_credential)
+            metadata_sha256 = _credential_lease_metadata_sha256(metadata)
+            credential_version = int(current_credential["credential_version"])
+            if payload.purpose == "dispatchSecret" and (
+                credential_version != payload.expected_credential_version
+                or not hmac.compare_digest(
+                    metadata_sha256, payload.expected_metadata_sha256 or ""
+                )
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="credential generation or metadata changed during secret release",
+                )
+            credential_entry = {
+                "credentialId": payload.credential_id,
+                "credentialVersion": credential_version,
+                "metadataSha256": metadata_sha256,
+                "metadata": metadata,
+            }
+            if payload.purpose == "dispatchSecret":
+                credential_entry["secret"] = _credential_secret_for_lease(
+                    current_credential, current_credential_policy
+                )
+            credentials = [credential_entry]
 
             aad = {
                 "apiVersion": "serverware.credentialLeaseEnvelope/v2",
@@ -11143,7 +11688,10 @@ def data_plane_credential_leases(
                 "expiresAtEpochMs": expires_at_epoch_ms,
             }
             plaintext = {
-                "apiVersion": "serverware.credentialLeaseSet/v2",
+                "apiVersion": "serverware.credentialLeaseSet/v3",
+                "purpose": payload.purpose,
+                "requestBindingSha256": request_binding_sha256,
+                "releaseAuthorization": release_authorization,
                 "recipientKeyId": payload.recipient_key_id,
                 "recipientNonce": payload.recipient_nonce,
                 "policyHash": payload.policy_hash,
@@ -11178,6 +11726,35 @@ def data_plane_credential_leases(
             if len(response_body) > _CREDENTIAL_LEASE_RESPONSE_MAX_BYTES:
                 raise HTTPException(
                     status_code=503, detail="credential lease response exceeds 8 MiB"
+                )
+        if release_authorization is not None:
+            final_snapshot = get_policy_snapshot()
+            if final_snapshot is None:
+                raise HTTPException(
+                    status_code=503,
+                    detail="active signed policy bundle became unavailable",
+                )
+            final_route = _active_route_by_id(
+                payload.route_id, snapshot=final_snapshot
+            )
+            final_release_authorization = (
+                _assert_credential_lease_release_authorization(
+                    payload, route=final_route
+                )
+            )
+            if final_release_authorization != release_authorization:
+                raise HTTPException(
+                    status_code=409,
+                    detail="credential lease release authorization changed after encryption",
+                )
+            now_epoch_ms = time.time_ns() // 1_000_000
+            if (
+                now_epoch_ms >= expires_at_epoch_ms
+                or final_snapshot.hash != payload.policy_hash
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="credential lease authority expired after encryption",
                 )
     except HTTPException as exc:
         _record_credential_lease_audit(
@@ -12996,7 +13573,7 @@ UI_HTML = r"""
         <div class="toolbar">
           <h2 style="margin-right:auto">Setup and Verify</h2>
           <span id="setup-configuration-status" class="pill warn">Configuration pending</span>
-          <span id="setup-runtime-status" class="pill warn">Gateway stages pending</span>
+          <span id="setup-runtime-status" class="pill warn">Gateway telemetry pending</span>
           <span id="setup-hardware-status" class="pill warn">Hardware unverified</span>
         </div>
         <p class="section-kicker">Active assignment and independently reported runtime evidence</p>
@@ -14515,7 +15092,7 @@ UI_HTML = r"""
       $('setup-copy-challenge-button').disabled = !state.setupChallenge?.value || state.setupChallenge.setupSessionId !== setupSession?.id;
 
       setupStatusPill('setup-configuration-status', verification?.configurationReady === true, 'Configuration ready', active ? 'Evidence pending' : 'Configuration pending');
-      setupStatusPill('setup-runtime-status', verification?.runtimeVerified === true, 'Gateway stages verified', 'Gateway stages pending');
+      setupStatusPill('setup-runtime-status', verification?.runtimeVerified === true, 'Gateway telemetry correlated', 'Gateway telemetry pending');
       const hardwareVerified = ['hardware_verified', 'completion_pending_audit', 'complete'].includes(setupSession?.phase);
       setupStatusPill('setup-hardware-status', hardwareVerified, setupSession?.phase === 'complete' ? 'Attestation complete' : 'Hardware verified', 'Hardware unverified');
 
@@ -15658,13 +16235,15 @@ UI_HTML = r"""
       const binding = await downloadEnrollmentBinding();
       agentInstructionText(binding.packet);
       const serverware = binding.packet.serverware || {};
-      if (!serverware.controlPlaneUrl) throw new Error('Enrollment packet is missing its control-plane binding');
+      const tooling = binding.packet.tooling || {};
+      if (!serverware.controlPlaneUrl || !tooling.expectedVersionOutput) throw new Error('Enrollment packet is missing its control-plane or tooling binding');
       const command = [
         'set -eu',
         'umask 077',
         'SERVERWARE_PACKET_PATH="${SERVERWARE_PACKET_PATH:-$HOME/Downloads/' + binding.packetFilename + '}"',
         `SERVERWARE_PACKET_SHA256=${shellQuote(binding.packetSha256)}`,
         'export SERVERWARE_PACKET_PATH SERVERWARE_PACKET_SHA256',
+        `test "$(serverware-enrollment --version)" = ${shellQuote(tooling.expectedVersionOutput)} || { echo "required serverware-enrollment version is unavailable" >&2; exit 1; }`,
         `serverware-enrollment --base ${shellQuote(serverware.controlPlaneUrl)} --verify-packet "$SERVERWARE_PACKET_PATH" --expected-packet-sha256 "$SERVERWARE_PACKET_SHA256" --expected-principal ${shellQuote(binding.packet.principalId)} --expected-nonce ${shellQuote(binding.packet.nonce)} --emit-verified-instructions`
       ];
       await navigator.clipboard.writeText(command.join('\n'));
@@ -16053,7 +16632,8 @@ UI_HTML = r"""
       const pinning = packet.pinning || {};
       const serverware = packet.serverware || {};
       const ca = packet.ca || {};
-      if (!serverware.controlPlaneUrl || !pinning.policySigningKeyId || !pinning.rollbackEpoch || !ca.installPath) {
+      const tooling = packet.tooling || {};
+      if (!serverware.controlPlaneUrl || !pinning.policySigningKeyId || !pinning.rollbackEpoch || !ca.installPath || !tooling.expectedVersionOutput) {
         throw new Error('Enrollment packet is missing required verifier bindings');
       }
       const command = [
@@ -16061,6 +16641,7 @@ UI_HTML = r"""
         'umask 077',
         'ENROLLMENT_PACKET="${SERVERWARE_ENROLLMENT_PACKET:-$HOME/Downloads/' + binding.packetFilename + '}"',
         'VERIFIED_ENROLLMENT_PACKET="${SERVERWARE_VERIFIED_ENROLLMENT_PACKET:-${ENROLLMENT_PACKET%.json}.verified.json}"',
+        `test "$(serverware-enrollment --version)" = ${shellQuote(tooling.expectedVersionOutput)} || { echo "required serverware-enrollment version is unavailable" >&2; exit 1; }`,
         `serverware-enrollment --verify-packet "$ENROLLMENT_PACKET" --expected-packet-sha256 ${shellQuote(binding.packetSha256)} --expected-principal ${shellQuote(packet.principalId)} --expected-nonce ${shellQuote(packet.nonce)} --base ${shellQuote(serverware.controlPlaneUrl)} > "$VERIFIED_ENROLLMENT_PACKET"`,
         `serverware-attestation --base ${shellQuote(serverware.controlPlaneUrl)} --enrollment-packet "$VERIFIED_ENROLLMENT_PACKET" --ca-out .tmp/serverware-ca.pem --expected-policy-key-hash ${shellQuote(pinning.policySigningKeyId)} --expected-rollback-epoch ${Number(pinning.rollbackEpoch)}`,
         `install -D -m 0644 .tmp/serverware-ca.pem ${shellQuote(ca.installPath)}`,

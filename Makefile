@@ -1,10 +1,12 @@
-.PHONY: up down logs e2e bench bench-gate-rs decision-gate-bench-evidence release-provenance production-release-provenance image-signatures sign-production-images build-agent-enrollment-wheel fetch-production-dependency-cache refresh-production-dependency-cache verify-production-dependency-cache build-production-images publish-production-images merge-production-images-env production-handoff production-release-input-preflight validate-production-policy-identity verify-production-agent-enrollment-evidence production-host-preflight deploy-production build-production-python-runtime build-production-launcher install-production-launcher generate-production-launch-manifest run-production-readiness-final production-release-proof capture-reproducible-build validate-reproducible-builds validate-policy-activation-evidence prepare-aws-kms-materials install-apparmor verify-apparmor-contract verify-apparmor-runtime verify-cosign-sigstore verify-release-image-signing verify-production-image-publish verify-production-images-env-merge verify-production-handoff verify-production-release-input-preflight verify-production-policy-identity verify-production-host-preflight verify-production-python-runtime verify-production-launch-assets verify-launch-authorization verify-production-release-proof verify-credential-policy-contracts verify-control-plane-startup verify-portal-browser-oauth verify-custody-response-proof verify-reproducible-builds verify-policy-activation-evidence verify-transparency-checkpoint verify-nitro-nsm-attest verify-aws-kms-recipient-release verify-aws-nitro-kms-unseal verify-prepare-aws-kms-materials verify-ca-install-sessions verify-control-plane-csrf verify-control-plane-oidc verify-webauthn-recovery verify-oauth-credentials verify-credential-lease-delivery verify-control-plane-mutation-mfa verify-control-plane-two-person verify-control-plane-rbac-audit verify-break-glass-grants verify-approval-denial-reason verify-approval-review verify-policy-publish-workflow verify-policy-canary-workflow verify-audit-search verify-audit-export verify-agent-enrollment verify-setup-session-api verify-production-images-no-shell scan-production-images-no-shell verify-production-image-builds generate-production-readiness-claims verify-production-readiness-claims verify-production-readiness-runner verify-release-completion verify-production-config verify-production-readiness run-production-readiness collect-nitro-kms-evidence verify-nitro-kms-evidence verify-nitro-tee verify-decision-gate-attestation verify-codebase-attestation install-ca verify-attestation reset
+.PHONY: up down logs e2e bench bench-gate-rs decision-gate-bench-evidence release-provenance production-release-provenance image-signatures sign-production-images build-agent-enrollment-wheel fetch-production-dependency-cache refresh-production-dependency-cache verify-production-dependency-cache build-production-images publish-production-images merge-production-images-env production-handoff production-release-input-preflight validate-production-policy-identity verify-production-agent-enrollment-evidence production-host-preflight deploy-production build-production-python-runtime build-production-launcher install-production-launcher generate-production-launch-manifest run-production-readiness-final production-release-proof capture-reproducible-build validate-reproducible-builds validate-policy-activation-evidence prepare-aws-kms-materials install-apparmor verify-apparmor-contract verify-apparmor-runtime verify-cosign-sigstore verify-release-image-signing verify-production-image-publish verify-production-images-env-merge verify-production-handoff verify-production-release-input-preflight verify-production-policy-identity verify-production-host-preflight verify-production-python-runtime verify-production-launch-assets verify-launch-authorization verify-production-release-proof verify-credential-policy-contracts verify-control-plane-startup verify-portal-browser-oauth verify-onboarding-evidence-tooling verify-custody-response-proof verify-reproducible-builds verify-policy-activation-evidence verify-transparency-checkpoint verify-nitro-nsm-attest verify-aws-kms-recipient-release verify-aws-nitro-kms-unseal verify-prepare-aws-kms-materials verify-ca-install-sessions verify-control-plane-csrf verify-control-plane-oidc verify-webauthn-recovery verify-oauth-credentials verify-credential-lease-delivery verify-control-plane-mutation-mfa verify-control-plane-two-person verify-control-plane-rbac-audit verify-break-glass-grants verify-approval-denial-reason verify-approval-review verify-policy-publish-workflow verify-policy-canary-workflow verify-audit-search verify-audit-export verify-agent-enrollment verify-setup-session-api verify-production-images-no-shell scan-production-images-no-shell verify-production-image-builds generate-production-readiness-claims verify-production-readiness-claims verify-production-readiness-runner verify-release-completion verify-production-config verify-production-readiness run-production-readiness collect-nitro-kms-evidence verify-nitro-kms-evidence verify-nitro-tee verify-decision-gate-attestation verify-codebase-attestation install-ca verify-attestation reset
 
 PRODUCTION_READINESS_CLAIMS_FILE ?= .tmp/production-readiness-claims.json
 override PRODUCTION_PLATFORM := linux/amd64
 AGENT_ENROLLMENT_WHEEL_DIRECTORY ?= .tmp/agent-enrollment-wheel
 AGENT_ENROLLMENT_RUNTIME_LOCK ?= serverware_agent_trust/requirements.lock
 AGENT_ENROLLMENT_WHEEL_MANIFEST ?= $(AGENT_ENROLLMENT_WHEEL_DIRECTORY)/wheelhouse-manifest.json
+AGENT_ENROLLMENT_WHEEL_CHECKSUMS ?= $(AGENT_ENROLLMENT_WHEEL_DIRECTORY)/SHA256SUMS
+AGENT_ENROLLMENT_WHEEL_FILENAME ?= $(shell python3 -c 'from serverware_agent_trust.build_backend import WHEEL_NAME; print(WHEEL_NAME)')
 AGENT_ENROLLMENT_TARGET_PLATFORM ?= manylinux2014_x86_64
 AGENT_ENROLLMENT_TARGET_PYTHON ?= 311
 AGENT_ENROLLMENT_TARGET_ABI ?= cp311
@@ -317,14 +319,16 @@ sign-production-images:
 	cat "$(IMAGE_SIGNATURES_SUMMARY_FILE)"
 
 build-agent-enrollment-wheel:
+	@python3 -c 'from pathlib import Path; import sys; root=(Path.cwd()/".tmp").resolve(); target=Path(sys.argv[1]).resolve(); (root in target.parents and target != root) or sys.exit("AGENT_ENROLLMENT_WHEEL_DIRECTORY must resolve below the repository .tmp directory")' "$(AGENT_ENROLLMENT_WHEEL_DIRECTORY)"
 	rm -rf "$(AGENT_ENROLLMENT_WHEEL_DIRECTORY)"
 	mkdir -p "$(AGENT_ENROLLMENT_WHEEL_DIRECTORY)"
 	python3 -m pip download --require-hashes --only-binary=:all: --platform "$(AGENT_ENROLLMENT_TARGET_PLATFORM)" --implementation cp --python-version "$(AGENT_ENROLLMENT_TARGET_PYTHON)" --abi "$(AGENT_ENROLLMENT_TARGET_ABI)" --dest "$(AGENT_ENROLLMENT_WHEEL_DIRECTORY)" --requirement "$(AGENT_ENROLLMENT_RUNTIME_LOCK)"
 	SOURCE_DATE_EPOCH="$${SOURCE_DATE_EPOCH:-0}" python3 -m pip wheel --no-build-isolation --no-deps --wheel-dir "$(AGENT_ENROLLMENT_WHEEL_DIRECTORY)" .
 	cp "$(AGENT_ENROLLMENT_RUNTIME_LOCK)" "$(AGENT_ENROLLMENT_WHEEL_DIRECTORY)/requirements.lock"
-	test "$$(find "$(AGENT_ENROLLMENT_WHEEL_DIRECTORY)" -maxdepth 1 -type f -name 'serverware_enrollment-*.whl' | wc -l | tr -d ' ')" = 1
-	python3 scripts/generate_offline_artifact_manifest.py --root "$(AGENT_ENROLLMENT_WHEEL_DIRECTORY)" --output "$(AGENT_ENROLLMENT_WHEEL_MANIFEST)" --require 'serverware_enrollment-*.whl' --require 'cryptography-*.whl' --require 'cffi-*.whl' --require 'pycparser-*.whl' --require requirements.lock --label serverware-enrollment-cpython311-linux-amd64 --python-tag cp311 --platform-tag "$(AGENT_ENROLLMENT_TARGET_PLATFORM)" --architecture amd64
-	python3 scripts/verify_offline_artifact_manifest.py --root "$(AGENT_ENROLLMENT_WHEEL_DIRECTORY)" --manifest "$(AGENT_ENROLLMENT_WHEEL_MANIFEST)" --label serverware-enrollment-cpython311-linux-amd64 --python-tag cp311 --platform-tag "$(AGENT_ENROLLMENT_TARGET_PLATFORM)" --architecture amd64
+	test -f "$(AGENT_ENROLLMENT_WHEEL_DIRECTORY)/$(AGENT_ENROLLMENT_WHEEL_FILENAME)"
+	python3 scripts/generate_offline_artifact_manifest.py --root "$(AGENT_ENROLLMENT_WHEEL_DIRECTORY)" --output "$(AGENT_ENROLLMENT_WHEEL_MANIFEST)" --checksums "$(AGENT_ENROLLMENT_WHEEL_CHECKSUMS)" --require "$(AGENT_ENROLLMENT_WHEEL_FILENAME)" --require 'cryptography-*.whl' --require 'cffi-*.whl' --require 'pycparser-*.whl' --require requirements.lock --label serverware-enrollment-cpython311-linux-amd64 --python-tag cp311 --platform-tag "$(AGENT_ENROLLMENT_TARGET_PLATFORM)" --architecture amd64
+	@set -eu; cd "$(AGENT_ENROLLMENT_WHEEL_DIRECTORY)"; if command -v shasum >/dev/null 2>&1; then shasum -a 256 -c SHA256SUMS; elif command -v sha256sum >/dev/null 2>&1; then sha256sum -c SHA256SUMS; else echo "neither shasum nor sha256sum is available" >&2; exit 1; fi
+	python3 scripts/verify_offline_artifact_manifest.py --root "$(AGENT_ENROLLMENT_WHEEL_DIRECTORY)" --manifest "$(AGENT_ENROLLMENT_WHEEL_MANIFEST)" --checksums "$(AGENT_ENROLLMENT_WHEEL_CHECKSUMS)" --label serverware-enrollment-cpython311-linux-amd64 --python-tag cp311 --platform-tag "$(AGENT_ENROLLMENT_TARGET_PLATFORM)" --architecture amd64
 
 fetch-production-dependency-cache:
 	python3 production-dependencies/prefetch.py fetch
@@ -556,7 +560,9 @@ production-release-proof:
 	$(MAKE) verify-control-plane-oidc
 	$(MAKE) verify-webauthn-recovery
 	$(MAKE) verify-portal-browser-oauth
+	$(MAKE) verify-onboarding-evidence-tooling
 	$(MAKE) verify-agent-enrollment
+	$(MAKE) build-agent-enrollment-wheel
 	$(MAKE) verify-setup-session-api
 	$(MAKE) validate-production-policy-identity
 	$(MAKE) verify-production-agent-enrollment-evidence
@@ -656,7 +662,7 @@ verify-launch-authorization:
 	$(CRYPTO_SCHEMA_PYTHON_RUN) scripts/test_launch_authorization.py
 	$(CRYPTO_PYTHON_RUN) scripts/test_launch_authority_service.py
 
-verify-production-release-proof: verify-production-launch-assets verify-launch-authorization verify-production-image-builds verify-production-release-input-preflight verify-production-host-preflight verify-production-readiness-runner verify-release-completion verify-custody-response-proof
+verify-production-release-proof: verify-production-launch-assets verify-launch-authorization verify-production-image-builds verify-production-release-input-preflight verify-production-host-preflight verify-production-readiness-runner verify-release-completion verify-custody-response-proof verify-onboarding-evidence-tooling build-agent-enrollment-wheel
 	python3 scripts/test_production_release_proof_target.py
 
 verify-credential-policy-contracts:
@@ -670,6 +676,9 @@ verify-control-plane-startup:
 verify-portal-browser-oauth:
 	$(PLAYWRIGHT_RUN) python -m playwright install chromium
 	$(PLAYWRIGHT_RUN) python scripts/test_portal_browser_oauth.py
+
+verify-onboarding-evidence-tooling:
+	PYTHONDONTWRITEBYTECODE=1 $(TEST_PYTHON_RUN) -m unittest scripts.test_onboarding_evidence -v
 
 verify-custody-response-proof:
 	COMPOSE_PROJECT_NAME="$${COMPOSE_PROJECT_NAME:-serverware-custody-$$(date +%s)-$$$$-$$(openssl rand -hex 6)}" ./scripts/test_custody_response_proof.sh

@@ -14,6 +14,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "scripts"))
 
 from verify_attestation import (
     canonical_json,
@@ -24,6 +25,7 @@ from verify_attestation import (
     verify_runtime_digest,
 )
 from serverware.http_client import request_bytes
+import verify_production_readiness
 
 
 REQUIRED_MATERIALS = {"broker-kek", "decision-gate-ca"}
@@ -214,7 +216,16 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Generate a verified claims file for production Nitro/KMS readiness probes.")
     parser.add_argument("--base", default="http://localhost:3000", help="Serverware control-plane base URL")
     parser.add_argument("--ca-bundle", default=None, help="CA bundle for the production control-plane TLS service")
-    parser.add_argument("--admin-token", default=os.getenv("SERVERWARE_ADMIN_TOKEN"), help="admin token for policy verification")
+    parser.add_argument(
+        "--admin-token",
+        default=os.getenv("SERVERWARE_ADMIN_TOKEN"),
+        help="development-only direct admin token for policy verification",
+    )
+    parser.add_argument(
+        "--admin-token-file",
+        default=os.getenv("SERVERWARE_ADMIN_TOKEN_FILE"),
+        help="production admin-token file",
+    )
     parser.add_argument("--nonce", default=None)
     parser.add_argument("--out", default=None)
     parser.add_argument("--tee-verify-command", default=os.getenv("SERVERWARE_TEE_QUOTE_VERIFY_COMMAND"))
@@ -222,10 +233,20 @@ def main() -> None:
     parser.add_argument("--allow-debug-claims", action="store_true")
     args = parser.parse_args()
 
-    if not args.skip_policy_verify and not args.admin_token:
-        raise SystemExit("--admin-token or SERVERWARE_ADMIN_TOKEN is required unless --skip-policy-verify is used")
     if args.skip_policy_verify and not args.allow_debug_claims:
         raise ValueError("production readiness claims may not skip signed policy and high-water verification")
+    admin_token = None
+    if not args.skip_policy_verify:
+        token_sources: dict[str, str] = {}
+        if args.admin_token is not None:
+            token_sources["SERVERWARE_ADMIN_TOKEN"] = args.admin_token
+        if args.admin_token_file is not None:
+            token_sources["SERVERWARE_ADMIN_TOKEN_FILE"] = args.admin_token_file
+        admin_token = verify_production_readiness.load_service_credential_for_tool(
+            token_sources,
+            "SERVERWARE_ADMIN_TOKEN",
+            require_file=not args.allow_debug_claims,
+        )
 
     nonce = args.nonce or f"production-readiness-claims-{int(time.time())}"
     base = args.base.rstrip("/")
@@ -238,7 +259,7 @@ def main() -> None:
         raise ValueError("attestation nonce mismatch")
     policy_status = None
     if not args.skip_policy_verify:
-        policy_status = request_json(f"{base}/api/policy", args.admin_token, ca_bundle=args.ca_bundle)
+        policy_status = request_json(f"{base}/api/policy", admin_token, ca_bundle=args.ca_bundle)
     claims = readiness_claims_from_attestation(
         attestation,
         policy_status,

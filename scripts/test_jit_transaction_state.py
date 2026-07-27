@@ -4288,6 +4288,88 @@ def exercise_transactional_bound_storage_rewrap(
         raise AssertionError(
             "restored active key could not verify after historical removal: "
             f"{restored_verification}"
+            )
+
+
+def exercise_release_credential_issuance_claim(db: Any, backend: str) -> None:
+    fixture = _provision_release_authority_fixture(
+        db,
+        backend,
+        "credential-issuance",
+        reserve=True,
+    )
+    reservation = fixture["reservation"]
+    binding = fixture["binding"]
+    request_binding_sha256 = _jit_authority_policy_hash(
+        f"{backend}:credential-issuance:request"
+    )
+    recipient_key_id = _jit_authority_policy_hash(
+        f"{backend}:credential-issuance:recipient"
+    )
+    recipient_nonce_sha256 = _jit_authority_policy_hash(
+        f"{backend}:credential-issuance:nonce"
+    )
+    claim_kwargs = {
+        "attempt_id": reservation["attempt_id"],
+        "binding_digest": reservation["binding_digest"],
+        "request_binding_sha256": request_binding_sha256,
+        "recipient_key_id": recipient_key_id,
+        "recipient_nonce_sha256": recipient_nonce_sha256,
+        "principal_id": binding["principal_id"],
+        "route_id": binding["route_id"],
+        "credential_id": binding["credential_id"],
+        "credential_version": binding["credential_version"],
+        "policy_hash": binding["policy_hash"],
+        "grant_id": fixture["grant_id"],
+        "approval_request_id": fixture["approval_id"],
+        "reservation_expires_at_epoch_ms": reservation[
+            "reservation_expires_at_epoch_ms"
+        ],
+        "required_approver_roles": {"approver"},
+        "allowed_approver_ids": {fixture["actor_id"]},
+        "require_approver_webauthn": True,
+    }
+    claimed = db.claim_release_credential_issuance(**claim_kwargs)
+    if (
+        claimed.get("attempt_id") != reservation["attempt_id"]
+        or claimed.get("request_binding_sha256") != request_binding_sha256
+        or claimed.get("recipient_key_id") != recipient_key_id
+        or claimed.get("recipient_nonce_sha256") != recipient_nonce_sha256
+    ):
+        raise AssertionError(
+            f"{backend} credential issuance claim lost exact bindings: {claimed}"
+        )
+    try:
+        db.claim_release_credential_issuance(
+            **{
+                **claim_kwargs,
+                "request_binding_sha256": _jit_authority_policy_hash(
+                    f"{backend}:credential-issuance:replacement-request"
+                ),
+                "recipient_key_id": _jit_authority_policy_hash(
+                    f"{backend}:credential-issuance:replacement-recipient"
+                ),
+                "recipient_nonce_sha256": _jit_authority_policy_hash(
+                    f"{backend}:credential-issuance:replacement-nonce"
+                ),
+            }
+        )
+    except db.ReleaseAuthorizationConflictError:
+        pass
+    else:
+        raise AssertionError(
+            f"{backend} one release attempt minted multiple credential issuances"
+        )
+    with db.connect() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS count "
+            "FROM release_authorization_credential_issuances "
+            "WHERE attempt_id = ?",
+            (reservation["attempt_id"],),
+        ).fetchone()
+    if row is None or int(row["count"]) != 1:
+        raise AssertionError(
+            f"{backend} credential issuance claim count is not exactly one: {row}"
         )
 
 
@@ -6921,6 +7003,7 @@ def main() -> None:
                 exercise_jit_approval_route_authority(db, backend)
                 exercise_denial_authority_races(db, backend)
                 exercise_release_authority_lifecycle(db, backend)
+                exercise_release_credential_issuance_claim(db, backend)
                 print(
                     json.dumps(
                         {
@@ -6973,6 +7056,7 @@ def main() -> None:
             )
             exercise_calendar_rate_limits(db, backend)
             exercise_release_authority_lifecycle(db, backend)
+            exercise_release_credential_issuance_claim(db, backend)
             exercise_atomic_release_authorization(db, backend)
             exercise_control_plane_jit_approval(app_module, db, backend)
             exercise_proxy_credential_binding(policy_engine, CredentialPolicy)

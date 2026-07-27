@@ -87,6 +87,7 @@ _JSON_OPERATION_FIELD_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,127}$")
 _GMAIL_PROOF_NONCE_HEADER = "x-serverware-proof-nonce"
 _GMAIL_STREAM_PROOF_NONCE_HEADER = "x-serverware-stream-proof-nonce"
 _MIN_GMAIL_CHILD_AUTHORITY_SECONDS = 0.250
+_MAX_NPM_ATTACHMENT_BYTES = 16 * 1024 * 1024
 
 
 def _secure_bounded_metadata_get(
@@ -2444,7 +2445,7 @@ class NpmRegistryAdapter(ApiAdapter):
         return super().validate_response(flow, route, params)
 
     def _registry_path(self, flow: Any) -> str:
-        path = (urlsplit(flow.request.pretty_url).path or "/").rstrip("/") or "/"
+        path = urlsplit(flow.request.pretty_url).path or "/"
         if path.startswith("/npm/"):
             return path[4:] or "/"
         if path == "/npm":
@@ -2469,35 +2470,105 @@ class NpmRegistryAdapter(ApiAdapter):
     ) -> str:
         method = flow.request.method.upper()
         path = self._registry_path(flow)
-        if method in {"GET", "HEAD"}:
-            return "read"
-        if path.startswith("/-/npm/v1/tokens") or path.startswith("/-/user/token"):
+        if path != "/" and path.endswith("/"):
+            raise ValueError("npm operation path must not have a trailing slash")
+        segments = path.strip("/").split("/") if path != "/" else []
+
+        def package_segment(value: str) -> bool:
+            if "%2f" in value:
+                if value.count("%2f") != 1:
+                    return False
+                scope, package = value.split("%2f", 1)
+                return bool(
+                    len(scope) - 1 <= 214
+                    and len(package) <= 214
+                    and re.fullmatch(r"@[A-Za-z0-9._~-]+", scope)
+                    and re.fullmatch(r"[A-Za-z0-9@._~-]+", package)
+                )
+            return bool(
+                not value.startswith("@")
+                and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9@._~-]{0,213}", value)
+            )
+
+        if (
+            method == "POST"
+            and segments == ["-", "npm", "v1", "tokens"]
+        ) or (
+            method == "DELETE"
+            and len(segments) == 6
+            and segments[:5] == ["-", "npm", "v1", "tokens", "token"]
+            and bool(segments[5])
+        ):
             return "tokenWrite"
-        if path.startswith("/-/package/") and (
-            "/dist-tags/" in path or path.endswith("/dist-tags")
+        if (
+            method in {"PUT", "DELETE"}
+            and len(segments) == 5
+            and segments[:2] == ["-", "package"]
+            and package_segment(segments[2])
+            and segments[3] == "dist-tags"
+            and bool(segments[4])
         ):
             return "distTagWrite"
-        if "/-rev/" in path and not path.startswith("/-/") and method in {"PUT", "DELETE"}:
+        if (
+            method == "DELETE"
+            and len(segments) == 3
+            and package_segment(segments[0])
+            and segments[1] == "-rev"
+            and bool(segments[2])
+        ) or (
+            method == "DELETE"
+            and len(segments) == 5
+            and package_segment(segments[0])
+            and segments[1] == "-"
+            and bool(segments[2])
+            and segments[3] == "-rev"
+            and bool(segments[4])
+        ):
             return "unpublish"
-        if path.startswith(
-            (
-                "/-/npm/v1/user",
-                "/-/package/",
-                "/-/team/",
-                "/-/org/",
-                "/-/user/",
-            )
+        if (
+            method == "POST"
+            and len(segments) == 4
+            and segments[:2] == ["-", "package"]
+            and package_segment(segments[2])
+            and segments[3] == "access"
+        ) or (
+            method == "POST"
+            and segments == ["-", "npm", "v1", "user"]
+        ) or (
+            method in {"PUT", "DELETE"}
+            and len(segments) == 5
+            and segments[:2] == ["-", "team"]
+            and all(segments[index] for index in (2, 3))
+            and segments[4] == "package"
         ):
             return "metadataWrite"
-        if method == "PUT" and isinstance(body, dict) and body.get("_rev"):
-            return "metadataWrite"
-        if method in {"PUT", "POST"}:
-            return "publish"
-        return "metadataWrite"
+        if (
+            method == "PUT"
+            and len(segments) == 1
+            and package_segment(segments[0])
+            and isinstance(body, dict)
+        ):
+            if any(
+                field in body
+                for field in (
+                    "_attachments",
+                    "versions",
+                    "dist-tags",
+                    "tarball_integrity",
+                )
+            ):
+                return "publish"
+            return "metadataWrite" if "_rev" in body else "publish"
+        raise ValueError("npm operation does not match the closed write grammar")
 
     def operation_fields(self, flow: Any, route: Any, params: dict[str, str]) -> dict[str, str]:
-        body = self._json_body(flow) if flow.request.method.upper() not in {"GET", "HEAD"} else None
+        method = flow.request.method.upper()
+        body = self._json_body(flow) if method not in {"GET", "HEAD"} else None
         operation = self._operation_name(flow, params, body)
+        if method in {"PUT", "POST"} and not isinstance(body, dict):
+            raise ValueError("npm_write_body_required")
+        if method == "DELETE" and body is not None:
+            raise ValueError("npm_delete_body_denied")
         return self._operation_fields(operation, body, params)
 
     def _operation_fields(
@@ -2513,13 +2584,33 @@ class NpmRegistryAdapter(ApiAdapter):
         if package:
             fields["packageName"] = unquote(package)
         if isinstance(body, dict):
-            if body.get("name"):
-                fields["packageName"] = str(body["name"])
-            selected_version = body.get("version")
+            if (
+                "_rev" in body
+                and (not isinstance(body["_rev"], str) or not body["_rev"])
+            ):
+                raise ValueError(
+                    "npm_publish_revision_invalid"
+                    if operation == "publish"
+                    else "npm_metadata_revision_invalid"
+                )
+            document_name = body.get("name")
+            if operation == "publish":
+                if not isinstance(document_name, str) or not document_name:
+                    raise ValueError("npm_publish_package_missing")
+                if package and unquote(package) != document_name:
+                    raise ValueError("npm_publish_package_mismatch")
+                fields["packageName"] = document_name
+            elif isinstance(document_name, str) and document_name:
+                fields["packageName"] = document_name
             dist_tags = body.get("dist-tags")
+            versions = body.get("versions")
+            selected_version = (
+                dist_tags.get("latest")
+                if operation == "publish" and isinstance(dist_tags, dict)
+                else body.get("version")
+            )
             if not selected_version and isinstance(dist_tags, dict):
                 selected_version = dist_tags.get("latest")
-            versions = body.get("versions")
             version_doc: dict[str, Any] = {}
             if isinstance(versions, dict):
                 if not selected_version and len(versions) == 1:
@@ -2529,26 +2620,56 @@ class NpmRegistryAdapter(ApiAdapter):
                     version_doc = candidate
             if selected_version or version_doc.get("version"):
                 fields["packageVersion"] = str(version_doc.get("version") or selected_version)
-            integrity = body.get("tarball_integrity")
-            dist = version_doc.get("dist")
-            if not integrity and isinstance(dist, dict):
-                integrity = dist.get("integrity")
-            if not integrity:
-                integrity = version_doc.get("_integrity")
-            if not integrity:
+            if operation == "publish":
                 attachments = body.get("_attachments")
-                if isinstance(attachments, dict) and len(attachments) == 1:
-                    attachment = next(iter(attachments.values()))
-                    encoded = attachment.get("data") if isinstance(attachment, dict) else None
-                    if isinstance(encoded, str):
-                        try:
-                            tarball = base64.b64decode(encoded, validate=True)
-                        except Exception:
-                            tarball = b""
-                        if tarball:
-                            integrity = "sha512-" + base64.b64encode(hashlib.sha512(tarball).digest()).decode("ascii")
-            if integrity:
-                fields["tarballIntegrity"] = str(integrity)
+                if not isinstance(attachments, dict):
+                    raise ValueError("npm_publish_attachment_missing")
+                if len(attachments) != 1:
+                    raise ValueError("npm_publish_attachment_ambiguous")
+                attachment_name, attachment = next(iter(attachments.items()))
+                if not isinstance(attachment, dict):
+                    raise ValueError("npm_publish_attachment_invalid")
+                encoded = attachment.get("data")
+                if not isinstance(encoded, str):
+                    raise ValueError("npm_publish_attachment_data_missing")
+                max_encoded_bytes = (_MAX_NPM_ATTACHMENT_BYTES * 4) // 3 + 4
+                if len(encoded) > max_encoded_bytes:
+                    raise ValueError("npm_publish_attachment_too_large")
+                try:
+                    tarball = base64.b64decode(encoded, validate=True)
+                except Exception as exc:
+                    raise ValueError("npm_publish_attachment_invalid_base64") from exc
+                if base64.b64encode(tarball).decode("ascii") != encoded:
+                    raise ValueError("npm_publish_attachment_invalid_base64")
+                if len(tarball) > _MAX_NPM_ATTACHMENT_BYTES:
+                    raise ValueError("npm_publish_attachment_too_large")
+                if not tarball:
+                    raise ValueError("npm_publish_attachment_empty")
+                if "length" in attachment and (
+                    not isinstance(attachment["length"], int)
+                    or isinstance(attachment["length"], bool)
+                    or attachment["length"] != len(tarball)
+                ):
+                    raise ValueError("npm_publish_attachment_length_mismatch")
+                integrity = "sha512-" + base64.b64encode(
+                    hashlib.sha512(tarball).digest()
+                ).decode("ascii")
+                declarations: list[tuple[str, Any]] = []
+                if "tarball_integrity" in body:
+                    declarations.append(("tarball_integrity", body["tarball_integrity"]))
+                dist = version_doc.get("dist")
+                if isinstance(dist, dict) and "integrity" in dist:
+                    declarations.append(("versions.dist.integrity", dist["integrity"]))
+                if "_integrity" in version_doc:
+                    declarations.append(("versions._integrity", version_doc["_integrity"]))
+                if any(
+                    not isinstance(declared, str) or declared != integrity
+                    for _source, declared in declarations
+                ):
+                    raise ValueError("npm_publish_integrity_mismatch")
+                fields["tarballIntegrity"] = integrity
+                fields["attachmentName"] = str(attachment_name)
+                fields["attachmentBytes"] = str(len(tarball))
         return fields
 
     def _validate_publish_document(
@@ -2563,12 +2684,14 @@ class NpmRegistryAdapter(ApiAdapter):
                 reason="npm publish body must be a JSON object",
                 payload={"error": "npm_publish_invalid_json"},
             )
-        if body.get("_rev"):
+        if "_rev" in body and (
+            not isinstance(body["_rev"], str) or not body["_rev"]
+        ):
             return PolicyDecision(
                 allowed=False,
                 status_code=403,
-                reason="npm publish body must not update an existing packument revision",
-                payload={"error": "npm_publish_revision_denied"},
+                reason="npm publish revision must be a nonempty string when present",
+                payload={"error": "npm_publish_revision_invalid"},
             )
         route_package = unquote(params.get("package") or "")
         document_package = body.get("name")
@@ -2627,15 +2750,35 @@ class NpmRegistryAdapter(ApiAdapter):
         try:
             body = self._json_body(flow) if method not in {"GET", "HEAD"} else None
         except (UnicodeError, ValueError, RecursionError):
-            operation = self._operation_name(flow, params)
-            error = "npm_publish_invalid_json" if operation == "publish" else "npm_write_invalid_json"
             return PolicyDecision(
                 allowed=False,
                 status_code=403,
-                reason=f"npm {operation} body must be a strict JSON object",
-                payload={"error": error, "operation": operation},
+                reason="npm write body must be a strict JSON object",
+                payload={"error": "npm_write_invalid_json"},
             )
-        operation = self._operation_name(flow, params, body)
+        try:
+            operation = self._operation_name(flow, params, body)
+        except ValueError:
+            return PolicyDecision(
+                allowed=False,
+                status_code=403,
+                reason="npm request does not match a configured write operation",
+                payload={"error": "npm_operation_unclassified"},
+            )
+        if method in {"PUT", "POST"} and not isinstance(body, dict):
+            return PolicyDecision(
+                allowed=False,
+                status_code=403,
+                reason="npm write operation requires a strict JSON object body",
+                payload={"error": "npm_write_body_required"},
+            )
+        if method == "DELETE" and body is not None:
+            return PolicyDecision(
+                allowed=False,
+                status_code=403,
+                reason="npm delete operation must not include a body",
+                payload={"error": "npm_delete_body_denied"},
+            )
         allowed_operations = set(route.adapter_config.get("operations") or [])
         if operation not in allowed_operations:
             return PolicyDecision(
@@ -2644,11 +2787,32 @@ class NpmRegistryAdapter(ApiAdapter):
                 reason=f"npm operation {operation} is not allowed by route policy",
                 payload={"error": "npm_operation_not_allowed", "operation": operation},
             )
+        if (
+            operation == "metadataWrite"
+            and isinstance(body, dict)
+            and "_rev" in body
+            and (not isinstance(body["_rev"], str) or not body["_rev"])
+        ):
+            return PolicyDecision(
+                allowed=False,
+                status_code=403,
+                reason="npm metadata replacement revision must be a nonempty string",
+                payload={"error": "npm_metadata_revision_invalid"},
+            )
         if operation == "publish":
             document_decision = self._validate_publish_document(body, params)
             if not document_decision.allowed:
                 return document_decision
-            fields = self._operation_fields(operation, body, params)
+            try:
+                fields = self._operation_fields(operation, body, params)
+            except ValueError as exc:
+                error = str(exc)
+                return PolicyDecision(
+                    allowed=False,
+                    status_code=403,
+                    reason="npm publish attachment integrity could not be verified",
+                    payload={"error": error},
+                )
             missing = [
                 field
                 for field in ("packageName", "packageVersion", "tarballIntegrity")

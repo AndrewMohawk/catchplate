@@ -216,6 +216,8 @@ def main() -> None:
             "crypto.subtle.digest('SHA-256'",
             "set -eu",
             "SERVERWARE_PACKET_SHA256",
+            "tooling.expectedVersionOutput",
+            'serverware-enrollment --version',
             "--emit-verified-instructions",
             "SERVERWARE_ENROLLMENT_PACKET:-$HOME/Downloads/",
             'serverware-enrollment --verify-packet "$ENROLLMENT_PACKET"',
@@ -292,6 +294,7 @@ def main() -> None:
         agent_instruction_order = (
             "await downloadEnrollmentBinding()",
             "SERVERWARE_PACKET_SHA256",
+            "serverware-enrollment --version",
             "--verify-packet",
             "--emit-verified-instructions",
             "navigator.clipboard.writeText(command.join('\\n'))",
@@ -303,6 +306,7 @@ def main() -> None:
             raise AssertionError("portal must not copy unauthenticated packet instruction text")
         ordered_enrollment_handoff = (
             "await downloadEnrollmentBinding()",
+            "serverware-enrollment --version",
             "serverware-enrollment --verify-packet",
             "serverware-attestation --base",
             "install -D -m 0644",

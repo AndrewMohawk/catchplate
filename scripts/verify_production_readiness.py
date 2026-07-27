@@ -15,6 +15,7 @@ import stat
 import subprocess
 import sys
 import time
+import unicodedata
 import urllib.parse
 from functools import partial
 from pathlib import Path
@@ -69,6 +70,7 @@ METADATA_TABLES = (
     "request_logs",
     "rate_limit_counters",
     "release_authorization_attempts",
+    "release_authorization_credential_issuances",
     "release_authorization_quota_reservations",
     "release_authorization_events",
     "policy_high_water",
@@ -97,12 +99,24 @@ INTERNAL_SERVICE_TOKEN_NAMES = (
     "SERVERWARE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN",
     "SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN",
 )
+CONTROL_PLANE_SERVICE_CREDENTIAL_NAMES = (
+    "SERVERWARE_ADMIN_TOKEN",
+    "SERVERWARE_WEBAUTHN_BOOTSTRAP_TOKEN",
+    *INTERNAL_SERVICE_TOKEN_NAMES,
+    "SERVERWARE_AUDIT_ANCHOR_TOKEN",
+)
+SHARED_SERVICE_CREDENTIAL_NAMES = frozenset(
+    (*INTERNAL_SERVICE_TOKEN_NAMES, "SERVERWARE_AUDIT_ANCHOR_TOKEN")
+)
 MAX_OAUTH_CLIENT_SECRET_FILE_BYTES = 4096
+MAX_SERVICE_CREDENTIAL_FILE_BYTES = 4096
 MAX_TRUSTED_PUBLIC_KEY_FILE_BYTES = 65536
 MAX_FINAL_CHALLENGE_RECEIPT_FILE_BYTES = 1048576
 MAX_HARDWARE_ASSURANCE_FILE_BYTES = 1048576
 CONTROL_PLANE_RUNTIME_UID = 65532
 CONTROL_PLANE_RUNTIME_GID = 65532
+SHARED_SERVICE_CREDENTIAL_RUNTIME_GID = 65530
+SHARED_SERVICE_CREDENTIAL_OWNER_UID = 0
 MAX_POSIX_ID = (1 << 32) - 2
 HARDWARE_PROOF_API_VERSION = "serverware.hardwareAssurance/v1"
 HARDWARE_PROOF_MAX_AGE_SECONDS = 900
@@ -250,6 +264,18 @@ def bounded_non_root_id(value: str) -> int:
     if not 1 <= parsed <= MAX_POSIX_ID:
         raise argparse.ArgumentTypeError(
             f"must be between 1 and {MAX_POSIX_ID}"
+        )
+    return parsed
+
+
+def bounded_posix_id(value: str) -> int:
+    try:
+        parsed = int(value, 10)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be a decimal integer") from exc
+    if not 0 <= parsed <= MAX_POSIX_ID:
+        raise argparse.ArgumentTypeError(
+            f"must be between 0 and {MAX_POSIX_ID}"
         )
     return parsed
 
@@ -787,8 +813,118 @@ def check_no_dev_or_fixture(env: dict[str, str], failures: list[str]) -> None:
         add(failures, not placeholder_hostname(parsed.hostname), "SERVERWARE_PUBLIC_URL must not use .example placeholder domains")
 
 
-def check_control_plane_security(env: dict[str, str], failures: list[str]) -> None:
-    token = env.get("SERVERWARE_ADMIN_TOKEN", "").strip()
+def resolve_service_credential(
+    env: dict[str, str],
+    setting_name: str,
+    failures: list[str],
+    *,
+    expected_control_plane_uid: int = CONTROL_PLANE_RUNTIME_UID,
+    expected_control_plane_gid: int = CONTROL_PLANE_RUNTIME_GID,
+    expected_shared_owner_uid: int = SHARED_SERVICE_CREDENTIAL_OWNER_UID,
+    expected_shared_gid: int = SHARED_SERVICE_CREDENTIAL_RUNTIME_GID,
+) -> str:
+    file_name = f"{setting_name}_FILE"
+    direct_present = setting_name in env
+    file_present = file_name in env
+    if direct_present and file_present:
+        failures.append(f"must not set both {setting_name} and {file_name}")
+        return ""
+    if not direct_present and not file_present:
+        failures.append(f"{setting_name} or {file_name} must be configured")
+        return ""
+    if direct_present:
+        credential = env[setting_name]
+    else:
+        shared = setting_name in SHARED_SERVICE_CREDENTIAL_NAMES
+        read_gid = expected_shared_gid if shared else expected_control_plane_gid
+        payload = read_bounded_regular_file(
+            env,
+            file_name,
+            failures,
+            file_label="service-credential",
+            max_bytes=MAX_SERVICE_CREDENTIAL_FILE_BYTES,
+            allowed_modes={0o440} if shared else {0o400, 0o600},
+            required_read_uid=expected_control_plane_uid,
+            required_read_gid=read_gid,
+            required_owner_uid=(
+                expected_shared_owner_uid if shared else expected_control_plane_uid
+            ),
+            required_owner_gid=read_gid,
+        )
+        if payload is None:
+            return ""
+        try:
+            credential = payload.decode("utf-8")
+        except UnicodeDecodeError:
+            failures.append(f"{file_name} must contain UTF-8 text")
+            return ""
+    valid_content = (
+        bool(credential)
+        and credential == credential.strip()
+        and not any(
+            character.isspace()
+            or unicodedata.category(character).startswith("C")
+            for character in credential
+        )
+    )
+    add(
+        failures,
+        valid_content,
+        f"{setting_name if direct_present else file_name} must contain one non-empty "
+        "credential without whitespace or control characters",
+    )
+    return credential if valid_content else ""
+
+
+def load_service_credential_for_tool(
+    sources: dict[str, str],
+    setting_name: str,
+    *,
+    require_file: bool,
+    expected_control_plane_uid: int = CONTROL_PLANE_RUNTIME_UID,
+    expected_control_plane_gid: int = CONTROL_PLANE_RUNTIME_GID,
+    expected_shared_owner_uid: int = SHARED_SERVICE_CREDENTIAL_OWNER_UID,
+    expected_shared_gid: int = SHARED_SERVICE_CREDENTIAL_RUNTIME_GID,
+) -> str:
+    if require_file and setting_name in sources:
+        raise ValueError(
+            f"{setting_name} must not be supplied directly in production; "
+            f"use {setting_name}_FILE"
+        )
+    failures: list[str] = []
+    credential = resolve_service_credential(
+        sources,
+        setting_name,
+        failures,
+        expected_control_plane_uid=expected_control_plane_uid,
+        expected_control_plane_gid=expected_control_plane_gid,
+        expected_shared_owner_uid=expected_shared_owner_uid,
+        expected_shared_gid=expected_shared_gid,
+    )
+    if failures:
+        raise ValueError("; ".join(failures))
+    return credential
+
+
+def check_control_plane_security(
+    env: dict[str, str],
+    failures: list[str],
+    *,
+    expected_control_plane_uid: int = CONTROL_PLANE_RUNTIME_UID,
+    expected_control_plane_gid: int = CONTROL_PLANE_RUNTIME_GID,
+    expected_shared_owner_uid: int = SHARED_SERVICE_CREDENTIAL_OWNER_UID,
+    expected_shared_gid: int = SHARED_SERVICE_CREDENTIAL_RUNTIME_GID,
+) -> None:
+    resolver = partial(
+        resolve_service_credential,
+        env,
+        failures=failures,
+        expected_control_plane_uid=expected_control_plane_uid,
+        expected_control_plane_gid=expected_control_plane_gid,
+        expected_shared_owner_uid=expected_shared_owner_uid,
+        expected_shared_gid=expected_shared_gid,
+    )
+    token = resolver("SERVERWARE_ADMIN_TOKEN")
     add(failures, bool(token), "SERVERWARE_ADMIN_TOKEN must be explicitly configured for production")
     add(failures, len(token) >= 32, "SERVERWARE_ADMIN_TOKEN must be at least 32 characters")
     add(
@@ -796,14 +932,24 @@ def check_control_plane_security(env: dict[str, str], failures: list[str]) -> No
         token not in {"dev-admin-token", "admin", "password", "changeme", "serverware"},
         "SERVERWARE_ADMIN_TOKEN must not use a development/default value",
     )
-    anchor_token = env.get("SERVERWARE_AUDIT_ANCHOR_TOKEN", "").strip()
+    anchor_token = resolver("SERVERWARE_AUDIT_ANCHOR_TOKEN")
     add(failures, len(anchor_token) >= 32, "SERVERWARE_AUDIT_ANCHOR_TOKEN must be at least 32 characters")
-    add(failures, anchor_token != token, "audit-anchor token must be distinct from the admin token")
-    for name in INTERNAL_SERVICE_TOKEN_NAMES:
-        service_token = env.get(name, "").strip()
-        if service_token:
-            add(failures, anchor_token != service_token, f"audit-anchor token must be distinct from {name}")
-            add(failures, token != service_token, f"admin token must be distinct from {name}")
+    bootstrap_token = resolver("SERVERWARE_WEBAUTHN_BOOTSTRAP_TOKEN")
+    resolved_credentials = [
+        ("SERVERWARE_ADMIN_TOKEN", token),
+        ("SERVERWARE_WEBAUTHN_BOOTSTRAP_TOKEN", bootstrap_token),
+        *[(name, resolver(name)) for name in INTERNAL_SERVICE_TOKEN_NAMES],
+        ("SERVERWARE_AUDIT_ANCHOR_TOKEN", anchor_token),
+    ]
+    for index, (left_name, left_token) in enumerate(resolved_credentials):
+        for right_name, right_token in resolved_credentials[index + 1 :]:
+            add(
+                failures,
+                not left_token
+                or not right_token
+                or not hmac.compare_digest(left_token, right_token),
+                f"service credentials must be distinct: {left_name} and {right_name}",
+            )
     roles = {role.strip() for role in env.get("SERVERWARE_ADMIN_ROLES", "").split(",") if role.strip()}
     required_roles = {
         "admin",
@@ -983,7 +1129,6 @@ def check_control_plane_security(env: dict[str, str], failures: list[str]) -> No
         "*" in two_person_actions or required_two_person_actions.issubset(two_person_actions),
         "SERVERWARE_CONTROL_PLANE_TWO_PERSON_ACTIONS must cover credential creation, exact-account OAuth activation, uncertain OAuth issuance resolution, route, policy publish, WebAuthn enrollment, revocation, trust publication, RBAC, deprovisioning, token rotation, break-glass, and setup attestation finalization mutations",
     )
-    bootstrap_token = env.get("SERVERWARE_WEBAUTHN_BOOTSTRAP_TOKEN", "")
     add(
         failures,
         len(bootstrap_token) >= 32,
@@ -1129,10 +1274,16 @@ def read_bounded_regular_file(
     allowed_modes: set[int] | None = None,
     required_read_uid: int | None = None,
     required_read_gid: int | None = None,
+    required_owner_uid: int | None = None,
+    required_owner_gid: int | None = None,
 ) -> bytes | None:
     require_valid(
         (required_read_uid is None) == (required_read_gid is None),
         "required file reader UID and GID must be configured together",
+    )
+    require_valid(
+        (required_owner_uid is None) == (required_owner_gid is None),
+        "required file owner UID and GID must be configured together",
     )
     raw_path = env.get(setting_name, "").strip()
     add(failures, bool(raw_path), f"{setting_name} must be configured")
@@ -1217,6 +1368,19 @@ def read_bounded_regular_file(
     add(failures, stable_file, f"{setting_name} changed while its {file_label} file was being validated")
     if not stable_file:
         return None
+    if required_owner_uid is not None and required_owner_gid is not None:
+        exact_owner = (
+            final_stat.st_uid == required_owner_uid
+            and final_stat.st_gid == required_owner_gid
+        )
+        add(
+            failures,
+            exact_owner,
+            f"{setting_name} must be owned by UID/GID "
+            f"{required_owner_uid}:{required_owner_gid}",
+        )
+        if not exact_owner:
+            return None
     if required_read_uid is not None and required_read_gid is not None:
         runtime_readable = file_readable_by_identity(
             final_stat,
@@ -2471,14 +2635,36 @@ def check_shared_stores(env: dict[str, str], failures: list[str]) -> None:
     )
 
 
-def check_internal_service_auth(env: dict[str, str], failures: list[str]) -> None:
+def check_internal_service_auth(
+    env: dict[str, str],
+    failures: list[str],
+    *,
+    expected_control_plane_uid: int = CONTROL_PLANE_RUNTIME_UID,
+    expected_control_plane_gid: int = CONTROL_PLANE_RUNTIME_GID,
+    expected_shared_owner_uid: int = SHARED_SERVICE_CREDENTIAL_OWNER_UID,
+    expected_shared_gid: int = SHARED_SERVICE_CREDENTIAL_RUNTIME_GID,
+) -> None:
     instance_id = env.get("SERVERWARE_DATA_PLANE_INSTANCE_ID", "").strip()
     add(
         failures,
         instance_id.startswith("spiffe://") and len(instance_id) > len("spiffe://"),
         "SERVERWARE_DATA_PLANE_INSTANCE_ID must identify the authenticated data-plane instance",
     )
-    tokens = [(name, env.get(name, "").strip()) for name in INTERNAL_SERVICE_TOKEN_NAMES]
+    tokens = [
+        (
+            name,
+            resolve_service_credential(
+                env,
+                name,
+                failures,
+                expected_control_plane_uid=expected_control_plane_uid,
+                expected_control_plane_gid=expected_control_plane_gid,
+                expected_shared_owner_uid=expected_shared_owner_uid,
+                expected_shared_gid=expected_shared_gid,
+            ),
+        )
+        for name in INTERNAL_SERVICE_TOKEN_NAMES
+    ]
     for name, token in tokens:
         add(
             failures,
@@ -2921,6 +3107,18 @@ def main() -> None:
         default=CONTROL_PLANE_RUNTIME_GID,
         help="production control-plane GID expected to read runtime secrets",
     )
+    parser.add_argument(
+        "--expected-shared-service-credential-owner-uid",
+        type=bounded_posix_id,
+        default=SHARED_SERVICE_CREDENTIAL_OWNER_UID,
+        help="owner UID required for shared service-credential files",
+    )
+    parser.add_argument(
+        "--expected-shared-service-credential-gid",
+        type=bounded_non_root_id,
+        default=SHARED_SERVICE_CREDENTIAL_RUNTIME_GID,
+        help="supplementary GID shared by the control plane and data plane for service credentials",
+    )
     parser.add_argument("--out", default=None, help="write the full readiness result JSON to this path")
     args = parser.parse_args()
 
@@ -2928,7 +3126,13 @@ def main() -> None:
     failures: list[str] = []
     for check in (
         check_no_dev_or_fixture,
-        check_control_plane_security,
+        partial(
+            check_control_plane_security,
+            expected_control_plane_uid=args.expected_control_plane_uid,
+            expected_control_plane_gid=args.expected_control_plane_gid,
+            expected_shared_owner_uid=args.expected_shared_service_credential_owner_uid,
+            expected_shared_gid=args.expected_shared_service_credential_gid,
+        ),
         check_oauth_providers,
         check_nitro,
         check_attested_credential_delivery,
@@ -2941,7 +3145,13 @@ def main() -> None:
         check_cosign,
         check_transparency,
         check_apparmor,
-        check_internal_service_auth,
+        partial(
+            check_internal_service_auth,
+            expected_control_plane_uid=args.expected_control_plane_uid,
+            expected_control_plane_gid=args.expected_control_plane_gid,
+            expected_shared_owner_uid=args.expected_shared_service_credential_owner_uid,
+            expected_shared_gid=args.expected_shared_service_credential_gid,
+        ),
         check_shared_stores,
         check_agent_egress,
         check_production_images,

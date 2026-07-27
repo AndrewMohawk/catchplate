@@ -4359,8 +4359,407 @@ def main() -> None:
     npm_fields = npm_adapter.operation_fields(npm_request, npm_route, {"package": "@scope%2fexample"})
     assert npm_fields["packageName"] == "@scope/example", npm_fields
     assert npm_fields["packageVersion"] == "1.2.3", npm_fields
-    assert npm_fields["tarballIntegrity"].startswith("sha512-"), npm_fields
+    npm_integrity = "sha512-" + base64.b64encode(hashlib.sha512(tarball).digest()).decode("ascii")
+    assert npm_fields["tarballIntegrity"] == npm_integrity, npm_fields
+    assert npm_fields["attachmentName"] == "example-1.2.3.tgz", npm_fields
+    assert npm_fields["attachmentBytes"] == str(len(tarball)), npm_fields
     assert npm_adapter.validate_request(npm_request, npm_route, {"package": "@scope%2fexample"}).allowed
+
+    existing_publish_document = copy.deepcopy(npm_document)
+    existing_publish_document["_rev"] = "42-deadbeef"
+    existing_publish_request = flow(
+        "PUT",
+        "https://registry.npmjs.org/@scope%2fexample",
+        existing_publish_document,
+    )
+    existing_publish_fields = npm_adapter.operation_fields(
+        existing_publish_request,
+        npm_route,
+        {"package": "@scope%2fexample"},
+    )
+    assert existing_publish_fields["operation"] == "npm.publish", existing_publish_fields
+    assert existing_publish_fields["tarballIntegrity"] == npm_integrity, existing_publish_fields
+    assert npm_adapter.validate_request(
+        existing_publish_request,
+        npm_route,
+        {"package": "@scope%2fexample"},
+    ).allowed
+
+    incomplete_existing_publish_documents = []
+    for publish_key in ("versions", "dist-tags", "_attachments", "tarball_integrity"):
+        incomplete_document = {
+            "_rev": "42-deadbeef",
+            "name": "@scope/example",
+            publish_key: copy.deepcopy(npm_document.get(publish_key, npm_integrity)),
+        }
+        incomplete_existing_publish_documents.append((publish_key, incomplete_document))
+    for publish_key, incomplete_document in incomplete_existing_publish_documents:
+        incomplete_request = flow(
+            "PUT",
+            "https://registry.npmjs.org/@scope%2fexample",
+            incomplete_document,
+        )
+        incomplete_decision = npm_adapter.validate_request(
+            incomplete_request,
+            npm_route,
+            {"package": "@scope%2fexample"},
+        )
+        assert not incomplete_decision.allowed, (publish_key, incomplete_decision)
+        assert incomplete_decision.payload.get("error", "").startswith("npm_publish_"), (
+            publish_key,
+            incomplete_decision.payload,
+        )
+        try:
+            incomplete_fields = npm_adapter.operation_fields(
+                incomplete_request,
+                npm_route,
+                {"package": "@scope%2fexample"},
+            )
+        except ValueError as exc:
+            assert str(exc).startswith("npm_publish_"), (publish_key, exc)
+        else:
+            assert incomplete_fields["operation"] == "npm.publish", (
+                publish_key,
+                incomplete_fields,
+            )
+
+    declared_npm_document = copy.deepcopy(npm_document)
+    declared_npm_document["tarball_integrity"] = npm_integrity
+    declared_version = declared_npm_document["versions"]["1.2.3"]
+    declared_version["dist"]["integrity"] = npm_integrity
+    declared_version["_integrity"] = npm_integrity
+    declared_npm = flow(
+        "PUT",
+        "https://registry.npmjs.org/@scope%2fexample",
+        declared_npm_document,
+    )
+    declared_fields = npm_adapter.operation_fields(
+        declared_npm,
+        npm_route,
+        {"package": "@scope%2fexample"},
+    )
+    assert declared_fields["tarballIntegrity"] == npm_integrity, declared_fields
+    assert npm_adapter.validate_request(
+        declared_npm,
+        npm_route,
+        {"package": "@scope%2fexample"},
+    ).allowed
+
+    conflicting_top_level_version = copy.deepcopy(npm_document)
+    conflicting_top_level_version["version"] = "9.9.9"
+    top_level_version_request = flow(
+        "PUT",
+        "https://registry.npmjs.org/@scope%2fexample",
+        conflicting_top_level_version,
+    )
+    top_level_version_fields = npm_adapter.operation_fields(
+        top_level_version_request,
+        npm_route,
+        {"package": "@scope%2fexample"},
+    )
+    assert top_level_version_fields["packageVersion"] == "1.2.3", top_level_version_fields
+
+    for invalid_name in (None, 7, "@scope/attacker"):
+        invalid_name_document = copy.deepcopy(npm_document)
+        invalid_name_document["name"] = invalid_name
+        invalid_name_request = flow(
+            "PUT",
+            "https://registry.npmjs.org/@scope%2fexample",
+            invalid_name_document,
+        )
+        expected_error = (
+            "npm_publish_package_mismatch"
+            if invalid_name == "@scope/attacker"
+            else "npm_publish_package_missing"
+        )
+        assert_denied(
+            npm_adapter.validate_request(
+                invalid_name_request,
+                npm_route,
+                {"package": "@scope%2fexample"},
+            ),
+            expected_error,
+        )
+
+    for declaration in ("tarball_integrity", "dist.integrity", "_integrity"):
+        conflicting_document = copy.deepcopy(npm_document)
+        if declaration == "tarball_integrity":
+            conflicting_document["tarball_integrity"] = "sha512-declared-not-uploaded"
+        elif declaration == "dist.integrity":
+            conflicting_document["versions"]["1.2.3"]["dist"][
+                "integrity"
+            ] = "sha512-declared-not-uploaded"
+        else:
+            conflicting_document["versions"]["1.2.3"][
+                "_integrity"
+            ] = "sha512-declared-not-uploaded"
+        conflicting_request = flow(
+            "PUT",
+            "https://registry.npmjs.org/@scope%2fexample",
+            conflicting_document,
+        )
+        assert_denied(
+            npm_adapter.validate_request(
+                conflicting_request,
+                npm_route,
+                {"package": "@scope%2fexample"},
+            ),
+            "npm_publish_integrity_mismatch",
+        )
+        try:
+            npm_adapter.operation_fields(
+                conflicting_request,
+                npm_route,
+                {"package": "@scope%2fexample"},
+            )
+        except ValueError as exc:
+            assert str(exc) == "npm_publish_integrity_mismatch", (declaration, exc)
+        else:
+            raise AssertionError(f"npm accepted conflicting {declaration}")
+
+    invalid_attachment_documents = []
+    missing_attachment = copy.deepcopy(npm_document)
+    missing_attachment.pop("_attachments")
+    invalid_attachment_documents.append(("npm_publish_attachment_missing", missing_attachment))
+    zero_attachments = copy.deepcopy(npm_document)
+    zero_attachments["_attachments"] = {}
+    invalid_attachment_documents.append(("npm_publish_attachment_ambiguous", zero_attachments))
+    multiple_attachments = copy.deepcopy(npm_document)
+    multiple_attachments["_attachments"]["other.tgz"] = {
+        "data": base64.b64encode(b"other").decode("ascii")
+    }
+    invalid_attachment_documents.append(("npm_publish_attachment_ambiguous", multiple_attachments))
+    invalid_attachment_object = copy.deepcopy(npm_document)
+    invalid_attachment_object["_attachments"]["example-1.2.3.tgz"] = []
+    invalid_attachment_documents.append(
+        ("npm_publish_attachment_invalid", invalid_attachment_object)
+    )
+    missing_attachment_data = copy.deepcopy(npm_document)
+    missing_attachment_data["_attachments"]["example-1.2.3.tgz"].pop("data")
+    invalid_attachment_documents.append(
+        ("npm_publish_attachment_data_missing", missing_attachment_data)
+    )
+    invalid_base64 = copy.deepcopy(npm_document)
+    invalid_base64["_attachments"]["example-1.2.3.tgz"]["data"] = "***"
+    invalid_attachment_documents.append(
+        ("npm_publish_attachment_invalid_base64", invalid_base64)
+    )
+    noncanonical_base64 = copy.deepcopy(npm_document)
+    noncanonical_base64["_attachments"]["example-1.2.3.tgz"]["data"] = "YR=="
+    invalid_attachment_documents.append(
+        ("npm_publish_attachment_invalid_base64", noncanonical_base64)
+    )
+    empty_attachment = copy.deepcopy(npm_document)
+    empty_attachment["_attachments"]["example-1.2.3.tgz"]["data"] = ""
+    empty_attachment["_attachments"]["example-1.2.3.tgz"]["length"] = 0
+    invalid_attachment_documents.append(("npm_publish_attachment_empty", empty_attachment))
+    wrong_attachment_length = copy.deepcopy(npm_document)
+    wrong_attachment_length["_attachments"]["example-1.2.3.tgz"]["length"] += 1
+    invalid_attachment_documents.append(
+        ("npm_publish_attachment_length_mismatch", wrong_attachment_length)
+    )
+    oversized_attachment = copy.deepcopy(npm_document)
+    oversized_attachment["_attachments"]["example-1.2.3.tgz"]["data"] = "A" * (
+        (16 * 1024 * 1024 * 4) // 3 + 5
+    )
+    invalid_attachment_documents.append(
+        ("request_body_too_large", oversized_attachment)
+    )
+    for expected_error, invalid_document in invalid_attachment_documents:
+        invalid_request = flow(
+            "PUT",
+            "https://registry.npmjs.org/@scope%2fexample",
+            invalid_document,
+        )
+        assert_denied(
+            npm_adapter.validate_request(
+                invalid_request,
+                npm_route,
+                {"package": "@scope%2fexample"},
+            ),
+            expected_error,
+        )
+
+    known_npm_operations = (
+        (
+            "DELETE",
+            "https://registry.npmjs.org/@scope%2fexample/-rev/42-deadbeef",
+            None,
+            {"package": "@scope%2fexample", "revision": "42-deadbeef"},
+            "npm.unpublish",
+        ),
+        (
+            "DELETE",
+            "https://registry.npmjs.org/@scope%2fexample/-/example.tgz/-rev/42-deadbeef",
+            None,
+            {"package": "@scope%2fexample", "revision": "42-deadbeef"},
+            "npm.unpublish",
+        ),
+        (
+            "PUT",
+            "https://registry.npmjs.org/-/package/@scope%2fexample/dist-tags/next",
+            {"version": "1.2.3"},
+            {"package": "@scope%2fexample", "tag": "next"},
+            "npm.distTagWrite",
+        ),
+        (
+            "POST",
+            "https://registry.npmjs.org/-/npm/v1/tokens",
+            {"readonly": True},
+            {},
+            "npm.tokenWrite",
+        ),
+        (
+            "DELETE",
+            "https://registry.npmjs.org/-/npm/v1/tokens/token/token-key",
+            None,
+            {"token": "token-key"},
+            "npm.tokenWrite",
+        ),
+        (
+            "POST",
+            "https://registry.npmjs.org/-/package/@scope%2fexample/access",
+            {"access": "public"},
+            {"package": "@scope%2fexample"},
+            "npm.metadataWrite",
+        ),
+        (
+            "POST",
+            "https://registry.npmjs.org/-/npm/v1/user",
+            {"email": "owner@example.test"},
+            {},
+            "npm.metadataWrite",
+        ),
+        (
+            "PUT",
+            "https://registry.npmjs.org/-/team/scope/owners/package",
+            {"package": "@scope/example"},
+            {"scope": "scope", "team": "owners"},
+            "npm.metadataWrite",
+        ),
+        (
+            "PUT",
+            "https://registry.npmjs.org/@scope%2fexample",
+            {"_rev": "42-deadbeef", "name": "@scope/example", "description": "metadata only"},
+            {"package": "@scope%2fexample"},
+            "npm.metadataWrite",
+        ),
+    )
+    for method, target, body, params, expected_operation in known_npm_operations:
+        known_request = flow(method, target, body)
+        fields = npm_adapter.operation_fields(known_request, npm_route, params)
+        assert fields["operation"] == expected_operation, (target, fields)
+
+    for revision in (None, False, 0, "", {}):
+        invalid_revision_document = {
+            "_rev": revision,
+            "name": "@scope/example",
+            "description": "metadata only",
+        }
+        invalid_revision_request = flow(
+            "PUT",
+            "https://registry.npmjs.org/@scope%2fexample",
+            invalid_revision_document,
+        )
+        assert_denied(
+            npm_adapter.validate_request(
+                invalid_revision_request,
+                npm_route,
+                {"package": "@scope%2fexample"},
+            ),
+            "npm_metadata_revision_invalid",
+        )
+        try:
+            npm_adapter.operation_fields(
+                invalid_revision_request,
+                npm_route,
+                {"package": "@scope%2fexample"},
+            )
+        except ValueError as exc:
+            assert str(exc) == "npm_metadata_revision_invalid", (revision, exc)
+        else:
+            raise AssertionError(f"npm accepted invalid _rev value {revision!r}")
+
+        invalid_publish_revision_document = copy.deepcopy(npm_document)
+        invalid_publish_revision_document["_rev"] = revision
+        invalid_publish_revision_request = flow(
+            "PUT",
+            "https://registry.npmjs.org/@scope%2fexample",
+            invalid_publish_revision_document,
+        )
+        invalid_publish_revision_decision = npm_adapter.validate_request(
+            invalid_publish_revision_request,
+            npm_route,
+            {"package": "@scope%2fexample"},
+        )
+        assert not invalid_publish_revision_decision.allowed, (
+            revision,
+            invalid_publish_revision_decision,
+        )
+        assert invalid_publish_revision_decision.payload.get("error"), (
+            revision,
+            invalid_publish_revision_decision.payload,
+        )
+
+    unknown_npm_requests = (
+        ("GET", "https://registry.npmjs.org/@scope%2fexample", None),
+        ("HEAD", "https://registry.npmjs.org/@scope%2fexample/-/example-1.2.3.tgz", None),
+        ("POST", "https://registry.npmjs.org/@scope%2fexample", npm_document),
+        ("PATCH", "https://registry.npmjs.org/@scope%2fexample", npm_document),
+        ("PUT", "https://registry.npmjs.org/arbitrary/path", {}),
+        ("POST", "https://registry.npmjs.org/-/package/@scope%2fexample/dist-tags/next", {}),
+        ("PUT", "https://registry.npmjs.org/-/npm/v1/tokens", {}),
+        ("DELETE", "https://registry.npmjs.org/-/package/@scope%2fexample/access", {}),
+        ("PUT", "https://registry.npmjs.org/-/npm/v1/tokens-evil", {}),
+        (
+            "PUT",
+            "https://registry.npmjs.org/-/package/@scope%2fexample/dist-tags/next/extra",
+            {},
+        ),
+        (
+            "PUT",
+            "https://registry.npmjs.org/@scope%2fexample/",
+            npm_document,
+        ),
+        ("DELETE", "https://registry.npmjs.org/-/user/token/token-key", {}),
+    )
+    for method, target, body in unknown_npm_requests:
+        unknown_request = flow(method, target, body)
+        assert_denied(
+            npm_adapter.validate_request(unknown_request, npm_route, {}),
+            "npm_operation_unclassified",
+        )
+        try:
+            npm_adapter.operation_fields(unknown_request, npm_route, {})
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"npm classified unknown request {method} {target}")
+
+    for invalid_request, expected_error in (
+        (
+            flow("POST", "https://registry.npmjs.org/-/npm/v1/tokens"),
+            "npm_write_body_required",
+        ),
+        (
+            flow(
+                "DELETE",
+                "https://registry.npmjs.org/@scope%2fexample/-rev/42-deadbeef",
+                {"unexpected": True},
+            ),
+            "npm_delete_body_denied",
+        ),
+    ):
+        assert_denied(
+            npm_adapter.validate_request(invalid_request, npm_route, {}),
+            expected_error,
+        )
+        try:
+            npm_adapter.operation_fields(invalid_request, npm_route, {})
+        except ValueError as exc:
+            assert str(exc) == expected_error, exc
+        else:
+            raise AssertionError(f"npm accepted invalid body for {invalid_request.request.pretty_url}")
 
     npm_unknown_header = copy.deepcopy(npm_request)
     npm_unknown_header.request.headers["x-agent-widening"] = "1"
@@ -4435,7 +4834,7 @@ def main() -> None:
                 npm_route,
                 {"package": "@scope%2fexample"},
             ),
-            "npm_publish_invalid_json",
+            "npm_write_invalid_json",
         )
         try:
             npm_adapter.operation_fields(
@@ -4469,7 +4868,7 @@ def main() -> None:
     if invalid_revision_decision.allowed:
         credential_accesses.append("cred-npm")
         upstream_contacts.append(invalid_revision.request.pretty_url)
-    assert_denied(invalid_revision_decision, "npm_publish_invalid_json")
+    assert_denied(invalid_revision_decision, "npm_write_invalid_json")
     assert credential_accesses == []
     assert upstream_contacts == []
 
@@ -4500,6 +4899,12 @@ def main() -> None:
             blocked_npm.request.headers["X-Serverware-Agent"] = "example-agent"
             blocked_npm.request.headers["content-type"] = "application/json"
             blocked_npm.request.raw_content = invalid_npm_publish_bodies[0]
+            blocked_unknown_npm = flow(
+                "POST",
+                "https://registry.npmjs.org/@scope%2fexample",
+                npm_document,
+            )
+            blocked_unknown_npm.request.headers["X-Serverware-Agent"] = "example-agent"
             blocked_gmail = flow(
                 "GET",
                 "https://gmail.googleapis.com/gmail/v1/users/me/messages?unknown=1",
@@ -4521,7 +4926,8 @@ def main() -> None:
                 (blocked_gmail, "request_query_key_not_allowed", 403),
                 (blocked_x_read, "request_query_key_not_allowed", 403),
                 (blocked_x_write, "request_content_type_denied", 415),
-                (blocked_npm, "npm_publish_invalid_json", 403),
+                (blocked_npm, "npm_write_invalid_json", 403),
+                (blocked_unknown_npm, "npm_operation_unclassified", 403),
             ):
                 ServerwareAddon().request(blocked_request)
                 assert credential_reads == [], credential_reads
@@ -4920,9 +5326,8 @@ def main() -> None:
         ),
         (
             flow(
-                "PUT",
-                "https://registry.npmjs.org/@scope%2fexample/-rev/42-deadbeef",
-                {"_rev": "42-deadbeef", "name": "@scope/example", "versions": {}},
+                "DELETE",
+                "https://registry.npmjs.org/@scope%2fexample/-/example.tgz/-rev/42-deadbeef",
             ),
             {"package": "@scope%2fexample", "revision": "42-deadbeef"},
             "npm.unpublish",
@@ -4956,7 +5361,11 @@ def main() -> None:
             flow(
                 "PUT",
                 "https://registry.npmjs.org/@scope%2fexample",
-                {"_rev": "42-deadbeef", "name": "@scope/example", "versions": {}},
+                {
+                    "_rev": "42-deadbeef",
+                    "name": "@scope/example",
+                    "description": "metadata only",
+                },
             ),
             {"package": "@scope%2fexample"},
             "npm.metadataWrite",

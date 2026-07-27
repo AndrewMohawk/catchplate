@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import hashlib
 import json
 import importlib.util
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -49,7 +51,9 @@ def main() -> None:
         "verify-control-plane-oidc",
         "verify-webauthn-recovery",
         "verify-portal-browser-oauth",
+        "verify-onboarding-evidence-tooling",
         "verify-agent-enrollment",
+        "build-agent-enrollment-wheel",
         "verify-setup-session-api",
         "validate-production-policy-identity",
         "verify-production-agent-enrollment-evidence",
@@ -110,6 +114,14 @@ def main() -> None:
     )
     if "verify-custody-response-proof" not in aggregate_declaration:
         raise AssertionError("verify-production-release-proof omits the custody proof lifecycle")
+    for required in (
+        "verify-onboarding-evidence-tooling",
+        "build-agent-enrollment-wheel",
+    ):
+        if required not in aggregate_declaration:
+            raise AssertionError(
+                f"verify-production-release-proof omits {required}"
+            )
 
     oidc_body = target_body(makefile, "verify-control-plane-oidc")
     if "scripts/test_control_plane_oidc.py" not in oidc_body:
@@ -129,6 +141,16 @@ def main() -> None:
     for target in ("bench-gate-rs", "verify-oauth-credentials"):
         if "$(MAKE) verify-portal-browser-oauth" not in target_body(makefile, target):
             raise AssertionError(f"{target} omits the portal browser OAuth proof")
+
+    onboarding_body = target_body(makefile, "verify-onboarding-evidence-tooling")
+    for required in (
+        "$(TEST_PYTHON_RUN)",
+        "-m unittest scripts.test_onboarding_evidence -v",
+    ):
+        if required not in onboarding_body:
+            raise AssertionError(
+                f"onboarding evidence verification omits {required}"
+            )
 
     bench_body = target_body(makefile, "bench-gate-rs")
     provenance_step = "scripts/generate_release_provenance.py"
@@ -389,7 +411,14 @@ def main() -> None:
                 )
 
     wheel_body = target_body(makefile, "build-agent-enrollment-wheel")
+    if (
+        "AGENT_ENROLLMENT_WHEEL_FILENAME ?= $(shell python3 -c "
+        "'from serverware_agent_trust.build_backend import WHEEL_NAME; print(WHEEL_NAME)')"
+        not in makefile
+    ):
+        raise AssertionError("agent enrollment wheel filename is not sourced from build_backend.WHEEL_NAME")
     for required in (
+        "AGENT_ENROLLMENT_WHEEL_DIRECTORY must resolve below the repository .tmp directory",
         "pip download",
         "--require-hashes",
         "--only-binary=:all:",
@@ -401,23 +430,48 @@ def main() -> None:
         '"$(AGENT_ENROLLMENT_WHEEL_DIRECTORY)/requirements.lock"',
         "--no-build-isolation",
         "--no-deps",
-        "serverware_enrollment-*.whl",
+        "$(AGENT_ENROLLMENT_WHEEL_FILENAME)",
         "generate_offline_artifact_manifest.py",
         "verify_offline_artifact_manifest.py",
         "$(AGENT_ENROLLMENT_WHEEL_MANIFEST)",
+        "$(AGENT_ENROLLMENT_WHEEL_CHECKSUMS)",
+        "--checksums",
+        "SHA256SUMS",
+        "shasum -a 256 -c SHA256SUMS",
+        "sha256sum -c SHA256SUMS",
         "--python-tag cp311",
         '"$(AGENT_ENROLLMENT_TARGET_PLATFORM)"',
         "--architecture amd64",
     ):
         if required not in wheel_body:
             raise AssertionError(f"clean-room wheel build target omits {required}")
+    if wheel_body.index("must resolve below") > wheel_body.index('rm -rf "'):
+        raise AssertionError(
+            "wheelhouse path guard must execute before recursive cleanup"
+        )
+    generate_position = wheel_body.index("generate_offline_artifact_manifest.py")
+    checksum_position = wheel_body.index("shasum -a 256 -c SHA256SUMS")
+    verify_position = wheel_body.index("verify_offline_artifact_manifest.py")
+    if not generate_position < checksum_position < verify_position:
+        raise AssertionError("wheel build must generate, standard-verify, then Python-verify SHA256SUMS")
     with tempfile.TemporaryDirectory(dir=ROOT / ".tmp") as temporary_directory:
         wheelhouse = Path(temporary_directory)
-        package_wheel = wheelhouse / "serverware_enrollment-0.2.0-py3-none-any.whl"
+        package_wheel_name = subprocess.check_output(
+            [
+                sys.executable,
+                "-c",
+                "from serverware_agent_trust.build_backend import WHEEL_NAME; print(WHEEL_NAME)",
+            ],
+            cwd=ROOT,
+            text=True,
+        ).strip()
+        package_wheel = wheelhouse / package_wheel_name
         package_wheel_bytes = b"package wheel bytes"
         package_wheel.write_bytes(package_wheel_bytes)
-        (wheelhouse / "cryptography-48.0.1-cp311-manylinux2014_x86_64.whl").write_bytes(
-            b"cryptography wheel bytes"
+        cryptography_wheel = wheelhouse / "cryptography-48.0.1-cp311-manylinux2014_x86_64.whl"
+        cryptography_wheel_bytes = b"cryptography wheel bytes"
+        cryptography_wheel.write_bytes(
+            cryptography_wheel_bytes
         )
         (wheelhouse / "cffi-2.1.0-cp311-manylinux2014_x86_64.whl").write_bytes(
             b"cffi wheel bytes"
@@ -427,6 +481,7 @@ def main() -> None:
         )
         (wheelhouse / "requirements.lock").write_bytes(b"locked requirements\n")
         manifest = wheelhouse / "wheelhouse-manifest.json"
+        checksums = wheelhouse / "SHA256SUMS"
         common = [
             "--root",
             str(wheelhouse),
@@ -445,9 +500,11 @@ def main() -> None:
                 str(ROOT / "scripts" / "generate_offline_artifact_manifest.py"),
                 "--output",
                 str(manifest),
+                "--checksums",
+                str(checksums),
                 *common,
                 "--require",
-                "serverware_enrollment-*.whl",
+                package_wheel_name,
                 "--require",
                 "cryptography-*.whl",
                 "--require",
@@ -464,11 +521,62 @@ def main() -> None:
         )
         if generate.returncode != 0:
             raise AssertionError(f"wheel manifest generation failed: {generate.stderr}")
+        first_manifest = manifest.read_bytes()
+        first_checksums = checksums.read_bytes()
+        regenerated = subprocess.run(
+            generate.args,
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if regenerated.returncode != 0:
+            raise AssertionError(f"wheel manifest regeneration failed: {regenerated.stderr}")
+        if manifest.read_bytes() != first_manifest or checksums.read_bytes() != first_checksums:
+            raise AssertionError("wheel manifest or SHA256SUMS output is not deterministic")
+
+        checksum_lines = checksums.read_text(encoding="ascii").splitlines()
+        expected_checksum_names = sorted(
+            path.name for path in wheelhouse.iterdir() if path.name != checksums.name
+        )
+        actual_checksum_names = []
+        for line in checksum_lines:
+            match = re.fullmatch(r"([0-9a-f]{64})  ([A-Za-z0-9][A-Za-z0-9._+-]{0,254})", line)
+            if match is None:
+                raise AssertionError(f"SHA256SUMS contains a non-canonical line: {line!r}")
+            digest, name = match.groups()
+            actual_checksum_names.append(name)
+            if digest != hashlib.sha256((wheelhouse / name).read_bytes()).hexdigest():
+                raise AssertionError(f"SHA256SUMS contains the wrong digest for {name}")
+        if actual_checksum_names != expected_checksum_names:
+            raise AssertionError(
+                f"SHA256SUMS coverage differs: {actual_checksum_names} != {expected_checksum_names}"
+            )
+
+        if shutil.which("shasum"):
+            standard_checksum_command = ["shasum", "-a", "256", "-c", checksums.name]
+        elif shutil.which("sha256sum"):
+            standard_checksum_command = ["sha256sum", "-c", checksums.name]
+        else:
+            raise AssertionError("focused wheelhouse test requires shasum or sha256sum")
+        standard_verified = subprocess.run(
+            standard_checksum_command,
+            cwd=wheelhouse,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if standard_verified.returncode != 0:
+            raise AssertionError(
+                f"standard SHA256SUMS verification failed: {standard_verified.stderr}"
+            )
         verify_command = [
             sys.executable,
             str(ROOT / "scripts" / "verify_offline_artifact_manifest.py"),
             "--manifest",
             str(manifest),
+            "--checksums",
+            str(checksums),
             *common,
         ]
         verified = subprocess.run(
@@ -483,7 +591,19 @@ def main() -> None:
         verification = json.loads(verified.stdout)
         if verification.get("manifest_sha256", "").startswith("sha256:") is not True:
             raise AssertionError("wheel manifest verifier did not emit its manifest digest")
+        if verification.get("checksums_sha256", "").startswith("sha256:") is not True:
+            raise AssertionError("wheel manifest verifier did not emit the SHA256SUMS digest")
+
         package_wheel.write_bytes(b"X" * len(package_wheel_bytes))
+        standard_substituted = subprocess.run(
+            standard_checksum_command,
+            cwd=wheelhouse,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if standard_substituted.returncode == 0:
+            raise AssertionError("standard SHA256SUMS verification accepted a substituted wheel")
         substituted = subprocess.run(
             verify_command,
             cwd=ROOT,
@@ -493,6 +613,41 @@ def main() -> None:
         )
         if substituted.returncode == 0 or "SHA-256 mismatch" not in substituted.stderr:
             raise AssertionError("wheel manifest verifier accepted a substituted package wheel")
+        package_wheel.write_bytes(package_wheel_bytes)
+
+        cryptography_wheel.unlink()
+        missing = subprocess.run(
+            verify_command,
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if missing.returncode == 0 or "artifact set differs" not in missing.stderr:
+            raise AssertionError("wheel manifest verifier accepted a missing dependency wheel")
+        missing_standard = subprocess.run(
+            standard_checksum_command,
+            cwd=wheelhouse,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if missing_standard.returncode == 0:
+            raise AssertionError("standard SHA256SUMS verification accepted a missing dependency wheel")
+        cryptography_wheel.write_bytes(cryptography_wheel_bytes)
+
+        unexpected = wheelhouse / "unexpected.whl"
+        unexpected.write_bytes(b"unexpected wheel")
+        extra = subprocess.run(
+            verify_command,
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if extra.returncode == 0 or "artifact set differs" not in extra.stderr:
+            raise AssertionError("wheel manifest verifier accepted an extra wheelhouse artifact")
+        unexpected.unlink()
     agent_enrollment_body = target_body(makefile, "verify-agent-enrollment")
     if "scripts/test_agent_enrollment.py" not in agent_enrollment_body:
         raise AssertionError("agent enrollment gate omits its clean-room and receipt contract test")

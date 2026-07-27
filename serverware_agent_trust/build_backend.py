@@ -5,16 +5,20 @@ import csv
 import hashlib
 import io
 import os
+import re
 import time
 import zipfile
 from pathlib import Path
 
+from . import DISTRIBUTION_NAME, ENROLLMENT_CLI_COMMAND, __version__
 
-NAME = "serverware-enrollment"
-NORMALIZED_NAME = "serverware_enrollment"
-VERSION = "0.2.0"
-DIST_INFO = f"{NORMALIZED_NAME}-{VERSION}.dist-info"
-WHEEL_NAME = f"{NORMALIZED_NAME}-{VERSION}-py3-none-any.whl"
+
+NAME = DISTRIBUTION_NAME
+NORMALIZED_NAME = re.sub(r"[-_.]+", "_", NAME)
+VERSION = __version__
+NORMALIZED_VERSION = re.sub(r"[^A-Za-z0-9.]+", "_", VERSION)
+DIST_INFO = f"{NORMALIZED_NAME}-{NORMALIZED_VERSION}.dist-info"
+WHEEL_NAME = f"{NORMALIZED_NAME}-{NORMALIZED_VERSION}-py3-none-any.whl"
 
 
 def _metadata() -> bytes:
@@ -43,7 +47,7 @@ def _entry_points() -> bytes:
     return (
         "[console_scripts]\n"
         "serverware-attestation = serverware_agent_trust.attestation:console_main\n"
-        "serverware-enrollment = serverware_agent_trust.enrollment:console_main\n"
+        f"{ENROLLMENT_CLI_COMMAND} = serverware_agent_trust.enrollment:console_main\n"
     ).encode("ascii")
 
 

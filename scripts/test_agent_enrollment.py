@@ -81,7 +81,13 @@ def main() -> None:
             _safe_allow_canaries,
         )
         from serverware.policy_bundle import compile_policy_bundle, demo_policy_bundle, sign_policy_bundle
-        from serverware.response_identity import response_public_key_info
+        from serverware.response_identity import response_public_key_info, sign_statement
+        from serverware_agent_trust import (
+            DISTRIBUTION_NAME,
+            ENROLLMENT_CLI_COMMAND,
+            ENROLLMENT_TOOLING_API_VERSION,
+            __version__ as ENROLLMENT_CLI_VERSION,
+        )
         from serverware_agent_trust.receipts import (
             EGRESS_EVIDENCE_API_VERSION,
             Ed25519TrustRoot,
@@ -93,7 +99,7 @@ def main() -> None:
             verify_agent_egress_evidence,
             verify_enrollment_verifier_receipt,
         )
-        from serverware_agent_trust.attestation import verify_quote
+        from serverware_agent_trust.attestation import enrollment_install_session, verify_quote
         from serverware_agent_trust.http import (
             HttpClientError,
             request_bytes as clean_room_request_bytes,
@@ -141,6 +147,16 @@ def main() -> None:
         )
 
         assert packet["apiVersion"] == "serverware.agentEnrollment/v1", packet
+        assert packet["tooling"] == {
+            "apiVersion": ENROLLMENT_TOOLING_API_VERSION,
+            "command": ENROLLMENT_CLI_COMMAND,
+            "distribution": DISTRIBUTION_NAME,
+            "version": ENROLLMENT_CLI_VERSION,
+            "versionCheck": [ENROLLMENT_CLI_COMMAND, "--version"],
+            "expectedVersionOutput": (
+                f"{ENROLLMENT_CLI_COMMAND} {ENROLLMENT_CLI_VERSION}"
+            ),
+        }, packet
         assert packet["principalId"] == "agent:demo-proxy-token", packet
         assert packet["pinning"]["policyHash"] == snapshot.hash, packet
         assert packet["pinning"]["runtimeManifestDigest"] == attestation["runtime_manifest_digest"], packet
@@ -242,6 +258,7 @@ def main() -> None:
         bootstrap = handoff["instructionsText"]
         binding = handoff["verificationBinding"]
         assert binding["mode"] == "emit-verified-instructions", binding
+        assert binding["toolingContractPath"] == "tooling", binding
         assert binding["expectedPrincipal"] == packet["principalId"], binding
         assert binding["expectedNonce"] == NONCE, binding
         assert binding["expectedPins"] == packet["pinning"], binding
@@ -268,6 +285,10 @@ def main() -> None:
             "--emit-verified-instructions",
         ], binding
         assert 'exec serverware-enrollment \\' in bootstrap, bootstrap
+        assert (
+            f'test "$(serverware-enrollment --version)" = '
+            f"'{ENROLLMENT_CLI_COMMAND} {ENROLLMENT_CLI_VERSION}'"
+        ) in bootstrap, bootstrap
         assert '--verify-packet "$SERVERWARE_PACKET_PATH"' in bootstrap, bootstrap
         assert '--expected-packet-sha256 "$SERVERWARE_PACKET_SHA256"' in bootstrap, bootstrap
         assert "--expected-principal agent:demo-proxy-token" in bootstrap, bootstrap
@@ -506,8 +527,61 @@ print(json.dumps({
         receipt = verify_packet(packet, verification_attestation, NONCE)
         assert receipt["packetSha256"] == packet_sha256, receipt
         assert "packet-signature" in receipt["checks"], receipt
+        assert "tooling-contract" in receipt["checks"], receipt
+        assert "tooling-version" in receipt["checks"], receipt
         full_receipt = verify_attestation_for_packet(packet, verification_attestation, NONCE, None)
         assert full_receipt["packetSha256"] == packet_sha256, full_receipt
+
+        def resign_enrollment_packet(value: dict[str, object]) -> dict[str, object]:
+            resigned = json.loads(json.dumps(value))
+            resigned.pop("authenticity", None)
+            resigned_packet_sha256 = "sha256:" + hashlib.sha256(
+                canonical_json(resigned).encode("utf-8")
+            ).hexdigest()
+            statement = dict(packet["authenticity"]["statement"])
+            statement["packetSha256"] = resigned_packet_sha256
+            resigned["authenticity"] = {
+                "statement": statement,
+                "statementSha256": "sha256:" + hashlib.sha256(
+                    canonical_json(statement).encode("utf-8")
+                ).hexdigest(),
+                "signature": sign_statement(statement),
+            }
+            return resigned
+
+        missing_tooling_packet = json.loads(json.dumps(packet))
+        missing_tooling_packet.pop("tooling")
+        missing_tooling_packet = resign_enrollment_packet(missing_tooling_packet)
+        try:
+            verify_packet(missing_tooling_packet, verification_attestation, NONCE)
+        except ValueError as exc:
+            assert "missing the required tooling contract" in str(exc), exc
+        else:
+            raise AssertionError("enrollment verifier accepted a signed packet without tooling")
+
+        wrong_tooling_version_packet = json.loads(json.dumps(packet))
+        wrong_tooling_version_packet["tooling"]["version"] = "999.0.0"
+        wrong_tooling_version_packet["tooling"]["expectedVersionOutput"] = (
+            f"{ENROLLMENT_CLI_COMMAND} 999.0.0"
+        )
+        wrong_tooling_version_packet = resign_enrollment_packet(wrong_tooling_version_packet)
+        try:
+            verify_packet(wrong_tooling_version_packet, verification_attestation, NONCE)
+        except ValueError as exc:
+            assert "requires serverware-enrollment version" in str(exc), exc
+            assert ENROLLMENT_CLI_VERSION in str(exc), exc
+        else:
+            raise AssertionError("enrollment verifier accepted a wrong required tooling version")
+
+        open_tooling_schema_packet = json.loads(json.dumps(packet))
+        open_tooling_schema_packet["tooling"]["unexpected"] = True
+        open_tooling_schema_packet = resign_enrollment_packet(open_tooling_schema_packet)
+        try:
+            verify_packet(open_tooling_schema_packet, verification_attestation, NONCE)
+        except ValueError as exc:
+            assert "closed schema" in str(exc), exc
+        else:
+            raise AssertionError("enrollment verifier accepted an open tooling contract")
         wrong_policy_key_attestation = dict(verification_attestation)
         wrong_policy_key_attestation["policy_signing_key_id"] = "sha256:" + "0" * 64
         try:
@@ -988,8 +1062,14 @@ print(json.dumps({
             )
             if wheel_result.returncode != 0:
                 raise AssertionError(f"clean-room wheel build failed: {wheel_result.stderr}")
+            expected_wheel_name = (
+                f"serverware_enrollment-{ENROLLMENT_CLI_VERSION}-py3-none-any.whl"
+            )
             wheels = list(wheel_dir.glob("serverware_enrollment-*.whl"))
-            assert len(wheels) == 1, (wheels, wheel_result.stdout)
+            assert [wheel.name for wheel in wheels] == [expected_wheel_name], (
+                wheels,
+                wheel_result.stdout,
+            )
             second_wheel_dir = Path(tmp) / "wheel-second-build"
             second_wheel_dir.mkdir()
             second_wheel_result = subprocess.run(
@@ -1015,7 +1095,7 @@ print(json.dumps({
                     f"second deterministic wheel build failed: {second_wheel_result.stderr}"
                 )
             second_wheels = list(second_wheel_dir.glob("serverware_enrollment-*.whl"))
-            assert len(second_wheels) == 1, second_wheels
+            assert [wheel.name for wheel in second_wheels] == [expected_wheel_name], second_wheels
             assert wheels[0].name == second_wheels[0].name
             assert wheels[0].read_bytes() == second_wheels[0].read_bytes(), (
                 hashlib.sha256(wheels[0].read_bytes()).hexdigest(),
@@ -1122,6 +1202,46 @@ print(json.dumps({
             enrollment_executable = clean_bin / (
                 "serverware-enrollment.exe" if os.name == "nt" else "serverware-enrollment"
             )
+            metadata_result = subprocess.run(
+                [
+                    str(clean_python),
+                    "-c",
+                    (
+                        "import importlib.metadata as m,json,serverware_agent_trust as p;"
+                        f"d=m.distribution({DISTRIBUTION_NAME!r});"
+                        "print(json.dumps({'distributionVersion':d.version,"
+                        "'packageVersion':p.__version__,'entryPoints':"
+                        "sorted([{'name':e.name,'value':e.value} for e in d.entry_points "
+                        "if e.group=='console_scripts'],"
+                        "key=lambda e:(e['name'],e['value']))}))"
+                    ),
+                ],
+                cwd=Path(tmp),
+                env=clean_env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            assert metadata_result.returncode == 0, metadata_result.stderr
+            installed_metadata = json.loads(metadata_result.stdout)
+            assert installed_metadata["distributionVersion"] == ENROLLMENT_CLI_VERSION
+            assert installed_metadata["packageVersion"] == ENROLLMENT_CLI_VERSION
+            assert {
+                "name": ENROLLMENT_CLI_COMMAND,
+                "value": "serverware_agent_trust.enrollment:console_main",
+            } in installed_metadata["entryPoints"], installed_metadata
+            version_result = subprocess.run(
+                [str(enrollment_executable), "--version"],
+                cwd=Path(tmp),
+                env=clean_env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            assert version_result.returncode == 0, version_result.stderr
+            assert version_result.stdout.strip() == (
+                f"{ENROLLMENT_CLI_COMMAND} {ENROLLMENT_CLI_VERSION}"
+            ), version_result
             installed_verify_result = subprocess.run(
                 [
                     str(enrollment_executable),
@@ -1622,6 +1742,88 @@ print(json.dumps({
                 expected_principal=setup_assignment.principal_id,
                 expected_nonce=NONCE,
             )
+
+            install_base, verified_install_session = enrollment_install_session(
+                verified_setup_packet,
+                base="https://serverware.example",
+            )
+            assert install_base == "https://serverware.example", install_base
+            assert verified_install_session == setup_install_session, verified_install_session
+
+            def resign_verified_enrollment_packet(
+                value: dict[str, object],
+            ) -> dict[str, object]:
+                resigned = json.loads(json.dumps(value))
+                receipt = resigned.pop("verificationReceipt")
+                authenticity = resigned.pop("authenticity")
+                packet_digest = "sha256:" + hashlib.sha256(
+                    canonical_json(resigned).encode("utf-8")
+                ).hexdigest()
+                statement = dict(authenticity["statement"])
+                statement["packetSha256"] = packet_digest
+                statement_digest = "sha256:" + hashlib.sha256(
+                    canonical_json(statement).encode("utf-8")
+                ).hexdigest()
+                resigned["authenticity"] = {
+                    "statement": statement,
+                    "statementSha256": statement_digest,
+                    "signature": sign_statement(statement),
+                }
+                receipt["packetSha256"] = packet_digest
+                receipt["statementSha256"] = statement_digest
+                resigned["verificationReceipt"] = receipt
+                return resigned
+
+            def expect_attestation_install_rejection(
+                packet_value: dict[str, object],
+                expected_error: str,
+            ) -> None:
+                try:
+                    enrollment_install_session(
+                        packet_value,
+                        base="https://serverware.example",
+                    )
+                except ValueError as exc:
+                    assert expected_error in str(exc), exc
+                else:
+                    raise AssertionError(
+                        "serverware-attestation accepted a hostile enrollment packet"
+                    )
+
+            missing_tooling_install_packet = json.loads(
+                json.dumps(verified_setup_packet)
+            )
+            missing_tooling_install_packet.pop("tooling")
+            expect_attestation_install_rejection(
+                resign_verified_enrollment_packet(missing_tooling_install_packet),
+                "missing the required tooling contract",
+            )
+
+            wrong_tooling_install_packet = json.loads(
+                json.dumps(verified_setup_packet)
+            )
+            wrong_tooling_install_packet["tooling"]["version"] = "999.0.0"
+            expect_attestation_install_rejection(
+                resign_verified_enrollment_packet(wrong_tooling_install_packet),
+                "requires serverware-enrollment version",
+            )
+
+            open_tooling_install_packet = json.loads(json.dumps(verified_setup_packet))
+            open_tooling_install_packet["tooling"]["unexpected"] = True
+            expect_attestation_install_rejection(
+                resign_verified_enrollment_packet(open_tooling_install_packet),
+                "closed schema",
+            )
+
+            for missing_receipt_check in ("tooling-contract", "tooling-version"):
+                missing_check_packet = json.loads(json.dumps(verified_setup_packet))
+                missing_check_packet["verificationReceipt"]["checks"].remove(
+                    missing_receipt_check
+                )
+                expect_attestation_install_rejection(
+                    missing_check_packet,
+                    "missing required tooling checks",
+                )
 
             def expect_production_quote_rejection(
                 packet_value: dict[str, object], expected_error: str

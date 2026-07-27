@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import stat
+import unicodedata
 from pathlib import Path
 
 from serverware.rbac import RBACRoleValidationError, normalize_rbac_roles
@@ -23,6 +24,8 @@ PRODUCTION_IMAGE = _PRODUCTION_IMAGE_MARKER_PRESENT or os.getenv(
 ) == "1"
 _DEVELOPMENT_RELEASE_CHANNELS = {"dev", "development", "local", "test"}
 MAX_OAUTH_CLIENT_SECRET_FILE_BYTES = 4096
+MAX_SERVICE_CREDENTIAL_FILE_BYTES = 4096
+_SERVICE_CREDENTIAL_FILE_MODES = {0o400, 0o440, 0o600, 0o640}
 
 
 def _production_release() -> bool:
@@ -83,6 +86,127 @@ def _oauth_client_secret(*, value_name: str, file_name: str) -> tuple[str, Path 
     return _read_oauth_client_secret_file(secret_path, setting_name=file_name), secret_path
 
 
+def _service_credential_file_identity(file_stat: os.stat_result) -> tuple[int, ...]:
+    return (
+        file_stat.st_dev,
+        file_stat.st_ino,
+        file_stat.st_mode,
+        file_stat.st_size,
+        file_stat.st_mtime_ns,
+        file_stat.st_ctime_ns,
+    )
+
+
+def _read_service_credential_file(path: Path, *, setting_name: str) -> str:
+    if not path.is_absolute():
+        raise RuntimeError(f"{setting_name} must be an absolute path")
+    try:
+        path_stat_before = path.lstat()
+    except OSError as exc:
+        raise RuntimeError(
+            f"{setting_name} must reference a readable, non-symlink credential file"
+        ) from exc
+    if stat.S_ISLNK(path_stat_before.st_mode):
+        raise RuntimeError(f"{setting_name} must not reference a symlink")
+
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise RuntimeError(
+            f"{setting_name} must reference a readable, non-symlink credential file"
+        ) from exc
+    try:
+        file_stat_before = os.fstat(descriptor)
+        if not stat.S_ISREG(file_stat_before.st_mode):
+            raise RuntimeError(f"{setting_name} must reference a regular file")
+        if (
+            path_stat_before.st_dev != file_stat_before.st_dev
+            or path_stat_before.st_ino != file_stat_before.st_ino
+        ):
+            raise RuntimeError(f"{setting_name} changed while it was being opened")
+        mode = stat.S_IMODE(file_stat_before.st_mode)
+        if mode not in _SERVICE_CREDENTIAL_FILE_MODES:
+            raise RuntimeError(
+                f"{setting_name} must use mode 0400, 0440, 0600, or 0640"
+            )
+        if not 1 <= file_stat_before.st_size <= MAX_SERVICE_CREDENTIAL_FILE_BYTES:
+            raise RuntimeError(
+                f"{setting_name} must contain between 1 and "
+                f"{MAX_SERVICE_CREDENTIAL_FILE_BYTES} bytes"
+            )
+
+        chunks: list[bytes] = []
+        remaining = MAX_SERVICE_CREDENTIAL_FILE_BYTES + 1
+        while remaining:
+            chunk = os.read(descriptor, remaining)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        payload = b"".join(chunks)
+        file_stat_after = os.fstat(descriptor)
+        try:
+            path_stat_after = path.lstat()
+        except OSError as exc:
+            raise RuntimeError(f"{setting_name} changed while it was being read") from exc
+        if (
+            len(payload) != file_stat_before.st_size
+            or _service_credential_file_identity(file_stat_after)
+            != _service_credential_file_identity(file_stat_before)
+            or _service_credential_file_identity(path_stat_after)
+            != _service_credential_file_identity(file_stat_before)
+        ):
+            raise RuntimeError(f"{setting_name} changed while it was being read")
+    finally:
+        os.close(descriptor)
+
+    try:
+        credential = payload.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise RuntimeError(f"{setting_name} must contain UTF-8 text") from exc
+    if not credential:
+        raise RuntimeError(f"{setting_name} must contain one non-empty credential")
+    if credential != credential.strip():
+        raise RuntimeError(
+            f"{setting_name} must not contain surrounding whitespace or newlines"
+        )
+    if any(
+        character.isspace() or unicodedata.category(character).startswith("C")
+        for character in credential
+    ):
+        raise RuntimeError(f"{setting_name} must not contain whitespace or control characters")
+    return credential
+
+
+def _service_credential(
+    *,
+    value_name: str,
+    file_name: str,
+    strip_direct_value: bool = False,
+) -> tuple[str, Path | None]:
+    value_present = value_name in os.environ
+    file_present = file_name in os.environ
+    if value_present and file_present:
+        raise RuntimeError(f"must not set both {value_name} and {file_name}")
+    if value_present:
+        direct_value = os.environ[value_name]
+        return (
+            direct_value.strip() if strip_direct_value else direct_value,
+            None,
+        )
+    if not file_present:
+        return "", None
+    raw_path = os.environ[file_name]
+    if not raw_path or raw_path != raw_path.strip():
+        raise RuntimeError(f"{file_name} must be a non-empty absolute path")
+    credential_path = Path(raw_path)
+    return (
+        _read_service_credential_file(credential_path, setting_name=file_name),
+        credential_path,
+    )
+
+
 DATA_DIR = Path(os.getenv("SERVERWARE_DATA_DIR", "/data"))
 DB_PATH = DATA_DIR / "serverware.sqlite3"
 MITMPROXY_CONF_DIR = DATA_DIR / "mitmproxy"
@@ -119,7 +243,22 @@ POLICY_CANARY_STATE_PATH = Path(os.getenv("SERVERWARE_POLICY_CANARY_STATE", str(
 POLICY_CANARY_BUNDLE_PATH = Path(os.getenv("SERVERWARE_POLICY_CANARY_BUNDLE", str(DATA_DIR / "policy-canary-bundle.json")))
 POLICY_SIGNING_KEY_PATH = Path(os.getenv("SERVERWARE_POLICY_SIGNING_KEY", str(DATA_DIR / "policy-signing-ed25519.pem")))
 POLICY_SIGNING_PUBLIC_KEY_PATH = Path(os.getenv("SERVERWARE_POLICY_SIGNING_PUBLIC_KEY", str(DATA_DIR / "policy-signing-ed25519.pub.pem")))
-ADMIN_TOKEN_PATH = DATA_DIR / "admin.token"
+ADMIN_TOKEN, _ADMIN_TOKEN_FILE_PATH = _service_credential(
+    value_name="SERVERWARE_ADMIN_TOKEN",
+    file_name="SERVERWARE_ADMIN_TOKEN_FILE",
+)
+ADMIN_TOKEN_FILE_PATH = _ADMIN_TOKEN_FILE_PATH
+ADMIN_TOKEN_EXTERNALLY_CONFIGURED = (
+    "SERVERWARE_ADMIN_TOKEN" in os.environ or ADMIN_TOKEN_FILE_PATH is not None
+)
+ADMIN_TOKEN_SOURCE = (
+    "env"
+    if "SERVERWARE_ADMIN_TOKEN" in os.environ
+    else "file"
+    if ADMIN_TOKEN_FILE_PATH is not None
+    else "generated-file"
+)
+ADMIN_TOKEN_PATH = ADMIN_TOKEN_FILE_PATH or DATA_DIR / "admin.token"
 RBAC_BINDINGS_PATH = Path(os.getenv("SERVERWARE_RBAC_BINDINGS", str(DATA_DIR / "rbac-bindings.json")))
 RELEASE_PROVENANCE_PATH = Path(os.getenv("SERVERWARE_RELEASE_PROVENANCE", str(DATA_DIR / "release-provenance.json")))
 IMAGE_SIGNATURES_PATH = Path(os.getenv("SERVERWARE_IMAGE_SIGNATURES", str(DATA_DIR / "image-signatures.json")))
@@ -498,7 +637,12 @@ if not 100 <= WEBAUTHN_CHALLENGE_MAX_RETAINED <= 1_000_000:
 WEBAUTHN_RP_ID = os.getenv("SERVERWARE_WEBAUTHN_RP_ID", "localhost")
 WEBAUTHN_ORIGIN = os.getenv("SERVERWARE_WEBAUTHN_ORIGIN", PUBLIC_URL)
 WEBAUTHN_RP_NAME = os.getenv("SERVERWARE_WEBAUTHN_RP_NAME", "Serverware")
-WEBAUTHN_BOOTSTRAP_TOKEN = os.getenv("SERVERWARE_WEBAUTHN_BOOTSTRAP_TOKEN", "")
+WEBAUTHN_BOOTSTRAP_TOKEN, _WEBAUTHN_BOOTSTRAP_TOKEN_FILE_PATH = (
+    _service_credential(
+        value_name="SERVERWARE_WEBAUTHN_BOOTSTRAP_TOKEN",
+        file_name="SERVERWARE_WEBAUTHN_BOOTSTRAP_TOKEN_FILE",
+    )
+)
 WEBAUTHN_TRUST_ROOTS_PATH = Path(os.getenv("SERVERWARE_WEBAUTHN_TRUST_ROOTS", str(DATA_DIR / "webauthn-trust-roots.pem")))
 WEBAUTHN_TRUST_BUNDLE_PATH = Path(os.getenv("SERVERWARE_WEBAUTHN_TRUST_BUNDLE", str(DATA_DIR / "webauthn-trust-bundle.json")))
 WEBAUTHN_TRUST_BUNDLE_STATE_PATH = Path(
@@ -545,7 +689,18 @@ POLICY_MIN_ROLLBACK_EPOCH = int(os.getenv("SERVERWARE_POLICY_MIN_ROLLBACK_EPOCH"
 SECRET_LEASE_TTL_SECONDS = float(os.getenv("SERVERWARE_SECRET_LEASE_TTL_SECONDS", "5"))
 AUDIT_QUEUE_MAX = int(os.getenv("SERVERWARE_AUDIT_QUEUE_MAX", "10000"))
 AUDIT_ANCHOR_URL = os.getenv("SERVERWARE_AUDIT_ANCHOR_URL", "").rstrip("/")
-AUDIT_ANCHOR_TOKEN = os.getenv("SERVERWARE_AUDIT_ANCHOR_TOKEN", "")
+AUDIT_ANCHOR_TOKEN, _AUDIT_ANCHOR_TOKEN_FILE_PATH = _service_credential(
+    value_name="SERVERWARE_AUDIT_ANCHOR_TOKEN",
+    file_name="SERVERWARE_AUDIT_ANCHOR_TOKEN_FILE",
+)
+AUDIT_ANCHOR_TOKEN_FILE_PATH = _AUDIT_ANCHOR_TOKEN_FILE_PATH
+AUDIT_ANCHOR_TOKEN_SOURCE = (
+    "env"
+    if "SERVERWARE_AUDIT_ANCHOR_TOKEN" in os.environ
+    else "file"
+    if AUDIT_ANCHOR_TOKEN_FILE_PATH is not None
+    else "unconfigured"
+)
 AUDIT_ANCHOR_CA_BUNDLE = os.getenv("SERVERWARE_AUDIT_ANCHOR_CA_BUNDLE", "").strip()
 AUDIT_ANCHOR_INTERVAL_SECONDS = float(os.getenv("SERVERWARE_AUDIT_ANCHOR_INTERVAL_SECONDS", "2"))
 AUDIT_ANCHOR_TIMEOUT_SECONDS = float(os.getenv("SERVERWARE_AUDIT_ANCHOR_TIMEOUT_SECONDS", "10"))
@@ -588,14 +743,49 @@ if not 1 <= RELEASE_AUTHORIZATION_RECONCILE_LIMIT <= 500:
 DECISION_GATE_BASE = os.getenv("SERVERWARE_DECISION_GATE_BASE", "").rstrip("/")
 DECISION_GATE_TIMEOUT_SECONDS = float(os.getenv("SERVERWARE_DECISION_GATE_TIMEOUT_SECONDS", "2"))
 DATA_PLANE_INSTANCE_ID = os.getenv("SERVERWARE_DATA_PLANE_INSTANCE_ID", "").strip()
-DATA_PLANE_CREDENTIAL_LEASE_TOKEN = os.getenv("SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN", "").strip()
-DATA_PLANE_AUDIT_INGEST_TOKEN = os.getenv("SERVERWARE_DATA_PLANE_AUDIT_TOKEN", "").strip()
-DATA_PLANE_GRANT_CONSUME_TOKEN = os.getenv("SERVERWARE_DATA_PLANE_GRANT_CONSUME_TOKEN", "").strip()
-DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN = os.getenv("SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN", "").strip()
-DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN = os.getenv(
-    "SERVERWARE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN", ""
-).strip()
-DATA_PLANE_MANAGEMENT_TOKEN = os.getenv("SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN", "").strip()
+DATA_PLANE_CREDENTIAL_LEASE_TOKEN, _DATA_PLANE_CREDENTIAL_LEASE_TOKEN_FILE_PATH = (
+    _service_credential(
+        value_name="SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN",
+        file_name="SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN_FILE",
+        strip_direct_value=True,
+    )
+)
+DATA_PLANE_AUDIT_INGEST_TOKEN, _DATA_PLANE_AUDIT_INGEST_TOKEN_FILE_PATH = (
+    _service_credential(
+        value_name="SERVERWARE_DATA_PLANE_AUDIT_TOKEN",
+        file_name="SERVERWARE_DATA_PLANE_AUDIT_TOKEN_FILE",
+        strip_direct_value=True,
+    )
+)
+DATA_PLANE_GRANT_CONSUME_TOKEN, _DATA_PLANE_GRANT_CONSUME_TOKEN_FILE_PATH = (
+    _service_credential(
+        value_name="SERVERWARE_DATA_PLANE_GRANT_CONSUME_TOKEN",
+        file_name="SERVERWARE_DATA_PLANE_GRANT_CONSUME_TOKEN_FILE",
+        strip_direct_value=True,
+    )
+)
+DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN, _DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN_FILE_PATH = (
+    _service_credential(
+        value_name="SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN",
+        file_name="SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN_FILE",
+        strip_direct_value=True,
+    )
+)
+(
+    DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN,
+    _DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN_FILE_PATH,
+) = _service_credential(
+    value_name="SERVERWARE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN",
+    file_name="SERVERWARE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN_FILE",
+    strip_direct_value=True,
+)
+DATA_PLANE_MANAGEMENT_TOKEN, _DATA_PLANE_MANAGEMENT_TOKEN_FILE_PATH = (
+    _service_credential(
+        value_name="SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN",
+        file_name="SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN_FILE",
+        strip_direct_value=True,
+    )
+)
 # serverware.runtime still publishes development grants to the Rust management API
 # through this internal symbol. It must never reuse an ingest or consume credential.
 DATA_PLANE_AUDIT_TOKEN = DATA_PLANE_MANAGEMENT_TOKEN
@@ -618,13 +808,16 @@ KEY_RELEASE_REQUIRE_DATA_PLANE_DIGEST = os.getenv("SERVERWARE_KEY_RELEASE_REQUIR
 EXPECTED_DATA_PLANE_BINARY_DIGEST = os.getenv("SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST") or None
 
 
-_INTERNAL_SERVICE_TOKENS = {
+_CONTROL_PLANE_SERVICE_TOKENS = {
+    "SERVERWARE_ADMIN_TOKEN": ADMIN_TOKEN,
+    "SERVERWARE_WEBAUTHN_BOOTSTRAP_TOKEN": WEBAUTHN_BOOTSTRAP_TOKEN,
     "SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN": DATA_PLANE_CREDENTIAL_LEASE_TOKEN,
     "SERVERWARE_DATA_PLANE_AUDIT_TOKEN": DATA_PLANE_AUDIT_INGEST_TOKEN,
     "SERVERWARE_DATA_PLANE_GRANT_CONSUME_TOKEN": DATA_PLANE_GRANT_CONSUME_TOKEN,
     "SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN": DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN,
     "SERVERWARE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN": DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN,
     "SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN": DATA_PLANE_MANAGEMENT_TOKEN,
+    "SERVERWARE_AUDIT_ANCHOR_TOKEN": AUDIT_ANCHOR_TOKEN,
 }
 
 
@@ -637,10 +830,10 @@ def validate_internal_service_auth() -> None:
         )
     if not DATA_PLANE_INSTANCE_ID.startswith("spiffe://") or len(DATA_PLANE_INSTANCE_ID) <= len("spiffe://"):
         raise RuntimeError("production requires SERVERWARE_DATA_PLANE_INSTANCE_ID as a non-empty SPIFFE ID")
-    for name, token in _INTERNAL_SERVICE_TOKENS.items():
+    for name, token in _CONTROL_PLANE_SERVICE_TOKENS.items():
         if len(token.encode("utf-8")) < 32 or len(set(token)) < 8:
             raise RuntimeError(f"production requires {name} with at least 32 high-entropy bytes")
-    token_items = list(_INTERNAL_SERVICE_TOKENS.items())
+    token_items = list(_CONTROL_PLANE_SERVICE_TOKENS.items())
     for index, (left_name, left_token) in enumerate(token_items):
         for right_name, right_token in token_items[index + 1 :]:
             if left_token == right_token:

@@ -79,7 +79,8 @@ def _configure_environment(
         "SERVERWARE_GRANT_STORE_BACKEND": "sqlite",
         "SERVERWARE_OIDC_ENABLED": "0",
         "SERVERWARE_OIDC_BROWSER_LOGIN_ENABLED": "0",
-        "SERVERWARE_CONTROL_PLANE_TWO_PERSON_REQUIRED": "0",
+        "SERVERWARE_CONTROL_PLANE_TWO_PERSON_REQUIRED": "1",
+        "SERVERWARE_CONTROL_PLANE_TWO_PERSON_ACTIONS": "credential.oauth.activate",
         "SERVERWARE_CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED": "0",
         "SERVERWARE_CONTROL_PLANE_MUTATION_REQUIRE_HARDWARE_ATTESTATION": "0",
         "SERVERWARE_POLICY_PUBLISH_DRY_RUN_REQUIRED": "1",
@@ -830,6 +831,7 @@ def _assert_stripe_uses_manual_credential_flow(
 def _connect_oauth(
     page: Any,
     context: Any,
+    reviewer_page: Any,
     public_url: str,
     *,
     provider: str,
@@ -850,7 +852,7 @@ def _connect_oauth(
     page.locator("#oauth-submit").click(no_wait_after=True)
     try:
         page.get_by_role(
-            "heading", name="OAuth credential connected", exact=True
+            "heading", name="OAuth account verified", exact=True
         ).wait_for(state="visible", timeout=DEFAULT_TIMEOUT_MS)
     except Exception as exc:
         diagnostic = page.evaluate(
@@ -863,7 +865,7 @@ def _connect_oauth(
             """
         )
         raise AssertionError(
-            f"{provider} OAuth callback did not succeed: {diagnostic}"
+            f"{provider} OAuth callback did not stage exact-account activation: {diagnostic}"
         ) from exc
     page.wait_for_url(
         re.compile(rf"^{re.escape(public_url)}/(?:\?.*)?$"), timeout=DEFAULT_TIMEOUT_MS
@@ -877,6 +879,161 @@ def _connect_oauth(
     _wait_for_portal(page, public_url)
     page.wait_for_function(
         """
+        ({name, account}) => (state.pendingOAuthCredentials || []).some(
+          (item) => item.name === name
+            && item.requester_id === 'user:operator'
+            && item.status === 'pending'
+            && item.review?.provider_account === account
+        )
+        """,
+        arg={"name": name, "account": account},
+        timeout=DEFAULT_TIMEOUT_MS,
+    )
+    pending = page.evaluate(
+        """
+        ({name, account}) => (state.pendingOAuthCredentials || []).find(
+          (item) => item.name === name && item.review?.provider_account === account
+        )
+        """,
+        {"name": name, "account": account},
+    )
+    _require(
+        pending.get("requester_id") == "user:operator",
+        f"{provider} pending activation was not bound to the requester: {pending}",
+    )
+    pending_item = page.locator(
+        "#pending-oauth-credentials .pending-oauth-item"
+    ).filter(has_text=account)
+    pending_item.get_by_role(
+        "button", name="Request approval and activate", exact=True
+    ).click()
+    page.wait_for_function(
+        """
+        () => {
+          try {
+            const mutation = JSON.parse(
+              sessionStorage.getItem('serverware.pendingMutation') || 'null'
+            );
+            return mutation?.kind === 'oauth-activate'
+              && typeof mutation?.approvalId === 'string';
+          } catch (_) {
+            return false;
+          }
+        }
+        """,
+        timeout=DEFAULT_TIMEOUT_MS,
+    )
+    pending_mutation = page.evaluate(
+        "() => JSON.parse(sessionStorage.getItem('serverware.pendingMutation'))"
+    )
+    approval_id = pending_mutation["approvalId"]
+    _require(
+        pending_mutation.get("path") == f"/api/oauth/pending/{pending['id']}/activate",
+        f"{provider} retry mutation is not bound to the pending credential",
+    )
+    self_approval = page.evaluate(
+        """
+        async ({id, token}) => {
+          const response = await fetch(`/api/control-plane/approvals/${id}/approve`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Serverware-Admin-Token': token,
+              'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify({note: 'requester self-approval must fail'}),
+            credentials: 'same-origin',
+            cache: 'no-store'
+          });
+          return {status: response.status, body: await response.json()};
+        }
+        """,
+        {"id": approval_id, "token": ADMIN_TOKEN},
+    )
+    _require(
+        self_approval.get("status") == 403
+        and "requester cannot approve" in str(self_approval.get("body")),
+        f"{provider} requester self-approval did not fail closed: {self_approval}",
+    )
+
+    reviewer_page.goto(public_url + "/", wait_until="domcontentloaded")
+    reviewer_page.locator("#admin-token").fill(ADMIN_TOKEN)
+    reviewer_page.locator("#admin-token").dispatch_event("change")
+    _wait_for_portal(reviewer_page, public_url)
+    reviewer_page.wait_for_function(
+        """
+        (id) => (state.controlPlaneApprovals || []).some(
+          (item) => item.id === id
+            && item.status === 'pending'
+            && item.action === 'credential.oauth.activate'
+            && item.requester_id === 'user:operator'
+        )
+        """,
+        arg=approval_id,
+        timeout=DEFAULT_TIMEOUT_MS,
+    )
+    reviewer_activation = reviewer_page.evaluate(
+        """
+        async ({pendingId, setupSessionId, setupRevision, token}) => {
+          const response = await fetch(`/api/oauth/pending/${pendingId}/activate`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Serverware-Admin-Token': token,
+              'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify({
+              setupSessionId,
+              setupRevision
+            }),
+            credentials: 'same-origin',
+            cache: 'no-store'
+          });
+          return {status: response.status, body: await response.json()};
+        }
+        """,
+        {
+            "pendingId": pending["id"],
+            "setupSessionId": pending_mutation.get("body", {}).get("setupSessionId"),
+            "setupRevision": pending_mutation.get("body", {}).get("setupRevision"),
+            "token": ADMIN_TOKEN,
+        },
+    )
+    _require(
+        reviewer_activation.get("status") == 403
+        and "only the OAuth requester" in str(reviewer_activation.get("body")),
+        f"{provider} reviewer directly activated requester grant: {reviewer_activation}",
+    )
+    approval_row = reviewer_page.locator("#control-plane-approvals tr").filter(
+        has_text=pending["id"]
+    )
+    approval_text = approval_row.inner_text()
+    for marker in (
+        "credential.oauth.activate",
+        "user:operator",
+        account,
+        str(pending["review"]["provider_subject"]),
+    ):
+        _require(
+            marker in approval_text,
+            f"{provider} exact-account approval omitted {marker!r}",
+        )
+    approval_row.get_by_role("button", name="Approve", exact=True).click()
+    reviewer_page.wait_for_function(
+        """
+        (id) => (state.controlPlaneApprovals || []).some(
+          (item) => item.id === id
+            && item.status === 'approved'
+            && item.approved_by === 'user:demo'
+        )
+        """,
+        arg=approval_id,
+        timeout=DEFAULT_TIMEOUT_MS,
+    )
+
+    page.get_by_role("button", name="Continue approved request", exact=True).click()
+    page.wait_for_function(
+        """
         ({name, account}) => [...document.querySelectorAll('#credentials tr')].some(
           (row) => row.textContent.includes(name)
             && row.textContent.includes(account)
@@ -886,9 +1043,19 @@ def _connect_oauth(
         arg={"name": name, "account": account},
         timeout=DEFAULT_TIMEOUT_MS,
     )
+    page.wait_for_function(
+        """
+        (id) => !(state.pendingOAuthCredentials || []).some((item) => item.id === id)
+          && sessionStorage.getItem('serverware.pendingMutation') === null
+        """,
+        arg=pending["id"],
+        timeout=DEFAULT_TIMEOUT_MS,
+    )
     _assert_no_oauth_cookies(context)
     bootstrap = _api_json(page, "/api/bootstrap")
-    return _credential_by_name(bootstrap, name)
+    credential = _credential_by_name(bootstrap, name)
+    credential["browserApprovalId"] = approval_id
+    return credential
 
 
 def _preview_stage_activate_policy(
@@ -1313,10 +1480,21 @@ def _run_browser_journey(
             locale="en-US",
             timezone_id="UTC",
             reduced_motion="reduce",
+            extra_http_headers={"X-Test-Actor": "operator"},
+        )
+        reviewer_context = browser.new_context(
+            viewport={"width": 1440, "height": 1100},
+            locale="en-US",
+            timezone_id="UTC",
+            reduced_motion="reduce",
+            extra_http_headers={"X-Test-Actor": "reviewer"},
         )
         _install_dev_webauthn_shim(context)
+        _install_dev_webauthn_shim(reviewer_context)
         page = context.new_page()
+        reviewer_page = reviewer_context.new_page()
         page.set_default_timeout(DEFAULT_TIMEOUT_MS)
+        reviewer_page.set_default_timeout(DEFAULT_TIMEOUT_MS)
 
         def record_request(request: Any) -> None:
             browser_observations.append(
@@ -1330,6 +1508,8 @@ def _run_browser_journey(
 
         page.on("request", record_request)
         page.on("response", record_response)
+        reviewer_page.on("request", record_request)
+        reviewer_page.on("response", record_response)
         page.on(
             "console",
             lambda message: console_errors.append(message.text)
@@ -1337,6 +1517,13 @@ def _run_browser_journey(
             else None,
         )
         page.on("pageerror", lambda error: page_errors.append(str(error)))
+        reviewer_page.on(
+            "console",
+            lambda message: console_errors.append(message.text)
+            if message.type == "error"
+            else None,
+        )
+        reviewer_page.on("pageerror", lambda error: page_errors.append(str(error)))
 
         try:
             response = page.goto(public_url + "/", wait_until="domcontentloaded")
@@ -1445,17 +1632,31 @@ def _run_browser_journey(
                 )
                 page.set_viewport_size({"width": 1440, "height": 1100})
 
-            dev_credential = _api_post_json(page, "/api/dev/webauthn/credential")
+            reviewer_page.goto(public_url + "/", wait_until="domcontentloaded")
+            reviewer_page.locator("#admin-token").fill(ADMIN_TOKEN)
+            reviewer_page.locator("#admin-token").dispatch_event("change")
+            _wait_for_portal(reviewer_page, public_url)
+            _require(
+                reviewer_page.evaluate("state.currentUserId") == "user:demo",
+                "review browser did not receive the distinct reviewer identity",
+            )
+            dev_credential = _api_post_json(
+                reviewer_page, "/api/dev/webauthn/credential"
+            )
             _require(
                 dev_credential.get("user_id") == "user:demo"
                 and dev_credential.get("attestation_trusted") is True,
                 f"dev authenticator registration was not trusted: {dev_credential}",
             )
             _require(
-                page.evaluate("window.__serverwareDevWebAuthnShim === true"),
+                reviewer_page.evaluate(
+                    "window.__serverwareDevWebAuthnShim === true"
+                ),
                 "browser WebAuthn shim was not installed",
             )
 
+            operator_page = page
+            page = reviewer_page
             approval = _create_browser_jit_approval()
             approval_url = f"{public_url}/approvals/{quote(approval['id'], safe='')}"
             approval_response = page.goto(approval_url, wait_until="domcontentloaded")
@@ -1649,6 +1850,7 @@ def _run_browser_journey(
             _assert_no_horizontal_overflow(page, label="mobile completed denial review")
             page.set_viewport_size({"width": 1440, "height": 1100})
 
+            page = operator_page
             page.goto(public_url + "/", wait_until="domcontentloaded")
             page.locator("#admin-token").fill(ADMIN_TOKEN)
             page.locator("#admin-token").dispatch_event("change")
@@ -1683,6 +1885,7 @@ def _run_browser_journey(
             google_credential = _connect_oauth(
                 page,
                 context,
+                reviewer_page,
                 public_url,
                 provider="google",
                 name=GOOGLE_NAME,
@@ -1721,6 +1924,7 @@ def _run_browser_journey(
             x_credential = _connect_oauth(
                 page,
                 context,
+                reviewer_page,
                 public_url,
                 provider="x",
                 name=X_NAME,
@@ -1778,6 +1982,83 @@ def _run_browser_journey(
             final_bootstrap = _api_json(page, "/api/bootstrap")
             final_policy_api = _api_json(page, "/api/policy")
             api_documents.extend([final_bootstrap, final_policy_api])
+            page.locator("#enrollment-principal").select_option("agent:demo")
+            page.locator("#agent-enrollment-form button[type='submit']").click()
+            try:
+                page.wait_for_function(
+                    """
+                    ({policyHash, routeId, credentialId}) => {
+                      const packet = state.enrollmentPacket;
+                      return packet?.apiVersion === 'serverware.agentEnrollment/v1'
+                        && packet?.principalId === 'agent:demo'
+                        && packet?.pinning?.policyHash === policyHash
+                        && (packet?.allowedRoutes || []).some(
+                          (item) => item.id === routeId
+                            && item.credentialRef === credentialId
+                        );
+                    }
+                    """,
+                    arg={
+                        "policyHash": final_policy_api["policy_hash"],
+                        "routeId": "browser.gmail.last-30-days",
+                        "credentialId": google_credential["id"],
+                    },
+                    timeout=DEFAULT_TIMEOUT_MS,
+                )
+            except Exception as exc:
+                diagnostics = page.evaluate(
+                    """
+                    () => ({
+                      status: document.querySelector('#operator-status')?.textContent || '',
+                      packet: state.enrollmentPacket,
+                      principal: document.querySelector('#enrollment-principal')?.value || '',
+                      output: (document.querySelector('#enrollment-output')?.value || '').slice(0, 2000)
+                    })
+                    """
+                )
+                raise AssertionError(
+                    f"browser enrollment packet did not bind the Gmail assignment: {diagnostics}"
+                ) from exc
+            if screenshots_dir is not None:
+                _capture_element_screenshot(
+                    page,
+                    "section:has(#agent-enrollment-form)",
+                    screenshots_dir / "operator-portal-enrollment.png",
+                )
+            with page.expect_download(timeout=DEFAULT_TIMEOUT_MS) as download_info:
+                page.get_by_role("button", name="Download", exact=True).click()
+            download = download_info.value
+            packet_path = Path(download.path())
+            packet_bytes = packet_path.read_bytes()
+            _require(
+                0 < len(packet_bytes) <= 1024 * 1024,
+                "downloaded enrollment packet has an invalid size",
+            )
+            enrollment_packet = json.loads(packet_bytes)
+            state_packet = page.evaluate("() => state.enrollmentPacket")
+            _require(
+                enrollment_packet == state_packet,
+                "downloaded enrollment packet differs from the generated browser state",
+            )
+            _require(
+                download.suggested_filename
+                == "serverware-enrollment-agent-demo.json",
+                "downloaded enrollment packet filename is not principal-bound",
+            )
+            unknown_route_canaries = [
+                item
+                for item in (enrollment_packet.get("canaries", {}).get("deny") or [])
+                if item.get("expectedError") == "unknown_route_denied"
+            ]
+            _require(
+                len(unknown_route_canaries) == 1
+                and unknown_route_canaries[0].get("expectedStatus") == 403,
+                "enrollment packet does not bind one fail-closed unknown-route canary",
+            )
+            enrollment_packet_sha256 = (
+                "sha256:" + hashlib.sha256(packet_bytes).hexdigest()
+            )
+            api_documents.append(enrollment_packet)
             _require(
                 not final_bootstrap.get("pendingOAuthCredentials"),
                 "browser journey left a pending OAuth credential",
@@ -1805,12 +2086,72 @@ def _run_browser_journey(
             _assert_no_horizontal_overflow(page, label="desktop final")
 
             _require(not page_errors, f"browser page errors occurred: {page_errors}")
+            expected_activation_challenges = [
+                item
+                for item in browser_observations
+                if item.get("type") == "response"
+                and item.get("status") == 428
+                and re.search(
+                    r"/api/oauth/pending/[^/]+/activate$",
+                    str(item.get("url") or ""),
+                )
+            ]
             _require(
-                not console_errors, f"browser console errors occurred: {console_errors}"
+                len(expected_activation_challenges) == 2,
+                "browser journey did not observe exactly one two-person activation "
+                "challenge for each OAuth credential",
+            )
+            expected_separation_denials = [
+                item
+                for item in browser_observations
+                if item.get("type") == "response"
+                and item.get("status") == 403
+                and (
+                    re.search(
+                        r"/api/control-plane/approvals/[^/]+/approve$",
+                        str(item.get("url") or ""),
+                    )
+                    or re.search(
+                        r"/api/oauth/pending/[^/]+/activate$",
+                        str(item.get("url") or ""),
+                    )
+                )
+            ]
+            _require(
+                len(expected_separation_denials) == 4,
+                "browser journey did not observe requester self-approval and reviewer "
+                "direct-activation denials for both OAuth credentials",
+            )
+            expected_console_428 = (
+                "Failed to load resource: the server responded with a status of 428 "
+                "(Precondition Required)"
+            )
+            expected_console_403 = (
+                "Failed to load resource: the server responded with a status of 403 "
+                "(Forbidden)"
+            )
+            unexpected_console_errors = [
+                message
+                for message in console_errors
+                if message not in {expected_console_428, expected_console_403}
+            ]
+            _require(
+                console_errors.count(expected_console_428) == 2
+                and console_errors.count(expected_console_403) == 4
+                and not unexpected_console_errors,
+                f"browser console errors occurred: {console_errors}",
             )
             _assert_storage_and_disk_do_not_leak_tokens(
                 page,
                 context,
+                data_dir,
+                simulator,
+                api_documents,
+                browser_observations,
+            )
+            _assert_storage_and_disk_do_not_leak_tokens(
+                reviewer_page,
+                reviewer_context,
                 data_dir,
                 simulator,
                 api_documents,
@@ -1823,6 +2164,20 @@ def _run_browser_journey(
                 "credentials": {
                     "google": google_credential["id"],
                     "x": x_credential["id"],
+                },
+                "oauthActivationApprovals": {
+                    "google": google_credential["browserApprovalId"],
+                    "x": x_credential["browserApprovalId"],
+                    "approvedBy": "user:demo",
+                    "requestedBy": "user:operator",
+                },
+                "enrollment": {
+                    "filename": download.suggested_filename,
+                    "packetSha256": enrollment_packet_sha256,
+                    "principalId": enrollment_packet["principalId"],
+                    "policyHash": enrollment_packet["pinning"]["policyHash"],
+                    "gmailRoute": "browser.gmail.last-30-days",
+                    "unknownRouteCanary": unknown_route_canaries[0],
                 },
                 "approvalDecisions": {
                     "approved": {
@@ -1842,11 +2197,24 @@ def _run_browser_journey(
                     "browser.x.post.one-per-day",
                 ],
                 "providerCounts": observations["counts"],
+                "testAssurance": {
+                    "productionProof": False,
+                    "identity": "header-selected-distinct-test-subjects",
+                    "webauthn": "server-generated-development-authenticator",
+                    "jitOrigin": "database-fixture-not-rust-proxy",
+                    "oauthActivationChallenges": len(
+                        expected_activation_challenges
+                    ),
+                    "oauthSeparationDenials": len(expected_separation_denials),
+                    "downloadedPacketExactBytesVerified": True,
+                    "unknownRouteRuntimeAsserted": False,
+                },
                 "screenshots": str(screenshots_dir)
                 if screenshots_dir is not None
                 else None,
             }
         finally:
+            reviewer_context.close()
             context.close()
             browser.close()
 
@@ -1882,6 +2250,7 @@ def main() -> None:
         original_providers: Any = None
         original_request_bytes: Any = None
         original_reconciler: Any = None
+        original_attestation_document: Any = None
         oauth_module: Any = None
         app_module: Any = None
         try:
@@ -1891,6 +2260,44 @@ def main() -> None:
 
             from serverware import app as app_module
             from serverware import oauth as oauth_module
+            from fastapi import HTTPException, Request
+            from serverware.auth import AdminIdentity, require_admin
+            from serverware.response_identity import response_public_key_info
+
+            identities = {
+                "operator": AdminIdentity(
+                    "user:operator",
+                    frozenset(
+                        {
+                            "admin",
+                            "approver",
+                            "auditor",
+                            "policy_author",
+                            "policy_publisher",
+                            "credential_owner",
+                            "attestation_operator",
+                            "attestation_reviewer",
+                        }
+                    ),
+                    "browser-test-actor",
+                ),
+                "reviewer": AdminIdentity(
+                    "user:demo",
+                    frozenset({"admin", "approver", "auditor", "credential_owner"}),
+                    "browser-test-actor",
+                ),
+            }
+
+            def test_require_admin(request: Request) -> AdminIdentity:
+                identity = identities.get(request.headers.get("X-Test-Actor", ""))
+                if identity is None:
+                    raise HTTPException(
+                        status_code=401, detail="recognized browser actor required"
+                    )
+                return identity
+
+            test_require_admin.__annotations__["request"] = Request
+            app_module.app.dependency_overrides[require_admin] = test_require_admin
 
             original_providers = oauth_module._providers
             configured = original_providers()
@@ -1914,6 +2321,43 @@ def main() -> None:
             oauth_module.request_bytes = trusted_provider_request
             original_reconciler = app_module._start_oauth_revocation_reconciler
             app_module._start_oauth_revocation_reconciler = lambda: None
+            original_attestation_document = app_module.attestation_document
+
+            def browser_attestation_document(
+                nonce: str | None = None,
+            ) -> dict[str, Any]:
+                snapshot = app_module.get_policy_snapshot()
+                if snapshot is None:
+                    return original_attestation_document(nonce)
+                metadata = snapshot.raw.get("metadata") or {}
+                return {
+                    "nonce": nonce,
+                    "policy_bundle_digest": snapshot.hash,
+                    "policy_signing_key_id": metadata.get("signingKeyId"),
+                    "policy_sequence": metadata.get("sequence"),
+                    "rollback_epoch": metadata.get("rollbackEpoch"),
+                    "policy_high_water_digest": "sha256:" + "1" * 64,
+                    "release_channel": "dev",
+                    "ca_intermediate_spki_sha256": "sha256:" + "2" * 64,
+                    "data_plane_binary_digest": DATA_PLANE_DIGEST,
+                    "runtime_manifest_digest": "sha256:" + "3" * 64,
+                    "response_signing_key_id": response_public_key_info()[
+                        "spki_sha256"
+                    ],
+                    "provenance_digest": "sha256:" + "5" * 64,
+                    "image_signatures_digest": "sha256:" + "6" * 64,
+                    "source_tree_digest": "sha256:" + "7" * 64,
+                    "assurance": {
+                        "class": "deterministic-browser-simulator",
+                        "fact_origin": "test-fixture",
+                        "hardware_proof": False,
+                        "workload_custody_proven": False,
+                        "tls_peer_binding_proven": False,
+                        "reason": "Browser contract test; not production TEE evidence.",
+                    },
+                }
+
+            app_module.attestation_document = browser_attestation_document
 
             portal = _UvicornThread(app_module.app, listener, simulator)
             portal.start()
@@ -1936,6 +2380,10 @@ def main() -> None:
                     oauth_module.request_bytes = original_request_bytes
             if app_module is not None and original_reconciler is not None:
                 app_module._start_oauth_revocation_reconciler = original_reconciler
+            if app_module is not None and original_attestation_document is not None:
+                app_module.attestation_document = original_attestation_document
+            if app_module is not None:
+                app_module.app.dependency_overrides.clear()
             simulator.close()
 
 

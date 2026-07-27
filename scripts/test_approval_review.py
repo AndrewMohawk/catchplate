@@ -578,9 +578,17 @@ def exercise_python_atomic_reserve_contract(runtime, canonical_json) -> None:
         post.assert_not_called()
 
 
-def make_approval(db, snapshot, *, digest_suffix: str, redacted_display: dict, canonical_request: dict):
+def make_approval(
+    db,
+    snapshot,
+    *,
+    digest_suffix: str,
+    redacted_display: dict,
+    canonical_request: dict,
+    route_id: str = "demo.npm.publish.jit",
+):
     return db.ensure_jit_approval_request(
-        route_id="demo.npm.publish.jit",
+        route_id=route_id,
         method="PUT",
         url="https://registry.npmjs.org/@scope%2fpkg",
         principal_id="agent:demo",
@@ -595,6 +603,29 @@ def make_approval(db, snapshot, *, digest_suffix: str, redacted_display: dict, c
         grant_ttl_seconds=30,
         grant_max_uses=1,
     )
+
+
+def approval_review_receipt_count(db, approval_id: str) -> int:
+    with db.connect() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS count FROM approval_review_receipts "
+            "WHERE approval_request_id = ?",
+            (approval_id,),
+        ).fetchone()
+    return int(row["count"] if row else 0)
+
+
+def expect_http_error(call, *, status_code: int, detail: str, label: str) -> None:
+    try:
+        call()
+    except Exception as exc:
+        if (
+            getattr(exc, "status_code", None) != status_code
+            or detail not in str(getattr(exc, "detail", ""))
+        ):
+            raise AssertionError(f"{label} failed with the wrong error: {exc}") from exc
+        return
+    raise AssertionError(f"{label} was unexpectedly allowed")
 
 
 def exercise_grant_publish_acknowledgement_binding(runtime) -> None:
@@ -848,6 +879,90 @@ def main() -> None:
                 ) from exc
         else:
             raise AssertionError("approval deep link accepted an invalid path identifier")
+        receipts_before_denied_reviews = approval_review_receipt_count(db, current["id"])
+        for label, denied_identity, detail in (
+            (
+                "unrelated global approver review",
+                AdminIdentity(
+                    "user:unrelated",
+                    frozenset({"approver"}),
+                    "admin-token-header",
+                ),
+                "not an allowed approver for this route",
+            ),
+            (
+                "auditor-only review",
+                AdminIdentity(
+                    "user:demo",
+                    frozenset({"auditor"}),
+                    "admin-token-header",
+                ),
+                "required role: approver",
+            ),
+        ):
+            with patch.object(
+                db,
+                "_decrypt_approval_json",
+                side_effect=AssertionError(
+                    f"{label} reached encrypted approval review material"
+                ),
+            ):
+                expect_http_error(
+                    lambda denied_identity=denied_identity: app_module.approval_review(
+                        current["id"], identity=denied_identity
+                    ),
+                    status_code=403,
+                    detail=detail,
+                    label=label,
+                )
+        if (
+            approval_review_receipt_count(db, current["id"])
+            != receipts_before_denied_reviews
+        ):
+            raise AssertionError("denied approval reviews issued a review receipt")
+
+        missing_route_id = "demo.npm.removed.jit"
+        db.upsert_route_with_id(
+            missing_route_id,
+            {
+                "name": "Removed NPM publish JIT route",
+                "enabled": True,
+                "match_host": "registry.npmjs.org",
+                "match_path_prefix": "/",
+                "credential_id": None,
+                "injection": {"type": "bearer"},
+                "policies": [{"type": "approval", "scope": "request_digest"}],
+            },
+        )
+        missing_route = make_approval(
+            db,
+            snapshot,
+            digest_suffix="6",
+            redacted_display={"package": "@scope/removed"},
+            canonical_request={
+                "principal": "agent:demo",
+                "operation": {"packageName": "@scope/removed"},
+            },
+            route_id=missing_route_id,
+        )
+        with patch.object(
+            db,
+            "_decrypt_approval_json",
+            side_effect=AssertionError(
+                "missing-route review reached encrypted approval review material"
+            ),
+        ):
+            expect_http_error(
+                lambda: app_module.approval_review(
+                    missing_route["id"], identity=approver_identity
+                ),
+                status_code=409,
+                detail="approval route is not in the active policy",
+                label="missing-route approval review",
+            )
+        if approval_review_receipt_count(db, missing_route["id"]) != 0:
+            raise AssertionError("missing-route approval review issued a receipt")
+
         review = app_module.approval_review(
             current["id"],
             identity=AdminIdentity("user:demo", frozenset({"approver"}), "admin-token-header"),
@@ -876,6 +991,11 @@ def main() -> None:
         receipt = review.get("review_receipt") or {}
         if not receipt.get("id") or not receipt.get("expires_at"):
             raise AssertionError(f"approval review did not issue a bounded receipt: {review}")
+        if (
+            approval_review_receipt_count(db, current["id"])
+            != receipts_before_denied_reviews + 1
+        ):
+            raise AssertionError("authorized approval review did not issue exactly one receipt")
         if not str(review.get("review_digest") or "").startswith("sha256:"):
             raise AssertionError(f"approval review did not bind its document digest: {review}")
         active_receipt = db.get_active_approval_review_receipt(
@@ -941,6 +1061,54 @@ def main() -> None:
                 raise AssertionError(
                     f"approval decision surface disclosed {forbidden}: {denied_json}"
                 )
+        terminal_receipts = approval_review_receipt_count(db, denial_test["id"])
+        with patch.object(
+            db,
+            "_decrypt_approval_json",
+            side_effect=AssertionError(
+                "unrelated terminal review reached retained encrypted review material"
+            ),
+        ):
+            unrelated_terminal_review = app_module.approval_review(
+                denial_test["id"],
+                identity=AdminIdentity(
+                    "user:unrelated",
+                    frozenset({"approver"}),
+                    "admin-token-header",
+                ),
+            )
+        if approval_review_receipt_count(db, denial_test["id"]) != terminal_receipts:
+            raise AssertionError("denied terminal review issued a review receipt")
+        if unrelated_terminal_review != app_module.approval_review(
+            denial_test["id"], identity=approver_identity
+        ):
+            raise AssertionError(
+                "terminal approval summary varied by globally authorized approver"
+            )
+        denied_collection_summary = next(
+            item
+            for item in db.list_approvals(limit=100)
+            if item["id"] == denial_test["id"]
+        )
+        terminal_review_json = json.dumps(unrelated_terminal_review, sort_keys=True)
+        if unrelated_terminal_review != {
+            **denied_collection_summary,
+            "review_detail_available": False,
+            "review_receipt": None,
+        } or any(
+            forbidden in terminal_review_json
+            for forbidden in (
+                "top-secret-value",
+                "canonical_request",
+                "redacted_display",
+                "source_identity",
+                "normalized_operation_fields",
+                "previous_similar_approvals",
+            )
+        ):
+            raise AssertionError(
+                f"terminal approval review was not collection-safe: {unrelated_terminal_review}"
+            )
         audit_documents = json.dumps(
             {
                 "list": app_module.audit_events(limit=500, _=admin_identity),
@@ -1017,6 +1185,29 @@ def main() -> None:
         ):
             raise AssertionError(
                 f"approval publish surface disclosed a raw gate response: {approved_documents}"
+            )
+        with patch.object(
+            db,
+            "_decrypt_approval_json",
+            side_effect=AssertionError(
+                "approved review reached retained encrypted review material"
+            ),
+        ):
+            approved_terminal_review = app_module.approval_review(
+                approval_success_test["id"],
+                identity=AdminIdentity(
+                    "user:unrelated",
+                    frozenset({"approver"}),
+                    "admin-token-header",
+                ),
+            )
+        if (
+            approved_terminal_review["status"] != "approved"
+            or approved_terminal_review["review_detail_available"] is not False
+            or approved_terminal_review["review_receipt"] is not None
+        ):
+            raise AssertionError(
+                f"approved terminal review was not collection-safe: {approved_terminal_review}"
             )
 
         receipt_test = make_approval(
@@ -1143,16 +1334,75 @@ def main() -> None:
             raise AssertionError("approval used a timestamp captured before lock acquisition")
         if db.get_approval_request(lock_expiry["id"])["status"] != "pending":
             raise AssertionError("expired approval changed state after waiting for its lock")
+        expired_receipts = approval_review_receipt_count(db, lock_expiry["id"])
+        with patch.object(
+            db,
+            "_decrypt_approval_json",
+            side_effect=AssertionError(
+                "expired review reached retained encrypted review material"
+            ),
+        ):
+            expired_review = app_module.approval_review(
+                lock_expiry["id"],
+                identity=AdminIdentity(
+                    "user:unrelated",
+                    frozenset({"approver"}),
+                    "admin-token-header",
+                ),
+            )
+        if (
+            expired_review["review_detail_available"] is not False
+            or expired_review["review_receipt"] is not None
+            or approval_review_receipt_count(db, lock_expiry["id"])
+            != expired_receipts
+        ):
+            raise AssertionError(
+                f"expired approval review was not collection-safe: {expired_review}"
+            )
+
+        missing_policy_receipts = approval_review_receipt_count(db, current["id"])
+        with (
+            patch.object(app_module, "get_policy_snapshot", return_value=None),
+            patch.object(
+                db,
+                "_decrypt_approval_json",
+                side_effect=AssertionError(
+                    "missing-policy review reached encrypted approval review material"
+                ),
+            ),
+        ):
+            expect_http_error(
+                lambda: app_module.approval_review(
+                    current["id"], identity=approver_identity
+                ),
+                status_code=503,
+                detail="policy bundle missing",
+                label="missing-policy approval review",
+            )
+        if approval_review_receipt_count(db, current["id"]) != missing_policy_receipts:
+            raise AssertionError("missing-policy approval review issued a receipt")
 
         changed_bundle = policy_bundle.demo_policy_bundle("cred-demo-bearer")
         changed_bundle["metadata"]["sequence"] = 2
         policy_bundle.write_policy_bundle(changed_bundle)
-        stale_review = app_module.approval_review(
-            current["id"],
-            identity=AdminIdentity("user:demo", frozenset({"approver"}), "admin-token-header"),
-        )
-        if "policy_hash_not_current" not in stale_review["risk_flags"]:
-            raise AssertionError(f"stale approval review did not flag policy change: {stale_review}")
+        stale_policy_receipts = approval_review_receipt_count(db, current["id"])
+        with patch.object(
+            db,
+            "_decrypt_approval_json",
+            side_effect=AssertionError(
+                "stale-policy review reached encrypted approval review material"
+            ),
+        ):
+            expect_http_error(
+                lambda: app_module.approval_review(
+                    current["id"], identity=approver_identity
+                ),
+                status_code=409,
+                detail="policy changed",
+                label="stale-policy approval review",
+            )
+        if approval_review_receipt_count(db, current["id"]) != stale_policy_receipts:
+            raise AssertionError("stale-policy approval review issued a receipt")
         try:
             app_module.approve(
                 current["id"],

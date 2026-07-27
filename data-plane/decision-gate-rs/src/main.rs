@@ -74,6 +74,7 @@ const MAX_CONTROL_PLANE_RELEASE_AUTHORIZATION_RESPONSE_BYTES: u64 = 32 * 1024;
 const MAX_CONTROL_PLANE_AUTHORIZATION_RECEIPT_BODY_BYTES: usize = 32 * 1024;
 const MAX_CONTROL_PLANE_AUDIT_ACK_BODY_BYTES: u64 = 32 * 1024;
 const MAX_CONTROL_PLANE_AUDIT_BATCH_BODY_BYTES: usize = 1536 * 1024;
+const MAX_INTERNAL_SERVICE_TOKEN_FILE_BYTES: u64 = 4 * 1024;
 const RESPONSE_OBSERVATION_NONCE_EXPIRY_BYTES: usize = 4;
 const RESPONSE_OBSERVATION_NONCE_MAX_LIFETIME_SECONDS: u64 = 330;
 const MAX_CONTROL_PLANE_RESPONSE_STATEMENT_BYTES: usize = 8 * 1024;
@@ -99,13 +100,16 @@ const MAX_BUFFERED_REQUEST_BODY_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_MANAGEMENT_REQUEST_BODY_BYTES: u64 = 1024 * 1024;
 const MAX_BUFFERED_RESPONSE_BODY_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_INJECTED_CREDENTIAL_BYTES: usize = 64 * 1024;
+const MAX_CREDENTIAL_GENERATION_METADATA_BYTES: usize = 64 * 1024;
+const MAX_CREDENTIAL_GENERATION_METADATA_STRING_BYTES: usize = 4 * 1024;
+const MAX_CREDENTIAL_GENERATION_METADATA_SCOPES: usize = 128;
 const MAX_NPM_ATTACHMENT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_LOCAL_RATE_COUNTERS: usize = 65_536;
 const MAX_RATE_LIMIT_WINDOW_SECONDS: u64 = 31_536_000;
 const POLICY_TRUST_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 const POLICY_TRUST_MAX_AGE: Duration = Duration::from_secs(90);
 const CREDENTIAL_LEASE_SINGLEFLIGHT_TIMEOUT: Duration = Duration::from_secs(15);
-const CREDENTIAL_LEASE_RENEW_BEFORE: Duration = Duration::from_secs(4);
+const CREDENTIAL_LEASE_RENEW_BEFORE: Duration = Duration::from_secs(1);
 const CREDENTIAL_LEASE_HOT_WINDOW: Duration = Duration::from_secs(30);
 const CREDENTIAL_LEASE_RECIPIENT_ATTESTATION_TIMEOUT: Duration = Duration::from_secs(2);
 const MIN_CREDENTIAL_LEASE_UPSTREAM_SEND_WINDOW: Duration = Duration::from_millis(250);
@@ -2281,7 +2285,7 @@ struct GmailMetadataFetchConfig {
 struct GmailMetadataFanoutExecution<'a> {
     parent_credential_binding: Option<&'a CredentialLeaseReleaseBinding>,
     injection_plan: &'a Value,
-    dispatch_expires_at_epoch_ms: Option<u64>,
+    upstream_send_deadlines: UpstreamSendDeadlines,
     prepared_upstream: &'a PreparedUpstream,
 }
 
@@ -2296,15 +2300,28 @@ struct CredentialLeaseGenerationKey {
     snapshot_epoch: u64,
     policy_hash: String,
     trust_generation: u64,
+    purpose: CredentialLeasePurpose,
+    release_attempt_id: Option<String>,
+    release_binding_digest: Option<String>,
 }
 
 impl CredentialLeaseGenerationKey {
-    fn new(snapshot: &Snapshot, scope: &CredentialLeaseScope) -> Self {
+    fn new(
+        snapshot: &Snapshot,
+        scope: &CredentialLeaseScope,
+        purpose: CredentialLeasePurpose,
+        release_authorization: Option<&CredentialLeaseReleaseAuthorization>,
+    ) -> Self {
         Self {
             scope: scope.clone(),
             snapshot_epoch: snapshot.epoch,
             policy_hash: snapshot.hash.clone(),
             trust_generation: snapshot.trust_generation,
+            purpose,
+            release_attempt_id: release_authorization
+                .map(|authorization| authorization.attempt_id.clone()),
+            release_binding_digest: release_authorization
+                .map(|authorization| authorization.binding_digest.clone()),
         }
     }
 }
@@ -2312,6 +2329,12 @@ impl CredentialLeaseGenerationKey {
 struct CredentialLeaseRenewalTask {
     snapshot: Arc<Snapshot>,
     key: CredentialLeaseGenerationKey,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct CredentialLeaseBackgroundCandidate {
+    scope: CredentialLeaseScope,
+    purpose: CredentialLeasePurpose,
 }
 
 struct CredentialLeaseRenewalPendingGuard {
@@ -2337,6 +2360,8 @@ struct CredentialLeaseReleaseBinding {
     scope: CredentialLeaseScope,
     version: u64,
     secret_fingerprint: String,
+    metadata_sha256: String,
+    release_authorization: Option<CredentialLeaseReleaseAuthorization>,
     expires_at_monotonic: Instant,
 }
 
@@ -2752,13 +2777,44 @@ impl CredentialLeaseScope {
     }
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+enum CredentialLeasePurpose {
+    GenerationMetadata,
+    DispatchSecret,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CredentialLeaseReleaseAuthorization {
+    api_version: String,
+    state: String,
+    attempt_id: String,
+    binding_digest: String,
+    #[serde(deserialize_with = "deserialize_required_option")]
+    grant_id: Option<String>,
+    #[serde(deserialize_with = "deserialize_required_option")]
+    approval_request_id: Option<String>,
+    reservation_expires_at_epoch_ms: u64,
+}
+
+fn deserialize_required_option<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer)
+}
+
 #[derive(Clone)]
 struct SecretLease {
     scope: CredentialLeaseScope,
     version: u64,
     secret: Zeroizing<String>,
     metadata: BTreeMap<String, Value>,
+    metadata_sha256: String,
     policy_hash: String,
+    release_authorization: Option<CredentialLeaseReleaseAuthorization>,
     expires_at_epoch_ms: u128,
     expires_at_monotonic: Instant,
 }
@@ -2891,9 +2947,13 @@ impl<W: Write + ?Sized> Write for ResponseSecretWriter<'_, W> {
 #[serde(rename_all = "camelCase")]
 struct CredentialLeaseRequest {
     api_version: String,
+    purpose: CredentialLeasePurpose,
     principal_id: String,
     route_id: String,
     credential_id: String,
+    expected_credential_version: Option<u64>,
+    expected_metadata_sha256: Option<String>,
+    release_authorization: Option<CredentialLeaseReleaseAuthorization>,
     recipient_public_key: String,
     recipient_key_id: String,
     recipient_nonce: String,
@@ -2968,6 +3028,10 @@ struct VerifiedControlPlaneSignedResponse {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct CredentialLeaseSet {
     api_version: String,
+    purpose: CredentialLeasePurpose,
+    request_binding_sha256: String,
+    #[serde(deserialize_with = "deserialize_required_option")]
+    release_authorization: Option<CredentialLeaseReleaseAuthorization>,
     recipient_key_id: String,
     recipient_nonce: String,
     policy_hash: String,
@@ -2981,11 +3045,28 @@ struct CredentialLeaseSet {
 }
 
 #[derive(Deserialize)]
+#[serde(untagged)]
+enum CredentialLeaseEntry {
+    GenerationMetadata(CredentialLeaseGenerationEntry),
+    DispatchSecret(CredentialLeaseSecretEntry),
+}
+
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct CredentialLeaseEntry {
+struct CredentialLeaseGenerationEntry {
+    credential_id: String,
+    credential_version: u64,
+    metadata_sha256: String,
+    metadata: BTreeMap<String, Value>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CredentialLeaseSecretEntry {
     credential_id: String,
     credential_version: u64,
     secret: Zeroizing<String>,
+    metadata_sha256: String,
     metadata: BTreeMap<String, Value>,
 }
 
@@ -3143,6 +3224,26 @@ struct ReleaseAuthorizationReservation {
     shared_quotas: Vec<ValidatedReleaseAuthorizationQuota>,
     dispatch_started_at_epoch_ms: Option<u64>,
     dispatch_expires_at_epoch_ms: Option<u64>,
+}
+
+impl ReleaseAuthorizationReservation {
+    fn credential_lease_authorization(
+        &self,
+    ) -> Result<CredentialLeaseReleaseAuthorization, String> {
+        let authorization = CredentialLeaseReleaseAuthorization {
+            api_version: "serverware.credentialLeaseReleaseAuthorization/v1".to_string(),
+            state: "reserved".to_string(),
+            attempt_id: self.attempt_id.clone(),
+            binding_digest: self.binding_digest.clone(),
+            grant_id: self.grant_id.clone(),
+            approval_request_id: self.approval_request_id.clone(),
+            reservation_expires_at_epoch_ms: self
+                .reservation_expires_at_epoch_ms
+                .ok_or("release reservation expiry is unavailable")?,
+        };
+        validate_credential_lease_release_authorization(&authorization)?;
+        Ok(authorization)
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -12056,37 +12157,175 @@ fn verify_credential_lease_response(
     Ok(())
 }
 
+fn credential_lease_metadata_sha256(metadata: &BTreeMap<String, Value>) -> String {
+    digest_json_ensure_ascii(
+        &serde_json::to_value(metadata).expect("credential metadata serialization failed"),
+    )
+}
+
+fn credential_generation_metadata_key_is_secret_bearing(key: &str) -> bool {
+    let normalized = key.to_ascii_lowercase();
+    [
+        "secret",
+        "token",
+        "password",
+        "passwd",
+        "authorization",
+        "cookie",
+        "api_key",
+        "apikey",
+        "private_key",
+        "privatekey",
+    ]
+    .iter()
+    .any(|marker| normalized.contains(marker))
+}
+
+fn validate_credential_generation_metadata(
+    metadata: &BTreeMap<String, Value>,
+) -> Result<(), String> {
+    let validate_string = |key: &str, value: &Value| -> Result<(), String> {
+        let value = value
+            .as_str()
+            .ok_or_else(|| format!("credential generation metadata {key} must be a string"))?;
+        if value.is_empty() || value.len() > MAX_CREDENTIAL_GENERATION_METADATA_STRING_BYTES {
+            return Err(format!(
+                "credential generation metadata {key} must be a bounded non-empty string"
+            ));
+        }
+        Ok(())
+    };
+
+    for (key, value) in metadata {
+        if credential_generation_metadata_key_is_secret_bearing(key) {
+            return Err(format!(
+                "credential generation metadata contains forbidden secret-bearing key {key}"
+            ));
+        }
+        match key.as_str() {
+            "app_id" | "injection_field" | "injection_name" | "injection_prefix" | "provider"
+            | "provider_id" | "provider_subject" | "scope" | "subject" | "username"
+            | "x_app_id" => validate_string(key, value)?,
+            "managed" | "oauth" => {
+                if !value.is_boolean() {
+                    return Err(format!(
+                        "credential generation metadata {key} must be a boolean"
+                    ));
+                }
+            }
+            "expires_at_epoch_ms" => {
+                if value.as_u64().is_none_or(|value| value == 0) {
+                    return Err(
+                        "credential generation metadata expires_at_epoch_ms must be a positive integer"
+                            .to_string(),
+                    );
+                }
+            }
+            "scopes" => {
+                let scopes = value.as_array().ok_or_else(|| {
+                    "credential generation metadata scopes must be an array of strings".to_string()
+                })?;
+                if scopes.len() > MAX_CREDENTIAL_GENERATION_METADATA_SCOPES {
+                    return Err(
+                        "credential generation metadata scopes exceeds the array limit".to_string(),
+                    );
+                }
+                let mut seen = HashSet::with_capacity(scopes.len());
+                for scope in scopes {
+                    validate_string("scopes entry", scope)?;
+                    let scope = scope.as_str().expect("validated scope string");
+                    if !seen.insert(scope) {
+                        return Err(
+                            "credential generation metadata scopes must be unique".to_string()
+                        );
+                    }
+                }
+            }
+            _ => {
+                return Err(format!(
+                    "credential generation metadata contains unknown key {key}"
+                ))
+            }
+        }
+    }
+
+    let encoded = canonical_json_ensure_ascii(
+        &serde_json::to_value(metadata).expect("credential metadata serialization failed"),
+    );
+    if encoded.len() > MAX_CREDENTIAL_GENERATION_METADATA_BYTES {
+        return Err("credential generation metadata exceeds 64 KiB".to_string());
+    }
+    Ok(())
+}
+
 fn exactly_one_matching_credential(
     snapshot: &Snapshot,
     scope: &CredentialLeaseScope,
+    purpose: CredentialLeasePurpose,
     entries: Vec<CredentialLeaseEntry>,
 ) -> Result<CredentialLeaseEntry, String> {
     let mut entries = entries.into_iter();
     let entry = entries
         .next()
         .ok_or("credential lease set must contain exactly one credential")?;
+    let (credential_id, metadata_sha256, metadata) = match &entry {
+        CredentialLeaseEntry::GenerationMetadata(entry) => {
+            if purpose != CredentialLeasePurpose::GenerationMetadata {
+                return Err("credential lease purpose and material mismatch".to_string());
+            }
+            (
+                entry.credential_id.as_str(),
+                entry.metadata_sha256.as_str(),
+                &entry.metadata,
+            )
+        }
+        CredentialLeaseEntry::DispatchSecret(entry) => {
+            if purpose != CredentialLeasePurpose::DispatchSecret {
+                return Err("credential lease purpose and material mismatch".to_string());
+            }
+            (
+                entry.credential_id.as_str(),
+                entry.metadata_sha256.as_str(),
+                &entry.metadata,
+            )
+        }
+    };
     if entries.next().is_some()
-        || entry.credential_id != scope.credential_id
-        || !snapshot.credentials.contains_key(&entry.credential_id)
+        || credential_id != scope.credential_id
+        || !snapshot.credentials.contains_key(credential_id)
     {
         return Err(
             "credential lease set must contain exactly one matching credential".to_string(),
         );
     }
+    if !is_sha256_digest(metadata_sha256)
+        || credential_lease_metadata_sha256(metadata) != metadata_sha256
+    {
+        return Err("credential lease metadata digest mismatch".to_string());
+    }
+    validate_credential_generation_metadata(metadata)?;
     Ok(entry)
+}
+
+enum CredentialLeaseMaterial {
+    GenerationMetadata(CredentialLeaseGeneration),
+    DispatchSecret(Box<SecretLease>),
 }
 
 fn decrypt_credential_lease_envelope(
     snapshot: &Snapshot,
     binary_digest: &str,
     scope: &CredentialLeaseScope,
+    purpose: CredentialLeasePurpose,
+    request_binding_sha256: &str,
+    release_authorization: Option<&CredentialLeaseReleaseAuthorization>,
     recipient_private_key: X25519StaticSecret,
     recipient_key_id: &str,
     recipient_nonce: &str,
     recipient_nonce_bytes: &[u8; 32],
     body: &[u8],
     requested_ttl_seconds: u64,
-) -> Result<SecretLease, String> {
+) -> Result<CredentialLeaseMaterial, String> {
     let envelope: CredentialLeaseEnvelope = strict_json_from_slice(body)
         .map_err(|err| format!("parse credential lease envelope: {err}"))?;
     let issued_at_ms = u128::from(envelope.issued_at_epoch_ms);
@@ -12178,7 +12417,10 @@ fn decrypt_credential_lease_envelope(
     let plaintext = Zeroizing::new(plaintext);
     let payload: CredentialLeaseSet = strict_json_from_slice(&plaintext)
         .map_err(|err| format!("parse decrypted credential lease set: {err}"))?;
-    if payload.api_version != "serverware.credentialLeaseSet/v2"
+    if payload.api_version != "serverware.credentialLeaseSet/v3"
+        || payload.purpose != purpose
+        || payload.request_binding_sha256 != request_binding_sha256
+        || payload.release_authorization.as_ref() != release_authorization
         || payload.recipient_key_id != recipient_key_id
         || payload.recipient_nonce != recipient_nonce
         || payload.policy_hash != snapshot.hash
@@ -12197,19 +12439,44 @@ fn decrypt_credential_lease_envelope(
     }
     let expires_at_monotonic =
         Instant::now() + Duration::from_millis(u64::try_from(remaining_ms).unwrap_or(u64::MAX));
-    let entry = exactly_one_matching_credential(snapshot, scope, payload.credentials)?;
-    if entry.credential_version == 0 || entry.secret.is_empty() {
-        return Err("credential lease entry has invalid version or empty secret".to_string());
+    let entry = exactly_one_matching_credential(snapshot, scope, purpose, payload.credentials)?;
+    match entry {
+        CredentialLeaseEntry::GenerationMetadata(entry) => {
+            if entry.credential_version == 0 {
+                return Err("credential generation has an invalid version".to_string());
+            }
+            Ok(CredentialLeaseMaterial::GenerationMetadata(
+                CredentialLeaseGeneration {
+                    policy_hash: snapshot.hash.clone(),
+                    version: entry.credential_version,
+                    metadata_sha256: entry.metadata_sha256,
+                    metadata: entry.metadata,
+                    expires_at_epoch_ms: expires_at_ms,
+                    expires_at_monotonic,
+                },
+            ))
+        }
+        CredentialLeaseEntry::DispatchSecret(entry) => {
+            if entry.credential_version == 0 || entry.secret.is_empty() {
+                return Err(
+                    "credential lease entry has invalid version or empty secret".to_string()
+                );
+            }
+            Ok(CredentialLeaseMaterial::DispatchSecret(Box::new(
+                SecretLease {
+                    scope: scope.clone(),
+                    version: entry.credential_version,
+                    secret: entry.secret,
+                    metadata: entry.metadata,
+                    metadata_sha256: entry.metadata_sha256,
+                    policy_hash: snapshot.hash.clone(),
+                    release_authorization: release_authorization.cloned(),
+                    expires_at_epoch_ms: expires_at_ms,
+                    expires_at_monotonic,
+                },
+            )))
+        }
     }
-    Ok(SecretLease {
-        scope: scope.clone(),
-        version: entry.credential_version,
-        secret: entry.secret,
-        metadata: entry.metadata,
-        policy_hash: snapshot.hash.clone(),
-        expires_at_epoch_ms: expires_at_ms,
-        expires_at_monotonic,
-    })
 }
 
 fn validate_credential_lease_scope(
@@ -12236,11 +12503,71 @@ fn validate_credential_lease_scope(
     Ok(())
 }
 
+fn credential_scope_requires_jit(
+    snapshot: &Snapshot,
+    scope: &CredentialLeaseScope,
+) -> Result<bool, String> {
+    let route = snapshot
+        .routes
+        .iter()
+        .find(|route| route.id == scope.route_id)
+        .ok_or("credential lease route is not active")?;
+    Ok(route
+        .jit
+        .get("required")
+        .and_then(Value::as_bool)
+        .unwrap_or(false))
+}
+
+fn credential_lease_request_binding_sha256(request: &CredentialLeaseRequest) -> String {
+    digest_json_ensure_ascii(&json!({
+        "apiVersion":request.api_version,
+        "purpose":request.purpose,
+        "principalId":request.principal_id,
+        "routeId":request.route_id,
+        "credentialId":request.credential_id,
+        "expectedCredentialVersion":request.expected_credential_version,
+        "expectedMetadataSha256":request.expected_metadata_sha256,
+        "releaseAuthorization":request.release_authorization,
+        "recipientKeyId":request.recipient_key_id,
+        "recipientNonce":request.recipient_nonce,
+        "policyHash":request.policy_hash,
+        "dataPlaneBinaryDigest":request.data_plane_binary_digest,
+        "maxTtlSeconds":request.max_ttl_seconds,
+    }))
+}
+
+fn validate_credential_lease_release_authorization(
+    authorization: &CredentialLeaseReleaseAuthorization,
+) -> Result<(), String> {
+    if authorization.api_version != "serverware.credentialLeaseReleaseAuthorization/v1"
+        || authorization.state != "reserved"
+        || !is_sha256_digest(&authorization.attempt_id)
+        || !is_sha256_digest(&authorization.binding_digest)
+        || u128::from(authorization.reservation_expires_at_epoch_ms) <= now_epoch_ms()
+        || authorization.grant_id.is_some() != authorization.approval_request_id.is_some()
+        || authorization
+            .grant_id
+            .as_deref()
+            .is_some_and(|value| !valid_release_authorization_identity(Some(value)))
+        || authorization
+            .approval_request_id
+            .as_deref()
+            .is_some_and(|value| !valid_release_authorization_identity(Some(value)))
+    {
+        return Err("credential lease release authorization is invalid or expired".to_string());
+    }
+    Ok(())
+}
+
 fn fetch_scoped_credential_lease(
     state: &GateState,
     snapshot: &Arc<Snapshot>,
     scope: &CredentialLeaseScope,
-) -> Result<SecretLease, String> {
+    purpose: CredentialLeasePurpose,
+    expected_generation: Option<&CredentialLeaseGeneration>,
+    release_authorization: Option<&CredentialLeaseReleaseAuthorization>,
+) -> Result<CredentialLeaseMaterial, String> {
     let request_url = state
         .credential_lease_url
         .as_deref()
@@ -12250,6 +12577,38 @@ fn fetch_scoped_credential_lease(
         .as_deref()
         .ok_or("credential lease data-plane token is not configured")?;
     validate_credential_lease_scope(snapshot, scope)?;
+    let jit_required = credential_scope_requires_jit(snapshot, scope)?;
+    match purpose {
+        CredentialLeasePurpose::GenerationMetadata => {
+            if expected_generation.is_some() || release_authorization.is_some() {
+                return Err("generation metadata fetch cannot carry dispatch bindings".to_string());
+            }
+        }
+        CredentialLeasePurpose::DispatchSecret => {
+            let generation = expected_generation
+                .ok_or("dispatch secret fetch requires an exact credential generation")?;
+            if !credential_generation_valid_after(
+                generation,
+                snapshot,
+                now_epoch_ms(),
+                Instant::now(),
+            ) {
+                return Err(
+                    "dispatch secret fetch credential generation is stale or invalid".to_string(),
+                );
+            }
+            if jit_required {
+                let authorization = release_authorization
+                    .ok_or("JIT dispatch secret fetch requires release authorization")?;
+                validate_credential_lease_release_authorization(authorization)?;
+            } else if release_authorization.is_some() {
+                return Err(
+                    "non-JIT dispatch secret fetch cannot carry JIT release authorization"
+                        .to_string(),
+                );
+            }
+        }
+    }
     if !snapshot_is_active(state, snapshot) {
         return Err("policy snapshot was revoked before credential lease fetch".to_string());
     }
@@ -12281,12 +12640,34 @@ fn fetch_scoped_credential_lease(
         .map_err(|_| "generate credential lease nonce failed".to_string())?;
     let recipient_nonce = general_purpose::URL_SAFE_NO_PAD.encode(&recipient_nonce_bytes);
     let requested_ttl_seconds = 5u64;
-    let recipient_attestation = if let Some(command) = state
+    let mut request_body = CredentialLeaseRequest {
+        api_version: "serverware.credentialLeaseRequest/v3".to_string(),
+        purpose,
+        principal_id: scope.principal_id.clone(),
+        route_id: scope.route_id.clone(),
+        credential_id: scope.credential_id.clone(),
+        expected_credential_version: expected_generation.map(|generation| generation.version),
+        expected_metadata_sha256: expected_generation
+            .map(|generation| generation.metadata_sha256.clone()),
+        release_authorization: release_authorization.cloned(),
+        recipient_public_key: general_purpose::URL_SAFE_NO_PAD
+            .encode(recipient_public_key.as_bytes()),
+        recipient_key_id: recipient_key_id.clone(),
+        recipient_nonce: recipient_nonce.clone(),
+        policy_hash: snapshot.hash.clone(),
+        data_plane_binary_digest: state.binary_digest.clone(),
+        max_ttl_seconds: requested_ttl_seconds,
+        recipient_attestation: None,
+    };
+    let request_binding_sha256 = credential_lease_request_binding_sha256(&request_body);
+    request_body.recipient_attestation = if let Some(command) = state
         .credential_lease_recipient_attestation_command
         .as_deref()
     {
         let attestation_request = json!({
-            "apiVersion":"serverware.recipientAttestationRequest/v2",
+            "apiVersion":"serverware.recipientAttestationRequest/v3",
+            "purpose":purpose,
+            "requestBindingSha256":request_binding_sha256,
             "recipientPublicKey":general_purpose::URL_SAFE_NO_PAD.encode(recipient_public_key.as_bytes()),
             "recipientKeyId":recipient_key_id,
             "recipientNonce":recipient_nonce,
@@ -12302,20 +12683,6 @@ fn fetch_scoped_credential_lease(
         )?)
     } else {
         None
-    };
-    let request_body = CredentialLeaseRequest {
-        api_version: "serverware.credentialLeaseRequest/v2".to_string(),
-        principal_id: scope.principal_id.clone(),
-        route_id: scope.route_id.clone(),
-        credential_id: scope.credential_id.clone(),
-        recipient_public_key: general_purpose::URL_SAFE_NO_PAD
-            .encode(recipient_public_key.as_bytes()),
-        recipient_key_id: recipient_key_id.clone(),
-        recipient_nonce: recipient_nonce.clone(),
-        policy_hash: snapshot.hash.clone(),
-        data_plane_binary_digest: state.binary_digest.clone(),
-        max_ttl_seconds: requested_ttl_seconds,
-        recipient_attestation,
     };
     let response = state
         .credential_lease_client
@@ -12349,6 +12716,9 @@ fn fetch_scoped_credential_lease(
         snapshot,
         &state.binary_digest,
         scope,
+        purpose,
+        &request_binding_sha256,
+        release_authorization,
         recipient_private_key,
         &recipient_key_id,
         &recipient_nonce,
@@ -12358,6 +12728,33 @@ fn fetch_scoped_credential_lease(
     )?;
     if !snapshot_is_active(state, snapshot) {
         return Err("policy snapshot changed while credential lease was fetched".to_string());
+    }
+    if let Some(authorization) = release_authorization {
+        validate_credential_lease_release_authorization(authorization)?;
+    }
+    if let (CredentialLeaseMaterial::DispatchSecret(lease), Some(expected_generation)) =
+        (&lease, expected_generation)
+    {
+        let validation_epoch_ms = now_epoch_ms();
+        let validation_monotonic = Instant::now();
+        if !credential_generation_valid_after(
+            expected_generation,
+            snapshot,
+            validation_epoch_ms,
+            validation_monotonic,
+        ) || !credential_secret_lease_valid_after(
+            lease,
+            snapshot,
+            validation_epoch_ms,
+            validation_monotonic,
+        ) || lease.version != expected_generation.version
+            || lease.metadata_sha256 != expected_generation.metadata_sha256
+            || lease.metadata != expected_generation.metadata
+        {
+            return Err(
+                "credential generation or metadata changed during secret fetch".to_string(),
+            );
+        }
     }
     Ok(lease)
 }
@@ -12602,6 +12999,7 @@ fn generate_recipient_attestation(command: &str, request: &Value) -> Result<Valu
 
 struct CredentialLeaseInfo {
     version: u64,
+    metadata_sha256: String,
     metadata: BTreeMap<String, Value>,
     secret_available: bool,
 }
@@ -12610,8 +13008,43 @@ struct CredentialLeaseInfo {
 struct CredentialLeaseGeneration {
     policy_hash: String,
     version: u64,
-    secret_fingerprint: String,
+    metadata_sha256: String,
     metadata: BTreeMap<String, Value>,
+    expires_at_epoch_ms: u128,
+    expires_at_monotonic: Instant,
+}
+
+fn credential_generation_valid_after(
+    generation: &CredentialLeaseGeneration,
+    snapshot: &Snapshot,
+    epoch_ms: u128,
+    monotonic: Instant,
+) -> bool {
+    credential_generation_floor_matches(generation, snapshot)
+        && generation.expires_at_epoch_ms > epoch_ms
+        && generation.expires_at_monotonic > monotonic
+}
+
+fn credential_generation_floor_matches(
+    generation: &CredentialLeaseGeneration,
+    snapshot: &Snapshot,
+) -> bool {
+    generation.version > 0
+        && generation.policy_hash == snapshot.hash
+        && generation.metadata_sha256 == credential_lease_metadata_sha256(&generation.metadata)
+}
+
+fn credential_secret_lease_valid_after(
+    lease: &SecretLease,
+    snapshot: &Snapshot,
+    epoch_ms: u128,
+    monotonic: Instant,
+) -> bool {
+    lease.policy_hash == snapshot.hash
+        && lease.expires_at_epoch_ms > epoch_ms
+        && lease.expires_at_monotonic > monotonic
+        && !lease.secret.is_empty()
+        && lease.metadata_sha256 == credential_lease_metadata_sha256(&lease.metadata)
 }
 
 fn credential_secret_fingerprint(secret: &str) -> String {
@@ -12623,7 +13056,7 @@ fn retain_relevant_credential_generation_floors(
     snapshot: &Snapshot,
 ) -> (usize, usize) {
     let before = generations.len();
-    generations.retain(|scope, _| snapshot.credentials.contains_key(&scope.credential_id));
+    generations.retain(|scope, _| validate_credential_lease_scope(snapshot, scope).is_ok());
     let retained = generations.len();
     (retained, before.saturating_sub(retained))
 }
@@ -12631,17 +13064,20 @@ fn retain_relevant_credential_generation_floors(
 fn lease_info(lease: &SecretLease) -> CredentialLeaseInfo {
     CredentialLeaseInfo {
         version: lease.version,
+        metadata_sha256: lease.metadata_sha256.clone(),
         metadata: lease.metadata.clone(),
         secret_available: !lease.secret.is_empty(),
     }
 }
 
+#[cfg(test)]
 fn cached_credential_lease_info(
     state: &GateState,
     snapshot: &Arc<Snapshot>,
     scope: &CredentialLeaseScope,
 ) -> Option<CredentialLeaseInfo> {
     let now = Instant::now();
+    let now_epoch_ms = now_epoch_ms();
     let leases = state
         .credential_leases
         .lock()
@@ -12650,8 +13086,7 @@ fn cached_credential_lease_info(
         .get(scope)
         .filter(|lease| {
             lease.scope == *scope
-                && lease.expires_at_monotonic > now
-                && lease.policy_hash == snapshot.hash
+                && credential_secret_lease_valid_after(lease, snapshot, now_epoch_ms, now)
         })
         .map(lease_info)
 }
@@ -12669,18 +13104,72 @@ fn peek_cached_credential_lease_info(
     snapshot: &Arc<Snapshot>,
     scope: &CredentialLeaseScope,
 ) -> Option<CredentialLeaseInfo> {
-    mark_credential_lease_activity(state, scope);
+    let now = Instant::now();
+    let now_epoch_ms = now_epoch_ms();
     state
         .credential_generations
         .lock()
         .expect("credential generation mutex poisoned")
         .get(scope)
-        .filter(|generation| generation.policy_hash == snapshot.hash)
+        .filter(|generation| {
+            credential_generation_valid_after(generation, snapshot, now_epoch_ms, now)
+        })
         .map(|generation| CredentialLeaseInfo {
             version: generation.version,
+            metadata_sha256: generation.metadata_sha256.clone(),
             metadata: generation.metadata.clone(),
             secret_available: false,
         })
+}
+
+fn cache_scoped_credential_generation(
+    state: &GateState,
+    snapshot: &Arc<Snapshot>,
+    scope: &CredentialLeaseScope,
+    generation: CredentialLeaseGeneration,
+) -> Result<(), String> {
+    validate_credential_generation_metadata(&generation.metadata)?;
+    if !credential_generation_valid_after(&generation, snapshot, now_epoch_ms(), Instant::now()) {
+        return Err("credential generation binding or expiry is invalid".to_string());
+    }
+    let _dispatch_authority = state.upstream_dispatch_authority.begin_mutation();
+    let active = state
+        .snapshot
+        .read()
+        .expect("policy snapshot lock poisoned");
+    if active.epoch != snapshot.epoch || !Arc::ptr_eq(&active, snapshot) {
+        return Err("policy snapshot changed before credential generation caching".to_string());
+    }
+    let mut leases = state
+        .credential_leases
+        .lock()
+        .expect("credential lease mutex poisoned");
+    let mut generations = state
+        .credential_generations
+        .lock()
+        .expect("credential generation mutex poisoned");
+    if let Some(current) = generations.get(scope) {
+        if generation.version < current.version {
+            return Err("credential lease version regression rejected".to_string());
+        }
+        if generation.version == current.version
+            && (generation.metadata_sha256 != current.metadata_sha256
+                || generation.metadata != current.metadata)
+        {
+            return Err("credential metadata changed without a version increment".to_string());
+        }
+    } else if generations.len() >= state.credential_lease_cache_max {
+        return Err("credential generation cache capacity exhausted".to_string());
+    }
+    if leases.get(scope).is_some_and(|lease| {
+        lease.version != generation.version
+            || lease.metadata_sha256 != generation.metadata_sha256
+            || lease.metadata != generation.metadata
+    }) {
+        leases.remove(scope);
+    }
+    generations.insert(scope.clone(), generation);
+    Ok(())
 }
 
 fn cache_scoped_credential_lease(
@@ -12689,7 +13178,17 @@ fn cache_scoped_credential_lease(
     scope: &CredentialLeaseScope,
     lease: SecretLease,
 ) -> Result<(), String> {
-    let secret_fingerprint = credential_secret_fingerprint(lease.secret.as_str());
+    validate_credential_generation_metadata(&lease.metadata)?;
+    let validation_epoch_ms = now_epoch_ms();
+    let validation_monotonic = Instant::now();
+    if !credential_secret_lease_valid_after(
+        &lease,
+        snapshot,
+        validation_epoch_ms,
+        validation_monotonic,
+    ) {
+        return Err("credential lease metadata or expiry is invalid".to_string());
+    }
     let _dispatch_authority = state.upstream_dispatch_authority.begin_mutation();
     let active = state
         .snapshot
@@ -12702,7 +13201,7 @@ fn cache_scoped_credential_lease(
         .credential_leases
         .lock()
         .expect("credential lease mutex poisoned");
-    let mut generations = state
+    let generations = state
         .credential_generations
         .lock()
         .expect("credential generation mutex poisoned");
@@ -12722,38 +13221,80 @@ fn cache_scoped_credential_lease(
         return Err("credential lease cache capacity exhausted".to_string());
     }
     if let Some(current) = generations.get(scope) {
+        if !credential_generation_valid_after(
+            current,
+            snapshot,
+            validation_epoch_ms,
+            validation_monotonic,
+        ) {
+            return Err("credential secret lease generation is stale or invalid".to_string());
+        }
         if lease.version < current.version {
             return Err("credential lease version regression rejected".to_string());
         }
         if lease.version == current.version
-            && (secret_fingerprint != current.secret_fingerprint
+            && (lease.metadata_sha256 != current.metadata_sha256
                 || lease.metadata != current.metadata)
         {
+            return Err("credential metadata changed without a version increment".to_string());
+        }
+        if lease.version > current.version {
             return Err(
-                "credential lease semantics changed without a version increment".to_string(),
+                "credential secret lease was not preceded by its exact generation".to_string(),
             );
         }
+    } else {
+        return Err("credential secret lease has no cached generation".to_string());
     }
-    generations.insert(
-        scope.clone(),
-        CredentialLeaseGeneration {
-            policy_hash: lease.policy_hash.clone(),
-            version: lease.version,
-            secret_fingerprint,
-            metadata: lease.metadata.clone(),
-        },
-    );
     leases.insert(scope.clone(), lease);
     Ok(())
 }
 
-fn refresh_scoped_credential_lease(
+fn refresh_scoped_credential_material(
     state: &GateState,
     snapshot: &Arc<Snapshot>,
     scope: &CredentialLeaseScope,
+    purpose: CredentialLeasePurpose,
+    release_authorization: Option<&CredentialLeaseReleaseAuthorization>,
 ) -> Result<(), String> {
-    let result = fetch_scoped_credential_lease(state, snapshot, scope)
-        .and_then(|lease| cache_scoped_credential_lease(state, snapshot, scope, lease));
+    let expected_generation = if purpose == CredentialLeasePurpose::DispatchSecret {
+        let validation_epoch_ms = now_epoch_ms();
+        let validation_monotonic = Instant::now();
+        state
+            .credential_generations
+            .lock()
+            .expect("credential generation mutex poisoned")
+            .get(scope)
+            .filter(|generation| {
+                credential_generation_valid_after(
+                    generation,
+                    snapshot,
+                    validation_epoch_ms,
+                    validation_monotonic,
+                )
+            })
+            .cloned()
+            .ok_or("dispatch secret fetch requires a cached credential generation")?
+            .into()
+    } else {
+        None
+    };
+    let result = fetch_scoped_credential_lease(
+        state,
+        snapshot,
+        scope,
+        purpose,
+        expected_generation.as_ref(),
+        release_authorization,
+    )
+    .and_then(|material| match material {
+        CredentialLeaseMaterial::GenerationMetadata(generation) => {
+            cache_scoped_credential_generation(state, snapshot, scope, generation)
+        }
+        CredentialLeaseMaterial::DispatchSecret(lease) => {
+            cache_scoped_credential_lease(state, snapshot, scope, *lease)
+        }
+    });
     if let Err(err) = result {
         state
             .credential_lease_refresh_failed
@@ -12766,15 +13307,17 @@ fn refresh_scoped_credential_lease(
     Ok(())
 }
 
-fn refresh_scoped_credential_lease_singleflight(
+fn refresh_scoped_credential_material_singleflight(
     state: &GateState,
     snapshot: &Arc<Snapshot>,
     scope: &CredentialLeaseScope,
+    purpose: CredentialLeasePurpose,
+    release_authorization: Option<&CredentialLeaseReleaseAuthorization>,
 ) -> Result<(), String> {
     if !snapshot_is_active(state, snapshot) {
         return Err("policy snapshot was revoked before credential lease refresh".to_string());
     }
-    let key = CredentialLeaseGenerationKey::new(snapshot, scope);
+    let key = CredentialLeaseGenerationKey::new(snapshot, scope, purpose, release_authorization);
     let (flight, leader) = {
         let mut flights = state
             .credential_lease_flights
@@ -12793,7 +13336,13 @@ fn refresh_scoped_credential_lease_singleflight(
         }
     };
     if leader {
-        let result = refresh_scoped_credential_lease(state, snapshot, scope);
+        let result = refresh_scoped_credential_material(
+            state,
+            snapshot,
+            scope,
+            purpose,
+            release_authorization,
+        );
         *flight
             .result
             .lock()
@@ -12839,23 +13388,114 @@ fn refresh_scoped_credential_lease_singleflight(
     Ok(())
 }
 
-fn ensure_scoped_credential_lease(
+fn ensure_scoped_credential_generation(
     state: &GateState,
     snapshot: &Arc<Snapshot>,
     scope: &CredentialLeaseScope,
 ) -> Result<CredentialLeaseInfo, String> {
     if !snapshot_is_active(state, snapshot) {
-        return Err("policy snapshot was revoked before credential lease lookup".to_string());
+        return Err("policy snapshot was revoked before credential generation lookup".to_string());
     }
-    mark_credential_lease_activity(state, scope);
-    if let Some(info) = cached_credential_lease_info(state, snapshot, scope) {
+    if let Some(info) = peek_cached_credential_lease_info(state, snapshot, scope) {
         return Ok(info);
     }
-    refresh_scoped_credential_lease_singleflight(state, snapshot, scope)?;
+    refresh_scoped_credential_material_singleflight(
+        state,
+        snapshot,
+        scope,
+        CredentialLeasePurpose::GenerationMetadata,
+        None,
+    )?;
+    if !snapshot_is_active(state, snapshot) {
+        return Err("policy snapshot changed during credential generation lookup".to_string());
+    }
+    peek_cached_credential_lease_info(state, snapshot, scope).ok_or_else(|| {
+        "credential generation refresh completed without cached metadata".to_string()
+    })
+}
+
+fn ensure_scoped_credential_lease(
+    state: &GateState,
+    snapshot: &Arc<Snapshot>,
+    scope: &CredentialLeaseScope,
+    release_authorization: Option<&CredentialLeaseReleaseAuthorization>,
+) -> Result<CredentialLeaseInfo, String> {
+    if !snapshot_is_active(state, snapshot) {
+        return Err("policy snapshot was revoked before credential lease lookup".to_string());
+    }
+    let jit_required = credential_scope_requires_jit(snapshot, scope)?;
+    if jit_required {
+        let authorization = release_authorization
+            .ok_or("credential-bearing JIT requires exact atomic release authorization")?;
+        validate_credential_lease_release_authorization(authorization)?;
+    } else if release_authorization.is_some() {
+        return Err("non-JIT credential lookup cannot carry JIT release authorization".to_string());
+    }
+    let generation = ensure_scoped_credential_generation(state, snapshot, scope)?;
+    mark_credential_lease_activity(state, scope);
+    let cached = {
+        let now = Instant::now();
+        let now_epoch_ms = now_epoch_ms();
+        state
+            .credential_leases
+            .lock()
+            .expect("credential lease mutex poisoned")
+            .get(scope)
+            .filter(|lease| {
+                lease.scope == *scope
+                    && credential_secret_lease_valid_after(lease, snapshot, now_epoch_ms, now)
+                    && lease.version == generation.version
+                    && lease.metadata_sha256 == generation.metadata_sha256
+                    && lease.metadata == generation.metadata
+                    && lease.release_authorization.as_ref() == release_authorization
+            })
+            .map(lease_info)
+    };
+    if let Some(info) = cached {
+        return Ok(info);
+    }
+    refresh_scoped_credential_material_singleflight(
+        state,
+        snapshot,
+        scope,
+        CredentialLeasePurpose::DispatchSecret,
+        release_authorization,
+    )?;
     if !snapshot_is_active(state, snapshot) {
         return Err("policy snapshot changed during credential lease lookup".to_string());
     }
-    cached_credential_lease_info(state, snapshot, scope)
+    if let Some(authorization) = release_authorization {
+        validate_credential_lease_release_authorization(authorization)?;
+    }
+    let current_generation = peek_cached_credential_lease_info(state, snapshot, scope)
+        .ok_or("credential generation changed during credential lease lookup")?;
+    if current_generation.version != generation.version
+        || current_generation.metadata_sha256 != generation.metadata_sha256
+        || current_generation.metadata != generation.metadata
+    {
+        return Err("credential generation changed during credential lease lookup".to_string());
+    }
+    let validation_epoch_ms = now_epoch_ms();
+    let validation_monotonic = Instant::now();
+    state
+        .credential_leases
+        .lock()
+        .expect("credential lease mutex poisoned")
+        .get(scope)
+        .filter(|lease| {
+            lease.scope == *scope
+                && credential_secret_lease_valid_after(
+                    lease,
+                    snapshot,
+                    validation_epoch_ms,
+                    validation_monotonic,
+                )
+                && lease.version == generation.version
+                && lease.metadata_sha256 == generation.metadata_sha256
+                && lease.metadata == generation.metadata
+                && lease.release_authorization.as_ref() == release_authorization
+        })
+        .map(lease_info)
         .ok_or_else(|| "credential lease refresh completed without a cached lease".to_string())
 }
 
@@ -12865,6 +13505,55 @@ fn credential_generation(
     scope: &CredentialLeaseScope,
 ) -> Option<u64> {
     peek_cached_credential_lease_info(state, snapshot, scope).map(|info| info.version)
+}
+
+fn decision_credential_lease_release_authorization(
+    decision: &Value,
+) -> Result<Option<CredentialLeaseReleaseAuthorization>, &'static str> {
+    let jit_required = decision
+        .pointer("/jit/required")
+        .and_then(Value::as_bool)
+        .ok_or("credential_release_authority_missing")?;
+    if !jit_required {
+        return Ok(None);
+    }
+    let release = decision
+        .get("release_authorization")
+        .and_then(Value::as_object)
+        .ok_or("credential_release_authority_missing")?;
+    let authorization = CredentialLeaseReleaseAuthorization {
+        api_version: "serverware.credentialLeaseReleaseAuthorization/v1".to_string(),
+        state: release
+            .get("state")
+            .and_then(Value::as_str)
+            .ok_or("credential_release_authority_missing")?
+            .to_string(),
+        attempt_id: release
+            .get("attempt_id")
+            .and_then(Value::as_str)
+            .ok_or("credential_release_authority_missing")?
+            .to_string(),
+        binding_digest: release
+            .get("binding_digest")
+            .and_then(Value::as_str)
+            .ok_or("credential_release_authority_missing")?
+            .to_string(),
+        grant_id: release
+            .get("grant_id")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        approval_request_id: release
+            .get("approval_request_id")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        reservation_expires_at_epoch_ms: release
+            .get("reservation_expires_at_epoch_ms")
+            .and_then(Value::as_u64)
+            .ok_or("credential_release_authority_missing")?,
+    };
+    validate_credential_lease_release_authorization(&authorization)
+        .map_err(|_| "credential_release_authority_invalid")?;
+    Ok(Some(authorization))
 }
 
 fn credential_lease_for_release(
@@ -12899,21 +13588,39 @@ fn credential_lease_for_release(
     let scope = CredentialLeaseScope::new(principal_id, route_id, credential_ref);
     validate_credential_lease_scope(snapshot, &scope).map_err(|_| "credential_scope_mismatch")?;
     let now = Instant::now();
+    let now_epoch_ms = now_epoch_ms();
     let leases = state
         .credential_leases
         .lock()
         .expect("credential lease mutex poisoned");
+    let generations = state
+        .credential_generations
+        .lock()
+        .expect("credential generation mutex poisoned");
     let Some(lease) = leases.get(&scope) else {
         return Err("credential_lease_missing");
     };
     if lease.scope != scope
-        || lease.expires_at_monotonic <= now
-        || lease.policy_hash != snapshot.hash
+        || !credential_secret_lease_valid_after(lease, snapshot, now_epoch_ms, now)
     {
         return Err("credential_lease_missing");
     }
     if lease.version != credential_version {
         return Err("credential_lease_rotated");
+    }
+    let Some(generation) = generations.get(&scope) else {
+        return Err("credential_generation_missing");
+    };
+    if !credential_generation_valid_after(generation, snapshot, now_epoch_ms, now)
+        || generation.version != credential_version
+        || lease.metadata_sha256 != generation.metadata_sha256
+        || lease.metadata != generation.metadata
+    {
+        return Err("credential_generation_changed_before_injection");
+    }
+    let release_authorization = decision_credential_lease_release_authorization(decision)?;
+    if lease.release_authorization != release_authorization {
+        return Err("credential_lease_release_authority_mismatch");
     }
     Ok(lease.clone())
 }
@@ -12923,6 +13630,8 @@ fn credential_lease_release_binding(lease: &SecretLease) -> CredentialLeaseRelea
         scope: lease.scope.clone(),
         version: lease.version,
         secret_fingerprint: credential_secret_fingerprint(lease.secret.as_str()),
+        metadata_sha256: lease.metadata_sha256.clone(),
+        release_authorization: lease.release_authorization.clone(),
         expires_at_monotonic: lease.expires_at_monotonic,
     }
 }
@@ -12932,7 +13641,10 @@ fn credential_lease_still_releasable(
     snapshot: &Arc<Snapshot>,
     binding: &CredentialLeaseReleaseBinding,
 ) -> bool {
-    if binding.expires_at_monotonic <= Instant::now() || !snapshot_is_active(state, snapshot) {
+    let validation_epoch_ms = now_epoch_ms();
+    let validation_monotonic = Instant::now();
+    if binding.expires_at_monotonic <= validation_monotonic || !snapshot_is_active(state, snapshot)
+    {
         return false;
     }
     state
@@ -12943,8 +13655,16 @@ fn credential_lease_still_releasable(
         .is_some_and(|lease| {
             lease.scope == binding.scope
                 && lease.version == binding.version
-                && lease.policy_hash == snapshot.hash
-                && lease.expires_at_monotonic > Instant::now()
+                && credential_secret_lease_valid_after(
+                    lease,
+                    snapshot,
+                    validation_epoch_ms,
+                    validation_monotonic,
+                )
+                && lease.metadata_sha256 == binding.metadata_sha256
+                && lease.release_authorization == binding.release_authorization
+                && credential_secret_fingerprint(lease.secret.as_str())
+                    == binding.secret_fingerprint
         })
 }
 
@@ -12952,6 +13672,60 @@ struct UpstreamSendAuthority<'a> {
     _dispatch: UpstreamDispatchPermit<'a>,
     _snapshot: RwLockReadGuard<'a, Arc<Snapshot>>,
     lease_deadline: Option<Instant>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct UpstreamSendDeadlines {
+    reservation_expires_at_epoch_ms: Option<u64>,
+    dispatch_expires_at_epoch_ms: Option<u64>,
+    policy_expires_at_epoch_ms: Option<u64>,
+}
+
+impl UpstreamSendDeadlines {
+    fn minimum_epoch_ms(self) -> Option<u64> {
+        [
+            self.reservation_expires_at_epoch_ms,
+            self.dispatch_expires_at_epoch_ms,
+            self.policy_expires_at_epoch_ms,
+        ]
+        .into_iter()
+        .flatten()
+        .min()
+    }
+}
+
+fn upstream_send_deadlines(
+    policy_expires_at_epoch_ms: Option<u64>,
+    dispatch: Option<&ReleaseAuthorizationDispatchObservation>,
+) -> UpstreamSendDeadlines {
+    UpstreamSendDeadlines {
+        reservation_expires_at_epoch_ms: dispatch
+            .and_then(|observation| observation.reservation_expires_at_epoch_ms),
+        dispatch_expires_at_epoch_ms: dispatch
+            .map(|observation| observation.dispatch_expires_at_epoch_ms),
+        policy_expires_at_epoch_ms,
+    }
+}
+
+fn upstream_send_deadline_timeout_at(
+    deadlines: UpstreamSendDeadlines,
+    now_ms: u128,
+) -> Result<Option<Duration>, &'static str> {
+    let Some(deadline_ms) = deadlines.minimum_epoch_ms() else {
+        return Ok(None);
+    };
+    let remaining_ms = u128::from(deadline_ms)
+        .checked_sub(now_ms)
+        .filter(|remaining| *remaining > 0)
+        .and_then(|remaining| u64::try_from(remaining).ok())
+        .ok_or("upstream_send_authority_expired")?;
+    Ok(Some(Duration::from_millis(remaining_ms)))
+}
+
+fn upstream_send_deadline_timeout(
+    deadlines: UpstreamSendDeadlines,
+) -> Result<Option<Duration>, &'static str> {
+    upstream_send_deadline_timeout_at(deadlines, now_epoch_ms())
 }
 
 fn credential_lease_send_timeout(
@@ -12981,6 +13755,14 @@ fn acquire_upstream_send_authority<'a>(
         .expect("policy snapshot lock poisoned");
     if !policy_trust_is_fresh(state) {
         return Err("policy_trust_stale_before_upstream_send");
+    }
+    if binding
+        .and_then(|binding| binding.release_authorization.as_ref())
+        .is_some_and(|authorization| {
+            validate_credential_lease_release_authorization(authorization).is_err()
+        })
+    {
+        return Err("credential_release_authorization_expired_before_upstream_send");
     }
     if active.epoch != snapshot.epoch || !Arc::ptr_eq(&active, snapshot) {
         return Err("policy_snapshot_revoked_before_upstream_send");
@@ -13012,25 +13794,42 @@ fn acquire_upstream_send_authority<'a>(
         .credential_generations
         .lock()
         .expect("credential generation mutex poisoned");
+    let validation_epoch_ms = now_epoch_ms();
+    let validation_monotonic = Instant::now();
     if !policy_trust_is_fresh(state) {
         return Err("policy_trust_stale_before_upstream_send");
     }
     let lease = leases
         .get(&binding.scope)
-        .filter(|lease| {
-            lease.scope == binding.scope
-                && lease.version == binding.version
-                && lease.policy_hash == snapshot.hash
-        })
         .ok_or("credential_lease_changed_before_upstream_send")?;
+    if lease.scope != binding.scope
+        || lease.version != binding.version
+        || lease.policy_hash != snapshot.hash
+        || lease.secret.is_empty()
+        || lease.metadata_sha256 != credential_lease_metadata_sha256(&lease.metadata)
+    {
+        return Err("credential_lease_changed_before_upstream_send");
+    }
+    if lease.expires_at_epoch_ms <= validation_epoch_ms
+        || lease.expires_at_monotonic <= validation_monotonic
+    {
+        return Err("credential_lease_expired_before_upstream_send");
+    }
     let generation = generations
         .get(&binding.scope)
-        .filter(|generation| {
-            generation.version == binding.version && generation.policy_hash == snapshot.hash
-        })
         .ok_or("credential_generation_changed_before_upstream_send")?;
-    if generation.secret_fingerprint != binding.secret_fingerprint
+    if generation.version != binding.version
+        || !credential_generation_floor_matches(generation, snapshot)
+        || generation.expires_at_epoch_ms <= validation_epoch_ms
+        || generation.expires_at_monotonic <= validation_monotonic
+    {
+        return Err("credential_generation_changed_before_upstream_send");
+    }
+    if generation.metadata_sha256 != binding.metadata_sha256
         || generation.metadata != lease.metadata
+        || lease.metadata_sha256 != binding.metadata_sha256
+        || lease.release_authorization != binding.release_authorization
+        || credential_secret_fingerprint(lease.secret.as_str()) != binding.secret_fingerprint
     {
         return Err("credential_generation_changed_before_upstream_send");
     }
@@ -13066,6 +13865,7 @@ fn send_upstream_request_with_current_lease(
     snapshot: &Arc<Snapshot>,
     binding: Option<&CredentialLeaseReleaseBinding>,
     builder: reqwest::blocking::RequestBuilder,
+    deadlines: UpstreamSendDeadlines,
     require_response_proof: bool,
 ) -> Result<reqwest::blocking::Response, UpstreamSendError> {
     send_upstream_request_with_current_lease_and_timeout(
@@ -13074,6 +13874,7 @@ fn send_upstream_request_with_current_lease(
         binding,
         builder,
         None,
+        deadlines,
         require_response_proof,
     )
 }
@@ -13084,6 +13885,7 @@ fn send_upstream_request_with_current_lease_and_timeout(
     binding: Option<&CredentialLeaseReleaseBinding>,
     builder: reqwest::blocking::RequestBuilder,
     maximum_timeout: Option<Duration>,
+    deadlines: UpstreamSendDeadlines,
     require_response_proof: bool,
 ) -> Result<reqwest::blocking::Response, UpstreamSendError> {
     let send = || {
@@ -13100,14 +13902,24 @@ fn send_upstream_request_with_current_lease_and_timeout(
         }
         let send_timeout = credential_lease_send_timeout(authority.lease_deadline)
             .map_err(UpstreamSendError::CredentialAuthority)?;
-        let send_timeout = match (send_timeout, maximum_timeout) {
-            (Some(lease), Some(maximum)) => Some(lease.min(maximum)),
-            (Some(lease), None) => Some(lease),
-            (None, Some(maximum)) => Some(maximum),
-            (None, None) => None,
-        };
+        let authorization_timeout = upstream_send_deadline_timeout(deadlines)
+            .map_err(UpstreamSendError::CredentialAuthority)?;
+        let send_timeout = [send_timeout, authorization_timeout, maximum_timeout]
+            .into_iter()
+            .flatten()
+            .min();
         if let Some(timeout) = send_timeout {
             *request.timeout_mut() = Some(timeout);
+        }
+        if binding
+            .and_then(|binding| binding.release_authorization.as_ref())
+            .is_some_and(|authorization| {
+                validate_credential_lease_release_authorization(authorization).is_err()
+            })
+        {
+            return Err(UpstreamSendError::CredentialAuthority(
+                "credential_release_authorization_expired_before_upstream_send",
+            ));
         }
         let result = client
             .execute(request)
@@ -13128,13 +13940,16 @@ fn send_upstream_request_with_current_lease_and_timeout(
 
 fn earliest_credential_lease_expiry_epoch_ms(state: &GateState) -> Option<u128> {
     let now = Instant::now();
+    let now_epoch_ms = now_epoch_ms();
     let leases = state
         .credential_leases
         .lock()
         .expect("credential lease mutex poisoned");
     leases
         .values()
-        .filter(|lease| lease.expires_at_monotonic > now)
+        .filter(|lease| {
+            lease.expires_at_epoch_ms > now_epoch_ms && lease.expires_at_monotonic > now
+        })
         .map(|lease| lease.expires_at_epoch_ms)
         .min()
 }
@@ -13196,47 +14011,62 @@ fn credential_lease_background_candidates(
     state: &GateState,
     snapshot: &Arc<Snapshot>,
     renew_before: Duration,
-) -> Vec<CredentialLeaseScope> {
+) -> Vec<CredentialLeaseBackgroundCandidate> {
     let now = Instant::now();
+    let now_epoch_ms = now_epoch_ms();
     let deadline = now.checked_add(renew_before).unwrap_or_else(Instant::now);
-    let scopes = policy_credential_lease_scopes(snapshot);
-    let policy_scopes = scopes.iter().cloned().collect::<HashSet<_>>();
+    let deadline_epoch_ms = now_epoch_ms.saturating_add(renew_before.as_millis());
+    let scopes = {
+        let mut activity = state
+            .credential_lease_activity
+            .lock()
+            .expect("credential lease activity mutex poisoned");
+        activity.retain(|scope, last_used| {
+            validate_credential_lease_scope(snapshot, scope).is_ok()
+                && now.saturating_duration_since(*last_used) <= CREDENTIAL_LEASE_HOT_WINDOW
+        });
+        activity.keys().cloned().collect::<Vec<_>>()
+    };
     let mut leases = state
         .credential_leases
         .lock()
         .expect("credential lease mutex poisoned");
+    leases.retain(|scope, lease| {
+        validate_credential_lease_scope(snapshot, scope).is_ok()
+            && credential_secret_lease_valid_after(lease, snapshot, now_epoch_ms, now)
+    });
     let generations = state
         .credential_generations
         .lock()
         .expect("credential generation mutex poisoned");
-    let mut activity = state
-        .credential_lease_activity
-        .lock()
-        .expect("credential lease activity mutex poisoned");
-    activity.retain(|scope, last_used| {
-        policy_scopes.contains(scope)
-            && now.saturating_duration_since(*last_used) <= CREDENTIAL_LEASE_HOT_WINDOW
-    });
     let mut candidates = Vec::new();
     for scope in scopes {
-        let generation_ready = generations
-            .get(&scope)
-            .is_some_and(|generation| generation.policy_hash == snapshot.hash);
+        let generation = generations.get(&scope);
+        let generation_ready = generation.is_some_and(|generation| {
+            credential_generation_valid_after(generation, snapshot, deadline_epoch_ms, deadline)
+        });
         if !generation_ready {
-            candidates.push(scope);
+            candidates.push(CredentialLeaseBackgroundCandidate {
+                scope,
+                purpose: CredentialLeasePurpose::GenerationMetadata,
+            });
             continue;
         }
-        if activity.contains_key(&scope) {
+        let jit_required = credential_scope_requires_jit(snapshot, &scope).unwrap_or(true);
+        if !jit_required {
+            let generation = generation.expect("ready credential generation must exist");
             if !leases.get(&scope).is_some_and(|lease| {
-                lease.policy_hash == snapshot.hash && lease.expires_at_monotonic > deadline
+                credential_secret_lease_valid_after(lease, snapshot, deadline_epoch_ms, deadline)
+                    && lease.release_authorization.is_none()
+                    && lease.version == generation.version
+                    && lease.metadata_sha256 == generation.metadata_sha256
+                    && lease.metadata == generation.metadata
             }) {
-                candidates.push(scope);
+                candidates.push(CredentialLeaseBackgroundCandidate {
+                    scope,
+                    purpose: CredentialLeasePurpose::DispatchSecret,
+                });
             }
-        } else if leases
-            .get(&scope)
-            .is_some_and(|lease| lease.expires_at_monotonic <= now)
-        {
-            leases.remove(&scope);
         }
     }
     candidates
@@ -13246,25 +14076,53 @@ fn active_credential_lease_background_candidates(
     state: &GateState,
     snapshot: &Arc<Snapshot>,
     renew_before: Duration,
-) -> Vec<CredentialLeaseScope> {
+) -> Vec<CredentialLeaseBackgroundCandidate> {
     if !snapshot_is_active(state, snapshot) {
         return Vec::new();
     }
     credential_lease_background_candidates(state, snapshot, renew_before)
 }
 
+fn credential_lease_hot_scope_count(state: &GateState, snapshot: &Arc<Snapshot>) -> usize {
+    let now = Instant::now();
+    state
+        .credential_lease_activity
+        .lock()
+        .expect("credential lease activity mutex poisoned")
+        .iter()
+        .filter(|(scope, last_used)| {
+            validate_credential_lease_scope(snapshot, scope).is_ok()
+                && now.saturating_duration_since(**last_used) <= CREDENTIAL_LEASE_HOT_WINDOW
+        })
+        .count()
+}
+
 fn credential_generations_ready(state: &GateState, snapshot: &Arc<Snapshot>) -> bool {
+    let now = Instant::now();
+    let now_epoch_ms = now_epoch_ms();
+    let scopes = {
+        let activity = state
+            .credential_lease_activity
+            .lock()
+            .expect("credential lease activity mutex poisoned");
+        activity
+            .iter()
+            .filter(|(scope, last_used)| {
+                validate_credential_lease_scope(snapshot, scope).is_ok()
+                    && now.saturating_duration_since(**last_used) <= CREDENTIAL_LEASE_HOT_WINDOW
+            })
+            .map(|(scope, _)| scope.clone())
+            .collect::<Vec<_>>()
+    };
     let generations = state
         .credential_generations
         .lock()
         .expect("credential generation mutex poisoned");
-    policy_credential_lease_scopes(snapshot)
-        .iter()
-        .all(|scope| {
-            generations
-                .get(scope)
-                .is_some_and(|generation| generation.policy_hash == snapshot.hash)
+    scopes.iter().all(|scope| {
+        generations.get(scope).is_some_and(|generation| {
+            credential_generation_valid_after(generation, snapshot, now_epoch_ms, now)
         })
+    })
 }
 
 fn start_credential_lease_renewal(
@@ -13297,10 +14155,12 @@ fn start_credential_lease_renewal(
                     key: task.key.clone(),
                 };
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    refresh_scoped_credential_lease_singleflight(
+                    refresh_scoped_credential_material_singleflight(
                         &worker_state,
                         &task.snapshot,
                         &task.key.scope,
+                        task.key.purpose,
+                        None,
                     )
                 }));
                 match result {
@@ -13322,12 +14182,17 @@ fn start_credential_lease_renewal(
         .name("credential-lease-renewal-coordinator".to_string())
         .spawn(move || loop {
             let snapshot = current_snapshot(&state);
-            for scope in active_credential_lease_background_candidates(
+            for candidate in active_credential_lease_background_candidates(
                 &state,
                 &snapshot,
                 CREDENTIAL_LEASE_RENEW_BEFORE,
             ) {
-                let key = CredentialLeaseGenerationKey::new(&snapshot, &scope);
+                let key = CredentialLeaseGenerationKey::new(
+                    &snapshot,
+                    &candidate.scope,
+                    candidate.purpose,
+                    None,
+                );
                 let inserted = state.credential_lease_url.is_some()
                     && pending
                         .lock()
@@ -16200,6 +17065,10 @@ impl<'a> ReleaseAuthorizationGuard<'a> {
     fn complete_forwarded(&mut self) -> Result<(), String> {
         self.complete("forwarded")
     }
+
+    fn complete_not_forwarded(&mut self) -> Result<(), String> {
+        self.complete("not_forwarded")
+    }
 }
 
 impl Drop for ReleaseAuthorizationGuard<'_> {
@@ -16756,8 +17625,7 @@ fn x_response_constraint_rewrite(url: &Url, operation: &str, route: &Route) -> V
 }
 
 fn npm_registry_path(url: &Url) -> String {
-    let decoded_path = decode_npm_scoped_name(url.path());
-    let path = decoded_path.trim_end_matches('/');
+    let path = url.path();
     if let Some(rest) = path.strip_prefix("/npm/") {
         return format!("/{rest}");
     }
@@ -16767,38 +17635,86 @@ fn npm_registry_path(url: &Url) -> String {
     path.to_string()
 }
 
-fn npm_operation(url: &Url, method: &str, body: &str) -> String {
+fn npm_package_segment(value: &str) -> bool {
+    if value.contains("%2f") {
+        return is_canonical_npm_scoped_segment(value);
+    }
+    !value.starts_with('@') && !value.contains('%') && valid_npm_package_part(value, false)
+}
+
+fn npm_operation(url: &Url, method: &str, body: &str) -> Result<&'static str, Value> {
     let method = method.to_ascii_uppercase();
     let path = npm_registry_path(url);
-    if method == "GET" || method == "HEAD" {
-        "read".to_string()
-    } else if path.starts_with("/-/npm/v1/tokens") || path.starts_with("/-/user/token") {
-        "tokenWrite".to_string()
-    } else if path.starts_with("/-/package/")
-        && (path.contains("/dist-tags/") || path.ends_with("/dist-tags"))
-    {
-        "distTagWrite".to_string()
-    } else if path.contains("/-rev/")
-        && !path.starts_with("/-/")
-        && (method == "PUT" || method == "DELETE")
-    {
-        "unpublish".to_string()
-    } else if path.starts_with("/-/npm/v1/user")
-        || path.starts_with("/-/package/")
-        || path.starts_with("/-/team/")
-        || path.starts_with("/-/org/")
-        || path.starts_with("/-/user/")
-        || (method == "PUT"
-            && strict_json_value_from_str(body)
-                .ok()
-                .and_then(|body| body.get("_rev").cloned())
-                .is_some())
-    {
-        "metadataWrite".to_string()
-    } else if method == "PUT" || method == "POST" {
-        "publish".to_string()
-    } else {
-        "metadataWrite".to_string()
+    if path != "/" && path.ends_with('/') {
+        return Err(json!({
+            "error":"npm_operation_unclassified",
+            "method":method,
+            "path":path,
+        }));
+    }
+    let segments = path
+        .trim_matches('/')
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    match (method.as_str(), segments.as_slice()) {
+        ("POST", ["-", "npm", "v1", "tokens"]) => Ok("tokenWrite"),
+        ("DELETE", ["-", "npm", "v1", "tokens", "token", token]) if !token.is_empty() => {
+            Ok("tokenWrite")
+        }
+        ("PUT" | "DELETE", ["-", "package", package, "dist-tags", tag])
+            if npm_package_segment(package) && !tag.is_empty() =>
+        {
+            Ok("distTagWrite")
+        }
+        ("DELETE", [package, "-rev", revision])
+            if npm_package_segment(package) && !revision.is_empty() =>
+        {
+            Ok("unpublish")
+        }
+        ("DELETE", [package, "-", tarball, "-rev", revision])
+            if npm_package_segment(package) && !tarball.is_empty() && !revision.is_empty() =>
+        {
+            Ok("unpublish")
+        }
+        ("POST", ["-", "package", package, "access"]) if npm_package_segment(package) => {
+            Ok("metadataWrite")
+        }
+        ("POST", ["-", "npm", "v1", "user"]) => Ok("metadataWrite"),
+        ("PUT" | "DELETE", ["-", "team", scope, team, "package"])
+            if !scope.is_empty() && !team.is_empty() =>
+        {
+            Ok("metadataWrite")
+        }
+        ("PUT", [package]) if npm_package_segment(package) => {
+            if body.trim().is_empty() {
+                return Err(json!({
+                    "error":"npm_operation_unclassified",
+                    "method":method,
+                    "path":path,
+                }));
+            }
+            let body = strict_json_value_from_str(body)
+                .map_err(|_| json!({"error":"npm_write_invalid_json"}))?;
+            let body = body
+                .as_object()
+                .ok_or_else(|| json!({"error":"npm_write_invalid_json"}))?;
+            if ["_attachments", "versions", "dist-tags", "tarball_integrity"]
+                .iter()
+                .any(|field| body.contains_key(*field))
+            {
+                Ok("publish")
+            } else if body.contains_key("_rev") {
+                Ok("metadataWrite")
+            } else {
+                Ok("publish")
+            }
+        }
+        _ => Err(json!({
+            "error":"npm_operation_unclassified",
+            "method":method,
+            "path":path,
+        })),
     }
 }
 
@@ -16808,7 +17724,7 @@ fn npm_operation_fields(
     params: &BTreeMap<String, String>,
     body: &str,
 ) -> Result<Value, Value> {
-    let operation = npm_operation(url, method, body);
+    let operation = npm_operation(url, method, body)?;
     let mut fields = Map::new();
     fields.insert(
         "operation".to_string(),
@@ -16827,17 +17743,41 @@ fn npm_operation_fields(
             Ok(Value::Object(body_json)) => Some(body_json),
             _ => {
                 return Err(json!({
-                    "error":"request_json_invalid",
-                    "status_code":400,
+                    "error":"npm_write_invalid_json",
+                    "status_code":403,
                 }))
             }
         }
     };
+    if (method.eq_ignore_ascii_case("PUT") || method.eq_ignore_ascii_case("POST"))
+        && body_json.is_none()
+    {
+        return Err(json!({"error":"npm_write_body_required"}));
+    }
+    if method.eq_ignore_ascii_case("DELETE") && body_json.is_some() {
+        return Err(json!({"error":"npm_delete_body_denied"}));
+    }
     if let Some(body_json) = body_json {
-        if operation == "publish" && body_json.get("_rev").is_some() {
-            return Err(json!({"error":"npm_publish_revision_denied"}));
+        if body_json.contains_key("_rev") {
+            let valid_revision = body_json
+                .get("_rev")
+                .and_then(Value::as_str)
+                .is_some_and(|revision| !revision.is_empty());
+            if !valid_revision {
+                return Err(json!({
+                    "error":if operation == "publish" {
+                        "npm_publish_revision_invalid"
+                    } else {
+                        "npm_metadata_revision_invalid"
+                    }
+                }));
+            }
         }
-        if let Some(package_name) = body_json.get("name").and_then(Value::as_str) {
+        let package_name = body_json.get("name").and_then(Value::as_str);
+        if operation == "publish" && package_name.is_none_or(str::is_empty) {
+            return Err(json!({"error":"npm_publish_package_missing"}));
+        }
+        if let Some(package_name) = package_name {
             if route_package
                 .as_deref()
                 .is_some_and(|route_package| route_package != package_name)
@@ -16912,36 +17852,10 @@ fn npm_operation_fields(
                         "document_version":declared_version,
                     }));
                 }
-                if let Some(integrity) = version_document
-                    .get("dist")
-                    .and_then(Value::as_object)
-                    .and_then(|dist| dist.get("integrity"))
-                    .and_then(Value::as_str)
-                {
-                    fields.insert(
-                        "tarballIntegrity".to_string(),
-                        Value::String(integrity.to_string()),
-                    );
-                } else if let Some(integrity) =
-                    version_document.get("_integrity").and_then(Value::as_str)
-                {
-                    fields.insert(
-                        "tarballIntegrity".to_string(),
-                        Value::String(integrity.to_string()),
-                    );
-                }
             }
             fields.insert("packageVersion".to_string(), Value::String(version));
         }
-        if !fields.contains_key("tarballIntegrity") {
-            if let Some(integrity) = body_json.get("tarball_integrity").and_then(Value::as_str) {
-                fields.insert(
-                    "tarballIntegrity".to_string(),
-                    Value::String(integrity.to_string()),
-                );
-            }
-        }
-        if operation == "publish" && !fields.contains_key("tarballIntegrity") {
+        if operation == "publish" {
             let attachments = body_json
                 .get("_attachments")
                 .and_then(Value::as_object)
@@ -16964,6 +17878,9 @@ fn npm_operation_fields(
             let decoded = general_purpose::STANDARD
                 .decode(encoded.as_bytes())
                 .map_err(|_| json!({"error":"npm_publish_attachment_invalid_base64"}))?;
+            if general_purpose::STANDARD.encode(&decoded) != encoded {
+                return Err(json!({"error":"npm_publish_attachment_invalid_base64"}));
+            }
             if decoded.len() > MAX_NPM_ATTACHMENT_BYTES {
                 return Err(json!({"error":"npm_publish_attachment_too_large"}));
             }
@@ -16976,12 +17893,51 @@ fn npm_operation_fields(
                 "sha512-{}",
                 general_purpose::STANDARD.encode(hasher.finalize())
             );
+            if let Some(length) = attachment.get("length") {
+                if length.as_u64() != u64::try_from(decoded.len()).ok() {
+                    return Err(json!({"error":"npm_publish_attachment_length_mismatch"}));
+                }
+            }
+            let version = fields
+                .get("packageVersion")
+                .and_then(Value::as_str)
+                .ok_or_else(|| json!({"error":"npm_publish_version_missing"}))?;
+            let version_document = body_json
+                .get("versions")
+                .and_then(Value::as_object)
+                .and_then(|versions| versions.get(version))
+                .and_then(Value::as_object)
+                .ok_or_else(|| json!({"error":"npm_publish_version_document_missing"}))?;
+            let mut declared_integrities = Vec::new();
+            if let Some(declared) = body_json.get("tarball_integrity") {
+                declared_integrities.push(declared);
+            }
+            if let Some(declared) = version_document
+                .get("dist")
+                .and_then(Value::as_object)
+                .and_then(|dist| dist.get("integrity"))
+            {
+                declared_integrities.push(declared);
+            }
+            if let Some(declared) = version_document.get("_integrity") {
+                declared_integrities.push(declared);
+            }
+            if declared_integrities.iter().any(|declared| {
+                declared
+                    .as_str()
+                    .is_none_or(|declared| !constant_time_eq(declared, &integrity))
+            }) {
+                return Err(json!({"error":"npm_publish_integrity_mismatch"}));
+            }
             fields.insert("tarballIntegrity".to_string(), Value::String(integrity));
             fields.insert(
                 "attachmentName".to_string(),
                 Value::String(attachment_name.clone()),
             );
-            fields.insert("attachmentBytes".to_string(), json!(decoded.len()));
+            fields.insert(
+                "attachmentBytes".to_string(),
+                Value::String(decoded.len().to_string()),
+            );
         }
     }
     Ok(Value::Object(fields))
@@ -17475,7 +18431,7 @@ fn validate_adapter(
             Ok((json!({"operation":operation}), rewrite))
         }
         "npm.registry" => {
-            let operation = npm_operation(url, &req.method, &req.body);
+            let operation = npm_operation(url, &req.method, &req.body)?;
             let allowed = config
                 .get("operations")
                 .and_then(Value::as_array)
@@ -17483,7 +18439,7 @@ fn validate_adapter(
                 .flatten()
                 .filter_map(Value::as_str)
                 .collect::<HashSet<_>>();
-            if !allowed.contains(operation.as_str()) {
+            if !allowed.contains(operation) {
                 return Err(json!({"error":"npm_operation_not_allowed","operation":operation}));
             }
             let fields = npm_operation_fields(url, &req.method, &route_match.params, &req.body)?;
@@ -18736,6 +19692,84 @@ fn enforce_request_time_window_at_ms(constraint: &Value, now_ms: i128) -> Result
 
 fn enforce_request_time_window(constraint: &Value) -> Result<(), Value> {
     enforce_request_time_window_at_ms(constraint, now_epoch_ms() as i128)
+}
+
+fn request_policy_deadline_epoch_ms(route: &Route, now_ms: u64) -> Result<Option<u64>, String> {
+    let now = OffsetDateTime::from_unix_timestamp_nanos(i128::from(now_ms) * 1_000_000)
+        .map_err(|_| "request policy deadline timestamp is outside the supported epoch")?;
+    let mut deadline = None;
+    let mut include = |candidate: u64| {
+        deadline = Some(
+            deadline
+                .map(|current: u64| current.min(candidate))
+                .unwrap_or(candidate),
+        );
+    };
+    for constraint in &route.constraints {
+        if constraint.get("type").and_then(Value::as_str) != Some("requestTimeWindow")
+            || !constraint_phase_includes(constraint, "request")
+        {
+            continue;
+        }
+        if let Some(not_after) = constraint.get("notAfter").and_then(Value::as_str) {
+            let parsed = parse_rfc3339_ms(not_after)
+                .and_then(|value| u64::try_from(value).ok())
+                .ok_or("request policy notAfter deadline is invalid")?;
+            include(parsed);
+        }
+        if constraint.get("weekdays").is_some() {
+            let next_midnight = now
+                .date()
+                .next_day()
+                .ok_or("request policy weekday deadline overflow")?
+                .midnight()
+                .assume_utc();
+            include(utc_epoch_ms(next_midnight)?);
+        }
+        if let Some(windows) = constraint.get("dailyWindows").and_then(Value::as_array) {
+            let minute = now.hour() as u16 * 60 + now.minute() as u16;
+            let end = windows
+                .iter()
+                .filter_map(|window| {
+                    let start = window
+                        .get("start")
+                        .and_then(Value::as_str)
+                        .and_then(parse_clock_minutes)?;
+                    let end = window
+                        .get("end")
+                        .and_then(Value::as_str)
+                        .and_then(parse_clock_minutes)?;
+                    (start <= minute && minute < end).then_some(end)
+                })
+                .min()
+                .ok_or("request policy daily window is no longer active")?;
+            let end_time =
+                now.date().midnight().assume_utc() + TimeDuration::minutes(i64::from(end));
+            include(utc_epoch_ms(end_time)?);
+        }
+    }
+    Ok(deadline)
+}
+
+fn policy_upstream_send_deadline(
+    snapshot: &Snapshot,
+    decision: &Value,
+    method: &str,
+    url: &Url,
+) -> Result<Option<u64>, String> {
+    let route_match =
+        decision_route_context(snapshot, decision, method, url).map_err(|payload| {
+            format!(
+                "request policy deadline route context is invalid: {}",
+                canonical_json(&payload)
+            )
+        })?;
+    let now_ms = u64::try_from(now_epoch_ms()).map_err(|_| "current epoch is outside u64")?;
+    let deadline = request_policy_deadline_epoch_ms(route_match.route, now_ms)?;
+    if deadline.is_some_and(|deadline| now_ms >= deadline) {
+        return Err("request policy deadline expired before upstream send".to_string());
+    }
+    Ok(deadline)
 }
 
 fn query_values(url: &Url, parameter: &str) -> Vec<String> {
@@ -20686,7 +21720,8 @@ fn decide_internal_with_mode(
     let has_response_binding = route.constraints.iter().any(|constraint| {
         constraint.get("type").and_then(Value::as_str) == Some("responseBinding")
     });
-    let preflight_request_semantics = has_response_binding
+    let preflight_request_semantics = route.adapter_type == "npm.registry"
+        || has_response_binding
         || route.constraints.iter().any(|constraint| {
             constraint.get("type").and_then(Value::as_str) == Some("requestValue")
         });
@@ -20759,18 +21794,41 @@ fn decide_internal_with_mode(
     } else {
         None
     };
+    let jit_required = route
+        .jit
+        .get("required")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let atomic_release = state.atomic_release_authorization_enabled && !preview;
     let credential_scope = credential_ref
         .as_ref()
         .map(|credential_id| CredentialLeaseScope::new(&principal.id, &route.id, credential_id));
+    if credential_scope.is_some() && jit_required && !preview && !atomic_release {
+        return deny_for_route(
+            503,
+            "credential-bearing JIT requires atomic release authorization",
+            json!({
+                "error":"credential_jit_requires_atomic_release_authorization",
+                "principal_id":principal.id,
+                "route_id":route.id,
+            }),
+            route,
+            started,
+        );
+    }
     let (credential_version, mut secret_available) = if let (Some(credential_id), Some(scope)) =
         (credential_ref.as_ref(), credential_scope.as_ref())
     {
-        let info = if preview || atomic_release {
-            peek_cached_credential_lease_info(state, snapshot, scope)
-                .ok_or_else(|| "credential generation is not cached".to_string())
+        let info = if preview {
+            ensure_scoped_credential_generation(state, snapshot, scope)
+        } else if atomic_release {
+            let result = ensure_scoped_credential_generation(state, snapshot, scope);
+            if result.is_ok() {
+                mark_credential_lease_activity(state, scope);
+            }
+            result
         } else {
-            ensure_scoped_credential_lease(state, snapshot, scope)
+            ensure_scoped_credential_lease(state, snapshot, scope, None)
         };
         match info {
             Ok(info) => {
@@ -20923,12 +21981,6 @@ fn decide_internal_with_mode(
             .cloned()
             .unwrap_or(Value::Null),
     });
-    let jit_required = route
-        .jit
-        .get("required")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-
     if preview {
         return with_enrollment_session_id(
             json!({
@@ -21149,10 +22201,43 @@ fn decide_internal_with_mode(
             dispatch_started_at_epoch_ms: None,
             dispatch_expires_at_epoch_ms: None,
         };
+        let credential_release_authorization = if jit_required {
+            match reservation.credential_lease_authorization() {
+                Ok(authorization) => Some(authorization),
+                Err(err) => {
+                    let _ = cancel_release_reservation(state, reservation);
+                    return add_decision_correlation(
+                        deny_for_route(
+                            409,
+                            "credential release authorization is invalid after reservation",
+                            json!({
+                                "error":"credential_release_authorization_invalid",
+                                "detail":err,
+                            }),
+                            route,
+                            started,
+                        ),
+                        &principal.id,
+                        &snapshot.hash,
+                        &request_digest,
+                        &operation_digest,
+                        &attempt_id,
+                        &operation,
+                    );
+                }
+            }
+        } else {
+            None
+        };
         if let (Some(credential_id), Some(scope)) =
             (credential_ref.as_ref(), credential_scope.as_ref())
         {
-            match ensure_scoped_credential_lease(state, snapshot, scope) {
+            match ensure_scoped_credential_lease(
+                state,
+                snapshot,
+                scope,
+                credential_release_authorization.as_ref(),
+            ) {
                 Ok(info) if info.version == credential_version => {
                     req.credential_metadata
                         .insert(credential_id.clone(), info.metadata);
@@ -22424,16 +23509,16 @@ enum GmailMetadataChildResult {
 fn gmail_metadata_child_timeout(
     config: GmailMetadataFetchConfig,
     total_deadline: Instant,
-    dispatch_expires_at_epoch_ms: Option<u64>,
+    upstream_send_deadlines: UpstreamSendDeadlines,
 ) -> Result<Duration, &'static str> {
     let remaining = total_deadline
         .checked_duration_since(Instant::now())
         .filter(|remaining| !remaining.is_zero())
         .ok_or("gmail_metadata_fetch_total_deadline_exhausted")?;
     let mut timeout = config.per_request_timeout.min(remaining);
-    if let Some(dispatch_expires_at_epoch_ms) = dispatch_expires_at_epoch_ms {
+    if let Some(upstream_deadline_epoch_ms) = upstream_send_deadlines.minimum_epoch_ms() {
         let now = now_epoch_ms();
-        let dispatch_remaining_ms = u128::from(dispatch_expires_at_epoch_ms)
+        let dispatch_remaining_ms = u128::from(upstream_deadline_epoch_ms)
             .checked_sub(now)
             .and_then(|remaining| u64::try_from(remaining).ok())
             .filter(|remaining| {
@@ -22487,7 +23572,7 @@ fn fetch_gmail_metadata_child(
     let timeout = match gmail_metadata_child_timeout(
         config,
         total_deadline,
-        execution.dispatch_expires_at_epoch_ms,
+        execution.upstream_send_deadlines,
     ) {
         Ok(timeout) => timeout,
         Err("gmail_metadata_fetch_release_authority_expired") => {
@@ -22581,6 +23666,7 @@ fn fetch_gmail_metadata_child(
         Some(&child_binding),
         builder,
         Some(timeout),
+        execution.upstream_send_deadlines,
         false,
     ) {
         Ok(response) => response,
@@ -27972,6 +29058,14 @@ fn forward_absolute_request_inner<'a>(
             json!({"error":"credential_lease_changed_before_release"}),
         ));
     }
+    let policy_expires_at_epoch_ms =
+        match policy_upstream_send_deadline(snapshot, &decision, &request_method, &upstream_url) {
+            Ok(deadline) => deadline,
+            Err(detail) => buffered!(json_status_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!({"error":"request_policy_deadline_invalid","detail":detail}),
+            )),
+        };
     let mut release_dispatch_observation = None;
     if let Some(release) = release_authorization.as_mut() {
         match release.dispatch(snapshot) {
@@ -27987,6 +29081,10 @@ fn forward_absolute_request_inner<'a>(
             }
         }
     }
+    let send_deadlines = upstream_send_deadlines(
+        policy_expires_at_epoch_ms,
+        release_dispatch_observation.as_ref(),
+    );
     let mut completed_response_proof_authorization = None;
     if response_proof_requires_authority || release_authorization.is_some() {
         let Some(release) = release_authorization.as_ref() else {
@@ -28028,6 +29126,7 @@ fn forward_absolute_request_inner<'a>(
         snapshot,
         credential_release_binding.as_ref(),
         builder,
+        send_deadlines,
         response_proof_requested,
     ) {
         Ok(response) => {
@@ -28040,6 +29139,14 @@ fn forward_absolute_request_inner<'a>(
         Err(UpstreamSendError::CredentialAuthority(error)) => {
             if let Some(observation) = response_observation.as_deref_mut() {
                 observation.response_path = "authorized-not-attempted";
+            }
+            if let Some(release) = release_authorization.as_mut() {
+                if let Err(detail) = release.complete_not_forwarded() {
+                    buffered!(json_status_response(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        json!({"error":"release_authorization_completion_failed","detail":detail}),
+                    ));
+                }
             }
             buffered!(json_status_response(
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -28125,12 +29232,10 @@ fn forward_absolute_request_inner<'a>(
     } else {
         (stream_writer, None)
     };
-    let gmail_metadata_fanout = gmail_metadata_list.then(|| GmailMetadataFanoutExecution {
+    let gmail_metadata_fanout = gmail_metadata_list.then_some(GmailMetadataFanoutExecution {
         parent_credential_binding: credential_release_binding.as_ref(),
         injection_plan,
-        dispatch_expires_at_epoch_ms: release_dispatch_observation
-            .as_ref()
-            .map(|observation| observation.dispatch_expires_at_epoch_ms),
+        upstream_send_deadlines: send_deadlines,
         prepared_upstream,
     });
     let mut gmail_proof_commit = None;
@@ -28461,23 +29566,46 @@ fn forward_absolute_streaming_request_to(
             json!({"error":"credential_lease_changed_before_release"}),
         ));
     }
+    let policy_expires_at_epoch_ms =
+        match policy_upstream_send_deadline(snapshot, &decision, &request_method, &upstream_url) {
+            Ok(deadline) => deadline,
+            Err(detail) => write_buffered!(json_status_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!({"error":"request_policy_deadline_invalid","detail":detail}),
+            )),
+        };
+    let mut release_dispatch_observation = None;
     if let Some(release) = release_authorization.as_mut() {
-        if let Err(err) = release.dispatch(snapshot) {
-            write_buffered!(json_status_response(
+        match release.dispatch(snapshot) {
+            Ok(observation) => release_dispatch_observation = Some(observation),
+            Err(err) => write_buffered!(json_status_response(
                 StatusCode::SERVICE_UNAVAILABLE,
                 json!({"error":"release_authorization_dispatch_transition_unknown","detail":err}),
-            ));
+            )),
         }
     }
+    let send_deadlines = upstream_send_deadlines(
+        policy_expires_at_epoch_ms,
+        release_dispatch_observation.as_ref(),
+    );
     let response = match send_upstream_request_with_current_lease(
         state,
         snapshot,
         credential_release_binding.as_ref(),
         builder,
+        send_deadlines,
         false,
     ) {
         Ok(response) => response,
         Err(UpstreamSendError::CredentialAuthority(error)) => {
+            if let Some(release) = release_authorization.as_mut() {
+                if let Err(detail) = release.complete_not_forwarded() {
+                    write_buffered!(json_status_response(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        json!({"error":"release_authorization_completion_failed","detail":detail}),
+                    ));
+                }
+            }
             write_buffered!(json_status_response(
                 StatusCode::SERVICE_UNAVAILABLE,
                 json!({"error":error}),
@@ -28890,28 +30018,45 @@ fn forward_intercepted_streaming_request_to<R: Read + Write + TerminalDeadlineWr
         .request(method, upstream_url.as_str())
         .headers(headers)
         .body(body);
+    let policy_expires_at_epoch_ms =
+        match policy_upstream_send_deadline(snapshot, &decision, &request_method, &upstream_url) {
+            Ok(deadline) => deadline,
+            Err(detail) => write_buffered!(json_status_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!({"error":"request_policy_deadline_invalid","detail":detail}),
+            )),
+        };
     let (ready_sender, ready_receiver) = mpsc::sync_channel::<()>(0);
-    let (start_sender, start_receiver) = mpsc::sync_channel::<()>(0);
+    let (start_sender, start_receiver) = mpsc::sync_channel::<UpstreamSendDeadlines>(0);
     let send_state = Arc::clone(state);
     let send_snapshot = Arc::clone(snapshot);
     let send_credential_release_binding = credential_release_binding.clone();
     let sender_thread = thread::spawn(move || {
-        ready_sender
-            .send(())
-            .map_err(|_| "upstream sender readiness channel closed".to_string())?;
-        start_receiver
-            .recv()
-            .map_err(|_| "upstream sender was cancelled before dispatch".to_string())?;
+        ready_sender.send(()).map_err(|_| {
+            (
+                false,
+                "upstream sender readiness channel closed".to_string(),
+            )
+        })?;
+        let send_deadlines = start_receiver.recv().map_err(|_| {
+            (
+                false,
+                "upstream sender was cancelled before dispatch".to_string(),
+            )
+        })?;
         send_upstream_request_with_current_lease(
             &send_state,
             &send_snapshot,
             send_credential_release_binding.as_ref(),
             builder,
+            send_deadlines,
             false,
         )
         .map_err(|error| match error {
-            UpstreamSendError::CredentialAuthority(error) => error.to_string(),
-            UpstreamSendError::RequestBuild(error) | UpstreamSendError::Request(error) => error,
+            UpstreamSendError::CredentialAuthority(error) => (true, error.to_string()),
+            UpstreamSendError::RequestBuild(error) | UpstreamSendError::Request(error) => {
+                (false, error)
+            }
         })
     });
     if ready_receiver.recv().is_err() {
@@ -28932,14 +30077,18 @@ fn forward_intercepted_streaming_request_to<R: Read + Write + TerminalDeadlineWr
             json!({"error":"credential_lease_changed_before_release"}),
         ));
     }
+    let mut release_dispatch_observation = None;
     if let Some(release) = release_authorization.as_mut() {
-        if let Err(err) = release.dispatch(snapshot) {
-            drop(start_sender);
-            let _ = sender_thread.join();
-            write_buffered!(json_status_response(
-                StatusCode::SERVICE_UNAVAILABLE,
-                json!({"error":"release_authorization_dispatch_transition_unknown","detail":err}),
-            ));
+        match release.dispatch(snapshot) {
+            Ok(observation) => release_dispatch_observation = Some(observation),
+            Err(err) => {
+                drop(start_sender);
+                let _ = sender_thread.join();
+                write_buffered!(json_status_response(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    json!({"error":"release_authorization_dispatch_transition_unknown","detail":err}),
+                ));
+            }
         }
     }
     if let Err(error) =
@@ -28952,7 +30101,11 @@ fn forward_intercepted_streaming_request_to<R: Read + Write + TerminalDeadlineWr
             json!({"error":error}),
         ));
     }
-    if start_sender.send(()).is_err() {
+    let send_deadlines = upstream_send_deadlines(
+        policy_expires_at_epoch_ms,
+        release_dispatch_observation.as_ref(),
+    );
+    if start_sender.send(send_deadlines).is_err() {
         let _ = sender_thread.join();
         write_buffered!(json_status_response(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -28968,7 +30121,7 @@ fn forward_intercepted_streaming_request_to<R: Read + Write + TerminalDeadlineWr
     );
     let response_result = sender_thread
         .join()
-        .map_err(|_| "upstream request thread panicked".to_string())
+        .map_err(|_| (false, "upstream request thread panicked".to_string()))
         .and_then(|result| result);
     let (body_sha256, body_bytes) = request_stream_stats_snapshot(&stats);
     let (response, response_error) = match response_result {
@@ -28983,7 +30136,19 @@ fn forward_intercepted_streaming_request_to<R: Read + Write + TerminalDeadlineWr
             }
             (Some(response), None)
         }
-        Err(err) => (None, Some(err)),
+        Err((authority_rejected, err)) => {
+            if authority_rejected {
+                if let Some(release) = release_authorization.as_mut() {
+                    if let Err(detail) = release.complete_not_forwarded() {
+                        write_buffered!(json_status_response(
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            json!({"error":"release_authorization_completion_failed","detail":detail}),
+                        ));
+                    }
+                }
+            }
+            (None, Some(err))
+        }
     };
     if let Err(err) = pump_result {
         enqueue_audit(
@@ -30479,6 +31644,9 @@ fn health_response(state: &GateState) -> Vec<u8> {
             "credential_leases":state.credential_leases.lock().expect("credential lease mutex poisoned").len(),
             "credential_generations":state.credential_generations.lock().expect("credential generation mutex poisoned").len(),
             "credential_generations_ready":credential_generations_ready(state, &snapshot),
+            "credential_generation_policy_scopes":policy_credential_lease_scopes(&snapshot).len(),
+            "credential_generation_hot_scopes":credential_lease_hot_scope_count(state, &snapshot),
+            "credential_generation_refresh_mode":"on-demand-singleflight-hot-background",
             "credential_lease_earliest_expiry_epoch_ms":earliest_credential_lease_expiry_epoch_ms(state),
             "credential_lease_protocol":"scoped-recipient-bound-pull/v2",
             "credential_lease_renewal":{
@@ -31019,11 +32187,127 @@ fn configure_control_plane_attestation_verifier(
     Ok(Some(ControlPlaneAttestationVerifier::Pinned(pinned)))
 }
 
-fn configured_service_token(name: &str) -> Option<String> {
-    env::var(name)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
+fn read_service_token_file(name: &str, file_name: &str, path: &Path) -> Result<String, String> {
+    if !path.is_absolute() {
+        return Err(format!("{file_name} for {name} must be an absolute path"));
+    }
+    let path_metadata = fs::symlink_metadata(path)
+        .map_err(|err| format!("inspect {file_name} for {name}: {err}"))?;
+    if path_metadata.file_type().is_symlink() {
+        return Err(format!("{file_name} for {name} must not be a symlink"));
+    }
+    if !path_metadata.file_type().is_file() {
+        return Err(format!("{file_name} for {name} must be a regular file"));
+    }
+
+    let mut file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
+        .open(path)
+        .map_err(|err| format!("open {file_name} for {name} without following symlinks: {err}"))?;
+    let before = file
+        .metadata()
+        .map_err(|err| format!("inspect opened {file_name} for {name}: {err}"))?;
+    if !before.file_type().is_file() {
+        return Err(format!("{file_name} for {name} must be a regular file"));
+    }
+    if path_metadata.dev() != before.dev() || path_metadata.ino() != before.ino() {
+        return Err(format!(
+            "{file_name} for {name} changed while it was opened"
+        ));
+    }
+    let mode = before.permissions().mode() & 0o7777;
+    if !matches!(mode, 0o400 | 0o600 | 0o440 | 0o640) {
+        return Err(format!(
+            "{file_name} for {name} must use mode 0400, 0600, 0440, or 0640"
+        ));
+    }
+    if before.len() == 0 || before.len() > MAX_INTERNAL_SERVICE_TOKEN_FILE_BYTES {
+        return Err(format!(
+            "{file_name} for {name} must contain 1-{MAX_INTERNAL_SERVICE_TOKEN_FILE_BYTES} bytes"
+        ));
+    }
+
+    let mut bytes = Vec::with_capacity(usize::try_from(before.len()).unwrap_or(0));
+    Read::by_ref(&mut file)
+        .take(MAX_INTERNAL_SERVICE_TOKEN_FILE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|err| format!("read {file_name} for {name}: {err}"))?;
+    let after = file
+        .metadata()
+        .map_err(|err| format!("reinspect opened {file_name} for {name}: {err}"))?;
+    let path_metadata_after = fs::symlink_metadata(path)
+        .map_err(|err| format!("{file_name} for {name} changed while it was read: {err}"))?;
+    if bytes.len() as u64 != before.len()
+        || before.dev() != after.dev()
+        || before.ino() != after.ino()
+        || before.len() != after.len()
+        || before.mode() != after.mode()
+        || before.mtime() != after.mtime()
+        || before.mtime_nsec() != after.mtime_nsec()
+        || before.ctime() != after.ctime()
+        || before.ctime_nsec() != after.ctime_nsec()
+        || path_metadata_after.file_type().is_symlink()
+        || path_metadata_after.dev() != after.dev()
+        || path_metadata_after.ino() != after.ino()
+        || path_metadata_after.len() != after.len()
+        || path_metadata_after.mode() != after.mode()
+        || path_metadata_after.mtime() != after.mtime()
+        || path_metadata_after.mtime_nsec() != after.mtime_nsec()
+        || path_metadata_after.ctime() != after.ctime()
+        || path_metadata_after.ctime_nsec() != after.ctime_nsec()
+    {
+        return Err(format!("{file_name} for {name} changed while it was read"));
+    }
+
+    let token = String::from_utf8(bytes)
+        .map_err(|_| format!("{file_name} for {name} must contain valid UTF-8"))?;
+    if token.trim() != token {
+        return Err(format!(
+            "{file_name} for {name} must not contain surrounding whitespace"
+        ));
+    }
+    if token
+        .chars()
+        .any(|value| value.is_whitespace() || value.is_control())
+    {
+        return Err(format!(
+            "{file_name} for {name} must not contain whitespace or control characters"
+        ));
+    }
+    Ok(token)
+}
+
+fn configured_service_token_values(
+    name: &str,
+    environment_value: Option<OsString>,
+    file_value: Option<OsString>,
+) -> Result<Option<String>, String> {
+    let file_name = format!("{name}_FILE");
+    if environment_value.is_some() && file_value.is_some() {
+        return Err(format!(
+            "{name} and {file_name} are mutually exclusive, including when either value is blank"
+        ));
+    }
+    if let Some(value) = environment_value {
+        let value = value
+            .into_string()
+            .map_err(|_| format!("{name} must contain valid UTF-8"))?;
+        let value = value.trim().to_string();
+        return Ok((!value.is_empty()).then_some(value));
+    }
+    let Some(path) = file_value else {
+        return Ok(None);
+    };
+    if path.is_empty() {
+        return Err(format!("{file_name} must identify a token file"));
+    }
+    read_service_token_file(name, &file_name, Path::new(&path)).map(Some)
+}
+
+fn configured_service_token(name: &str) -> Result<Option<String>, String> {
+    let file_name = format!("{name}_FILE");
+    configured_service_token_values(name, env::var_os(name), env::var_os(file_name))
 }
 
 fn service_token_is_strong(token: &str) -> bool {
@@ -31038,8 +32322,23 @@ fn validate_internal_service_tokens(
         return Ok(());
     }
     for (name, token) in tokens {
-        let Some(token) = token.as_deref() else {
+        let Some(_) = token.as_deref() else {
             return Err(format!("production requires {name}"));
+        };
+    }
+    validate_configured_internal_service_tokens(is_production, tokens)
+}
+
+fn validate_configured_internal_service_tokens(
+    is_production: bool,
+    tokens: &[(&str, &Option<String>)],
+) -> Result<(), String> {
+    if !is_production {
+        return Ok(());
+    }
+    for (name, token) in tokens {
+        let Some(token) = token.as_deref() else {
+            continue;
         };
         if !service_token_is_strong(token) {
             return Err(format!(
@@ -31047,12 +32346,24 @@ fn validate_internal_service_tokens(
             ));
         }
     }
+    validate_distinct_internal_service_tokens(is_production, tokens)
+}
+
+fn validate_distinct_internal_service_tokens(
+    is_production: bool,
+    tokens: &[(&str, &Option<String>)],
+) -> Result<(), String> {
+    if !is_production {
+        return Ok(());
+    }
     for (index, (left_name, left_token)) in tokens.iter().enumerate() {
         for (right_name, right_token) in &tokens[index + 1..] {
-            if constant_time_eq(
-                left_token.as_deref().unwrap_or_default(),
-                right_token.as_deref().unwrap_or_default(),
-            ) {
+            let (Some(left_token), Some(right_token)) =
+                (left_token.as_deref(), right_token.as_deref())
+            else {
+                continue;
+            };
+            if constant_time_eq(left_token, right_token) {
                 return Err(format!(
                     "production requires distinct internal service credentials: {left_name} and {right_name}"
                 ));
@@ -31329,14 +32640,36 @@ fn main() -> Result<(), String> {
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
     let credential_lease_token =
-        configured_service_token("SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN");
-    let audit_token = configured_service_token("SERVERWARE_DATA_PLANE_AUDIT_TOKEN");
-    let grant_consume_token = configured_service_token("SERVERWARE_DATA_PLANE_GRANT_CONSUME_TOKEN");
+        configured_service_token("SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN")?;
+    let audit_token = configured_service_token("SERVERWARE_DATA_PLANE_AUDIT_TOKEN")?;
+    let grant_consume_token =
+        configured_service_token("SERVERWARE_DATA_PLANE_GRANT_CONSUME_TOKEN")?;
     let rate_limit_consume_token =
-        configured_service_token("SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN");
+        configured_service_token("SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN")?;
     let release_authorization_token =
-        configured_service_token("SERVERWARE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN");
-    let management_token = configured_service_token("SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN");
+        configured_service_token("SERVERWARE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN")?;
+    let management_token = configured_service_token("SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN")?;
+    let configured_tokens = [
+        (
+            "SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN",
+            &credential_lease_token,
+        ),
+        ("SERVERWARE_DATA_PLANE_AUDIT_TOKEN", &audit_token),
+        (
+            "SERVERWARE_DATA_PLANE_GRANT_CONSUME_TOKEN",
+            &grant_consume_token,
+        ),
+        (
+            "SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN",
+            &rate_limit_consume_token,
+        ),
+        (
+            "SERVERWARE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN",
+            &release_authorization_token,
+        ),
+        ("SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN", &management_token),
+    ];
+    validate_configured_internal_service_tokens(is_production, &configured_tokens)?;
     let mut required_tokens = vec![
         (
             "SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN",
@@ -31899,6 +33232,14 @@ mod tests {
             std::process::id(),
             NEXT_PATH.fetch_add(1, Ordering::Relaxed)
         ))
+    }
+
+    fn write_test_service_token_file(label: &str, contents: &[u8], mode: u32) -> PathBuf {
+        let path = test_temp_path(label);
+        fs::write(&path, contents).expect("write service token fixture");
+        fs::set_permissions(&path, fs::Permissions::from_mode(mode))
+            .expect("set service token fixture mode");
+        path
     }
 
     fn test_custody_socket_path(label: &str) -> PathBuf {
@@ -32820,6 +34161,41 @@ mod tests {
             response_proof_signing_key_id,
             response_proof_attestation_command: None,
             server_instance_id: None,
+        }
+    }
+
+    fn test_credential_generation(
+        snapshot: &Snapshot,
+        version: u64,
+        metadata: BTreeMap<String, Value>,
+    ) -> CredentialLeaseGeneration {
+        CredentialLeaseGeneration {
+            policy_hash: snapshot.hash.clone(),
+            version,
+            metadata_sha256: credential_lease_metadata_sha256(&metadata),
+            metadata,
+            expires_at_epoch_ms: now_epoch_ms() + 60_000,
+            expires_at_monotonic: Instant::now() + Duration::from_secs(60),
+        }
+    }
+
+    fn test_secret_lease(
+        snapshot: &Snapshot,
+        scope: CredentialLeaseScope,
+        version: u64,
+        secret: &str,
+        metadata: BTreeMap<String, Value>,
+    ) -> SecretLease {
+        SecretLease {
+            scope,
+            version,
+            secret: Zeroizing::new(secret.to_string()),
+            metadata_sha256: credential_lease_metadata_sha256(&metadata),
+            metadata,
+            policy_hash: snapshot.hash.clone(),
+            release_authorization: None,
+            expires_at_epoch_ms: now_epoch_ms() + 60_000,
+            expires_at_monotonic: Instant::now() + Duration::from_secs(60),
         }
     }
 
@@ -33790,12 +35166,11 @@ mod tests {
             .expect("credential generations")
             .insert(
                 scope,
-                CredentialLeaseGeneration {
-                    policy_hash: snapshot.hash.clone(),
-                    version: 7,
-                    secret_fingerprint: credential_secret_fingerprint("preview-secret"),
-                    metadata: BTreeMap::from([("account".to_string(), json!("preview"))]),
-                },
+                test_credential_generation(
+                    &snapshot,
+                    7,
+                    BTreeMap::from([("provider_subject".to_string(), json!("preview"))]),
+                ),
             );
         let decision = decide(
             &state,
@@ -33821,11 +35196,7 @@ mod tests {
             .credential_lease_activity
             .lock()
             .expect("credential lease activity")
-            .contains_key(&CredentialLeaseScope::new(
-                "agent:test",
-                "route:test",
-                "credential:test",
-            )));
+            .is_empty());
         assert_eq!(
             state
                 .credential_lease_refresh_success
@@ -33876,19 +35247,19 @@ mod tests {
         state.audit_url = Some("https://audit.invalid/events".to_string());
         state.audit_token = Some("audit-token".to_string());
         let scope = CredentialLeaseScope::new("agent:test", "route:test", "credential:test");
+        state
+            .credential_generations
+            .lock()
+            .expect("credential generations")
+            .insert(
+                scope.clone(),
+                test_credential_generation(&snapshot, 7, BTreeMap::new()),
+            );
         cache_scoped_credential_lease(
             &state,
             &snapshot,
             &scope,
-            SecretLease {
-                scope: scope.clone(),
-                version: 7,
-                secret: Zeroizing::new("not-json".to_string()),
-                metadata: BTreeMap::new(),
-                policy_hash: snapshot.hash.clone(),
-                expires_at_epoch_ms: now_epoch_ms().saturating_add(5_000),
-                expires_at_monotonic: Instant::now() + Duration::from_secs(5),
-            },
+            test_secret_lease(&snapshot, scope.clone(), 7, "not-json", BTreeMap::new()),
         )
         .expect("cache malformed injection fixture");
 
@@ -33967,10 +35338,13 @@ mod tests {
         let denied = decide_internal(&state, &snapshot, request(), Some("agent:test"));
         stop.store(1, Ordering::Relaxed);
         quota_server.join().expect("shared quota server");
-        assert_eq!(denied["payload"]["error"], "credential_injection_failed");
+        assert_eq!(
+            denied["payload"]["error"],
+            "credential_jit_requires_atomic_release_authorization"
+        );
         assert_eq!(
             *quota_consumption_flags.lock().expect("shared quota flags"),
-            vec![Some(false)]
+            Vec::<Option<bool>>::new()
         );
         assert_eq!(
             state
@@ -34016,12 +35390,7 @@ mod tests {
             .expect("credential generations")
             .insert(
                 scope,
-                CredentialLeaseGeneration {
-                    policy_hash: snapshot.hash.clone(),
-                    version: 7,
-                    secret_fingerprint: credential_secret_fingerprint("cold-secret"),
-                    metadata: BTreeMap::new(),
-                },
+                test_credential_generation(&snapshot, 7, BTreeMap::new()),
             );
 
         let grant = create_grant(
@@ -34075,12 +35444,7 @@ mod tests {
             .expect("credential generations")
             .insert(
                 CredentialLeaseScope::new("agent:test", "route:test", "credential:test"),
-                CredentialLeaseGeneration {
-                    policy_hash: snapshot.hash.clone(),
-                    version: 7,
-                    secret_fingerprint: credential_secret_fingerprint("cold-secret"),
-                    metadata: BTreeMap::new(),
-                },
+                test_credential_generation(&snapshot, 7, BTreeMap::new()),
             );
         (snapshot, state)
     }
@@ -34099,6 +35463,79 @@ mod tests {
             max_uses: 1,
             ttl_seconds: 3600,
         }
+    }
+
+    #[test]
+    fn atomic_request_generation_refresh_failure_precedes_release_authorization() {
+        let mut snapshot_value = (*test_snapshot(1)).clone();
+        snapshot_value.credentials.insert(
+            "credential:test".to_string(),
+            Credential {
+                provider: "generic".to_string(),
+                provider_subject: None,
+                injection: json!({"type":"bearer","header":"Authorization"}),
+            },
+        );
+        snapshot_value.routes[0].credential_ref = Some("credential:test".to_string());
+        snapshot_value.routes[0].jit = json!({"required":true});
+        let snapshot = Arc::new(snapshot_value);
+        let mut state = test_gate_state(Arc::clone(&snapshot));
+        state.atomic_release_authorization_enabled = true;
+
+        let release_listener =
+            TcpListener::bind("127.0.0.1:0").expect("release authorization listener");
+        release_listener
+            .set_nonblocking(true)
+            .expect("release listener nonblocking mode");
+        state.release_authorization_base_url = Some(format!(
+            "http://{}/api/data-plane/release-authorizations",
+            release_listener
+                .local_addr()
+                .expect("release listener address")
+        ));
+        state.release_authorization_token = Some("release-token".to_string());
+
+        let scope = CredentialLeaseScope::new("agent:test", "route:test", "credential:test");
+        let mut expired_generation = test_credential_generation(&snapshot, 7, BTreeMap::new());
+        expired_generation.expires_at_epoch_ms = now_epoch_ms().saturating_sub(1);
+        expired_generation.expires_at_monotonic = Instant::now()
+            .checked_sub(Duration::from_secs(1))
+            .expect("past instant");
+        state
+            .credential_generations
+            .lock()
+            .expect("credential generations")
+            .insert(scope, expired_generation);
+
+        let decision = decide_internal(
+            &state,
+            &snapshot,
+            correlated_test_decision_request("A_-0123456789abcdefghijk"),
+            Some("agent:test"),
+        );
+
+        assert_eq!(decision["status_code"], 503);
+        assert_eq!(
+            decision["payload"]["error"],
+            "credential_generation_missing"
+        );
+        assert!(decision["payload"]["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("credential lease URL is not configured")));
+        assert!(matches!(
+            release_listener.accept(),
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock
+        ));
+        assert!(state
+            .credential_leases
+            .lock()
+            .expect("credential leases")
+            .is_empty());
+        assert!(state
+            .credential_lease_activity
+            .lock()
+            .expect("credential lease activity")
+            .is_empty());
     }
 
     #[test]
@@ -34396,6 +35833,14 @@ mod tests {
     fn atomic_jit_denial_uses_canonical_request_and_surfaces_pending_approval() {
         let listener = TcpListener::bind("127.0.0.1:0").expect("release listener");
         let address = listener.local_addr().expect("release listener address");
+        let credential_listener =
+            TcpListener::bind("127.0.0.1:0").expect("credential lease listener");
+        credential_listener
+            .set_nonblocking(true)
+            .expect("credential lease nonblocking mode");
+        let credential_address = credential_listener
+            .local_addr()
+            .expect("credential lease listener address");
         let (payload_sender, payload_receiver) = mpsc::channel();
         let approval_expires_at = (OffsetDateTime::now_utc() + TimeDuration::minutes(5))
             .format(&Rfc3339)
@@ -34448,6 +35893,15 @@ mod tests {
 
         let mut snapshot_value = (*test_snapshot(1)).clone();
         snapshot_value.routes[0].jit = json!({"required":true});
+        snapshot_value.routes[0].credential_ref = Some("credential:test".to_string());
+        snapshot_value.credentials.insert(
+            "credential:test".to_string(),
+            Credential {
+                provider: "generic".to_string(),
+                provider_subject: None,
+                injection: json!({"type":"bearer"}),
+            },
+        );
         let snapshot = Arc::new(snapshot_value);
         let mut state = test_gate_state(Arc::clone(&snapshot));
         state.atomic_release_authorization_enabled = true;
@@ -34455,6 +35909,19 @@ mod tests {
             "http://{address}/api/data-plane/release-authorizations"
         ));
         state.release_authorization_token = Some("release-token".to_string());
+        state.credential_lease_url = Some(format!(
+            "http://{credential_address}/api/data-plane/credential-leases"
+        ));
+        state.credential_lease_token = Some("credential-token".to_string());
+        let scope = CredentialLeaseScope::new("agent:test", "route:test", "credential:test");
+        state
+            .credential_generations
+            .lock()
+            .expect("credential generations")
+            .insert(
+                scope,
+                test_credential_generation(&snapshot, 1, BTreeMap::new()),
+            );
 
         let decision = decide_internal(
             &state,
@@ -34501,6 +35968,274 @@ mod tests {
             json!({"host":"example.test"})
         );
         assert!(payload.get("redactedDisplay").is_none());
+        assert!(matches!(
+            credential_listener.accept(),
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock
+        ));
+        assert!(state
+            .credential_leases
+            .lock()
+            .expect("credential lease cache")
+            .is_empty());
+    }
+
+    #[test]
+    fn approved_identical_jit_retry_fetches_dispatch_secret_only_after_reservation() {
+        let release_listener = TcpListener::bind("127.0.0.1:0").expect("release listener");
+        let release_address = release_listener
+            .local_addr()
+            .expect("release listener address");
+        let credential_listener = TcpListener::bind("127.0.0.1:0").expect("credential listener");
+        let credential_address = credential_listener
+            .local_addr()
+            .expect("credential listener address");
+        let order = Arc::new(Mutex::new(Vec::new()));
+        let release_payloads = Arc::new(Mutex::new(Vec::new()));
+        let credential_payload = Arc::new(Mutex::new(None));
+        let approval_expires_at = (OffsetDateTime::now_utc() + TimeDuration::minutes(5))
+            .format(&Rfc3339)
+            .expect("approval expiry");
+        let reservation_expires_at = u64::try_from(now_epoch_ms()).expect("current epoch") + 5_000;
+
+        let release_order = Arc::clone(&order);
+        let captured_release_payloads = Arc::clone(&release_payloads);
+        let release_server = thread::spawn(move || {
+            for index in 0..3 {
+                let (mut stream, _) = release_listener.accept().expect("release request");
+                let head = read_request_head_from(&mut stream, None).expect("release request head");
+                let request = read_request_body_from_head(
+                    &mut stream,
+                    head,
+                    MAX_MANAGEMENT_REQUEST_BODY_BYTES,
+                )
+                .expect("release request body");
+                let payload =
+                    strict_json_value_from_slice(&request.body).expect("release request JSON");
+                let attempt_id = payload["attemptId"]
+                    .as_str()
+                    .expect("release attempt ID")
+                    .to_string();
+                captured_release_payloads
+                    .lock()
+                    .expect("release payloads")
+                    .push(payload.clone());
+                release_order
+                    .lock()
+                    .expect("request order")
+                    .push(match index {
+                        0 => "release-denied",
+                        1 => "release-reserved",
+                        _ => "release-cancelled",
+                    });
+                let body = if index == 0 {
+                    json!({
+                        "apiVersion":"serverware.releaseAuthorization/v1",
+                        "ok":true,
+                        "authorized":false,
+                        "state":"denied",
+                        "reason":"jit_grant_unavailable",
+                        "attemptId":attempt_id,
+                        "bindingDigest":format!("sha256:{}", "a".repeat(64)),
+                        "idempotentReplay":false,
+                        "grantId":null,
+                        "approvalRequestId":"approval:test",
+                        "approvalStatus":"pending",
+                        "approvalExpiresAt":approval_expires_at,
+                        "approvalCreated":true,
+                        "reservationExpiresAtEpochMs":null,
+                        "dispatchStartedAtEpochMs":null,
+                        "dispatchExpiresAtEpochMs":null,
+                        "completionOutcome":null,
+                        "retryAfterSeconds":1,
+                        "quotas":[],
+                        "store":{"backend":"postgres","ha":true},
+                    })
+                } else if index == 1 {
+                    json!({
+                        "apiVersion":"serverware.releaseAuthorization/v1",
+                        "ok":true,
+                        "authorized":true,
+                        "state":"reserved",
+                        "reason":"reserved",
+                        "attemptId":attempt_id,
+                        "bindingDigest":format!("sha256:{}", "b".repeat(64)),
+                        "idempotentReplay":false,
+                        "grantId":"grant:test",
+                        "approvalRequestId":"approval:test",
+                        "approvalStatus":null,
+                        "approvalExpiresAt":null,
+                        "approvalCreated":null,
+                        "reservationExpiresAtEpochMs":reservation_expires_at,
+                        "dispatchStartedAtEpochMs":null,
+                        "dispatchExpiresAtEpochMs":null,
+                        "completionOutcome":null,
+                        "retryAfterSeconds":0,
+                        "quotas":[],
+                        "store":{"backend":"postgres","ha":true},
+                    })
+                } else {
+                    assert_eq!(
+                        payload["bindingDigest"],
+                        format!("sha256:{}", "b".repeat(64))
+                    );
+                    assert_eq!(payload["outcome"], "not_forwarded");
+                    json!({
+                        "apiVersion":"serverware.releaseAuthorization/v1",
+                        "ok":true,
+                        "authorized":false,
+                        "state":"cancelled",
+                        "reason":"cancelled",
+                        "attemptId":attempt_id,
+                        "bindingDigest":format!("sha256:{}", "b".repeat(64)),
+                        "idempotentReplay":false,
+                        "grantId":"grant:test",
+                        "approvalRequestId":"approval:test",
+                        "approvalStatus":null,
+                        "approvalExpiresAt":null,
+                        "approvalCreated":null,
+                        "reservationExpiresAtEpochMs":reservation_expires_at,
+                        "dispatchStartedAtEpochMs":null,
+                        "dispatchExpiresAtEpochMs":null,
+                        "completionOutcome":"not_forwarded",
+                        "retryAfterSeconds":0,
+                        "quotas":[],
+                        "store":{"backend":"postgres","ha":true},
+                    })
+                };
+                stream
+                    .write_all(&http_response("200 OK", body))
+                    .expect("release response");
+            }
+        });
+
+        let response_signing_key = SigningKey::from_bytes(&[53u8; 32]);
+        let mut snapshot_value =
+            (*test_snapshot_with_control_plane_response_key(1, &response_signing_key)).clone();
+        snapshot_value.routes[0].jit = json!({"required":true});
+        snapshot_value.routes[0].credential_ref = Some("credential:test".to_string());
+        snapshot_value.credentials.insert(
+            "credential:test".to_string(),
+            Credential {
+                provider: "generic".to_string(),
+                provider_subject: None,
+                injection: json!({"type":"bearer"}),
+            },
+        );
+        let snapshot = Arc::new(snapshot_value);
+        let credential_order = Arc::clone(&order);
+        let captured_credential_payload = Arc::clone(&credential_payload);
+        let credential_snapshot = Arc::clone(&snapshot);
+        let credential_server = thread::spawn(move || {
+            let (mut stream, _) = credential_listener
+                .accept()
+                .expect("dispatch credential request");
+            let head = read_request_head_from(&mut stream, None).expect("credential request head");
+            let request =
+                read_request_body_from_head(&mut stream, head, MAX_CREDENTIAL_LEASE_RESPONSE_BYTES)
+                    .expect("credential request body");
+            let payload =
+                strict_json_value_from_slice(&request.body).expect("credential request JSON");
+            *captured_credential_payload
+                .lock()
+                .expect("credential payload") = Some(payload);
+            credential_order
+                .lock()
+                .expect("request order")
+                .push("credential-dispatch");
+            let response_nonce = request
+                .headers
+                .get("x-serverware-response-nonce")
+                .expect("credential response nonce");
+            let response = signed_control_plane_test_response(
+                &response_signing_key,
+                &credential_snapshot,
+                &request,
+                response_nonce,
+                u64::try_from(now_epoch_ms()).expect("response epoch"),
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!({"detail":"intentional dispatch fixture stop"}),
+            );
+            stream
+                .write_all(&response)
+                .expect("signed credential response");
+        });
+
+        let mut state = test_gate_state(Arc::clone(&snapshot));
+        state.atomic_release_authorization_enabled = true;
+        state.release_authorization_base_url = Some(format!(
+            "http://{release_address}/api/data-plane/release-authorizations"
+        ));
+        state.release_authorization_token = Some("release-token".to_string());
+        state.credential_lease_url = Some(format!(
+            "http://{credential_address}/api/data-plane/credential-leases"
+        ));
+        state.credential_lease_token = Some("credential-token".to_string());
+        let scope = CredentialLeaseScope::new("agent:test", "route:test", "credential:test");
+        let generation = test_credential_generation(&snapshot, 7, BTreeMap::new());
+        let generation_digest = generation.metadata_sha256.clone();
+        state
+            .credential_generations
+            .lock()
+            .expect("credential generations")
+            .insert(scope, generation);
+        let request = || correlated_test_decision_request("A_-0123456789abcdefghijk");
+
+        let denied = decide_internal(&state, &snapshot, request(), Some("agent:test"));
+        assert_eq!(denied["status_code"], 428);
+        assert_eq!(
+            *order.lock().expect("request order"),
+            vec!["release-denied"]
+        );
+        assert!(state
+            .credential_leases
+            .lock()
+            .expect("credential leases")
+            .is_empty());
+
+        let retry = decide_internal(&state, &snapshot, request(), Some("agent:test"));
+        assert_eq!(retry["status_code"], 503);
+        release_server.join().expect("release server");
+        credential_server.join().expect("credential server");
+        assert_eq!(
+            *order.lock().expect("request order"),
+            vec![
+                "release-denied",
+                "release-reserved",
+                "credential-dispatch",
+                "release-cancelled",
+            ]
+        );
+        let releases = release_payloads.lock().expect("release payloads");
+        assert_eq!(releases[0]["requestDigest"], releases[1]["requestDigest"]);
+        assert_eq!(
+            releases[0]["operationDigest"],
+            releases[1]["operationDigest"]
+        );
+        let credential = credential_payload
+            .lock()
+            .expect("credential payload")
+            .clone()
+            .expect("captured credential payload");
+        assert_eq!(
+            credential["apiVersion"],
+            "serverware.credentialLeaseRequest/v3"
+        );
+        assert_eq!(credential["purpose"], "dispatchSecret");
+        assert_eq!(credential["expectedCredentialVersion"], 7);
+        assert_eq!(credential["expectedMetadataSha256"], generation_digest);
+        assert_eq!(
+            credential["releaseAuthorization"]["attemptId"],
+            releases[1]["attemptId"]
+        );
+        assert_eq!(
+            credential["releaseAuthorization"]["bindingDigest"],
+            format!("sha256:{}", "b".repeat(64))
+        );
+        assert!(state
+            .credential_leases
+            .lock()
+            .expect("credential leases")
+            .is_empty());
     }
 
     #[test]
@@ -35419,6 +37154,71 @@ mod tests {
     }
 
     #[test]
+    fn dispatch_expiry_completion_records_not_forwarded() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("release listener");
+        let address = listener.local_addr().expect("release listener address");
+        let (payload_sender, payload_receiver) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let (mut stream, payload) = read_release_test_request(&listener);
+            payload_sender.send(payload).expect("capture completion");
+            stream
+                .write_all(&http_response(
+                    "200 OK",
+                    json!({
+                        "apiVersion":"serverware.releaseAuthorization/v1",
+                        "ok":true,
+                        "authorized":false,
+                        "state":"cancelled",
+                        "reason":"cancelled",
+                        "attemptId":"attempt-test",
+                        "bindingDigest":format!("sha256:{}", "a".repeat(64)),
+                        "idempotentReplay":false,
+                        "grantId":null,
+                        "approvalRequestId":null,
+                        "reservationExpiresAtEpochMs":1300,
+                        "dispatchStartedAtEpochMs":1100,
+                        "dispatchExpiresAtEpochMs":1200,
+                        "completionOutcome":"not_forwarded",
+                        "retryAfterSeconds":0,
+                        "quotas":[],
+                        "store":{"backend":"sqlite","ha":false},
+                    }),
+                ))
+                .expect("completion response");
+        });
+
+        let snapshot = test_snapshot(1);
+        let mut state = test_gate_state(Arc::clone(&snapshot));
+        state.release_authorization_base_url = Some(format!(
+            "http://{address}/api/data-plane/release-authorizations"
+        ));
+        state.release_authorization_token = Some("release-token".to_string());
+        let mut guard = ReleaseAuthorizationGuard {
+            state: &state,
+            reservation: ReleaseAuthorizationReservation {
+                attempt_id: "attempt-test".to_string(),
+                binding_digest: format!("sha256:{}", "a".repeat(64)),
+                grant_id: None,
+                approval_request_id: None,
+                reservation_expires_at_epoch_ms: Some(1300),
+                shared_quotas: Vec::new(),
+                dispatch_started_at_epoch_ms: Some(1100),
+                dispatch_expires_at_epoch_ms: Some(1200),
+            },
+            stage: ReleaseAuthorizationStage::Dispatching,
+        };
+        guard
+            .complete_not_forwarded()
+            .expect("known pre-connect expiry must cancel the reservation");
+        assert_eq!(guard.stage, ReleaseAuthorizationStage::Completed);
+        server.join().expect("release server");
+        assert_eq!(
+            payload_receiver.recv().expect("completion payload")["outcome"],
+            "not_forwarded"
+        );
+    }
+
+    #[test]
     fn dispatch_response_loss_completes_as_unknown() {
         let listener = TcpListener::bind("127.0.0.1:0").expect("release listener");
         let address = listener.local_addr().expect("release listener address");
@@ -35768,18 +37568,179 @@ mod tests {
     }
 
     #[test]
+    fn service_token_configuration_preserves_env_defaults_and_rejects_dual_sources() {
+        assert_eq!(
+            configured_service_token_values(
+                "SERVERWARE_DATA_PLANE_AUDIT_TOKEN",
+                Some(OsString::from("  development-token  ")),
+                None,
+            )
+            .expect("environment token"),
+            Some("development-token".to_string())
+        );
+        assert_eq!(
+            configured_service_token_values(
+                "SERVERWARE_DATA_PLANE_AUDIT_TOKEN",
+                Some(OsString::new()),
+                None,
+            )
+            .expect("blank environment token preserves the existing default"),
+            None
+        );
+        assert_eq!(
+            configured_service_token_values("SERVERWARE_DATA_PLANE_AUDIT_TOKEN", None, None,)
+                .expect("unconfigured token"),
+            None
+        );
+        assert!(configured_service_token_values(
+            "SERVERWARE_DATA_PLANE_AUDIT_TOKEN",
+            Some(OsString::new()),
+            Some(OsString::new()),
+        )
+        .expect_err("blank but present sources must remain mutually exclusive")
+        .contains("mutually exclusive"));
+        assert!(configured_service_token_values(
+            "SERVERWARE_DATA_PLANE_AUDIT_TOKEN",
+            None,
+            Some(OsString::new()),
+        )
+        .expect_err("blank token file path")
+        .contains("must identify"));
+        assert!(configured_service_token_values(
+            "SERVERWARE_DATA_PLANE_AUDIT_TOKEN",
+            None,
+            Some(OsString::from("relative-token-file")),
+        )
+        .expect_err("relative token file path")
+        .contains("absolute path"));
+    }
+
+    #[test]
+    fn service_token_file_accepts_secure_owner_and_group_readable_modes() {
+        for mode in [0o400, 0o600, 0o440, 0o640] {
+            let token = format!("audit-service-token-ABCDEFGHIJKLMNOPQRSTUVWXYZ-{mode:o}");
+            let path = write_test_service_token_file(
+                &format!("service-token-mode-{mode:o}"),
+                token.as_bytes(),
+                mode,
+            );
+            assert_eq!(
+                configured_service_token_values(
+                    "SERVERWARE_DATA_PLANE_AUDIT_TOKEN",
+                    None,
+                    Some(path.as_os_str().to_os_string()),
+                )
+                .expect("secure token file"),
+                Some(token)
+            );
+            fs::remove_file(path).expect("remove service token fixture");
+        }
+    }
+
+    #[test]
+    fn service_token_file_rejects_links_nonregular_files_size_modes_and_content() {
+        let target = write_test_service_token_file(
+            "service-token-symlink-target",
+            b"audit-service-token-ABCDEFGHIJKLMNOPQRSTUVWXYZ-01",
+            0o600,
+        );
+        let link = test_temp_path("service-token-symlink");
+        std::os::unix::fs::symlink(&target, &link).expect("create service token symlink");
+        assert!(configured_service_token_values(
+            "SERVERWARE_DATA_PLANE_AUDIT_TOKEN",
+            None,
+            Some(link.as_os_str().to_os_string()),
+        )
+        .expect_err("service token symlink")
+        .contains("must not be a symlink"));
+        fs::remove_file(link).expect("remove service token symlink");
+        fs::remove_file(target).expect("remove service token target");
+
+        let directory = test_temp_path("service-token-directory");
+        fs::create_dir(&directory).expect("create service token directory");
+        assert!(configured_service_token_values(
+            "SERVERWARE_DATA_PLANE_AUDIT_TOKEN",
+            None,
+            Some(directory.as_os_str().to_os_string()),
+        )
+        .expect_err("service token directory")
+        .contains("regular file"));
+        fs::remove_dir(directory).expect("remove service token directory");
+
+        let oversized = write_test_service_token_file(
+            "service-token-oversized",
+            &vec![b'a'; MAX_INTERNAL_SERVICE_TOKEN_FILE_BYTES as usize + 1],
+            0o600,
+        );
+        assert!(configured_service_token_values(
+            "SERVERWARE_DATA_PLANE_AUDIT_TOKEN",
+            None,
+            Some(oversized.as_os_str().to_os_string()),
+        )
+        .expect_err("oversized service token")
+        .contains("must contain"));
+        fs::remove_file(oversized).expect("remove oversized service token fixture");
+
+        for mode in [0o200, 0o444, 0o644, 0o700] {
+            let path = write_test_service_token_file(
+                &format!("service-token-insecure-mode-{mode:o}"),
+                b"audit-service-token-ABCDEFGHIJKLMNOPQRSTUVWXYZ-02",
+                mode,
+            );
+            assert!(
+                configured_service_token_values(
+                    "SERVERWARE_DATA_PLANE_AUDIT_TOKEN",
+                    None,
+                    Some(path.as_os_str().to_os_string()),
+                )
+                .is_err(),
+                "accepted service token mode {mode:o}"
+            );
+            fs::remove_file(path).expect("remove insecure service token fixture");
+        }
+
+        for (label, contents) in [
+            ("empty", b"".as_slice()),
+            ("leading-space", b" token".as_slice()),
+            ("trailing-space", b"token ".as_slice()),
+            ("embedded-newline", b"token\nsecond".as_slice()),
+            ("embedded-space", b"token second".as_slice()),
+            ("embedded-unicode-space", "token\u{2003}second".as_bytes()),
+            ("embedded-control", b"token\0second".as_slice()),
+        ] {
+            let path = write_test_service_token_file(
+                &format!("service-token-invalid-{label}"),
+                contents,
+                0o600,
+            );
+            assert!(
+                configured_service_token_values(
+                    "SERVERWARE_DATA_PLANE_AUDIT_TOKEN",
+                    None,
+                    Some(path.as_os_str().to_os_string()),
+                )
+                .is_err(),
+                "accepted invalid service token content {label}"
+            );
+            fs::remove_file(path).expect("remove invalid service token fixture");
+        }
+    }
+
+    #[test]
     fn internal_service_tokens_are_scoped_strong_and_distinct() {
         let credential_lease =
             Some("credential-lease-scope-ABCDEFGHIJKLMNOPQRSTUVWXYZ-01".to_string());
         let audit = Some("audit-ingest-scope-ABCDEFGHIJKLMNOPQRSTUVWXYZ-02".to_string());
         let grant = Some("grant-consume-scope-ABCDEFGHIJKLMNOPQRSTUVWXYZ-03".to_string());
         let rate_limit = Some("rate-limit-scope-ABCDEFGHIJKLMNOPQRSTUVWXYZ-04".to_string());
-        let management = Some("rust-management-scope-ABCDEFGHIJKLMNOPQRSTUVWXYZ-05".to_string());
+        let release = Some("release-authorization-scope-ABCDEFGHIJKLMNOPQRSTUVWXYZ-05".to_string());
+        let management = Some("rust-management-scope-ABCDEFGHIJKLMNOPQRSTUVWXYZ-06".to_string());
         let names_and_tokens = [
             ("credential", &credential_lease),
             ("audit", &audit),
             ("grant", &grant),
             ("rate-limit", &rate_limit),
+            ("release", &release),
             ("management", &management),
         ];
         validate_internal_service_tokens(true, &names_and_tokens)
@@ -35802,6 +37763,16 @@ mod tests {
         )
         .expect_err("equal production tokens")
         .contains("distinct"));
+        let optional_weak = Some("optional-but-weak".to_string());
+        assert!(validate_configured_internal_service_tokens(
+            true,
+            &[
+                ("credential", &credential_lease),
+                ("optional", &optional_weak)
+            ],
+        )
+        .expect_err("configured weak optional token")
+        .contains("high-entropy"));
     }
 
     #[test]
@@ -36058,15 +38029,14 @@ mod tests {
         let canonical_digest = digest_json(&json!({"headers":canonical}));
 
         let scope = CredentialLeaseScope::new("agent:test", "route:test", "credential:test");
-        let lease = SecretLease {
+        let mut lease = test_secret_lease(
+            &test_snapshot(1),
             scope,
-            version: 1,
-            secret: Zeroizing::new("upstream-secret".to_string()),
-            metadata: BTreeMap::new(),
-            policy_hash: "sha256:policy".to_string(),
-            expires_at_epoch_ms: now_epoch_ms() + 60_000,
-            expires_at_monotonic: Instant::now() + Duration::from_secs(60),
-        };
+            1,
+            "upstream-secret",
+            BTreeMap::new(),
+        );
+        lease.policy_hash = "sha256:policy".to_string();
         for adapter_type in SUPPORTED_ADAPTER_TYPES
             .iter()
             .copied()
@@ -36645,9 +38615,17 @@ mod tests {
     }
 
     #[test]
-    fn credential_lease_set_accepts_typed_oauth_metadata() {
+    fn credential_generation_set_accepts_typed_oauth_metadata_without_secret() {
+        let metadata = BTreeMap::from([
+            ("managed".to_string(), json!(true)),
+            ("expires_at_epoch_ms".to_string(), json!(1234)),
+            ("scopes".to_string(), json!(["gmail.readonly"])),
+        ]);
         let value = json!({
-            "apiVersion": "serverware.credentialLeaseSet/v2",
+            "apiVersion": "serverware.credentialLeaseSet/v3",
+            "purpose": "generationMetadata",
+            "requestBindingSha256": sha256_prefixed(b"request"),
+            "releaseAuthorization": null,
             "recipientKeyId": "sha256:recipient",
             "recipientNonce": "canonical-nonce",
             "policyHash": "sha256:policy",
@@ -36660,30 +38638,30 @@ mod tests {
             "credentials": [{
                 "credentialId": "google-oauth",
                 "credentialVersion": 7,
-                "secret": "{\"access_token\":\"secret\"}",
-                "metadata": {
-                    "managed": true,
-                    "expires_at_epoch_ms": 1234,
-                    "scopes": ["gmail.readonly"]
-                }
+                "metadataSha256": credential_lease_metadata_sha256(&metadata),
+                "metadata": metadata
             }]
         });
         let set: CredentialLeaseSet =
             serde_json::from_value(value).expect("typed metadata must parse");
-        assert_eq!(set.credentials[0].metadata["managed"], json!(true));
-        assert_eq!(
-            set.credentials[0].metadata["scopes"],
-            json!(["gmail.readonly"])
-        );
+        let CredentialLeaseEntry::GenerationMetadata(entry) = &set.credentials[0] else {
+            panic!("generation response must not deserialize as secret material");
+        };
+        assert_eq!(entry.metadata["managed"], json!(true));
+        assert_eq!(entry.metadata["scopes"], json!(["gmail.readonly"]));
     }
 
     #[test]
-    fn credential_lease_v2_request_binds_exact_scope() {
+    fn credential_lease_v3_request_binds_purpose_and_exact_scope() {
         let request = CredentialLeaseRequest {
-            api_version: "serverware.credentialLeaseRequest/v2".to_string(),
+            api_version: "serverware.credentialLeaseRequest/v3".to_string(),
+            purpose: CredentialLeasePurpose::GenerationMetadata,
             principal_id: "agent:test".to_string(),
             route_id: "route:test".to_string(),
             credential_id: "credential:test".to_string(),
+            expected_credential_version: None,
+            expected_metadata_sha256: None,
+            release_authorization: None,
             recipient_public_key: "public-key".to_string(),
             recipient_key_id: "sha256:recipient".to_string(),
             recipient_nonce: "nonce".to_string(),
@@ -36697,7 +38675,11 @@ mod tests {
             })),
         };
         let value = serde_json::to_value(request).expect("serialize lease request");
-        assert_eq!(value["apiVersion"], "serverware.credentialLeaseRequest/v2");
+        assert_eq!(value["apiVersion"], "serverware.credentialLeaseRequest/v3");
+        assert_eq!(value["purpose"], "generationMetadata");
+        assert!(value["expectedCredentialVersion"].is_null());
+        assert!(value["expectedMetadataSha256"].is_null());
+        assert!(value["releaseAuthorization"].is_null());
         assert_eq!(value["principalId"], "agent:test");
         assert_eq!(value["routeId"], "route:test");
         assert_eq!(value["credentialId"], "credential:test");
@@ -36708,7 +38690,7 @@ mod tests {
     }
 
     #[test]
-    fn credential_lease_v2_accepts_exactly_one_matching_credential() {
+    fn credential_lease_v3_accepts_one_matching_generation_and_rejects_mode_substitution() {
         let mut snapshot = (*test_snapshot(1)).clone();
         snapshot.credentials.insert(
             "credential:test".to_string(),
@@ -36719,28 +38701,45 @@ mod tests {
             },
         );
         let scope = CredentialLeaseScope::new("agent:test", "route:test", "credential:test");
-        let entry = |credential_id: &str| CredentialLeaseEntry {
-            credential_id: credential_id.to_string(),
-            credential_version: 7,
-            secret: Zeroizing::new("secret".to_string()),
-            metadata: BTreeMap::new(),
+        let entry = |credential_id: &str| {
+            let metadata = BTreeMap::new();
+            CredentialLeaseEntry::GenerationMetadata(CredentialLeaseGenerationEntry {
+                credential_id: credential_id.to_string(),
+                credential_version: 7,
+                metadata_sha256: credential_lease_metadata_sha256(&metadata),
+                metadata,
+            })
         };
-        assert!(
-            exactly_one_matching_credential(&snapshot, &scope, vec![entry("credential:test")])
-                .is_ok()
-        );
         assert!(exactly_one_matching_credential(
             &snapshot,
             &scope,
+            CredentialLeasePurpose::GenerationMetadata,
+            vec![entry("credential:test")]
+        )
+        .is_ok());
+        assert!(exactly_one_matching_credential(
+            &snapshot,
+            &scope,
+            CredentialLeasePurpose::GenerationMetadata,
             vec![entry("credential:test"), entry("credential:test")]
         )
         .is_err());
         assert!(exactly_one_matching_credential(
             &snapshot,
             &scope,
+            CredentialLeasePurpose::GenerationMetadata,
             vec![entry("credential:other")]
         )
         .is_err());
+        assert!(exactly_one_matching_credential(
+            &snapshot,
+            &scope,
+            CredentialLeasePurpose::DispatchSecret,
+            vec![entry("credential:test")]
+        )
+        .err()
+        .expect("generation material cannot substitute for dispatch secret")
+        .contains("purpose and material mismatch"));
     }
 
     #[test]
@@ -38586,6 +40585,129 @@ mod tests {
     }
 
     #[test]
+    fn npm_unknown_operation_precedes_credential_jit_quota_and_upstream_access() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("npm side-effect listener");
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking npm side-effect listener");
+        let address = listener.local_addr().expect("npm side-effect address");
+        let contact_count = Arc::new(AtomicU64::new(0));
+        let server_count = Arc::clone(&contact_count);
+        let server = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_millis(500);
+            while Instant::now() < deadline {
+                match listener.accept() {
+                    Ok(_) => {
+                        server_count.fetch_add(1, Ordering::Relaxed);
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(error) => panic!("accept npm side-effect request: {error}"),
+                }
+            }
+        });
+
+        let mut snapshot = (*test_snapshot(1)).clone();
+        snapshot.credentials.insert(
+            "credential:npm".to_string(),
+            Credential {
+                provider: "npm".to_string(),
+                provider_subject: None,
+                injection: json!({"type":"bearer"}),
+            },
+        );
+        let route = &mut snapshot.routes[0];
+        route.scheme = "http".to_string();
+        route.host = address.ip().to_string();
+        route.port = address.port();
+        route.methods = HashSet::from(["POST".to_string()]);
+        route.paths = vec![compile_template("/{package}").expect("npm package template")];
+        route.credential_ref = Some("credential:npm".to_string());
+        route.adapter_type = "npm.registry".to_string();
+        route.adapter_config = json!({
+            "request":provider_request_profile_json("npm.registry", None),
+            "operations":["publish","unpublish","distTagWrite","tokenWrite","metadataWrite"],
+            "response":{"mode":"json","maxBodyBytes":1024,"allowedFields":["ok"]}
+        });
+        route.jit = json!({"required":true,"ttlSeconds":30,"maxUses":1});
+        route.constraints = vec![json!({
+            "id":"npm-shared-quota",
+            "type":"rateLimit",
+            "max":1,
+            "windowSeconds":60,
+            "store":"shared"
+        })];
+        let snapshot = Arc::new(snapshot);
+        let mut state = test_gate_state(Arc::clone(&snapshot));
+        state.credential_lease_url = Some(format!("http://{address}/credential-leases"));
+        state.grant_consume_url = Some(format!("http://{address}/grants/consume"));
+        state.rate_limit_consume_url = Some(format!("http://{address}/rate-limits/consume"));
+
+        let result = forward_absolute_request_inner(
+            &state,
+            &snapshot,
+            IncomingRequest {
+                method: "POST".to_string(),
+                target: format!("http://{address}/package"),
+                headers: BTreeMap::from([(
+                    "content-type".to_string(),
+                    "application/json".to_string(),
+                )]),
+                body: b"{}".to_vec(),
+                client_ip: Some("127.0.0.1".to_string()),
+            },
+            Some("agent:test"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+        );
+        let ForwardResult::Buffered(response) = result else {
+            panic!("unknown npm operation unexpectedly streamed");
+        };
+        let response = String::from_utf8(response).expect("unknown npm denial response");
+        assert!(response.starts_with("HTTP/1.1 403"), "{response}");
+        assert!(
+            response.contains("npm_operation_unclassified"),
+            "{response}"
+        );
+        assert!(state
+            .credential_leases
+            .lock()
+            .expect("credential leases")
+            .is_empty());
+        assert!(state
+            .credential_generations
+            .lock()
+            .expect("credential generations")
+            .is_empty());
+        assert!(state.grants.lock().expect("grants").is_empty());
+        assert!(state
+            .constraint_rate_counters
+            .lock()
+            .expect("rate counters")
+            .is_empty());
+        assert_eq!(
+            state
+                .credential_lease_refresh_success
+                .load(Ordering::Relaxed),
+            0
+        );
+        assert_eq!(
+            state
+                .credential_lease_refresh_failed
+                .load(Ordering::Relaxed),
+            0
+        );
+        server.join().expect("npm side-effect server");
+        assert_eq!(contact_count.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
     fn request_value_without_response_binding_precedes_credential_access() {
         let listener = TcpListener::bind("127.0.0.1:0").expect("test upstream listener");
         listener
@@ -39268,23 +41390,24 @@ mod tests {
         let snapshot = Arc::new(snapshot_value);
         let state = test_gate_state(Arc::clone(&snapshot));
         let scope = CredentialLeaseScope::new("agent:test", "route:test", "credential");
+        state
+            .credential_generations
+            .lock()
+            .expect("credential generations")
+            .insert(
+                scope.clone(),
+                test_credential_generation(&snapshot, 1, BTreeMap::new()),
+            );
         state.credential_leases.lock().expect("lease cache").insert(
             scope.clone(),
-            SecretLease {
-                scope,
-                version: 1,
-                secret: Zeroizing::new("secret".to_string()),
-                metadata: BTreeMap::new(),
-                policy_hash: snapshot.hash.clone(),
-                expires_at_epoch_ms: now_epoch_ms() + 60_000,
-                expires_at_monotonic: Instant::now() + Duration::from_secs(60),
-            },
+            test_secret_lease(&snapshot, scope, 1, "secret", BTreeMap::new()),
         );
         let decision = json!({
             "principal_id":"agent:test",
             "route_id":"route:test",
             "policy_hash":snapshot.hash,
             "snapshot_epoch":snapshot.epoch,
+            "jit":{"required":false},
             "request_digest":"sha256:request",
             "operation_digest":"sha256:operation",
         });
@@ -39834,7 +41957,7 @@ mod tests {
         let execution = GmailMetadataFanoutExecution {
             parent_credential_binding: None,
             injection_plan: &injection,
-            dispatch_expires_at_epoch_ms: None,
+            upstream_send_deadlines: UpstreamSendDeadlines::default(),
             prepared_upstream: &prepared_upstream,
         };
         let error = hydrate_gmail_list_metadata(
@@ -39880,7 +42003,7 @@ mod tests {
         let execution = GmailMetadataFanoutExecution {
             parent_credential_binding: None,
             injection_plan: &injection,
-            dispatch_expires_at_epoch_ms: None,
+            upstream_send_deadlines: UpstreamSendDeadlines::default(),
             prepared_upstream: &prepared_upstream,
         };
         let error = hydrate_gmail_list_metadata(
@@ -39968,15 +42091,21 @@ mod tests {
         let mut state = test_gate_state(Arc::clone(&snapshot));
         state.upstream_resolver = resolver.clone();
         let scope = CredentialLeaseScope::new("agent:test", "route:test", "credential:test");
-        let lease = SecretLease {
-            scope: scope.clone(),
-            version: 7,
-            secret: Zeroizing::new("upstream-secret".to_string()),
-            metadata: BTreeMap::new(),
-            policy_hash: snapshot.hash.clone(),
-            expires_at_epoch_ms: now_epoch_ms() + 10_000,
-            expires_at_monotonic: Instant::now() + Duration::from_secs(10),
-        };
+        state
+            .credential_generations
+            .lock()
+            .expect("credential generations")
+            .insert(
+                scope.clone(),
+                test_credential_generation(&snapshot, 7, BTreeMap::new()),
+            );
+        let lease = test_secret_lease(
+            &snapshot,
+            scope.clone(),
+            7,
+            "upstream-secret",
+            BTreeMap::new(),
+        );
         let parent_binding = credential_lease_release_binding(&lease);
         cache_scoped_credential_lease(&state, &snapshot, &scope, lease)
             .expect("cache Gmail credential lease");
@@ -39985,7 +42114,7 @@ mod tests {
         let execution = GmailMetadataFanoutExecution {
             parent_credential_binding: Some(&parent_binding),
             injection_plan: &injection,
-            dispatch_expires_at_epoch_ms: None,
+            upstream_send_deadlines: UpstreamSendDeadlines::default(),
             prepared_upstream: &prepared_upstream,
         };
         let decision = json!({
@@ -39995,6 +42124,7 @@ mod tests {
             "snapshot_epoch":snapshot.epoch,
             "credential_ref":"credential:test",
             "credential_version":7,
+            "jit":{"required":false},
         });
         let parent_url = Url::parse(&format!("http://{address}/gmail/v1/users/me/messages"))
             .expect("parent URL");
@@ -40129,15 +42259,21 @@ mod tests {
         state.audit_url = Some(format!("http://{audit_address}/api/data-plane/audit"));
         state.audit_token = Some("audit-token".to_string());
         let scope = CredentialLeaseScope::new("agent:test", "route:test", "credential:test");
-        let lease = SecretLease {
-            scope: scope.clone(),
-            version: 7,
-            secret: Zeroizing::new("upstream-secret".to_string()),
-            metadata: BTreeMap::new(),
-            policy_hash: snapshot.hash.clone(),
-            expires_at_epoch_ms: now_epoch_ms() + 10_000,
-            expires_at_monotonic: Instant::now() + Duration::from_secs(10),
-        };
+        state
+            .credential_generations
+            .lock()
+            .expect("credential generations")
+            .insert(
+                scope.clone(),
+                test_credential_generation(&snapshot, 7, BTreeMap::new()),
+            );
+        let lease = test_secret_lease(
+            &snapshot,
+            scope.clone(),
+            7,
+            "upstream-secret",
+            BTreeMap::new(),
+        );
         let parent_binding = credential_lease_release_binding(&lease);
         cache_scoped_credential_lease(&state, &snapshot, &scope, lease)
             .expect("cache Gmail credential lease");
@@ -40148,6 +42284,7 @@ mod tests {
             "snapshot_epoch":snapshot.epoch,
             "credential_ref":"credential:test",
             "credential_version":7,
+            "jit":{"required":false},
             "request_digest":sha256_prefixed(b"parent-request"),
             "operation_digest":sha256_prefixed(b"parent-operation"),
             "attempt_id":sha256_prefixed(b"parent-attempt"),
@@ -40162,7 +42299,7 @@ mod tests {
         let execution = GmailMetadataFanoutExecution {
             parent_credential_binding: Some(&parent_binding),
             injection_plan: &injection,
-            dispatch_expires_at_epoch_ms: None,
+            upstream_send_deadlines: UpstreamSendDeadlines::default(),
             prepared_upstream: &prepared_upstream,
         };
         let parent_url = Url::parse(&format!(
@@ -40286,7 +42423,7 @@ mod tests {
         let execution = GmailMetadataFanoutExecution {
             parent_credential_binding: None,
             injection_plan: &injection,
-            dispatch_expires_at_epoch_ms: None,
+            upstream_send_deadlines: UpstreamSendDeadlines::default(),
             prepared_upstream: &prepared_upstream,
         };
         let body = serde_json::to_vec(&json!({
@@ -40583,6 +42720,7 @@ mod tests {
             "route_id":"route:test",
             "policy_hash":snapshot.hash,
             "snapshot_epoch":snapshot.epoch,
+            "jit":{"required":false},
             "request_digest":"sha256:request",
             "operation_digest":"sha256:operation"
         });
@@ -40869,7 +43007,7 @@ mod tests {
     }
 
     #[test]
-    fn policy_reload_retains_secret_semantic_floor_for_relevant_credential_ids() {
+    fn policy_reload_retains_metadata_generation_floor_for_relevant_credential_ids() {
         let suffix = format!("{}-{}", std::process::id(), now_epoch_ms());
         let policy_path = env::temp_dir().join(format!("serverware-policy-{suffix}.json"));
         let trust_path = env::temp_dir().join(format!("serverware-policy-key-{suffix}.pem"));
@@ -40909,6 +43047,8 @@ mod tests {
             CredentialLeaseScope::new("agent:test", "route:test", "credential:test");
         let removed_scope =
             CredentialLeaseScope::new("agent:test", "route:test", "credential:removed");
+        let stale_route_scope =
+            CredentialLeaseScope::new("agent:test", "route:removed", "credential:test");
         state
             .credential_generations
             .lock()
@@ -40916,21 +43056,19 @@ mod tests {
             .extend([
                 (
                     retained_scope.clone(),
-                    CredentialLeaseGeneration {
-                        policy_hash: previous.hash.clone(),
-                        version: 9,
-                        secret_fingerprint: credential_secret_fingerprint("stable-secret"),
-                        metadata: BTreeMap::from([("account".to_string(), json!("stable"))]),
-                    },
+                    test_credential_generation(
+                        &previous,
+                        9,
+                        BTreeMap::from([("provider_subject".to_string(), json!("stable"))]),
+                    ),
                 ),
                 (
                     removed_scope.clone(),
-                    CredentialLeaseGeneration {
-                        policy_hash: previous.hash.clone(),
-                        version: 4,
-                        secret_fingerprint: credential_secret_fingerprint("removed-secret"),
-                        metadata: BTreeMap::new(),
-                    },
+                    test_credential_generation(&previous, 4, BTreeMap::new()),
+                ),
+                (
+                    stale_route_scope.clone(),
+                    test_credential_generation(&previous, 5, BTreeMap::new()),
                 ),
             ]);
 
@@ -40944,26 +43082,29 @@ mod tests {
             .get(&retained_scope)
             .expect("relevant generation floor retained");
         assert_eq!(retained.version, 9);
+        assert_eq!(retained.metadata["provider_subject"], json!("stable"));
         assert_eq!(
-            retained.secret_fingerprint,
-            credential_secret_fingerprint("stable-secret")
+            retained.metadata_sha256,
+            credential_lease_metadata_sha256(&retained.metadata)
         );
         assert!(!generations.contains_key(&removed_scope));
+        assert!(!generations.contains_key(&stale_route_scope));
         drop(generations);
 
-        let changed_same_version = SecretLease {
-            scope: retained_scope.clone(),
-            version: 9,
-            secret: Zeroizing::new("changed-secret".to_string()),
-            metadata: BTreeMap::from([("account".to_string(), json!("stable"))]),
-            policy_hash: active.hash.clone(),
-            expires_at_epoch_ms: now_epoch_ms() + 60_000,
-            expires_at_monotonic: Instant::now() + Duration::from_secs(60),
-        };
+        let changed_same_version = test_credential_generation(
+            &active,
+            9,
+            BTreeMap::from([("provider_subject".to_string(), json!("changed"))]),
+        );
         assert_eq!(
-            cache_scoped_credential_lease(&state, &active, &retained_scope, changed_same_version,)
-                .expect_err("reload-retained floor must reject changed same-version secret"),
-            "credential lease semantics changed without a version increment"
+            cache_scoped_credential_generation(
+                &state,
+                &active,
+                &retained_scope,
+                changed_same_version,
+            )
+            .expect_err("reload-retained floor must reject changed same-version metadata"),
+            "credential metadata changed without a version increment"
         );
 
         fs::remove_file(policy_path).expect("remove candidate policy fixture");
@@ -41309,20 +43450,48 @@ mod tests {
     fn npm_publish_document_fields_are_approval_bound() {
         let url = Url::parse("https://registry.test/npm/@scope%2fpkg").expect("URL");
         let params = BTreeMap::from([("package".to_string(), "@scope%2fpkg".to_string())]);
+        let attachment = general_purpose::STANDARD.encode(b"tarball");
+        let mut hasher = Sha512::new();
+        hasher.update(b"tarball");
+        let expected_integrity = format!(
+            "sha512-{}",
+            general_purpose::STANDARD.encode(hasher.finalize())
+        );
         let fields = npm_operation_fields(
             &url,
             "PUT",
             &params,
-            r#"{
+            &json!({
                 "name":"@scope/pkg",
                 "dist-tags":{"latest":"1.2.3"},
-                "versions":{"1.2.3":{"version":"1.2.3","dist":{"integrity":"sha512-real"}}}
-            }"#,
+                "versions":{"1.2.3":{"version":"1.2.3","dist":{"integrity":expected_integrity.clone()}}},
+                "_attachments":{"pkg-1.2.3.tgz":{"data":attachment.clone(),"length":7}}
+            })
+            .to_string(),
         )
         .expect("real npm publish document");
         assert_eq!(fields["packageName"], "@scope/pkg");
         assert_eq!(fields["packageVersion"], "1.2.3");
-        assert_eq!(fields["tarballIntegrity"], "sha512-real");
+        assert_eq!(fields["tarballIntegrity"], expected_integrity);
+        assert_eq!(fields["attachmentName"], "pkg-1.2.3.tgz");
+        assert_eq!(fields["attachmentBytes"], "7");
+
+        let existing_publish = npm_operation_fields(
+            &url,
+            "PUT",
+            &params,
+            &json!({
+                "_rev":"42-existing",
+                "name":"@scope/pkg",
+                "dist-tags":{"latest":"1.2.3"},
+                "versions":{"1.2.3":{"version":"1.2.3","dist":{"integrity":expected_integrity.clone()}}},
+                "_attachments":{"pkg-1.2.3.tgz":{"data":attachment.clone(),"length":7}}
+            })
+            .to_string(),
+        )
+        .expect("existing-package publish must retain attachment verification");
+        assert_eq!(existing_publish["operation"], "npm.publish");
+        assert_eq!(existing_publish["tarballIntegrity"], expected_integrity);
 
         let attachment = general_purpose::STANDARD.encode(b"tarball");
         let fallback = npm_operation_fields(
@@ -41333,19 +43502,137 @@ mod tests {
                 "name":"@scope/pkg",
                 "dist-tags":{"latest":"1.2.3"},
                 "versions":{"1.2.3":{"version":"1.2.3","dist":{}}},
-                "_attachments":{"pkg-1.2.3.tgz":{"data":attachment}}
+                "_attachments":{"pkg-1.2.3.tgz":{"data":attachment.clone()}}
             })
             .to_string(),
         )
         .expect("bounded attachment fallback");
-        let mut hasher = Sha512::new();
-        hasher.update(b"tarball");
-        let expected_integrity = format!(
-            "sha512-{}",
-            general_purpose::STANDARD.encode(hasher.finalize())
-        );
         assert_eq!(fallback["tarballIntegrity"], expected_integrity);
-        assert_eq!(fallback["attachmentBytes"], 7);
+        assert_eq!(fallback["attachmentBytes"], "7");
+
+        let top_level_version = npm_operation_fields(
+            &url,
+            "PUT",
+            &params,
+            &json!({
+                "name":"@scope/pkg",
+                "version":"9.9.9",
+                "dist-tags":{"latest":"1.2.3"},
+                "versions":{"1.2.3":{"version":"1.2.3","dist":{}}},
+                "_attachments":{"pkg-1.2.3.tgz":{"data":attachment.clone()}}
+            })
+            .to_string(),
+        )
+        .expect("publish version must come from the sole version and latest tag");
+        assert_eq!(top_level_version["packageVersion"], "1.2.3");
+
+        for (name, expected_error) in [
+            (Value::Null, "npm_publish_package_missing"),
+            (json!(7), "npm_publish_package_missing"),
+            (json!("@scope/attacker"), "npm_publish_package_mismatch"),
+        ] {
+            let denied = npm_operation_fields(
+                &url,
+                "PUT",
+                &params,
+                &json!({
+                    "name":name,
+                    "dist-tags":{"latest":"1.2.3"},
+                    "versions":{"1.2.3":{"version":"1.2.3","dist":{}}},
+                    "_attachments":{"pkg-1.2.3.tgz":{"data":attachment.clone()}}
+                })
+                .to_string(),
+            )
+            .expect_err("invalid publish package identity must fail closed");
+            assert_eq!(denied["error"], expected_error);
+        }
+
+        for conflicting_document in [
+            json!({
+                "name":"@scope/pkg",
+                "tarball_integrity":"sha512-declared-not-uploaded",
+                "dist-tags":{"latest":"1.2.3"},
+                "versions":{"1.2.3":{"version":"1.2.3","dist":{}}},
+                "_attachments":{"pkg-1.2.3.tgz":{"data":attachment.clone()}}
+            }),
+            json!({
+                "name":"@scope/pkg",
+                "dist-tags":{"latest":"1.2.3"},
+                "versions":{"1.2.3":{"version":"1.2.3","dist":{"integrity":"sha512-declared-not-uploaded"}}},
+                "_attachments":{"pkg-1.2.3.tgz":{"data":attachment.clone()}}
+            }),
+            json!({
+                "name":"@scope/pkg",
+                "dist-tags":{"latest":"1.2.3"},
+                "versions":{"1.2.3":{"version":"1.2.3","dist":{},"_integrity":"sha512-declared-not-uploaded"}},
+                "_attachments":{"pkg-1.2.3.tgz":{"data":attachment.clone()}}
+            }),
+        ] {
+            let denied =
+                npm_operation_fields(&url, "PUT", &params, &conflicting_document.to_string())
+                    .expect_err("declared integrity must match exact attachment bytes");
+            assert_eq!(denied["error"], "npm_publish_integrity_mismatch");
+        }
+
+        for (document, expected_error) in [
+            (
+                json!({
+                    "name":"@scope/pkg",
+                    "dist-tags":{"latest":"1.2.3"},
+                    "versions":{"1.2.3":{"version":"1.2.3","dist":{}}}
+                }),
+                "npm_publish_attachment_missing",
+            ),
+            (
+                json!({
+                    "name":"@scope/pkg",
+                    "dist-tags":{"latest":"1.2.3"},
+                    "versions":{"1.2.3":{"version":"1.2.3","dist":{}}},
+                    "_attachments":{}
+                }),
+                "npm_publish_attachment_ambiguous",
+            ),
+            (
+                json!({
+                    "name":"@scope/pkg",
+                    "dist-tags":{"latest":"1.2.3"},
+                    "versions":{"1.2.3":{"version":"1.2.3","dist":{}}},
+                    "_attachments":{"pkg.tgz":{"data":"***"}}
+                }),
+                "npm_publish_attachment_invalid_base64",
+            ),
+            (
+                json!({
+                    "name":"@scope/pkg",
+                    "dist-tags":{"latest":"1.2.3"},
+                    "versions":{"1.2.3":{"version":"1.2.3","dist":{}}},
+                    "_attachments":{"pkg.tgz":{"data":"YR=="}}
+                }),
+                "npm_publish_attachment_invalid_base64",
+            ),
+            (
+                json!({
+                    "name":"@scope/pkg",
+                    "dist-tags":{"latest":"1.2.3"},
+                    "versions":{"1.2.3":{"version":"1.2.3","dist":{}}},
+                    "_attachments":{"pkg.tgz":{"data":""}}
+                }),
+                "npm_publish_attachment_empty",
+            ),
+            (
+                json!({
+                    "name":"@scope/pkg",
+                    "dist-tags":{"latest":"1.2.3"},
+                    "versions":{"1.2.3":{"version":"1.2.3","dist":{}}},
+                    "_attachments":{"pkg.tgz":{"data":attachment.clone(),"length":8}}
+                }),
+                "npm_publish_attachment_length_mismatch",
+            ),
+        ] {
+            let denied = npm_operation_fields(&url, "PUT", &params, &document.to_string())
+                .expect_err("invalid npm attachment must fail closed");
+            assert_eq!(denied["error"], expected_error);
+        }
 
         let extra_version = npm_operation_fields(
             &url,
@@ -41390,9 +43677,9 @@ mod tests {
                 "unpublish",
             ),
             (
-                "https://registry.test/npm/@scope%2fpkg/-rev/42-deadbeef",
-                "PUT",
-                r#"{"_rev":"42-deadbeef","name":"@scope/pkg","versions":{}}"#,
+                "https://registry.test/npm/@scope%2fpkg/-/pkg.tgz/-rev/42-deadbeef",
+                "DELETE",
+                "",
                 "unpublish",
             ),
             (
@@ -41428,15 +43715,128 @@ mod tests {
             (
                 "https://registry.test/npm/@scope%2fpkg",
                 "PUT",
-                r#"{"_rev":"42-deadbeef","name":"@scope/pkg","versions":{}}"#,
+                r#"{"_rev":"42-deadbeef","name":"@scope/pkg","description":"bounded metadata"}"#,
                 "metadataWrite",
             ),
         ] {
             let target = Url::parse(target).expect("npm operation URL");
-            assert_eq!(npm_operation(&target, method, body), expected);
+            assert_eq!(
+                npm_operation(&target, method, body).expect("known npm operation"),
+                expected
+            );
             let fields = npm_operation_fields(&target, method, &params, body)
                 .expect("known npm write operation fields");
             assert_eq!(fields["operation"], format!("npm.{expected}"));
+        }
+
+        for revision in [Value::Null, json!(false), json!(0), json!(""), json!({})] {
+            let body = json!({
+                "_rev":revision,
+                "name":"@scope/pkg",
+                "description":"bounded metadata"
+            })
+            .to_string();
+            assert_eq!(
+                npm_operation(&url, "PUT", &body).expect("_rev presence must classify"),
+                "metadataWrite"
+            );
+            let denied = npm_operation_fields(&url, "PUT", &params, &body)
+                .expect_err("invalid revision must fail without becoming publish");
+            assert_eq!(denied["error"], "npm_metadata_revision_invalid");
+        }
+
+        let revision_bearing_packument = json!({
+            "_rev":"42-existing",
+            "name":"@scope/pkg",
+            "dist-tags":{"latest":"1.2.3"},
+            "versions":{"1.2.3":{"version":"1.2.3","dist":{}}}
+        })
+        .to_string();
+        assert_eq!(
+            npm_operation(&url, "PUT", &revision_bearing_packument)
+                .expect("publish-bearing metadata must classify as publish"),
+            "publish"
+        );
+        let denied = npm_operation_fields(&url, "PUT", &params, &revision_bearing_packument)
+            .expect_err("revision-bearing publish without attachment must fail closed");
+        assert_eq!(denied["error"], "npm_publish_attachment_missing");
+
+        for (target, method, body) in [
+            (
+                "https://registry.test/npm/@scope%2fpkg",
+                "POST",
+                r#"{"name":"@scope/pkg"}"#,
+            ),
+            (
+                "https://registry.test/npm/@scope%2fpkg",
+                "PATCH",
+                r#"{"name":"@scope/pkg"}"#,
+            ),
+            ("https://registry.test/npm/arbitrary/path", "PUT", "{}"),
+            (
+                "https://registry.test/npm/-/package/@scope%2fpkg/dist-tags/next",
+                "POST",
+                "{}",
+            ),
+            ("https://registry.test/npm/-/npm/v1/tokens", "PUT", "{}"),
+            (
+                "https://registry.test/npm/-/package/@scope%2fpkg/access",
+                "DELETE",
+                "{}",
+            ),
+            (
+                "https://registry.test/npm/-/npm/v1/tokens-evil",
+                "PUT",
+                "{}",
+            ),
+            (
+                "https://registry.test/npm/-/package/@scope%2fpkg/dist-tags/next/extra",
+                "PUT",
+                "{}",
+            ),
+            (
+                "https://registry.test/npm/@scope%2fpkg/",
+                "PUT",
+                r#"{"name":"@scope/pkg"}"#,
+            ),
+            (
+                "https://registry.test/npm/-/user/token/token-key",
+                "DELETE",
+                "",
+            ),
+            (
+                "https://registry.test/npm/@scope%2fpkg/-rev/42-deadbeef",
+                "PUT",
+                r#"{"_rev":"42-deadbeef"}"#,
+            ),
+        ] {
+            let target = Url::parse(target).expect("unknown npm operation URL");
+            let denied = npm_operation(&target, method, body)
+                .expect_err("unknown npm operation must not inherit a write class");
+            assert_eq!(denied["error"], "npm_operation_unclassified");
+            let denied_fields = npm_operation_fields(&target, method, &params, body)
+                .expect_err("unknown npm operation fields must fail closed");
+            assert_eq!(denied_fields["error"], "npm_operation_unclassified");
+        }
+
+        for (target, method, body, expected_error) in [
+            (
+                "https://registry.test/npm/-/npm/v1/tokens",
+                "POST",
+                "",
+                "npm_write_body_required",
+            ),
+            (
+                "https://registry.test/npm/@scope%2fpkg/-rev/42-deadbeef",
+                "DELETE",
+                "{}",
+                "npm_delete_body_denied",
+            ),
+        ] {
+            let target = Url::parse(target).expect("npm body grammar URL");
+            let denied = npm_operation_fields(&target, method, &params, body)
+                .expect_err("npm operation body grammar must fail closed");
+            assert_eq!(denied["error"], expected_error);
         }
     }
 
@@ -46126,6 +48526,8 @@ mod tests {
             scope: CredentialLeaseScope::new("agent:test", "route:test", "credential:test"),
             version: 7,
             secret_fingerprint: credential_secret_fingerprint("secret"),
+            metadata_sha256: credential_lease_metadata_sha256(&BTreeMap::new()),
+            release_authorization: None,
             expires_at_monotonic: Instant::now() + Duration::from_secs(5),
         };
         let decision = json!({
@@ -46200,22 +48602,28 @@ mod tests {
         state.server_instance_id = Some("test-instance".to_string());
         let scope = CredentialLeaseScope::new("agent:test", "route:test", "credential:test");
         let expiry = Instant::now() + Duration::from_millis(40);
-        state.credential_leases.lock().expect("lease cache").insert(
-            scope.clone(),
-            SecretLease {
-                scope: scope.clone(),
-                version: 7,
-                secret: Zeroizing::new("secret".to_string()),
-                metadata: BTreeMap::new(),
-                policy_hash: snapshot.hash.clone(),
-                expires_at_epoch_ms: now_epoch_ms() + 40,
-                expires_at_monotonic: expiry,
-            },
-        );
+        let mut generation = test_credential_generation(&snapshot, 7, BTreeMap::new());
+        generation.expires_at_epoch_ms = now_epoch_ms() + 40;
+        generation.expires_at_monotonic = expiry;
+        state
+            .credential_generations
+            .lock()
+            .expect("credential generations")
+            .insert(scope.clone(), generation);
+        let mut lease = test_secret_lease(&snapshot, scope.clone(), 7, "secret", BTreeMap::new());
+        lease.expires_at_epoch_ms = now_epoch_ms() + 40;
+        lease.expires_at_monotonic = expiry;
+        state
+            .credential_leases
+            .lock()
+            .expect("lease cache")
+            .insert(scope.clone(), lease);
         let binding = CredentialLeaseReleaseBinding {
             scope,
             version: 7,
             secret_fingerprint: credential_secret_fingerprint("secret"),
+            metadata_sha256: credential_lease_metadata_sha256(&BTreeMap::new()),
+            release_authorization: None,
             expires_at_monotonic: expiry,
         };
         assert!(credential_lease_still_releasable(
@@ -46265,19 +48673,181 @@ mod tests {
         lifetime: Duration,
     ) -> CredentialLeaseReleaseBinding {
         let scope = CredentialLeaseScope::new("agent:test", "route:test", "credential:test");
-        let lease = SecretLease {
-            scope: scope.clone(),
-            version: 7,
-            secret: Zeroizing::new("upstream-secret".to_string()),
-            metadata: BTreeMap::new(),
-            policy_hash: snapshot.hash.clone(),
-            expires_at_epoch_ms: now_epoch_ms() + lifetime.as_millis(),
-            expires_at_monotonic: Instant::now() + lifetime,
-        };
+        let mut generation = test_credential_generation(snapshot, 7, BTreeMap::new());
+        generation.expires_at_epoch_ms = now_epoch_ms() + lifetime.as_millis();
+        generation.expires_at_monotonic = Instant::now() + lifetime;
+        state
+            .credential_generations
+            .lock()
+            .expect("credential generations")
+            .insert(scope.clone(), generation);
+        let mut lease = test_secret_lease(
+            snapshot,
+            scope.clone(),
+            7,
+            "upstream-secret",
+            BTreeMap::new(),
+        );
+        lease.expires_at_epoch_ms = now_epoch_ms() + lifetime.as_millis();
+        lease.expires_at_monotonic = Instant::now() + lifetime;
         let binding = credential_lease_release_binding(&lease);
         cache_scoped_credential_lease(state, snapshot, &scope, lease)
             .expect("cache test credential lease generation");
         binding
+    }
+
+    #[test]
+    fn upstream_send_deadline_uses_the_minimum_live_boundary() {
+        let now_ms = 10_000_u128;
+        let cases = [
+            (
+                UpstreamSendDeadlines {
+                    reservation_expires_at_epoch_ms: Some(10_300),
+                    dispatch_expires_at_epoch_ms: Some(10_100),
+                    policy_expires_at_epoch_ms: Some(10_200),
+                },
+                Duration::from_millis(100),
+            ),
+            (
+                UpstreamSendDeadlines {
+                    reservation_expires_at_epoch_ms: Some(10_100),
+                    dispatch_expires_at_epoch_ms: Some(10_300),
+                    policy_expires_at_epoch_ms: Some(10_200),
+                },
+                Duration::from_millis(100),
+            ),
+            (
+                UpstreamSendDeadlines {
+                    reservation_expires_at_epoch_ms: Some(10_300),
+                    dispatch_expires_at_epoch_ms: Some(10_200),
+                    policy_expires_at_epoch_ms: Some(10_100),
+                },
+                Duration::from_millis(100),
+            ),
+        ];
+        for (deadlines, expected) in cases {
+            assert_eq!(
+                upstream_send_deadline_timeout_at(deadlines, now_ms),
+                Ok(Some(expected))
+            );
+            assert_eq!(
+                upstream_send_deadline_timeout_at(
+                    deadlines,
+                    u128::from(deadlines.minimum_epoch_ms().expect("minimum deadline")),
+                ),
+                Err("upstream_send_authority_expired"),
+                "the minimum deadline is exclusive"
+            );
+        }
+        assert_eq!(
+            upstream_send_deadline_timeout_at(UpstreamSendDeadlines::default(), now_ms),
+            Ok(None)
+        );
+    }
+
+    #[test]
+    fn request_policy_deadline_uses_the_active_window_end() {
+        let mut route = test_snapshot(1).routes[0].clone();
+        route.constraints = vec![json!({
+            "id":"bounded-send-window",
+            "type":"requestTimeWindow",
+            "timezone":"UTC",
+            "notAfter":"2026-07-27T13:00:00Z",
+            "dailyWindows":[{"start":"12:00","end":"12:15"}],
+        })];
+        let now_ms = u64::try_from(
+            parse_rfc3339_ms("2026-07-27T12:05:00Z").expect("fixed policy timestamp"),
+        )
+        .expect("fixed policy timestamp fits u64");
+        let expected =
+            u64::try_from(parse_rfc3339_ms("2026-07-27T12:15:00Z").expect("fixed policy deadline"))
+                .expect("fixed policy deadline fits u64");
+        assert_eq!(
+            request_policy_deadline_epoch_ms(&route, now_ms),
+            Ok(Some(expected))
+        );
+        assert!(request_policy_deadline_epoch_ms(&route, expected)
+            .expect_err("the active daily window end is exclusive")
+            .contains("no longer active"));
+    }
+
+    #[test]
+    fn buffered_proof_wait_rejects_expired_dispatch_without_target_connection() {
+        let snapshot = test_snapshot(1);
+        let mut state = test_gate_state(Arc::clone(&snapshot));
+        state.response_proof_signer =
+            test_custody_response_proof_signer(sha256_prefixed(b"control-plane-response-spki"));
+        let state = Arc::new(state);
+        let ResponseProofSigner::Custody(signer) = &state.response_proof_signer else {
+            panic!("custody signer");
+        };
+        let blocking_transition = signer.health.begin_health_transition();
+        let listener = TcpListener::bind("127.0.0.1:0").expect("proof upstream listener");
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking proof upstream listener");
+        let address = listener.local_addr().expect("proof upstream address");
+        let dispatch_expires_at_epoch_ms =
+            u64::try_from(now_epoch_ms()).expect("current epoch fits u64") + 100;
+        let worker_state = Arc::clone(&state);
+        let worker_snapshot = Arc::clone(&snapshot);
+        let send = thread::spawn(move || {
+            let builder = test_upstream_client().get(format!("http://{address}/resource"));
+            send_upstream_request_with_current_lease(
+                &worker_state,
+                &worker_snapshot,
+                None,
+                builder,
+                UpstreamSendDeadlines {
+                    reservation_expires_at_epoch_ms: Some(dispatch_expires_at_epoch_ms + 10_000),
+                    dispatch_expires_at_epoch_ms: Some(dispatch_expires_at_epoch_ms),
+                    policy_expires_at_epoch_ms: Some(dispatch_expires_at_epoch_ms + 20_000),
+                },
+                true,
+            )
+        });
+        for _ in 0..1_000 {
+            if signer
+                .health
+                .dispatch_coordination
+                .lock()
+                .expect("custody dispatch coordination")
+                .waiting_dispatches
+                == 1
+            {
+                break;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(
+            signer
+                .health
+                .dispatch_coordination
+                .lock()
+                .expect("custody dispatch coordination")
+                .waiting_dispatches,
+            1,
+            "the sender must block before final send authority"
+        );
+        while now_epoch_ms() < u128::from(dispatch_expires_at_epoch_ms) {
+            thread::sleep(Duration::from_millis(1));
+        }
+        drop(blocking_transition);
+        let error = send
+            .join()
+            .expect("buffered proof send worker")
+            .expect_err("expired dispatch authority must fail before target connection");
+        assert!(matches!(
+            error,
+            UpstreamSendError::CredentialAuthority("upstream_send_authority_expired")
+        ));
+        assert_eq!(
+            listener
+                .accept()
+                .expect_err("expired dispatch authority must not contact target")
+                .kind(),
+            io::ErrorKind::WouldBlock
+        );
     }
 
     #[test]
@@ -46301,6 +48871,7 @@ mod tests {
             &snapshot,
             Some(&binding),
             builder,
+            UpstreamSendDeadlines::default(),
             false,
         )
         .expect_err("lease expiring during dispatch must block buffered send");
@@ -46337,9 +48908,15 @@ mod tests {
             .expect("nonblocking proof upstream listener");
         let address = listener.local_addr().expect("proof upstream address");
         let builder = test_upstream_client().get(format!("http://{address}/resource"));
-        let error =
-            send_upstream_request_with_current_lease(&state, &snapshot, None, builder, true)
-                .expect_err("unhealthy custody must block the final upstream send");
+        let error = send_upstream_request_with_current_lease(
+            &state,
+            &snapshot,
+            None,
+            builder,
+            UpstreamSendDeadlines::default(),
+            true,
+        )
+        .expect_err("unhealthy custody must block the final upstream send");
         assert!(matches!(
             error,
             UpstreamSendError::CredentialAuthority("response_proof_unavailable")
@@ -46409,6 +48986,7 @@ mod tests {
                 &worker_snapshot,
                 Some(&worker_binding),
                 builder,
+                UpstreamSendDeadlines::default(),
                 true,
             )
         });
@@ -46484,6 +49062,7 @@ mod tests {
                 &worker_snapshot,
                 None,
                 builder,
+                UpstreamSendDeadlines::default(),
                 true,
             )
         });
@@ -46559,6 +49138,7 @@ mod tests {
                 &worker_snapshot,
                 None,
                 builder,
+                UpstreamSendDeadlines::default(),
                 true,
             )
         });
@@ -46640,6 +49220,7 @@ mod tests {
             &snapshot,
             Some(&binding),
             builder,
+            UpstreamSendDeadlines::default(),
             false,
         )
         .expect_err("lease revoked during dispatch must block streaming send");
@@ -46662,15 +49243,15 @@ mod tests {
         let state = test_gate_state(Arc::clone(&snapshot));
         let binding =
             cache_test_credential_lease_for_send(&state, &snapshot, Duration::from_millis(800));
-        let renewed = SecretLease {
-            scope: binding.scope.clone(),
-            version: binding.version,
-            secret: Zeroizing::new("upstream-secret".to_string()),
-            metadata: BTreeMap::new(),
-            policy_hash: snapshot.hash.clone(),
-            expires_at_epoch_ms: now_epoch_ms() + 5_000,
-            expires_at_monotonic: Instant::now() + Duration::from_secs(5),
-        };
+        let mut renewed = test_secret_lease(
+            &snapshot,
+            binding.scope.clone(),
+            binding.version,
+            "upstream-secret",
+            BTreeMap::new(),
+        );
+        renewed.expires_at_epoch_ms = now_epoch_ms() + 5_000;
+        renewed.expires_at_monotonic = Instant::now() + Duration::from_secs(5);
         cache_scoped_credential_lease(&state, &snapshot, &binding.scope, renewed)
             .expect("renew same credential generation");
 
@@ -47046,6 +49627,7 @@ mod tests {
                 &send_snapshot,
                 Some(&send_binding),
                 builder,
+                UpstreamSendDeadlines::default(),
                 false,
             )
         });
@@ -47059,15 +49641,20 @@ mod tests {
         let rotation_version = binding.version + 1;
         let (rotation_done_tx, rotation_done_rx) = mpsc::sync_channel(0);
         let rotation = thread::spawn(move || {
-            let lease = SecretLease {
-                scope: rotation_scope.clone(),
-                version: rotation_version,
-                secret: Zeroizing::new("rotated-upstream-secret".to_string()),
-                metadata: BTreeMap::new(),
-                policy_hash: rotation_snapshot.hash.clone(),
-                expires_at_epoch_ms: now_epoch_ms() + 5_000,
-                expires_at_monotonic: Instant::now() + Duration::from_secs(5),
-            };
+            cache_scoped_credential_generation(
+                &rotation_state,
+                &rotation_snapshot,
+                &rotation_scope,
+                test_credential_generation(&rotation_snapshot, rotation_version, BTreeMap::new()),
+            )
+            .expect("rotate credential generation after send");
+            let lease = test_secret_lease(
+                &rotation_snapshot,
+                rotation_scope.clone(),
+                rotation_version,
+                "rotated-upstream-secret",
+                BTreeMap::new(),
+            );
             cache_scoped_credential_lease(
                 &rotation_state,
                 &rotation_snapshot,
@@ -47136,15 +49723,21 @@ mod tests {
         let current = test_snapshot(2);
         let state = test_gate_state(Arc::clone(&current));
         let scope = CredentialLeaseScope::new("agent:test", "route:test", "credential:test");
-        let lease = SecretLease {
-            scope: scope.clone(),
-            version: 9,
-            secret: Zeroizing::new("current-secret".to_string()),
-            metadata: BTreeMap::new(),
-            policy_hash: current.hash.clone(),
-            expires_at_epoch_ms: now_epoch_ms() + 5_000,
-            expires_at_monotonic: Instant::now() + Duration::from_secs(5),
-        };
+        state
+            .credential_generations
+            .lock()
+            .expect("credential generations")
+            .insert(
+                scope.clone(),
+                test_credential_generation(&current, 9, BTreeMap::new()),
+            );
+        let lease = test_secret_lease(
+            &current,
+            scope.clone(),
+            9,
+            "current-secret",
+            BTreeMap::new(),
+        );
         cache_scoped_credential_lease(&state, &current, &scope, lease)
             .expect("cache current credential lease");
 
@@ -47866,18 +50459,12 @@ mod tests {
                 Duration::from_millis(500),
             ),
         ] {
-            leases.insert(
-                scope.clone(),
-                SecretLease {
-                    scope,
-                    version: 1,
-                    secret: Zeroizing::new("secret".to_string()),
-                    metadata: BTreeMap::new(),
-                    policy_hash,
-                    expires_at_epoch_ms: now_ms + lifetime.as_millis(),
-                    expires_at_monotonic: Instant::now() + lifetime,
-                },
-            );
+            let mut lease =
+                test_secret_lease(&snapshot, scope.clone(), 1, "secret", BTreeMap::new());
+            lease.policy_hash = policy_hash;
+            lease.expires_at_epoch_ms = now_ms + lifetime.as_millis();
+            lease.expires_at_monotonic = Instant::now() + lifetime;
+            leases.insert(scope, lease);
         }
         drop(leases);
 
@@ -47889,7 +50476,7 @@ mod tests {
     }
 
     #[test]
-    fn credential_lease_background_prefetches_once_and_renews_only_hot_scopes() {
+    fn credential_lease_background_renews_only_hot_scopes() {
         let mut snapshot_value = (*test_snapshot(1)).clone();
         snapshot_value.credentials.insert(
             "credential".to_string(),
@@ -47904,37 +50491,32 @@ mod tests {
         let state = test_gate_state(Arc::clone(&snapshot));
         let scope = CredentialLeaseScope::new("agent:test", "route:test", "credential");
 
-        assert_eq!(
-            credential_lease_background_candidates(&state, &snapshot, Duration::from_secs(1)),
-            vec![scope.clone()]
+        assert!(
+            credential_lease_background_candidates(&state, &snapshot, Duration::from_secs(1))
+                .is_empty(),
+            "cold policy scopes must not create background control-plane traffic"
         );
+        assert!(credential_generations_ready(&state, &snapshot));
+        assert_eq!(credential_lease_hot_scope_count(&state, &snapshot), 0);
+
         state
             .credential_generations
             .lock()
             .expect("credential generations")
             .insert(
                 scope.clone(),
-                CredentialLeaseGeneration {
-                    policy_hash: snapshot.hash.clone(),
-                    version: 1,
-                    secret_fingerprint: credential_secret_fingerprint("secret"),
-                    metadata: BTreeMap::new(),
-                },
+                test_credential_generation(&snapshot, 1, BTreeMap::new()),
             );
-        state.credential_leases.lock().expect("lease cache").insert(
-            scope.clone(),
-            SecretLease {
-                scope: scope.clone(),
-                version: 1,
-                secret: Zeroizing::new("secret".to_string()),
-                metadata: BTreeMap::new(),
-                policy_hash: snapshot.hash.clone(),
-                expires_at_epoch_ms: now_epoch_ms().saturating_sub(1),
-                expires_at_monotonic: Instant::now()
-                    .checked_sub(Duration::from_secs(1))
-                    .expect("past instant"),
-            },
-        );
+        let mut expired = test_secret_lease(&snapshot, scope.clone(), 1, "secret", BTreeMap::new());
+        expired.expires_at_epoch_ms = now_epoch_ms().saturating_sub(1);
+        expired.expires_at_monotonic = Instant::now()
+            .checked_sub(Duration::from_secs(1))
+            .expect("past instant");
+        state
+            .credential_leases
+            .lock()
+            .expect("lease cache")
+            .insert(scope.clone(), expired);
         assert!(
             credential_lease_background_candidates(&state, &snapshot, Duration::from_secs(1))
                 .is_empty()
@@ -47944,6 +50526,38 @@ mod tests {
             .lock()
             .expect("lease cache")
             .contains_key(&scope));
+
+        let mut expiring_generation = test_credential_generation(&snapshot, 1, BTreeMap::new());
+        expiring_generation.expires_at_epoch_ms = now_epoch_ms() + 100;
+        expiring_generation.expires_at_monotonic = Instant::now() + Duration::from_millis(100);
+        state
+            .credential_generations
+            .lock()
+            .expect("credential generations")
+            .insert(scope.clone(), expiring_generation);
+        assert!(
+            credential_lease_background_candidates(&state, &snapshot, Duration::from_secs(1))
+                .is_empty(),
+            "cold metadata inside the renewal window must remain on demand"
+        );
+        assert!(credential_generations_ready(&state, &snapshot));
+
+        let mut expired_generation = test_credential_generation(&snapshot, 1, BTreeMap::new());
+        expired_generation.expires_at_epoch_ms = now_epoch_ms().saturating_sub(1);
+        expired_generation.expires_at_monotonic = Instant::now()
+            .checked_sub(Duration::from_secs(1))
+            .expect("past instant");
+        state
+            .credential_generations
+            .lock()
+            .expect("credential generations")
+            .insert(scope.clone(), expired_generation);
+        assert!(
+            credential_lease_background_candidates(&state, &snapshot, Duration::from_secs(1))
+                .is_empty(),
+            "expired cold generation metadata must refresh only when the scope is used"
+        );
+        assert!(credential_generations_ready(&state, &snapshot));
 
         state
             .credential_lease_activity
@@ -47956,7 +50570,33 @@ mod tests {
                 &snapshot,
                 Duration::from_secs(1)
             ),
-            vec![scope]
+            vec![CredentialLeaseBackgroundCandidate {
+                scope: scope.clone(),
+                purpose: CredentialLeasePurpose::GenerationMetadata,
+            }],
+            "the first hot refresh must update metadata before any secret lease"
+        );
+        assert!(!credential_generations_ready(&state, &snapshot));
+        assert_eq!(credential_lease_hot_scope_count(&state, &snapshot), 1);
+        state
+            .credential_generations
+            .lock()
+            .expect("credential generations")
+            .insert(
+                scope.clone(),
+                test_credential_generation(&snapshot, 1, BTreeMap::new()),
+            );
+        assert!(credential_generations_ready(&state, &snapshot));
+        assert_eq!(
+            active_credential_lease_background_candidates(
+                &state,
+                &snapshot,
+                Duration::from_secs(1)
+            ),
+            vec![CredentialLeaseBackgroundCandidate {
+                scope,
+                purpose: CredentialLeasePurpose::DispatchSecret,
+            }]
         );
 
         let replacement = Arc::new((*snapshot).clone());
@@ -47967,6 +50607,270 @@ mod tests {
             Duration::from_secs(1)
         )
         .is_empty());
+    }
+
+    #[test]
+    fn ten_thousand_cold_policy_scopes_create_no_background_refreshes() {
+        let mut snapshot_value = (*test_snapshot(1)).clone();
+        snapshot_value.credentials.insert(
+            "credential".to_string(),
+            Credential {
+                provider: "generic".to_string(),
+                provider_subject: None,
+                injection: json!({}),
+            },
+        );
+        let route_template = snapshot_value.routes[0].clone();
+        snapshot_value.routes = (0..10_000)
+            .map(|index| {
+                let mut route = route_template.clone();
+                route.id = format!("route:cold:{index}");
+                route.credential_ref = Some("credential".to_string());
+                route
+            })
+            .collect();
+        let snapshot = Arc::new(snapshot_value);
+        let state = test_gate_state(Arc::clone(&snapshot));
+
+        assert!(
+            credential_lease_background_candidates(&state, &snapshot, Duration::from_secs(1))
+                .is_empty()
+        );
+        assert!(credential_generations_ready(&state, &snapshot));
+        assert_eq!(credential_lease_hot_scope_count(&state, &snapshot), 0);
+        assert_eq!(
+            state
+                .credential_lease_refresh_success
+                .load(Ordering::Relaxed),
+            0
+        );
+        assert_eq!(
+            state
+                .credential_lease_refresh_failed
+                .load(Ordering::Relaxed),
+            0
+        );
+    }
+
+    #[test]
+    fn jit_background_renewal_never_schedules_dispatch_secret() {
+        let mut snapshot_value = (*test_snapshot(1)).clone();
+        snapshot_value.credentials.insert(
+            "credential".to_string(),
+            Credential {
+                provider: "generic".to_string(),
+                provider_subject: None,
+                injection: json!({}),
+            },
+        );
+        snapshot_value.routes[0].credential_ref = Some("credential".to_string());
+        snapshot_value.routes[0].jit = json!({"required":true});
+        let snapshot = Arc::new(snapshot_value);
+        let state = test_gate_state(Arc::clone(&snapshot));
+        let scope = CredentialLeaseScope::new("agent:test", "route:test", "credential");
+        state
+            .credential_generations
+            .lock()
+            .expect("credential generations")
+            .insert(
+                scope.clone(),
+                test_credential_generation(&snapshot, 1, BTreeMap::new()),
+            );
+        state
+            .credential_lease_activity
+            .lock()
+            .expect("credential lease activity")
+            .insert(scope.clone(), Instant::now());
+
+        assert!(
+            credential_lease_background_candidates(&state, &snapshot, Duration::from_secs(1))
+                .is_empty(),
+            "hot JIT scope must not prefetch dispatch secret"
+        );
+        let mut expiring_generation = test_credential_generation(&snapshot, 1, BTreeMap::new());
+        expiring_generation.expires_at_epoch_ms = now_epoch_ms() + 100;
+        expiring_generation.expires_at_monotonic = Instant::now() + Duration::from_millis(100);
+        state
+            .credential_generations
+            .lock()
+            .expect("credential generations")
+            .insert(scope.clone(), expiring_generation);
+        assert_eq!(
+            credential_lease_background_candidates(&state, &snapshot, Duration::from_secs(1)),
+            vec![CredentialLeaseBackgroundCandidate {
+                scope,
+                purpose: CredentialLeasePurpose::GenerationMetadata,
+            }]
+        );
+        assert!(state
+            .credential_leases
+            .lock()
+            .expect("credential leases")
+            .is_empty());
+    }
+
+    #[test]
+    fn generation_metadata_cache_never_creates_secret_material() {
+        let mut snapshot_value = (*test_snapshot(1)).clone();
+        snapshot_value.credentials.insert(
+            "credential".to_string(),
+            Credential {
+                provider: "generic".to_string(),
+                provider_subject: None,
+                injection: json!({}),
+            },
+        );
+        snapshot_value.routes[0].credential_ref = Some("credential".to_string());
+        let snapshot = Arc::new(snapshot_value);
+        let state = test_gate_state(Arc::clone(&snapshot));
+        let scope = CredentialLeaseScope::new("agent:test", "route:test", "credential");
+        let metadata = BTreeMap::from([("provider_id".to_string(), json!("generic"))]);
+
+        cache_scoped_credential_generation(
+            &state,
+            &snapshot,
+            &scope,
+            test_credential_generation(&snapshot, 11, metadata.clone()),
+        )
+        .expect("cache generation metadata");
+
+        assert!(state
+            .credential_leases
+            .lock()
+            .expect("credential leases")
+            .is_empty());
+        let generations = state
+            .credential_generations
+            .lock()
+            .expect("credential generations");
+        let generation = generations.get(&scope).expect("cached generation");
+        assert_eq!(generation.version, 11);
+        assert_eq!(generation.metadata, metadata);
+        assert_eq!(
+            generation.metadata_sha256,
+            credential_lease_metadata_sha256(&generation.metadata)
+        );
+    }
+
+    #[test]
+    fn credential_generation_metadata_accepts_canonical_typed_oauth_metadata() {
+        let metadata = BTreeMap::from([
+            ("app_id".to_string(), json!("oauth-client")),
+            (
+                "expires_at_epoch_ms".to_string(),
+                json!(4_102_444_800_000u64),
+            ),
+            ("injection_field".to_string(), json!("access_token")),
+            ("injection_name".to_string(), json!("Authorization")),
+            ("injection_prefix".to_string(), json!("Bearer ")),
+            ("managed".to_string(), json!(true)),
+            ("oauth".to_string(), json!(true)),
+            ("provider".to_string(), json!("x")),
+            ("provider_id".to_string(), json!("x")),
+            ("provider_subject".to_string(), json!("provider-user-123")),
+            ("scope".to_string(), json!("tweet.read tweet.write")),
+            (
+                "scopes".to_string(),
+                json!(["tweet.read", "tweet.write", "users.read"]),
+            ),
+            ("subject".to_string(), json!("operator@example.test")),
+            ("username".to_string(), json!("operator")),
+            ("x_app_id".to_string(), json!("oauth-client")),
+        ]);
+
+        validate_credential_generation_metadata(&metadata)
+            .expect("canonical typed OAuth metadata must be accepted");
+
+        let snapshot = test_snapshot(1);
+        let state = test_gate_state(Arc::clone(&snapshot));
+        let scope = CredentialLeaseScope::new("agent:test", "route:test", "credential");
+        cache_scoped_credential_generation(
+            &state,
+            &snapshot,
+            &scope,
+            test_credential_generation(&snapshot, 1, metadata.clone()),
+        )
+        .expect("typed OAuth generation metadata must enter the generation cache");
+        cache_scoped_credential_lease(
+            &state,
+            &snapshot,
+            &scope,
+            test_secret_lease(&snapshot, scope.clone(), 1, "secret", metadata),
+        )
+        .expect("typed OAuth generation metadata must enter the secret cache");
+        assert!(state
+            .credential_generations
+            .lock()
+            .expect("credential generations")
+            .contains_key(&scope));
+        assert!(state
+            .credential_leases
+            .lock()
+            .expect("credential leases")
+            .contains_key(&scope));
+    }
+
+    #[test]
+    fn credential_generation_metadata_rejects_untyped_secret_and_oversized_values() {
+        let oversized_string = "x".repeat(MAX_CREDENTIAL_GENERATION_METADATA_STRING_BYTES + 1);
+        let oversized_scopes = vec![json!("scope"); MAX_CREDENTIAL_GENERATION_METADATA_SCOPES + 1];
+        let invalid = [
+            BTreeMap::from([("access_token".to_string(), json!("must-not-enter-cache"))]),
+            BTreeMap::from([("unknown".to_string(), json!({"nested":{"arbitrary":true}}))]),
+            BTreeMap::from([("provider".to_string(), json!(["x"]))]),
+            BTreeMap::from([("provider".to_string(), json!(oversized_string))]),
+            BTreeMap::from([("scopes".to_string(), Value::Array(oversized_scopes))]),
+            BTreeMap::from([("scopes".to_string(), json!(["tweet.read", "tweet.read"]))]),
+            BTreeMap::from([("expires_at_epoch_ms".to_string(), json!(-1))]),
+            BTreeMap::from([("expires_at_epoch_ms".to_string(), json!(1.5))]),
+        ];
+
+        for metadata in invalid {
+            assert!(
+                validate_credential_generation_metadata(&metadata).is_err(),
+                "invalid metadata must be rejected: {metadata:?}"
+            );
+        }
+
+        let snapshot = test_snapshot(1);
+        let state = test_gate_state(Arc::clone(&snapshot));
+        let scope = CredentialLeaseScope::new("agent:test", "route:test", "credential");
+        let secret_metadata =
+            BTreeMap::from([("access_token".to_string(), json!("must-not-enter-cache"))]);
+        assert!(cache_scoped_credential_generation(
+            &state,
+            &snapshot,
+            &scope,
+            test_credential_generation(&snapshot, 1, secret_metadata),
+        )
+        .is_err());
+        assert!(state
+            .credential_generations
+            .lock()
+            .expect("credential generations")
+            .is_empty());
+
+        cache_scoped_credential_generation(
+            &state,
+            &snapshot,
+            &scope,
+            test_credential_generation(&snapshot, 1, BTreeMap::new()),
+        )
+        .expect("valid generation floor");
+        let nested_metadata =
+            BTreeMap::from([("provider".to_string(), json!({"nested":"arbitrary"}))]);
+        assert!(cache_scoped_credential_lease(
+            &state,
+            &snapshot,
+            &scope,
+            test_secret_lease(&snapshot, scope.clone(), 1, "secret", nested_metadata),
+        )
+        .is_err());
+        assert!(state
+            .credential_leases
+            .lock()
+            .expect("credential leases")
+            .is_empty());
     }
 
     #[test]
@@ -47984,21 +50888,27 @@ mod tests {
         let snapshot = Arc::new(snapshot_value);
         let state = test_gate_state(Arc::clone(&snapshot));
         let scope = CredentialLeaseScope::new("agent:test", "route:test", "credential");
+        state
+            .credential_generations
+            .lock()
+            .expect("credential generations")
+            .insert(
+                scope.clone(),
+                test_credential_generation(&snapshot, 7, BTreeMap::new()),
+            );
         state.credential_leases.lock().expect("lease cache").insert(
             scope.clone(),
-            SecretLease {
-                scope: scope.clone(),
-                version: 7,
-                secret: Zeroizing::new("secret".to_string()),
-                metadata: BTreeMap::new(),
-                policy_hash: snapshot.hash.clone(),
-                expires_at_epoch_ms: now_epoch_ms() + 60_000,
-                expires_at_monotonic: Instant::now() + Duration::from_secs(60),
-            },
+            test_secret_lease(&snapshot, scope.clone(), 7, "secret", BTreeMap::new()),
         );
 
-        let error = refresh_scoped_credential_lease_singleflight(&state, &snapshot, &scope)
-            .expect_err("unconfigured control plane must reject refresh");
+        let error = refresh_scoped_credential_material_singleflight(
+            &state,
+            &snapshot,
+            &scope,
+            CredentialLeasePurpose::DispatchSecret,
+            None,
+        )
+        .expect_err("unconfigured control plane must reject refresh");
         assert!(error.contains("credential lease URL is not configured"));
         assert!(cached_credential_lease_info(&state, &snapshot, &scope).is_some());
         assert_eq!(
@@ -48024,17 +50934,23 @@ mod tests {
         let snapshot = Arc::new(snapshot_value);
         let state = test_gate_state(Arc::clone(&snapshot));
         let scope = CredentialLeaseScope::new("agent:test", "route:test", "credential");
+        state
+            .credential_generations
+            .lock()
+            .expect("credential generations")
+            .insert(
+                scope.clone(),
+                test_credential_generation(&snapshot, 8, BTreeMap::new()),
+            );
         state.credential_leases.lock().expect("lease cache").insert(
             scope.clone(),
-            SecretLease {
-                scope: scope.clone(),
-                version: 8,
-                secret: Zeroizing::new("rotated-secret".to_string()),
-                metadata: BTreeMap::new(),
-                policy_hash: snapshot.hash.clone(),
-                expires_at_epoch_ms: now_epoch_ms() + 60_000,
-                expires_at_monotonic: Instant::now() + Duration::from_secs(60),
-            },
+            test_secret_lease(
+                &snapshot,
+                scope.clone(),
+                8,
+                "rotated-secret",
+                BTreeMap::new(),
+            ),
         );
         let decision = json!({
             "principal_id":"agent:test",
@@ -48052,19 +50968,21 @@ mod tests {
     }
 
     #[test]
-    fn credential_lease_cache_rejects_regression_and_unversioned_change() {
+    fn credential_lease_cache_requires_exact_generation_and_rejects_live_secret_change() {
         let snapshot = test_snapshot(1);
         let state = test_gate_state(Arc::clone(&snapshot));
         let scope = CredentialLeaseScope::new("agent:test", "route:test", "credential");
-        let lease = |version, secret: &str| SecretLease {
-            scope: scope.clone(),
-            version,
-            secret: Zeroizing::new(secret.to_string()),
-            metadata: BTreeMap::new(),
-            policy_hash: snapshot.hash.clone(),
-            expires_at_epoch_ms: now_epoch_ms() + 60_000,
-            expires_at_monotonic: Instant::now() + Duration::from_secs(60),
+        let lease = |version, secret: &str| {
+            test_secret_lease(&snapshot, scope.clone(), version, secret, BTreeMap::new())
         };
+        state
+            .credential_generations
+            .lock()
+            .expect("credential generations")
+            .insert(
+                scope.clone(),
+                test_credential_generation(&snapshot, 7, BTreeMap::new()),
+            );
         state
             .credential_leases
             .lock()
@@ -48081,6 +50999,13 @@ mod tests {
                 .expect_err("same-version secret change must fail"),
             "credential lease semantics changed without a version increment"
         );
+        cache_scoped_credential_generation(
+            &state,
+            &snapshot,
+            &scope,
+            test_credential_generation(&snapshot, 8, BTreeMap::new()),
+        )
+        .expect("higher generation must replace atomically");
         cache_scoped_credential_lease(&state, &snapshot, &scope, lease(8, "new"))
             .expect("higher version must replace atomically");
         let cached = state.credential_leases.lock().expect("lease cache");
@@ -48097,20 +51022,22 @@ mod tests {
             .get(&scope)
             .cloned()
             .expect("generation floor");
+        assert_eq!(floor.version, 8);
         assert_eq!(
-            floor.secret_fingerprint,
-            credential_secret_fingerprint("new")
+            floor.metadata_sha256,
+            credential_lease_metadata_sha256(&floor.metadata)
         );
-        assert!(!floor.secret_fingerprint.contains("new"));
 
         state
             .credential_leases
             .lock()
             .expect("lease cache")
             .remove(&scope);
+        cache_scoped_credential_lease(&state, &snapshot, &scope, lease(8, "reacquired"))
+            .expect("cold exact-generation secret can be reacquired without a fingerprint");
         assert_eq!(
             cache_scoped_credential_lease(&state, &snapshot, &scope, lease(8, "changed"))
-                .expect_err("generation floor must bind same-version secret after eviction"),
+                .expect_err("live same-version secret change must fail"),
             "credential lease semantics changed without a version increment"
         );
         assert_eq!(
@@ -48140,11 +51067,24 @@ mod tests {
             completed: Condvar::new(),
         });
         state
+            .credential_generations
+            .lock()
+            .expect("credential generations")
+            .insert(
+                scope.clone(),
+                test_credential_generation(&snapshot, 7, BTreeMap::new()),
+            );
+        state
             .credential_lease_flights
             .lock()
             .expect("lease flights")
             .insert(
-                CredentialLeaseGenerationKey::new(&snapshot, &scope),
+                CredentialLeaseGenerationKey::new(
+                    &snapshot,
+                    &scope,
+                    CredentialLeasePurpose::DispatchSecret,
+                    None,
+                ),
                 Arc::clone(&flight),
             );
 
@@ -48152,19 +51092,11 @@ mod tests {
         let waiter_snapshot = Arc::clone(&snapshot);
         let waiter_scope = scope.clone();
         let waiter = thread::spawn(move || {
-            ensure_scoped_credential_lease(&waiter_state, &waiter_snapshot, &waiter_scope)
+            ensure_scoped_credential_lease(&waiter_state, &waiter_snapshot, &waiter_scope, None)
         });
         state.credential_leases.lock().expect("lease cache").insert(
             scope.clone(),
-            SecretLease {
-                scope,
-                version: 7,
-                secret: Zeroizing::new("secret".to_string()),
-                metadata: BTreeMap::new(),
-                policy_hash: snapshot.hash.clone(),
-                expires_at_epoch_ms: now_epoch_ms() + 60_000,
-                expires_at_monotonic: Instant::now() + Duration::from_secs(60),
-            },
+            test_secret_lease(&snapshot, scope, 7, "secret", BTreeMap::new()),
         );
         *flight.result.lock().expect("flight result") = Some(Ok(()));
         flight.completed.notify_all();

@@ -5392,6 +5392,19 @@ def init_db(path: Path = DB_PATH) -> None:
                     dispatch_expires_at_epoch_ms, attempt_id
                 );
 
+            CREATE TABLE IF NOT EXISTS release_authorization_credential_issuances (
+                attempt_id TEXT PRIMARY KEY
+                    REFERENCES release_authorization_attempts(attempt_id) ON DELETE CASCADE,
+                binding_digest TEXT NOT NULL,
+                request_binding_sha256 TEXT NOT NULL,
+                recipient_key_id TEXT NOT NULL,
+                recipient_nonce_sha256 TEXT NOT NULL,
+                reservation_expires_at_epoch_ms BIGINT NOT NULL,
+                claimed_at_epoch_ms BIGINT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE (recipient_key_id, recipient_nonce_sha256)
+            );
+
             CREATE TABLE IF NOT EXISTS release_authorization_quota_reservations (
                 attempt_id TEXT NOT NULL
                     REFERENCES release_authorization_attempts(attempt_id) ON DELETE CASCADE,
@@ -11925,6 +11938,19 @@ def credential_lease_snapshot(item_id: str):
         yield row_to_credential(row, include_secret=True) if row else None
 
 
+@contextlib.contextmanager
+def credential_generation_snapshot(item_id: str):
+    """Hold the mutation lock while reading only non-secret generation metadata."""
+    with connect() as conn:
+        _lock_credential_mutation(conn, item_id)
+        row = conn.execute(
+            "SELECT * FROM credentials WHERE id = ?", (item_id,)
+        ).fetchone()
+        if row is not None and str(row["lifecycle_status"] or "active") != "active":
+            row = None
+        yield row_to_credential(row, include_secret=False) if row else None
+
+
 def list_credentials() -> list[dict[str, Any]]:
     with connect() as conn:
         rows = conn.execute(
@@ -16156,6 +16182,221 @@ def _bound_release_attempt(
     return row
 
 
+def claim_release_credential_issuance(
+    *,
+    attempt_id: str,
+    binding_digest: str,
+    request_binding_sha256: str,
+    recipient_key_id: str,
+    recipient_nonce_sha256: str,
+    principal_id: str,
+    route_id: str,
+    credential_id: str,
+    credential_version: int,
+    policy_hash: str,
+    grant_id: str,
+    approval_request_id: str,
+    reservation_expires_at_epoch_ms: int,
+    now_epoch_ms: int | None = None,
+    required_approver_roles: set[str] | None = None,
+    allowed_approver_ids: set[str] | None = None,
+    require_approver_webauthn: bool = False,
+) -> dict[str, Any]:
+    """Atomically claim the sole credential-bearing lease for a JIT attempt."""
+    require_atomic_release_writer()
+    attempt_id = _release_text(
+        "release authorization attempt_id",
+        attempt_id,
+        maximum=_RELEASE_AUTHORIZATION_ATTEMPT_ID_MAX_BYTES,
+    )
+    binding_digest = (
+        _release_digest("release authorization binding_digest", binding_digest) or ""
+    )
+    request_binding_sha256 = (
+        _release_digest(
+            "credential issuance request binding digest", request_binding_sha256
+        )
+        or ""
+    )
+    recipient_key_id = (
+        _release_digest("credential issuance recipient key ID", recipient_key_id)
+        or ""
+    )
+    recipient_nonce_sha256 = (
+        _release_digest(
+            "credential issuance recipient nonce digest", recipient_nonce_sha256
+        )
+        or ""
+    )
+    if not isinstance(credential_version, int) or isinstance(credential_version, bool):
+        raise ReleaseAuthorizationError(
+            "credential issuance version must be an integer"
+        )
+    if credential_version < 1:
+        raise ReleaseAuthorizationError(
+            "credential issuance version must be positive"
+        )
+    if (
+        not isinstance(reservation_expires_at_epoch_ms, int)
+        or isinstance(reservation_expires_at_epoch_ms, bool)
+        or reservation_expires_at_epoch_ms < 1
+    ):
+        raise ReleaseAuthorizationError(
+            "credential issuance reservation expiry must be positive"
+        )
+    expected_strings = {
+        "principal_id": principal_id,
+        "route_id": route_id,
+        "credential_id": credential_id,
+        "policy_hash": policy_hash,
+        "grant_id": grant_id,
+        "approval_request_id": approval_request_id,
+    }
+    for field, value in expected_strings.items():
+        if not isinstance(value, str) or not value:
+            raise ReleaseAuthorizationError(
+                f"credential issuance {field} must be non-empty"
+            )
+    normalized_approver_roles = _normalize_release_approver_roles(
+        required_approver_roles
+    )
+    normalized_approver_ids = (
+        {
+            _release_text(
+                "credential issuance approver ID",
+                item,
+                maximum=256,
+            )
+            for item in allowed_approver_ids
+        }
+        if allowed_approver_ids
+        else None
+    )
+
+    with connect() as conn:
+        _begin_release_transaction(conn)
+        try:
+            now_ms = _rate_limit_transaction_now_epoch_ms(conn, now_epoch_ms)
+        except RateLimitStoreError as exc:
+            raise ReleaseAuthorizationError(str(exc)) from exc
+        preview = _release_attempt_row(conn, attempt_id)
+        if preview is None:
+            raise ReleaseAuthorizationError(
+                "release authorization attempt was not found"
+            )
+        if not hmac.compare_digest(str(preview["binding_digest"]), binding_digest):
+            raise ReleaseAuthorizationConflictError(
+                "release authorization binding does not match the durable attempt"
+            )
+        _lock_policy_high_water(conn)
+        _lock_webauthn_authority(conn)
+        if normalized_approver_roles:
+            _lock_rbac_authority(conn)
+        _lock_credential_mutation(conn, credential_id)
+        row = _bound_release_attempt(conn, attempt_id, binding_digest)
+        if now_epoch_ms is None:
+            try:
+                now_ms = _rate_limit_transaction_now_epoch_ms(conn, None)
+            except RateLimitStoreError as exc:
+                raise ReleaseAuthorizationError(str(exc)) from exc
+        if str(row["state"]) != "reserved":
+            raise ReleaseAuthorizationConflictError(
+                "credential issuance requires a reserved release authorization"
+            )
+        expected = {
+            **expected_strings,
+            "credential_version": credential_version,
+            "reservation_expires_at_epoch_ms": reservation_expires_at_epoch_ms,
+        }
+        for field, expected_value in expected.items():
+            actual = row[field]
+            if field in {"credential_version", "reservation_expires_at_epoch_ms"}:
+                actual = int(actual)
+            if isinstance(expected_value, str):
+                if not isinstance(actual, str) or not hmac.compare_digest(
+                    actual, expected_value
+                ):
+                    raise ReleaseAuthorizationConflictError(
+                        "credential issuance binding does not match the durable attempt"
+                    )
+            elif actual != expected_value:
+                raise ReleaseAuthorizationConflictError(
+                    "credential issuance binding does not match the durable attempt"
+                )
+        invalid_reason = _release_reservation_invalid_reason(
+            conn, row, now_epoch_ms=now_ms
+        )
+        if invalid_reason is not None:
+            _cancel_release_attempt(
+                conn,
+                row,
+                now_ms=now_ms,
+                actor_id=None,
+                reason=invalid_reason,
+            )
+            raise ReleaseAuthorizationError(
+                "credential issuance release authorization is no longer active"
+            )
+        authority_reason = _release_attempt_authority_reason(
+            conn,
+            row,
+            now_epoch_ms=now_ms,
+            required_approver_roles=normalized_approver_roles,
+            allowed_approver_ids=normalized_approver_ids,
+            require_approver_webauthn=require_approver_webauthn,
+        )
+        if authority_reason is not None:
+            _cancel_release_attempt(
+                conn,
+                row,
+                now_ms=now_ms,
+                actor_id=None,
+                reason=authority_reason,
+            )
+            raise ReleaseAuthorizationError(
+                "credential issuance release authorization is no longer active"
+            )
+        existing = conn.execute(
+            "SELECT * FROM release_authorization_credential_issuances "
+            "WHERE attempt_id = ?",
+            (attempt_id,),
+        ).fetchone()
+        if existing is not None:
+            raise ReleaseAuthorizationConflictError(
+                "release authorization already issued credential material"
+            )
+        now_s = datetime.fromtimestamp(now_ms / 1000, timezone.utc).isoformat()
+        conn.execute(
+            """
+            INSERT INTO release_authorization_credential_issuances (
+                attempt_id, binding_digest, request_binding_sha256,
+                recipient_key_id, recipient_nonce_sha256,
+                reservation_expires_at_epoch_ms, claimed_at_epoch_ms, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                attempt_id,
+                binding_digest,
+                request_binding_sha256,
+                recipient_key_id,
+                recipient_nonce_sha256,
+                reservation_expires_at_epoch_ms,
+                now_ms,
+                now_s,
+            ),
+        )
+        return {
+            "attempt_id": attempt_id,
+            "binding_digest": binding_digest,
+            "request_binding_sha256": request_binding_sha256,
+            "recipient_key_id": recipient_key_id,
+            "recipient_nonce_sha256": recipient_nonce_sha256,
+            "reservation_expires_at_epoch_ms": reservation_expires_at_epoch_ms,
+            "claimed_at_epoch_ms": now_ms,
+        }
+
+
 def dispatch_release_authorization(
     *,
     attempt_id: str,
@@ -20055,6 +20296,7 @@ def metadata_store_status() -> dict[str, Any]:
         "request_logs",
         "rate_limit_counters",
         "release_authorization_attempts",
+        "release_authorization_credential_issuances",
         "release_authorization_quota_reservations",
         "release_authorization_events",
     ]

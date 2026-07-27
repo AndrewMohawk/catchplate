@@ -24,6 +24,7 @@ from cryptography import x509
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 
+from . import validate_enrollment_tooling
 from .http import request_bytes as bounded_request_bytes, validate_http_url
 
 
@@ -101,6 +102,19 @@ def _relative_endpoint(value: Any, *, label: str) -> str:
     return value
 
 
+def _require_enrollment_tooling_receipt_checks(receipt: dict[str, Any]) -> None:
+    checks = receipt.get("checks")
+    required_checks = {"tooling-contract", "tooling-version"}
+    if (
+        not isinstance(checks, list)
+        or not all(isinstance(item, str) for item in checks)
+        or not required_checks.issubset(set(checks))
+    ):
+        raise ValueError(
+            "enrollment verificationReceipt is missing required tooling checks"
+        )
+
+
 def enrollment_install_session(
     packet: dict[str, Any],
     *,
@@ -108,6 +122,7 @@ def enrollment_install_session(
 ) -> tuple[str, dict[str, Any]]:
     if packet.get("apiVersion") != "serverware.agentEnrollment/v1":
         raise ValueError("enrollment packet apiVersion is invalid")
+    validate_enrollment_tooling(packet)
     serverware = packet.get("serverware")
     if not isinstance(serverware, dict):
         raise ValueError("enrollment packet is missing serverware configuration")
@@ -148,6 +163,7 @@ def enrollment_install_session(
         raise ValueError("enrollment verificationReceipt does not bind the signed packet digest")
     if receipt.get("statementSha256") != statement_digest:
         raise ValueError("enrollment verificationReceipt does not bind the signed statement digest")
+    _require_enrollment_tooling_receipt_checks(receipt)
     nonce = packet.get("nonce")
     if not isinstance(nonce, str) or re.fullmatch(r"[A-Za-z0-9_-]{32,256}", nonce) is None:
         raise ValueError("enrollment packet nonce is invalid")
@@ -286,6 +302,8 @@ def verify_enrollment_measurements(
         "measurement-pins",
         "packet-expiry",
         "packet-signature",
+        "tooling-contract",
+        "tooling-version",
         "downloaded-file-digest",
         "expected-principal",
         "expected-nonce",

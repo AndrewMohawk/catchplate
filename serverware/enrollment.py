@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 
 from serverware.policy_bundle import PolicySnapshot
 from serverware.response_identity import canonical_json, response_public_key_info, sign_statement
+from serverware_agent_trust import enrollment_tooling_contract
 
 
 class AgentEnrollmentError(ValueError):
@@ -503,8 +504,12 @@ def _render_verified_instructions_bootstrap(packet: dict[str, Any]) -> str:
     ):
         raise AgentEnrollmentError("enrollment packet cannot render a verified-instructions bootstrap")
     control_plane_url = serverware.get("controlPlaneUrl")
-    if not isinstance(control_plane_url, str):
+    tooling = packet.get("tooling")
+    if not isinstance(control_plane_url, str) or not isinstance(tooling, dict):
         raise AgentEnrollmentError("enrollment packet control plane URL is invalid")
+    expected_version_output = tooling.get("expectedVersionOutput")
+    if not isinstance(expected_version_output, str):
+        raise AgentEnrollmentError("enrollment packet tooling contract is invalid")
     return "\n".join(
         [
             "#!/bin/sh",
@@ -514,6 +519,12 @@ def _render_verified_instructions_bootstrap(packet: dict[str, Any]) -> str:
             "# Never calculate SERVERWARE_PACKET_SHA256 from an untrusted packet and trust that same value.",
             ': "${SERVERWARE_PACKET_PATH:?path to the exact packet downloaded from the authenticated portal}"',
             ': "${SERVERWARE_PACKET_SHA256:?authenticated portal SHA-256 for those exact downloaded bytes}"',
+            "",
+            (
+                f"test \"$(serverware-enrollment --version)\" = "
+                f"{shlex.quote(expected_version_output)} || "
+                "{ echo \"required serverware-enrollment version is unavailable\" >&2; exit 1; }"
+            ),
             "",
             "exec serverware-enrollment \\",
             f"  --base {shlex.quote(control_plane_url)} \\",
@@ -726,6 +737,7 @@ def build_agent_enrollment(
     packet = {
         "apiVersion": "serverware.agentEnrollment/v1",
         "kind": "AgentEnrollment",
+        "tooling": enrollment_tooling_contract(),
         "generatedAt": datetime.fromtimestamp(issued_at_epoch_ms / 1000, tz=timezone.utc).isoformat(),
         "issuedAtEpochMs": issued_at_epoch_ms,
         "expiresAtEpochMs": issued_at_epoch_ms + ttl_seconds * 1000,
@@ -783,6 +795,7 @@ def build_agent_enrollment(
             "verificationBinding": {
                 "mode": "emit-verified-instructions",
                 "installedCli": "serverware-enrollment",
+                "toolingContractPath": "tooling",
                 "downloadedPacketPathEnvironmentVariable": "SERVERWARE_PACKET_PATH",
                 "downloadedPacketSha256EnvironmentVariable": "SERVERWARE_PACKET_SHA256",
                 "downloadedPacketSha256Source": "authenticated-portal-metadata-for-exact-download-bytes",

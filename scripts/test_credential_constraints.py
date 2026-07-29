@@ -4,14 +4,18 @@ from __future__ import annotations
 
 import base64
 import copy
+import contextlib
 import hashlib
 import json
 import os
+import selectors
+import signal
 import socket
 import ssl
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from importlib.metadata import version
@@ -80,8 +84,14 @@ for name in (
 ):
     os.environ.pop(name, None)
 
-from serverware import constraints, db, runtime
-from serverware.adapters import X_V2_READ_OPERATION_PATHS, X_V2_READ_OPERATIONS, _x_read_operation, get_adapter
+from serverware import constraints, db, http_client, runtime
+from serverware.adapters import (
+    X_V2_READ_OPERATION_PATHS,
+    X_V2_READ_OPERATIONS,
+    _x_read_operation,
+    get_adapter,
+    preflight_request_admission,
+)
 from serverware.constraints import (
     _enforce_request_time_window,
     evaluate_request_constraints,
@@ -100,6 +110,7 @@ from serverware.policy_bundle import (
     X_V2_REQUEST_HEADERS,
     CredentialPolicy,
     PolicyBundleError,
+    _validate_generic_required_headers,
     _load_raw_policy,
     bounded_pattern_matches,
     canonical_json,
@@ -109,18 +120,35 @@ from serverware.policy_bundle import (
     provider_account_scope_value,
     sign_policy_bundle,
     strict_json_loads,
+    validate_discard_headers,
     validate_policy_schema,
+    validate_raw_absolute_target,
+    validate_request_target_path,
 )
 try:
+    from mitmproxy import http as mitm_http
+    from serverware import policy_engine
     from serverware.policy_engine import (
+        LEGACY_MITM_TRANSPORT_METADATA_KEY,
+        _canonical_credential_version,
         _canonical_forwarded_request_headers,
+        _canonical_query_wire,
         _canonical_request,
+        _canonicalize_provider_query,
         _bind_provider_account_scope,
+        _credential_policy_binding_decision,
         _credential_injection_collision,
+        _discard_declared_request_headers,
         _digest,
         _inject_credential,
+        _legacy_mitm_route_admission,
+        _normalized_request_headers,
         _operation_digest,
+        _evaluate_response_envelope,
+        _provider_request_matches_canonical,
         _validated_successful_release_reserve,
+        _verified_mtls_evidence,
+        evaluate_request,
         evaluate_response,
     )
     from serverware.mitm_addon import ServerwareAddon
@@ -135,21 +163,111 @@ except ModuleNotFoundError as exc:
     _bind_provider_account_scope = None
     _operation_digest = None
     _validated_successful_release_reserve = None
+    _canonical_credential_version = None
     _canonical_forwarded_request_headers = None
+    _canonical_query_wire = None
     _canonical_request = None
+    _canonicalize_provider_query = None
     _credential_injection_collision = None
+    _discard_declared_request_headers = None
     _digest = None
+    _normalized_request_headers = None
+    _provider_request_matches_canonical = None
+    _legacy_mitm_route_admission = None
+    LEGACY_MITM_TRANSPORT_METADATA_KEY = None
+    policy_engine = None
+    mitm_http = None
     evaluate_response = None
+    evaluate_request = None
     ServerwareAddon = None
+
+
+def require_consolidated_policy_runtime() -> None:
+    missing = [
+        name
+        for name, value in {
+            "mitmproxy.http": mitm_http,
+            "ServerwareAddon": ServerwareAddon,
+            "_canonical_forwarded_request_headers": _canonical_forwarded_request_headers,
+            "_canonical_query_wire": _canonical_query_wire,
+            "_canonical_request": _canonical_request,
+            "_canonicalize_provider_query": _canonicalize_provider_query,
+            "_discard_declared_request_headers": _discard_declared_request_headers,
+            "_normalized_request_headers": _normalized_request_headers,
+            "_digest": _digest,
+            "_operation_digest": _operation_digest,
+            "_provider_request_matches_canonical": _provider_request_matches_canonical,
+            "_legacy_mitm_route_admission": _legacy_mitm_route_admission,
+            "LEGACY_MITM_TRANSPORT_METADATA_KEY": LEGACY_MITM_TRANSPORT_METADATA_KEY,
+            "evaluate_request": evaluate_request,
+            "policy_engine": policy_engine,
+        }.items()
+        if value is None
+    ]
+    if missing:
+        raise AssertionError(
+            "consolidated credential-constraint lane requires the locked "
+            f"mitmproxy/policy runtime; missing: {', '.join(missing)}"
+        )
+
+
+class RawHeaders(dict):
+    def __init__(self, entries: list[tuple[str, str]]) -> None:
+        super().__init__(entries)
+        self.fields = tuple(
+            (name.encode("ascii"), value.encode("ascii"))
+            for name, value in entries
+        )
 
 
 class Request:
     def __init__(self, method: str, url: str, body: dict | None = None, content_type: str = "application/json") -> None:
+        parts = urlsplit(url)
+        authority = parts.netloc
+        path = parts.path or "/"
+        if parts.query:
+            path += "?" + parts.query
         self.method = method
         self.pretty_url = url
         self.headers = {"content-type": content_type}
         self.raw_content = json.dumps(body or {}).encode("utf-8") if body is not None else b""
         self.query = dict(parse_qsl(urlsplit(url).query, keep_blank_values=True))
+        self.host = parts.hostname or ""
+        self.port = parts.port or (443 if parts.scheme == "https" else 80)
+        self.scheme = parts.scheme
+        self.path = authority if method == "CONNECT" else path
+        self.first_line_format = "authority" if method == "CONNECT" else "absolute"
+        self.http_version = "HTTP/1.1"
+        raw_headers = RawHeaders(
+            [("Host", authority)]
+        )
+        self.data = SimpleNamespace(
+            method=method.encode("ascii"),
+            scheme=b"" if method == "CONNECT" else parts.scheme.encode("ascii"),
+            authority=authority.encode("ascii"),
+            path=(authority if method == "CONNECT" else path).encode("ascii"),
+            host=self.host,
+            port=self.port,
+            headers=raw_headers,
+            http_version=b"HTTP/1.1",
+        )
+
+    @property
+    def url(self) -> str:
+        return self.pretty_url
+
+    @url.setter
+    def url(self, value: str) -> None:
+        self.pretty_url = value
+        self.query = dict(
+            parse_qsl(urlsplit(value).query, keep_blank_values=True)
+        )
+
+    def get_content(self, strict: bool = True) -> bytes:
+        del strict
+        if not isinstance(self.raw_content, bytes):
+            raise ValueError("request body is not bytes")
+        return self.raw_content
 
 
 class Response:
@@ -174,9 +292,21 @@ class Response:
 
 
 def flow(method: str, url: str, body: dict | None = None, response: dict | None = None) -> SimpleNamespace:
+    request = Request(method, url, body)
     item = SimpleNamespace(
-        request=Request(method, url, body),
-        client_conn=SimpleNamespace(peername=("127.0.0.1", 12345)),
+        id=f"flow:{id(request)}",
+        request=request,
+        client_conn=SimpleNamespace(
+            id=f"client:{id(request)}",
+            peername=("127.0.0.1", 12345),
+        ),
+        server_conn=SimpleNamespace(
+            id=f"server:{id(request)}",
+            address=(request.host, request.port),
+            peername=("172.16.0.2", request.port),
+            sni=request.host if request.scheme == "https" else None,
+            tls_established=request.scheme == "https",
+        ),
         metadata={},
     )
     if response is not None:
@@ -432,26 +562,333 @@ def assert_injection_rejected(bundle: dict, message: str, *, validate_schema: bo
     raise AssertionError(f"policy schema accepted {message}")
 
 
-def _proxy_http_headers(sock: socket.socket) -> bytes:
+_LIVE_PROXY_TIMEOUT_SECONDS = 20.0
+_MITMDUMP_OUTPUT_LIMIT_BYTES = 1024 * 1024
+_MITMDUMP_DIAGNOSTIC_TAIL_BYTES = 32 * 1024
+_MITMDUMP_TEARDOWN_RESERVE_SECONDS = 2.0
+_MITMDUMP_TERM_GRACE_SECONDS = 0.75
+_MITMDUMP_FINAL_REAP_RESERVE_SECONDS = 0.25
+
+
+class _MitmdumpSupervisor:
+    def __init__(self, process: subprocess.Popen[bytes], deadline: float) -> None:
+        if process.stdout is None or process.stderr is None:
+            raise AssertionError("mitmdump supervisor requires stdout and stderr pipes")
+        self.process = process
+        self.deadline = deadline
+        self.assertion_cutoff = deadline - _MITMDUMP_TEARDOWN_RESERVE_SECONDS
+        self._lock = threading.Lock()
+        self._shutdown_requested = threading.Event()
+        self._done = threading.Event()
+        self._failure: str | None = None
+        self._observed_bytes = 0
+        self._tails = {
+            "stdout": bytearray(),
+            "stderr": bytearray(),
+        }
+        self._thread = threading.Thread(
+            target=self._supervise,
+            name="mitmdump-output-supervisor",
+            daemon=False,
+        )
+        self._thread.start()
+
+    def _record_failure(self, message: str) -> None:
+        with self._lock:
+            if self._failure is None:
+                self._failure = message
+
+    def _capture(self, stream_name: str, chunk: bytes) -> None:
+        with self._lock:
+            self._observed_bytes += len(chunk)
+            tail = self._tails[stream_name]
+            tail.extend(chunk)
+            if len(tail) > _MITMDUMP_DIAGNOSTIC_TAIL_BYTES:
+                del tail[:-_MITMDUMP_DIAGNOSTIC_TAIL_BYTES]
+            if (
+                self._observed_bytes > _MITMDUMP_OUTPUT_LIMIT_BYTES
+                and self._failure is None
+            ):
+                self._failure = (
+                    "mitmdump exceeded the "
+                    f"{_MITMDUMP_OUTPUT_LIMIT_BYTES}-byte combined output cap"
+                )
+
+    def _diagnostics(self) -> str:
+        with self._lock:
+            observed_bytes = self._observed_bytes
+            tails = {
+                name: bytes(value).decode("utf-8", errors="replace")
+                for name, value in self._tails.items()
+            }
+        sections = [
+            "mitmdump output "
+            f"({observed_bytes} bytes observed; bounded tails follow)"
+        ]
+        for stream_name in ("stdout", "stderr"):
+            content = tails[stream_name]
+            sections.append(f"--- {stream_name} tail ---\n{content or '<empty>'}")
+        return "\n".join(sections)
+
+    def _failure_message(self) -> str | None:
+        with self._lock:
+            failure = self._failure
+        if failure is None:
+            return None
+        return f"{failure}\n{self._diagnostics()}"
+
+    def _group_exists(self) -> bool:
+        try:
+            os.killpg(self.process.pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        return True
+
+    def _signal_group(self, sig: signal.Signals) -> None:
+        try:
+            os.killpg(self.process.pid, sig)
+        except ProcessLookupError:
+            pass
+
+    @staticmethod
+    def _close_stream(
+        selector: selectors.BaseSelector,
+        stream,
+    ) -> None:
+        try:
+            selector.unregister(stream)
+        except (KeyError, ValueError):
+            pass
+        try:
+            stream.close()
+        except OSError:
+            pass
+
+    def _drain_ready(
+        self,
+        selector: selectors.BaseSelector,
+        timeout: float,
+    ) -> None:
+        try:
+            events = selector.select(timeout)
+        except (OSError, ValueError):
+            return
+        for key, _mask in events:
+            stream = key.fileobj
+            stream_name = key.data
+            for _ in range(64):
+                try:
+                    chunk = os.read(stream.fileno(), 16 * 1024)
+                except BlockingIOError:
+                    break
+                except (OSError, ValueError):
+                    self._close_stream(selector, stream)
+                    break
+                if not chunk:
+                    self._close_stream(selector, stream)
+                    break
+                self._capture(stream_name, chunk)
+
+    def _supervise(self) -> None:
+        selector = selectors.DefaultSelector()
+        streams = (
+            (self.process.stdout, "stdout"),
+            (self.process.stderr, "stderr"),
+        )
+        shutting_down = False
+        term_sent_at: float | None = None
+        kill_sent = False
+        try:
+            for stream, stream_name in streams:
+                os.set_blocking(stream.fileno(), False)
+                selector.register(stream, selectors.EVENT_READ, stream_name)
+
+            while True:
+                now = time.monotonic()
+                if shutting_down:
+                    next_transition = self.deadline
+                    if term_sent_at is not None and not kill_sent:
+                        next_transition = min(
+                            next_transition,
+                            term_sent_at + _MITMDUMP_TERM_GRACE_SECONDS,
+                        )
+                else:
+                    next_transition = self.assertion_cutoff
+                self._drain_ready(
+                    selector,
+                    max(0.0, min(0.05, next_transition - now)),
+                )
+                now = time.monotonic()
+
+                with self._lock:
+                    output_failed = (
+                        self._failure is not None
+                        and self._observed_bytes > _MITMDUMP_OUTPUT_LIMIT_BYTES
+                    )
+
+                if not shutting_down:
+                    if self._shutdown_requested.is_set():
+                        shutting_down = True
+                    elif output_failed:
+                        shutting_down = True
+                    elif now >= self.assertion_cutoff:
+                        self._record_failure(
+                            "live proxy assertions exceeded the single "
+                            f"{_LIVE_PROXY_TIMEOUT_SECONDS:g}-second deadline"
+                        )
+                        shutting_down = True
+                    elif self.process.poll() is not None:
+                        self._record_failure(
+                            "mitmdump exited before live assertions completed "
+                            f"with status {self.process.returncode}"
+                        )
+                        shutting_down = True
+
+                if shutting_down and term_sent_at is None:
+                    self._signal_group(signal.SIGTERM)
+                    term_sent_at = now
+
+                if (
+                    shutting_down
+                    and term_sent_at is not None
+                    and not kill_sent
+                    and now >= term_sent_at + _MITMDUMP_TERM_GRACE_SECONDS
+                    and self._group_exists()
+                ):
+                    self._signal_group(signal.SIGKILL)
+                    kill_sent = True
+
+                group_exists = self._group_exists()
+                leader_exited = self.process.poll() is not None
+                if shutting_down and not group_exists and leader_exited:
+                    self._drain_ready(selector, 0.0)
+                    if not selector.get_map():
+                        break
+
+                if now >= self.deadline - _MITMDUMP_FINAL_REAP_RESERVE_SECONDS:
+                    if group_exists:
+                        self._signal_group(signal.SIGKILL)
+                        kill_sent = True
+                    if now >= self.deadline:
+                        if self._group_exists() or self.process.poll() is None:
+                            self._record_failure(
+                                "mitmdump process group was not reaped before "
+                                "the live proxy deadline"
+                            )
+                        break
+        except BaseException as exc:
+            self._record_failure(
+                "mitmdump supervision failed: "
+                f"{type(exc).__name__}: {exc}"
+            )
+        finally:
+            if self._group_exists():
+                self._signal_group(signal.SIGKILL)
+            remaining = max(0.0, self.deadline - time.monotonic())
+            if self.process.poll() is None and remaining > 0:
+                try:
+                    self.process.wait(timeout=remaining)
+                except subprocess.TimeoutExpired:
+                    self._record_failure(
+                        "mitmdump leader was not reaped before the live proxy deadline"
+                    )
+            self._drain_ready(selector, 0.0)
+            for stream, _stream_name in streams:
+                self._close_stream(selector, stream)
+            selector.close()
+            self._done.set()
+
+    def check(self, context: str) -> None:
+        failure = self._failure_message()
+        if failure is not None:
+            raise AssertionError(f"{context}: {failure}")
+        if self.process.poll() is not None and not self._shutdown_requested.is_set():
+            self._record_failure(
+                "mitmdump exited before live assertions completed "
+                f"with status {self.process.returncode}"
+            )
+            raise AssertionError(f"{context}: {self._failure_message()}")
+        if time.monotonic() >= self.assertion_cutoff:
+            self._record_failure(
+                "live proxy assertions exceeded the single "
+                f"{_LIVE_PROXY_TIMEOUT_SECONDS:g}-second deadline"
+            )
+            raise AssertionError(f"{context}: {self._failure_message()}")
+
+    def io_timeout(self, maximum: float, context: str) -> float:
+        self.check(context)
+        remaining = self.assertion_cutoff - time.monotonic()
+        if remaining <= 0:
+            self.check(context)
+        return max(0.001, min(maximum, remaining))
+
+    def pause(self, duration: float, context: str) -> None:
+        self.check(context)
+        self._shutdown_requested.wait(self.io_timeout(duration, context))
+        self.check(context)
+
+    def finish(self) -> str | None:
+        self._shutdown_requested.set()
+        force_at = self.deadline - _MITMDUMP_FINAL_REAP_RESERVE_SECONDS
+        self._done.wait(max(0.0, force_at - time.monotonic()))
+        if not self._done.is_set():
+            self._signal_group(signal.SIGKILL)
+            for stream in (self.process.stdout, self.process.stderr):
+                try:
+                    stream.close()
+                except OSError:
+                    pass
+            self._done.wait(max(0.0, self.deadline - time.monotonic()))
+        self._thread.join(timeout=max(0.0, self.deadline - time.monotonic()))
+        if self._thread.is_alive():
+            self._record_failure(
+                "mitmdump output supervisor did not stop before the live proxy deadline"
+            )
+        if self.process.poll() is None or self._group_exists():
+            self._record_failure(
+                "mitmdump process group remained after bounded teardown"
+            )
+        return self._failure_message()
+
+
+def _proxy_http_headers(
+    sock: socket.socket,
+    supervisor: _MitmdumpSupervisor,
+) -> bytes:
     received = bytearray()
     while b"\r\n\r\n" not in received:
+        sock.settimeout(
+            supervisor.io_timeout(2.0, "waiting for proxy CONNECT response")
+        )
         chunk = sock.recv(4096)
         if not chunk:
             break
         received.extend(chunk)
         if len(received) > 65536:
             raise AssertionError("proxy returned oversized CONNECT response headers")
+        supervisor.check("reading proxy CONNECT response")
     return bytes(received)
 
 
-def _assert_no_upstream_connection(listener: socket.socket, label: str) -> None:
-    listener.settimeout(0.5)
+def _assert_no_upstream_connection(
+    listener: socket.socket,
+    label: str,
+    supervisor: _MitmdumpSupervisor,
+) -> None:
+    listener.settimeout(
+        supervisor.io_timeout(0.5, f"checking {label} upstream isolation")
+    )
     try:
         upstream, _address = listener.accept()
     except TimeoutError:
+        supervisor.check(f"checking {label} upstream isolation")
         return
     try:
-        upstream.settimeout(0.1)
+        upstream.settimeout(
+            supervisor.io_timeout(0.1, f"reading unexpected {label} connection")
+        )
         try:
             payload = upstream.recv(4096)
         except TimeoutError:
@@ -464,6 +901,7 @@ def _assert_no_upstream_connection(listener: socket.socket, label: str) -> None:
 def _live_proxy_transport_assertions(runner_module) -> None:
     from serverware.config import POLICY_BUNDLE_PATH
 
+    deadline = time.monotonic() + _LIVE_PROXY_TIMEOUT_SECONDS
     bundle = demo_policy_bundle("cred-demo-bearer")
     echo_route = next(item for item in bundle["routes"] if item["id"] == "demo.echo")
 
@@ -474,6 +912,7 @@ def _live_proxy_transport_assertions(runner_module) -> None:
     upstream_port = upstream_listener.getsockname()[1]
     echo_route["match"]["host"] = "localhost"
     echo_route["match"]["port"] = upstream_port
+    echo_route["match"]["resolvedCidrs"] = ["127.0.0.1/32"]
     signed_bundle = sign_policy_bundle(bundle)
     compile_policy_bundle(signed_bundle, verify_signature=True, validate_schema=True)
     POLICY_BUNDLE_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -491,52 +930,79 @@ def _live_proxy_transport_assertions(runner_module) -> None:
     env["PYTHONPATH"] = os.pathsep.join(
         item for item in (str(ROOT), env.get("PYTHONPATH", "")) if item
     )
-    process = subprocess.Popen(
-        command,
-        cwd=ROOT,
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-    )
-
-    def open_connect(agent: str) -> tuple[socket.socket, bytes]:
-        tunnel = socket.create_connection(("127.0.0.1", proxy_port), timeout=2)
-        tunnel.settimeout(2)
-        tunnel.sendall(
-            (
-                f"CONNECT localhost:{upstream_port} HTTP/1.1\r\n"
-                f"Host: localhost:{upstream_port}\r\n"
-                f"X-Serverware-Agent: {agent}\r\n"
-                "\r\n"
-            ).encode("ascii")
-        )
-        return tunnel, _proxy_http_headers(tunnel)
-
+    process: subprocess.Popen[bytes] | None = None
+    supervisor: _MitmdumpSupervisor | None = None
+    primary_error: BaseException | None = None
+    cleanup_error: str | None = None
     try:
-        deadline = time.monotonic() + 8
+        process = subprocess.Popen(
+            command,
+            cwd=ROOT,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=False,
+            start_new_session=True,
+        )
+        supervisor = _MitmdumpSupervisor(process, deadline)
+
+        def open_connect(agent: str) -> tuple[socket.socket, bytes]:
+            supervisor.check(f"opening CONNECT tunnel for {agent}")
+            tunnel = socket.create_connection(
+                ("127.0.0.1", proxy_port),
+                timeout=supervisor.io_timeout(
+                    2.0,
+                    f"opening CONNECT tunnel for {agent}",
+                ),
+            )
+            tunnel.settimeout(
+                supervisor.io_timeout(
+                    2.0,
+                    f"sending CONNECT request for {agent}",
+                )
+            )
+            tunnel.sendall(
+                (
+                    f"CONNECT localhost:{upstream_port} HTTP/1.1\r\n"
+                    f"Host: localhost:{upstream_port}\r\n"
+                    f"X-Serverware-Agent: {agent}\r\n"
+                    "\r\n"
+                ).encode("ascii")
+            )
+            return tunnel, _proxy_http_headers(tunnel, supervisor)
+
         while True:
-            if process.poll() is not None:
-                output = process.communicate()[0]
-                raise AssertionError(f"mitmdump exited before live assertions:\n{output}")
+            supervisor.check("waiting for mitmdump listener")
             try:
-                with socket.create_connection(("127.0.0.1", proxy_port), timeout=0.1):
+                with socket.create_connection(
+                    ("127.0.0.1", proxy_port),
+                    timeout=supervisor.io_timeout(
+                        0.1,
+                        "waiting for mitmdump listener",
+                    ),
+                ):
                     break
             except OSError:
-                if time.monotonic() >= deadline:
-                    raise AssertionError("mitmdump did not listen within 8 seconds")
-                time.sleep(0.05)
+                supervisor.pause(0.05, "waiting for mitmdump listener")
 
         denied_tunnel, denied_headers = open_connect("not-admitted")
         denied_tunnel.close()
         assert denied_headers.startswith(b"HTTP/1.1 403"), denied_headers
-        _assert_no_upstream_connection(upstream_listener, "unadmitted CONNECT")
+        _assert_no_upstream_connection(
+            upstream_listener,
+            "unadmitted CONNECT",
+            supervisor,
+        )
 
         admitted_tunnel, admitted_headers = open_connect("demo-agent")
         assert admitted_headers.startswith(b"HTTP/1.1 200"), admitted_headers
         admitted_tunnel.sendall(b"SERVERWARE-UNKNOWN-RAW-TCP\x00\x01\x02")
         admitted_tunnel.close()
-        _assert_no_upstream_connection(upstream_listener, "raw TCP after admitted CONNECT")
+        _assert_no_upstream_connection(
+            upstream_listener,
+            "raw TCP after admitted CONNECT",
+            supervisor,
+        )
 
         tls_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         tls_context.check_hostname = False
@@ -544,12 +1010,41 @@ def _live_proxy_transport_assertions(runner_module) -> None:
 
         matching_tunnel, matching_headers = open_connect("demo-agent")
         assert matching_headers.startswith(b"HTTP/1.1 200"), matching_headers
+        matching_tunnel.settimeout(
+            supervisor.io_timeout(2.0, "performing matching SNI handshake")
+        )
         matching_tls = tls_context.wrap_socket(
             matching_tunnel,
             server_hostname="localhost",
         )
+        matching_tls.sendall(
+            (
+                "GET /echo HTTP/1.1\r\n"
+                f"Host: localhost:{upstream_port}\r\n"
+                "X-Serverware-Agent: demo-agent\r\n"
+                "Connection: close\r\n"
+                "\r\n"
+            ).encode("ascii")
+        )
+        denied_request_headers = _proxy_http_headers(
+            matching_tls,
+            supervisor,
+        )
         matching_tls.close()
-        _assert_no_upstream_connection(upstream_listener, "matching SNI handshake")
+        assert denied_request_headers.startswith(
+            b"HTTP/1.1 503"
+        ), denied_request_headers
+        assert (
+            b"legacy_mitm_credential_transport_denied"
+            in denied_request_headers
+            or b"content-type: application/json"
+            in denied_request_headers.lower()
+        ), denied_request_headers
+        _assert_no_upstream_connection(
+            upstream_listener,
+            "credential-bearing HTTPS request",
+            supervisor,
+        )
 
         for server_hostname, label in (
             ("mismatch.example.test", "mismatched SNI"),
@@ -557,6 +1052,9 @@ def _live_proxy_transport_assertions(runner_module) -> None:
         ):
             invalid_tunnel, invalid_headers = open_connect("demo-agent")
             assert invalid_headers.startswith(b"HTTP/1.1 200"), invalid_headers
+            invalid_tunnel.settimeout(
+                supervisor.io_timeout(2.0, f"performing {label} handshake")
+            )
             try:
                 invalid_tls = tls_context.wrap_socket(
                     invalid_tunnel,
@@ -567,16 +1065,43 @@ def _live_proxy_transport_assertions(runner_module) -> None:
             else:
                 invalid_tls.close()
                 raise AssertionError(f"{label} completed a TLS handshake")
-            _assert_no_upstream_connection(upstream_listener, label)
+            _assert_no_upstream_connection(
+                upstream_listener,
+                label,
+                supervisor,
+            )
+        supervisor.check("completing live proxy assertions")
+    except BaseException as exc:
+        primary_error = exc
     finally:
         upstream_listener.close()
-        if process.poll() is None:
-            process.terminate()
-        try:
-            process.communicate(timeout=5)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.communicate(timeout=5)
+        if supervisor is not None:
+            cleanup_error = supervisor.finish()
+        elif process is not None:
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            remaining = max(0.0, deadline - time.monotonic())
+            try:
+                process.wait(timeout=min(_MITMDUMP_TERM_GRACE_SECONDS, remaining))
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                remaining = max(0.0, deadline - time.monotonic())
+                try:
+                    process.wait(timeout=remaining)
+                except subprocess.TimeoutExpired:
+                    cleanup_error = "mitmdump launch failure left an unreaped process group"
+
+    if primary_error is not None:
+        if cleanup_error is not None:
+            primary_error.add_note(f"mitmdump supervision: {cleanup_error}")
+        raise primary_error.with_traceback(primary_error.__traceback__)
+    if cleanup_error is not None:
+        raise AssertionError(cleanup_error)
 
 
 def run_proxy_transport_assertions() -> None:
@@ -587,7 +1112,7 @@ def run_proxy_transport_assertions() -> None:
     from mitmproxy import connection, http, tls
     from mitmproxy.options import Options
     from mitmproxy.proxy.context import Context
-    from serverware import mitm_addon, runner
+    from serverware import mitm_addon, policy_engine, runner
 
     expected_command = [
         "mitmdump",
@@ -609,7 +1134,46 @@ def run_proxy_transport_assertions() -> None:
         str(Path(runner.__file__).with_name("mitm_addon.py")),
     ]
     assert runner._mitmdump_command() == expected_command
+    assert "connection_strategy=eager" not in runner._mitmdump_command()
     assert "ssl_insecure=true" not in runner._mitmdump_command()
+
+    addon_source = Path(mitm_addon.__file__).read_text(encoding="utf-8")
+    marker_offset = addon_source.index(
+        "flow.metadata[LEGACY_MITM_TRANSPORT_METADATA_KEY] = True"
+    )
+    evaluation_offset = addon_source.index("evaluation = evaluate_request(flow)")
+    route_guard_offset = addon_source.index(
+        "if route.credential_ref:",
+        evaluation_offset,
+    )
+    dispatch_offset = addon_source.index(
+        "dispatch = dispatch_release_authorization(flow)",
+        route_guard_offset,
+    )
+    assert marker_offset < evaluation_offset < route_guard_offset < dispatch_offset
+    assert "verify_connected_provider_peer" not in addon_source
+
+    policy_source = Path(policy_engine.__file__).read_text(encoding="utf-8")
+    request_evaluation_offset = policy_source.index(
+        "def evaluate_request(flow: http.HTTPFlow)"
+    )
+    admission_offset = policy_source.index(
+        "transport_denial = _legacy_mitm_route_admission(flow, route)",
+        request_evaluation_offset,
+    )
+    adapter_offset = policy_source.index(
+        "adapter = get_adapter(route.adapter_type)",
+        admission_offset,
+    )
+    credential_generation_offset = policy_source.index(
+        "credential_generation = runtime.get_credential_generation(",
+        adapter_offset,
+    )
+    assert admission_offset < adapter_offset < credential_generation_offset
+
+    http_client_source = Path(http_client.__file__).read_text(encoding="utf-8")
+    assert "class PinnedProviderConnection" not in http_client_source
+    assert "def open_pinned_provider_connection" not in http_client_source
 
     production_env = os.environ.copy()
     production_env["SERVERWARE_RELEASE_CHANNEL"] = "production"
@@ -665,8 +1229,14 @@ def run_proxy_transport_assertions() -> None:
         item.request = http.Request.make(
             "CONNECT",
             "https://connect.example.test:443",
-            headers={"X-Serverware-Agent": agent},
+            headers={
+                "Host": "connect.example.test:443",
+                "X-Serverware-Agent": agent,
+            },
         )
+        item.request.data.scheme = b""
+        item.request.data.authority = b"connect.example.test:443"
+        item.request.data.path = b"connect.example.test:443"
         return item
 
     def client_hello_data(item, sni):
@@ -685,7 +1255,17 @@ def run_proxy_transport_assertions() -> None:
         admitted = connect_flow("connect-agent")
         addon.http_connect(admitted)
         assert admitted.response is None
-        matching = client_hello_data(admitted, "CONNECT.EXAMPLE.TEST.")
+        noncanonical_sni = client_hello_data(admitted, "CONNECT.EXAMPLE.TEST.")
+        addon.tls_clienthello(noncanonical_sni)
+        assert (
+            noncanonical_sni.context.client.state
+            is connection.ConnectionState.CLOSED
+        )
+        assert "SNI does not match" in noncanonical_sni.context.client.error
+
+        canonical_sni = connect_flow("connect-agent")
+        addon.http_connect(canonical_sni)
+        matching = client_hello_data(canonical_sni, "connect.example.test")
         addon.tls_clienthello(matching)
         assert matching.context.client.state is connection.ConnectionState.OPEN
         assert matching.context.client.error is None
@@ -722,9 +1302,22 @@ def run_proxy_transport_assertions() -> None:
         assert "without an admitted CONNECT" in unadmitted_data.context.client.error
 
         addon.client_disconnected(admitted.client_conn)
+        assert (
+            mitm_addon._connection_key(admitted.client_conn)
+            not in addon._admitted_connect_authorities
+        )
+        assert (
+            mitm_addon._connection_key(admitted.server_conn)
+            in addon._admitted_server_connections
+        )
         disconnected_data = client_hello_data(admitted, "connect.example.test")
         addon.tls_clienthello(disconnected_data)
         assert disconnected_data.context.client.state is connection.ConnectionState.CLOSED
+        addon.server_disconnected(admitted.server_conn)
+        assert (
+            mitm_addon._connection_key(admitted.server_conn)
+            not in addon._admitted_server_connections
+        )
     finally:
         runtime.log_request = original_log_request
         mitm_addon.get_policy_snapshot = original_snapshot
@@ -734,6 +1327,7 @@ def run_proxy_transport_assertions() -> None:
 
 
 def main() -> None:
+    require_consolidated_policy_runtime()
     assert_runtime_constraint_vocabulary_fails_closed()
     if PROXY_TRANSPORT_ONLY:
         run_proxy_transport_assertions()
@@ -750,6 +1344,44 @@ def main() -> None:
         for item in internal_demo_routes
     )
 
+    for canonical_host in ("example.test", "192.0.2.1"):
+        valid_host = copy.deepcopy(demo_bundle)
+        next(item for item in valid_host["routes"] if item["id"] == "demo.echo")[
+            "match"
+        ]["host"] = canonical_host
+        compiled_host = compile_policy_bundle(
+            valid_host,
+            validate_schema=validate_schema,
+        )
+        assert route(compiled_host, "demo.echo").host == canonical_host
+
+    for label, invalid_host in (
+        ("upper-case DNS", "EXAMPLE.test"),
+        ("trailing DNS dot", "example.test."),
+        ("empty DNS label", "example..test"),
+        ("userinfo", "user@example.test"),
+        ("path separator", "example.test/path"),
+        ("percent escape", "example%2etest"),
+        ("noncanonical IPv4", "0127.0.0.1"),
+        ("short IPv4", "127.1"),
+        ("integer IPv4", "2130706433"),
+        ("expanded IPv6", "2001:0db8::1"),
+        ("upper-case IPv6", "2001:DB8::1"),
+        ("v1 policy IPv6 extension unavailable", "2001:db8::1"),
+        ("bracketed IPv6", "[2001:db8::1]"),
+        ("IPv6 zone", "fe80::1%eth0"),
+        ("IPv4-mapped IPv6", "::ffff:c000:201"),
+    ):
+        invalid = copy.deepcopy(demo_bundle)
+        next(item for item in invalid["routes"] if item["id"] == "demo.echo")[
+            "match"
+        ]["host"] = invalid_host
+        assert_signed_policy_and_schema_rejected(
+            invalid,
+            f"noncanonical route host with {label}",
+            validate_schema=validate_schema,
+        )
+
     valid_resolved_cidrs = [
         "10.0.0.0/8",
         "127.0.0.0/8",
@@ -760,8 +1392,10 @@ def main() -> None:
     next(
         item for item in explicit_resolution["routes"] if item["id"] == "demo.echo"
     )["match"]["resolvedCidrs"] = valid_resolved_cidrs
+    signed_explicit_resolution = sign_policy_bundle(explicit_resolution)
     explicit_snapshot = compile_policy_bundle(
-        explicit_resolution,
+        signed_explicit_resolution,
+        verify_signature=True,
         validate_schema=validate_schema,
     )
     assert route(explicit_snapshot, "demo.echo").resolved_cidrs == tuple(
@@ -770,6 +1404,97 @@ def main() -> None:
     assert next(
         item for item in explicit_snapshot.raw["routes"] if item["id"] == "demo.echo"
     )["match"]["resolvedCidrs"] == valid_resolved_cidrs
+
+    peer_bound_route = route(explicit_snapshot, "demo.echo")
+    legacy_credential_flow = flow(
+        "POST",
+        "https://demo-upstream:8443/echo",
+    )
+    legacy_credential_flow.metadata[
+        LEGACY_MITM_TRANSPORT_METADATA_KEY
+    ] = True
+    assert_denied(
+        _legacy_mitm_route_admission(
+            legacy_credential_flow,
+            peer_bound_route,
+        ),
+        "legacy_mitm_credential_transport_denied",
+    )
+
+    admission_side_effects: list[str] = []
+
+    def forbidden_admission_side_effect(*_args, **_kwargs):
+        admission_side_effects.append("credential_or_adapter")
+        raise AssertionError(
+            "legacy credential route reached credential or adapter work"
+        )
+
+    original_snapshot_lookup = policy_engine.get_policy_snapshot
+    original_adapter_lookup = policy_engine.get_adapter
+    original_generation_lookup = runtime.get_credential_generation
+    original_request_log = runtime.log_request
+    legacy_credential_flow.request.headers[
+        "X-Serverware-Agent"
+    ] = "demo-agent"
+    policy_engine.get_policy_snapshot = lambda: explicit_snapshot
+    policy_engine.get_adapter = forbidden_admission_side_effect
+    runtime.get_credential_generation = forbidden_admission_side_effect
+    runtime.log_request = lambda *_args, **_kwargs: None
+    try:
+        legacy_evaluation = evaluate_request(legacy_credential_flow)
+    finally:
+        runtime.log_request = original_request_log
+        runtime.get_credential_generation = original_generation_lookup
+        policy_engine.get_adapter = original_adapter_lookup
+        policy_engine.get_policy_snapshot = original_snapshot_lookup
+    assert_denied(
+        legacy_evaluation.decision,
+        "legacy_mitm_credential_transport_denied",
+    )
+    assert admission_side_effects == []
+
+    missing_resolution_flow = flow(
+        "POST",
+        "https://demo-upstream:8443/echo",
+    )
+    assert_denied(
+        _legacy_mitm_route_admission(
+            missing_resolution_flow,
+            SimpleNamespace(
+                credential_ref="cred-demo-bearer",
+                resolved_cidrs=None,
+            ),
+        ),
+        "provider_resolved_cidrs_required",
+    )
+
+    credentialless_dev_flow = flow(
+        "GET",
+        "https://demo-upstream:8443/stream-bytes",
+    )
+    credentialless_dev_flow.metadata[
+        LEGACY_MITM_TRANSPORT_METADATA_KEY
+    ] = True
+    assert (
+        _legacy_mitm_route_admission(
+            credentialless_dev_flow,
+            SimpleNamespace(
+                credential_ref=None,
+                resolved_cidrs=None,
+            ),
+        )
+        is None
+    )
+    assert_denied(
+        _legacy_mitm_route_admission(
+            credentialless_dev_flow,
+            SimpleNamespace(
+                credential_ref=None,
+                resolved_cidrs=("127.0.0.1/32",),
+            ),
+        ),
+        "legacy_mitm_resolved_cidrs_unsupported",
+    )
 
     public_only_resolution = copy.deepcopy(demo_bundle)
     next(
@@ -780,6 +1505,36 @@ def main() -> None:
         validate_schema=validate_schema,
     )
     assert route(public_only_snapshot, "demo.echo").resolved_cidrs is None
+    missing_resolution_request = flow(
+        "POST",
+        "https://demo-upstream:8443/echo",
+    )
+    missing_resolution_request.request.headers[
+        "X-Serverware-Agent"
+    ] = "demo-agent"
+    admission_side_effects.clear()
+    original_snapshot_lookup = policy_engine.get_policy_snapshot
+    original_adapter_lookup = policy_engine.get_adapter
+    original_generation_lookup = runtime.get_credential_generation
+    original_request_log = runtime.log_request
+    policy_engine.get_policy_snapshot = lambda: public_only_snapshot
+    policy_engine.get_adapter = forbidden_admission_side_effect
+    runtime.get_credential_generation = forbidden_admission_side_effect
+    runtime.log_request = lambda *_args, **_kwargs: None
+    try:
+        missing_resolution_evaluation = evaluate_request(
+            missing_resolution_request
+        )
+    finally:
+        runtime.log_request = original_request_log
+        runtime.get_credential_generation = original_generation_lookup
+        policy_engine.get_adapter = original_adapter_lookup
+        policy_engine.get_policy_snapshot = original_snapshot_lookup
+    assert_denied(
+        missing_resolution_evaluation.decision,
+        "provider_resolved_cidrs_required",
+    )
+    assert admission_side_effects == []
 
     invalid_resolved_cidr_sets = (
         ("empty list", []),
@@ -875,12 +1630,115 @@ def main() -> None:
         raise AssertionError("strict policy loading accepted duplicate keys in a validly signed policy")
 
     checked_in_demo = json.loads((ROOT / "policies" / "demo.policy.json").read_text())
-    assert checked_in_demo == demo_bundle, "policies/demo.policy.json drifted from demo_policy_bundle()"
-    demo = compile_policy_bundle(demo_bundle, validate_schema=validate_schema)
+    expected_checked_demo = copy.deepcopy(demo_bundle)
+    explicit_provider_statuses = {
+        "demo.gmail.recent": [200, 400, 401, 403, 404, 429, 500, 502, 503],
+        "demo.x.tweet.one_per_day": [
+            200,
+            400,
+            401,
+            403,
+            409,
+            422,
+            429,
+            500,
+            502,
+            503,
+        ],
+        "demo.x.search.recent": [200, 400, 401, 403, 404, 429, 500, 502, 503],
+        "demo.x.readonly": [200, 400, 401, 403, 404, 429, 500, 502, 503],
+        "demo.npm.publish.jit": [
+            200,
+            201,
+            400,
+            401,
+            403,
+            404,
+            409,
+            422,
+            429,
+            500,
+            502,
+            503,
+        ],
+    }
+    retry_after_rule = {
+        "name": "retry-after",
+        "required": False,
+        "predicate": {
+            "kind": "pattern",
+            "pattern": "^[0-9]{1,6}$",
+            "maxLength": 6,
+        },
+    }
+    authenticate_rule = {
+        "name": "www-authenticate",
+        "required": False,
+        "predicate": {
+            "kind": "stringLength",
+            "minLength": 1,
+            "maxLength": 512,
+        },
+    }
+    for route_id, statuses in explicit_provider_statuses.items():
+        expected_route = next(
+            item
+            for item in expected_checked_demo["routes"]
+            if item["id"] == route_id
+        )
+        envelope = next(
+            constraint
+            for constraint in expected_route["constraints"]
+            if constraint["type"] == "responseEnvelope"
+        )
+        envelope["statusCodes"] = statuses
+        envelope["allowedResponseHeaderNames"] = ["retry-after"]
+        envelope["responseHeaderRules"] = [copy.deepcopy(retry_after_rule)]
+        if route_id in {"demo.gmail.recent", "demo.npm.publish.jit"}:
+            envelope["allowedResponseHeaderNames"].append("www-authenticate")
+            envelope["responseHeaderRules"].append(
+                copy.deepcopy(authenticate_rule)
+            )
+    expected_gmail = next(
+        item
+        for item in expected_checked_demo["routes"]
+        if item["id"] == "demo.gmail.recent"
+    )
+    gmail_date_window = next(
+        constraint
+        for constraint in expected_gmail["constraints"]
+        if constraint["type"] == "responseDateWindow"
+    )
+    gmail_date_window["allowFutureSkewSeconds"] = 300
+    gmail_envelope = next(
+        constraint
+        for constraint in expected_gmail["constraints"]
+        if constraint["type"] == "responseEnvelope"
+    )
+    gmail_envelope["description"] = (
+        "The gmail.v1 adapter additionally requires a successful detail response "
+        "id to exactly equal the requested message_id and rejects internalDate "
+        "values more than 300 seconds in the future."
+    )
+    assert checked_in_demo == expected_checked_demo, (
+        "policies/demo.policy.json drifted from its explicit security overlay"
+    )
+    demo = compile_policy_bundle(checked_in_demo, validate_schema=validate_schema)
     examples = json.loads((ROOT / "policies" / "credential-limits.examples.json").read_text())
     example_snapshot = compile_policy_bundle(examples, validate_schema=validate_schema)
-    assert all("resolvedCidrs" not in item["match"] for item in examples["routes"])
-    assert all(item.resolved_cidrs is None for item in example_snapshot.routes)
+    credential_example_routes = [
+        item for item in examples["routes"] if item.get("credentialRef")
+    ]
+    assert credential_example_routes
+    assert all(
+        item["match"].get("resolvedCidrs")
+        for item in credential_example_routes
+    )
+    assert all(
+        item.resolved_cidrs is not None
+        for item in example_snapshot.routes
+        if item.credential_ref
+    )
 
     for label, predicate, value, expected_allowed in REQUEST_VALUE_PARITY_VECTORS:
         vector_flow = flow("GET", f"https://example.test/items?scope={quote(value, safe='')}")
@@ -1347,6 +2205,7 @@ def main() -> None:
         route_candidate["match"]["paths"] = ["/v1/payment_intents/{payment_intent_id}"]
         request = route_candidate["adapter"]["config"]["request"]
         request["bodyMode"] = "json"
+        request["allowedMediaTypes"] = ["application/json"]
         request["operation"] = {
             "name": "stripe.payment_intents.create",
             "jsonFields": ["amount", "currency", "payment_method"],
@@ -1501,6 +2360,9 @@ def main() -> None:
         if source_key == "formFields":
             route_candidate.pop("credentialRef")
             request["bodyMode"] = "formUrlencoded"
+            request["allowedMediaTypes"] = [
+                "application/x-www-form-urlencoded"
+            ]
             route_candidate["constraints"] = [
                 constraint
                 for constraint in route_candidate["constraints"]
@@ -1529,6 +2391,7 @@ def main() -> None:
     valid_path_only, path_only_route, path_only_binding = json_path_response_binding_candidate()
     path_only_request = path_only_route["adapter"]["config"]["request"]
     path_only_request["bodyMode"] = "none"
+    path_only_request["allowedMediaTypes"] = []
     path_only_request["maxBodyBytes"] = 0
     path_only_request["operation"].pop("jsonFields")
     path_only_route["constraints"] = [
@@ -1957,17 +2820,87 @@ def main() -> None:
     x_schema = json.loads((ROOT / "schemas" / "adapters" / "x.v2.schema.json").read_text())
     x_schema_operations = set(x_schema["properties"]["allowedReadOperations"]["items"]["enum"])
     assert x_schema_operations == X_V2_READ_OPERATIONS
-    assert X_V2_BOUNDED_READ_OPERATIONS == X_V2_READ_OPERATIONS - {"streams.read"}
+    assert X_V2_BOUNDED_READ_OPERATIONS == X_V2_READ_OPERATIONS
     assert X_V2_RECENT_SEARCH_PATHS == {
         "/2/tweets/counts/recent",
         "/2/tweets/search/recent",
     }
-    assert len(X_V2_RECENT_SEARCH_QUERY_KEYS) == 17
+    assert len(X_V2_RECENT_SEARCH_QUERY_KEYS) == 16
     assert len(X_V2_BOUNDED_READ_QUERY_KEYS) == 55
     assert len(GMAIL_V1_REQUEST_QUERY_KEYS) == 12
     assert len(GMAIL_V1_REQUEST_HEADERS) == 7
     assert len(X_V2_REQUEST_HEADERS) == 4
-    assert len(NPM_REGISTRY_REQUEST_HEADERS) == 10
+    assert len(NPM_REGISTRY_REQUEST_HEADERS) == 9
+    assert validate_request_target_path(
+        "https://registry.npmjs.org/@scope%2fexample"
+    )
+    assert not validate_request_target_path(
+        "https://api.example.test/public/resource"
+    )
+    for ambiguous_path in (
+        "/public/../admin",
+        "/public/./resource",
+        "/public/%2E%2E/admin",
+        "/public/%2e/admin",
+        "/public/%5Cadmin",
+        "/public\\admin",
+        "/public/%252e%252e/admin",
+        "/public/%zz/admin",
+        "/public//admin",
+        "/public/%2Fadmin",
+        "/public/value%2fadmin",
+    ):
+        try:
+            validate_request_target_path(
+                "https://api.example.test" + ambiguous_path
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                f"ambiguous provider path was admitted: {ambiguous_path}"
+            )
+    for canonical_target in (
+        "https://api.example.test/resource?data=a%26b%3Dc&literal=%2B&space=%20",
+        "https://api.example.test/caf%C3%A9",
+        "https://[2001:db8::1]:8443/resource?value=ok",
+    ):
+        validate_raw_absolute_target(canonical_target)
+    for ambiguous_target in (
+        "HTTPS://api.example.test/resource?value=ok",
+        "https://EXAMPLE.test:443/resource?value=ok",
+        "https://user@api.example.test/resource?value=ok",
+        "https://api.example.test:443/resource?value=ok",
+        "https://api.example.test:0443/resource?value=ok",
+        "https://api.example.test/resource#fragment",
+        "https://api.example.test\\attacker/resource?value=ok",
+        "https://api.example.test/resource?value=customer+name",
+        "https://api.example.test/resource?value=%2b",
+        "https://api.example.test/resource?value=a%26b%3dc",
+        "https://api.example.test/resource?value=a=b",
+        "https://api.example.test/resource?value",
+        "https://api.example.test/resource?=value",
+        "https://api.example.test/resource?value=1&&other=2",
+        "https://api.example.test/resource?value=%",
+        "https://api.example.test/resource?value=%25",
+        "https://api.example.test/resource?value=%252B",
+        "https://api.example.test/resource?value=%41",
+        "https://api.example.test/resource?value=%C0%AF",
+        "https://api.example.test/resource?value=%ED%A0%80",
+        "https://api.example.test/resource?value=a/b",
+        "https://api.example.test/resource?value=a;b",
+        "https://api.example.test/resource?",
+        "https://api.example.test",
+        "https://api.example.test?value=ok",
+    ):
+        try:
+            validate_raw_absolute_target(ambiguous_target)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                f"ambiguous absolute target was admitted: {ambiguous_target}"
+            )
     for operation, templates in X_V2_READ_OPERATION_PATHS:
         for template in templates:
             concrete_path = "/".join(
@@ -2019,6 +2952,43 @@ def main() -> None:
         request_profile = next(
             item for item in invalid["routes"] if item["id"] == route_id
         )["adapter"]["config"]["request"]
+        request_profile.pop("discardHeaders")
+        if adapter_type == "npm.registry":
+            assert_policy_rejected(
+                invalid,
+                "compiler accepted an npm provider profile without its explicit discard preset",
+                validate_schema=validate_schema,
+            )
+        else:
+            compile_policy_bundle(
+                invalid,
+                validate_schema=validate_schema,
+            )
+            legacy_empty_discard_signed_policy = sign_policy_bundle(
+                copy.deepcopy(invalid)
+            )
+            compile_policy_bundle(
+                legacy_empty_discard_signed_policy,
+                verify_signature=True,
+                validate_schema=validate_schema,
+            )
+
+        customized = copy.deepcopy(examples)
+        request_profile = next(
+            item for item in customized["routes"] if item["id"] == route_id
+        )["adapter"]["config"]["request"]
+        request_profile["discardHeaders"] = sorted(
+            set(expected_profile["discardHeaders"]) | {"x-client-retry"}
+        )
+        compile_policy_bundle(
+            customized,
+            validate_schema=validate_schema,
+        )
+
+        invalid = copy.deepcopy(examples)
+        request_profile = next(
+            item for item in invalid["routes"] if item["id"] == route_id
+        )["adapter"]["config"]["request"]
         request_profile["allowedHeaders"].append(request_profile["allowedHeaders"][0])
         assert_policy_rejected(
             invalid,
@@ -2060,6 +3030,323 @@ def main() -> None:
             f"compiler accepted altered {adapter_type} maxBodyBytes",
             validate_schema=validate_schema,
         )
+
+    generic_empty_body_route = SimpleNamespace(
+        adapter_config={
+            "request": {
+                "allowedHeaders": ["content-type"],
+                "allowedMediaTypes": ["application/json"],
+                "allowedQueryKeys": [],
+                "bodyMode": "json",
+                "discardHeaders": [],
+                "maxBodyBytes": 1024,
+                "requiredHeaders": {},
+            }
+        },
+        credential_ref=None,
+        constraints=(),
+    )
+    typed_empty_body_route = SimpleNamespace(
+        adapter_config={
+            "request": provider_request_profile("npm.registry"),
+        }
+    )
+    generic_empty_allowlist_route = SimpleNamespace(
+        adapter_config={
+            "request": {
+                "allowedHeaders": ["content-type"],
+                "allowedMediaTypes": [],
+                "allowedQueryKeys": [],
+                "bodyMode": "none",
+                "discardHeaders": [],
+                "maxBodyBytes": 0,
+                "requiredHeaders": {},
+            }
+        },
+        credential_ref=None,
+        constraints=(),
+    )
+
+    def empty_body_flow(content_type: str | None) -> SimpleNamespace:
+        headers = {}
+        if content_type is not None:
+            headers["content-type"] = content_type
+        request = SimpleNamespace(
+            headers=headers,
+            pretty_url="https://registry.npmjs.org/example",
+            raw_content=b"",
+            get_content=lambda strict=True: b"",
+        )
+        return SimpleNamespace(request=request)
+
+    for label, content_type, allowed in (
+        ("present wrong", "text/plain", False),
+        ("present valid", "application/json", True),
+        ("absent", None, True),
+    ):
+        preflight_flow = empty_body_flow(content_type)
+        preflight_decision = preflight_request_admission(
+            preflight_flow,
+            generic_empty_body_route,
+            {
+                str(name).lower(): str(value)
+                for name, value in preflight_flow.request.headers.items()
+            },
+        )
+        if preflight_decision.allowed is not allowed:
+            raise AssertionError(
+                f"raw preflight empty-body media fixture {label} produced "
+                f"{preflight_decision}"
+            )
+
+        generic_decision = get_adapter("generic.rest").validate_request(
+            empty_body_flow(content_type),
+            generic_empty_body_route,
+            {},
+        )
+        if generic_decision.allowed is not allowed:
+            raise AssertionError(
+                f"generic adapter empty-body media fixture {label} produced "
+                f"{generic_decision}"
+            )
+
+        typed_decision = get_adapter(
+            "npm.registry"
+        )._validate_provider_request_profile(
+            empty_body_flow(content_type),
+            typed_empty_body_route,
+        )
+        if typed_decision.allowed is not allowed:
+            raise AssertionError(
+                f"typed provider empty-body media fixture {label} produced "
+                f"{typed_decision}"
+            )
+
+    empty_allowlist_flow = empty_body_flow("application/json")
+    assert_denied(
+        preflight_request_admission(
+            empty_allowlist_flow,
+            generic_empty_allowlist_route,
+            {"content-type": "application/json"},
+        ),
+        "request_content_type_denied",
+    )
+    assert_denied(
+        get_adapter("generic.rest").validate_request(
+            empty_body_flow("application/json"),
+            generic_empty_allowlist_route,
+            {},
+        ),
+        "request_content_type_denied",
+    )
+
+    def generic_discard_bundle(headers: list[str]) -> tuple[dict, dict]:
+        candidate = copy.deepcopy(examples)
+        candidate_route = next(
+            item
+            for item in candidate["routes"]
+            if item["id"] == "example.slack.chat_post.hourly"
+        )
+        candidate_route["adapter"]["config"]["request"]["discardHeaders"] = headers
+        return candidate, candidate_route
+
+    valid_generic_discard, _ = generic_discard_bundle(["x-client-retry"])
+    compile_policy_bundle(
+        valid_generic_discard,
+        validate_schema=validate_schema,
+    )
+
+    invalid_content_encoding, invalid_content_encoding_route = (
+        generic_discard_bundle([])
+    )
+    invalid_content_encoding_request = invalid_content_encoding_route[
+        "adapter"
+    ]["config"]["request"]
+    invalid_content_encoding_request["allowedHeaders"].append(
+        "content-encoding"
+    )
+    invalid_content_encoding_request["allowedHeaders"].sort()
+    assert_policy_rejected(
+        invalid_content_encoding,
+        "compiler accepted unbounded request content-encoding forwarding",
+        validate_schema=validate_schema,
+    )
+    for identity_header in (
+        "content-encoding",
+        "content-length",
+        "transfer-encoding",
+    ):
+        invalid_identity = copy.deepcopy(examples)
+        invalid_identity["principals"][0]["requiredHeaders"][
+            identity_header
+        ] = "selector-value"
+        assert_policy_rejected(
+            invalid_identity,
+            f"compiler accepted raw admission header {identity_header} "
+            "as a principal selector",
+            validate_schema=validate_schema,
+        )
+        try:
+            _validate_generic_required_headers(
+                "route:raw-admission-selector-negative",
+                {
+                    "requiredHeaders": {
+                        identity_header: {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 64,
+                        }
+                    }
+                },
+                {identity_header},
+            )
+        except PolicyBundleError:
+            pass
+        else:
+            raise AssertionError(
+                f"generic requiredHeaders accepted raw admission selector "
+                f"{identity_header}"
+            )
+
+    discard_admission_negatives = (
+        (
+            ["x-discard-01", "x-discard-00"],
+            "compiler accepted unsorted discardHeaders",
+        ),
+        (
+            ["X-Client-Retry"],
+            "compiler accepted a discardHeaders case variant",
+        ),
+        (
+            ["x-client-retry", "x-client-retry"],
+            "compiler accepted duplicate discardHeaders",
+        ),
+        (
+            ["x-client-retry", "x_client_retry"],
+            "compiler accepted underscore-equivalent discardHeaders aliases",
+        ),
+        (
+            [f"x-discard-{index:02d}" for index in range(17)],
+            "compiler accepted more than 16 discardHeaders",
+        ),
+    )
+    for discard_headers, label in discard_admission_negatives:
+        invalid, _ = generic_discard_bundle(discard_headers)
+        assert_policy_rejected(
+            invalid,
+            label,
+            validate_schema=validate_schema,
+        )
+
+    for reserved_name in (
+        "authorization",
+        "connection",
+        "content-length",
+        "content_type",
+        "cookie",
+        "host",
+        "idempotency-key",
+        "if-match",
+        "npm-command",
+        "proxy_authorization",
+        "sec-fetch-site",
+        "signature",
+        "traceparent",
+        "x-api-key",
+        "x-goog-user-project",
+        "x-custom-token",
+        "x-forwarded-for",
+        "x_serverware_agent",
+    ):
+        invalid, _ = generic_discard_bundle([reserved_name])
+        assert_policy_rejected(
+            invalid,
+            f"compiler accepted reserved discard header {reserved_name}",
+            validate_schema=validate_schema,
+        )
+
+    valid_npm_session_discard, _ = generic_discard_bundle(["npm-session"])
+    compile_policy_bundle(
+        valid_npm_session_discard,
+        validate_schema=validate_schema,
+    )
+
+    invalid, _ = generic_discard_bundle(["user-agent"])
+    assert_policy_rejected(
+        invalid,
+        "compiler accepted discardHeaders overlap with allowedHeaders",
+        validate_schema=validate_schema,
+    )
+
+    invalid, invalid_route = generic_discard_bundle(["x-request-marker"])
+    invalid_request = invalid_route["adapter"]["config"]["request"]
+    invalid_request["allowedHeaders"].append("x-request-marker")
+    invalid_request["allowedHeaders"].sort()
+    invalid_request["requiredHeaders"] = {
+        "x-request-marker": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+        }
+    }
+    assert_policy_rejected(
+        invalid,
+        "compiler accepted discardHeaders overlap with requiredHeaders",
+        validate_schema=validate_schema,
+    )
+    try:
+        validate_discard_headers(
+            "route:direct-required-overlap",
+            {"discardHeaders": ["x-request-marker"]},
+            required_headers={"x-request-marker"},
+        )
+    except PolicyBundleError as exc:
+        assert "requiredHeaders" in str(exc), exc
+    else:
+        raise AssertionError(
+            "typed discard validator accepted direct requiredHeaders overlap"
+        )
+
+    invalid, invalid_route = generic_discard_bundle(["x-provider-value"])
+    invalid_route["credentialRef"] = "cred-slack"
+    next(
+        item for item in invalid["credentials"] if item["id"] == "cred-slack"
+    )["injection"] = {
+        "type": "header",
+        "name": "x-provider-value",
+    }
+    assert_policy_rejected(
+        invalid,
+        "compiler accepted discardHeaders overlap with credential injection",
+        validate_schema=validate_schema,
+    )
+
+    invalid, _ = generic_discard_bundle(["x-agent-selector"])
+    invalid["principals"][0]["requiredHeaders"]["x-agent-selector"] = "bound-agent"
+    assert_policy_rejected(
+        invalid,
+        "compiler accepted discardHeaders overlap with principal identity",
+        validate_schema=validate_schema,
+    )
+
+    invalid, invalid_route = generic_discard_bundle([])
+    invalid["principals"][0]["requiredHeaders"]["x-agent-selector"] = "bound-agent"
+    invalid_request = invalid_route["adapter"]["config"]["request"]
+    invalid_request["allowedHeaders"].append("x-agent-selector")
+    invalid_request["allowedHeaders"].sort()
+    invalid_request["requiredHeaders"] = {
+        "x-agent-selector": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+        }
+    }
+    assert_policy_rejected(
+        invalid,
+        "compiler accepted provider requiredHeaders overlap with principal identity",
+        validate_schema=validate_schema,
+    )
+
     if validate_schema:
         invalid_field = json.loads(json.dumps(examples))
         invalid_field["credentials"][0]["injection"]["field"] = "*.access_token"
@@ -2261,8 +3548,28 @@ def main() -> None:
         valid_stream_route.pop("credentialRef")
         stream_request = valid_stream_route["adapter"]["config"]["request"]
         stream_request["bodyMode"] = request_mode
+        stream_request["allowedMediaTypes"] = [
+            {
+                "jsonlStream": "application/x-ndjson",
+                "jsonArrayStream": "application/json",
+                "jsonSseStream": "text/event-stream",
+                "jsonNestedStream": "application/json",
+                "formUrlencodedStream": "application/x-www-form-urlencoded",
+                "csvStream": "text/csv",
+            }[request_mode]
+        ]
         stream_request["allowedFields"] = ["safe", "nested.value"]
         compile_policy_bundle(valid_stream_request, validate_schema=validate_schema)
+
+        missing_stream_media = copy.deepcopy(valid_stream_request)
+        missing_stream_media["routes"][0]["adapter"]["config"]["request"].pop(
+            "allowedMediaTypes"
+        )
+        assert_policy_rejected(
+            missing_stream_media,
+            f"compiler accepted {request_mode} request without allowedMediaTypes",
+            validate_schema=validate_schema,
+        )
 
         missing_stream_fields = copy.deepcopy(valid_stream_request)
         missing_stream_fields["routes"][0]["adapter"]["config"]["request"].pop("allowedFields")
@@ -2285,6 +3592,7 @@ def main() -> None:
         invalid_stream_route.pop("credentialRef")
         request = invalid_stream_route["adapter"]["config"]["request"]
         request["bodyMode"] = "jsonlStream"
+        request["allowedMediaTypes"] = ["application/x-ndjson"]
         request["allowedFields"] = allowed_fields
         assert_policy_rejected(
             invalid_stream_request,
@@ -2294,9 +3602,10 @@ def main() -> None:
 
     invalid = copy.deepcopy(demo_bundle)
     invalid["routes"][0]["adapter"]["config"]["request"]["bodyMode"] = "stream"
-    assert_policy_rejected(
+    assert_compiler_rejected_reason(
         invalid,
-        "compiler accepted a credential-bearing mutating request stream",
+        "route demo.echo credential-bearing generic.rest routes cannot use "
+        "opaque bodyMode stream",
         validate_schema=validate_schema,
     )
     invalid = copy.deepcopy(demo_bundle)
@@ -3016,6 +4325,7 @@ def main() -> None:
         b'{"safe":Infinity}',
         b'{"safe":-Infinity}',
         b'{"safe":1e400}',
+        b'{"safe":"\xff"}',
     ):
         invalid_json_request = flow(
             "POST",
@@ -3024,9 +4334,50 @@ def main() -> None:
         )
         invalid_json_request.request.raw_content = invalid_json_body
         assert_denied(
+            credential_json_adapter.validate_request(
+                invalid_json_request,
+                credential_json_route,
+                {},
+            ),
+            "request_json_invalid",
+        )
+        assert_denied(
             request_decision(credential_json_route, invalid_json_request, "echo"),
             "json_body_invalid",
         )
+
+    structured_json_vectors = (
+        (
+            credential_json_adapter._redact_json_lines,
+            b'{"safe":1,"safe":2}\n',
+        ),
+        (
+            credential_json_adapter._redact_json_array,
+            b'[{"safe":NaN}]',
+        ),
+        (
+            credential_json_adapter._redact_json_nested,
+            b'{"safe":"\xff"}',
+        ),
+        (
+            credential_json_adapter._redact_json_sse,
+            b'data: {"safe":Infinity}\n\n',
+        ),
+    )
+    for parser, hostile_body in structured_json_vectors:
+        try:
+            parser(hostile_body, [("safe",)])
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                "structured JSON parser accepted duplicate keys, a non-finite "
+                "number, or invalid UTF-8"
+            )
+    assert credential_json_adapter._redact_json_array(
+        b'[{"z":0,"safe":{"z":2,"a":1}}]',
+        [("safe",)],
+    ) == b'[{"safe":{"a":1,"z":2}}]'
 
     for stale_constraints in (
         (),
@@ -3126,6 +4477,7 @@ def main() -> None:
     ):
         stream_request_config = {
             "allowedHeaders": ["content-type"],
+            "allowedMediaTypes": ["application/x-ndjson"],
             "allowedQueryKeys": [],
             "bodyMode": "jsonlStream",
             "maxBodyBytes": 4096,
@@ -3200,6 +4552,25 @@ def main() -> None:
         "Content-Type": "application/json",
         "Content-Length": str(len(projected.response.raw_content)),
     }
+    for hostile_json_response in (
+        b'{"data":{"id":"first","id":"second"}}',
+        b'{"data":{"id":NaN}}',
+        b'{"data":{"id":"\xff"}}',
+    ):
+        hostile_projected = flow(
+            "GET",
+            "https://api.example.test/data",
+            response=source_with_siblings,
+        )
+        hostile_projected.response.raw_content = hostile_json_response
+        assert_denied(
+            generic_adapter.validate_response(
+                hostile_projected,
+                projected_route,
+                {},
+            ),
+            "response_invalid_json",
+        )
 
     for label, response_headers in (
         ("missing", {}),
@@ -4030,6 +5401,7 @@ def main() -> None:
             policy_hash=example_snapshot.hash,
             operation_fields=stripe_operation,
             forwarded_headers=forwarded_headers,
+            discard_headers=(),
         )
         changed_idempotency_key = copy.deepcopy(stripe_request)
         changed_idempotency_key.request.headers["idempotency-key"] = "agent-payment:req-124"
@@ -4045,9 +5417,156 @@ def main() -> None:
             policy_hash=example_snapshot.hash,
             operation_fields=stripe_operation,
             forwarded_headers=changed_forwarded_headers,
+            discard_headers=(),
         )
         assert _digest(canonical) != _digest(changed_canonical)
         assert _operation_digest(canonical) != _operation_digest(changed_canonical)
+
+        raw_plus_query = flow(
+            "GET",
+            "https://api.stripe.com/v1/customers?"
+            "starting_after=customer+name&limit=5",
+        )
+        try:
+            _canonicalize_provider_query(raw_plus_query)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("raw query plus was normalized instead of rejected")
+
+        unsorted_query = flow(
+            "GET",
+            "https://api.stripe.com/v1/customers?"
+            "starting_after=customer%20name&limit=5",
+        )
+        try:
+            _canonicalize_provider_query(unsorted_query)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("unsorted raw query was reordered instead of rejected")
+        canonical_query = flow(
+            "GET",
+            "https://api.stripe.com/v1/customers?"
+            "limit=5&starting_after=customer%20name",
+        )
+        assert _canonicalize_provider_query(canonical_query) == [
+            ("limit", "5"),
+            ("starting_after", "customer name"),
+        ]
+        assert canonical_query.request.pretty_url == (
+            "https://api.stripe.com/v1/customers?"
+            "limit=5&starting_after=customer%20name"
+        )
+        assert _canonical_query_wire(
+            [("limit", "5"), ("starting_after", "customer name")]
+        ) == "limit=5&starting_after=customer%20name"
+        encoded_delimiters = flow(
+            "GET",
+            "https://api.stripe.com/v1/customers?"
+            "data=a%26b%3Dc&literal=%2B",
+        )
+        assert _canonicalize_provider_query(encoded_delimiters) == [
+            ("data", "a&b=c"),
+            ("literal", "+"),
+        ]
+        assert encoded_delimiters.request.pretty_url == (
+            "https://api.stripe.com/v1/customers?"
+            "data=a%26b%3Dc&literal=%2B"
+        )
+
+        list_route = route(
+            example_snapshot,
+            "example.stripe.customers.list",
+        )
+        list_forwarded = _canonical_forwarded_request_headers(
+            canonical_query,
+            stripe_credential,
+        )
+        list_canonical = _canonical_request(
+            canonical_query,
+            principal=principal,
+            route=list_route,
+            credential_version="1",
+            policy_hash=example_snapshot.hash,
+            operation_fields={"operation": "stripe.customers.list"},
+            forwarded_headers=list_forwarded,
+            discard_headers=(),
+        )
+        assert list_canonical["request"]["query"] == [
+            ("limit", "5"),
+            ("starting_after", "customer name"),
+        ]
+        assert _provider_request_matches_canonical(
+            query_variants[0],
+            list_canonical,
+            stripe_credential,
+        )
+        raw_query_tamper = copy.deepcopy(query_variants[0])
+        raw_query_tamper.request.pretty_url = (
+            "https://api.stripe.com/v1/customers?"
+            "starting_after=customer+name&limit=5"
+        )
+        assert not _provider_request_matches_canonical(
+            raw_query_tamper,
+            list_canonical,
+            stripe_credential,
+        )
+
+        query_credential_policy = CredentialPolicy(
+            id="cred-query-binding",
+            injection={"type": "query", "name": "api_key"},
+        )
+        query_credential_request = flow(
+            "GET",
+            "https://api.stripe.com/v1/customers?"
+            "limit=5&starting_after=customer%20name",
+        )
+        _canonicalize_provider_query(query_credential_request)
+        query_credential_canonical = _canonical_request(
+            query_credential_request,
+            principal=principal,
+            route=list_route,
+            credential_version="1",
+            policy_hash=example_snapshot.hash,
+            operation_fields={"operation": "stripe.customers.list"},
+            forwarded_headers=_canonical_forwarded_request_headers(
+                query_credential_request,
+                query_credential_policy,
+            ),
+            discard_headers=(),
+        )
+        query_credential = {
+            "kind": "query",
+            "secret": "provider key/+%",
+        }
+        _inject_credential(
+            query_credential_request,
+            query_credential_policy,
+            query_credential,
+        )
+        assert query_credential_request.request.pretty_url == (
+            "https://api.stripe.com/v1/customers?"
+            "api_key=provider%20key%2F%2B%25&limit=5&"
+            "starting_after=customer%20name"
+        )
+        assert _provider_request_matches_canonical(
+            query_credential_request,
+            query_credential_canonical,
+            query_credential_policy,
+            query_credential,
+        )
+        changed_query_credential = copy.deepcopy(query_credential_request)
+        changed_query_credential.request.pretty_url = (
+            "https://api.stripe.com/v1/customers?"
+            "api_key=different&limit=5&starting_after=customer%20name"
+        )
+        assert not _provider_request_matches_canonical(
+            changed_query_credential,
+            query_credential_canonical,
+            query_credential_policy,
+            query_credential,
+        )
 
         header_collision = copy.deepcopy(stripe_request)
         header_collision.request.headers["Authorization"] = "Bearer agent-controlled"
@@ -4099,11 +5618,14 @@ def main() -> None:
     gmail_bodyless_content_type.request.headers["content-type"] = (
         ' Application/JSON ; charset="utf-8" '
     )
-    assert gmail_request_adapter.validate_request(
-        gmail_bodyless_content_type,
-        gmail_request_route,
-        {"user": "me"},
-    ).allowed
+    assert_denied(
+        gmail_request_adapter.validate_request(
+            gmail_bodyless_content_type,
+            gmail_request_route,
+            {"user": "me"},
+        ),
+        "request_content_type_denied",
+    )
     for denied_request, expected_error in (
         (
             flow(
@@ -4167,7 +5689,10 @@ def main() -> None:
         "https://api.x.com/2/tweets/search/recent?query=serverware",
     )
     x_bodyless_content_type.request.headers["content-type"] = "application/json"
-    assert x_adapter.validate_request(x_bodyless_content_type, x_route, {}).allowed
+    assert_denied(
+        x_adapter.validate_request(x_bodyless_content_type, x_route, {}),
+        "request_content_type_denied",
+    )
     x_recent_unknown_header = flow(
         "GET",
         "https://api.x.com/2/tweets/search/recent?query=serverware",
@@ -4219,13 +5744,27 @@ def main() -> None:
 
     full_x_route = route(example_snapshot, "example.x.full_bounded_read")
     full_x_adapter = get_adapter(full_x_route.adapter_type)
+    assert full_x_adapter.validate_credential_metadata(
+        full_x_route,
+        {"x_app_id": "approved-x-app-id"},
+    ).allowed
+    assert_denied(
+        full_x_adapter.validate_credential_metadata(
+            full_x_route,
+            {"x_app_id": "unapproved-x-app-id"},
+        ),
+        "x_app_id_denied",
+    )
     full_x_bodyless_content_type = flow("GET", "https://api.x.com/2/users/me")
     full_x_bodyless_content_type.request.headers["content-type"] = "application/json"
-    assert full_x_adapter.validate_request(
-        full_x_bodyless_content_type,
-        full_x_route,
-        {},
-    ).allowed
+    assert_denied(
+        full_x_adapter.validate_request(
+            full_x_bodyless_content_type,
+            full_x_route,
+            {},
+        ),
+        "request_content_type_denied",
+    )
     assert_denied(
         full_x_adapter.validate_request(
             flow("GET", "https://api.x.com/2/users/me?unknown=1"),
@@ -4307,6 +5846,15 @@ def main() -> None:
             },
             "request_content_type_ambiguous",
         ),
+        (
+            "duplicate parameter",
+            {
+                "content-type": (
+                    "application/json; charset=utf-8; CHARSET=utf-8"
+                )
+            },
+            "request_content_type_denied",
+        ),
     ):
         denied_x_write = flow(
             "POST",
@@ -4364,6 +5912,398 @@ def main() -> None:
     assert npm_fields["attachmentName"] == "example-1.2.3.tgz", npm_fields
     assert npm_fields["attachmentBytes"] == str(len(tarball)), npm_fields
     assert npm_adapter.validate_request(npm_request, npm_route, {"package": "@scope%2fexample"}).allowed
+
+    if (
+        _discard_declared_request_headers is not None
+        and _canonical_credential_version is not None
+        and _canonical_forwarded_request_headers is not None
+        and _canonical_request is not None
+        and _normalized_request_headers is not None
+        and _digest is not None
+        and _operation_digest is not None
+    ):
+        parity_vector = json.loads(
+            (ROOT / "scripts" / "discard_headers_parity.v1.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert parity_vector["apiVersion"] == "serverware.discardHeadersParity/v2"
+        raw_target_vector = parity_vector["rawAbsoluteTarget"]
+        for target in raw_target_vector["valid"]:
+            parts = validate_raw_absolute_target(target)
+            validate_request_target_path(target)
+            assert parts.geturl() == target
+        for target in raw_target_vector["invalid"]:
+            try:
+                validate_request_target_path(target)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError(
+                    f"shared invalid absolute target was admitted: {target}"
+                )
+        canonical_query_vector = raw_target_vector["canonicalQuery"]
+        canonical_query_flow = flow(
+            "GET",
+            canonical_query_vector["input"],
+        )
+        expected_query_pairs = [
+            tuple(pair) for pair in canonical_query_vector["pairs"]
+        ]
+        assert (
+            _canonicalize_provider_query(canonical_query_flow)
+            == expected_query_pairs
+        )
+        assert canonical_query_flow.request.pretty_url == (
+            "https://api.example.test/resource?"
+            + canonical_query_vector["wire"]
+        )
+        for vector_name in ("legacyV1", "discardV2"):
+            vector = parity_vector[vector_name]
+            parity_canonical = vector["canonicalRequest"]
+            parity_operation_view = {
+                "principal": parity_canonical["principal"],
+                "route_id": parity_canonical["route_id"],
+                "credential_ref": parity_canonical["credential_ref"],
+                "credential_version": parity_canonical["credential_version"],
+                "policy_hash": parity_canonical["policy_hash"],
+                "request": parity_canonical["request"],
+                "operation": parity_canonical["operation"],
+            }
+            assert canonical_json(parity_canonical) == vector["canonicalJson"]
+            assert canonical_json(parity_operation_view) == vector["operationJson"]
+            assert _digest(parity_canonical) == (
+                "sha256:"
+                + hashlib.sha256(vector["canonicalJson"].encode("utf-8")).hexdigest()
+            )
+            assert _operation_digest(parity_canonical) == (
+                "sha256:"
+                + hashlib.sha256(vector["operationJson"].encode("utf-8")).hexdigest()
+            )
+        legacy_vector = parity_vector["legacyV1"]["canonicalRequest"]
+        legacy_vector_flow = flow(
+            "GET",
+            "https://api.example.test/resource",
+        )
+        legacy_vector_flow.client_conn.peername = ("192.0.2.44", 12345)
+        legacy_vector_flow.request.headers = {
+            "accept": "application/json"
+        }
+        legacy_vector_route = SimpleNamespace(
+            id="route:legacy-parity",
+            credential_ref=None,
+        )
+        actual_legacy_canonical = _canonical_request(
+            legacy_vector_flow,
+            principal=SimpleNamespace(id="agent:parity"),
+            route=legacy_vector_route,
+            credential_version=_canonical_credential_version(0),
+            policy_hash=legacy_vector["policy_hash"],
+            operation_fields={"operation": "test.read"},
+            forwarded_headers=_canonical_forwarded_request_headers(
+                legacy_vector_flow,
+                None,
+            ),
+            discard_headers=(),
+        )
+        assert actual_legacy_canonical == legacy_vector
+        assert (
+            actual_legacy_canonical["credential_version"]
+            == _canonical_credential_version(0)
+            == "none"
+        )
+        assert "discard_headers" not in parity_vector["legacyV1"]["canonicalRequest"]["request"]
+        discard_vector = parity_vector["discardV2"]
+        discard_vector_canonical = discard_vector["canonicalRequest"]
+        discard_vector_flow = flow(
+            "PUT",
+            "https://registry.npmjs.org/package",
+        )
+        discard_vector_flow.client_conn.peername = ("192.0.2.44", 12345)
+        discard_vector_flow.request.headers = {
+            "content-length": "0",
+            "content-type": "application/json",
+            "npm-command": "publish",
+            "user-agent": "npm/10.8.2 node/v22.5.1",
+        }
+        actual_discard_canonical = _canonical_request(
+            discard_vector_flow,
+            principal=SimpleNamespace(id="agent:parity"),
+            route=SimpleNamespace(
+                id="route:npm-parity",
+                credential_ref="credential:npm-parity",
+            ),
+            credential_version=_canonical_credential_version(7),
+            policy_hash=discard_vector_canonical["policy_hash"],
+            operation_fields={
+                "operation": "npm.publish",
+                "packageName": "package",
+                "packageVersion": "1.2.3",
+            },
+            forwarded_headers=_canonical_forwarded_request_headers(
+                discard_vector_flow,
+                None,
+            ),
+            discard_headers=("npm-session",),
+        )
+        assert actual_discard_canonical == discard_vector_canonical
+        assert discard_vector["canonicalRequest"]["request"]["discard_headers"] == [
+            "npm-session"
+        ]
+        for discarded_value in discard_vector["discardedValues"]:
+            assert discarded_value not in discard_vector["canonicalJson"]
+            assert discarded_value not in discard_vector["operationJson"]
+
+        npm_principal = example_snapshot.principals["agent:example"]
+        retry_requests = []
+        for session_value in ("npm-session-attempt-a", "npm-session-attempt-b"):
+            retry_request = copy.deepcopy(npm_request)
+            retry_request.request.headers.update(
+                {
+                    "npm-command": "publish",
+                    "npm-session": session_value,
+                    "user-agent": "npm/10.8.2 node/v22.5.1",
+                }
+            )
+            declared_discard = _discard_declared_request_headers(
+                retry_request,
+                npm_route,
+                npm_principal,
+                example_snapshot.credentials[npm_route.credential_ref],
+            )
+            assert declared_discard == ("npm-session",)
+            discarded_evidence = retry_request.metadata.get(
+                "serverware_discarded_request_headers"
+            )
+            assert discarded_evidence == discard_vector["discardedEvidence"]
+            assert session_value not in canonical_json(discarded_evidence)
+            assert "npm-session" not in {
+                str(name).lower() for name in retry_request.request.headers
+            }
+            assert npm_adapter.validate_request(
+                retry_request,
+                npm_route,
+                {"package": "@scope%2fexample"},
+            ).allowed
+            forwarded = _canonical_forwarded_request_headers(
+                retry_request,
+                example_snapshot.credentials[npm_route.credential_ref],
+            )
+            assert forwarded["npm-command"] == "publish"
+            assert forwarded["user-agent"] == "npm/10.8.2 node/v22.5.1"
+            assert "npm-session" not in forwarded
+            retry_fields = npm_adapter.operation_fields(
+                retry_request,
+                npm_route,
+                {"package": "@scope%2fexample"},
+            )
+            canonical_retry = _canonical_request(
+                retry_request,
+                principal=npm_principal,
+                route=npm_route,
+                credential_version="1",
+                policy_hash=example_snapshot.hash,
+                operation_fields=retry_fields,
+                forwarded_headers=forwarded,
+                discard_headers=declared_discard,
+            )
+            assert canonical_retry["v"] == 2
+            assert canonical_retry["request"]["discard_headers"] == ["npm-session"]
+            assert session_value not in canonical_json(canonical_retry)
+            retry_requests.append((retry_request, canonical_retry))
+
+        first_retry = retry_requests[0][1]
+        second_retry = retry_requests[1][1]
+        assert _digest(first_retry) == _digest(second_retry)
+        assert _operation_digest(first_retry) == _operation_digest(second_retry)
+        changed_discard_policy = copy.deepcopy(first_retry)
+        changed_discard_policy["request"]["discard_headers"] = []
+        assert _digest(changed_discard_policy) != _digest(first_retry)
+        assert _operation_digest(changed_discard_policy) != _operation_digest(first_retry)
+
+        legacy_route = generic_route
+        legacy_request = flow(
+            "GET",
+            "https://api.stripe.com/v1/customers?limit=5",
+        )
+        legacy_credential = example_snapshot.credentials[legacy_route.credential_ref]
+        legacy_discard = _discard_declared_request_headers(
+            legacy_request,
+            legacy_route,
+            npm_principal,
+            legacy_credential,
+        )
+        assert legacy_discard == ()
+        legacy_forwarded = _canonical_forwarded_request_headers(
+            legacy_request,
+            legacy_credential,
+        )
+        legacy_fields = get_adapter(legacy_route.adapter_type).operation_fields(
+            legacy_request,
+            legacy_route,
+            {},
+        )
+        legacy_canonical = _canonical_request(
+            legacy_request,
+            principal=npm_principal,
+            route=legacy_route,
+            credential_version="1",
+            policy_hash=example_snapshot.hash,
+            operation_fields=legacy_fields,
+            forwarded_headers=legacy_forwarded,
+            discard_headers=legacy_discard,
+        )
+        assert legacy_canonical["v"] == 1
+        assert "discard_headers" not in legacy_canonical["request"]
+
+        if mitm_http is None:
+            raise AssertionError(
+                "consolidated discard-header parity requires mitmproxy physical headers"
+            )
+        duplicate_physical = copy.deepcopy(npm_request)
+        duplicate_fields = [
+            (b"Host", b"registry.npmjs.org"),
+            *[
+                (name.encode("ascii"), value.encode("ascii"))
+                for name, value in discard_vector["duplicatePhysicalHeaders"]
+            ],
+        ]
+        duplicate_physical.request.headers = mitm_http.Headers(
+            fields=duplicate_fields
+        )
+        try:
+            _normalized_request_headers(duplicate_physical)
+        except ValueError as exc:
+            assert "repeats header npm-session" in str(exc)
+        else:
+            raise AssertionError(
+                "Python merged duplicate physical npm-session fields"
+            )
+
+        for malformed_headers in (
+            {"bad\nname": "value"},
+            {"x" * 129: "value"},
+            {"x-test": "bad\nvalue"},
+            {"x-test": "x" * (16 * 1024 + 1)},
+            {
+                "Npm-Session": "one",
+                "npm-session": "two",
+            },
+        ):
+            malformed_request = copy.deepcopy(npm_request)
+            malformed_request.request.headers = malformed_headers
+            try:
+                _normalized_request_headers(malformed_request)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError(
+                    f"malformed request headers normalized: {list(malformed_headers)}"
+                )
+
+        malformed_policy_route = copy.deepcopy(npm_route)
+        malformed_policy_route.adapter_config["request"]["allowedHeaders"] = "user-agent"
+        try:
+            _discard_declared_request_headers(
+                copy.deepcopy(npm_request),
+                malformed_policy_route,
+                npm_principal,
+                example_snapshot.credentials[npm_route.credential_ref],
+            )
+        except PolicyBundleError:
+            pass
+        else:
+            raise AssertionError(
+                "Python runtime accepted malformed request-header policy state"
+            )
+
+        retained_header_change = copy.deepcopy(retry_requests[0][0])
+        retained_header_change.request.headers["user-agent"] = "npm/10.9.0 node/v22.5.1"
+        changed_forwarded = _canonical_forwarded_request_headers(
+            retained_header_change,
+            example_snapshot.credentials[npm_route.credential_ref],
+        )
+        changed_header_canonical = _canonical_request(
+            retained_header_change,
+            principal=npm_principal,
+            route=npm_route,
+            credential_version="1",
+            policy_hash=example_snapshot.hash,
+            operation_fields=npm_fields,
+            forwarded_headers=changed_forwarded,
+            discard_headers=("npm-session",),
+        )
+        assert _digest(changed_header_canonical) != _digest(first_retry)
+        assert _operation_digest(changed_header_canonical) != _operation_digest(first_retry)
+
+        body_change = copy.deepcopy(retry_requests[0][0])
+        body_change.request.raw_content += b" "
+        changed_body_forwarded = _canonical_forwarded_request_headers(
+            body_change,
+            example_snapshot.credentials[npm_route.credential_ref],
+        )
+        changed_body_canonical = _canonical_request(
+            body_change,
+            principal=npm_principal,
+            route=npm_route,
+            credential_version="1",
+            policy_hash=example_snapshot.hash,
+            operation_fields=npm_fields,
+            forwarded_headers=changed_body_forwarded,
+            discard_headers=("npm-session",),
+        )
+        assert _digest(changed_body_canonical) != _digest(first_retry)
+        assert _operation_digest(changed_body_canonical) != _operation_digest(first_retry)
+
+        path_change = copy.deepcopy(retry_requests[0][0])
+        path_change.request.pretty_url = "https://registry.npmjs.org/@scope%2fother"
+        path_decision = npm_adapter.validate_request(
+            path_change,
+            npm_route,
+            {"package": "@scope%2fother"},
+        )
+        assert not path_decision.allowed
+        changed_path_canonical = _canonical_request(
+            path_change,
+            principal=npm_principal,
+            route=npm_route,
+            credential_version="1",
+            policy_hash=example_snapshot.hash,
+            operation_fields=npm_fields,
+            forwarded_headers=_canonical_forwarded_request_headers(
+                path_change,
+                example_snapshot.credentials[npm_route.credential_ref],
+            ),
+            discard_headers=("npm-session",),
+        )
+        assert _digest(changed_path_canonical) != _digest(first_retry)
+        assert _operation_digest(changed_path_canonical) != _operation_digest(first_retry)
+
+        changed_package_document = copy.deepcopy(npm_document)
+        changed_package_document["name"] = "@scope/other"
+        changed_package_request = flow(
+            "PUT",
+            "https://registry.npmjs.org/@scope%2fexample",
+            changed_package_document,
+        )
+        assert not npm_adapter.validate_request(
+            changed_package_request,
+            npm_route,
+            {"package": "@scope%2fexample"},
+        ).allowed
+
+        changed_version_document = copy.deepcopy(npm_document)
+        changed_version_document["versions"]["1.2.3"]["version"] = "1.2.4"
+        changed_version_request = flow(
+            "PUT",
+            "https://registry.npmjs.org/@scope%2fexample",
+            changed_version_document,
+        )
+        assert not npm_adapter.validate_request(
+            changed_version_request,
+            npm_route,
+            {"package": "@scope%2fexample"},
+        ).allowed
 
     existing_publish_document = copy.deepcopy(npm_document)
     existing_publish_document["_rev"] = "42-deadbeef"
@@ -5004,17 +6944,192 @@ def main() -> None:
     assert credential_accesses == []
     assert upstream_contacts == []
 
+    original_runtime_claim = runtime._claim_release_controlled_credential
+    original_runtime_start_workers = runtime.start_runtime_workers
+    original_runtime_db_get_credential = db.get_credential
+    with runtime._credential_lock:
+        original_runtime_cache = copy.deepcopy(runtime._credential_cache)
+    release_cache_events: list[tuple[str, str]] = []
+    claimed_attempts: set[str] = set()
+
+    def fixture_release_claim(
+        credential_id: str,
+        request_authority: dict[str, Any],
+        release_authorization: dict[str, Any] | None,
+        *,
+        expected: runtime.ReleaseAuthorizationExpectedIdentity,
+        jit_policy: dict[str, Any] | None,
+    ) -> None:
+        del expected, jit_policy, release_authorization
+        attempt_id = str(request_authority["attemptId"])
+        release_cache_events.append(("claim", attempt_id))
+        if int(request_authority["reservationExpiresAtEpochMs"]) <= int(
+            time.time() * 1000
+        ):
+            raise runtime.ReleaseAuthorizationClientError(
+                "fixture authority expired"
+            )
+        if attempt_id in claimed_attempts:
+            raise runtime.ReleaseAuthorizationClientError(
+                "fixture authority replayed"
+            )
+        claimed_attempts.add(attempt_id)
+        assert credential_id == "credential:release-cache"
+
+    def fixture_release_secret(
+        credential_id: str,
+        *,
+        include_secret: bool = False,
+    ) -> dict[str, Any]:
+        assert include_secret is True
+        release_cache_events.append(("secret", credential_id))
+        return {
+            "id": credential_id,
+            "kind": "bearer",
+            "credential_version": 7,
+            "lifecycle_status": "active",
+            "metadata": {},
+            "secret": "reservation-scoped-secret",
+        }
+
+    runtime._claim_release_controlled_credential = fixture_release_claim
+    runtime.start_runtime_workers = lambda: release_cache_events.append(
+        ("workers", "started")
+    )
+    db.get_credential = fixture_release_secret
+    try:
+        authority_a = {
+            "attemptId": "attempt:release-cache:a",
+            "reservationExpiresAtEpochMs": int(time.time() * 1000) + 30_000,
+        }
+        authority_b = {
+            "attemptId": "attempt:release-cache:b",
+            "reservationExpiresAtEpochMs": int(time.time() * 1000) + 30_000,
+        }
+        assert runtime.get_credential(
+            "credential:release-cache",
+            request_authority=authority_a,
+            expected_release_identity=object(),
+            jit_policy={"required": False},
+        )["secret"] == "reservation-scoped-secret"
+        assert runtime.get_credential(
+            "credential:release-cache",
+            request_authority=authority_b,
+            expected_release_identity=object(),
+            jit_policy={"required": False},
+        )["secret"] == "reservation-scoped-secret"
+        secret_events_before_denials = [
+            event for event in release_cache_events if event[0] == "secret"
+        ]
+        for rejected_authority in (
+            authority_a,
+            {
+                "attemptId": "attempt:release-cache:expired",
+                "reservationExpiresAtEpochMs": int(time.time() * 1000) - 1,
+            },
+        ):
+            try:
+                runtime.get_credential(
+                    "credential:release-cache",
+                    request_authority=rejected_authority,
+                    expected_release_identity=object(),
+                    jit_policy={"required": False},
+                )
+            except runtime.ReleaseAuthorizationClientError:
+                pass
+            else:
+                raise AssertionError(
+                    "replayed or expired release authority reached credential material"
+                )
+        assert [
+            event for event in release_cache_events if event[0] == "secret"
+        ] == secret_events_before_denials
+        assert release_cache_events[:3] == [
+            ("claim", "attempt:release-cache:a"),
+            ("workers", "started"),
+            ("secret", "credential:release-cache"),
+        ]
+        assert release_cache_events[3:6] == [
+            ("claim", "attempt:release-cache:b"),
+            ("workers", "started"),
+            ("secret", "credential:release-cache"),
+        ]
+        with runtime._credential_lock:
+            assert runtime._credential_cache == original_runtime_cache
+    finally:
+        runtime._claim_release_controlled_credential = original_runtime_claim
+        runtime.start_runtime_workers = original_runtime_start_workers
+        db.get_credential = original_runtime_db_get_credential
+        with runtime._credential_lock:
+            runtime._credential_cache.clear()
+            runtime._credential_cache.update(original_runtime_cache)
+
     if ServerwareAddon is not None:
         from serverware import policy_engine
 
         original_get_policy_snapshot = policy_engine.get_policy_snapshot
         original_get_credential = runtime.get_credential
         original_get_credential_version = runtime.get_credential_version
+        original_get_credential_generation = runtime.get_credential_generation
+        original_generation_snapshot = db.credential_generation_snapshot
         original_atomic_mode = runtime.atomic_release_authorization_enabled
-        original_reserve = runtime.reserve_release_authorization
+        original_expected_reserve = runtime.reserve_expected_release_authorization
         original_dispatch = runtime.dispatch_release_authorization
         credential_reads: list[str | None] = []
         authorization_calls: list[str] = []
+
+        x_admission_events: list[str] = []
+
+        @contextlib.contextmanager
+        def x_generation_snapshot(credential_id: str):
+            x_admission_events.append(f"metadata:{credential_id}")
+            credential_policy = example_snapshot.credentials[credential_id]
+            yield {
+                "id": credential_id,
+                "kind": "oauth2",
+                "credential_version": 7,
+                "lifecycle_status": "active",
+                "metadata": {
+                    "oauth": True,
+                    "provider_identity_verified": True,
+                    "provider_id": "x",
+                    "provider_subject": credential_policy.provider_subject,
+                    "scopes": list(credential_policy.scopes),
+                    "x_app_id": "approved-x-app-id",
+                },
+            }
+
+        def reject_x_secret_read(credential_id: str | None):
+            x_admission_events.append(f"secret:{credential_id}")
+            raise RuntimeError("fixture stops after secret lease ordering")
+
+        def reject_x_version_read(credential_id: str | None):
+            x_admission_events.append(f"version:{credential_id}")
+            raise AssertionError("X generation admission reparsed credential version")
+
+        policy_engine.get_policy_snapshot = lambda: example_snapshot
+        db.credential_generation_snapshot = x_generation_snapshot
+        runtime.get_credential = reject_x_secret_read
+        runtime.get_credential_version = reject_x_version_read
+        runtime.atomic_release_authorization_enabled = lambda: False
+        try:
+            admitted_x = flow("GET", "https://api.x.com/2/users/me")
+            admitted_x.request.headers["X-Serverware-Agent"] = "example-agent"
+            admitted_x_decision = policy_engine.evaluate_request(
+                admitted_x
+            ).decision
+            assert_denied(admitted_x_decision, "credential_unavailable")
+            assert x_admission_events == [
+                "metadata:cred-x",
+                "secret:cred-x",
+            ], x_admission_events
+        finally:
+            runtime.atomic_release_authorization_enabled = original_atomic_mode
+            runtime.get_credential_version = original_get_credential_version
+            runtime.get_credential_generation = original_get_credential_generation
+            runtime.get_credential = original_get_credential
+            db.credential_generation_snapshot = original_generation_snapshot
+            policy_engine.get_policy_snapshot = original_get_policy_snapshot
 
         def reject_credential_read(credential_id: str | None):
             credential_reads.append(credential_id)
@@ -5023,8 +7138,11 @@ def main() -> None:
         policy_engine.get_policy_snapshot = lambda: example_snapshot
         runtime.get_credential = reject_credential_read
         runtime.get_credential_version = reject_credential_read
+        runtime.get_credential_generation = reject_credential_read
         runtime.atomic_release_authorization_enabled = lambda: True
-        runtime.reserve_release_authorization = lambda **_kwargs: authorization_calls.append("reserve")
+        runtime.reserve_expected_release_authorization = (
+            lambda **_kwargs: authorization_calls.append("reserve")
+        )
         runtime.dispatch_release_authorization = lambda **_kwargs: authorization_calls.append("dispatch")
         try:
             blocked_npm = flow("PUT", "https://registry.npmjs.org/@scope%2fexample")
@@ -5127,9 +7245,10 @@ def main() -> None:
                 assert json.loads(blocked_request.response.raw_content)["error"] == expected_error
         finally:
             runtime.dispatch_release_authorization = original_dispatch
-            runtime.reserve_release_authorization = original_reserve
+            runtime.reserve_expected_release_authorization = original_expected_reserve
             runtime.atomic_release_authorization_enabled = original_atomic_mode
             runtime.get_credential_version = original_get_credential_version
+            runtime.get_credential_generation = original_get_credential_generation
             runtime.get_credential = original_get_credential
             policy_engine.get_policy_snapshot = original_get_policy_snapshot
 
@@ -5262,16 +7381,24 @@ def main() -> None:
 
         original_atomic_snapshot = policy_engine.get_policy_snapshot
         original_atomic_get_version = runtime.get_credential_version
+        original_atomic_get_generation = runtime.get_credential_generation
         original_atomic_get_credential = runtime.get_credential
-        original_atomic_reserve = runtime.reserve_release_authorization
+        original_atomic_expected_reserve = (
+            runtime.reserve_expected_release_authorization
+        )
         original_atomic_complete = runtime.complete_release_authorization
+        original_atomic_cancel_expected = (
+            runtime.cancel_expected_release_authorization
+        )
         invalid_reserve_credential_reads: list[str | None] = []
         invalid_reserve_completions: list[str] = []
 
         def invalid_successful_reserve(**kwargs):
+            expected = kwargs["guard"].expected
             return {
                 **successful_reserve,
-                "attempt_id": kwargs["attempt_id"],
+                "attempt_id": expected.attempt_id,
+                "binding_digest": expected.binding_digest,
                 "grant_id": None,
             }
 
@@ -5279,22 +7406,43 @@ def main() -> None:
             invalid_reserve_credential_reads.append(credential_id)
             raise AssertionError("invalid atomic reserve reached credential access")
 
-        def cancel_invalid_successful_reserve(**kwargs):
-            invalid_reserve_completions.append(kwargs["outcome"])
+        def cancel_invalid_successful_reserve(expected):
+            invalid_reserve_completions.append("not_forwarded")
             return {
                 "authorized": False,
-                "state": "cancelled",
-                "attempt_id": kwargs["attempt_id"],
-                "binding_digest": kwargs["binding_digest"],
-                "completion_outcome": kwargs["outcome"],
+                "state": "absent",
+                "reason": "reservation_absent",
+                "attempt_id": expected.attempt_id,
+                "binding_digest": expected.binding_digest,
+                "idempotent_replay": True,
+                "grant_id": None,
+                "approval_request_id": None,
+                "reservation_expires_at_epoch_ms": None,
+                "dispatch_started_at_epoch_ms": None,
+                "dispatch_expires_at_epoch_ms": None,
+                "completion_outcome": None,
+                "retry_after_seconds": 0,
+                "quotas": [],
             }
 
         policy_engine.get_policy_snapshot = lambda: example_snapshot
         runtime.atomic_release_authorization_enabled = lambda: True
         runtime.get_credential_version = lambda _credential_id: 1
+        runtime.get_credential_generation = lambda credential_id: {
+            "id": credential_id,
+            "kind": "bearer",
+            "credential_version": 1,
+            "lifecycle_status": "active",
+            "metadata": {
+                "provider_id": "npm",
+                "scopes": ["automation"],
+            },
+        }
         runtime.get_credential = reject_invalid_reserve_credential_read
-        runtime.reserve_release_authorization = invalid_successful_reserve
-        runtime.complete_release_authorization = cancel_invalid_successful_reserve
+        runtime.reserve_expected_release_authorization = invalid_successful_reserve
+        runtime.cancel_expected_release_authorization = (
+            cancel_invalid_successful_reserve
+        )
         try:
             invalid_success = copy.deepcopy(npm_request)
             invalid_success.request.headers["X-Serverware-Agent"] = "example-agent"
@@ -5307,12 +7455,23 @@ def main() -> None:
             )
             assert invalid_reserve_credential_reads == []
             assert invalid_reserve_completions == ["not_forwarded"]
-            assert invalid_success.metadata["serverware_release_state"] == "cancelled"
+            invalid_guard = invalid_success.metadata.get(
+                "serverware_release_authorization_guard"
+            )
+            assert invalid_guard is not None
+            assert invalid_guard.cleanup_emitted is True
+            assert invalid_guard.phase == "terminal"
         finally:
+            runtime.cancel_expected_release_authorization = (
+                original_atomic_cancel_expected
+            )
             runtime.complete_release_authorization = original_atomic_complete
-            runtime.reserve_release_authorization = original_atomic_reserve
+            runtime.reserve_expected_release_authorization = (
+                original_atomic_expected_reserve
+            )
             runtime.get_credential = original_atomic_get_credential
             runtime.get_credential_version = original_atomic_get_version
+            runtime.get_credential_generation = original_atomic_get_generation
             runtime.atomic_release_authorization_enabled = original_atomic_mode
             policy_engine.get_policy_snapshot = original_atomic_snapshot
 
@@ -5339,12 +7498,19 @@ def main() -> None:
 
         def connect_flow():
             item = flow("CONNECT", "https://connect.example.test:443")
-            item.request.host = "CONNECT.EXAMPLE.TEST."
+            item.request.host = "connect.example.test"
             item.request.port = 443
-            item.request.headers = {
-                "Proxy-Authorization": "Basic must-not-enter-audit",
-                "X-Serverware-Agent": "connect-agent",
-            }
+            item.request.headers = RawHeaders(
+                [
+                    ("Host", "connect.example.test:443"),
+                    (
+                        "Proxy-Authorization",
+                        "Basic must-not-enter-audit",
+                    ),
+                    ("X-Serverware-Agent", "connect-agent"),
+                ]
+            )
+            item.request.data.headers = item.request.headers
             item.client_conn.peername = ("10.42.0.9", 51234)
             return item
 
@@ -5361,6 +7527,22 @@ def main() -> None:
         connect_logs: list[tuple[tuple, dict]] = []
         runtime.log_request = lambda *args, **kwargs: connect_logs.append((args, kwargs))
         try:
+            uppercase_wire = connect_flow()
+            uppercase_wire.request.data.authority = b"CONNECT.example.test:443"
+            uppercase_wire.request.data.path = b"CONNECT.example.test:443"
+            uppercase_wire.request.headers = RawHeaders(
+                [("Host", "CONNECT.example.test:443")]
+            )
+            uppercase_wire.request.data.headers = uppercase_wire.request.headers
+            mitm_addon.get_policy_snapshot = lambda: (_ for _ in ()).throw(
+                AssertionError("invalid CONNECT target reached policy snapshot")
+            )
+            addon.http_connect(uppercase_wire)
+            assert uppercase_wire.response.status_code == 400
+            assert json.loads(uppercase_wire.response.raw_content) == {
+                "error": "invalid_connect_target"
+            }
+
             unknown_principal = connect_flow()
             mitm_addon.get_policy_snapshot = lambda: connect_snapshot(None)
             addon.http_connect(unknown_principal)
@@ -5407,38 +7589,116 @@ def main() -> None:
             assert assigned.metadata.get("serverware_blocked_response") is not True
             assert identified_inputs[-1] == ("10.42.0.9", assigned.request.headers)
             assert "must-not-enter-audit" not in repr(connect_logs)
+            reused_tunnel = connect_flow()
+            reused_tunnel.client_conn = assigned.client_conn
+            reused_tunnel.server_conn = assigned.server_conn
+            addon.http_connect(reused_tunnel)
+            assert reused_tunnel.response.status_code == 400
+            assert json.loads(reused_tunnel.response.raw_content) == {
+                "error": "invalid_connect_target"
+            }
         finally:
             runtime.log_request = original_connect_log
             mitm_addon.get_policy_snapshot = original_connect_snapshot
 
         original_addon_evaluate_request = mitm_addon.evaluate_request
         original_addon_dispatch = mitm_addon.dispatch_release_authorization
+        original_addon_dispatch_marker = (
+            mitm_addon.mark_provider_dispatch_uncertain
+        )
         original_complete = runtime.complete_release_authorization
+        original_cancel_expected = runtime.cancel_expected_release_authorization
         completion_outcomes: list[str] = []
         dispatch_calls: list[str] = []
 
         def complete_failed_hook(**kwargs):
             completion_outcomes.append(kwargs["outcome"])
-            expected_state = {
-                "not_forwarded": "cancelled",
-                "unknown": "committed_indeterminate",
-            }[kwargs["outcome"]]
+            if kwargs["outcome"] != "unknown":
+                raise AssertionError(
+                    "untyped addon cleanup bypassed the expected reservation guard"
+                )
+            previous = kwargs["previous_lifecycle"]
             return {
-                "authorized": expected_state != "cancelled",
-                "state": expected_state,
+                "authorized": True,
+                "state": "committed_indeterminate",
+                "reason": "forward_outcome_indeterminate",
                 "attempt_id": kwargs["attempt_id"],
                 "binding_digest": kwargs["binding_digest"],
-                "completion_outcome": kwargs["outcome"],
+                "idempotent_replay": False,
+                "grant_id": None,
+                "approval_request_id": None,
+                "approval_status": None,
+                "approval_expires_at": None,
+                "approval_created": None,
+                "reservation_expires_at_epoch_ms": previous[
+                    "reservation_expires_at_epoch_ms"
+                ],
+                "dispatch_started_at_epoch_ms": previous.get(
+                    "dispatch_started_at_epoch_ms"
+                ),
+                "dispatch_expires_at_epoch_ms": previous.get(
+                    "dispatch_expires_at_epoch_ms"
+                ),
+                "completion_outcome": "unknown",
+                "retry_after_seconds": 0,
+                "quotas": [],
+            }
+
+        def cancel_expected_hook(expected):
+            completion_outcomes.append("not_forwarded")
+            return {
+                "authorized": False,
+                "state": "cancelled",
+                "reason": "cancelled",
+                "attempt_id": expected.attempt_id,
+                "binding_digest": expected.binding_digest,
+                "idempotent_replay": False,
+                "grant_id": None,
+                "approval_request_id": None,
+                "approval_status": None,
+                "approval_expires_at": None,
+                "approval_created": None,
+                "reservation_expires_at_epoch_ms": int(time.time() * 1000)
+                + 60_000,
+                "dispatch_started_at_epoch_ms": None,
+                "dispatch_expires_at_epoch_ms": None,
+                "completion_outcome": "not_forwarded",
+                "retry_after_seconds": 0,
+                "quotas": [],
             }
 
         def install_lifecycle(item, *, dispatch_attempted: bool = False):
+            expected = runtime.expected_release_authorization_identity(
+                attempt_id="attempt:addon-failure",
+                flow_id="attempt:addon-failure",
+                principal_id="agent:addon-fixture",
+                route_id="route:addon-fixture",
+                credential_ref=None,
+                credential_version=0,
+                policy_hash="sha256:" + "7" * 64,
+                request_digest="sha256:" + "6" * 64,
+                operation_digest=None,
+                operation_context={},
+                shared_quotas=[],
+                require_jit_grant=False,
+            )
+            guard = runtime.ReleaseAuthorizationGuard(expected)
+            guard.promote_reserved()
+            item.metadata["serverware_atomic_reservation_required"] = True
+            item.metadata[
+                "serverware_release_authorization_guard"
+            ] = guard
             item.metadata["serverware_release_authorization"] = {
-                "attempt_id": "attempt:addon-failure",
-                "flow_id": "attempt:addon-failure",
-                "binding_digest": "sha256:" + "8" * 64,
+                "attempt_id": expected.attempt_id,
+                "flow_id": expected.flow_id,
+                "binding_digest": expected.binding_digest,
                 "state": "reserved",
                 "dispatch_attempted": dispatch_attempted,
+                "reservation_expires_at_epoch_ms": int(time.time() * 1000)
+                + 60_000,
+                "quotas": [],
             }
+            return guard
 
         def fail_after_reserve(item):
             install_lifecycle(item)
@@ -5446,7 +7706,22 @@ def main() -> None:
 
         def allow_with_reservation(item):
             install_lifecycle(item)
-            return SimpleNamespace(decision=policy_engine.PolicyDecision(True))
+            return SimpleNamespace(
+                decision=policy_engine.PolicyDecision(True),
+                route=SimpleNamespace(
+                    credential_ref=None,
+                    resolved_cidrs=None,
+                ),
+            )
+
+        def incorrectly_allow_credential(_item):
+            return SimpleNamespace(
+                decision=policy_engine.PolicyDecision(True),
+                route=SimpleNamespace(
+                    credential_ref="cred-demo-bearer",
+                    resolved_cidrs=("127.0.0.1/32",),
+                ),
+            )
 
         def fail_during_dispatch(item):
             dispatch_calls.append("dispatch")
@@ -5454,7 +7729,248 @@ def main() -> None:
             raise RuntimeError("dispatch transport failed unexpectedly")
 
         runtime.complete_release_authorization = complete_failed_hook
+        runtime.cancel_expected_release_authorization = cancel_expected_hook
         try:
+            ingress_targets: list[str] = []
+
+            def deny_after_raw_ingress(item):
+                ingress_targets.append(
+                    item.metadata["serverware_raw_absolute_target"]
+                )
+                assert (
+                    item.metadata["serverware_raw_target_validated"] is True
+                )
+                assert (
+                    item.request.pretty_url
+                    == item.metadata["serverware_raw_absolute_target"]
+                )
+                assert (
+                    item.metadata[LEGACY_MITM_TRANSPORT_METADATA_KEY]
+                    is True
+                )
+                return SimpleNamespace(
+                    decision=policy_engine.PolicyDecision(
+                        False,
+                        "fixture denial",
+                        403,
+                        {"error": "fixture_denied"},
+                    )
+                )
+
+            mitm_addon.evaluate_request = deny_after_raw_ingress
+            canonical_absolute = flow(
+                "GET",
+                "https://demo-upstream:8443/echo?literal=%2B&space=a%20b",
+            )
+            addon.request(canonical_absolute)
+            assert canonical_absolute.response.status_code == 403
+            assert ingress_targets == [
+                "https://demo-upstream:8443/echo?literal=%2B&space=a%20b"
+            ]
+
+            canonical_origin = flow("GET", "https://demo-upstream:8443/echo")
+            canonical_origin.request.first_line_format = "relative"
+            canonical_origin.request.data.authority = b""
+            canonical_origin.request.headers = RawHeaders(
+                [("Host", "demo-upstream:8443")]
+            )
+            canonical_origin.request.data.headers = canonical_origin.request.headers
+            addon.request(canonical_origin)
+            assert canonical_origin.response.status_code == 400
+            assert json.loads(canonical_origin.response.raw_content) == {
+                "error": "invalid_request_target"
+            }
+
+            missing_host = flow(
+                "GET", "https://demo-upstream:8443/echo"
+            )
+            missing_host.request.data.headers = RawHeaders([])
+            duplicate_host = flow(
+                "GET", "https://demo-upstream:8443/echo"
+            )
+            duplicate_host.request.data.headers = RawHeaders(
+                [
+                    ("Host", "demo-upstream:8443"),
+                    ("host", "demo-upstream:8443"),
+                ]
+            )
+            h2_host_ambiguity = flow(
+                "GET", "https://demo-upstream:8443/echo"
+            )
+            h2_host_ambiguity.request.first_line_format = "relative"
+            h2_host_ambiguity.request.http_version = "HTTP/2"
+            h2_host_ambiguity.request.data.http_version = b"HTTP/2"
+            h2_host_ambiguity.request.data.headers = RawHeaders(
+                [("Host", "demo-upstream:8443")]
+            )
+            for invalid_host in (
+                missing_host,
+                duplicate_host,
+                h2_host_ambiguity,
+            ):
+                addon.request(invalid_host)
+                assert invalid_host.response.status_code == 400
+                assert json.loads(invalid_host.response.raw_content) == {
+                    "error": "invalid_request_target"
+                }
+
+            h2_canonical = flow(
+                "GET", "https://demo-upstream:8443/echo"
+            )
+            h2_canonical.request.first_line_format = "relative"
+            h2_canonical.request.http_version = "HTTP/2"
+            h2_canonical.request.data.http_version = b"HTTP/2"
+            h2_canonical.request.data.headers = RawHeaders([])
+            assert mitm_addon._admit_raw_absolute_request_target(
+                h2_canonical
+            ) == (
+                "https://demo-upstream:8443/echo",
+                "demo-upstream",
+                8443,
+            )
+
+            tunnel_a_request = flow(
+                "GET", "https://connect.example.test/resource"
+            )
+            tunnel_a_request.client_conn = assigned.client_conn
+            tunnel_a_request.server_conn = assigned.server_conn
+            tunnel_a_request.request.first_line_format = "relative"
+            tunnel_a_request.request.data.authority = b""
+            tunnel_a_request.request.data.headers = RawHeaders(
+                [("Host", "connect.example.test")]
+            )
+            addon.request(tunnel_a_request)
+            assert tunnel_a_request.response.status_code == 403
+            assert ingress_targets[-1] == (
+                "https://connect.example.test/resource"
+            )
+
+            admitted_before_cross_authority = len(ingress_targets)
+            tunnel_b_request = flow(
+                "GET", "https://other.example.test/resource"
+            )
+            tunnel_b_request.client_conn = assigned.client_conn
+            tunnel_b_request.server_conn = assigned.server_conn
+            tunnel_b_request.request.first_line_format = "relative"
+            tunnel_b_request.request.data.authority = b""
+            tunnel_b_request.request.data.headers = RawHeaders(
+                [("Host", "other.example.test")]
+            )
+            addon.request(tunnel_b_request)
+            assert tunnel_b_request.response.status_code == 400
+            assert json.loads(tunnel_b_request.response.raw_content) == {
+                "error": "invalid_request_target"
+            }
+            assert len(ingress_targets) == admitted_before_cross_authority
+
+            (
+                unavailable_raw,
+                unavailable_headers,
+                uppercase_raw,
+                inconsistent_raw,
+                raw_plus_query,
+                unsorted_query,
+                duplicate_query,
+            ) = (
+                flow("GET", "https://demo-upstream:8443/echo"),
+                flow("GET", "https://demo-upstream:8443/echo"),
+                flow("GET", "https://demo-upstream:8443/echo"),
+                flow("GET", "https://demo-upstream:8443/echo"),
+                flow(
+                    "GET",
+                    "https://demo-upstream:8443/echo?space=a+b",
+                ),
+                flow(
+                    "GET",
+                    "https://demo-upstream:8443/echo?space=a%20b&data=a%26b%3Dc",
+                ),
+                flow(
+                    "GET",
+                    "https://demo-upstream:8443/echo?data=first&data=second",
+                ),
+            )
+            unavailable_raw.request.data = None
+            unavailable_headers.request.data.headers = None
+            uppercase_raw.request.data.authority = b"DEMO-upstream:8443"
+            inconsistent_raw.request.data.path = b"/different"
+            admitted_before_invalid = len(ingress_targets)
+            for invalid_ingress in (
+                unavailable_raw,
+                unavailable_headers,
+                uppercase_raw,
+                inconsistent_raw,
+                raw_plus_query,
+                unsorted_query,
+                duplicate_query,
+            ):
+                addon.request(invalid_ingress)
+                assert invalid_ingress.response.status_code == 400
+                assert json.loads(invalid_ingress.response.raw_content) == {
+                    "error": "invalid_request_target"
+                }
+            assert len(ingress_targets) == admitted_before_invalid
+
+            cleanup_unknown_calls: list[object] = []
+
+            def cleanup_transport_loss(expected):
+                cleanup_unknown_calls.append(expected)
+                raise runtime.ReleaseAuthorizationClientError(
+                    "fixture cleanup transport loss"
+                )
+
+            runtime.cancel_expected_release_authorization = (
+                cleanup_transport_loss
+            )
+            cleanup_unknown = flow(
+                "POST",
+                "https://demo-upstream:8443/echo",
+            )
+            cleanup_unknown_guard = install_lifecycle(cleanup_unknown)
+            first_cleanup = (
+                policy_engine.complete_release_authorization_for_error(
+                    cleanup_unknown
+                )
+            )
+            second_cleanup = (
+                policy_engine.complete_release_authorization_for_error(
+                    cleanup_unknown
+                )
+            )
+            assert first_cleanup.allowed is False
+            assert second_cleanup.allowed is True
+            assert cleanup_unknown_calls == [cleanup_unknown_guard.expected]
+            assert cleanup_unknown_guard.phase == "cleanup_unknown"
+            assert cleanup_unknown_guard.cleanup_emitted is True
+            assert cleanup_unknown_guard.cleanup_error is True
+            assert (
+                cleanup_unknown.metadata["serverware_release_state"]
+                == "cleanup_unknown"
+            )
+            assert (
+                cleanup_unknown.metadata[
+                    "serverware_release_authorization"
+                ]["cleanup_error"]
+                == "fixture cleanup transport loss"
+            )
+            runtime.cancel_expected_release_authorization = cancel_expected_hook
+
+            mitm_addon.evaluate_request = incorrectly_allow_credential
+            mitm_addon.dispatch_release_authorization = (
+                lambda _item: dispatch_calls.append("unexpected_dispatch")
+            )
+            escaped_credential = flow(
+                "POST",
+                "https://demo-upstream:8443/echo",
+            )
+            addon.request(escaped_credential)
+            assert escaped_credential.response.status_code == 503
+            assert json.loads(
+                escaped_credential.response.raw_content
+            ) == {
+                "error": "legacy_mitm_credential_transport_denied"
+            }
+            assert dispatch_calls == []
+
             mitm_addon.evaluate_request = fail_after_reserve
             mitm_addon.dispatch_release_authorization = lambda _item: dispatch_calls.append(
                 "unexpected_dispatch"
@@ -5481,6 +7997,44 @@ def main() -> None:
             assert completion_outcomes == ["not_forwarded", "unknown"], completion_outcomes
             assert dispatch_failure.metadata["serverware_release_state"] == "committed_indeterminate"
 
+            forward_events: list[str] = []
+
+            def authorize_dispatch(item):
+                forward_events.append("dispatch")
+                lifecycle = item.metadata["serverware_release_authorization"]
+                lifecycle["state"] = "dispatch_authorized"
+                item.metadata["serverware_release_state"] = "dispatch_authorized"
+                item.metadata[
+                    "serverware_release_authorization_guard"
+                ].mark_dispatch_authorized()
+                return policy_engine.PolicyDecision(True)
+
+            def observe_dispatch_marker(item):
+                original_addon_dispatch_marker(item)
+                forward_events.append("dispatch_marker")
+
+            mitm_addon.evaluate_request = allow_with_reservation
+            mitm_addon.dispatch_release_authorization = authorize_dispatch
+            mitm_addon.mark_provider_dispatch_uncertain = (
+                observe_dispatch_marker
+            )
+            forwarded = flow("POST", "https://demo-upstream:8443/echo")
+            addon.request(forwarded)
+            if (
+                forwarded.response is not None
+                or forward_events
+                != ["dispatch", "dispatch_marker"]
+                or forwarded.metadata.get("serverware_release_state")
+                != "dispatching"
+                or not forwarded.metadata[
+                    "serverware_release_authorization_guard"
+                ].dispatch_uncertain
+            ):
+                raise AssertionError(
+                    "addon did not retain dispatch ownership through its final "
+                    f"pre-provider operation: {forward_events} {forwarded.metadata}"
+                )
+
             mitm_addon.evaluate_request = lambda _item: (_ for _ in ()).throw(
                 AssertionError("streamed request reached policy evaluation")
             )
@@ -5493,7 +8047,13 @@ def main() -> None:
                 "error": "request_streaming_unsupported"
             }
         finally:
+            runtime.cancel_expected_release_authorization = (
+                original_cancel_expected
+            )
             runtime.complete_release_authorization = original_complete
+            mitm_addon.mark_provider_dispatch_uncertain = (
+                original_addon_dispatch_marker
+            )
             mitm_addon.dispatch_release_authorization = original_addon_dispatch
             mitm_addon.evaluate_request = original_addon_evaluate_request
 
@@ -5923,6 +8483,38 @@ def main() -> None:
         ),
         "gmail_response_invalid_internal_date",
     )
+    mismatched_detail = flow(
+        "GET",
+        "https://demo-upstream:8443/gmail/v1/users/me/messages/requested",
+        response={
+            "id": "different",
+            "internalDate": str(epoch_ms_days_ago(1)),
+        },
+    )
+    assert_denied(
+        gmail_adapter.validate_response(
+            mismatched_detail,
+            gmail_route,
+            {"user": "me", "message_id": "requested"},
+        ),
+        "gmail_response_message_id_mismatch",
+    )
+    future_detail = flow(
+        "GET",
+        "https://demo-upstream:8443/gmail/v1/users/me/messages/future",
+        response={
+            "id": "future",
+            "internalDate": str(int(time.time() * 1000) + 360_000),
+        },
+    )
+    assert_denied(
+        gmail_adapter.validate_response(
+            future_detail,
+            gmail_route,
+            {"user": "me", "message_id": "future"},
+        ),
+        "gmail_response_internal_date_in_future",
+    )
     for projection in (None, []):
         unprojected_gmail_route = copy.deepcopy(gmail_route)
         response_config = unprojected_gmail_route.adapter_config["response"]
@@ -5953,27 +8545,37 @@ def main() -> None:
             "mode": "json",
         }
 
-    gmail_unproven = flow(
+    gmail_response_config = gmail_route.adapter_config["response"]
+    assert gmail_route.adapter_config["forceQuery"] is True
+    assert (
+        gmail_route.adapter_config["allowMessageGetOnlyFromPriorSearch"]
+        is True
+    )
+    assert gmail_response_config["validateInternalDate"] is True
+    assert (
+        gmail_response_config["validateListByMetadataFetch"]
+        is True
+    )
+    assert gmail_response_config["metadataFetch"] == {
+        "maxMessages": 10,
+        "perRequestTimeoutMs": 1500,
+        "totalTimeoutMs": 8000,
+        "maxBodyBytes": 4096,
+    }
+    legacy_gmail_flow = flow(
         "GET",
         "https://demo-upstream:8443/gmail/v1/users/me/messages",
-        response={
-            "messages": [
-                {"id": "unproven", "snippet": "must not escape"},
-                {"id": "recent", "internalDate": str(epoch_ms_days_ago(1))},
-            ]
-        },
     )
-    gmail_unproven.metadata.update(
-        {
-            "serverware_principal_id": "agent:demo",
-            "serverware_credential_id": gmail_route.credential_ref,
-            "serverware_credential_version": 1,
-            "serverware_policy_hash": demo.hash,
-        }
+    legacy_gmail_flow.metadata[
+        LEGACY_MITM_TRANSPORT_METADATA_KEY
+    ] = True
+    assert_denied(
+        _legacy_mitm_route_admission(
+            legacy_gmail_flow,
+            gmail_route,
+        ),
+        "legacy_mitm_credential_transport_denied",
     )
-    assert gmail_adapter.validate_response(gmail_unproven, gmail_route, {"user": "me"}).allowed
-    released = json.loads(gmail_unproven.response.get_text())
-    assert [item["id"] for item in released["messages"]] == ["recent"], released
 
     gmail_headers = flow(
         "GET",
@@ -6018,13 +8620,24 @@ def main() -> None:
         },
     )
     gmail_error.response.status_code = 429
+    gmail_error.metadata["serverware_operation"] = {
+        "operation": "gmail.message.get"
+    }
+    assert _evaluate_response_envelope(gmail_error, gmail_route).allowed
     gmail_error.response.headers.update(
         {
             "retry-after": "30",
             "www-authenticate": 'Bearer realm="gmail"',
-            "set-cookie": "provider_session=secret",
         }
     )
+    assert _evaluate_response_envelope(gmail_error, gmail_route).allowed
+    malformed_retry_after = copy.deepcopy(gmail_error)
+    malformed_retry_after.response.headers["retry-after"] = "1234567"
+    assert_denied(
+        _evaluate_response_envelope(malformed_retry_after, gmail_route),
+        "response_envelope_header_value_denied",
+    )
+    gmail_error.response.headers["set-cookie"] = "provider_session=secret"
     assert gmail_adapter.validate_response(gmail_error, gmail_route, gmail_detail_params).allowed
     assert json.loads(gmail_error.response.get_text()) == {
         "error": {"code": 429, "message": "slow down", "status": "RESOURCE_EXHAUSTED"}
@@ -6032,6 +8645,70 @@ def main() -> None:
     assert gmail_error.response.headers.get("retry-after") == "30"
     assert gmail_error.response.headers.get("www-authenticate") == 'Bearer realm="gmail"'
     assert "set-cookie" not in {name.lower() for name in gmail_error.response.headers}
+
+    unlisted_gmail_error = flow(
+        "GET",
+        "https://demo-upstream:8443/gmail/v1/users/me/messages/recent",
+        response={"error": {"code": 418, "message": "not admitted"}},
+    )
+    unlisted_gmail_error.response.status_code = 418
+    unlisted_gmail_error.metadata["serverware_operation"] = {
+        "operation": "gmail.message.get"
+    }
+    assert_denied(
+        _evaluate_response_envelope(unlisted_gmail_error, gmail_route),
+        "response_envelope_status_denied",
+    )
+    assert_denied(
+        gmail_adapter.validate_response(
+            unlisted_gmail_error,
+            gmail_route,
+            gmail_detail_params,
+        ),
+        "response_error_profile_status_denied",
+    )
+
+    oversized_gmail_error = flow(
+        "GET",
+        "https://demo-upstream:8443/gmail/v1/users/me/messages/recent",
+        response={"error": {"code": 429, "message": "placeholder"}},
+    )
+    oversized_gmail_error.response.status_code = 429
+    oversized_gmail_error.response.raw_content = (
+        b'{"error":{"code":429,"message":"'
+        + b"x" * 65_536
+        + b'"}}'
+    )
+    oversized_gmail_error.metadata["serverware_operation"] = {
+        "operation": "gmail.message.get"
+    }
+    assert _evaluate_response_envelope(
+        oversized_gmail_error,
+        gmail_route,
+    ).allowed
+    assert_denied(
+        gmail_adapter.validate_response(
+            oversized_gmail_error,
+            gmail_route,
+            gmail_detail_params,
+        ),
+        "response_body_too_large",
+    )
+
+    bodyless_gmail_error = flow(
+        "GET",
+        "https://demo-upstream:8443/gmail/v1/users/me/messages/recent",
+        response={},
+    )
+    bodyless_gmail_error.response.status_code = 429
+    bodyless_gmail_error.response.raw_content = b""
+    bodyless_gmail_error.metadata["serverware_operation"] = {
+        "operation": "gmail.message.get"
+    }
+    assert_denied(
+        _evaluate_response_envelope(bodyless_gmail_error, gmail_route),
+        "response_envelope_body_presence_denied",
+    )
 
     gmail_redirect = flow(
         "GET",
@@ -6051,6 +8728,7 @@ def main() -> None:
         response={"error": "denied", "reason": "policy", "internal": "must not release"},
     )
     npm_error.response.status_code = 403
+    npm_error.metadata["serverware_operation"] = {"operation": "npm.publish"}
     npm_adapter = get_adapter(route(demo, "demo.npm.publish.jit").adapter_type)
     npm_demo_route = route(demo, "demo.npm.publish.jit")
     npm_public_route = route(public_npm_snapshot, "demo.npm.publish.jit")
@@ -6247,6 +8925,9 @@ def main() -> None:
         response={"error": "must-not-release"},
     )
     npm_wrong_error_media_type.response.status_code = 403
+    npm_wrong_error_media_type.metadata["serverware_operation"] = {
+        "operation": "npm.publish"
+    }
     npm_wrong_error_media_type.response.headers["content-type"] = "text/plain"
     npm_wrong_error_media_type.response.raw_content = b"not-json-and-must-not-release"
     npm_wrong_error_body = npm_wrong_error_media_type.response.raw_content
@@ -6285,6 +8966,9 @@ def main() -> None:
         response={"error": "invalid"},
     )
     npm_invalid_error.response.status_code = 500
+    npm_invalid_error.metadata["serverware_operation"] = {
+        "operation": "npm.publish"
+    }
     npm_invalid_error.response.raw_content = b"not-json"
     assert_denied(
         npm_adapter.validate_response(npm_invalid_error, npm_demo_route, {"package": "@scope%2fexample"}),
@@ -6343,6 +9027,85 @@ def main() -> None:
             )
             return guarded
 
+        original_response_adapter_lookup = policy_engine.get_adapter
+        policy_engine.get_adapter = lambda _adapter_type: (_ for _ in ()).throw(
+            AssertionError(
+                "invalid response Content-Encoding reached adapter body processing"
+            )
+        )
+        try:
+            for adapter_type, status_code in (
+                ("generic.rest", 200),
+                ("x.v2", 200),
+                ("gmail.v1", 200),
+                ("npm.registry", 200),
+                ("generic.rest", 500),
+            ):
+                for response_headers in (
+                    RawHeaders(
+                        [
+                            ("Content-Type", "application/json"),
+                            ("Content-Encoding", "identity"),
+                            ("content-encoding", "identity"),
+                        ]
+                    ),
+                    RawHeaders(
+                        [
+                            ("Content-Type", "application/json"),
+                            ("Content-Encoding", "Identity"),
+                        ]
+                    ),
+                    RawHeaders(
+                        [
+                            ("Content-Type", "application/json"),
+                            ("Content-Encoding", "identity; q=1"),
+                        ]
+                    ),
+                    RawHeaders(
+                        [
+                            ("Content-Type", "application/json"),
+                            ("Content-Encoding", "gzip"),
+                        ]
+                    ),
+                ):
+                    encoded_response = flow(
+                        "GET",
+                        "https://demo-upstream:8443/encoded",
+                        response={"must": "remain buffered"},
+                    )
+                    encoded_response.response.status_code = status_code
+                    encoded_response.response.headers = response_headers
+                    encoded_response.metadata.update(
+                        {
+                            "serverware_route": SimpleNamespace(
+                                id=f"encoding.{adapter_type}.{status_code}",
+                                adapter_type=adapter_type,
+                                adapter_config={},
+                                constraints=[],
+                                credential_ref=None,
+                            ),
+                            "serverware_route_id": (
+                                f"encoding.{adapter_type}.{status_code}"
+                            ),
+                            "serverware_params": {},
+                        }
+                    )
+                    original_encoded_body = (
+                        encoded_response.response.raw_content
+                    )
+                    decision = policy_engine.prepare_response(
+                        encoded_response
+                    )
+                    assert_denied(
+                        decision, "response_content_encoding_denied"
+                    )
+                    assert (
+                        encoded_response.response.raw_content
+                        == original_encoded_body
+                    )
+        finally:
+            policy_engine.get_adapter = original_response_adapter_lookup
+
         audit_calls = []
         original_log_request = runtime.log_request
         runtime.log_request = lambda *args, **kwargs: audit_calls.append((args, kwargs))
@@ -6369,6 +9132,9 @@ def main() -> None:
                 }
             )
             original_complete_release = runtime.complete_release_authorization
+            original_validate_complete_release = (
+                runtime.validate_complete_release_authorization_response
+            )
             original_addon_evaluate_response = mitm_addon.evaluate_response
 
             def complete_forwarded(**kwargs):
@@ -6379,6 +9145,7 @@ def main() -> None:
                     "attempt_id": kwargs["attempt_id"],
                     "binding_digest": kwargs["binding_digest"],
                     "completion_outcome": kwargs["outcome"],
+                    "quotas": [],
                 }
 
             def observe_response_policy(item):
@@ -6386,14 +9153,412 @@ def main() -> None:
                 return original_addon_evaluate_response(item)
 
             runtime.complete_release_authorization = complete_forwarded
+            runtime.validate_complete_release_authorization_response = (
+                lambda response, **_kwargs: response
+            )
             mitm_addon.evaluate_response = observe_response_policy
             try:
                 ServerwareAddon().response(lifecycle_response)
             finally:
                 mitm_addon.evaluate_response = original_addon_evaluate_response
+                runtime.validate_complete_release_authorization_response = (
+                    original_validate_complete_release
+                )
                 runtime.complete_release_authorization = original_complete_release
-            assert lifecycle_order == ["complete:forwarded", "response_policy"], lifecycle_order
+            assert lifecycle_order == ["response_policy", "complete:forwarded"], lifecycle_order
             assert lifecycle_response.metadata["serverware_release_state"] == "committed"
+            lifecycle_actions = [call[0][3] for call in audit_calls]
+            assert lifecycle_actions[-2:] == [
+                "response_validated",
+                "response_release_authorized",
+            ], lifecycle_actions
+
+            ordinary_body_flow = guarded_response(
+                "ordinary-staged-body-secret",
+                {"ok": True},
+            )
+            assert evaluate_response(ordinary_body_flow).allowed
+            ordinary_body_flow.response.raw_content = b'{"ok":false}'
+            assert_denied(
+                policy_engine.validate_response_completion(
+                    ordinary_body_flow
+                ),
+                "response_changed_after_validation",
+            )
+
+            durable_order: list[str] = []
+            original_complete_durable = (
+                runtime.complete_durable_policy_state
+            )
+            original_fail_durable = runtime.fail_durable_policy_state
+            original_policy_adapter_lookup = policy_engine.get_adapter
+
+            class DurableOrderingAdapter:
+                def __init__(self, finalizer):
+                    self._finalizer = finalizer
+
+                def validate_response(self, *_args, **_kwargs):
+                    return SimpleNamespace(
+                        allowed=True,
+                        reason=None,
+                        status_code=200,
+                        payload={},
+                    )
+
+                def finalize_response(self, item, *_args, **_kwargs):
+                    durable_order.append("finalizer")
+                    return self._finalizer(item)
+
+            def durable_flow(secret: str, state: str = "dispatched"):
+                item = guarded_response(secret, {"ok": True})
+                dispatch_deadline = int(time.time() * 1000) + 30_000
+                reservation = {
+                    "state": state,
+                    "attempt_id": "attempt:durable-order",
+                    "claim_digest": "sha256:" + "8" * 64,
+                    "reservation_id": "sha256:" + "9" * 64,
+                    "dispatch_deadline_at_epoch_ms": dispatch_deadline,
+                }
+                item.metadata.update(
+                    {
+                        "serverware_durable_policy_claims": [],
+                        "serverware_durable_policy_reservation": reservation,
+                        "serverware_release_authorization": {
+                            "state": "dispatching",
+                            "dispatch_expires_at_epoch_ms": (
+                                dispatch_deadline
+                            ),
+                            "durable_policy": copy.deepcopy(reservation),
+                        },
+                    }
+                )
+                return item
+
+            def reject_split_durable_transition(*_args, **_kwargs):
+                raise AssertionError(
+                    "response path used a split durable policy transition"
+                )
+
+            runtime.complete_durable_policy_state = (
+                reject_split_durable_transition
+            )
+            runtime.fail_durable_policy_state = (
+                reject_split_durable_transition
+            )
+            try:
+                policy_engine.get_adapter = lambda _adapter_type: (
+                    DurableOrderingAdapter(
+                        lambda _item: SimpleNamespace(
+                            allowed=True,
+                            reason=None,
+                            status_code=200,
+                            payload={},
+                        )
+                    )
+                )
+                durable_success_flow = durable_flow(
+                    "durable-order-success-secret"
+                )
+                assert evaluate_response(durable_success_flow).allowed
+                assert durable_order == ["finalizer"]
+                staged_success = durable_success_flow.metadata[
+                    "serverware_durable_policy_completion"
+                ]
+                assert staged_success["outcome"] == "forwarded"
+                assert staged_success["response_body_sha256"] == (
+                    "sha256:"
+                    + hashlib.sha256(
+                        durable_success_flow.response.raw_content
+                    ).hexdigest()
+                )
+                durable_success_flow.metadata[
+                    "serverware_durable_policy_reservation"
+                ]["state"] = "committed"
+                assert policy_engine.validate_response_completion(
+                    durable_success_flow
+                ).allowed
+
+                durable_order.clear()
+
+                indeterminate_flow = durable_flow(
+                    "durable-order-indeterminate-secret"
+                )
+                assert evaluate_response(indeterminate_flow).allowed
+                indeterminate_flow.metadata[
+                    "serverware_durable_policy_reservation"
+                ]["state"] = "indeterminate"
+                indeterminate_decision = (
+                    policy_engine.validate_response_completion(
+                        indeterminate_flow
+                    )
+                )
+                assert_denied(
+                    indeterminate_decision,
+                    "durable_policy_response_indeterminate",
+                )
+                assert durable_order == ["finalizer"]
+
+                durable_order.clear()
+                reflected_secret = "durable-order-reflection-secret"
+
+                def reflect_in_finalizer(item):
+                    item.response.raw_content = json.dumps(
+                        {"echo": reflected_secret}
+                    ).encode("utf-8")
+                    return SimpleNamespace(
+                        allowed=True,
+                        reason=None,
+                        status_code=200,
+                        payload={},
+                    )
+
+                policy_engine.get_adapter = lambda _adapter_type: (
+                    DurableOrderingAdapter(reflect_in_finalizer)
+                )
+                reflected_durable_flow = durable_flow(reflected_secret)
+                assert_denied(
+                    evaluate_response(reflected_durable_flow),
+                    "response_credential_reflection",
+                )
+                assert durable_order == ["finalizer"]
+                assert (
+                    reflected_durable_flow.metadata[
+                        "serverware_durable_policy_completion"
+                    ]["outcome"]
+                    == "unknown"
+                )
+
+                durable_order.clear()
+                policy_engine.get_adapter = lambda _adapter_type: (
+                    DurableOrderingAdapter(
+                        lambda _item: SimpleNamespace(
+                            allowed=False,
+                            reason="forced finalizer denial",
+                            status_code=502,
+                            payload={"error": "forced_finalizer_denial"},
+                        )
+                    )
+                )
+                finalizer_denial_flow = durable_flow(
+                    "durable-order-finalizer-secret"
+                )
+                assert_denied(
+                    evaluate_response(finalizer_denial_flow),
+                    "forced_finalizer_denial",
+                )
+                assert durable_order == ["finalizer"]
+                assert (
+                    finalizer_denial_flow.metadata[
+                        "serverware_durable_policy_completion"
+                    ]["outcome"]
+                    == "unknown"
+                )
+
+                durable_order.clear()
+                staged_body_flow = durable_flow(
+                    "durable-staged-body-secret",
+                )
+
+                def mutate_before_staging(item):
+                    item.response.raw_content = b'{"ok":false}'
+                    return SimpleNamespace(
+                        allowed=True,
+                        reason=None,
+                        status_code=200,
+                        payload={},
+                    )
+
+                policy_engine.get_adapter = lambda _adapter_type: (
+                    DurableOrderingAdapter(mutate_before_staging)
+                )
+                assert evaluate_response(staged_body_flow).allowed
+                staged_body_digest = staged_body_flow.metadata[
+                    "serverware_durable_policy_completion"
+                ]["response_body_sha256"]
+                assert staged_body_digest == (
+                    "sha256:" + hashlib.sha256(b'{"ok":false}').hexdigest()
+                )
+                staged_body_flow.metadata[
+                    "serverware_durable_policy_reservation"
+                ]["state"] = "committed"
+                staged_body_flow.response.raw_content = b'{"ok":"changed"}'
+                assert_denied(
+                    policy_engine.validate_response_completion(
+                        staged_body_flow
+                    ),
+                    "response_changed_after_validation",
+                )
+                assert durable_order == ["finalizer"]
+
+                durable_order.clear()
+
+                class PrepareDenialAdapter:
+                    def prepare_response(self, *_args, **_kwargs):
+                        return SimpleNamespace(
+                            allowed=False,
+                            reason="forced response preparation denial",
+                            status_code=502,
+                            payload={
+                                "error": "forced_prepare_response_denial"
+                            },
+                        )
+
+                policy_engine.get_adapter = lambda _adapter_type: (
+                    PrepareDenialAdapter()
+                )
+                prepare_denial_flow = durable_flow(
+                    "durable-prepare-denial-secret"
+                )
+                assert_denied(
+                    policy_engine.prepare_response(prepare_denial_flow),
+                    "forced_prepare_response_denial",
+                )
+                assert durable_order == []
+                assert (
+                    prepare_denial_flow.metadata[
+                        "serverware_durable_policy_completion"
+                    ]["outcome"]
+                    == "unknown"
+                )
+
+                durable_order.clear()
+                original_internal_evaluate_response = (
+                    policy_engine._evaluate_response
+                )
+                policy_engine._evaluate_response = (
+                    lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                        RuntimeError("forced internal response exception")
+                    )
+                )
+                try:
+                    evaluator_failure_flow = durable_flow(
+                        "durable-evaluator-exception-secret"
+                    )
+                    assert_denied(
+                        evaluate_response(evaluator_failure_flow),
+                        "response_evaluation_failed_closed",
+                    )
+                finally:
+                    policy_engine._evaluate_response = (
+                        original_internal_evaluate_response
+                    )
+                assert durable_order == []
+                assert (
+                    evaluator_failure_flow.metadata[
+                        "serverware_durable_policy_completion"
+                    ]["outcome"]
+                    == "unknown"
+                )
+
+                durable_order.clear()
+                original_runtime_release_completion = (
+                    runtime.complete_release_authorization
+                )
+
+                def release_completion_failure(**_kwargs):
+                    raise runtime.ReleaseAuthorizationClientError(
+                        "forced release completion failure"
+                    )
+
+                runtime.complete_release_authorization = (
+                    release_completion_failure
+                )
+                release_cleanup_flow = durable_flow(
+                    "durable-release-cleanup-secret"
+                )
+                release_cleanup_flow.metadata[
+                    "serverware_release_authorization"
+                ] = {
+                    "attempt_id": "attempt:durable-order",
+                    "binding_digest": "sha256:" + "7" * 64,
+                    "state": "dispatching",
+                    "dispatch_attempted": True,
+                    "durable_policy": copy.deepcopy(
+                        release_cleanup_flow.metadata[
+                            "serverware_durable_policy_reservation"
+                        ]
+                    ),
+                }
+                try:
+                    release_cleanup_decision = (
+                        policy_engine.complete_release_authorization_for_error(
+                            release_cleanup_flow
+                        )
+                    )
+                finally:
+                    runtime.complete_release_authorization = (
+                        original_runtime_release_completion
+                    )
+                assert_denied(
+                    release_cleanup_decision,
+                    "release_authorization_completion_uncertain",
+                )
+                assert durable_order == []
+                assert (
+                    release_cleanup_flow.metadata[
+                        "serverware_durable_policy_reservation"
+                    ]["state"]
+                    == "dispatched"
+                )
+                assert (
+                    release_cleanup_flow.metadata[
+                        "serverware_durable_policy_completion"
+                    ]["outcome"]
+                    == "unknown"
+                )
+
+                durable_cleanup_attempts = []
+
+                def fail_durable_cleanup(*_args, **_kwargs):
+                    durable_cleanup_attempts.append("fail")
+                    raise runtime.DurablePolicyStateError(
+                        "forced durable cleanup failure"
+                    )
+
+                runtime.fail_durable_policy_state = fail_durable_cleanup
+                runtime.complete_release_authorization = (
+                    release_completion_failure
+                )
+                combined_cleanup_flow = durable_flow(
+                    "durable-combined-cleanup-secret"
+                )
+                combined_cleanup_flow.metadata[
+                    "serverware_release_authorization"
+                ] = {
+                    "attempt_id": "attempt:durable-order",
+                    "binding_digest": "sha256:" + "7" * 64,
+                    "state": "dispatching",
+                    "dispatch_attempted": True,
+                    "durable_policy": copy.deepcopy(
+                        combined_cleanup_flow.metadata[
+                            "serverware_durable_policy_reservation"
+                        ]
+                    ),
+                }
+                try:
+                    combined_cleanup = (
+                        policy_engine.complete_release_authorization_for_error(
+                            combined_cleanup_flow
+                        )
+                    )
+                finally:
+                    runtime.complete_release_authorization = (
+                        original_runtime_release_completion
+                    )
+                    runtime.fail_durable_policy_state = (
+                        reject_split_durable_transition
+                    )
+                assert_denied(
+                    combined_cleanup,
+                    "release_authorization_completion_uncertain",
+                )
+                assert durable_cleanup_attempts == []
+            finally:
+                policy_engine.get_adapter = original_policy_adapter_lookup
+                runtime.complete_durable_policy_state = (
+                    original_complete_durable
+                )
+                runtime.fail_durable_policy_state = original_fail_durable
 
             evaluator_secret = "prototype-evaluator-failure-secret-6bf4"
             evaluator_failure = guarded_response(
@@ -6501,7 +9666,594 @@ def main() -> None:
         finally:
             runtime.log_request = original_log_request
 
+    source_only_policy_model_fixtures(validate_schema)
     print(f"credential constraint tests passed; schema_validation={validate_schema}")
+
+
+def source_only_policy_model_fixtures(validate_schema: bool) -> None:
+    base = demo_policy_bundle("cred-demo-bearer")
+
+    unknown_adapter = copy.deepcopy(base)
+    unknown_adapter["routes"][0]["adapter"]["type"] = "unknown.adapter"
+    assert_policy_rejected(
+        unknown_adapter,
+        "compiler accepted an unknown conditional adapter",
+        validate_schema=validate_schema,
+    )
+
+    unknown_nested_field = copy.deepcopy(base)
+    unknown_nested_field["routes"][0]["adapter"]["config"]["request"][
+        "unattestedOption"
+    ] = True
+    assert_policy_rejected(
+        unknown_nested_field,
+        "compiler accepted an unknown nested adapter field",
+        validate_schema=validate_schema,
+    )
+
+    open_generic_profile = copy.deepcopy(base)
+    open_generic_profile["routes"][0]["adapter"]["config"]["response"][
+        "mode"
+    ] = "any"
+    assert_policy_rejected(
+        open_generic_profile,
+        "compiler accepted an opaque credential-bearing generic response",
+        validate_schema=validate_schema,
+    )
+
+    alternate_x_search = copy.deepcopy(base)
+    broad_x = next(
+        route
+        for route in alternate_x_search["routes"]
+        if route["id"] == "demo.x.readonly"
+    )
+    broad_x["adapter"]["config"]["allowedReadOperations"].append(
+        "search.read"
+    )
+    next(
+        constraint
+        for constraint in broad_x["constraints"]
+        if constraint["type"] == "operationPolicy"
+    )["allowedOperations"].append("search.read")
+    assert_policy_rejected(
+        alternate_x_search,
+        "compiler accepted an older X search alternate-route bypass",
+        validate_schema=validate_schema,
+    )
+
+    oauth_client_mismatch = copy.deepcopy(base)
+    gmail_route = next(
+        route
+        for route in oauth_client_mismatch["routes"]
+        if route["id"] == "demo.gmail.recent"
+    )
+    gmail_route["adapter"]["config"]["credentialBinding"]["clientIds"] = [
+        "other-client"
+    ]
+    assert_policy_rejected(
+        oauth_client_mismatch,
+        "compiler accepted an OAuth client binding mismatch",
+        validate_schema=validate_schema,
+    )
+
+    typed_request_values = copy.deepcopy(base)
+    typed_request = typed_request_values["routes"][0]["adapter"]["config"][
+        "request"
+    ]
+    typed_request["valueRules"] = [
+        {
+            "source": "query",
+            "name": "reflectCredential",
+            "predicate": {"kind": "enum", "values": ["0", "1"]},
+        },
+        {
+            "source": "header",
+            "name": "accept",
+            "predicate": {
+                "kind": "equals",
+                "value": "application/json",
+            },
+        },
+        {
+            "source": "jsonBody",
+            "name": "audit_marker",
+            "predicate": {
+                "kind": "stringLength",
+                "minLength": 1,
+                "maxLength": 256,
+            },
+        },
+        {
+            "source": "operationField",
+            "name": "operation",
+            "predicate": {"kind": "equals", "value": "demo.echo"},
+        },
+    ]
+    compile_policy_bundle(
+        typed_request_values,
+        validate_schema=validate_schema,
+    )
+
+    vacuous_response_proof = copy.deepcopy(base)
+    vacuous_response_proof["routes"][0]["constraints"].append(
+        {
+            "id": "empty-response-proof",
+            "type": "responseJson",
+            "phase": "response",
+            "fields": {},
+        }
+    )
+    assert_policy_rejected(
+        vacuous_response_proof,
+        "compiler accepted a vacuous response JSON proof",
+        validate_schema=validate_schema,
+    )
+
+    noncanonical_cidr = copy.deepcopy(base)
+    noncanonical_cidr["principals"][0]["sourceCidrs"] = [
+        "10.0.0.1/8"
+    ]
+    assert_policy_rejected(
+        noncanonical_cidr,
+        "compiler accepted a CIDR with host bits",
+        validate_schema=validate_schema,
+    )
+
+    issuer_only_mtls = copy.deepcopy(base)
+    issuer_only_mtls["principals"][0].pop("sourceCidrs", None)
+    issuer_only_mtls["principals"][0]["mtls"] = {
+        "verifiedByTrustedIngress": True,
+        "issuerSpkiSha256": "sha256:" + "1" * 64,
+    }
+    assert_policy_rejected(
+        issuer_only_mtls,
+        "compiler accepted issuer-only mTLS identity",
+        validate_schema=validate_schema,
+    )
+    mtls_snapshot = compile_policy_bundle(
+        examples, validate_schema=validate_schema
+    )
+    mtls_flow = flow("GET", "https://example.test/")
+    mtls_flow.client_conn.peername = ("10.1.2.3", 443)
+    mtls_flow.client_conn.serverware_mtls_verified = True
+    mtls_flow.client_conn.serverware_mtls_evidence = {
+        "san_spiffe_ids": [
+            "spiffe://agents.example.test/agent/example"
+        ],
+        "san_dns_names": ["example-agent.agents.example.test"],
+        "san_uris": ["urn:serverware:agent:example"],
+        "certificate_sha256": (
+            "sha256:"
+            "c2a5140ef6d8a3bc5472798f00b4bd22d33826d0a7d17724e68a4bb86b87c21f"
+        ),
+        "spki_sha256": (
+            "sha256:"
+            "1f4d8c8b7a3e90d2c6f547ab16a0be23447b7bb192332eec9b3f76c93ad283fe"
+        ),
+        "issuer_spki_sha256": (
+            "sha256:"
+            "5bcf9e3428ea16b49a96a2e8d2ecf2d6557a39219db2b8b53ca99c8f55d844e1"
+        ),
+    }
+    verified_mtls = _verified_mtls_evidence(mtls_flow)
+    assert verified_mtls is not None
+    assert (
+        mtls_snapshot.identify_principal(
+            "10.1.2.3", RawHeaders([]), verified_mtls
+        ).id
+        == "agent:example-mtls"
+    )
+    mismatched_mtls = dict(mtls_flow.client_conn.serverware_mtls_evidence)
+    mismatched_mtls["spki_sha256"] = "sha256:" + "0" * 64
+    mtls_flow.client_conn.serverware_mtls_evidence = mismatched_mtls
+    assert mtls_snapshot.identify_principal(
+        "10.1.2.3",
+        RawHeaders([]),
+        _verified_mtls_evidence(mtls_flow),
+    ) is None
+    contradictory_mtls = dict(mismatched_mtls)
+    contradictory_mtls["san_spiffe_ids"] = [
+        "spiffe://agents.example.test/agent/example",
+        "spiffe://agents.example.test/agent/example",
+    ]
+    mtls_flow.client_conn.serverware_mtls_evidence = contradictory_mtls
+    assert _verified_mtls_evidence(mtls_flow) is None
+
+    contradictory_alias_decision = _credential_policy_binding_decision(
+        SimpleNamespace(
+            adapter_type="x.v2",
+            adapter_config={
+                "credentialBinding": {
+                    "credentialType": "oauth2",
+                    "provider": "x",
+                    "subjects": ["x-subject"],
+                    "clientIds": ["x-client"],
+                    "requiredScopes": [
+                        "tweet.read",
+                        "users.read",
+                    ],
+                }
+            },
+        ),
+        CredentialPolicy(
+            id="cred-alias-conflict",
+            kind="oauth2",
+            provider="x",
+            provider_subject="x-subject",
+            oauth_client_id="x-client",
+            scopes=("tweet.read", "users.read"),
+        ),
+        {
+            "kind": "oauth2",
+            "metadata": {
+                "oauth": True,
+                "provider_identity_verified": True,
+                "provider_id": "x",
+                "provider_subject": "x-subject",
+                "oauth_client_id": "x-client",
+                "x_app_id": "different-client",
+                "scopes": ["tweet.read", "users.read"],
+            },
+        },
+        "search.read",
+    )
+    assert (
+        contradictory_alias_decision is not None
+        and not contradictory_alias_decision.allowed
+    )
+
+    duplicate_header_flow = flow("GET", "https://example.test/")
+    duplicate_header_flow.metadata["serverware_operation"] = {
+        "operation": "example.read"
+    }
+    duplicate_header_flow.response = mitm_http.Response.make(
+        200, b"{}", {"Content-Type": "application/json"}
+    )
+    duplicate_header_flow.response.headers = RawHeaders(
+        [
+            ("Content-Type", "application/json"),
+            ("ETag", '"same"'),
+            ("ETag", '"same"'),
+        ]
+    )
+    duplicate_header_flow.response.data.headers = (
+        duplicate_header_flow.response.headers
+    )
+    duplicate_header_decision = _evaluate_response_envelope(
+        duplicate_header_flow,
+        SimpleNamespace(
+            constraints=(
+                {
+                    "id": "single-etag",
+                    "type": "responseEnvelope",
+                    "operations": ["example.read"],
+                    "statusCodes": [200],
+                    "bodyPresence": "required",
+                    "contentTypes": ["application/json"],
+                    "allowedResponseHeaderNames": ["etag"],
+                    "responseHeaderRules": [
+                        {
+                            "name": "etag",
+                            "required": False,
+                            "predicate": {
+                                "kind": "equals",
+                                "value": '"same"',
+                            },
+                        }
+                    ],
+                },
+            )
+        ),
+    )
+    assert not duplicate_header_decision.allowed
+    assert duplicate_header_decision.payload == {
+        "error": "response_envelope_header_evidence_invalid",
+        "headers": ["etag"],
+    }
+
+    for transport_name, transport_value in (
+        ("Content-Length", "2"),
+        ("Transfer-Encoding", "chunked"),
+        ("Connection", "keep-alive"),
+        ("Trailer", "x-checksum"),
+    ):
+        duplicate_transport_flow = flow("GET", "https://example.test/")
+        duplicate_transport_flow.metadata["serverware_operation"] = {
+            "operation": "example.read"
+        }
+        duplicate_transport_flow.response = mitm_http.Response.make(
+            200, b"{}", {"Content-Type": "application/json"}
+        )
+        duplicate_transport_flow.response.headers = RawHeaders(
+            [
+                ("Content-Type", "application/json"),
+                (transport_name, transport_value),
+                (transport_name.lower(), transport_value),
+            ]
+        )
+        duplicate_transport_flow.response.data.headers = (
+            duplicate_transport_flow.response.headers
+        )
+        duplicate_transport_decision = _evaluate_response_envelope(
+            duplicate_transport_flow,
+            SimpleNamespace(
+                constraints=(
+                    {
+                        "id": "duplicate-transport-header",
+                        "type": "responseEnvelope",
+                        "operations": ["example.read"],
+                        "statusCodes": [200],
+                        "bodyPresence": "required",
+                        "contentTypes": ["application/json"],
+                        "allowedResponseHeaderNames": [],
+                        "responseHeaderRules": [],
+                    },
+                )
+            ),
+        )
+        assert not duplicate_transport_decision.allowed
+        assert duplicate_transport_decision.payload == {
+            "error": "response_envelope_header_evidence_invalid",
+            "headers": [transport_name.lower()],
+        }
+
+    x_pagination_bypass = copy.deepcopy(base)
+    recent_search_route = next(
+        route
+        for route in x_pagination_bypass["routes"]
+        if route["id"] == "demo.x.search.recent"
+    )
+    recent_search_route["adapter"]["config"]["request"][
+        "allowedQueryKeys"
+    ].append("pagination_token")
+    recent_search_route["adapter"]["config"]["request"][
+        "allowedQueryKeys"
+    ].sort()
+    assert_policy_rejected(
+        x_pagination_bypass,
+        "compiler accepted pagination_token as an alternate recent-search cursor",
+        validate_schema=validate_schema,
+    )
+
+    universal_header = copy.deepcopy(base)
+    universal_header["principals"][0]["sourceCidrs"] = [
+        "0.0.0.0/0",
+        "::/0",
+    ]
+    assert_policy_rejected(
+        universal_header,
+        "compiler accepted requiredHeaders anchored only by universal CIDRs",
+        validate_schema=validate_schema,
+    )
+
+    unrestricted_bearer_header = copy.deepcopy(universal_header)
+    unrestricted_bearer_header["principals"][0][
+        "proxyAuthorization"
+    ] = {
+        "scheme": "Bearer",
+        "tokenId": "unrestricted-fixture",
+        "tokenSha256": "sha256:" + "2" * 64,
+        "sourceCidrs": ["0.0.0.0/0", "::/0"],
+        "expiresAtEpochMs": 4102444800000,
+    }
+    assert_policy_rejected(
+        unrestricted_bearer_header,
+        "compiler accepted an unrestricted bearer as a trusted-header anchor",
+        validate_schema=validate_schema,
+    )
+
+    legacy_bearer_header = copy.deepcopy(universal_header)
+    legacy_bearer_header["principals"][0][
+        "proxyAuthorization"
+    ] = "Bearer legacy-is-not-a-source-anchor"
+    assert_policy_rejected(
+        legacy_bearer_header,
+        "compiler accepted a legacy bearer as a trusted-header anchor",
+        validate_schema=validate_schema,
+    )
+
+    source_bound_bearer_header = copy.deepcopy(universal_header)
+    source_bound_bearer_header["principals"][0][
+        "proxyAuthorization"
+    ] = {
+        "scheme": "Bearer",
+        "tokenId": "source-bound-fixture",
+        "tokenSha256": "sha256:" + "3" * 64,
+        "sourceCidrs": ["10.0.0.0/8", "127.0.0.0/8"],
+        "expiresAtEpochMs": 4102444800000,
+    }
+    compile_policy_bundle(
+        source_bound_bearer_header,
+        validate_schema=validate_schema,
+    )
+
+    durable = copy.deepcopy(base)
+    durable_route = durable["routes"][0]
+    durable_request = durable_route["adapter"]["config"]["request"]
+    durable_request["allowedQueryKeys"].extend(
+        ["cost", "cursor", "query"]
+    )
+    durable_request["valueRules"] = [
+        {
+            "source": "query",
+            "name": "cost",
+            "capture": "requestCost",
+            "predicate": {
+                "kind": "numeric",
+                "min": 1,
+                "max": 1000,
+                "integer": True,
+            },
+        }
+    ]
+    durable_route["adapter"]["config"]["response"]["allowedFields"].extend(
+        ["records", "meta.next"]
+    )
+    durable_route["constraints"].extend(
+        [
+            {
+                "id": "sliding-operations",
+                "type": "slidingWindowLimit",
+                "store": "shared",
+                "max": 100,
+                "windowSeconds": 60,
+                "windowSemantics": "sliding",
+                "measure": "operationCount",
+                "reservationMode": "atomicReserveCommitRelease",
+                "onOverflow": "deny",
+                "key": {
+                    "scope": [
+                        "principal",
+                        "credential",
+                        "credentialVersion",
+                        "route",
+                    ]
+                },
+            },
+            {
+                "id": "weighted-cost",
+                "type": "weightedBudget",
+                "store": "shared",
+                "max": 1000,
+                "windowSeconds": 3600,
+                "windowSemantics": "sliding",
+                "measure": "weightedCanonicalInteger",
+                "reservationMode": "atomicReserveCommitRelease",
+                "onOverflow": "deny",
+                "key": {
+                    "scope": [
+                        "principal",
+                        "credential",
+                        "credentialVersion",
+                        "route",
+                    ]
+                },
+                "weight": {
+                    "source": "requestValue",
+                    "field": "requestCost",
+                    "representation": "canonicalNonNegativeInteger",
+                    "unit": "cost",
+                    "minimumPerOperation": 1,
+                    "maximumPerOperation": 1000,
+                },
+            },
+            {
+                "id": "bounded-traversal",
+                "type": "traversalBudget",
+                "operations": ["demo.echo"],
+                "traversal": {
+                    "store": "shared",
+                    "phases": ["request", "response"],
+                    "cursor": {
+                        "requestSource": "query",
+                        "requestField": "cursor",
+                        "responseField": "meta.next",
+                        "digest": "sha256",
+                        "firstPageMayOmit": True,
+                    },
+                    "lineage": {
+                        "scope": [
+                            "principal",
+                            "route",
+                            "credential",
+                            "credentialVersion",
+                        ],
+                        "queryFields": [
+                            "cost",
+                            "query",
+                            "reflectCredential",
+                        ],
+                        "queryDigest": "sha256",
+                    },
+                    "limits": {
+                        "maxPages": 5,
+                        "maxLifetimeSeconds": 300,
+                        "maxRecords": 500,
+                        "maxDecodedBytes": 1048576,
+                    },
+                    "accounting": {
+                        "recordCountField": "records",
+                        "byteSource": "validatedDecodedResponseBytes",
+                        "commit": "atomicAfterResponseValidation",
+                    },
+                    "onReplay": "deny",
+                    "onCrossLineage": "deny",
+                    "onMissingEvidence": "deny",
+                },
+            },
+        ]
+    )
+    envelope = next(
+        constraint
+        for constraint in durable_route["constraints"]
+        if constraint["type"] == "responseEnvelope"
+    )
+    envelope["allowedResponseHeaderNames"] = ["etag"]
+    envelope["responseHeaderRules"] = [
+        {
+            "name": "etag",
+            "required": False,
+            "predicate": {
+                "kind": "pattern",
+                "pattern": '^"[A-Za-z0-9._-]{1,64}"$',
+                "maxLength": 66,
+            },
+        }
+    ]
+    compile_policy_bundle(durable, validate_schema=validate_schema)
+    cursor_in_lineage = copy.deepcopy(durable)
+    invalid_traversal = next(
+        constraint
+        for constraint in cursor_in_lineage["routes"][0]["constraints"]
+        if constraint["type"] == "traversalBudget"
+    )
+    invalid_traversal["traversal"]["lineage"]["queryFields"] = [
+        "cursor",
+        "query",
+    ]
+    assert_policy_rejected(
+        cursor_in_lineage,
+        "compiler accepted a query cursor in stable traversal lineage",
+        validate_schema=validate_schema,
+    )
+    omitted_lineage = copy.deepcopy(durable)
+    omitted_traversal = next(
+        constraint
+        for constraint in omitted_lineage["routes"][0]["constraints"]
+        if constraint["type"] == "traversalBudget"
+    )
+    omitted_traversal["traversal"]["lineage"]["queryFields"].remove(
+        "reflectCredential"
+    )
+    assert_policy_rejected(
+        omitted_lineage,
+        "compiler accepted traversal lineage with an omitted shaping query",
+        validate_schema=validate_schema,
+    )
+    try:
+        constraints.traversal_budget_claims(
+            SimpleNamespace(
+                id="route.invalid-cursor-lineage",
+                credential_ref="cred-demo-bearer",
+                constraints=[invalid_traversal],
+            ),
+            principal_id="agent:demo",
+            credential_ref="cred-demo-bearer",
+            credential_version=1,
+            policy_hash="sha256:" + "5" * 64,
+            operation_fields={"operation": "demo.echo"},
+            canonical_query_fields={
+                "cursor": None,
+                "query": "bounded",
+            },
+            request_cursor_values={},
+        )
+    except ValueError as exc:
+        assert "lineage contract" in str(exc), exc
+    else:
+        raise AssertionError(
+            "traversal claim helper accepted its query cursor in lineage"
+        )
 
 
 if __name__ == "__main__":

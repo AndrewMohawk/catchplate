@@ -27,6 +27,96 @@
       "uniqueItems": true,
       "items": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,127}$"}
     },
+    "contentTypes": {
+      "type": "array",
+      "maxItems": 4,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 3,
+        "maxLength": 127,
+        "pattern": "^[a-z0-9!#$&^_.+-]+/[a-z0-9!#$&^_.+-]+$"
+      }
+    },
+    "valueRules": {
+      "type": "array",
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "https://serverware.local/schemas/policy-bundle.v1.schema.json#/$defs/requestValueRule"
+      }
+    },
+    "credentialBinding": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["credentialType", "provider", "subjects", "clientIds", "requiredScopes"],
+          "additionalProperties": false,
+          "properties": {
+            "credentialType": {"const": "oauth2"},
+            "provider": {"type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-z][a-z0-9.-]{0,63}$"},
+            "subjects": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 64,
+              "uniqueItems": true,
+              "items": {"type": "string", "minLength": 1, "maxLength": 512}
+            },
+            "clientIds": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 32,
+              "uniqueItems": true,
+              "items": {"type": "string", "minLength": 1, "maxLength": 512}
+            },
+            "requiredScopes": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 64,
+              "uniqueItems": true,
+              "items": {"type": "string", "minLength": 1, "maxLength": 512}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["credentialType", "provider", "subjects", "secretClass"],
+          "additionalProperties": false,
+          "properties": {
+            "credentialType": {"const": "static"},
+            "provider": {"type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-z][a-z0-9.-]{0,63}$"},
+            "subjects": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 64,
+              "uniqueItems": true,
+              "items": {"type": "string", "minLength": 1, "maxLength": 512}
+            },
+            "secretClass": {"enum": ["apiKey", "bearerToken", "basicPassword", "customHeader", "queryToken", "cookie"]}
+          }
+        }
+      ],
+      "$comment": "Admission must exactly match this declaration against the referenced credential; subset scope matching, subject aliases, and client-ID coercion deny."
+    },
+    "allowedRequestMediaTypes": {
+      "type": "array",
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 3,
+        "maxLength": 127,
+        "pattern": "^[a-z0-9!#$&^_.+-]+/[a-z0-9!#$&^_.+-]+$"
+      }
+    },
+    "credentialRequestBodyMode": {
+      "enum": ["none", "json", "formUrlencoded"],
+      "$comment": "Closed buffered allowlist for credential-bearing generic.rest requests. Named streaming modes and unknown future modes deny for every HTTP method."
+    },
+    "credentialResponseMode": {
+      "enum": ["headersOnly", "json"],
+      "$comment": "Closed response allowlist for credential-bearing generic.rest routes."
+    },
     "jsonOperationFields": {
       "type": "array",
       "maxItems": 16,
@@ -46,23 +136,156 @@
       }
     }
   },
-  "required": ["request", "response"],
+  "required": ["credentialMode", "request", "response"],
   "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "required": ["credentialMode"],
+        "properties": {"credentialMode": {"const": "required"}}
+      },
+      "then": {
+        "required": ["credentialBinding"],
+        "not": {"required": ["noCredentialProof"]},
+        "properties": {
+          "request": {
+            "properties": {
+              "bodyMode": {"$ref": "#/$defs/credentialRequestBodyMode"}
+            }
+          },
+          "response": {
+            "properties": {
+              "mode": {"$ref": "#/$defs/credentialResponseMode"}
+            }
+          }
+        }
+      },
+      "else": {
+        "required": ["noCredentialProof"],
+        "not": {"required": ["credentialBinding"]}
+      }
+    }
+  ],
   "properties": {
+    "credentialMode": {"enum": ["required", "none"]},
+    "credentialBinding": {"$ref": "#/$defs/credentialBinding"},
+    "noCredentialProof": {
+      "type": "object",
+      "required": ["credentialRefAbsent", "secretInjectionDisabled", "sensitiveHeadersForwarded", "authorizationForwarded"],
+      "additionalProperties": false,
+      "properties": {
+        "credentialRefAbsent": {"const": true},
+        "secretInjectionDisabled": {"const": true},
+        "sensitiveHeadersForwarded": {"const": false},
+        "authorizationForwarded": {"const": false}
+      }
+    },
     "request": {
       "type": "object",
+      "required": ["allowedQueryKeys", "allowedHeaders", "allowedMediaTypes", "bodyMode", "maxBodyBytes", "operation", "valueRules"],
       "additionalProperties": false,
       "allOf": [
         {
           "if": {
             "properties": {
               "bodyMode": {
-                "enum": ["jsonlStream", "jsonArrayStream", "jsonSseStream", "jsonNestedStream", "formUrlencodedStream", "csvStream"]
+                "enum": ["json", "formUrlencoded", "jsonlStream", "jsonArrayStream", "jsonSseStream", "jsonNestedStream", "formUrlencodedStream", "csvStream"]
               }
             },
             "required": ["bodyMode"]
           },
           "then": {"required": ["allowedFields"]}
+        },
+        {
+          "if": {
+            "properties": {
+              "bodyMode": {
+                "enum": ["json", "formUrlencoded", "jsonlStream", "jsonArrayStream", "jsonSseStream", "jsonNestedStream", "formUrlencodedStream", "csvStream"]
+              }
+            },
+            "required": ["bodyMode"]
+          },
+          "then": {
+            "required": ["allowedMediaTypes"]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "bodyMode": {"enum": ["json", "jsonArrayStream", "jsonNestedStream"]}
+            },
+            "required": ["bodyMode"]
+          },
+          "then": {
+            "properties": {
+              "allowedMediaTypes": {"const": ["application/json"]}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "bodyMode": {"const": "jsonlStream"}
+            },
+            "required": ["bodyMode"]
+          },
+          "then": {
+            "properties": {
+              "allowedMediaTypes": {"const": ["application/x-ndjson"]}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "bodyMode": {"const": "jsonSseStream"}
+            },
+            "required": ["bodyMode"]
+          },
+          "then": {
+            "properties": {
+              "allowedMediaTypes": {"const": ["text/event-stream"]}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "bodyMode": {"enum": ["formUrlencoded", "formUrlencodedStream"]}
+            },
+            "required": ["bodyMode"]
+          },
+          "then": {
+            "properties": {
+              "allowedMediaTypes": {"const": ["application/x-www-form-urlencoded"]}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "bodyMode": {"const": "csvStream"}
+            },
+            "required": ["bodyMode"]
+          },
+          "then": {
+            "properties": {
+              "allowedMediaTypes": {"const": ["text/csv"]}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "bodyMode": {"const": "none"}
+            },
+            "required": ["bodyMode"]
+          },
+          "then": {
+            "properties": {
+              "allowedMediaTypes": {"maxItems": 0}
+            }
+          }
         },
         {
           "if": {
@@ -113,12 +336,34 @@
         }
       ],
       "properties": {
-        "allowedQueryKeys": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 256}},
-        "allowedHeaders": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Za-z0-9!#$%&'*+.^_`|~-]+$"}},
+        "allowedQueryKeys": {"type": "array", "maxItems": 64, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 256}},
+        "allowedHeaders": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "https://serverware.local/schemas/policy-bundle.v1.schema.json#/$defs/adapterRequestHeaderName"
+          }
+        },
+        "allowedMediaTypes": {"$ref": "#/$defs/allowedRequestMediaTypes"},
+        "discardHeaders": {
+          "type": "array",
+          "default": [],
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[a-z0-9!#$%&'*+.^`|~-]+$"
+          }
+        },
         "requiredHeaders": {
           "type": "object",
           "maxProperties": 16,
-          "propertyNames": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-z0-9!#$%&'*+.^_`|~-]+$"},
+          "propertyNames": {
+            "$ref": "https://serverware.local/schemas/policy-bundle.v1.schema.json#/$defs/adapterRequestHeaderName"
+          },
           "additionalProperties": {"$ref": "#/$defs/requiredRequestHeader"}
         },
         "bodyMode": {"enum": ["none", "any", "json", "formUrlencoded", "stream", "jsonlStream", "jsonArrayStream", "jsonSseStream", "jsonNestedStream", "formUrlencodedStream", "csvStream"]},
@@ -130,6 +375,7 @@
         "maxRecordBytes": {"type": "integer", "minimum": 1, "maximum": 1048576},
         "maxNestedBytes": {"type": "integer", "minimum": 1, "maximum": 1048576},
         "allowedFields": {"type": "array", "minItems": 1, "maxItems": 64, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[A-Za-z0-9_-]+(?:\\.[A-Za-z0-9_-]+)*$"}},
+        "valueRules": {"$ref": "#/$defs/valueRules"},
         "operation": {
           "type": "object",
           "required": ["name"],
@@ -146,7 +392,7 @@
     },
     "response": {
       "type": "object",
-      "required": ["mode", "maxBodyBytes"],
+      "required": ["mode", "maxBodyBytes", "contentTypes", "allowedHeaders", "error"],
       "additionalProperties": false,
       "allOf": [
         {
@@ -159,11 +405,25 @@
             "required": ["mode"]
           },
           "then": {"required": ["allowedFields"]}
+        },
+        {
+          "if": {"properties": {"mode": {"const": "headersOnly"}}, "required": ["mode"]},
+          "then": {
+            "properties": {
+              "maxBodyBytes": {"const": 0},
+              "contentTypes": {"const": []}
+            },
+            "not": {"required": ["allowedFields"]}
+          },
+          "else": {
+            "properties": {"contentTypes": {"minItems": 1}}
+          }
         }
       ],
       "properties": {
         "mode": {"enum": ["headersOnly", "json", "any", "stream", "jsonlStream", "jsonArrayStream", "jsonSseStream", "jsonNestedStream", "formUrlencodedStream", "csvStream"]},
         "maxBodyBytes": {"type": "integer", "minimum": 0, "maximum": 16777216},
+        "contentTypes": {"$ref": "#/$defs/contentTypes"},
         "maxLineBytes": {"type": "integer", "minimum": 1, "maximum": 1048576},
         "maxItemBytes": {"type": "integer", "minimum": 1, "maximum": 1048576},
         "maxEventBytes": {"type": "integer", "minimum": 1, "maximum": 1048576},

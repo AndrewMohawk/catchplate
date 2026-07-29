@@ -1871,7 +1871,11 @@ def _allowed_authenticator(
         raise WebAuthnError(f"WebAuthn attestation trust unavailable: {exc}") from exc
     allowed = set(authn_policy.get("allowedAuthenticatorClasses") or [])
     credential_classes = {trust["effective_authenticator_class"]}
-    if trust["currently_trusted"] and trust["effective_authenticator_class"] != "platform":
+    hardware_attested = (
+        trust["currently_trusted"]
+        and trust["effective_authenticator_class"] in {"yubikey", "hardware"}
+    )
+    if hardware_attested:
         credential_classes.add("hardware")
     if allowed and not allowed.intersection(credential_classes):
         if trust["reason"] == "trust_root_withdrawn":
@@ -1879,7 +1883,7 @@ def _allowed_authenticator(
         raise WebAuthnError(
             f"authenticator class {trust['effective_authenticator_class']} is not allowed"
         )
-    if authn_policy.get("requireHardwareAttestation") and not trust["currently_trusted"]:
+    if authn_policy.get("requireHardwareAttestation") and not hardware_attested:
         if trust["reason"] == "trust_root_withdrawn":
             raise WebAuthnError("authenticator attestation trust root was withdrawn")
         raise WebAuthnError("trusted hardware attestation required")

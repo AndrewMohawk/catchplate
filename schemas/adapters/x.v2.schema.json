@@ -10,6 +10,61 @@
       "uniqueItems": true,
       "items": {"enum": ["cache-control", "content-language", "etag", "last-modified", "retry-after", "www-authenticate"]}
     },
+    "contentTypes": {
+      "type": "array",
+      "maxItems": 4,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 3,
+        "maxLength": 127,
+        "pattern": "^[a-z0-9!#$&^_.+-]+/[a-z0-9!#$&^_.+-]+$"
+      }
+    },
+    "valueRules": {
+      "type": "array",
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "https://serverware.local/schemas/policy-bundle.v1.schema.json#/$defs/requestValueRule"
+      }
+    },
+    "credentialBinding": {
+      "type": "object",
+      "required": ["credentialType", "provider", "subjects", "clientIds", "requiredScopes"],
+      "additionalProperties": false,
+      "properties": {
+        "credentialType": {"const": "oauth2"},
+        "provider": {"const": "x"},
+        "subjects": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "maxLength": 512}
+        },
+        "clientIds": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "maxLength": 512}
+        },
+        "requiredScopes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 128,
+            "pattern": "^[a-z][a-z0-9._-]*\\.(?:read|write|access)$"
+          }
+        }
+      },
+      "$comment": "Admission must exactly match provider, account subject, OAuth client ID, and every required scope against the referenced credential. appIds must be byte-for-byte equal to clientIds."
+    },
     "errorResponse": {
       "type": "object",
       "additionalProperties": false,
@@ -25,36 +80,49 @@
     "request": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["allowedHeaders", "allowedQueryKeys", "allowedMediaTypes", "maxBodyBytes"],
+      "required": ["allowedHeaders", "allowedQueryKeys", "allowedMediaTypes", "maxBodyBytes", "valueRules"],
       "properties": {
         "allowedHeaders": {
           "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "https://serverware.local/schemas/policy-bundle.v1.schema.json#/$defs/adapterRequestHeaderName"
+          }
+        },
+        "discardHeaders": {
+          "type": "array",
+          "default": [],
+          "maxItems": 16,
           "uniqueItems": true,
           "items": {
             "type": "string",
             "minLength": 1,
             "maxLength": 128,
-            "pattern": "^[a-z0-9!#$%&'*+.^_`|~-]+$"
+            "pattern": "^[a-z0-9!#$%&'*+.^`|~-]+$"
           }
         },
         "allowedQueryKeys": {
           "type": "array",
+          "maxItems": 64,
           "uniqueItems": true,
           "items": {"type": "string", "minLength": 1, "maxLength": 256}
         },
         "allowedMediaTypes": {
           "type": "array",
+          "maxItems": 16,
           "uniqueItems": true,
           "items": {
             "type": "string",
             "pattern": "^[a-z0-9!#$%&'*+.^_`|~-]+/[a-z0-9!#$%&'*+.^_`|~-]+$"
           }
         },
-        "maxBodyBytes": {"type": "integer", "minimum": 0}
+        "maxBodyBytes": {"type": "integer", "minimum": 0, "maximum": 1048576},
+        "valueRules": {"$ref": "#/$defs/valueRules"}
       }
     }
   },
-  "required": ["request", "mode", "blockWrites", "appIds", "response"],
+  "required": ["credentialBinding", "request", "mode", "blockWrites", "appIds", "response"],
   "additionalProperties": false,
   "allOf": [
     {
@@ -73,18 +141,21 @@
     }
   ],
   "properties": {
+    "credentialBinding": {"$ref": "#/$defs/credentialBinding"},
     "request": {"$ref": "#/$defs/request"},
     "mode": {"enum": ["readOnly", "recentSearchOnly", "controlledWrite"]},
     "blockWrites": {"type": "boolean"},
     "appIds": {
       "type": "array",
       "minItems": 1,
+      "maxItems": 32,
       "uniqueItems": true,
       "items": {"type": "string", "minLength": 1, "maxLength": 255}
     },
     "allowedReadOperations": {
       "type": "array",
       "minItems": 1,
+      "maxItems": 32,
       "uniqueItems": true,
       "items": {
         "enum": [
@@ -105,7 +176,6 @@
           "schema.read",
           "search.read",
           "spaces.read",
-          "streams.read",
           "trends.read",
           "tweets.read",
           "usage.read",
@@ -116,17 +186,31 @@
     },
     "response": {
       "type": "object",
-      "required": ["mode", "maxBodyBytes"],
+      "required": ["mode", "maxBodyBytes", "contentTypes", "allowedHeaders", "error"],
       "additionalProperties": false,
       "allOf": [
         {
           "if": {"properties": {"mode": {"const": "json"}}, "required": ["mode"]},
-          "then": {"required": ["allowedFields"]}
+          "then": {
+            "required": ["allowedFields"],
+            "properties": {"contentTypes": {"const": ["application/json"]}}
+          }
+        },
+        {
+          "if": {"properties": {"mode": {"const": "headersOnly"}}, "required": ["mode"]},
+          "then": {
+            "properties": {
+              "maxBodyBytes": {"const": 0},
+              "contentTypes": {"const": []}
+            },
+            "not": {"required": ["allowedFields"]}
+          }
         }
       ],
       "properties": {
-        "mode": {"enum": ["headersOnly", "json", "any", "stream"]},
+        "mode": {"enum": ["headersOnly", "json"]},
         "maxBodyBytes": {"type": "integer", "minimum": 0, "maximum": 16777216},
+        "contentTypes": {"$ref": "#/$defs/contentTypes"},
         "allowedFields": {
           "type": "array",
           "minItems": 1,

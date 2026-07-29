@@ -8,6 +8,7 @@ import io
 import json
 import os
 import shlex
+import stat
 import subprocess
 import sys
 import tempfile
@@ -29,6 +30,7 @@ import launch_authorization
 import run_production_readiness
 import test_production_policy_identity
 import test_production_release_input_preflight
+import test_run_production_readiness as readiness_runner_test
 import verify_release_completion
 import verify_production_policy_identity
 
@@ -69,6 +71,14 @@ def sha256_prefixed_bytes(value: bytes) -> str:
     import hashlib
 
     return "sha256:" + hashlib.sha256(value).hexdigest()
+
+
+def refresh_readiness_v6_proof_core(proof: dict[str, Any]) -> None:
+    proof["proof_core_sha256"] = sha256_prefixed_json(
+        verify_release_completion.host_readiness_completion_proof_v6_core(
+            proof
+        )
+    )
 
 
 def sha384(value: str) -> str:
@@ -762,13 +772,264 @@ def digest(char: str) -> str:
     return "sha256:" + char * 64
 
 
+def nonce_rollback_contract_fixture() -> tuple[dict[str, Any], bytes, str, str]:
+    evidence_key = Ed25519PrivateKey.from_private_bytes(bytes.fromhex("41" * 32))
+    verifier_state_key = Ed25519PrivateKey.from_private_bytes(
+        bytes.fromhex("42" * 32)
+    )
+    verifier_state_store_attestation_key = (
+        Ed25519PrivateKey.from_private_bytes(bytes.fromhex("43" * 32))
+    )
+    evidence_spki = evidence_key.public_key().public_bytes(
+        serialization.Encoding.DER,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    verifier_state_spki = verifier_state_key.public_key().public_bytes(
+        serialization.Encoding.DER,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    verifier_state_store_attestation_spki = (
+        verifier_state_store_attestation_key.public_key().public_bytes(
+            serialization.Encoding.DER,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+    )
+    assurance = {
+        "apiVersion": "serverware.nonceAuthorityAssurance/v1",
+        "administrativeDomainSha256": digest("a"),
+        "assuranceEvidenceSha256": digest("b"),
+        "assuranceEvidenceType": "linearizableCasOperatorAttestation",
+        "assuranceLevel": "productionRollbackProtected",
+        "authorityEpoch": 1,
+        "authorityGeneration": 2,
+        "authorityIdentitySha256": digest("c"),
+        "backendClass": "independentlyAdministeredLinearizableCas",
+        "productionEligible": True,
+        "rollbackProtection": {
+            "administrativeRollbackResistance": True,
+            "backendAttestationRequired": True,
+            "exactSuccessorRequired": True,
+            "freshVerifierChallengeRequired": True,
+            "keyProtection": "nonExportableKmsHsm",
+            "mechanism": "linearizableCasWithRollbackProtectedStorage",
+            "stateCommitment": "hashChainedLinearizableCommitment",
+            "verifierStateStoreClass": "independentlyAdministeredLinearizableCas",
+        },
+    }
+    assurance_sha256 = sha256_prefixed_json(assurance)
+    contract = {
+        "apiVersion": (
+            run_production_readiness.NONCE_ROLLBACK_ASSURANCE_PINS_API_VERSION
+        ),
+        "independentVerifierPins": {
+            "expectedNonceAuthorityAssuranceIssuerSpkiSha256": (
+                sha256_prefixed_bytes(evidence_spki)
+            ),
+            "expectedNonceAuthorityAssuranceSha256": assurance_sha256,
+        },
+        "publicConfigPins": {
+            "nonceAuthorityAssurance": assurance,
+            "nonceAuthorityAssuranceEvidenceSigningPublicKeySpkiDerBase64url": (
+                b64e(evidence_spki)
+            ),
+            "nonceAuthorityAssuranceSha256": assurance_sha256,
+            "nonceAuthorityVerifierStateSigningPublicKeySpkiDerBase64url": (
+                b64e(verifier_state_spki)
+            ),
+            "nonceAuthorityVerifierStateStoreAdministrativeDomainSha256": (
+                digest("d")
+            ),
+            "nonceAuthorityVerifierStateStoreAssuranceEvidenceSha256": (
+                digest("f")
+            ),
+            "nonceAuthorityVerifierStateStoreAttestationPublicKeySpkiDerBase64url": (
+                b64e(verifier_state_store_attestation_spki)
+            ),
+            "nonceAuthorityVerifierStateStoreIdentitySha256": digest("e"),
+        },
+    }
+    canonical = canonical_json(contract).encode("ascii")
+    pins_bytes = canonical + b"\n"
+    return (
+        contract,
+        pins_bytes,
+        sha256_prefixed_bytes(pins_bytes),
+        sha256_prefixed_bytes(canonical),
+    )
+
+
+def launch_authorization_security_fixture() -> dict[str, Any]:
+    authority_key = Ed25519PrivateKey.from_private_bytes(
+        bytes.fromhex("33" * 32)
+    )
+    witness_key = Ed25519PrivateKey.from_private_bytes(
+        bytes.fromhex("35" * 32)
+    )
+    witness_store_key = Ed25519PrivateKey.from_private_bytes(
+        bytes.fromhex("36" * 32)
+    )
+    witness_tls_key = Ed25519PrivateKey.from_private_bytes(
+        bytes.fromhex("37" * 32)
+    )
+    policy_activation_key = Ed25519PrivateKey.from_private_bytes(
+        bytes.fromhex("38" * 32)
+    )
+    policy_identity_key = Ed25519PrivateKey.from_private_bytes(
+        bytes.fromhex("39" * 32)
+    )
+    reproducible_build_key = Ed25519PrivateKey.from_private_bytes(
+        bytes.fromhex("3a" * 32)
+    )
+
+    def spki(private_key: Ed25519PrivateKey) -> bytes:
+        return private_key.public_key().public_bytes(
+            serialization.Encoding.DER,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+
+    authority_key_id = launch_authorization.spki_key_id(spki(authority_key))
+    witness_key_id = launch_authorization.spki_key_id(spki(witness_key))
+    witness_store_key_id = launch_authorization.spki_key_id(
+        spki(witness_store_key)
+    )
+    witness_identity_sha256 = sha256_prefixed_bytes(
+        b"fixture-launch-authority-witness-identity"
+    )
+    witness_administrative_domain_sha256 = sha256_prefixed_bytes(
+        b"fixture-launch-authority-witness-administrative-domain"
+    )
+    witness_store_statement = {
+        "assuranceIssuerKeyId": witness_store_key_id,
+        "witnessKeyId": witness_key_id,
+        "witnessIdentitySha256": witness_identity_sha256,
+        "witnessAdministrativeDomainSha256": (
+            witness_administrative_domain_sha256
+        ),
+        "storeIdentitySha256": sha256_prefixed_bytes(
+            b"fixture-launch-authority-witness-store"
+        ),
+        "storeAdministrativeDomainSha256": sha256_prefixed_bytes(
+            b"fixture-launch-authority-witness-store-administrative-domain"
+        ),
+        "storeClass": "independentlyAdministeredLinearizableCas",
+        "rollbackResistance": "externally-witnessed-monotonic",
+        "independentAdministration": True,
+    }
+    witness_store_unsigned = {
+        "apiVersion": "serverware.launchAuthorityWitnessStoreAssurance/v1",
+        "kind": "LaunchAuthorityWitnessStoreAssurance",
+        "statement": witness_store_statement,
+    }
+    witness_store_assurance = {
+        **witness_store_unsigned,
+        "signature": b64e(
+            witness_store_key.sign(
+                b"serverware.launchAuthorityWitnessStoreAssurance/v1\0"
+                + launch_authorization.canonical_json_bytes(
+                    witness_store_unsigned
+                )
+            )
+        ),
+    }
+    nonce_contract, _pins_bytes, _pins_sha256, _contract_sha256 = (
+        nonce_rollback_contract_fixture()
+    )
+    nonce_public = nonce_contract["publicConfigPins"]
+    roles = {
+        "launchAuthority": authority_key_id,
+        "launchAuthorityWitness": witness_key_id,
+        "launchAuthorityWitnessStoreAssurance": witness_store_key_id,
+        "launchAuthorityWitnessTls": launch_authorization.spki_key_id(
+            spki(witness_tls_key)
+        ),
+        "nonceAuthorityAssuranceEvidence": sha256_prefixed_bytes(
+            b64d(
+                nonce_public[
+                    "nonceAuthorityAssuranceEvidenceSigningPublicKeySpkiDerBase64url"
+                ]
+            )
+        ),
+        "nonceAuthorityVerifierState": sha256_prefixed_bytes(
+            b64d(
+                nonce_public[
+                    "nonceAuthorityVerifierStateSigningPublicKeySpkiDerBase64url"
+                ]
+            )
+        ),
+        "nonceAuthorityVerifierStateStoreAttestation": sha256_prefixed_bytes(
+            b64d(
+                nonce_public[
+                    "nonceAuthorityVerifierStateStoreAttestationPublicKeySpkiDerBase64url"
+                ]
+            )
+        ),
+        "policyActivation": launch_authorization.spki_key_id(
+            spki(policy_activation_key)
+        ),
+        "policyIdentity": launch_authorization.spki_key_id(
+            spki(policy_identity_key)
+        ),
+        "reproducibleBuild": launch_authorization.spki_key_id(
+            spki(reproducible_build_key)
+        ),
+    }
+    global_role_registry = (
+        launch_authorization.build_launch_global_role_registry(roles)
+    )
+    return {
+        "authorityKey": authority_key,
+        "authorityKeyId": authority_key_id,
+        "witnessKey": witness_key,
+        "witnessKeyId": witness_key_id,
+        "witnessPublicKeySpkiDerBase64url": b64e(spki(witness_key)),
+        "witnessIdentitySha256": witness_identity_sha256,
+        "witnessAdministrativeDomainSha256": (
+            witness_administrative_domain_sha256
+        ),
+        "witnessStoreAssurance": witness_store_assurance,
+        "witnessStoreAssuranceIssuerKeyId": witness_store_key_id,
+        "witnessStoreAssuranceIssuerPublicKeySpkiDerBase64url": b64e(
+            spki(witness_store_key)
+        ),
+        "witnessStoreAssuranceSha256": sha256_prefixed_bytes(
+            launch_authorization.canonical_json_bytes(
+                witness_store_assurance
+            )
+        ),
+        "globalRoleRegistry": global_role_registry,
+        "globalRoleRegistrySha256": (
+            launch_authorization.launch_global_role_registry_sha256(
+                global_role_registry
+            )
+        ),
+        "globalRoleRegistryPinsSha256": sha256_prefixed_bytes(
+            launch_authorization.canonical_json_bytes(
+                global_role_registry
+            )
+            + b"\n"
+        ),
+    }
+
+
 def bootstrap_receipt_fixture(
     *,
     deployment_identity_sha256: str = "sha256:" + "a" * 64,
     release_sequence: int = 42,
     rollback_epoch: int = 7,
+    legacy_v2: bool = False,
+    manifest_sha256: str | None = None,
 ) -> dict[str, Any]:
-    def metadata(*, mode: int = 0o100400, link_count: int = 1) -> dict[str, int]:
+    if legacy_v2:
+        receipt = bootstrap_receipt_fixture(
+            deployment_identity_sha256=deployment_identity_sha256,
+            release_sequence=release_sequence,
+            rollback_epoch=rollback_epoch,
+            manifest_sha256=manifest_sha256,
+        )
+        receipt["apiVersion"] = "serverware.bootstrapReceipt/v2"
+        return receipt
+
+    def metadata(*, mode: int = 0o400, link_count: int = 1) -> dict[str, int]:
         return {
             "device": 1,
             "inode": 2,
@@ -784,9 +1045,19 @@ def bootstrap_receipt_fixture(
     def file_record(path: str, character: str) -> dict[str, Any]:
         return {"path": path, "sha256": digest(character), "metadata": metadata()}
 
+    (
+        nonce_contract,
+        _nonce_pins_bytes,
+        nonce_pins_sha256,
+        nonce_contract_sha256,
+    ) = nonce_rollback_contract_fixture()
     launcher_digest = digest("3")
     receipt = {
-        "apiVersion": "serverware.bootstrapReceipt/v2",
+        "apiVersion": (
+            "serverware.bootstrapReceipt/v2"
+            if legacy_v2
+            else run_production_readiness.BOOTSTRAP_RECEIPT_API_VERSION
+        ),
         "kind": "ProductionBootstrapReceipt",
         "launchId": "1" * 64,
         "bootIdSha256": digest("2"),
@@ -796,7 +1067,13 @@ def bootstrap_receipt_fixture(
             + "/serverware-production-launcher",
             "3",
         ),
-        "manifest": file_record("/etc/serverware/production-release-launch.json", "4"),
+        "manifest": {
+            **file_record(
+                "/etc/serverware/production-release-launch.json",
+                "4",
+            ),
+            "sha256": manifest_sha256 or digest("4"),
+        },
         "sourceTreeDigest": SOURCE_TREE_DIGEST,
         "productionEnv": file_record("/etc/serverware/production-readiness.env", "5"),
         "python": {
@@ -805,8 +1082,23 @@ def bootstrap_receipt_fixture(
                 {
                     "path": "/opt/serverware/releases/fixture",
                     "sha256": digest("7"),
-                    "metadata": metadata(mode=0o40555, link_count=2),
-                }
+                    "metadata": metadata(mode=0o555, link_count=2),
+                },
+                {
+                    "path": "/opt/serverware/releases/fixture/runtime/python/lib/python3.11",
+                    "sha256": digest("6"),
+                    "metadata": metadata(mode=0o555, link_count=2),
+                },
+                {
+                    "path": "/opt/serverware/releases/fixture/runtime/python/lib/python3.11/lib-dynload",
+                    "sha256": digest("5"),
+                    "metadata": metadata(mode=0o555, link_count=2),
+                },
+                {
+                    "path": "/opt/serverware/releases/fixture/vendor",
+                    "sha256": digest("4"),
+                    "metadata": metadata(mode=0o555, link_count=2),
+                },
             ],
         },
         "scripts": {
@@ -830,7 +1122,38 @@ def bootstrap_receipt_fixture(
             "sha256": digest("e"),
         },
     }
-    authority_key = Ed25519PrivateKey.from_private_bytes(bytes.fromhex("33" * 32))
+    if not legacy_v2:
+        receipt["nonceRollbackAssurance"] = {
+            "apiVersion": (
+                run_production_readiness.NONCE_ROLLBACK_ASSURANCE_BINDING_API_VERSION
+            ),
+            "contractSha256": nonce_contract_sha256,
+            "pinsFile": {
+                **file_record(
+                    "/etc/serverware/nonce-rollback-assurance-pins.json",
+                    "0",
+                ),
+                "sha256": nonce_pins_sha256,
+            },
+            "retainedSnapshotFd": 199,
+            "retainedSnapshotSha256": nonce_pins_sha256,
+            "verifierStateService": {
+                "signingPublicKeySpkiDerBase64url": nonce_contract[
+                    "publicConfigPins"
+                ][
+                    "nonceAuthorityVerifierStateSigningPublicKeySpkiDerBase64url"
+                ],
+                "storeAdministrativeDomainSha256": digest("d"),
+                "storeAssuranceEvidenceSha256": digest("f"),
+                "storeAttestationPublicKeySpkiDerBase64url": nonce_contract[
+                    "publicConfigPins"
+                ][
+                    "nonceAuthorityVerifierStateStoreAttestationPublicKeySpkiDerBase64url"
+                ],
+                "storeIdentitySha256": digest("e"),
+            },
+        }
+    security = launch_authorization_security_fixture()
     request = {
         "apiVersion": launch_authorization.REQUEST_API_VERSION,
         "kind": launch_authorization.REQUEST_KIND,
@@ -838,6 +1161,12 @@ def bootstrap_receipt_fixture(
         "bootIdSha256": receipt["bootIdSha256"],
         "launcherSha256": receipt["launcher"]["sha256"],
         "manifestSha256": receipt["manifest"]["sha256"],
+        "nonceRollbackAssuranceContractSha256": receipt[
+            "nonceRollbackAssurance"
+        ]["contractSha256"],
+        "nonceRollbackAssurancePinsSha256": receipt[
+            "nonceRollbackAssurance"
+        ]["retainedSnapshotSha256"],
         "releaseProvenanceSha256": receipt["inputs"]["releaseProvenance"]["sha256"],
         "provenanceDigest": digest("0"),
         "reproducibleBuildVerificationSha256": receipt["inputs"][
@@ -848,23 +1177,99 @@ def bootstrap_receipt_fixture(
         "deploymentIdentitySha256": deployment_identity_sha256,
         "releaseSequence": release_sequence,
         "rollbackEpoch": rollback_epoch,
+        "authorizationScope": launch_authorization.AUTHORIZATION_SCOPE,
+        "freshnessAuthority": launch_authorization.FRESHNESS_AUTHORITY,
+        "launchAuthorityWitnessChallenge": "3" * 64,
+        "launchAuthorityWitnessKeyId": security["witnessKeyId"],
+        "launchAuthorityWitnessIdentitySha256": security[
+            "witnessIdentitySha256"
+        ],
+        "launchAuthorityWitnessAdministrativeDomainSha256": security[
+            "witnessAdministrativeDomainSha256"
+        ],
+        "launchAuthorityWitnessStoreAssuranceSha256": security[
+            "witnessStoreAssuranceSha256"
+        ],
+        "globalRoleRegistry": security["globalRoleRegistry"],
+        "globalRoleRegistrySha256": security[
+            "globalRoleRegistrySha256"
+        ],
+        "globalRoleRegistryPinsSha256": security[
+            "globalRoleRegistryPinsSha256"
+        ],
+        "launchAttemptJournalDomain": (
+            launch_authorization.LAUNCH_ATTEMPT_JOURNAL_DOMAIN
+        ),
+    }
+    request["launchAttemptRecoveryIdentitySha256"] = (
+        launch_authorization.launch_attempt_recovery_identity_sha256(
+            request
+        )
+    )
+    request_sha256 = (
+        launch_authorization.launch_authorization_request_sha256(request)
+    )
+    witness_statement = {
+        "operation": launch_authorization.WITNESS_OPERATION,
+        "operationId": request["launcherNonce"],
+        "authorizationId": "2" * 64,
+        "requestSha256": request_sha256,
+        "challenge": request["launchAuthorityWitnessChallenge"],
+        "issuedAtUnixSeconds": 100,
+        "expiresAtUnixSeconds": 120,
+        "authorityKeyId": security["authorityKeyId"],
+        "witnessKeyId": security["witnessKeyId"],
+        "witnessIdentitySha256": security["witnessIdentitySha256"],
+        "witnessAdministrativeDomainSha256": security[
+            "witnessAdministrativeDomainSha256"
+        ],
+        "storeAssuranceSha256": security[
+            "witnessStoreAssuranceSha256"
+        ],
+        "registryGeneration": 4,
+        "registrySha256": digest("3"),
+        "predecessorStateSha256": digest("1"),
+        "successorStateSha256": digest("2"),
+        "deploymentAudience": request["deploymentAudience"],
+        "deploymentIdentitySha256": request[
+            "deploymentIdentitySha256"
+        ],
+        "releaseSequence": request["releaseSequence"],
+        "rollbackEpoch": request["rollbackEpoch"],
+        "authorizationScope": request["authorizationScope"],
+        "stateTransitionCommitted": True,
+        "checkpointSequence": 9,
+    }
+    monotonic_witness = {
+        "apiVersion": launch_authorization.WITNESS_API_VERSION,
+        "kind": launch_authorization.WITNESS_KIND,
+        "statement": witness_statement,
+        "signature": b64e(
+            security["witnessKey"].sign(
+                launch_authorization.launch_authority_witness_signing_bytes(
+                    witness_statement
+                )
+            )
+        ),
     }
     envelope = launch_authorization.sign_launch_authorization(
         request,
-        private_key=authority_key,
+        private_key=security["authorityKey"],
         authorization_id="2" * 64,
         issued_at_unix_seconds=100,
         expires_at_unix_seconds=120,
+        monotonic_witness=monotonic_witness,
     )
     receipt["launchAuthorization"] = {
         "request": request,
-        "requestSha256": launch_authorization.launch_authorization_request_sha256(
-            request
-        ),
+        "requestSha256": request_sha256,
         "envelope": envelope,
         "authorizationSha256": sha256_prefixed_bytes(
             launch_authorization.canonical_json_bytes(envelope)
         ),
+        "witnessPublicKeySpkiDerBase64url": security[
+            "witnessPublicKeySpkiDerBase64url"
+        ],
         "verifiedAtUnixSeconds": 101,
     }
     return receipt
@@ -877,7 +1282,7 @@ def bootstrap_receipt_summary(receipt: dict[str, Any]) -> dict[str, Any]:
         serialization.Encoding.Raw,
         serialization.PublicFormat.Raw,
     )
-    return {
+    summary = {
         "apiVersion": receipt["apiVersion"],
         "kind": receipt["kind"],
         "launchId": receipt["launchId"],
@@ -898,15 +1303,38 @@ def bootstrap_receipt_summary(receipt: dict[str, Any]) -> dict[str, Any]:
         "sealed": True,
         "sealMask": run_production_readiness.REQUIRED_BOOTSTRAP_RECEIPT_SEALS,
     }
+    if "nonceRollbackAssurance" in receipt:
+        summary["nonceRollbackAssurance"] = receipt[
+            "nonceRollbackAssurance"
+        ]
+    return summary
 
 
-def verify_release_proof_schemas() -> tuple[Any, dict[str, Any]]:
+def _obsolete_verify_release_proof_schemas() -> tuple[Any, dict[str, Any]]:
+    raise AssertionError(
+        "obsolete final-shaped completionProof/v6 schema test is unreachable"
+    )
     from jsonschema import Draft202012Validator
 
-    receipt_schema = json.loads((ROOT / "schemas/bootstrap-receipt.v2.schema.json").read_text(encoding="utf-8"))
-    completion_schema = json.loads((ROOT / "schemas/completion-proof.v5.schema.json").read_text(encoding="utf-8"))
+    receipt_schema = json.loads(
+        (ROOT / "schemas/bootstrap-receipt.v3.schema.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    completion_schema = json.loads(
+        (ROOT / "schemas/completion-proof.v6.schema.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    final_result_schema = json.loads(
+        (
+            ROOT
+            / "schemas/release-completion-verification.v1.schema.json"
+        ).read_text(encoding="utf-8")
+    )
     Draft202012Validator.check_schema(receipt_schema)
     Draft202012Validator.check_schema(completion_schema)
+    Draft202012Validator.check_schema(final_result_schema)
     receipt = bootstrap_receipt_fixture()
     Draft202012Validator(receipt_schema).validate(receipt)
     open_receipt = json.loads(json.dumps(receipt))
@@ -917,11 +1345,1828 @@ def verify_release_proof_schemas() -> tuple[Any, dict[str, Any]]:
     open_authorization["launchAuthorization"]["request"]["unexpected"] = True
     if not list(Draft202012Validator(receipt_schema).iter_errors(open_authorization)):
         raise AssertionError("bootstrap receipt schema accepted an open authorization request")
-    old_receipt = clone_document(receipt)
-    old_receipt["apiVersion"] = "serverware.bootstrapReceipt/v1"
-    if not list(Draft202012Validator(receipt_schema).iter_errors(old_receipt)):
-        raise AssertionError("bootstrap receipt v2 schema accepted a v1 receipt")
+    legacy_receipt = bootstrap_receipt_fixture(legacy_v2=True)
+    if not list(
+        Draft202012Validator(receipt_schema).iter_errors(legacy_receipt)
+    ):
+        raise AssertionError("bootstrap receipt v3 schema accepted a v2 receipt")
+    final_result_validator = Draft202012Validator(final_result_schema)
+    final_result = (
+        readiness_runner_test.release_completion_result_v1_fixture()
+    )
+    final_result_validator.validate(final_result)
+    if (
+        verify_release_completion.validate_release_completion_verification_v1(
+            final_result,
+            **readiness_runner_test.release_completion_fixture_validation_kwargs(),
+        )
+        != final_result
+    ):
+        raise AssertionError(
+            "native final verifier rejected its current releaseCompletionVerification/v1 output shape"
+        )
+
+    def refresh_result_digest(value: dict[str, Any]) -> None:
+        payload = clone_document(value)
+        payload.pop("resultSha256", None)
+        value["resultSha256"] = sha256_prefixed_json(payload)
+
+    def refresh_production_identity_digest(value: dict[str, Any]) -> None:
+        identity = value["productionReleaseIdentity"]
+        payload = clone_document(identity)
+        payload.pop("identitySha256", None)
+        identity["identitySha256"] = sha256_prefixed_json(payload)
+        refresh_result_digest(value)
+
+    def refresh_boundary_digest(value: dict[str, Any]) -> None:
+        boundary = value["hostBootstrapBoundary"]
+        payload = clone_document(boundary)
+        payload.pop("boundarySha256", None)
+        boundary["boundarySha256"] = sha256_prefixed_json(payload)
+        refresh_result_digest(value)
+
+    final_result_negatives = []
+    missing_redemption = clone_document(final_result)
+    missing_redemption["publicVerifierResult"].pop(
+        "currentHeadRedemptionReceiptIdentity"
+    )
+    final_result_negatives.append(
+        ("missing public redemption identity", missing_redemption)
+    )
+    extra_checkpoint_authority = clone_document(final_result)
+    extra_checkpoint_authority["productionReleaseIdentity"][
+        "protectedPriorClientState"
+    ]["legacyCheckpointAuthority"] = digest("d")
+    final_result_negatives.append(
+        ("extra checkpoint authority", extra_checkpoint_authority)
+    )
+    substituted_identity_version = clone_document(final_result)
+    substituted_identity_version["aggregateAuthentication"][
+        "completionIdentity"
+    ]["apiVersion"] = "serverware.finalCompletionIdentity/v1"
+    final_result_negatives.append(
+        ("aggregate identity v1 substitution", substituted_identity_version)
+    )
+    substituted_public_version = clone_document(final_result)
+    substituted_public_version["publicVerifierResult"]["apiVersion"] = (
+        "serverware.publicNitroVerificationResult/v1"
+    )
+    final_result_negatives.append(
+        ("public result version substitution", substituted_public_version)
+    )
+    missing_boundary = clone_document(final_result)
+    missing_boundary.pop("hostBootstrapBoundary")
+    final_result_negatives.append(
+        ("missing host bootstrap boundary", missing_boundary)
+    )
+    incomplete_boundary = clone_document(final_result)
+    incomplete_boundary["hostBootstrapBoundary"].pop(
+        "launchAuthorizationRequestApiVersion"
+    )
+    final_result_negatives.append(
+        (
+            "missing host bootstrap authorization request version",
+            incomplete_boundary,
+        )
+    )
+    missing_boundary_digest = clone_document(final_result)
+    missing_boundary_digest["aggregateAuthentication"].pop(
+        "hostBootstrapBoundarySha256"
+    )
+    final_result_negatives.append(
+        ("missing aggregate host bootstrap digest", missing_boundary_digest)
+    )
+    missing_production_boundary_digest = clone_document(final_result)
+    missing_production_boundary_digest["productionReleaseIdentity"].pop(
+        "hostBootstrapBoundarySha256"
+    )
+    final_result_negatives.append(
+        (
+            "missing production identity host bootstrap digest",
+            missing_production_boundary_digest,
+        )
+    )
+    obsolete_final_alias = clone_document(final_result)
+    obsolete_final_alias["final_completion"] = True
+    final_result_negatives.append(
+        ("obsolete final_completion alias", obsolete_final_alias)
+    )
+    obsolete_result_version = clone_document(final_result)
+    obsolete_result_version["apiVersion"] = (
+        "serverware.releaseCompletionVerification/v0"
+    )
+    final_result_negatives.append(
+        ("obsolete final result version", obsolete_result_version)
+    )
+    readiness_envelope = {
+        "apiVersion": "serverware.completionProof/v6",
+        "kind": "ServerwarePreEnclaveReadiness",
+        "verificationOk": True,
+        "finalCompletionVerified": False,
+        "verification_mode": "readiness",
+    }
+    final_result_negatives.append(
+        ("readiness-envelope confusion", readiness_envelope)
+    )
+    v6_as_final = {
+        **readiness_envelope,
+        "kind": "ServerwareCompletionProof",
+        "finalCompletionVerified": True,
+        "verification_mode": "final",
+        "result_scope": "final-completion",
+        "readiness_only": False,
+    }
+    final_result_negatives.append(
+        ("completionProof/v6 as final", v6_as_final)
+    )
+    for label, invalid_document in final_result_negatives:
+        if not list(final_result_validator.iter_errors(invalid_document)):
+            raise AssertionError(
+                f"release completion result schema accepted {label}"
+            )
+        try:
+            verify_release_completion.validate_release_completion_verification_v1(
+                invalid_document,
+                **readiness_runner_test.release_completion_fixture_validation_kwargs(),
+            )
+        except ValueError:
+            continue
+        raise AssertionError(
+            f"native final verifier accepted {label}"
+        )
+
+    runtime_negatives: list[tuple[str, dict[str, Any]]] = []
+    boundary_digest_substitution = clone_document(final_result)
+    boundary_digest_substitution["hostBootstrapBoundary"][
+        "boundarySha256"
+    ] = digest("e")
+    refresh_result_digest(boundary_digest_substitution)
+    runtime_negatives.append(
+        ("host bootstrap boundary digest substitution", boundary_digest_substitution)
+    )
+    boundary_request_version_substitution = clone_document(final_result)
+    boundary_request_version_substitution["hostBootstrapBoundary"][
+        "launchAuthorizationRequestApiVersion"
+    ] = "serverware.launchAuthorizationRequest/v1"
+    refresh_boundary_digest(boundary_request_version_substitution)
+    runtime_negatives.append(
+        (
+            "host bootstrap authorization request version substitution",
+            boundary_request_version_substitution,
+        )
+    )
+    tampered_boundary = clone_document(final_result)
+    tampered_boundary["hostBootstrapBoundary"][
+        "authoritativeForFinalCompletion"
+    ] = True
+    refresh_boundary_digest(tampered_boundary)
+    runtime_negatives.append(
+        ("authoritative host bootstrap substitution", tampered_boundary)
+    )
+    cross_wired_boundary = clone_document(final_result)
+    cross_wired_boundary["hostBootstrapBoundary"][
+        "completionIdentitySha256"
+    ] = digest("e")
+    refresh_boundary_digest(cross_wired_boundary)
+    runtime_negatives.append(
+        ("cross-wired host bootstrap identity", cross_wired_boundary)
+    )
+    aggregate_boundary_substitution = clone_document(final_result)
+    aggregate_boundary_substitution["aggregateAuthentication"][
+        "hostBootstrapBoundarySha256"
+    ] = digest("e")
+    refresh_result_digest(aggregate_boundary_substitution)
+    runtime_negatives.append(
+        (
+            "aggregate host bootstrap digest substitution",
+            aggregate_boundary_substitution,
+        )
+    )
+    production_boundary_substitution = clone_document(final_result)
+    production_boundary_substitution["productionReleaseIdentity"][
+        "hostBootstrapBoundarySha256"
+    ] = digest("e")
+    refresh_production_identity_digest(production_boundary_substitution)
+    runtime_negatives.append(
+        (
+            "production identity host bootstrap substitution",
+            production_boundary_substitution,
+        )
+    )
+    completion_identity_mismatch = clone_document(final_result)
+    completion_identity_mismatch["aggregateAuthentication"][
+        "completionIdentity"
+    ]["releaseGeneration"] += 1
+    refresh_result_digest(completion_identity_mismatch)
+    runtime_negatives.append(
+        ("completion identity cross-wire", completion_identity_mismatch)
+    )
+    completion_digest_substitution = clone_document(final_result)
+    completion_digest_substitution["completionIdentitySha256"] = digest("e")
+    refresh_result_digest(completion_digest_substitution)
+    runtime_negatives.append(
+        ("completion identity digest substitution", completion_digest_substitution)
+    )
+    artifact_digest_substitution = clone_document(final_result)
+    artifact_digest_substitution["releaseArtifactBindings"][
+        "artifactBindingsSha256"
+    ] = digest("e")
+    refresh_result_digest(artifact_digest_substitution)
+    runtime_negatives.append(
+        ("artifact binding digest substitution", artifact_digest_substitution)
+    )
+    result_digest_substitution = clone_document(final_result)
+    result_digest_substitution["resultSha256"] = digest("e")
+    runtime_negatives.append(
+        ("final result digest substitution", result_digest_substitution)
+    )
+    for label, invalid_document in runtime_negatives:
+        try:
+            verify_release_completion.validate_release_completion_verification_v1(
+                invalid_document,
+                **readiness_runner_test.release_completion_fixture_validation_kwargs(),
+            )
+        except ValueError:
+            continue
+        raise AssertionError(
+            f"native final verifier accepted {label}"
+        )
     return Draft202012Validator(completion_schema), receipt
+
+
+def verify_final_result_signer_file_handoff(
+    *,
+    final_core: dict[str, Any],
+    signing_response: dict[str, Any],
+    final_result: dict[str, Any],
+    validation_kwargs: dict[str, str],
+) -> None:
+    with tempfile.TemporaryDirectory() as raw_tmp:
+        tmp = Path(raw_tmp)
+        request_path = tmp / "release-completion-signing-request.json"
+        response_path = tmp / "release-completion-signing-response.json"
+        result_path = tmp / "release-completion-verification.json"
+        base_args = {
+            "expected_release_completion_result_provider": validation_kwargs[
+                "expected_result_provider"
+            ],
+            "expected_release_completion_result_key_id": validation_kwargs[
+                "expected_result_key_id"
+            ],
+            "expected_release_completion_result_spki_sha256": validation_kwargs[
+                "expected_result_spki_sha256"
+            ],
+            "expected_public_nitro_verification_result_provider": (
+                validation_kwargs["expected_public_nitro_result_provider"]
+            ),
+            "expected_public_nitro_verification_result_key_id": (
+                validation_kwargs["expected_public_nitro_result_key_id"]
+            ),
+            "expected_public_nitro_verification_result_spki_sha256": (
+                validation_kwargs["expected_public_nitro_result_spki_sha256"]
+            ),
+            "expected_final_role_registry_sha256": validation_kwargs[
+                "expected_final_role_registry_sha256"
+            ],
+        }
+
+        def invoke(args: SimpleNamespace) -> tuple[dict[str, Any], bytes]:
+            captured = io.BytesIO()
+            original_stdout = sys.stdout
+            sys.stdout = SimpleNamespace(buffer=captured)
+            try:
+                document = (
+                    verify_release_completion
+                    .emit_release_completion_result_signer_phase(
+                        args,
+                        final_core,
+                        trusted_result_public_key_pem=validation_kwargs[
+                            "trusted_result_public_key_pem"
+                        ],
+                        trusted_public_nitro_result_public_key_pem=(
+                            validation_kwargs[
+                                "trusted_public_nitro_result_public_key_pem"
+                            ]
+                        ),
+                    )
+                )
+            finally:
+                sys.stdout = original_stdout
+            return document, captured.getvalue()
+
+        prepare_args = SimpleNamespace(
+            **base_args,
+            final_result_phase="prepare",
+            release_completion_result_signing_request=None,
+            release_completion_result_signature=None,
+            out=str(request_path),
+        )
+        prepared, prepare_stdout = invoke(prepare_args)
+        expected_request = (
+            verify_release_completion.build_release_completion_result_signing_request(
+                final_core,
+                provider=validation_kwargs["expected_result_provider"],
+                signing_key_id=validation_kwargs["expected_result_key_id"],
+                signing_key_spki_sha256=validation_kwargs[
+                    "expected_result_spki_sha256"
+                ],
+                global_role_registry_sha256=validation_kwargs[
+                    "expected_final_role_registry_sha256"
+                ],
+            )
+        )
+        expected_request_bytes = (
+            canonical_json(expected_request).encode("ascii") + b"\n"
+        )
+        if (
+            prepared != expected_request
+            or request_path.read_bytes() != expected_request_bytes
+            or prepare_stdout != expected_request_bytes
+        ):
+            raise AssertionError(
+                "prepare phase did not emit the exact deterministic signer request"
+            )
+        try:
+            invoke(
+                SimpleNamespace(
+                    **base_args,
+                    final_result_phase="prepare",
+                    release_completion_result_signing_request=None,
+                    release_completion_result_signature=str(response_path),
+                    out=str(request_path),
+                )
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                "prepare phase accepted a preexisting signer response"
+            )
+        try:
+            invoke(
+                SimpleNamespace(
+                    **base_args,
+                    final_result_phase="prepare",
+                    release_completion_result_signing_request=str(
+                        request_path
+                    ),
+                    release_completion_result_signature=None,
+                    out=str(result_path),
+                )
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                "prepare phase accepted a preexisting prepared request"
+            )
+        try:
+            invoke(
+                SimpleNamespace(
+                    **base_args,
+                    final_result_phase="finalize",
+                    release_completion_result_signing_request=str(
+                        request_path
+                    ),
+                    release_completion_result_signature=None,
+                    out=str(result_path),
+                )
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                "finalize phase accepted a missing signer response"
+            )
+        try:
+            invoke(
+                SimpleNamespace(
+                    **base_args,
+                    final_result_phase="finalize",
+                    release_completion_result_signing_request=None,
+                    release_completion_result_signature=str(response_path),
+                    out=str(result_path),
+                )
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                "finalize phase accepted a missing retained signer request"
+            )
+
+        response_path.write_bytes(
+            canonical_json(signing_response).encode("ascii") + b"\n"
+        )
+        finalize_args = SimpleNamespace(
+            **base_args,
+            final_result_phase="finalize",
+            release_completion_result_signing_request=str(request_path),
+            release_completion_result_signature=str(response_path),
+            out=str(result_path),
+        )
+        expected_result_bytes = (
+            canonical_json(final_result).encode("ascii") + b"\n"
+        )
+        for attempt in range(2):
+            finalized, finalize_stdout = invoke(finalize_args)
+            if (
+                finalized != final_result
+                or result_path.read_bytes() != expected_result_bytes
+                or finalize_stdout != expected_result_bytes
+            ):
+                raise AssertionError(
+                    "finalize phase changed the exact signed result during "
+                    f"{'initial delivery' if attempt == 0 else 'lost-response retry'}"
+                )
+
+        crossed_request = clone_document(expected_request)
+        crossed_request["requestSha256"] = digest("e")
+        request_path.write_bytes(
+            canonical_json(crossed_request).encode("ascii") + b"\n"
+        )
+        try:
+            invoke(finalize_args)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                "finalize phase accepted a tampered retained signer request"
+            )
+        crossed_core = clone_document(final_core)
+        crossed_core["verifiedAtUnix"] += 1
+        crossed_retained_request = (
+            verify_release_completion
+            .build_release_completion_result_signing_request(
+                crossed_core,
+                provider=validation_kwargs["expected_result_provider"],
+                signing_key_id=validation_kwargs[
+                    "expected_result_key_id"
+                ],
+                signing_key_spki_sha256=validation_kwargs[
+                    "expected_result_spki_sha256"
+                ],
+                global_role_registry_sha256=validation_kwargs[
+                    "expected_final_role_registry_sha256"
+                ],
+            )
+        )
+        request_path.write_bytes(
+            canonical_json(crossed_retained_request).encode("ascii")
+            + b"\n"
+        )
+        try:
+            invoke(finalize_args)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                "finalize phase accepted a deterministic request for a different final core"
+            )
+        request_path.write_bytes(expected_request_bytes)
+
+        try:
+            invoke(
+                SimpleNamespace(
+                    **base_args,
+                    final_result_phase="prepare",
+                    release_completion_result_signing_request=None,
+                    release_completion_result_signature=None,
+                    out=None,
+                )
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                "prepare phase accepted a non-durable missing output"
+            )
+
+        protocol_path_attributes = (
+            "public_nitro_evidence_bundle",
+            "public_nitro_expectations",
+            "public_nitro_trust_roots",
+            "public_nitro_verification_result",
+            "public_nitro_verification_result_public_key",
+            "host_readiness_completion_proof",
+            "release_completion_result_public_key",
+            "release_completion_result_signature",
+            "release_completion_result_signing_request",
+        )
+        for attribute in protocol_path_attributes:
+            collision_path = tmp / f"{attribute}.json"
+            collision_path.write_bytes(b"collision\n")
+            collision_args = SimpleNamespace(
+                out=str(collision_path),
+                **{attribute: str(collision_path)},
+            )
+            try:
+                verify_release_completion.reject_final_protocol_output_collisions(
+                    collision_args
+                )
+            except ValueError:
+                continue
+            raise AssertionError(
+                f"final protocol output collided with {attribute}"
+            )
+
+        hardlink_input = tmp / "hardlink-input.json"
+        hardlink_output = tmp / "hardlink-output.json"
+        hardlink_input.write_bytes(b"hardlink\n")
+        os.link(hardlink_input, hardlink_output)
+        try:
+            verify_release_completion.reject_final_protocol_output_collisions(
+                SimpleNamespace(
+                    out=str(hardlink_output),
+                    public_nitro_expectations=str(hardlink_input),
+                )
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                "final protocol output accepted a hardlink input collision"
+            )
+
+        aliased_input = tmp / "aliased-input.json"
+        aliased_input.write_bytes(b"alias\n")
+        aliased_output = str(
+            tmp / "nonexistent-component" / ".." / aliased_input.name
+        )
+        try:
+            verify_release_completion.reject_final_protocol_output_collisions(
+                SimpleNamespace(
+                    out=aliased_output,
+                    public_nitro_evidence_bundle=str(aliased_input),
+                )
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                "final protocol output accepted a normalized path alias collision"
+            )
+
+
+def verify_release_proof_schemas() -> tuple[Any, dict[str, Any]]:
+    from jsonschema import Draft202012Validator
+    from referencing import Registry, Resource
+
+    receipt_schema = json.loads(
+        (ROOT / "schemas/bootstrap-receipt.v3.schema.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    completion_schema = json.loads(
+        (ROOT / "schemas/completion-proof.v6.schema.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    final_schema = json.loads(
+        (
+            ROOT
+            / "schemas/release-completion-verification.v1.schema.json"
+        ).read_text(encoding="utf-8")
+    )
+    signing_request_schema = json.loads(
+        (
+            ROOT
+            / "schemas/release-completion-result-signing-request.v1.schema.json"
+        ).read_text(encoding="utf-8")
+    )
+    signing_response_schema = json.loads(
+        (
+            ROOT
+            / "schemas/release-completion-result-signing-response.v1.schema.json"
+        ).read_text(encoding="utf-8")
+    )
+    expected_public_nitro_provider_definition = {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "pattern": r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+    }
+    if (
+        final_schema["$defs"].get("publicNitroProvider")
+        != expected_public_nitro_provider_definition
+    ):
+        raise AssertionError(
+            "releaseCompletionVerification/v1 public Nitro provider "
+            "definition diverged from the runtime contract"
+        )
+    provider_references = {
+        definition: final_schema["$defs"][definition][
+            "properties"
+        ]["provider"]
+        for definition in (
+            "clientState",
+            "publicNitroEnvelope",
+            "resultAuthenticity",
+        )
+    }
+    if provider_references != {
+        "clientState": {"$ref": "#/$defs/identifier"},
+        "publicNitroEnvelope": {
+            "$ref": "#/$defs/publicNitroProvider"
+        },
+        "resultAuthenticity": {"$ref": "#/$defs/identifier"},
+    }:
+        raise AssertionError(
+            "releaseCompletionVerification/v1 narrowed an unrelated "
+            "provider or left the public Nitro provider generic"
+        )
+    Draft202012Validator.check_schema(receipt_schema)
+    Draft202012Validator.check_schema(completion_schema)
+    Draft202012Validator.check_schema(final_schema)
+    Draft202012Validator.check_schema(signing_request_schema)
+    Draft202012Validator.check_schema(signing_response_schema)
+    receipt = bootstrap_receipt_fixture()
+    Draft202012Validator(receipt_schema).validate(receipt)
+    completion_registry = Registry().with_resource(
+        completion_schema["$id"],
+        Resource.from_contents(completion_schema),
+    )
+    native_launch_manifest_validator = Draft202012Validator(
+        {
+            "$ref": (
+                completion_schema["$id"]
+                + "#/$defs/nativeLaunchManifest"
+            )
+        },
+        registry=completion_registry,
+    )
+    receipt_summary = bootstrap_receipt_summary(receipt)
+    native_nonce_assurance = {
+        "contractSha256": receipt_summary["nonceRollbackAssurance"][
+            "contractSha256"
+        ],
+        "retainedSnapshotSha256": receipt_summary[
+            "nonceRollbackAssurance"
+        ]["retainedSnapshotSha256"],
+        "verifierStateService": receipt_summary[
+            "nonceRollbackAssurance"
+        ]["verifierStateService"],
+        "verified": True,
+    }
+    native_launch_manifest = launch_manifest_v3_verification_fixture(
+        receipt_summary,
+        native_nonce_assurance,
+    )
+    native_launch_manifest_validator.validate(native_launch_manifest)
+    open_native_launch_manifest = clone_document(native_launch_manifest)
+    open_native_launch_manifest["launchAuthorityIssuanceSaga"][
+        "unexpected"
+    ] = True
+    if not list(
+        native_launch_manifest_validator.iter_errors(
+            open_native_launch_manifest
+        )
+    ):
+        raise AssertionError(
+            "completionProof/v6 schema accepted an open launcher v7 saga"
+        )
+
+    schema_registry = Registry().with_resource(
+        final_schema["$id"],
+        Resource.from_contents(final_schema),
+    )
+    public_nitro_provider_validator = Draft202012Validator(
+        {
+            "$ref": (
+                final_schema["$id"]
+                + "#/$defs/publicNitroProvider"
+            )
+        },
+        registry=schema_registry,
+    )
+    for provider in ("a", "fixture.signer-1", "a" * 128):
+        public_nitro_provider_validator.validate(provider)
+    for provider in ("", ".provider", "kms:primary", "a" * 129):
+        if not list(
+            public_nitro_provider_validator.iter_errors(provider)
+        ):
+            raise AssertionError(
+                "releaseCompletionVerification/v1 accepted an invalid "
+                "public Nitro provider"
+            )
+    final_validator = Draft202012Validator(
+        final_schema,
+        registry=schema_registry,
+    )
+    signing_request_validator = Draft202012Validator(
+        signing_request_schema,
+        registry=schema_registry,
+    )
+    signing_response_validator = Draft202012Validator(
+        signing_response_schema,
+        registry=schema_registry,
+    )
+    final_result = (
+        readiness_runner_test.release_completion_result_v1_fixture()
+    )
+    validation_kwargs = (
+        readiness_runner_test.release_completion_fixture_validation_kwargs()
+    )
+    canonical_signed_max = (
+        verify_release_completion.CANONICAL_JSON_SIGNED_MAX
+    )
+    signed_max_result = clone_document(final_result)
+    signed_max_result["verifiedAtUnix"] = canonical_signed_max
+    final_validator.validate(signed_max_result)
+    verify_release_completion.validate_canonical_json_profile(
+        {"verifiedAtUnix": canonical_signed_max},
+        label="signed-64 maximum fixture",
+    )
+    above_signed_max_result = clone_document(final_result)
+    above_signed_max_result["verifiedAtUnix"] = canonical_signed_max + 1
+    if not list(
+        final_validator.iter_errors(above_signed_max_result)
+    ):
+        raise AssertionError(
+            "releaseCompletionVerification/v1 schema accepted an integer "
+            "above the canonical signed-64 maximum"
+        )
+    try:
+        verify_release_completion.validate_canonical_json_profile(
+            {"verifiedAtUnix": canonical_signed_max + 1},
+            label="above signed-64 maximum fixture",
+        )
+    except ValueError:
+        pass
+    else:
+        raise AssertionError(
+            "canonical final-v1 profile accepted an integer above signed-64"
+        )
+    try:
+        verify_release_completion.validate_release_completion_verification_v1(
+            above_signed_max_result,
+            **validation_kwargs,
+        )
+    except ValueError:
+        pass
+    else:
+        raise AssertionError(
+            "native final-v1 validator accepted an integer above signed-64"
+        )
+    if not (
+        canonical_signed_max
+        == verify_release_completion
+        .PUBLIC_NITRO_CANONICAL_INTEGER_MAX
+        == verify_release_completion
+        .verify_nitro_tee
+        .PUBLIC_NITRO_CANONICAL_INTEGER_MAX
+    ):
+        raise AssertionError(
+            "final-v1 and native public Nitro integer domains diverged"
+        )
+    public_result_at_maximum = clone_document(
+        final_result["publicNitroVerification"]["envelope"]["result"]
+    )
+    public_result_at_maximum["verifiedAtUnix"] = canonical_signed_max
+    verify_release_completion._validate_public_nitro_live_result(
+        public_result_at_maximum
+    )
+    public_result_above_maximum = clone_document(
+        public_result_at_maximum
+    )
+    public_result_above_maximum["verifiedAtUnix"] = (
+        canonical_signed_max + 1
+    )
+    try:
+        verify_release_completion._validate_public_nitro_live_result(
+            public_result_above_maximum
+        )
+    except ValueError:
+        pass
+    else:
+        raise AssertionError(
+            "final-v1 accepted a public Nitro integer above signed-64"
+        )
+    expected_public_domain = (
+        b"serverware.publicNitroLiveVerificationResultEnvelope/v1"
+        b"\x00signatureAlgorithm=Ed25519\x00"
+    )
+    if (
+        verify_release_completion
+        .PUBLIC_NITRO_LIVE_RESULT_SIGNATURE_DOMAIN
+        != expected_public_domain
+        or verify_release_completion
+        .verify_nitro_tee
+        .PUBLIC_NITRO_LIVE_RESULT_ENVELOPE_DOMAIN
+        != expected_public_domain
+    ):
+        raise AssertionError(
+            "native and final-v1 public Nitro signature domains diverged"
+        )
+    public_envelope = final_result[
+        "publicNitroVerification"
+    ]["envelope"]
+    if (
+        verify_release_completion
+        .verify_signed_public_nitro_result_envelope(
+            public_envelope,
+            trusted_public_key_pem=validation_kwargs[
+                "trusted_public_nitro_result_public_key_pem"
+            ],
+            expected_provider=validation_kwargs[
+                "expected_public_nitro_result_provider"
+            ],
+            expected_key_id=validation_kwargs[
+                "expected_public_nitro_result_key_id"
+            ],
+            expected_spki_sha256=validation_kwargs[
+                "expected_public_nitro_result_spki_sha256"
+            ],
+        )
+        != public_envelope["result"]
+    ):
+        raise AssertionError(
+            "final-v1 did not consume the production/native envelope"
+        )
+    final_validator.validate(final_result)
+    if (
+        verify_release_completion.validate_release_completion_verification_v1(
+            final_result,
+            **validation_kwargs,
+        )
+        != final_result
+    ):
+        raise AssertionError(
+            "native final validator rejected the positive producer fixture"
+        )
+    final_core = clone_document(final_result)
+    final_core.pop("resultSha256")
+    final_core.pop("authenticity")
+    signing_request = (
+        verify_release_completion.build_release_completion_result_signing_request(
+            final_core,
+            provider=validation_kwargs["expected_result_provider"],
+            signing_key_id=validation_kwargs["expected_result_key_id"],
+            signing_key_spki_sha256=validation_kwargs[
+                "expected_result_spki_sha256"
+            ],
+            global_role_registry_sha256=validation_kwargs[
+                "expected_final_role_registry_sha256"
+            ],
+        )
+    )
+    if (
+        verify_release_completion.build_release_completion_result_signing_request(
+            final_core,
+            provider=validation_kwargs["expected_result_provider"],
+            signing_key_id=validation_kwargs["expected_result_key_id"],
+            signing_key_spki_sha256=validation_kwargs[
+                "expected_result_spki_sha256"
+            ],
+            global_role_registry_sha256=validation_kwargs[
+                "expected_final_role_registry_sha256"
+            ],
+        )
+        != signing_request
+    ):
+        raise AssertionError(
+            "release-completion signing request is not deterministic"
+        )
+    signing_request_validator.validate(signing_request)
+    verify_release_completion.validate_release_completion_result_signing_request(
+        signing_request,
+        expected_result_core=final_core,
+        expected_provider=validation_kwargs["expected_result_provider"],
+        expected_signing_key_id=validation_kwargs[
+            "expected_result_key_id"
+        ],
+        expected_signing_key_spki_sha256=validation_kwargs[
+            "expected_result_spki_sha256"
+        ],
+        expected_global_role_registry_sha256=validation_kwargs[
+            "expected_final_role_registry_sha256"
+        ],
+    )
+    result_signing_private_key = Ed25519PrivateKey.from_private_bytes(
+        hashlib.sha256(
+            b"serverware-fixture:release-completion-result"
+        ).digest()
+    )
+    signing_bytes = b64d(signing_request["signingBytesBase64url"])
+    signing_response = {
+        "apiVersion": (
+            verify_release_completion
+            .FINAL_RESULT_SIGNING_RESPONSE_API_VERSION
+        ),
+        "kind": (
+            verify_release_completion
+            .FINAL_RESULT_SIGNING_RESPONSE_KIND
+        ),
+        "operation": (
+            verify_release_completion.FINAL_RESULT_SIGNING_OPERATION
+        ),
+        "status": "signed",
+        "requestSha256": signing_request["requestSha256"],
+        "idempotencyKey": signing_request["idempotencyKey"],
+        "provider": signing_request["provider"],
+        "signingKeyId": signing_request["signingKeyId"],
+        "signingKeySpkiSha256": signing_request[
+            "signingKeySpkiSha256"
+        ],
+        "globalRoleRegistrySha256": signing_request[
+            "globalRoleRegistrySha256"
+        ],
+        "resultSha256": signing_request["resultSha256"],
+        "signingBytesSha256": signing_request["signingBytesSha256"],
+        "signature": "ed25519:"
+        + b64e(result_signing_private_key.sign(signing_bytes)),
+    }
+    signing_response_validator.validate(signing_response)
+    finalized = (
+        verify_release_completion.finalize_release_completion_verification_v1(
+            final_core,
+            signing_response,
+            **validation_kwargs,
+        )
+    )
+    if finalized != final_result:
+        raise AssertionError(
+            "two-phase external signer handoff changed the final-v1 result"
+        )
+    verify_final_result_signer_file_handoff(
+        final_core=final_core,
+        signing_response=signing_response,
+        final_result=final_result,
+        validation_kwargs=validation_kwargs,
+    )
+
+    signing_request_structural_negatives: list[
+        tuple[str, dict[str, Any]]
+    ] = []
+    missing_request_digest = clone_document(signing_request)
+    missing_request_digest.pop("requestSha256")
+    signing_request_structural_negatives.append(
+        ("omitted signing request digest", missing_request_digest)
+    )
+    extra_request_field = clone_document(signing_request)
+    extra_request_field["unexpected"] = True
+    signing_request_structural_negatives.append(
+        ("extra signing request field", extra_request_field)
+    )
+    obsolete_request_version = clone_document(signing_request)
+    obsolete_request_version["apiVersion"] = (
+        "serverware.releaseCompletionResultSigningRequest/v0"
+    )
+    signing_request_structural_negatives.append(
+        ("obsolete signing request version", obsolete_request_version)
+    )
+    invalid_request_provider = clone_document(signing_request)
+    invalid_request_provider["provider"] = "invalid/provider"
+    signing_request_structural_negatives.append(
+        ("invalid signing request provider", invalid_request_provider)
+    )
+    invalid_request_digest = clone_document(signing_request)
+    invalid_request_digest["requestSha256"] = "sha256:" + "A" * 64
+    signing_request_structural_negatives.append(
+        ("invalid signing request digest", invalid_request_digest)
+    )
+    invalid_signing_bytes = clone_document(signing_request)
+    invalid_signing_bytes["signingBytesBase64url"] = "A"
+    signing_request_structural_negatives.append(
+        ("invalid canonical signing bytes", invalid_signing_bytes)
+    )
+    for terminator_name, terminator in (
+        ("LF", "\n"),
+        ("CR", "\r"),
+        ("Unicode line separator", "\u2028"),
+        ("Unicode paragraph separator", "\u2029"),
+    ):
+        for field in (
+            "provider",
+            "requestSha256",
+            "signingBytesBase64url",
+        ):
+            trailing = clone_document(signing_request)
+            trailing[field] += terminator
+            signing_request_structural_negatives.append(
+                (
+                    f"{terminator_name} after signing request {field}",
+                    trailing,
+                )
+            )
+    for label, invalid in signing_request_structural_negatives:
+        if not list(signing_request_validator.iter_errors(invalid)):
+            raise AssertionError(
+                f"signing request schema accepted {label}"
+            )
+        try:
+            verify_release_completion.validate_release_completion_result_signing_request(
+                invalid,
+                expected_result_core=final_core,
+                expected_provider=validation_kwargs[
+                    "expected_result_provider"
+                ],
+                expected_signing_key_id=validation_kwargs[
+                    "expected_result_key_id"
+                ],
+                expected_signing_key_spki_sha256=validation_kwargs[
+                    "expected_result_spki_sha256"
+                ],
+                expected_global_role_registry_sha256=validation_kwargs[
+                    "expected_final_role_registry_sha256"
+                ],
+            )
+        except ValueError:
+            continue
+        raise AssertionError(
+            f"native signing request validator accepted {label}"
+        )
+
+    signing_request_identity_negatives: list[
+        tuple[str, dict[str, Any]]
+    ] = []
+    tampered_signing_bytes = clone_document(signing_request)
+    tampered_signing_bytes["signingBytesSha256"] = digest("e")
+    signing_request_identity_negatives.append(
+        ("tampered signing bytes digest", tampered_signing_bytes)
+    )
+    crossed_request_provider = clone_document(signing_request)
+    crossed_request_provider["provider"] = "crossed-provider"
+    signing_request_identity_negatives.append(
+        ("cross-wired signing request provider", crossed_request_provider)
+    )
+    crossed_request_registry = clone_document(signing_request)
+    crossed_request_registry["globalRoleRegistrySha256"] = digest("e")
+    signing_request_identity_negatives.append(
+        (
+            "cross-wired signing request role registry",
+            crossed_request_registry,
+        )
+    )
+    crossed_request_identity = clone_document(signing_request)
+    crossed_request_identity["requestSha256"] = digest("e")
+    signing_request_identity_negatives.append(
+        ("cross-wired deterministic request identity", crossed_request_identity)
+    )
+    crossed_idempotency = clone_document(signing_request)
+    crossed_idempotency["idempotencyKey"] = digest("e")
+    signing_request_identity_negatives.append(
+        ("cross-wired idempotency identity", crossed_idempotency)
+    )
+    for label, invalid in signing_request_identity_negatives:
+        if list(signing_request_validator.iter_errors(invalid)):
+            raise AssertionError(
+                "signing request schema performed native deterministic "
+                f"identity validation for {label}"
+            )
+        try:
+            verify_release_completion.validate_release_completion_result_signing_request(
+                invalid,
+                expected_result_core=final_core,
+                expected_provider=validation_kwargs[
+                    "expected_result_provider"
+                ],
+                expected_signing_key_id=validation_kwargs[
+                    "expected_result_key_id"
+                ],
+                expected_signing_key_spki_sha256=validation_kwargs[
+                    "expected_result_spki_sha256"
+                ],
+                expected_global_role_registry_sha256=validation_kwargs[
+                    "expected_final_role_registry_sha256"
+                ],
+            )
+        except ValueError:
+            continue
+        raise AssertionError(
+            f"external signer request accepted {label}"
+        )
+
+    response_structural_negatives: list[
+        tuple[str, dict[str, Any]]
+    ] = []
+    missing_response_binding = clone_document(signing_response)
+    missing_response_binding.pop("idempotencyKey")
+    response_structural_negatives.append(
+        ("omitted response idempotency key", missing_response_binding)
+    )
+    extra_response_field = clone_document(signing_response)
+    extra_response_field["unexpected"] = True
+    response_structural_negatives.append(
+        ("extra signing response field", extra_response_field)
+    )
+    wrong_response_status = clone_document(signing_response)
+    wrong_response_status["status"] = "pending"
+    response_structural_negatives.append(
+        ("wrong signing response status", wrong_response_status)
+    )
+    invalid_response_provider = clone_document(signing_response)
+    invalid_response_provider["provider"] = "invalid/provider"
+    response_structural_negatives.append(
+        ("invalid signing response provider", invalid_response_provider)
+    )
+    invalid_response_digest = clone_document(signing_response)
+    invalid_response_digest["requestSha256"] = "sha256:" + "A" * 64
+    response_structural_negatives.append(
+        ("invalid signing response digest", invalid_response_digest)
+    )
+    noncanonical_response_signature = clone_document(signing_response)
+    noncanonical_response_signature["signature"] = (
+        "ed25519:" + "A" * 85 + "B"
+    )
+    response_structural_negatives.append(
+        (
+            "non-canonical signing response signature",
+            noncanonical_response_signature,
+        )
+    )
+    for terminator_name, terminator in (
+        ("LF", "\n"),
+        ("CR", "\r"),
+        ("Unicode line separator", "\u2028"),
+        ("Unicode paragraph separator", "\u2029"),
+    ):
+        for field in ("provider", "requestSha256", "signature"):
+            trailing = clone_document(signing_response)
+            trailing[field] += terminator
+            response_structural_negatives.append(
+                (
+                    f"{terminator_name} after signing response {field}",
+                    trailing,
+                )
+            )
+    response_validation_kwargs = {
+        "signing_request": signing_request,
+        "trusted_public_key_pem": validation_kwargs[
+            "trusted_result_public_key_pem"
+        ],
+        "expected_provider": validation_kwargs[
+            "expected_result_provider"
+        ],
+        "expected_signing_key_id": validation_kwargs[
+            "expected_result_key_id"
+        ],
+        "expected_signing_key_spki_sha256": validation_kwargs[
+            "expected_result_spki_sha256"
+        ],
+        "expected_global_role_registry_sha256": validation_kwargs[
+            "expected_final_role_registry_sha256"
+        ],
+    }
+    for label, invalid in response_structural_negatives:
+        if not list(signing_response_validator.iter_errors(invalid)):
+            raise AssertionError(
+                f"signing response schema accepted {label}"
+            )
+        try:
+            verify_release_completion.verify_release_completion_result_signing_response(
+                invalid,
+                **response_validation_kwargs,
+            )
+        except ValueError:
+            continue
+        raise AssertionError(
+            f"native signing response validator accepted {label}"
+        )
+
+    response_identity_negatives: list[tuple[str, dict[str, Any]]] = []
+    for label, field, replacement in (
+        ("tampered request digest", "requestSha256", digest("e")),
+        ("cross-wired provider", "provider", "crossed-provider"),
+        ("cross-wired key", "signingKeyId", digest("e")),
+        ("cross-wired SPKI", "signingKeySpkiSha256", digest("e")),
+        (
+            "cross-wired role registry",
+            "globalRoleRegistrySha256",
+            digest("e"),
+        ),
+        ("tampered result digest", "resultSha256", digest("e")),
+        ("tampered signing digest", "signingBytesSha256", digest("e")),
+        ("tampered signature", "signature", "ed25519:" + "A" * 86),
+    ):
+        invalid = clone_document(signing_response)
+        invalid[field] = replacement
+        response_identity_negatives.append((label, invalid))
+    for label, invalid in response_identity_negatives:
+        if list(signing_response_validator.iter_errors(invalid)):
+            raise AssertionError(
+                "signing response schema performed native request/signature "
+                f"identity validation for {label}"
+            )
+        try:
+            verify_release_completion.verify_release_completion_result_signing_response(
+                invalid,
+                **response_validation_kwargs,
+            )
+        except ValueError:
+            continue
+        raise AssertionError(
+            f"external signer response accepted {label}"
+        )
+    recovered_response = (
+        verify_release_completion.verify_release_completion_result_signing_response(
+            signing_response,
+            **response_validation_kwargs,
+        )
+    )
+    if recovered_response != (
+        verify_release_completion.verify_release_completion_result_signing_response(
+            signing_response,
+            **response_validation_kwargs,
+        )
+    ):
+        raise AssertionError(
+            "byte-identical lost-response retry did not recover an identical result"
+        )
+    replay_core = clone_document(final_core)
+    replay_core["verifiedAtUnix"] += 1
+    replay_request = (
+        verify_release_completion.build_release_completion_result_signing_request(
+            replay_core,
+            provider=validation_kwargs["expected_result_provider"],
+            signing_key_id=validation_kwargs["expected_result_key_id"],
+            signing_key_spki_sha256=validation_kwargs[
+                "expected_result_spki_sha256"
+            ],
+            global_role_registry_sha256=validation_kwargs[
+                "expected_final_role_registry_sha256"
+            ],
+        )
+    )
+    try:
+        verify_release_completion.verify_release_completion_result_signing_response(
+            signing_response,
+            **{
+                **response_validation_kwargs,
+                "signing_request": replay_request,
+            },
+        )
+    except ValueError:
+        pass
+    else:
+        raise AssertionError(
+            "external signer response replayed across a different final core"
+        )
+    for label, invalid_identifier in (
+        ("empty", ""),
+        ("invalid character", "invalid/provider"),
+        ("oversized", "a" * 257),
+    ):
+        try:
+            verify_release_completion.require_final_v1_identifier(
+                invalid_identifier,
+                "fixture final-v1 identifier",
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                f"native final-v1 lexical validator accepted {label} identifier"
+            )
+    for provider in ("a", "fixture.signer-1", "a" * 128):
+        if (
+            verify_release_completion.require_public_nitro_provider(
+                provider,
+                "fixture public Nitro provider",
+            )
+            != provider
+        ):
+            raise AssertionError(
+                "final-v1 changed a valid public Nitro provider"
+            )
+    for label, invalid_provider in (
+        ("empty", ""),
+        ("leading punctuation", ".provider"),
+        ("colon", "kms:primary"),
+        ("oversized", "a" * 129),
+    ):
+        try:
+            verify_release_completion.require_public_nitro_provider(
+                invalid_provider,
+                "fixture public Nitro provider",
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                "final-v1 accepted "
+                f"{label} public Nitro signing provider"
+            )
+    state_commit_roles = final_result["publicNitroVerification"][
+        "envelope"
+    ]["result"]["roleKeyIds"]
+    for field in (
+        "commitId",
+        "storeId",
+        "currentHeadAuthorizationId",
+        "currentHeadReservationId",
+        "currentHeadRedemptionId",
+    ):
+        invalid_state_commit = clone_document(final_result["stateCommit"])
+        invalid_state_commit[field] = "invalid/value"
+        try:
+            verify_release_completion._validate_final_state_commit(
+                invalid_state_commit,
+                role_key_ids=state_commit_roles,
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                f"native final-v1 validator accepted invalid {field}"
+            )
+    for label, boundary in (
+        ("empty", ""),
+        ("oversized", "x" * 4097),
+    ):
+        invalid_state_commit = clone_document(final_result["stateCommit"])
+        invalid_state_commit["rollbackResistanceBoundary"] = boundary
+        try:
+            verify_release_completion._validate_final_state_commit(
+                invalid_state_commit,
+                role_key_ids=state_commit_roles,
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                "native final-v1 validator accepted "
+                f"{label} rollback boundary"
+            )
+
+    def assert_final_schema_and_native_reject(
+        label: str,
+        invalid: dict[str, Any],
+    ) -> None:
+        if not list(final_validator.iter_errors(invalid)):
+            raise AssertionError(f"final schema accepted {label}")
+        try:
+            verify_release_completion.validate_release_completion_verification_v1(
+                invalid,
+                **validation_kwargs,
+            )
+        except ValueError:
+            return
+        raise AssertionError(f"native final validator accepted {label}")
+
+    for terminator_name, terminator in (
+        ("LF", "\n"),
+        ("CR", "\r"),
+        ("Unicode line separator", "\u2028"),
+        ("Unicode paragraph separator", "\u2029"),
+    ):
+        lexical_cases: list[tuple[str, dict[str, Any]]] = []
+        trailing_provider = clone_document(final_result)
+        trailing_provider["authenticity"]["provider"] += terminator
+        lexical_cases.append(("identifier", trailing_provider))
+        trailing_digest = clone_document(final_result)
+        trailing_digest["resultSha256"] += terminator
+        lexical_cases.append(("SHA-256 digest", trailing_digest))
+        trailing_sha384 = clone_document(final_result)
+        trailing_sha384["publicNitroVerification"]["envelope"]["result"][
+            "eifSha384"
+        ] += terminator
+        lexical_cases.append(("SHA-384 digest", trailing_sha384))
+        trailing_signature = clone_document(final_result)
+        trailing_signature["authenticity"]["signature"] += terminator
+        lexical_cases.append(("Ed25519 signature", trailing_signature))
+        trailing_commit_id = clone_document(final_result)
+        trailing_commit_id["stateCommit"]["commitId"] += terminator
+        lexical_cases.append(("state commit identifier", trailing_commit_id))
+        trailing_boundary = clone_document(final_result)
+        trailing_boundary["stateCommit"][
+            "rollbackResistanceBoundary"
+        ] += terminator
+        lexical_cases.append(("boundary string", trailing_boundary))
+        for lexical_label, invalid in lexical_cases:
+            assert_final_schema_and_native_reject(
+                f"{terminator_name} after final-v1 {lexical_label}",
+                invalid,
+            )
+
+    public_result_fixture = final_result["publicNitroVerification"][
+        "envelope"
+    ]["result"]
+    maximum_kms_audit = {
+        f"audit-{index:02d}": digest(f"{index % 16:x}")
+        for index in range(64)
+    }
+    maximum_kms_result = clone_document(final_result)
+    maximum_kms_result["publicNitroVerification"]["envelope"]["result"][
+        "kmsAuditProofSha256s"
+    ] = maximum_kms_audit
+    final_validator.validate(maximum_kms_result)
+    maximum_native_public_result = clone_document(public_result_fixture)
+    maximum_native_public_result["kmsAuditProofSha256s"] = maximum_kms_audit
+    verify_release_completion._validate_public_nitro_live_result(
+        maximum_native_public_result
+    )
+
+    kms_audit_negatives: list[tuple[str, dict[str, str]]] = [
+        ("empty KMS audit digest map", {}),
+        (
+            "65-entry KMS audit digest map",
+            {
+                f"audit-{index:02d}": digest(f"{index % 16:x}")
+                for index in range(65)
+            },
+        ),
+        ("invalid KMS audit key", {"invalid/key": digest("a")}),
+        ("invalid KMS audit key prefix", {"_audit": digest("a")}),
+        ("oversized KMS audit key", {"a" * 129: digest("a")}),
+        (
+            "invalid KMS audit digest",
+            {"audit": "sha256:" + "A" * 64},
+        ),
+    ]
+    for terminator_name, terminator in (
+        ("LF", "\n"),
+        ("CR", "\r"),
+        ("Unicode line separator", "\u2028"),
+        ("Unicode paragraph separator", "\u2029"),
+    ):
+        kms_audit_negatives.extend(
+            (
+                (
+                    f"{terminator_name} after KMS audit key",
+                    {f"audit{terminator}": digest("a")},
+                ),
+                (
+                    f"{terminator_name} after KMS audit digest",
+                    {"audit": digest("a") + terminator},
+                ),
+            )
+        )
+    for label, invalid_map in kms_audit_negatives:
+        invalid_final = clone_document(final_result)
+        invalid_final["publicNitroVerification"]["envelope"]["result"][
+            "kmsAuditProofSha256s"
+        ] = invalid_map
+        if not list(final_validator.iter_errors(invalid_final)):
+            raise AssertionError(f"final schema accepted {label}")
+        invalid_public_result = clone_document(public_result_fixture)
+        invalid_public_result["kmsAuditProofSha256s"] = invalid_map
+        try:
+            verify_release_completion._validate_public_nitro_live_result(
+                invalid_public_result
+            )
+        except ValueError:
+            continue
+        raise AssertionError(
+            f"native public-Nitro result validator accepted {label}"
+        )
+
+    structural_negatives: list[tuple[str, dict[str, Any]]] = []
+    missing_boundary = clone_document(final_result)
+    missing_boundary.pop("hostBootstrapBoundary")
+    structural_negatives.append(("missing host boundary", missing_boundary))
+
+    missing_authenticity = clone_document(final_result)
+    missing_authenticity.pop("authenticity")
+    structural_negatives.append(
+        ("unsigned final result", missing_authenticity)
+    )
+
+    obsolete_field = clone_document(final_result)
+    obsolete_field["final_completion"] = True
+    structural_negatives.append(("obsolete final alias", obsolete_field))
+
+    obsolete_version = clone_document(final_result)
+    obsolete_version["apiVersion"] = (
+        "serverware.releaseCompletionVerification/v0"
+    )
+    structural_negatives.append(("obsolete final version", obsolete_version))
+
+    missing_role = clone_document(final_result)
+    missing_role["globalRoleRegistry"]["roles"].pop("witnessStore")
+    structural_negatives.append(("missing witness-store role", missing_role))
+
+    missing_state_store_role = clone_document(final_result)
+    missing_state_store_role["globalRoleRegistry"]["roles"].pop("stateStore")
+    structural_negatives.append(
+        ("missing state-store role", missing_state_store_role)
+    )
+
+    bridge_injection = clone_document(final_result)
+    bridge_injection["publicNitroVerification"]["envelope"]["result"][
+        "public_verifier_bridge"
+    ] = {"forged": True}
+    structural_negatives.append(
+        ("public verifier bridge injection", bridge_injection)
+    )
+
+    readiness_as_final = {
+        "apiVersion": "serverware.completionProof/v6",
+        "kind": "ServerwarePreEnclaveReadiness",
+        "verificationOk": True,
+        "finalCompletionVerified": False,
+        "verification_mode": "readiness",
+        "result_scope": "readiness-only",
+        "readiness_only": True,
+    }
+    structural_negatives.append(
+        ("readiness result as final", readiness_as_final)
+    )
+    final_shaped_v6 = {
+        **readiness_as_final,
+        "kind": "ServerwareCompletionProof",
+        "finalCompletionVerified": True,
+        "verification_mode": "final",
+        "result_scope": "final-completion",
+        "readiness_only": False,
+        "public_verifier_bridge": {"forged": True},
+    }
+    structural_negatives.append(
+        ("final-shaped completionProof/v6", final_shaped_v6)
+    )
+
+    for label, invalid in structural_negatives:
+        if not list(final_validator.iter_errors(invalid)):
+            raise AssertionError(f"final schema accepted {label}")
+        try:
+            verify_release_completion.validate_release_completion_verification_v1(
+                invalid,
+                **validation_kwargs,
+            )
+        except ValueError:
+            continue
+        raise AssertionError(f"native final validator accepted {label}")
+
+    runtime_negatives: list[tuple[str, dict[str, Any]]] = []
+    boundary_digest = clone_document(final_result)
+    boundary_digest["hostBootstrapBoundary"]["boundarySha256"] = digest("e")
+    runtime_negatives.append(
+        ("host boundary digest substitution", boundary_digest)
+    )
+
+    boundary_authority = clone_document(final_result)
+    boundary_authority["hostBootstrapBoundary"][
+        "authoritativeForFinalCompletion"
+    ] = True
+    runtime_negatives.append(
+        ("host boundary authority escalation", boundary_authority)
+    )
+
+    boundary_cross_wire = clone_document(final_result)
+    boundary_cross_wire["hostBootstrapBoundary"][
+        "completionIdentitySha256"
+    ] = digest("e")
+    runtime_negatives.append(
+        ("host boundary completion cross-wire", boundary_cross_wire)
+    )
+
+    readiness_proof_cross_wire = clone_document(final_result)
+    readiness_proof_cross_wire["hostBootstrapBoundary"][
+        "hostReadinessCompletionProofFileSha256"
+    ] = digest("e")
+    runtime_negatives.append(
+        (
+            "host boundary readiness-proof cross-wire",
+            readiness_proof_cross_wire,
+        )
+    )
+
+    launch_authority_cross_wire = clone_document(final_result)
+    launch_authority_cross_wire["hostBootstrapBoundary"][
+        "launchAuthorityKeyId"
+    ] = digest("e")
+    runtime_negatives.append(
+        (
+            "host boundary launch-authority cross-wire",
+            launch_authority_cross_wire,
+        )
+    )
+
+    completion_mismatch = clone_document(final_result)
+    completion_mismatch["completionIdentity"]["releaseGeneration"] += 1
+    runtime_negatives.append(
+        ("completion identity mismatch", completion_mismatch)
+    )
+
+    completion_digest = clone_document(final_result)
+    completion_digest["completionIdentitySha256"] = digest("e")
+    runtime_negatives.append(
+        ("completion identity digest substitution", completion_digest)
+    )
+
+    public_result_digest = clone_document(final_result)
+    public_result_digest["publicNitroVerification"]["resultSha256"] = digest(
+        "e"
+    )
+    runtime_negatives.append(
+        ("public result digest substitution", public_result_digest)
+    )
+
+    state_digest = clone_document(final_result)
+    state_digest["aggregateAuthentication"][
+        "stateCommitReceiptSha256"
+    ] = digest("e")
+    runtime_negatives.append(
+        ("state receipt digest substitution", state_digest)
+    )
+
+    result_digest = clone_document(final_result)
+    result_digest["resultSha256"] = digest("e")
+    runtime_negatives.append(
+        ("final result digest substitution", result_digest)
+    )
+
+    duplicate_role = clone_document(final_result)
+    duplicate_role["globalRoleRegistry"]["roles"]["witnessStore"] = (
+        duplicate_role["globalRoleRegistry"]["roles"]["witness"]
+    )
+    runtime_negatives.append(("duplicate global role", duplicate_role))
+
+    tampered_public_signature = clone_document(final_result)
+    tampered_public_signature["publicNitroVerification"]["envelope"][
+        "signature"
+    ] = "ed25519:" + "A" * 86
+    runtime_negatives.append(
+        ("tampered public result signature", tampered_public_signature)
+    )
+
+    tampered_result_signature = clone_document(final_result)
+    tampered_result_signature["authenticity"]["signature"] = (
+        "ed25519:" + "A" * 86
+    )
+    runtime_negatives.append(
+        ("tampered final result signature", tampered_result_signature)
+    )
+
+    for label, invalid in runtime_negatives:
+        try:
+            verify_release_completion.validate_release_completion_verification_v1(
+                invalid,
+                **validation_kwargs,
+            )
+        except ValueError:
+            continue
+        raise AssertionError(f"native final validator accepted {label}")
+
+    crossed_pins = dict(validation_kwargs)
+    crossed_pins["expected_result_provider"] = "cross-wired-provider"
+    try:
+        verify_release_completion.validate_release_completion_verification_v1(
+            final_result,
+            **crossed_pins,
+        )
+    except ValueError:
+        pass
+    else:
+        raise AssertionError(
+            "native final validator accepted a cross-wired result provider pin"
+        )
+    crossed_public_pins = dict(validation_kwargs)
+    crossed_public_pins[
+        "expected_public_nitro_result_provider"
+    ] = "cross-wired-public-provider"
+    try:
+        verify_release_completion.validate_release_completion_verification_v1(
+            final_result,
+            **crossed_public_pins,
+        )
+    except ValueError:
+        pass
+    else:
+        raise AssertionError(
+            "native final validator accepted a cross-wired public result provider"
+        )
+    return Draft202012Validator(completion_schema), receipt
+
+
+def final_completion_identity_v3_fixture() -> dict[str, Any]:
+    core_names = (
+        "builderA",
+        "builderB",
+        "continuity",
+        "custody",
+        "eif",
+        "hardware",
+        "promotion",
+        "release",
+        "response",
+        "runtime",
+        "source",
+        "trust",
+        "witness",
+    )
+    return {
+        "apiVersion": verify_release_completion.FINAL_COMPLETION_IDENTITY_API_VERSION,
+        "challengeNonceSha256": digest("1"),
+        "coreDigests": {
+            name: digest(format(index + 2, "x"))
+            for index, name in enumerate(core_names)
+        },
+        "pipeline": "manifest-v6-promoted-oci-nitro-eif",
+        "releaseGeneration": 42,
+        "rollbackEpoch": 7,
+    }
+
+
+def launch_manifest_v3_verification_fixture(
+    receipt: dict[str, Any],
+    nonce_assurance: dict[str, Any],
+) -> dict[str, Any]:
+    request = receipt["launchAuthorization"]["request"]
+    statement = receipt["launchAuthorization"]["envelope"]["statement"]
+    witness = statement["monotonicWitness"]
+    witness_statement = witness["statement"]
+    return {
+        "apiVersion": "serverware.productionReadinessLaunch/v3",
+        "manifestSha256": receipt["manifest"]["sha256"],
+        "authorizationScope": request["authorizationScope"],
+        "freshnessAuthority": request["freshnessAuthority"],
+        "capabilitySemantics": statement["capabilitySemantics"],
+        "launchAttemptJournal": {
+            "apiVersion": request["launchAttemptJournalDomain"],
+            "path": (
+                "/var/lib/serverware/production-proof/"
+                "launch-authorization-attempt.v1.json"
+            ),
+            "lockPath": (
+                "/var/lib/serverware/production-proof/"
+                "launch-authorization-attempt.v1.lock"
+            ),
+            "domain": request["launchAttemptJournalDomain"],
+            "maxBytes": 64 * 1024,
+            "consistencyScope": (
+                "trusted-host-readiness-availability-and-consistency-only"
+            ),
+            "rollbackAuthority": "external-monotonic-witness",
+        },
+        "launchAttemptRecoveryIdentitySha256": request[
+            "launchAttemptRecoveryIdentitySha256"
+        ],
+        "globalRoleRegistry": request["globalRoleRegistry"],
+        "globalRoleRegistrySha256": request[
+            "globalRoleRegistrySha256"
+        ],
+        "globalRoleRegistryPinsFile": {
+            "path": (
+                "/etc/serverware/"
+                "production-launch-global-role-registry.json"
+            ),
+            "sha256": request["globalRoleRegistryPinsSha256"],
+        },
+        "monotonicWitness": {
+            "sha256": sha256_prefixed_json(witness),
+            "signingKeyId": witness_statement["witnessKeyId"],
+            "identitySha256": witness_statement[
+                "witnessIdentitySha256"
+            ],
+            "administrativeDomainSha256": witness_statement[
+                "witnessAdministrativeDomainSha256"
+            ],
+            "storeAssuranceSha256": witness_statement[
+                "storeAssuranceSha256"
+            ],
+            "storeAssuranceIssuerKeyId": request[
+                "globalRoleRegistry"
+            ]["roles"]["launchAuthorityWitnessStoreAssurance"],
+            "registryGeneration": witness_statement[
+                "registryGeneration"
+            ],
+            "registrySha256": witness_statement["registrySha256"],
+            "predecessorStateSha256": witness_statement[
+                "predecessorStateSha256"
+            ],
+            "successorStateSha256": witness_statement[
+                "successorStateSha256"
+            ],
+            "checkpointSequence": witness_statement[
+                "checkpointSequence"
+            ],
+            "stateTransitionCommitted": True,
+        },
+        "launchAuthorityIssuanceSaga": {
+            "ledgerSchemaVersion": 7,
+            "requestSha256": receipt["launchAuthorization"][
+                "requestSha256"
+            ],
+            "authorizationId": statement["authorizationId"],
+            "recoveryIdentitySha256": request[
+                "launchAttemptRecoveryIdentitySha256"
+            ],
+            "registryGeneration": witness_statement[
+                "registryGeneration"
+            ],
+            "registrySha256": witness_statement["registrySha256"],
+            "predecessorStateSha256": witness_statement[
+                "predecessorStateSha256"
+            ],
+            "successorStateSha256": witness_statement[
+                "successorStateSha256"
+            ],
+            "checkpointSequence": witness_statement[
+                "checkpointSequence"
+            ],
+            "witnessTransitionSha256": sha256_prefixed_json(witness),
+            "stateTransitionCommitted": True,
+        },
+        "contractSha256": nonce_assurance["contractSha256"],
+        "pinsFile": {
+            "path": receipt["nonceRollbackAssurance"]["pinsFile"]["path"],
+            "sha256": nonce_assurance["retainedSnapshotSha256"],
+        },
+        "verifierStateService": nonce_assurance["verifierStateService"],
+        "purpose": "readiness-only",
+        "verified": True,
+    }
 
 
 def verify_launcher_three_way_binding() -> None:
@@ -970,25 +3215,48 @@ def verify_launcher_three_way_binding() -> None:
     else:
         raise AssertionError("launcher authorization accepted a non-content-addressed path")
 
-    launch_identity = verify_release_completion.verify_bootstrap_launch_authorization_bindings(
+    nonce_assurance = {
+        "contractSha256": receipt["nonceRollbackAssurance"][
+            "contractSha256"
+        ],
+        "retainedSnapshotSha256": receipt["nonceRollbackAssurance"][
+            "retainedSnapshotSha256"
+        ],
+        "verifierStateService": receipt["nonceRollbackAssurance"][
+            "verifierStateService"
+        ],
+        "verified": True,
+    }
+    launch_manifest_v3 = launch_manifest_v3_verification_fixture(
         receipt,
-        signed_provenance_digest=digest("0"),
-        signed_source_tree_digest=receipt["sourceTreeDigest"],
-        release_provenance_sha256=receipt["launchAuthorization"]["request"][
+        nonce_assurance,
+    )
+    binding_arguments = {
+        "signed_provenance_digest": digest("0"),
+        "signed_source_tree_digest": receipt["sourceTreeDigest"],
+        "release_provenance_sha256": receipt["launchAuthorization"]["request"][
             "releaseProvenanceSha256"
         ],
-        reproducible_build_verification_sha256=receipt["launchAuthorization"][
-            "request"
-        ]["reproducibleBuildVerificationSha256"],
-        current_host_identity_sha256=receipt["launchAuthorization"]["request"][
+        "reproducible_build_verification_sha256": receipt[
+            "launchAuthorization"
+        ]["request"]["reproducibleBuildVerificationSha256"],
+        "current_host_identity_sha256": receipt["launchAuthorization"]["request"][
             "deploymentIdentitySha256"
         ],
-        release_artifact_launch_authority={
+        "release_artifact_launch_authority": {
             "launch_authority_key_id": receipt["launchAuthorityKeyId"],
             "launch_authority_root_sha256": receipt[
                 "launchAuthorityRootSha256"
             ],
         },
+        "nonce_rollback_assurance": nonce_assurance,
+        "launch_manifest_v3": launch_manifest_v3,
+    }
+    launch_identity = (
+        verify_release_completion.verify_bootstrap_launch_authorization_bindings(
+            receipt,
+            **binding_arguments,
+        )
     )
     if not all(
         launch_identity.get(field) is True
@@ -1002,11 +3270,57 @@ def verify_launcher_three_way_binding() -> None:
             "independent_build_report_bound",
             "current_host_deployment_identity_bound",
             "release_artifact_authority_bound",
+            "nonce_rollback_assurance_bound",
+            "launch_manifest_v3_bound",
+            "launch_attempt_journal_bound",
+            "global_role_registry_bound",
+            "trusted_host_scope_and_freshness_bound",
+            "monotonic_witness_bound",
+            "launch_authority_v7_saga_bound",
         )
     ):
         raise AssertionError(
             f"completion launch authorization omitted required bindings: {launch_identity}"
         )
+    receipt_with_extra = clone_document(receipt)
+    receipt_with_extra["unexpected"] = True
+    receipt_without_nonce = clone_document(receipt)
+    receipt_without_nonce.pop("nonceRollbackAssurance")
+    request_with_extra = clone_document(receipt)
+    request_with_extra["launchAuthorization"]["request"]["unexpected"] = True
+    request_without_registry_pins = clone_document(receipt)
+    request_without_registry_pins["launchAuthorization"]["request"].pop(
+        "globalRoleRegistryPinsSha256"
+    )
+    authorization_with_extra = clone_document(receipt)
+    authorization_with_extra["launchAuthorization"]["unexpected"] = True
+    cross_wired_statement = clone_document(receipt)
+    cross_wired_statement["launchAuthorization"]["envelope"]["statement"][
+        "globalRoleRegistrySha256"
+    ] = digest("9")
+    for label, invalid_receipt in (
+        ("receipt with an added field", receipt_with_extra),
+        ("receipt with an omitted nonce binding", receipt_without_nonce),
+        ("request with an added field", request_with_extra),
+        (
+            "request with an omitted registry-pins digest",
+            request_without_registry_pins,
+        ),
+        ("authorization wrapper with an added field", authorization_with_extra),
+        ("cross-wired authorization statement", cross_wired_statement),
+    ):
+        try:
+            verify_release_completion.verify_bootstrap_launch_authorization_bindings(
+                invalid_receipt,
+                **binding_arguments,
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                "completion launch authorization accepted exact-field violation: "
+                + label
+            )
     separated_roles = {
         role: sha256_prefixed_bytes(f"fixture-role:{role}".encode("ascii"))
         for role in verify_release_completion.SECURITY_ROLE_NAMES
@@ -1071,6 +3385,16 @@ def verify_launcher_three_way_binding() -> None:
             ) from exc
     else:
         raise AssertionError("launch authority reused another security role key")
+    cross_wired_journal = clone_document(launch_manifest_v3)
+    cross_wired_journal["launchAttemptRecoveryIdentitySha256"] = digest("9")
+    cross_wired_registry = clone_document(launch_manifest_v3)
+    cross_wired_registry["globalRoleRegistrySha256"] = digest("9")
+    cross_wired_witness = clone_document(launch_manifest_v3)
+    cross_wired_witness["monotonicWitness"]["successorStateSha256"] = digest("9")
+    cross_wired_scope = clone_document(launch_manifest_v3)
+    cross_wired_scope["authorizationScope"] = "cross-wired-scope"
+    cross_wired_freshness = clone_document(launch_manifest_v3)
+    cross_wired_freshness["freshnessAuthority"] = "cross-wired-freshness"
     for label, overrides in (
         ("provenance", {"signed_provenance_digest": digest("9")}),
         ("source", {"signed_source_tree_digest": digest("9")}),
@@ -1100,6 +3424,56 @@ def verify_launcher_three_way_binding() -> None:
                 }
             },
         ),
+        (
+            "nonce contract",
+            {
+                "nonce_rollback_assurance": {
+                    **nonce_assurance,
+                    "contractSha256": digest("9"),
+                }
+            },
+        ),
+        (
+            "launch manifest",
+            {
+                "launch_manifest_v3": {
+                    **launch_manifest_v3,
+                    "manifestSha256": digest("9"),
+                }
+            },
+        ),
+        (
+            "verifier-state service",
+            {
+                "nonce_rollback_assurance": {
+                    **nonce_assurance,
+                    "verifierStateService": {
+                        **nonce_assurance["verifierStateService"],
+                        "storeIdentitySha256": digest("9"),
+                    },
+                },
+            },
+        ),
+        (
+            "launch-attempt journal",
+            {"launch_manifest_v3": cross_wired_journal},
+        ),
+        (
+            "global role registry",
+            {"launch_manifest_v3": cross_wired_registry},
+        ),
+        (
+            "monotonic witness",
+            {"launch_manifest_v3": cross_wired_witness},
+        ),
+        (
+            "readiness scope",
+            {"launch_manifest_v3": cross_wired_scope},
+        ),
+        (
+            "freshness authority",
+            {"launch_manifest_v3": cross_wired_freshness},
+        ),
     ):
         arguments = {
             "signed_provenance_digest": digest("0"),
@@ -1119,6 +3493,8 @@ def verify_launcher_three_way_binding() -> None:
                     "launchAuthorityRootSha256"
                 ],
             },
+            "nonce_rollback_assurance": nonce_assurance,
+            "launch_manifest_v3": launch_manifest_v3,
             **overrides,
         }
         try:
@@ -1132,6 +3508,376 @@ def verify_launcher_three_way_binding() -> None:
             raise AssertionError(
                 f"completion launch authorization accepted {label} cross-wiring"
             )
+
+
+def verify_launcher_nonce_manifest_v3_binding() -> None:
+    contract, _pins_bytes, pins_sha256, contract_sha256 = (
+        nonce_rollback_contract_fixture()
+    )
+    security = launch_authorization_security_fixture()
+
+    def manifest_document(api_version: str, *, extra: bool = False) -> dict[str, Any]:
+        value = {
+            "apiVersion": api_version,
+            "kind": "ProductionReadinessLaunch",
+            "releaseRoot": "/opt/serverware/releases/fixture",
+            "stateDirectory": "/var/lib/serverware/production-proof",
+            "sourceTreeDigest": SOURCE_TREE_DIGEST,
+            "authorization": {
+                "authorizationScope": launch_authorization.AUTHORIZATION_SCOPE,
+                "deploymentAudience": "production.us-east-1:primary",
+                "deploymentIdentitySha256": digest("a"),
+                "freshnessAuthority": launch_authorization.FRESHNESS_AUTHORITY,
+                "monotonicWitness": {
+                    "administrativeDomainSha256": security[
+                        "witnessAdministrativeDomainSha256"
+                    ],
+                    "identitySha256": security[
+                        "witnessIdentitySha256"
+                    ],
+                    "signingKeyId": security["witnessKeyId"],
+                    "signingPublicKeySpkiDerBase64url": security[
+                        "witnessPublicKeySpkiDerBase64url"
+                    ],
+                    "storeAssurance": security[
+                        "witnessStoreAssurance"
+                    ],
+                    "storeAssuranceIssuerKeyId": security[
+                        "witnessStoreAssuranceIssuerKeyId"
+                    ],
+                    "storeAssuranceIssuerPublicKeySpkiDerBase64url": security[
+                        "witnessStoreAssuranceIssuerPublicKeySpkiDerBase64url"
+                    ],
+                    "storeAssuranceSha256": security[
+                        "witnessStoreAssuranceSha256"
+                    ],
+                },
+                "releaseSequence": 42,
+                "rollbackEpoch": 7,
+            },
+            "launchAttemptJournal": {
+                "apiVersion": (
+                    launch_authorization.LAUNCH_ATTEMPT_JOURNAL_DOMAIN
+                ),
+                "path": (
+                    "/var/lib/serverware/production-proof/"
+                    "launch-authorization-attempt.v1.json"
+                ),
+                "lockPath": (
+                    "/var/lib/serverware/production-proof/"
+                    "launch-authorization-attempt.v1.lock"
+                ),
+                "domain": (
+                    launch_authorization.LAUNCH_ATTEMPT_JOURNAL_DOMAIN
+                ),
+                "maxBytes": 64 * 1024,
+                "consistencyScope": (
+                    "trusted-host-readiness-availability-and-consistency-only"
+                ),
+                "rollbackAuthority": "external-monotonic-witness",
+            },
+            "globalRoleRegistry": {
+                "apiVersion": (
+                    "serverware.productionLaunchGlobalRoleRegistryBinding/v1"
+                ),
+                "canonicalProfile": (
+                    "serverware.canonicalJson/"
+                    "integer-string-bool-null-array-object-nfc-v1"
+                ),
+                "claimScope": (
+                    launch_authorization.GLOBAL_ROLE_REGISTRY_CLAIM_SCOPE
+                ),
+                "registry": security["globalRoleRegistry"],
+                "registrySha256": security[
+                    "globalRoleRegistrySha256"
+                ],
+                "pinsFile": {
+                    "path": (
+                        "/etc/serverware/"
+                        "production-launch-global-role-registry.json"
+                    ),
+                    "sha256": security[
+                        "globalRoleRegistryPinsSha256"
+                    ],
+                },
+            },
+            "nonceRollbackAssurance": {
+                "apiVersion": (
+                    run_production_readiness.NONCE_ROLLBACK_ASSURANCE_BINDING_API_VERSION
+                ),
+                "canonicalProfile": (
+                    "serverware.canonicalJson/integer-string-bool-null-array-object-nfc-v1"
+                ),
+                "contract": clone_document(contract),
+                "contractSha256": contract_sha256,
+                "enforcement": "native-launcher-measured",
+                "pinsFile": {
+                    "path": "/etc/serverware/nonce-rollback-assurance-pins.json",
+                    "sha256": pins_sha256,
+                },
+                "purpose": "readiness-only",
+            },
+            "productionEnv": {},
+            "python": {},
+            "scripts": {},
+            "composeFile": {},
+            "inputs": {},
+            "outputs": {},
+        }
+        if extra:
+            value["unexpected"] = True
+        return value
+
+    original_reader = run_production_readiness.read_regular_file_once
+    try:
+        for label, manifest, accepted in (
+            (
+                "valid v3",
+                manifest_document(
+                    "serverware.productionReadinessLaunch/v3"
+                ),
+                True,
+            ),
+            (
+                "v2 downgrade",
+                manifest_document(
+                    "serverware.productionReadinessLaunch/v2"
+                ),
+                False,
+            ),
+            (
+                "unknown field",
+                manifest_document(
+                    "serverware.productionReadinessLaunch/v3",
+                    extra=True,
+                ),
+                False,
+            ),
+        ):
+            manifest_bytes = canonical_json(manifest).encode("ascii") + b"\n"
+            receipt = bootstrap_receipt_summary(
+                bootstrap_receipt_fixture(
+                    manifest_sha256=sha256_prefixed_bytes(manifest_bytes)
+                )
+            )
+            retained = {
+                "contractSha256": contract_sha256,
+                "enforcement": "native-launcher-measured-retained-snapshot",
+                "retainedSnapshotSha256": pins_sha256,
+                "verifierStateService": receipt[
+                    "nonceRollbackAssurance"
+                ]["verifierStateService"],
+                "verified": True,
+            }
+            run_production_readiness.read_regular_file_once = (
+                lambda _path, _label, **_kwargs: (
+                    manifest_bytes,
+                    SimpleNamespace(
+                        st_uid=0,
+                        st_mode=stat.S_IFREG | 0o400,
+                    ),
+                )
+            )
+            try:
+                verified = (
+                    verify_release_completion.verify_launcher_nonce_rollback_manifest_v3(
+                        receipt,
+                        retained,
+                    )
+                )
+            except ValueError:
+                if accepted:
+                    raise
+            else:
+                if (
+                    not accepted
+                    or verified.get("verified") is not True
+                    or verified.get("verifierStateService")
+                    != retained["verifierStateService"]
+                ):
+                    raise AssertionError(
+                        f"launcher manifest unexpectedly accepted {label}: {verified}"
+                    )
+
+        rejected_manifests: list[tuple[str, dict[str, Any]]] = []
+
+        omitted_journal = manifest_document(
+            "serverware.productionReadinessLaunch/v3"
+        )
+        del omitted_journal["launchAttemptJournal"]
+        rejected_manifests.append(("omitted launch-attempt journal", omitted_journal))
+
+        tampered_journal = manifest_document(
+            "serverware.productionReadinessLaunch/v3"
+        )
+        tampered_journal["launchAttemptJournal"]["path"] = (
+            "/var/lib/serverware/production-proof/cross-wired.json"
+        )
+        rejected_manifests.append(("tampered launch-attempt journal", tampered_journal))
+
+        omitted_registry = manifest_document(
+            "serverware.productionReadinessLaunch/v3"
+        )
+        del omitted_registry["globalRoleRegistry"]
+        rejected_manifests.append(("omitted global role registry", omitted_registry))
+
+        cross_wired_registry = manifest_document(
+            "serverware.productionReadinessLaunch/v3"
+        )
+        cross_wired_registry["globalRoleRegistry"]["registrySha256"] = digest("9")
+        rejected_manifests.append(
+            ("cross-wired global role registry", cross_wired_registry)
+        )
+
+        omitted_scope = manifest_document(
+            "serverware.productionReadinessLaunch/v3"
+        )
+        del omitted_scope["authorization"]["authorizationScope"]
+        rejected_manifests.append(("omitted readiness scope", omitted_scope))
+
+        cross_wired_scope = manifest_document(
+            "serverware.productionReadinessLaunch/v3"
+        )
+        cross_wired_scope["authorization"]["authorizationScope"] = (
+            "cross-wired-scope"
+        )
+        rejected_manifests.append(("cross-wired readiness scope", cross_wired_scope))
+
+        omitted_freshness = manifest_document(
+            "serverware.productionReadinessLaunch/v3"
+        )
+        del omitted_freshness["authorization"]["freshnessAuthority"]
+        rejected_manifests.append(
+            ("omitted freshness authority", omitted_freshness)
+        )
+
+        cross_wired_freshness = manifest_document(
+            "serverware.productionReadinessLaunch/v3"
+        )
+        cross_wired_freshness["authorization"]["freshnessAuthority"] = (
+            "cross-wired-freshness"
+        )
+        rejected_manifests.append(
+            ("cross-wired freshness authority", cross_wired_freshness)
+        )
+
+        omitted_witness_assurance = manifest_document(
+            "serverware.productionReadinessLaunch/v3"
+        )
+        del omitted_witness_assurance["authorization"]["monotonicWitness"][
+            "storeAssurance"
+        ]
+        rejected_manifests.append(
+            ("omitted witness-store assurance", omitted_witness_assurance)
+        )
+
+        tampered_witness_assurance = manifest_document(
+            "serverware.productionReadinessLaunch/v3"
+        )
+        tampered_witness_assurance["authorization"]["monotonicWitness"][
+            "storeAssuranceSha256"
+        ] = digest("9")
+        rejected_manifests.append(
+            ("tampered witness-store assurance", tampered_witness_assurance)
+        )
+
+        cross_wired_witness = manifest_document(
+            "serverware.productionReadinessLaunch/v3"
+        )
+        cross_wired_witness["authorization"]["monotonicWitness"][
+            "identitySha256"
+        ] = digest("9")
+        rejected_manifests.append(
+            ("cross-wired monotonic witness", cross_wired_witness)
+        )
+
+        obsolete_use_limit = manifest_document(
+            "serverware.productionReadinessLaunch/v3"
+        )
+        obsolete_use_limit["authorization"]["useLimit"] = 1
+        rejected_manifests.append(("obsolete useLimit", obsolete_use_limit))
+
+        for label, rejected_manifest in rejected_manifests:
+            rejected_bytes = (
+                canonical_json(rejected_manifest).encode("ascii") + b"\n"
+            )
+            rejected_receipt = bootstrap_receipt_summary(
+                bootstrap_receipt_fixture(
+                    manifest_sha256=sha256_prefixed_bytes(rejected_bytes)
+                )
+            )
+            rejected_retained = {
+                "contractSha256": contract_sha256,
+                "enforcement": "native-launcher-measured-retained-snapshot",
+                "retainedSnapshotSha256": pins_sha256,
+                "verifierStateService": rejected_receipt[
+                    "nonceRollbackAssurance"
+                ]["verifierStateService"],
+                "verified": True,
+            }
+            run_production_readiness.read_regular_file_once = (
+                lambda _path, _label, **_kwargs: (
+                    rejected_bytes,
+                    SimpleNamespace(
+                        st_uid=0,
+                        st_mode=stat.S_IFREG | 0o400,
+                    ),
+                )
+            )
+            try:
+                verify_release_completion.verify_launcher_nonce_rollback_manifest_v3(
+                    rejected_receipt,
+                    rejected_retained,
+                )
+            except ValueError:
+                pass
+            else:
+                raise AssertionError(f"launcher manifest accepted {label}")
+
+        substituted = manifest_document(
+            "serverware.productionReadinessLaunch/v3"
+        )
+        substituted["nonceRollbackAssurance"]["contract"][
+            "publicConfigPins"
+        ]["nonceAuthorityVerifierStateStoreIdentitySha256"] = digest("f")
+        substituted_bytes = (
+            canonical_json(substituted).encode("ascii") + b"\n"
+        )
+        substituted_receipt = bootstrap_receipt_summary(
+            bootstrap_receipt_fixture(
+                manifest_sha256=sha256_prefixed_bytes(substituted_bytes)
+            )
+        )
+        run_production_readiness.read_regular_file_once = (
+            lambda _path, _label, **_kwargs: (
+                substituted_bytes,
+                SimpleNamespace(
+                    st_uid=0,
+                    st_mode=stat.S_IFREG | 0o400,
+                ),
+            )
+        )
+        try:
+            verify_release_completion.verify_launcher_nonce_rollback_manifest_v3(
+                substituted_receipt,
+                {
+                    "contractSha256": contract_sha256,
+                    "enforcement": "native-launcher-measured-retained-snapshot",
+                    "retainedSnapshotSha256": pins_sha256,
+                    "verifierStateService": substituted_receipt[
+                        "nonceRollbackAssurance"
+                    ]["verifierStateService"],
+                    "verified": True,
+                },
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                "launcher manifest accepted contract substitution behind the same path"
+            )
+    finally:
+        run_production_readiness.read_regular_file_once = original_reader
 
 
 PINNED_EXECUTABLE_NAMES = {
@@ -1166,6 +3912,22 @@ ALTERNATE_PROXY_PRINCIPAL_ID = "agent:billing"
 PROXY_CLIENT_NONCE = b64e(b"n" * 32)
 PROXY_TLS_CHANNEL_BINDING = b64e(b"t" * 32)
 OBSERVATION_RESPONSE_BODY = b'{"accepted":true}'
+OBSERVATION_REQUEST_COMMITMENT = {
+    "method": "POST",
+    "target_digest": sha256_prefixed_bytes(b"/v1/messages?limit=1"),
+    "query_present": True,
+    "query_digest": sha256_prefixed_bytes(b"limit=1"),
+    "headers_digest": sha256_prefixed_bytes(
+        b"host: api.example\r\ncontent-type: application/json\r\n"
+    ),
+    "header_count": 2,
+    "body_digest": sha256_prefixed_bytes(b'{"ok":1}'),
+    "body_bytes": len(b'{"ok":1}'),
+    "body_observation": "complete-buffered",
+}
+OBSERVATION_CLIENT_REQUEST_DIGEST = sha256_prefixed_json(
+    OBSERVATION_REQUEST_COMMITMENT
+)
 PROXY_CLIENT_REQUEST_DIGEST = sha256_prefixed_json(
     {
         "apiVersion": "serverware.clientProofRequest/v1",
@@ -1347,12 +4109,83 @@ def resign_proxy_response_proof(
     sign_proxy_vendor_verifier_statement(document, verifier_key_info)
 
 
+def release_authorization_durable_policy_fixture(
+    receipt_version: str,
+    *,
+    attempt_id: str,
+    durable_policy: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    if receipt_version == "v1":
+        if durable_policy is not None:
+            raise ValueError("v1 release authorization fixtures cannot carry durable policy")
+        return None
+    if receipt_version != "v2":
+        raise ValueError("release authorization fixture version is unsupported")
+    if durable_policy is not None:
+        return clone_document(durable_policy)
+    claims = [
+        {
+            "constraintId": "durable:fixture",
+            "type": "traversalBudget",
+            "attemptId": attempt_id,
+        }
+    ]
+    return {
+        "actorId": "spiffe://prod.serverware.dev/decision-gate/durable-fixture",
+        "claimDigest": sha256_prefixed_json(claims),
+        "claims": claims,
+    }
+
+
+def release_authorization_binding_fixture(
+    *,
+    receipt_version: str,
+    attempt_id: str,
+    principal_id: str,
+    route_id: str,
+    credential_id: str,
+    credential_version: int,
+    request_digest: str,
+    operation_digest: str,
+    operation_context: dict[str, Any],
+    require_jit_grant: bool,
+    shared_quotas: list[dict[str, Any]] | None = None,
+    durable_policy: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    binding = {
+        "attempt_id": attempt_id,
+        "flow_id": attempt_id,
+        "principal_id": principal_id,
+        "route_id": route_id,
+        "credential_id": credential_id,
+        "credential_version": credential_version,
+        "policy_hash": POLICY_DIGEST,
+        "request_digest": request_digest,
+        "operation_digest": operation_digest,
+        "operation_context": clone_document(operation_context),
+        "require_jit_grant": require_jit_grant,
+        "shared_quotas": clone_document(shared_quotas or []),
+    }
+    if receipt_version == "v2":
+        if durable_policy is None:
+            raise ValueError("v2 release authorization fixtures require durable policy")
+        binding["api_version"] = verify_release_completion.RELEASE_AUTHORIZATION_BINDING_V2
+        binding["durable_policy"] = clone_document(durable_policy)
+    elif receipt_version != "v1":
+        raise ValueError("release authorization fixture version is unsupported")
+    return binding
+
+
 def proxy_response_proof(
     provenance_digest: str,
     *,
     now: int | None = None,
     shared_quotas: list[dict[str, Any]] | None = None,
     dispatch_quotas: list[dict[str, Any]] | None = None,
+    receipt_version: str = "v1",
+    durable_policy: dict[str, Any] | None = None,
+    response_nonce: str | None = None,
+    attempt_id: str = "sha256:" + "a" * 64,
 ) -> dict[str, Any]:
     captured_at = int(time.time()) if now is None else now
     body = b'{"ok":true,"source":"production-proxy"}'
@@ -1387,26 +4220,30 @@ def proxy_response_proof(
         "type": "tls-exporter",
         "value": PROXY_TLS_CHANNEL_BINDING,
     }
-    attempt_id = digest("a")
-    authorization_binding = {
-        "attempt_id": attempt_id,
-        "flow_id": attempt_id,
-        "principal_id": PROXY_PRINCIPAL_ID,
-        "route_id": "demo.echo",
-        "credential_id": "credential:response-proof",
-        "credential_version": 7,
-        "policy_hash": POLICY_DIGEST,
-        "request_digest": PROXY_REQUEST_DIGEST,
-        "operation_digest": PROXY_OPERATION_DIGEST,
-        "operation_context": PROXY_OPERATION_CONTEXT,
-        "require_jit_grant": True,
-        "shared_quotas": clone_document(shared_quotas or []),
-    }
+    durable_policy = release_authorization_durable_policy_fixture(
+        receipt_version,
+        attempt_id=attempt_id,
+        durable_policy=durable_policy,
+    )
+    authorization_binding = release_authorization_binding_fixture(
+        receipt_version=receipt_version,
+        attempt_id=attempt_id,
+        principal_id=PROXY_PRINCIPAL_ID,
+        route_id="demo.echo",
+        credential_id="cred-demo-bearer",
+        credential_version=7,
+        request_digest=PROXY_REQUEST_DIGEST,
+        operation_digest=PROXY_OPERATION_DIGEST,
+        operation_context=PROXY_OPERATION_CONTEXT,
+        require_jit_grant=False,
+        shared_quotas=shared_quotas,
+        durable_policy=durable_policy,
+    )
     release_authority = {
         "authority_mode": "atomic",
-        "grant_id": "grant:response-proof",
-        "approval_id": "approval:response-proof",
-        "credential_ref": "credential:response-proof",
+        "grant_id": None,
+        "approval_id": None,
+        "credential_ref": "cred-demo-bearer",
         "credential_version": 7,
         "request_digest": PROXY_REQUEST_DIGEST,
         "operation_digest": PROXY_OPERATION_DIGEST,
@@ -1496,6 +4333,9 @@ def proxy_response_proof(
     receipt = control_plane_authorization_receipt(
         document,
         quotas=dispatch_quotas,
+        receipt_version=receipt_version,
+        durable_policy=durable_policy,
+        response_nonce=response_nonce,
     )
     document["external_capture"]["control_plane_authorization_receipt"] = clone_document(
         receipt
@@ -1588,23 +4428,17 @@ def response_observation_proof(
     provenance_digest: str,
     *,
     now: int | None = None,
+    receipt_version: str = "v1",
+    durable_policy: dict[str, Any] | None = None,
+    response_nonce: str | None = None,
+    observation_nonce: str | None = None,
 ) -> dict[str, Any]:
     captured_at = int(time.time()) if now is None else now
-    observation_nonce = b64e(
+    observation_nonce = observation_nonce or b64e(
         (captured_at + 300).to_bytes(4, "big") + b"n" * 28
     )
-    request = {
-        "method": "POST",
-        "target_digest": sha256_prefixed_bytes(b"/v1/messages?limit=1"),
-        "query_present": True,
-        "query_digest": sha256_prefixed_bytes(b"limit=1"),
-        "headers_digest": sha256_prefixed_bytes(b"host: api.example\r\ncontent-type: application/json\r\n"),
-        "header_count": 2,
-        "body_digest": sha256_prefixed_bytes(b'{"ok":1}'),
-        "body_bytes": len(b'{"ok":1}'),
-        "body_observation": "complete-buffered",
-    }
-    request["aggregate_digest"] = sha256_prefixed_json(request)
+    request = clone_document(OBSERVATION_REQUEST_COMMITMENT)
+    request["aggregate_digest"] = OBSERVATION_CLIENT_REQUEST_DIGEST
     emitted = {
         "status": 200,
         "headers_digest": sha256_prefixed_json(
@@ -1631,7 +4465,26 @@ def response_observation_proof(
         "body_bytes": len(b'{"error":"rate-limit"}'),
     }
     upstream["aggregate_digest"] = sha256_prefixed_json(upstream)
-    binding_digest = digest("b")
+    attempt_id = digest("a")
+    durable_policy = release_authorization_durable_policy_fixture(
+        receipt_version,
+        attempt_id=attempt_id,
+        durable_policy=durable_policy,
+    )
+    authorization_binding = release_authorization_binding_fixture(
+        receipt_version=receipt_version,
+        attempt_id=attempt_id,
+        principal_id=PROXY_PRINCIPAL_ID,
+        route_id="demo.echo",
+        credential_id="cred-demo-bearer",
+        credential_version=7,
+        request_digest=PROXY_REQUEST_DIGEST,
+        operation_digest=PROXY_OPERATION_DIGEST,
+        operation_context=PROXY_OPERATION_CONTEXT,
+        require_jit_grant=False,
+        durable_policy=durable_policy,
+    )
+    binding_digest = sha256_prefixed_json(authorization_binding)
     release_authority = {
         "authority_mode": "atomic",
         "grant_id": None,
@@ -1640,7 +4493,7 @@ def response_observation_proof(
         "credential_version": 7,
         "request_digest": PROXY_REQUEST_DIGEST,
         "operation_digest": PROXY_OPERATION_DIGEST,
-        "attempt_id": digest("a"),
+        "attempt_id": attempt_id,
         "consumption_identity_digest": binding_digest,
         "authorization_state_at_upstream_dispatch": "dispatching",
         "authorization_state_observed_at_epoch_ms": captured_at * 1000,
@@ -1705,7 +4558,12 @@ def response_observation_proof(
     }
     receipt_source = {"server_statement": clone_document(statement)}
     receipt_source["server_statement"]["release_authority"] = release_authority
-    receipt = control_plane_authorization_receipt(receipt_source)
+    receipt = control_plane_authorization_receipt(
+        receipt_source,
+        receipt_version=receipt_version,
+        durable_policy=durable_policy,
+        response_nonce=response_nonce,
+    )
     statement["authorization"]["control_plane_authorization_receipt"] = receipt
     statement["authorization"]["control_plane_authorization_receipt_sha256"] = (
         sha256_prefixed_json(receipt)
@@ -1755,8 +4613,17 @@ def response_observation_proof(
     return document
 
 
-def credentialless_response_observation_proof(provenance_digest: str) -> dict[str, Any]:
-    document = response_observation_proof(provenance_digest)
+def credentialless_response_observation_proof(
+    provenance_digest: str,
+    *,
+    now: int | None = None,
+    observation_nonce: str | None = None,
+) -> dict[str, Any]:
+    document = response_observation_proof(
+        provenance_digest,
+        now=now,
+        observation_nonce=observation_nonce,
+    )
     statement = document["runtime_proof"]["server_statement"]
     statement["credential"] = {"state": "not-required", "binding_digest": None}
     statement["authorization"] = {
@@ -1987,7 +4854,7 @@ def streaming_response_proof(
             "apiVersion": "serverware.streamingProxyResponseCapture/v1",
             "environment": "production",
             "collection_mode": "strict-incremental-stream-capture",
-            "classification": "verified-complete-stream",
+            "classification": "runtime-verified-complete-stream",
             "captured_at_unix": captured_at,
             "client_nonce": PROXY_CLIENT_NONCE,
             "client_request_digest": PROXY_STREAM_CLIENT_REQUEST_DIGEST,
@@ -2046,6 +4913,140 @@ def resign_control_plane_authorization_receipt(
     )
 
 
+def release_authorization_dispatch_quotas_fixture(
+    quotas: list[dict[str, Any]] | None,
+    receipt_version: str,
+) -> list[dict[str, Any]]:
+    normalized = clone_document(quotas or [])
+    if receipt_version == "v1":
+        return normalized
+    if receipt_version != "v2":
+        raise ValueError("release authorization fixture version is unsupported")
+    for quota in normalized:
+        window_kind = quota.get("windowKind", "fixed")
+        quota["windowKind"] = window_kind
+        if window_kind == "fixed":
+            quota["windowEndEpochMs"] = (
+                quota["windowStartEpochMs"] + quota["windowSeconds"] * 1000
+            )
+        else:
+            quota["calendarWindow"] = window_kind
+            if "windowEndEpochMs" not in quota:
+                raise ValueError(
+                    "calendar quota fixtures require an explicit window end"
+                )
+    return normalized
+
+
+def signed_release_authorization_http_mock_response(
+    request_headers: dict[str, str],
+    *,
+    request_method: str,
+    request_path: str,
+    request_query: str,
+    status: int,
+    body: dict[str, Any],
+    response_headers: list[dict[str, str]],
+    issued_at_ms: int,
+    context: dict[str, str],
+    key_info: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    response_nonce = next(
+        (
+            value
+            for name, value in request_headers.items()
+            if name.lower() == "x-serverware-response-nonce"
+        ),
+        None,
+    )
+    if not isinstance(response_nonce, str) or not response_nonce:
+        raise ValueError("release authorization mock request is missing its response nonce")
+    response_nonce_bytes = verify_release_completion.require_base64url_bytes(
+        response_nonce,
+        "release authorization mock response nonce",
+        minimum_bytes=32,
+    )
+    if len(response_nonce_bytes) != 32:
+        raise ValueError(
+            "release authorization mock response nonce must contain exactly 32 bytes"
+        )
+    signer = key_info or control_plane_response_signing_key_info()
+    body_bytes = canonical_json(body).encode("utf-8")
+    body_digest = sha256_prefixed_bytes(body_bytes)
+    response_headers_bytes = canonical_json(response_headers).encode("ascii")
+    statement = {
+        "version": verify_release_completion.CONTROL_PLANE_RESPONSE_SIGNATURE_API_VERSION,
+        "issued_at_ms": issued_at_ms,
+        "request": {
+            "method": request_method,
+            "path": request_path,
+            "query_sha256": sha256_prefixed_bytes(request_query.encode("utf-8")),
+        },
+        "status_code": status,
+        "body_sha256": body_digest,
+        "response_headers_sha256": sha256_prefixed_bytes(response_headers_bytes),
+        "response_header_count": len(response_headers),
+        "nonce": response_nonce,
+        "response_signing_key_id": signer["key_id"],
+        "context": clone_document(context),
+    }
+    statement_bytes = canonical_json(statement).encode("utf-8")
+    proof_headers = {
+        "X-Serverware-Response-Key-Id": signer["key_id"],
+        "X-Serverware-Response-Body-SHA256": body_digest,
+        "X-Serverware-Response-Statement-B64": b64e(statement_bytes),
+        "X-Serverware-Response-Statement-SHA256": sha256_prefixed_bytes(
+            statement_bytes
+        ),
+        "X-Serverware-Response-Signature": "ed25519:"
+        + b64e(signer["key"].sign(statement_bytes)),
+    }
+    return {
+        "status": status,
+        "body_bytes": body_bytes,
+        "response_headers": clone_document(response_headers),
+        "proof_headers": proof_headers,
+    }
+
+
+def replace_control_plane_receipt_request_body(
+    document: dict[str, Any],
+    body: dict[str, Any],
+) -> None:
+    body_bytes = canonical_json(body).encode("utf-8")
+    document["request"]["body_b64"] = b64e(body_bytes)
+    document["request"]["body_sha256"] = sha256_prefixed_bytes(body_bytes)
+    resign_control_plane_authorization_receipt(document)
+
+
+def replace_control_plane_receipt_nonce(
+    document: dict[str, Any],
+    nonce: str,
+) -> None:
+    document["request"]["nonce"] = nonce
+    response = document["response"]
+    statement = json.loads(b64d(response["statement_b64"]).decode("utf-8"))
+    statement["nonce"] = nonce
+    response["statement_b64"] = b64e(canonical_json(statement).encode("utf-8"))
+    resign_control_plane_authorization_receipt(document)
+
+
+def replace_control_plane_receipt_response_headers(
+    document: dict[str, Any],
+    response_headers: list[dict[str, str]],
+) -> None:
+    response = document["response"]
+    response["response_headers"] = clone_document(response_headers)
+    response_headers_bytes = canonical_json(response_headers).encode("ascii")
+    statement = json.loads(b64d(response["statement_b64"]).decode("utf-8"))
+    statement["response_headers_sha256"] = sha256_prefixed_bytes(
+        response_headers_bytes
+    )
+    statement["response_header_count"] = len(response_headers)
+    response["statement_b64"] = b64e(canonical_json(statement).encode("utf-8"))
+    resign_control_plane_authorization_receipt(document)
+
+
 def replace_control_plane_receipt_response_body(
     document: dict[str, Any],
     body: dict[str, Any],
@@ -2071,19 +5072,50 @@ def control_plane_authorization_receipt(
     proxy_proof: dict[str, Any],
     *,
     quotas: list[dict[str, Any]] | None = None,
+    receipt_version: str = "v1",
+    durable_policy: dict[str, Any] | None = None,
+    response_nonce: str | None = None,
 ) -> dict[str, Any]:
     release_authority = proxy_proof["server_statement"]["release_authority"]
     observed_at_epoch_ms = release_authority[
         "authorization_state_observed_at_epoch_ms"
     ]
+    durable_policy = release_authorization_durable_policy_fixture(
+        receipt_version,
+        attempt_id=release_authority["attempt_id"],
+        durable_policy=durable_policy,
+    )
     request_body = {
-        "apiVersion": "serverware.releaseAuthorizationDispatch/v1",
+        "apiVersion": (
+            verify_release_completion.RELEASE_AUTHORIZATION_DISPATCH_V2
+            if receipt_version == "v2"
+            else verify_release_completion.RELEASE_AUTHORIZATION_DISPATCH_V1
+        ),
         "attemptId": release_authority["attempt_id"],
         "bindingDigest": release_authority["consumption_identity_digest"],
     }
+    durable_dispatch: dict[str, Any] | None = None
+    if durable_policy is not None:
+        durable_dispatch = {
+            "actorId": durable_policy["actorId"],
+            "attemptId": release_authority["attempt_id"],
+            "claimDigest": durable_policy["claimDigest"],
+            "reservationId": (
+                "reservation:fixture:"
+                + release_authority["attempt_id"].removeprefix("sha256:")[:32]
+            ),
+            "dispatchDeadlineAtEpochMs": release_authority[
+                "dispatch_expires_at_epoch_ms"
+            ],
+        }
+        request_body["durablePolicy"] = clone_document(durable_dispatch)
     request_body_bytes = canonical_json(request_body).encode("utf-8")
     response_body = {
-        "apiVersion": "serverware.releaseAuthorization/v1",
+        "apiVersion": (
+            verify_release_completion.RELEASE_AUTHORIZATION_RESPONSE_V2
+            if durable_dispatch is not None
+            else verify_release_completion.RELEASE_AUTHORIZATION_RESPONSE_V1
+        ),
         "ok": True,
         "authorized": True,
         "state": "dispatching",
@@ -2102,26 +5134,47 @@ def control_plane_authorization_receipt(
         ],
         "completionOutcome": None,
         "retryAfterSeconds": 0,
-        "quotas": clone_document(quotas or []),
+        "quotas": release_authorization_dispatch_quotas_fixture(
+            quotas,
+            receipt_version,
+        ),
         "store": {"backend": "postgres", "ha": True},
     }
-    response_body_bytes = canonical_json(response_body).encode("utf-8")
-    response_body_digest = sha256_prefixed_bytes(response_body_bytes)
-    nonce = b64e(b"c" * 32)
-    signer = control_plane_response_signing_key_info()
-    response_statement = {
-        "version": verify_release_completion.CONTROL_PLANE_RESPONSE_SIGNATURE_API_VERSION,
-        "issued_at_ms": observed_at_epoch_ms,
-        "request": {
-            "method": "POST",
-            "path": verify_release_completion.CONTROL_PLANE_DISPATCH_PATH,
-            "query_sha256": sha256_prefixed_bytes(b""),
-        },
-        "status_code": 200,
-        "body_sha256": response_body_digest,
-        "nonce": nonce,
-        "response_signing_key_id": signer["key_id"],
-        "context": {
+    if durable_dispatch is not None:
+        response_body["durablePolicy"] = {
+            "state": "dispatched",
+            "attemptId": durable_dispatch["attemptId"],
+            "claimDigest": durable_dispatch["claimDigest"],
+            "reservationId": durable_dispatch["reservationId"],
+            "actorId": durable_dispatch["actorId"],
+            "reservationDeadlineAtEpochMs": release_authority[
+                "reservation_expires_at_epoch_ms"
+            ],
+            "dispatchDeadlineAtEpochMs": durable_dispatch[
+                "dispatchDeadlineAtEpochMs"
+            ],
+            "responseEvidenceDigest": None,
+            "failureReason": None,
+            "responseBodySha256": None,
+            "uncertainty": None,
+        }
+    response_headers = [
+        {
+            "name": "content-type",
+            "value_b64": b64e(b"application/json"),
+        }
+    ]
+    nonce = response_nonce or b64e(os.urandom(32))
+    mock_response = signed_release_authorization_http_mock_response(
+        {"X-Serverware-Response-Nonce": nonce},
+        request_method="POST",
+        request_path=verify_release_completion.CONTROL_PLANE_DISPATCH_PATH,
+        request_query="",
+        status=200,
+        body=response_body,
+        response_headers=response_headers,
+        issued_at_ms=observed_at_epoch_ms,
+        context={
             "runtime_manifest_digest": proxy_proof["server_statement"][
                 "runtime_manifest_digest"
             ],
@@ -2130,8 +5183,8 @@ def control_plane_authorization_receipt(
             "image_signatures_digest": IMAGE_SIGNATURES_DIGEST,
             "source_tree_digest": SOURCE_TREE_DIGEST,
         },
-    }
-    response_statement_bytes = canonical_json(response_statement).encode("utf-8")
+    )
+    proof_headers = mock_response["proof_headers"]
     document = {
         "apiVersion": (
             verify_release_completion.CONTROL_PLANE_AUTHORIZATION_RECEIPT_API_VERSION
@@ -2149,16 +5202,24 @@ def control_plane_authorization_receipt(
             "body_sha256": sha256_prefixed_bytes(request_body_bytes),
         },
         "response": {
-            "status": 200,
-            "body_b64": b64e(response_body_bytes),
-            "body_sha256": response_body_digest,
-            "response_signing_key_id": signer["key_id"],
-            "statement_b64": b64e(response_statement_bytes),
-            "statement_sha256": sha256_prefixed_bytes(response_statement_bytes),
-            "signature": "",
+            "status": mock_response["status"],
+            "body_b64": b64e(mock_response["body_bytes"]),
+            "body_sha256": proof_headers[
+                "X-Serverware-Response-Body-SHA256"
+            ],
+            "response_headers": mock_response["response_headers"],
+            "response_signing_key_id": proof_headers[
+                "X-Serverware-Response-Key-Id"
+            ],
+            "statement_b64": proof_headers[
+                "X-Serverware-Response-Statement-B64"
+            ],
+            "statement_sha256": proof_headers[
+                "X-Serverware-Response-Statement-SHA256"
+            ],
+            "signature": proof_headers["X-Serverware-Response-Signature"],
         },
     }
-    resign_control_plane_authorization_receipt(document)
     return document
 
 
@@ -2179,6 +5240,20 @@ def replace_embedded_control_plane_receipt(
     resign_proxy_response_proof(proxy_proof)
 
 
+def replace_observation_control_plane_receipt(
+    observation_proof: dict[str, Any],
+    receipt: dict[str, Any],
+) -> None:
+    authorization = observation_proof["runtime_proof"]["server_statement"][
+        "authorization"
+    ]
+    authorization["control_plane_authorization_receipt"] = clone_document(receipt)
+    authorization["control_plane_authorization_receipt_sha256"] = (
+        sha256_prefixed_json(receipt)
+    )
+    resign_observation_proof(observation_proof)
+
+
 def benchmark_document(*, p99_ms: float = 9.0) -> dict[str, Any]:
     return {
         "candidate": "rust-decision-gate",
@@ -2193,6 +5268,281 @@ def benchmark_document(*, p99_ms: float = 9.0) -> dict[str, Any]:
         "attestation_nonce_before": "benchmark-nonce-before",
         "attestation_nonce_after": "benchmark-nonce-after",
     }
+
+
+def test_exact_benchmark_nanosecond_contract() -> None:
+    exact = verify_release_completion.ExactJsonDecimal
+    for token, expected in (
+        ("0", 0),
+        ("0.000001", 1),
+        ("1.000000", 1_000_000),
+        ("9223372036854.775807", 9_223_372_036_854_775_807),
+    ):
+        actual = verify_release_completion.exact_milliseconds_to_nanoseconds(
+            exact(token),
+            label="fixture latency",
+        )
+        if actual != expected:
+            raise AssertionError(
+                f"exact millisecond conversion changed {token!r}: {actual}"
+            )
+    for invalid in (
+        exact("-1"),
+        exact("01"),
+        exact("1e0"),
+        exact("0.0000001"),
+        exact("9223372036854.775808"),
+        1.0,
+        True,
+    ):
+        try:
+            verify_release_completion.exact_milliseconds_to_nanoseconds(
+                invalid,
+                label="fixture latency",
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                f"exact millisecond conversion accepted {invalid!r}"
+            )
+
+    for invalid in ("1.000", 1.0, True):
+        try:
+            verify_release_completion.benchmark_milliseconds_to_nanoseconds(
+                invalid,
+                label="fixture benchmark latency",
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                f"benchmark latency accepted a non-JSON-number alias: {invalid!r}"
+            )
+
+    benchmark = benchmark_document()
+    benchmark["p50_ms"] = exact("1.000")
+    benchmark["p95_ms"] = exact("5.000")
+    benchmark["p99_ms"] = exact("9.000")
+    summary = verify_release_completion.verify_benchmark(
+        benchmark,
+        20_000_000,
+        digest("9"),
+    )
+    integer_fields = ("requests", "p50_ns", "p95_ns", "p99_ns", "limit_ns")
+    if (
+        summary.get("latency_unit") != "nanoseconds"
+        or any(type(summary[field]) is not int for field in integer_fields)
+    ):
+        raise AssertionError(
+            f"benchmark proof summary contains non-integer latency: {summary}"
+        )
+    verify_release_completion.validate_canonical_json_profile(
+        summary,
+        label="benchmark proof summary",
+    )
+    for invalid_requests in (100.0, "100", True, 9_223_372_036_854_775_808):
+        invalid_benchmark = {**benchmark, "requests": invalid_requests}
+        try:
+            verify_release_completion.verify_benchmark(
+                invalid_benchmark,
+                20_000_000,
+                digest("9"),
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                "benchmark verifier accepted a non-canonical request count: "
+                f"{invalid_requests!r}"
+            )
+
+    preflight_with_legacy_decimal_benchmark = {
+        "checks": {
+            "release_artifacts": {
+                "bench": {
+                    "p50_ms": 1.0,
+                    "p95_ms": 5.125,
+                    "p99_ms": 9.000001,
+                    "target_p99_ms": 20.0,
+                }
+            }
+        }
+    }
+    preflight_snapshot = SimpleNamespace(
+        data=json.dumps(
+            preflight_with_legacy_decimal_benchmark,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8"),
+        path=Path("/fixture/production-host-preflight.json"),
+    )
+    loaded_preflight = (
+        verify_release_completion.load_production_host_preflight_json_snapshot(
+            preflight_snapshot,
+            "fixture production host preflight",
+        )
+    )
+    loaded_preflight_benchmark = loaded_preflight["checks"]["release_artifacts"][
+        "bench"
+    ]
+    if (
+        loaded_preflight_benchmark["p95_ms"] != 5.125
+        or type(loaded_preflight_benchmark["p95_ms"]) is not float
+    ):
+        raise AssertionError(
+            "signed preflight benchmark decimal compatibility changed"
+        )
+    legacy_preflight_payload = (
+        verify_release_completion.canonical_legacy_preflight_signature_json(
+            loaded_preflight
+        )
+    )
+    if json.loads(legacy_preflight_payload) != loaded_preflight:
+        raise AssertionError(
+            "legacy preflight signature canonicalization changed validated input"
+        )
+    try:
+        verify_release_completion.canonical_json(loaded_preflight)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError(
+            "completion proof canonicalization accepted legacy preflight decimals"
+        )
+    invalid_preflight = {
+        **preflight_with_legacy_decimal_benchmark,
+        "unexpected_decimal": 1.5,
+    }
+    invalid_preflight_snapshot = SimpleNamespace(
+        data=json.dumps(
+            invalid_preflight,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8"),
+        path=Path("/fixture/invalid-production-host-preflight.json"),
+    )
+    try:
+        verify_release_completion.load_production_host_preflight_json_snapshot(
+            invalid_preflight_snapshot,
+            "invalid fixture production host preflight",
+        )
+    except ValueError:
+        pass
+    else:
+        raise AssertionError(
+            "production host preflight loader accepted a decimal outside the "
+            "closed benchmark compatibility path"
+        )
+
+    schema = json.loads(
+        (ROOT / "schemas/completion-proof.v6.schema.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    definitions = schema["$defs"]
+    if (
+        definitions["unsignedU64"]["maximum"] != 9_223_372_036_854_775_807
+        or definitions["positiveU64"]["maximum"]
+        != 9_223_372_036_854_775_807
+        or definitions["signedI64"]["minimum"]
+        != -9_223_372_036_854_775_808
+        or definitions["signedI64"]["maximum"]
+        != 9_223_372_036_854_775_807
+        or "signedI128" in definitions
+    ):
+        raise AssertionError("v6 schema integer definitions are not signed-64-bit closed")
+    benchmark_schema = definitions["benchmarkSummary"]
+    env_schema = definitions["productionEnvironmentBindingSummary"]
+    metadata_schema = definitions["metadata"]
+    native_evidence_numeric_branches = [
+        branch
+        for branch in definitions["nativeEvidenceValue"]["anyOf"]
+        if branch.get("type") in {"integer", "number"}
+        or branch.get("$ref") == "#/$defs/signedI64"
+    ]
+    if (
+        set(integer_fields) - set(benchmark_schema["required"])
+        or "latency_unit" not in benchmark_schema["required"]
+        or benchmark_schema["properties"]["latency_unit"]
+        != {"const": "nanoseconds"}
+        or any(
+            benchmark_schema["properties"][field].get("$ref")
+            not in {"#/$defs/unsignedU64", "#/$defs/positiveU64"}
+            for field in integer_fields
+        )
+        or "p99_limit_ns" not in env_schema["required"]
+        or env_schema["properties"]["p99_limit_ns"].get("$ref")
+        != "#/$defs/positiveU64"
+        or metadata_schema["properties"]["modifiedUnixNanos"].get("$ref")
+        != "#/$defs/signedI64"
+        or metadata_schema["properties"]["changedUnixNanos"].get("$ref")
+        != "#/$defs/signedI64"
+        or native_evidence_numeric_branches != [{"$ref": "#/$defs/signedI64"}]
+    ):
+        raise AssertionError(
+            "v6 benchmark, metadata, and nested evidence schemas are not signed-64 integer closed"
+        )
+
+    from jsonschema import Draft202012Validator
+    from referencing import Registry, Resource
+
+    completion_registry = Registry().with_resource(
+        schema["$id"],
+        Resource.from_contents(schema),
+    )
+    metadata_validator = Draft202012Validator(
+        {"$ref": schema["$id"] + "#/$defs/metadata"},
+        registry=completion_registry,
+    )
+    metadata_at_signed64_boundary = {
+        "device": 0,
+        "inode": 0,
+        "mode": 0,
+        "ownerUid": 0,
+        "ownerGid": 0,
+        "linkCount": 1,
+        "size": 0,
+        "modifiedUnixNanos": -9_223_372_036_854_775_808,
+        "changedUnixNanos": 9_223_372_036_854_775_807,
+    }
+    metadata_validator.validate(metadata_at_signed64_boundary)
+    metadata_above_signed64 = {
+        **metadata_at_signed64_boundary,
+        "changedUnixNanos": 9_223_372_036_854_775_808,
+    }
+    if not list(metadata_validator.iter_errors(metadata_above_signed64)):
+        raise AssertionError(
+            "completionProof/v6 metadata accepted an integer above signed-64"
+        )
+    native_evidence_validator = Draft202012Validator(
+        {"$ref": schema["$id"] + "#/$defs/nativeEvidenceValue"},
+        registry=completion_registry,
+    )
+    native_evidence_validator.validate(
+        {"boundary": 9_223_372_036_854_775_807}
+    )
+    for invalid_numeric_evidence in (
+        {"above": 9_223_372_036_854_775_808},
+    ):
+        if not list(
+            native_evidence_validator.iter_errors(invalid_numeric_evidence)
+        ):
+            raise AssertionError(
+                "completionProof/v6 nested evidence accepted a non-canonical "
+                f"numeric value: {invalid_numeric_evidence!r}"
+            )
+    try:
+        verify_release_completion.validate_canonical_json_profile(
+            {"float": 1.0},
+            label="floating-point completion evidence fixture",
+        )
+    except ValueError:
+        pass
+    else:
+        raise AssertionError(
+            "completion proof canonicalization accepted floating-point evidence"
+        )
 
 
 def production_image_refs(control_digest: str = digest("6"), gate_digest: str = digest("7")) -> list[str]:
@@ -2553,7 +5903,7 @@ def test_final_production_env_binding() -> None:
             selected_proxy_digests: dict[str, str | None] | None = None,
             selected_launcher_trust: dict[str, str | None] | None = None,
             selected_proxy_max_age: int = 300,
-            selected_p99_limit: float = 20.0,
+            selected_p99_limit: str = "20",
             selected_docker_executable: str | None = None,
             selected_compose_plugin: str | None = None,
             selected_docker_socket: str | None = None,
@@ -2690,7 +6040,7 @@ def test_final_production_env_binding() -> None:
             or (binding.get("launcher_trust") or {}).get("path")
             != str(tmp / "production.env")
             or binding.get("proxy_proof_max_age_seconds") != 300
-            or binding.get("p99_limit_ms") != 20.0
+            or binding.get("p99_limit_ns") != 20_000_000
             or binding.get("docker_executable")
             != configured[production_host_preflight_module.PRODUCTION_DOCKER_EXECUTABLE_SETTING]
             or binding.get("docker_compose_project_name")
@@ -2754,7 +6104,7 @@ def test_final_production_env_binding() -> None:
 
         for label, kwargs in (
             ("proxy proof max age", {"selected_proxy_max_age": 299}),
-            ("p99 limit", {"selected_p99_limit": 19.0}),
+            ("p99 limit", {"selected_p99_limit": "19"}),
             (
                 "Docker executable",
                 {"selected_docker_executable": str(tmp / "caller-selected-docker")},
@@ -3202,15 +6552,25 @@ def test_preflight_authenticity_and_freshness() -> None:
                 "apiVersion": "serverware.productionHostPreflight/v1",
                 "kind": "ProductionHostPreflight",
                 "ok": True,
+                "verification_mode": "readiness",
+                "readiness_only": True,
+                "final_nitro_execution_proven": False,
+                "ok_for_action": False,
+                "authority_boundary": (
+                    production_host_preflight_module.readiness_authority_boundary(
+                        launcher_evidence_verified=False
+                    )
+                ),
                 "generated_at_unix": generated_at,
                 "checks": {},
                 "failures": [],
                 "next_command": "fixture",
                 "secret_values_redacted": True,
             }
-            document["authenticity"] = production_host_preflight_module.sign_final_preflight(
+            document["authenticity"] = production_host_preflight_module.sign_readiness_preflight(
                 document,
                 signing_env,
+                signed_at_unix=generated_at,
             )
             return document
 
@@ -4212,7 +7572,6 @@ def file_summary(path: Path, label: str) -> dict[str, Any]:
 def production_host_preflight(tmp: Path, source_tree_digest: str = SOURCE_TREE_DIGEST) -> dict[str, Any]:
     control_ref = "registry.prod.serverware.dev/serverware/control@sha256:" + "6" * 64
     gate_ref = "registry.prod.serverware.dev/serverware/decision-gate@sha256:" + "7" * 64
-    configured = run_production_readiness.load_env_file(tmp / "production.env")
     policy_identity = verify_production_policy_identity.verify_persisted_report(
         bundle_path=tmp / "policy-bundle.json",
         trusted_public_key_path=tmp / "policy-signing.pub.pem",
@@ -4238,6 +7597,15 @@ def production_host_preflight(tmp: Path, source_tree_digest: str = SOURCE_TREE_D
         "apiVersion": "serverware.productionHostPreflight/v1",
         "kind": "ProductionHostPreflight",
         "ok": True,
+        "verification_mode": "readiness",
+        "readiness_only": True,
+        "final_nitro_execution_proven": False,
+        "ok_for_action": False,
+        "authority_boundary": (
+            production_host_preflight_module.readiness_authority_boundary(
+                launcher_evidence_verified=False
+            )
+        ),
         "checks": {
             "host": {
                 "ok": True,
@@ -4722,6 +8090,7 @@ def verify_streaming_proxy_fixture(
     document: dict[str, Any],
     body: bytes,
     *,
+    expected_release_digest: str,
     proof_contract: str = "streaming-v1",
 ) -> dict[str, Any]:
     body_path = tmp / "proxy-stream-body.bin"
@@ -4780,11 +8149,7 @@ def verify_streaming_proxy_fixture(
         expected_policy_digest=POLICY_DIGEST,
         expected_runtime_manifest_digest=digest("7"),
         expected_binary_digest=digest("9"),
-        expected_release_digest=document[
-            "streaming_response_statement"
-            if "streaming_response_statement" in document
-            else "server_statement"
-        ]["release_digest"],
+        expected_release_digest=expected_release_digest,
         expected_image_signatures_digest=IMAGE_SIGNATURES_DIGEST,
         expected_source_tree_digest=SOURCE_TREE_DIGEST,
         expected_response_signing_key_id=proxy_response_key_info()["key_id"],
@@ -4798,9 +8163,10 @@ def verify_observation_proxy_fixture(
     tmp: Path,
     document: dict[str, Any],
     *,
+    expected_release_digest: str,
+    expected_client_request_digest: str,
+    expected_client_nonce: str,
     proof_contract: str = "observation-v1",
-    expected_client_request_digest: str | None = None,
-    expected_client_nonce: str | None = None,
     observation_body: bytes = OBSERVATION_RESPONSE_BODY,
 ) -> dict[str, Any]:
     runtime = document.get("runtime_proof")
@@ -4847,25 +8213,15 @@ def verify_observation_proxy_fixture(
         policy_snapshot=policy_snapshot,
         expected_principal_id=PROXY_PRINCIPAL_ID,
         expected_server_instance_id=PROXY_SERVER_INSTANCE_ID,
-        expected_client_nonce=(
-            expected_client_nonce
-            or statement.get("client_nonce")
-            or PROXY_CLIENT_NONCE
-        ),
-        expected_client_request_digest=(
-            expected_client_request_digest
-            or document.get("request", {}).get("aggregate_digest")
-            or PROXY_CLIENT_REQUEST_DIGEST
-        ),
+        expected_client_nonce=expected_client_nonce,
+        expected_client_request_digest=expected_client_request_digest,
         expected_request_digest=PROXY_REQUEST_DIGEST,
         expected_operation_digest=PROXY_OPERATION_DIGEST,
         expected_tls_channel_binding=PROXY_TLS_CHANNEL_BINDING,
         expected_policy_digest=POLICY_DIGEST,
         expected_runtime_manifest_digest=digest("7"),
         expected_binary_digest=digest("9"),
-        expected_release_digest=(
-            statement.get("release_digest", digest("8"))
-        ),
+        expected_release_digest=expected_release_digest,
         expected_image_signatures_digest=IMAGE_SIGNATURES_DIGEST,
         expected_source_tree_digest=SOURCE_TREE_DIGEST,
         expected_response_signing_key_id=proxy_response_key_info()["key_id"],
@@ -4879,9 +8235,22 @@ def test_response_observation_proof_requirements(
     tmp: Path,
     provenance_digest: str,
 ) -> None:
-    valid = response_observation_proof(provenance_digest)
-    valid_nonce = valid["runtime_proof"]["server_statement"]["client_nonce"]
-    summary = verify_observation_proxy_fixture(tmp, valid)
+    valid_captured_at = int(time.time())
+    valid_nonce = b64e(
+        (valid_captured_at + 300).to_bytes(4, "big") + b"v" * 28
+    )
+    valid = response_observation_proof(
+        provenance_digest,
+        now=valid_captured_at,
+        observation_nonce=valid_nonce,
+    )
+    summary = verify_observation_proxy_fixture(
+        tmp,
+        valid,
+        expected_release_digest=provenance_digest,
+        expected_client_request_digest=OBSERVATION_CLIENT_REQUEST_DIGEST,
+        expected_client_nonce=valid_nonce,
+    )
     expected_control_plane_key_id = control_plane_response_signing_key_info()[
         "key_id"
     ]
@@ -4891,6 +8260,7 @@ def test_response_observation_proof_requirements(
         or summary.get("strict_collector_capture_bound") is not True
         or summary.get("upstream_status") != 429
         or summary.get("response_path") != "complete-upstream-response-released"
+        or summary.get("compiled_route_authority_verified") is not True
         or summary.get("observation_authority")
         != {
             "source": "gate-authored",
@@ -4902,9 +8272,58 @@ def test_response_observation_proof_requirements(
     ):
         raise AssertionError(f"observation proof summary omitted strict bindings: {summary}")
 
-    credentialless = credentialless_response_observation_proof(provenance_digest)
+    durable_nonce = b64e(b"o" * 32)
+    durable_observation_nonce = b64e(
+        (valid_captured_at + 300).to_bytes(4, "big") + b"d" * 28
+    )
+    durable = response_observation_proof(
+        provenance_digest,
+        now=valid_captured_at,
+        receipt_version="v2",
+        response_nonce=durable_nonce,
+        observation_nonce=durable_observation_nonce,
+    )
+    durable_summary = verify_observation_proxy_fixture(
+        tmp,
+        durable,
+        expected_release_digest=provenance_digest,
+        expected_client_request_digest=OBSERVATION_CLIENT_REQUEST_DIGEST,
+        expected_client_nonce=durable_observation_nonce,
+    )
+    durable_receipt_summary = durable_summary.get(
+        "control_plane_authorization_receipt"
+    ) or {}
+    if (
+        durable_receipt_summary.get("dispatch_request_api_version")
+        != verify_release_completion.RELEASE_AUTHORIZATION_DISPATCH_V2
+        or durable_receipt_summary.get("dispatch_response_api_version")
+        != verify_release_completion.RELEASE_AUTHORIZATION_RESPONSE_V2
+        or durable_receipt_summary.get("durable_policy_verified") is not True
+        or (
+            durable["runtime_proof"]["server_statement"]["authorization"][
+                "control_plane_authorization_receipt"
+            ]["request"]["nonce"]
+            != durable_nonce
+        )
+    ):
+        raise AssertionError(
+            "observation proof omitted its v2 durable dispatch receipt bindings: "
+            f"{durable_summary}"
+        )
+
+    credentialless = credentialless_response_observation_proof(
+        provenance_digest,
+        now=valid_captured_at,
+        observation_nonce=valid_nonce,
+    )
     try:
-        verify_observation_proxy_fixture(tmp, credentialless)
+        verify_observation_proxy_fixture(
+            tmp,
+            credentialless,
+            expected_release_digest=provenance_digest,
+            expected_client_request_digest=OBSERVATION_CLIENT_REQUEST_DIGEST,
+            expected_client_nonce=valid_nonce,
+        )
     except ValueError as exc:
         if "credentialed signed route" not in str(exc) and "atomic credential" not in str(exc):
             raise AssertionError(
@@ -4921,21 +8340,18 @@ def test_response_observation_proof_requirements(
         description: str,
         *,
         contract: str = "observation-v1",
-        client_digest: str | None = None,
+        client_digest: str = OBSERVATION_CLIENT_REQUEST_DIGEST,
+        expected_nonce: str = valid_nonce,
         body: bytes = OBSERVATION_RESPONSE_BODY,
     ) -> None:
-        candidate_statement = (
-            (document.get("runtime_proof") or {}).get("server_statement") or {}
-        )
         try:
             verify_observation_proxy_fixture(
                 tmp,
                 document,
+                expected_release_digest=provenance_digest,
                 proof_contract=contract,
                 expected_client_request_digest=client_digest,
-                expected_client_nonce=(
-                    candidate_statement.get("client_nonce") or valid_nonce
-                ),
+                expected_client_nonce=expected_nonce,
                 observation_body=body,
             )
         except ValueError as exc:
@@ -4945,6 +8361,30 @@ def test_response_observation_proof_requirements(
                 ) from exc
             return
         raise AssertionError(f"observation verifier accepted {description}")
+
+    completed_durable_observation = clone_document(durable)
+    completed_durable_receipt = clone_document(
+        completed_durable_observation["runtime_proof"]["server_statement"][
+            "authorization"
+        ]["control_plane_authorization_receipt"]
+    )
+    completed_durable_body = json.loads(
+        b64d(completed_durable_receipt["response"]["body_b64"]).decode("utf-8")
+    )
+    completed_durable_body["durablePolicy"]["responseEvidenceDigest"] = digest("e")
+    replace_control_plane_receipt_response_body(
+        completed_durable_receipt,
+        completed_durable_body,
+    )
+    replace_observation_control_plane_receipt(
+        completed_durable_observation,
+        completed_durable_receipt,
+    )
+    rejected(
+        completed_durable_observation,
+        "control-plane authorization receipt durable policy lifecycle mismatch",
+        "non-null completion evidence in a dispatched observation receipt",
+    )
 
     rejected(
         valid,
@@ -4983,6 +8423,7 @@ def test_response_observation_proof_requirements(
         malformed_nonce,
         "random bytes must not be all zero",
         "structured nonce without random entropy",
+        expected_nonce=malformed_statement["client_nonce"],
     )
 
     for field, replacement in (
@@ -5187,23 +8628,46 @@ def test_streaming_proxy_response_proof_requirements(
     provenance_digest: str,
 ) -> None:
     valid_document, body = streaming_response_proof(provenance_digest)
-    summary = verify_streaming_proxy_fixture(tmp, valid_document, body)
+    summary = verify_streaming_proxy_fixture(
+        tmp,
+        valid_document,
+        body,
+        expected_release_digest=provenance_digest,
+    )
     if (
         summary.get("proof_contract") != "streaming-v1"
         or summary.get("emitted_body_digest") != sha256_prefixed_bytes(body)
         or summary.get("emitted_body_bytes") != len(body)
         or summary.get("released_body_artifact_bound") is not True
+        or summary.get("compiled_route_authority_verified") is not True
     ):
         raise AssertionError(f"streaming completion summary is incomplete: {summary}")
 
     def reject_streaming(label: str, document: dict[str, Any], candidate_body: bytes, expected: str) -> None:
         try:
-            verify_streaming_proxy_fixture(tmp, document, candidate_body)
+            verify_streaming_proxy_fixture(
+                tmp,
+                document,
+                candidate_body,
+                expected_release_digest=provenance_digest,
+            )
         except ValueError as exc:
             if expected not in str(exc):
                 raise AssertionError(f"streaming rejection for {label} was imprecise: {exc}") from exc
         else:
             raise AssertionError(f"streaming verifier accepted {label}")
+
+    stale_classification = clone_document(valid_document)
+    stale_classification["external_capture"]["classification"] = (
+        "verified-complete-stream"
+    )
+    sign_proxy_external_capture(stale_classification)
+    reject_streaming(
+        "stale stream classification",
+        stale_classification,
+        body,
+        "strict production stream evidence",
+    )
 
     reject_streaming("mutated published body", valid_document, body + b"!", "body digest")
     swapped_body = b"x" * len(body)
@@ -5239,7 +8703,13 @@ def test_streaming_proxy_response_proof_requirements(
         raise AssertionError("streaming body snapshot followed a substituted symlink")
 
     try:
-        verify_streaming_proxy_fixture(tmp, valid_document, body, proof_contract="buffered-v3")
+        verify_streaming_proxy_fixture(
+            tmp,
+            valid_document,
+            body,
+            expected_release_digest=provenance_digest,
+            proof_contract="buffered-v3",
+        )
     except ValueError as exc:
         if "wrong apiVersion" not in str(exc):
             raise
@@ -5579,10 +9049,127 @@ def test_proxy_response_proof_requirements(
             + detail(missing_response_signing_trust)
         )
 
-    valid_document = proxy_response_proof(provenance_digest)
+    valid_nonce = b64e(b"v" * 32)
+    valid_document = proxy_response_proof(
+        provenance_digest,
+        receipt_version="v1",
+        response_nonce=valid_nonce,
+    )
     valid_receipt = clone_document(
         valid_document["server_statement"]["control_plane_authorization_receipt"]
     )
+    write(tmp / "proxy-response-proof.json", valid_document)
+    valid_result = run_verifier(tmp)
+    valid_summary = (
+        json.loads(valid_result.stdout.decode("utf-8"))
+        if valid_result.returncode == 0
+        else {}
+    )
+    valid_proxy_summary = valid_summary.get("production_proxy_response_proof") or {}
+    valid_receipt_summary = valid_proxy_summary.get(
+        "control_plane_authorization_receipt"
+    ) or {}
+    if (
+        valid_result.returncode != 0
+        or valid_receipt_summary.get("dispatch_request_api_version")
+        != verify_release_completion.RELEASE_AUTHORIZATION_DISPATCH_V1
+        or valid_receipt_summary.get("dispatch_response_api_version")
+        != verify_release_completion.RELEASE_AUTHORIZATION_RESPONSE_V1
+        or valid_receipt_summary.get("durable_policy_verified") is not False
+        or valid_receipt["request"]["nonce"] != valid_nonce
+    ):
+        raise AssertionError(
+            "completion verifier rejected a valid v1 dispatch receipt: "
+            + detail(valid_result)
+        )
+
+    control_plane_key = control_plane_response_signing_key_info()
+    public_receipt_verification_args = {
+        "trusted_public_key_pem": control_plane_key["public_key_pem"],
+        "expected_trusted_public_key_id": control_plane_key["key_id"],
+        "expected_release_authority": valid_document["server_statement"][
+            "release_authority"
+        ],
+        "expected_principal_id": valid_document["server_statement"][
+            "principal_id"
+        ],
+        "expected_route_id": valid_document["server_statement"]["route_id"],
+        "expected_runtime_manifest_digest": valid_document[
+            "server_statement"
+        ]["runtime_manifest_digest"],
+        "expected_policy_digest": POLICY_DIGEST,
+        "expected_provenance_digest": provenance_digest,
+        "expected_image_signatures_digest": IMAGE_SIGNATURES_DIGEST,
+        "expected_source_tree_digest": SOURCE_TREE_DIGEST,
+    }
+    try:
+        verify_release_completion.verify_control_plane_authorization_receipt(
+            valid_receipt,
+            **public_receipt_verification_args,
+        )
+    except ValueError as exc:
+        if "requires an authenticated custody authorization binding" not in str(
+            exc
+        ):
+            raise
+    else:
+        raise AssertionError(
+            "public receipt verification accepted a receipt without an exact "
+            "authorization binding or authenticated custody statement"
+        )
+    if any(
+        hasattr(verify_release_completion, name)
+        for name in (
+            "_VerifiedCustodyAuthorizationBinding",
+            "_VERIFIED_CUSTODY_BINDING_TOKEN",
+        )
+    ):
+        raise AssertionError(
+            "completion verifier still exposes caller-forgeable custody capability state"
+        )
+    custody_envelope = {
+        "statement": clone_document(valid_document["server_statement"]),
+        "statement_sha256": sha256_prefixed_json(
+            valid_document["server_statement"]
+        ),
+        "signature": clone_document(valid_document["server_signature"]),
+    }
+    custody_verified = (
+        verify_release_completion.verify_control_plane_authorization_receipt(
+            valid_receipt,
+            **public_receipt_verification_args,
+            custody_authorization_envelope=custody_envelope,
+            expected_custody_signing_key_id=proxy_response_key_info()["key_id"],
+        )
+    )
+    if (
+        custody_verified.get("custody_authorization_envelope_verified")
+        is not True
+        or custody_verified.get("custody_authorization_signing_key_id")
+        != proxy_response_key_info()["key_id"]
+    ):
+        raise AssertionError(
+            "public receipt verification omitted its internally verified custody envelope"
+        )
+    forged_custody = clone_document(custody_envelope)
+    forged_custody["signature"]["signature"] = "ed25519:" + b64e(b"x" * 64)
+    try:
+        verify_release_completion.verify_control_plane_authorization_receipt(
+            valid_receipt,
+            **public_receipt_verification_args,
+            custody_authorization_envelope=forged_custody,
+            expected_custody_signing_key_id=proxy_response_key_info()["key_id"],
+        )
+    except ValueError as exc:
+        if "custody authorization envelope statement signature verification failed" not in str(
+            exc
+        ):
+            raise
+    else:
+        raise AssertionError(
+            "public receipt verification accepted a forged raw custody envelope"
+        )
+
     quota_window_start = (int(time.time()) // 3600) * 3_600_000
     shared_quota = {
         "counter_key": digest("c"),
@@ -5618,12 +9205,224 @@ def test_proxy_response_proof_requirements(
             dispatch_quotas=[quota],
         )
         write(tmp / "proxy-response-proof.json", quota_document)
-        accepted_quota = run_verifier(tmp)
-        if accepted_quota.returncode != 0:
+        rejected_quota = run_verifier(tmp)
+        if (
+            rejected_quota.returncode == 0
+            or "control-plane receipt quota count does not match the signed route"
+            not in detail(rejected_quota)
+        ):
             raise AssertionError(
-                f"completion verifier rejected a valid {quota_label} quota receipt: "
-                + detail(accepted_quota)
+                f"completion verifier accepted a {quota_label} quota not present "
+                "in the compiled route: "
+                + detail(rejected_quota)
             )
+
+    durable_nonce = b64e(b"d" * 32)
+    durable_document = proxy_response_proof(
+        provenance_digest,
+        receipt_version="v2",
+        response_nonce=durable_nonce,
+    )
+    durable_receipt = clone_document(
+        durable_document["server_statement"][
+            "control_plane_authorization_receipt"
+        ]
+    )
+    write(tmp / "proxy-response-proof.json", durable_document)
+    durable_result = run_verifier(tmp)
+    durable_summary = (
+        json.loads(durable_result.stdout.decode("utf-8"))
+        if durable_result.returncode == 0
+        else {}
+    )
+    durable_proxy_summary = (
+        durable_summary.get("production_proxy_response_proof") or {}
+    )
+    durable_receipt_summary = durable_proxy_summary.get(
+        "control_plane_authorization_receipt"
+    ) or {}
+    durable_response_body = json.loads(
+        b64d(durable_receipt["response"]["body_b64"]).decode("utf-8")
+    )
+    if (
+        durable_result.returncode != 0
+        or durable_receipt_summary.get("dispatch_request_api_version")
+        != verify_release_completion.RELEASE_AUTHORIZATION_DISPATCH_V2
+        or durable_receipt_summary.get("dispatch_response_api_version")
+        != verify_release_completion.RELEASE_AUTHORIZATION_RESPONSE_V2
+        or durable_receipt_summary.get("durable_policy_verified") is not True
+        or durable_receipt["request"]["nonce"] != durable_nonce
+        or durable_response_body.get("quotas") != []
+        or durable_response_body.get("store")
+        != {"backend": "postgres", "ha": True}
+    ):
+        raise AssertionError(
+            "completion verifier rejected a valid v2 durable dispatch receipt: "
+            + detail(durable_result)
+        )
+
+    same_attempt_replay_receipt = clone_document(durable_receipt)
+    same_attempt_replay_body = clone_document(durable_response_body)
+    same_attempt_replay_body["idempotentReplay"] = True
+    replace_control_plane_receipt_response_body(
+        same_attempt_replay_receipt,
+        same_attempt_replay_body,
+    )
+    same_attempt_replay_proof = clone_document(durable_document)
+    replace_embedded_control_plane_receipt(
+        same_attempt_replay_proof,
+        same_attempt_replay_receipt,
+    )
+    write(tmp / "proxy-response-proof.json", same_attempt_replay_proof)
+    same_attempt_replay_result = run_verifier(tmp)
+    same_attempt_replay_summary = (
+        json.loads(same_attempt_replay_result.stdout.decode("utf-8"))
+        if same_attempt_replay_result.returncode == 0
+        else {}
+    )
+    if (
+        same_attempt_replay_result.returncode != 0
+        or (
+            same_attempt_replay_summary.get("production_proxy_response_proof")
+            or {}
+        )
+        .get("control_plane_authorization_receipt", {})
+        .get("idempotent_replay")
+        is not True
+    ):
+        raise AssertionError(
+            "completion verifier rejected an exact same-attempt idempotent "
+            "dispatch replay: "
+            + detail(same_attempt_replay_result)
+        )
+
+    replay_with_completed_lifecycle = clone_document(
+        same_attempt_replay_receipt
+    )
+    replay_with_completed_body = clone_document(same_attempt_replay_body)
+    replay_with_completed_body["durablePolicy"]["state"] = "completed"
+    replace_control_plane_receipt_response_body(
+        replay_with_completed_lifecycle,
+        replay_with_completed_body,
+    )
+    replay_with_completed_proof = clone_document(durable_document)
+    replace_embedded_control_plane_receipt(
+        replay_with_completed_proof,
+        replay_with_completed_lifecycle,
+    )
+    expect_proxy_proof_failure(
+        tmp,
+        replay_with_completed_proof,
+        "control-plane authorization receipt durable policy lifecycle mismatch",
+        "an idempotentReplay=true receipt with a completed lifecycle",
+    )
+
+    cross_attempt_document = proxy_response_proof(
+        provenance_digest,
+        receipt_version="v2",
+        response_nonce=b64e(b"r" * 32),
+        attempt_id=digest("b"),
+    )
+    cross_attempt_receipt = clone_document(
+        cross_attempt_document["server_statement"][
+            "control_plane_authorization_receipt"
+        ]
+    )
+    cross_attempt_replay = clone_document(durable_document)
+    replace_embedded_control_plane_receipt(
+        cross_attempt_replay,
+        cross_attempt_receipt,
+    )
+    expect_proxy_proof_failure(
+        tmp,
+        cross_attempt_replay,
+        "control-plane authorization receipt release authority mismatch",
+        "a control-plane dispatch receipt replayed across attempts",
+    )
+
+    calendar_candidates = [
+        (
+            window_kind,
+            *verify_release_completion.streaming_calendar_window_bounds(
+                window_kind,
+                int(time.time()) * 1000,
+            ),
+        )
+        for window_kind in ("utcDay", "utcIsoWeek", "utcMonth")
+    ]
+    (
+        calendar_window_kind,
+        calendar_window_start,
+        calendar_window_end,
+    ) = max(calendar_candidates, key=lambda candidate: candidate[2])
+    calendar_captured_at = min(
+        int(time.time()),
+        calendar_window_end // 1000 - 300,
+    )
+    calendar_shared_quota = {
+        "counter_key": digest("4"),
+        "constraint_id": "quota:calendar",
+        "operation": "demo.echo",
+        "window_kind": calendar_window_kind,
+        "max_count": 3,
+    }
+    calendar_dispatch_quota = {
+        "counterKey": calendar_shared_quota["counter_key"],
+        "constraintId": calendar_shared_quota["constraint_id"],
+        "operation": calendar_shared_quota["operation"],
+        "windowKind": calendar_window_kind,
+        "windowStartEpochMs": calendar_window_start,
+        "windowEndEpochMs": calendar_window_end,
+        "calendarWindow": calendar_window_kind,
+        "max": calendar_shared_quota["max_count"],
+        "count": 1,
+        "remaining": 2,
+        "reservationState": "reserved",
+    }
+    calendar_document = proxy_response_proof(
+        provenance_digest,
+        now=calendar_captured_at,
+        shared_quotas=[calendar_shared_quota],
+        dispatch_quotas=[calendar_dispatch_quota],
+        receipt_version="v2",
+        response_nonce=b64e(b"k" * 32),
+    )
+    write(tmp / "proxy-response-proof.json", calendar_document)
+    calendar_result = run_verifier(tmp)
+    if (
+        calendar_result.returncode == 0
+        or "control-plane receipt quota count does not match the signed route"
+        not in detail(calendar_result)
+    ):
+        raise AssertionError(
+            "completion verifier accepted a calendar quota not present in the "
+            "compiled route: "
+            + detail(calendar_result)
+        )
+    invalid_calendar_receipt = clone_document(
+        calendar_document["server_statement"][
+            "control_plane_authorization_receipt"
+        ]
+    )
+    invalid_calendar_body = json.loads(
+        b64d(invalid_calendar_receipt["response"]["body_b64"]).decode("utf-8")
+    )
+    invalid_calendar_body["quotas"][0]["windowEndEpochMs"] += 1000
+    replace_control_plane_receipt_response_body(
+        invalid_calendar_receipt,
+        invalid_calendar_body,
+    )
+    invalid_calendar_proof = clone_document(calendar_document)
+    replace_embedded_control_plane_receipt(
+        invalid_calendar_proof,
+        invalid_calendar_receipt,
+    )
+    expect_proxy_proof_failure(
+        tmp,
+        invalid_calendar_proof,
+        "calendar boundaries are not exact",
+        "a v2 calendar quota receipt with a substituted window end",
+    )
 
     forged_receipt = clone_document(valid_receipt)
     forged_receipt["response"]["signature"] = "ed25519:" + b64e(b"x" * 64)
@@ -5635,6 +9434,252 @@ def test_proxy_response_proof_requirements(
         "control-plane authorization receipt signature verification failed",
         "an embedded receipt with a forged control-plane response signature",
     )
+    secret_header_receipt = clone_document(valid_receipt)
+    secret_headers = [
+        {
+            "name": "set-cookie",
+            "value_b64": b64e(b"session=secret"),
+        }
+    ]
+    replace_control_plane_receipt_response_headers(
+        secret_header_receipt,
+        secret_headers,
+    )
+    secret_header_proof = clone_document(valid_document)
+    replace_embedded_control_plane_receipt(
+        secret_header_proof,
+        secret_header_receipt,
+    )
+    expect_proxy_proof_failure(
+        tmp,
+        secret_header_proof,
+        "control-plane authorization receipt response header 0 name is invalid",
+        "a re-signed dispatch receipt carrying a secret-bearing response header",
+    )
+
+    def expect_durable_receipt_failure(
+        receipt: dict[str, Any],
+        expected_error: str,
+        description: str,
+    ) -> None:
+        proof = clone_document(durable_document)
+        replace_embedded_control_plane_receipt(proof, receipt)
+        expect_proxy_proof_failure(tmp, proof, expected_error, description)
+
+    v2_request_v1_response = clone_document(durable_receipt)
+    v1_response_body = clone_document(durable_response_body)
+    v1_response_body["apiVersion"] = (
+        verify_release_completion.RELEASE_AUTHORIZATION_RESPONSE_V1
+    )
+    v1_response_body.pop("durablePolicy")
+    replace_control_plane_receipt_response_body(
+        v2_request_v1_response,
+        v1_response_body,
+    )
+    expect_durable_receipt_failure(
+        v2_request_v1_response,
+        "control-plane authorization receipt response body fields do not match the contract",
+        "a v2 dispatch request paired with a v1 response shape",
+    )
+
+    v1_request_v2_response = clone_document(durable_receipt)
+    v1_request_body = json.loads(
+        b64d(v1_request_v2_response["request"]["body_b64"]).decode("utf-8")
+    )
+    v1_request_body["apiVersion"] = (
+        verify_release_completion.RELEASE_AUTHORIZATION_DISPATCH_V1
+    )
+    v1_request_body.pop("durablePolicy")
+    replace_control_plane_receipt_request_body(
+        v1_request_v2_response,
+        v1_request_body,
+    )
+    expect_durable_receipt_failure(
+        v1_request_v2_response,
+        "control-plane authorization receipt response body fields do not match the contract",
+        "a v1 dispatch request paired with a v2 response shape",
+    )
+
+    missing_durable_field = clone_document(durable_receipt)
+    missing_durable_body = clone_document(durable_response_body)
+    missing_durable_body["durablePolicy"].pop("uncertainty")
+    replace_control_plane_receipt_response_body(
+        missing_durable_field,
+        missing_durable_body,
+    )
+    expect_durable_receipt_failure(
+        missing_durable_field,
+        "control-plane authorization receipt response durable policy fields do not match the contract",
+        "a v2 dispatch response missing a durable lifecycle field",
+    )
+
+    durable_request_body = json.loads(
+        b64d(durable_receipt["request"]["body_b64"]).decode("utf-8")
+    )
+    for field, substituted, expected_error, description in (
+        (
+            "actorId",
+            "spiffe://prod.serverware.dev/decision-gate/substituted",
+            "control-plane authorization receipt request durable policy binding mismatch",
+            "durable request actor substitution",
+        ),
+        (
+            "attemptId",
+            digest("1"),
+            "control-plane authorization receipt request durable policy binding mismatch",
+            "durable request attempt substitution",
+        ),
+        (
+            "claimDigest",
+            digest("2"),
+            "control-plane authorization receipt request durable policy binding mismatch",
+            "durable request claim substitution",
+        ),
+        (
+            "reservationId",
+            "reservation:fixture:substituted",
+            "control-plane authorization receipt durable policy lifecycle mismatch",
+            "durable request reservation substitution",
+        ),
+        (
+            "dispatchDeadlineAtEpochMs",
+            durable_response_body["dispatchExpiresAtEpochMs"] - 1,
+            "control-plane authorization receipt request durable policy binding mismatch",
+            "durable request dispatch deadline substitution",
+        ),
+    ):
+        substituted_receipt = clone_document(durable_receipt)
+        substituted_body = clone_document(durable_request_body)
+        substituted_body["durablePolicy"][field] = substituted
+        replace_control_plane_receipt_request_body(
+            substituted_receipt,
+            substituted_body,
+        )
+        expect_durable_receipt_failure(
+            substituted_receipt,
+            expected_error,
+            description,
+        )
+
+    missing_request_field = clone_document(durable_receipt)
+    missing_request_body = clone_document(durable_request_body)
+    missing_request_body["durablePolicy"].pop("reservationId")
+    replace_control_plane_receipt_request_body(
+        missing_request_field,
+        missing_request_body,
+    )
+    expect_durable_receipt_failure(
+        missing_request_field,
+        "control-plane authorization receipt request durable policy fields do not match the contract",
+        "a v2 dispatch request missing its reservation ID",
+    )
+
+    for completion_value, description in (
+        (None, "a v2 dispatch request with a null completion-only field"),
+        (digest("3"), "a v2 dispatch request with completion evidence"),
+    ):
+        completion_request_field = clone_document(durable_receipt)
+        completion_request_body = clone_document(durable_request_body)
+        completion_request_body["durablePolicy"][
+            "responseEvidenceDigest"
+        ] = completion_value
+        replace_control_plane_receipt_request_body(
+            completion_request_field,
+            completion_request_body,
+        )
+        expect_durable_receipt_failure(
+            completion_request_field,
+            "control-plane authorization receipt request durable policy fields do not match the contract",
+            description,
+        )
+
+    for field, substituted, description in (
+        (
+            "actorId",
+            "spiffe://prod.serverware.dev/decision-gate/substituted",
+            "durable actor substitution",
+        ),
+        ("claimDigest", digest("0"), "durable claim substitution"),
+        (
+            "reservationId",
+            "reservation:fixture:substituted",
+            "durable reservation substitution",
+        ),
+        (
+            "dispatchDeadlineAtEpochMs",
+            durable_response_body["dispatchExpiresAtEpochMs"] - 1,
+            "durable dispatch deadline substitution",
+        ),
+    ):
+        substituted_receipt = clone_document(durable_receipt)
+        substituted_body = clone_document(durable_response_body)
+        substituted_body["durablePolicy"][field] = substituted
+        replace_control_plane_receipt_response_body(
+            substituted_receipt,
+            substituted_body,
+        )
+        expect_durable_receipt_failure(
+            substituted_receipt,
+            "control-plane authorization receipt durable policy lifecycle mismatch",
+            description,
+        )
+
+    invalid_store_receipt = clone_document(durable_receipt)
+    invalid_store_body = clone_document(durable_response_body)
+    invalid_store_body["store"]["ha"] = False
+    replace_control_plane_receipt_response_body(
+        invalid_store_receipt,
+        invalid_store_body,
+    )
+    expect_durable_receipt_failure(
+        invalid_store_receipt,
+        "does not prove an HA authorization store",
+        "a v2 dispatch response carrying non-HA store evidence",
+    )
+
+    canonical_nonce = b64e(b"n" * 32)
+    base64url_alphabet = (
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+    )
+    final_nonce_index = base64url_alphabet.index(canonical_nonce[-1])
+    alias_nonce_index = (
+        final_nonce_index + 1
+        if final_nonce_index % 4 != 3
+        else final_nonce_index - 1
+    )
+    noncanonical_nonce = (
+        canonical_nonce[:-1] + base64url_alphabet[alias_nonce_index]
+    )
+    for nonce_label, nonce, expected_error in (
+        (
+            "short",
+            b64e(b"n" * 31),
+            "control-plane authorization receipt request nonce must contain at least 32 bytes",
+        ),
+        (
+            "padded",
+            canonical_nonce + "=",
+            "control-plane authorization receipt request nonce must be unpadded base64url",
+        ),
+        (
+            "noncanonical",
+            noncanonical_nonce,
+            "control-plane authorization receipt request nonce is not canonical base64url",
+        ),
+        (
+            "overlong",
+            b64e(b"n" * 33),
+            "control-plane authorization receipt request nonce must contain exactly 32 bytes",
+        ),
+    ):
+        invalid_nonce_receipt = clone_document(durable_receipt)
+        replace_control_plane_receipt_nonce(invalid_nonce_receipt, nonce)
+        expect_durable_receipt_failure(
+            invalid_nonce_receipt,
+            expected_error,
+            f"a signed v2 dispatch receipt with a {nonce_label} response nonce",
+        )
+
     unexpected_receipt_field = clone_document(valid_receipt)
     unexpected_receipt_field["request"]["completion_outcome"] = "forwarded"
     unexpected_receipt_proof = clone_document(valid_document)
@@ -6112,6 +10157,9 @@ def test_proxy_response_proof_requirements(
 
     cross_wired_authority = clone_document(valid_document)
     cross_wired_authority["server_statement"]["release_authority"]["grant_id"] = "grant:other"
+    cross_wired_authority["server_statement"]["release_authority"][
+        "approval_id"
+    ] = "approval:other"
     resign_proxy_response_proof(cross_wired_authority)
     expect_proxy_proof_failure(
         tmp,
@@ -6126,6 +10174,7 @@ def test_proxy_response_proof_requirements(
         double_substitution["server_statement"]["release_authority"],
     ):
         authority["grant_id"] = "grant:substituted"
+        authority["approval_id"] = "approval:substituted"
     resign_proxy_response_proof(double_substitution)
     expect_proxy_proof_failure(
         tmp,
@@ -6205,6 +10254,12 @@ def test_proxy_response_proof_requirements(
     )
 
     inconsistent_grant = clone_document(valid_document)
+    inconsistent_grant["server_statement"]["release_authority"][
+        "grant_id"
+    ] = "grant:unexpected"
+    inconsistent_grant["external_capture"]["release_authority"][
+        "grant_id"
+    ] = "grant:unexpected"
     inconsistent_grant["server_statement"]["release_authority"]["approval_id"] = None
     inconsistent_grant["external_capture"]["release_authority"]["approval_id"] = None
     resign_proxy_response_proof(inconsistent_grant)
@@ -6457,6 +10512,20 @@ def test_proxy_response_proof_requirements(
     rejected_nonce = run_verifier(tmp, "--proxy-client-nonce", wrong_nonce)
     if rejected_nonce.returncode == 0 or "client nonce mismatch" not in detail(rejected_nonce):
         raise AssertionError(f"completion verifier accepted a proof for another client nonce: {detail(rejected_nonce)}")
+    overlong_nonce = run_verifier(
+        tmp,
+        "--proxy-client-nonce",
+        b64e(b"x" * 33),
+    )
+    if (
+        overlong_nonce.returncode == 0
+        or "expected proxy proof client nonce must contain exactly 32 bytes"
+        not in detail(overlong_nonce)
+    ):
+        raise AssertionError(
+            "completion verifier accepted a 33-byte buffered proof nonce: "
+            + detail(overlong_nonce)
+        )
     rejected_request = run_verifier(tmp, "--proxy-request-digest", digest("0"))
     if rejected_request.returncode == 0 or "canonical request digest mismatch" not in detail(rejected_request):
         raise AssertionError(f"completion verifier accepted a proof for another request: {detail(rejected_request)}")
@@ -6979,7 +11048,9 @@ def verify_release_artifact_authority_contracts() -> None:
 
 def main() -> None:
     completion_schema_validator, receipt_schema_fixture = verify_release_proof_schemas()
+    test_exact_benchmark_nanosecond_contract()
     verify_launcher_three_way_binding()
+    verify_launcher_nonce_manifest_v3_binding()
     verify_release_artifact_authority_contracts()
     verify_cosign_ecdsa_signature_compatibility()
     verify_ed25519_signature_canonicalization()
@@ -7091,7 +11162,29 @@ def main() -> None:
         if result.returncode != 0:
             raise AssertionError(f"completion verifier failed: {detail(result)}")
         proof = json.loads(result.stdout.decode("utf-8"))
-        persisted_proof = json.loads(out_path.read_text(encoding="utf-8"))
+        persisted_bytes = out_path.read_bytes()
+        persisted_proof = json.loads(persisted_bytes.decode("utf-8"))
+        if (
+            persisted_bytes
+            != canonical_json(persisted_proof).encode("utf-8") + b"\n"
+        ):
+            raise AssertionError(
+                "readiness writer did not persist canonical JSON plus LF"
+            )
+        host_context = (
+            verify_release_completion._load_host_readiness_context(
+                str(out_path)
+            )
+        )
+        if (
+            host_context["completionProofFileSha256"]
+            != sha256_prefixed_bytes(persisted_bytes)
+            or host_context["completionProofCoreSha256"]
+            != persisted_proof["proof_core_sha256"]
+        ):
+            raise AssertionError(
+                "final-v1 did not consume the exact persisted readiness bytes"
+            )
         generation = (persisted_proof.get("integrity_metadata") or {}).get("generation")
         detached_digest_path = run_production_readiness.completion_proof_digest_path(
             out_path,
@@ -7171,11 +11264,17 @@ def main() -> None:
             raise AssertionError("runner accepted a zero-return substitute that left the old proof in place")
         runner_expected.pre_run_completion_proof_state = {"exists": False}
         if (
-            proof.get("ok") is not True
+            proof.get("verificationOk") is not True
+            or proof.get("finalCompletionVerified") is not False
+            or proof.get("actionAuthorization") is not None
+            or proof.get("okForAction") is not False
+            or "ok" in proof
+            or "final_completion" in proof
             or not out_path.exists()
             or not detached_digest_path.exists()
-            or proof.get("proof_sha256") != verified_output_digest
-            or proof.get("proof_sha256_path") != str(detached_digest_path)
+            or "proof_sha256" in proof
+            or "proof_sha256_path" in proof
+            or proof != persisted_proof
             or detached_digest_path.read_text(encoding="ascii") != f"{verified_output_digest}\n"
             or (persisted_proof.get("integrity_metadata") or {}).get("scope") != "checksum-only"
             or (persisted_proof.get("integrity_metadata") or {}).get("independently_authenticated") is not False
@@ -7215,6 +11314,7 @@ def main() -> None:
             "generation": mutated_generation,
             "detached_sha256_path": str(mutated_contract_digest_path),
         }
+        refresh_readiness_v6_proof_core(mutated_contract)
         verify_release_completion.write_output(mutated_contract_path, mutated_contract)
         try:
             run_production_readiness.verify_completion_output(
@@ -7240,6 +11340,7 @@ def main() -> None:
             "generation": unknown_mode_generation,
             "detached_sha256_path": str(unknown_mode_digest_path),
         }
+        refresh_readiness_v6_proof_core(unknown_mode_contract)
         verify_release_completion.write_output(
             unknown_mode_path,
             unknown_mode_contract,
@@ -7247,7 +11348,7 @@ def main() -> None:
         try:
             run_production_readiness.verify_completion_output(unknown_mode_path)
         except ValueError as exc:
-            if "verification mode must be exactly readiness or final" not in str(exc):
+            if "completionProof/v6 is a readiness envelope" not in str(exc):
                 raise
         else:
             raise AssertionError(
@@ -7267,6 +11368,7 @@ def main() -> None:
             "generation": stale_generation,
             "detached_sha256_path": str(stale_digest_path),
         }
+        refresh_readiness_v6_proof_core(stale_contract)
         verify_release_completion.write_output(stale_contract_path, stale_contract)
         try:
             run_production_readiness.verify_completion_output(
@@ -7387,96 +11489,181 @@ def main() -> None:
             raise AssertionError("a concurrently committed completion proof lost its checksum generation")
         run_production_readiness.verify_completion_output(out_path)
         completion_schema_validator.validate(proof)
-        final_schema_fixture = json.loads(json.dumps(persisted_proof))
-        final_schema_fixture.update(
+        completion_schema_validator.validate(persisted_proof)
+        if (
+            verify_release_completion
+            .validate_host_readiness_completion_proof_v6(persisted_proof)
+            != persisted_proof
+        ):
+            raise AssertionError(
+                "native host-context validator changed a valid readiness proof"
+            )
+        core_mismatch = clone_document(persisted_proof)
+        core_mismatch["generated_at_unix"] += 1
+        core_mismatch_path = tmp / "readiness-core-mismatch.json"
+        core_mismatch_path.write_bytes(
+            canonical_json(core_mismatch).encode("utf-8") + b"\n"
+        )
+        try:
+            verify_release_completion._load_host_readiness_context(
+                str(core_mismatch_path)
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                "final-v1 accepted a readiness proof with a stale core digest"
+            )
+        open_nested_readiness = clone_document(persisted_proof)
+        open_nested_readiness["nonce_rollback_assurance"][
+            "launchManifest"
+        ]["unexpected"] = True
+        refresh_readiness_v6_proof_core(open_nested_readiness)
+        open_nested_readiness_path = (
+            tmp / "readiness-open-nested-contract.json"
+        )
+        open_nested_readiness_path.write_bytes(
+            canonical_json(open_nested_readiness).encode("utf-8") + b"\n"
+        )
+        try:
+            verify_release_completion._load_host_readiness_context(
+                str(open_nested_readiness_path)
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                "final-v1 accepted a readiness proof with an open nested "
+                "contract"
+            )
+        noncanonical_readiness_path = tmp / "readiness-pretty.json"
+        noncanonical_readiness_path.write_bytes(
+            (
+                json.dumps(
+                    persisted_proof,
+                    indent=2,
+                    sort_keys=True,
+                    ensure_ascii=True,
+                )
+                + "\n"
+            ).encode("utf-8")
+        )
+        try:
+            verify_release_completion._load_host_readiness_context(
+                str(noncanonical_readiness_path)
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                "final-v1 accepted noncanonical persisted readiness bytes"
+            )
+        for label, invalid_wire in (
+            (
+                "missing proof_path",
+                {
+                    key: value
+                    for key, value in persisted_proof.items()
+                    if key != "proof_path"
+                },
+            ),
+            (
+                "missing integrity_metadata",
+                {
+                    key: value
+                    for key, value in persisted_proof.items()
+                    if key != "integrity_metadata"
+                },
+            ),
+            (
+                "obsolete proof_sha256 alias",
+                {
+                    **persisted_proof,
+                    "proof_sha256": verified_output_digest,
+                },
+            ),
+            (
+                "obsolete proof_sha256_path alias",
+                {
+                    **persisted_proof,
+                    "proof_sha256_path": str(detached_digest_path),
+                },
+            ),
+        ):
+            if not list(
+                completion_schema_validator.iter_errors(invalid_wire)
+            ):
+                raise AssertionError(
+                    f"completionProof/v6 schema accepted {label}"
+                )
+        action_authority_v6 = clone_document(persisted_proof)
+        action_authority_v6["production_host_preflight"][
+            "authority_boundary"
+        ]["actionAuthority"] = True
+        if not list(
+            completion_schema_validator.iter_errors(action_authority_v6)
+        ):
+            raise AssertionError(
+                "completionProof/v6 schema accepted host preflight action "
+                "authority"
+            )
+        final_shaped_v6 = clone_document(persisted_proof)
+        final_shaped_v6.update(
             {
                 "kind": "ServerwareCompletionProof",
                 "verification_mode": "final",
                 "result_scope": "final-completion",
                 "readiness_only": False,
-                "completion_status": "hardware-backed-release-completion",
-                "release_completion": "pass",
-                "final_completion": True,
-                "hardware_proof": True,
-                "bootstrap_launcher": bootstrap_receipt_summary(receipt_schema_fixture),
-                "assurance_ceiling": {
-                    "final_completion": True,
-                    "hardware_proof": True,
-                    "hardware_evidence_verified": True,
-                },
-                "hardware_assurance_evidence": {"verified": True},
+                "finalCompletionVerified": True,
             }
         )
-        final_schema_fixture["final_challenge_consumption"] = {
-            "consumed": True,
-            "completion_identity": {
-                "apiVersion": "serverware.finalCompletionIdentity/v1",
-                "release_identity_sha256": digest("1"),
-                "current_host_identity_sha256": digest("2"),
-                "launch_authorization": (
-                    run_production_readiness.bootstrap_launch_authorization_identity(
-                        final_schema_fixture["bootstrap_launcher"]
-                    )
-                ),
-                "hardware_verifier_key_id": digest("3"),
-                "hardware_assurance_document_sha256": digest("4"),
-                "hardware_assurance_signed_statement_sha256": digest("5"),
-                "challenge_nonce_sha256": digest("6"),
-                "proxy_server_statement_sha256": digest("7"),
-                "security_role_map_sha256": digest("8"),
-            },
-        }
-        completion_schema_validator.validate(final_schema_fixture)
-        final_round_trip_path = tmp / "completion-proof-final-round-trip.json"
-        final_round_trip = json.loads(json.dumps(final_schema_fixture))
-        final_round_trip["proof_path"] = str(final_round_trip_path)
-        final_generation = "f" * 32
-        final_round_trip["integrity_metadata"] = {
-            "generation": final_generation,
-            "detached_sha256_path": str(
-                verify_release_completion.completion_proof_digest_path(
-                    final_round_trip_path,
-                    final_generation,
-                )
-            ),
-            "scope": "checksum-only",
-            "independently_authenticated": False,
-            "authenticity_requires_external_signature_or_checkpoint": True,
-        }
-        verify_release_completion.write_output(
-            final_round_trip_path,
-            final_round_trip,
-        )
+        if not list(
+            completion_schema_validator.iter_errors(final_shaped_v6)
+        ):
+            raise AssertionError(
+                "completionProof/v6 schema accepted a final envelope"
+            )
         try:
-            run_production_readiness.verify_completion_output(final_round_trip_path)
+            (
+                verify_release_completion
+                .validate_host_readiness_completion_proof_v6(
+                    final_shaped_v6
+                )
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                "native host-context validator accepted a final-shaped v6"
+            )
+        try:
+            run_production_readiness.verify_completion_output(
+                out_path,
+                SimpleNamespace(verification_mode="final"),
+            )
         except ValueError as exc:
-            if "requires caller-authenticated expected context" not in str(exc):
+            if "cannot satisfy a final-mode readiness runner" not in str(exc):
                 raise AssertionError(
-                    f"standalone final proof failed for the wrong reason: {exc}"
+                    f"readiness output failed for the wrong final-context reason: {exc}"
                 ) from exc
         else:
             raise AssertionError(
-                "standalone verifier accepted a self-checksummed final-looking proof"
-            )
-        readiness_shaped_final = json.loads(json.dumps(final_schema_fixture))
-        readiness_shaped_final["final_challenge_consumption"] = {
-            "required": False,
-            "consumed": False,
-        }
-        if not list(completion_schema_validator.iter_errors(readiness_shaped_final)):
-            raise AssertionError(
-                "completion v5 schema accepted readiness-shaped final challenge evidence"
+                "readiness consumer accepted completionProof/v6 as final"
             )
         if (
-            proof.get("apiVersion") != "serverware.completionProof/v5"
+            proof.get("apiVersion")
+            != verify_release_completion.COMPLETION_PROOF_API_VERSION
             or proof.get("kind") != "ServerwarePreEnclaveReadiness"
+            or proof.get("verificationOk") is not True
+            or proof.get("finalCompletionVerified") is not False
+            or proof.get("actionAuthorization") is not None
+            or proof.get("okForAction") is not False
             or proof.get("verification_mode") != "readiness"
             or proof.get("result_scope") != "readiness-only"
             or proof.get("readiness_only") is not True
             or proof.get("verification_passed") is not True
             or proof.get("completion_status") != "pre-enclave-readiness"
             or proof.get("release_completion") != "not-final"
-            or proof.get("final_completion") is not False
             or proof.get("hardware_proof") is not False
             or (proof.get("nitro_kms_evidence") or {}).get("hardware_proof") is not False
         ):
@@ -7491,6 +11678,7 @@ def main() -> None:
                 "fresh_client_nonce_bound",
                 "authenticated_external_client_capture_bound",
                 "release_authority_bound",
+                "compiled_route_authority_verified",
                 "embedded_control_plane_authorization_receipt_bound",
                 "upstream_response_bound",
                 "release_artifacts_bound",
@@ -7620,7 +11808,8 @@ def main() -> None:
             or hardware_summary.get("expected_challenge_bound") is not True
             or hardware_summary.get("challenge_nonce_sha256") != HARDWARE_ASSURANCE_CHALLENGE_SHA256
             or hardware_summary.get("current_host_identity_bound") is not False
-            or hardware_limited_proof.get("final_completion") is not False
+            or hardware_limited_proof.get("finalCompletionVerified") is not False
+            or hardware_limited_proof.get("verificationOk") is not True
             or hardware_limited_proof.get("hardware_proof") is not False
             or (hardware_limited_proof.get("assurance_ceiling") or {}).get("hardware_evidence_verified") is not True
         ):
@@ -7640,129 +11829,64 @@ def main() -> None:
             exact_host_hardware_summary,
             exact_host_summary,
         )
-        if final_assurance.get("final_completion") is not True or final_assurance.get("hardware_proof") is not True:
-            raise AssertionError(f"fully verified hardware and current-host evidence did not enable final completion: {final_assurance}")
+        if (
+            final_assurance.get("final_completion") is not False
+            or final_assurance.get("hardware_proof") is not False
+            or final_assurance.get("hardware_evidence_verified") is not True
+            or final_assurance.get("level") != "pre-enclave-readiness"
+        ):
+            raise AssertionError(
+                "legacy hardware and current-host evidence escaped the "
+                f"readiness-only ceiling: {final_assurance}"
+            )
 
         proxy_server_statement_sha256 = sha256_prefixed_json(
             valid_proxy_response_proof["server_statement"]
         )
-        final_bootstrap_receipt = bootstrap_receipt_summary(
-            bootstrap_receipt_fixture(
-                deployment_identity_sha256=exact_host_summary["identity"][
-                    "identity_sha256"
-                ]
-            )
+        final_completion_identity = final_completion_identity_v3_fixture()
+        final_completion_identity["challengeNonceSha256"] = (
+            HARDWARE_ASSURANCE_CHALLENGE_SHA256
         )
-        fixture_security_role_map_sha256 = digest("d")
-        final_completion_identity = verify_release_completion.final_completion_identity(
-            exact_host_hardware_summary,
-            bootstrap_receipt=final_bootstrap_receipt,
-            current_host_identity_sha256=exact_host_summary["identity"][
-                "identity_sha256"
-            ],
-            proxy_server_statement_sha256=proxy_server_statement_sha256,
-            security_role_map_sha256=fixture_security_role_map_sha256,
-        )
-        final_completion_identity_sha256 = sha256_prefixed_json(
+        (
+            validated_final_completion_identity,
+            final_completion_identity_sha256,
+        ) = verify_release_completion.validate_final_v6_completion_identity(
             final_completion_identity
         )
         if (
-            final_completion_identity.get("apiVersion")
+            validated_final_completion_identity
+            != final_completion_identity
+            or final_completion_identity.get("apiVersion")
             != verify_release_completion.FINAL_COMPLETION_IDENTITY_API_VERSION
-            or final_completion_identity.get("hardware_assurance_document_sha256")
-            != sha256_file(tmp / "hardware-assurance.json")
-            or final_completion_identity.get(
-                "hardware_assurance_signed_statement_sha256"
-            )
-            != sha256_prefixed_json(valid_hardware_assurance["statement"])
-            or final_completion_identity.get("launch_authorization")
-            != run_production_readiness.bootstrap_launch_authorization_identity(
-                final_bootstrap_receipt
-            )
-            or final_completion_identity.get("security_role_map_sha256")
-            != fixture_security_role_map_sha256
+            or final_completion_identity_sha256
+            != sha256_prefixed_json(final_completion_identity)
         ):
             raise AssertionError(
-                "final completion identity omitted exact hardware or launch authorization identity"
+                "final completion identity v3 did not bind its exact canonical fields"
             )
-        for field in (
-            "hardware_assurance_document_sha256",
-            "hardware_assurance_signed_statement_sha256",
-        ):
-            changed_hardware_summary = clone_document(exact_host_hardware_summary)
-            changed_hardware_summary[field] = digest("0")
-            changed_identity_sha256 = sha256_prefixed_json(
-                verify_release_completion.final_completion_identity(
-                    changed_hardware_summary,
-                    bootstrap_receipt=final_bootstrap_receipt,
-                    current_host_identity_sha256=exact_host_summary["identity"][
-                        "identity_sha256"
-                    ],
-                    proxy_server_statement_sha256=proxy_server_statement_sha256,
-                    security_role_map_sha256=fixture_security_role_map_sha256,
-                )
-            )
-            if changed_identity_sha256 == final_completion_identity_sha256:
-                raise AssertionError(
-                    f"final completion identity did not bind {field}"
-                )
-        changed_launch_identity_sha256 = sha256_prefixed_json(
-            verify_release_completion.final_completion_identity(
-                exact_host_hardware_summary,
-                bootstrap_receipt=bootstrap_receipt_summary(
-                    bootstrap_receipt_fixture(
-                        deployment_identity_sha256=exact_host_summary["identity"][
-                            "identity_sha256"
-                        ],
-                        release_sequence=43,
-                    )
-                ),
-                current_host_identity_sha256=exact_host_summary["identity"][
-                    "identity_sha256"
-                ],
-                proxy_server_statement_sha256=proxy_server_statement_sha256,
-                security_role_map_sha256=fixture_security_role_map_sha256,
+        changed_identity = clone_document(final_completion_identity)
+        changed_identity["coreDigests"]["release"] = digest("0")
+        _, changed_identity_sha256 = (
+            verify_release_completion.validate_final_v6_completion_identity(
+                changed_identity
             )
         )
-        if changed_launch_identity_sha256 == final_completion_identity_sha256:
+        if changed_identity_sha256 == final_completion_identity_sha256:
             raise AssertionError(
-                "final completion identity did not bind launch authorization sequence"
+                "final completion identity v3 did not bind its release core"
             )
-        changed_role_map_identity_sha256 = sha256_prefixed_json(
-            verify_release_completion.final_completion_identity(
-                exact_host_hardware_summary,
-                bootstrap_receipt=final_bootstrap_receipt,
-                current_host_identity_sha256=exact_host_summary["identity"][
-                    "identity_sha256"
-                ],
-                proxy_server_statement_sha256=proxy_server_statement_sha256,
-                security_role_map_sha256=digest("0"),
-            )
-        )
-        if changed_role_map_identity_sha256 == final_completion_identity_sha256:
-            raise AssertionError(
-                "final completion identity did not bind the canonical security role map"
-            )
+        legacy_identity = clone_document(final_completion_identity)
+        legacy_identity["apiVersion"] = "serverware.finalCompletionIdentity/v1"
         try:
-            verify_release_completion.final_completion_identity(
-                exact_host_hardware_summary,
-                bootstrap_receipt=bootstrap_receipt_summary(
-                    bootstrap_receipt_fixture(
-                        deployment_identity_sha256=digest("0")
-                    )
-                ),
-                current_host_identity_sha256=exact_host_summary["identity"][
-                    "identity_sha256"
-                ],
-                proxy_server_statement_sha256=proxy_server_statement_sha256,
-                security_role_map_sha256=fixture_security_role_map_sha256,
+            verify_release_completion.validate_final_v6_completion_identity(
+                legacy_identity
             )
         except ValueError as exc:
-            if "does not match the current completion host" not in str(exc):
+            if "version or pipeline" not in str(exc):
                 raise
         else:
             raise AssertionError(
-                "final completion identity accepted another deployment identity"
+                "final verifier accepted final completion identity v1"
             )
         receipt = final_challenge_receipt(
             challenge_nonce_sha256=HARDWARE_ASSURANCE_CHALLENGE_SHA256,

@@ -1,0 +1,183 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/release-identity.v1.schema.json",
+  "title": "Serverware stable release identity v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "build",
+    "configuration",
+    "eif",
+    "monotonicRelease",
+    "pipeline",
+    "policy",
+    "source"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "serverware.releaseIdentity/v1"
+    },
+    "pipeline": {
+      "const": "manifest-v6-promoted-oci-nitro-eif"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sourceClosureSha256",
+        "sourceInputApprovalSha256",
+        "sourceInputManifestFileSha256",
+        "sourceInputManifestPayloadSha256"
+      ],
+      "properties": {
+        "sourceClosureSha256": {"$ref": "#/$defs/sha256"},
+        "sourceInputApprovalSha256": {"$ref": "#/$defs/sha256"},
+        "sourceInputManifestFileSha256": {"$ref": "#/$defs/sha256"},
+        "sourceInputManifestPayloadSha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "build": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "builderCoreSha256s",
+        "buildWatchdogReceiptSha256",
+        "candidateManifestFileSha256",
+        "candidateManifestPayloadSha256",
+        "dependencyClosureSha256",
+        "eifBuildCoreSha256",
+        "importedImageMappingsSha256",
+        "promotedManifestSha256",
+        "promotionReceiptSha256",
+        "releaseCoreSha256"
+      ],
+      "properties": {
+        "builderCoreSha256s": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/sha256"}
+        },
+        "buildWatchdogReceiptSha256": {"$ref": "#/$defs/sha256"},
+        "candidateManifestFileSha256": {"$ref": "#/$defs/sha256"},
+        "candidateManifestPayloadSha256": {"$ref": "#/$defs/sha256"},
+        "dependencyClosureSha256": {"$ref": "#/$defs/sha256"},
+        "eifBuildCoreSha256": {"$ref": "#/$defs/sha256"},
+        "importedImageMappingsSha256": {"$ref": "#/$defs/sha256"},
+        "promotedManifestSha256": {"$ref": "#/$defs/sha256"},
+        "promotionReceiptSha256": {"$ref": "#/$defs/sha256"},
+        "releaseCoreSha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "eif": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["imageSha384", "pcrs"],
+      "properties": {
+        "imageSha384": {"$ref": "#/$defs/sha384"},
+        "pcrs": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["PCR0", "PCR1", "PCR2"],
+          "properties": {
+            "PCR0": {"$ref": "#/$defs/sha384"},
+            "PCR1": {"$ref": "#/$defs/sha384"},
+            "PCR2": {"$ref": "#/$defs/sha384"}
+          }
+        }
+      }
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hash", "sequence"],
+      "properties": {
+        "hash": {"$ref": "#/$defs/sha256"},
+        "sequence": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 18446744073709551615
+        }
+      }
+    },
+    "configuration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "caSpkiSha256",
+        "publicAttestation",
+        "releaseKeySpkiSha256",
+        "responseKeySpkiSha256",
+        "tlsScopeSigningKeySpkiSha256",
+        "trustRootBundleSha256",
+        "witnessKeySpkiSha256"
+      ],
+      "properties": {
+        "caSpkiSha256": {"$ref": "#/$defs/sha256"},
+        "publicAttestation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "nonceStoreIdentitySha256",
+            "nonceStoreKeySpkiSha256",
+            "producerDescriptorSha256",
+            "producerExecutableSha256",
+            "producerRequestSchemaSha256",
+            "sandboxDescriptorSha256",
+            "sandboxLauncherSha256",
+            "witnessStoreIdentitySha256",
+            "witnessStoreKeySpkiSha256"
+          ],
+          "properties": {
+            "nonceStoreIdentitySha256": {"$ref": "#/$defs/sha256"},
+            "nonceStoreKeySpkiSha256": {"$ref": "#/$defs/sha256"},
+            "producerDescriptorSha256": {"$ref": "#/$defs/sha256"},
+            "producerExecutableSha256": {"$ref": "#/$defs/sha256"},
+            "producerRequestSchemaSha256": {"$ref": "#/$defs/sha256"},
+            "sandboxDescriptorSha256": {"$ref": "#/$defs/sha256"},
+            "sandboxLauncherSha256": {"$ref": "#/$defs/sha256"},
+            "witnessStoreIdentitySha256": {"$ref": "#/$defs/sha256"},
+            "witnessStoreKeySpkiSha256": {"$ref": "#/$defs/sha256"}
+          }
+        },
+        "releaseKeySpkiSha256": {"$ref": "#/$defs/sha256"},
+        "responseKeySpkiSha256": {"$ref": "#/$defs/sha256"},
+        "tlsScopeSigningKeySpkiSha256": {"$ref": "#/$defs/sha256"},
+        "trustRootBundleSha256": {"$ref": "#/$defs/sha256"},
+        "witnessKeySpkiSha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "monotonicRelease": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "releaseGeneration",
+        "rollbackEpoch"
+      ],
+      "properties": {
+        "releaseGeneration": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 18446744073709551615
+        },
+        "rollbackEpoch": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "sha384": {
+      "type": "string",
+      "pattern": "^sha384:[0-9a-f]{96}$"
+    }
+  }
+}

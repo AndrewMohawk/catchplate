@@ -1,0 +1,213 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/retained-fd-ed25519-sign.v1.schema.json",
+  "title": "Serverware retained-FD stable-release signing protocol v1",
+  "description": "A production signer must retrieve the exact preauthorization from an external signer-owned rollback-resistant authorization, consumption, authorization-sequence, and release-tuple backend; compare every field and digest; enforce expiry and monotonic transition rules; atomically consume the one-use authorization; reconstruct the stable-release statement under its fixed domain; and only then sign. This protocol never accepts caller-selected message bytes. Retained integer FDs do not authenticate the peer, so a trusted measured launcher must create and preserve the intended pipe endpoints and sealed nonce memfd without substitution. Process-local fixtures cannot prove restart or rollback resistance.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/request"
+    },
+    {
+      "$ref": "#/$defs/response"
+    }
+  ],
+  "$defs": {
+    "request": {
+      "type": "object",
+      "description": "The statement payload is an exact preauthorized input, not an arbitrary signing message. The signer must independently validate the complete stable release identity and statement payload contract, canonicalize and hash it, and must not trust caller-supplied digests without matching external signer-owned preauthorization state.",
+      "additionalProperties": false,
+      "required": [
+        "algorithm",
+        "apiVersion",
+        "authorizationNonceBase64url",
+        "keyId",
+        "preauthorization",
+        "preauthorizationSha256",
+        "purpose",
+        "statementPayload",
+        "statementPayloadSha256"
+      ],
+      "properties": {
+        "algorithm": {
+          "const": "Ed25519"
+        },
+        "apiVersion": {
+          "const": "serverware.retainedFdEd25519SignRequest/v1"
+        },
+        "keyId": {
+          "$ref": "#/$defs/sha256"
+        },
+        "authorizationNonceBase64url": {
+          "$ref": "#/$defs/base64url32"
+        },
+        "preauthorization": {
+          "$ref": "#/$defs/preauthorization"
+        },
+        "preauthorizationSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "purpose": {
+          "const": "stable-release-statement"
+        },
+        "statementPayload": {
+          "$ref": "#/$defs/statementPayload"
+        },
+        "statementPayloadSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "algorithm",
+        "apiVersion",
+        "approvedIssuerRequestSha256",
+        "authorizationIdBase64url",
+        "authorizationSequence",
+        "keyId",
+        "messageSha256",
+        "preauthorizationSha256",
+        "releaseIdentitySha256",
+        "signatureBase64url",
+        "statementPayloadSha256"
+      ],
+      "properties": {
+        "algorithm": {
+          "const": "Ed25519"
+        },
+        "apiVersion": {
+          "const": "serverware.retainedFdEd25519SignResponse/v1"
+        },
+        "approvedIssuerRequestSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "authorizationIdBase64url": {
+          "$ref": "#/$defs/base64url32"
+        },
+        "authorizationSequence": {
+          "$ref": "#/$defs/u64Positive"
+        },
+        "keyId": {
+          "$ref": "#/$defs/sha256"
+        },
+        "messageSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "preauthorizationSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "releaseIdentitySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "signatureBase64url": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{85}[AQgw]$"
+        },
+        "statementPayloadSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "preauthorization": {
+      "type": "object",
+      "description": "The externally provisioned signer-owned record keyed by keyId and authorizationIdBase64url. approvedIssuerRequestSha256 and all remaining fields must match immutable rollback-resistant signer state exactly. authorizationSequence must exceed the durable high-water mark. rollbackEpoch may never decrease; policySequence may never decrease; releaseGeneration may not decrease within one rollbackEpoch; and a rollbackEpoch increase may reset releaseGeneration only when the exact new epoch is explicitly authorized. useLimit is one, the nonce digest must match, and consumption plus all high-water updates must be atomic with signing.",
+      "additionalProperties": false,
+      "required": [
+        "approvedIssuerRequestSha256",
+        "authorizationExpiresAtUnix",
+        "authorizationIdBase64url",
+        "authorizationIssuedAtUnix",
+        "authorizationNonceSha256",
+        "authorizationSequence",
+        "minimumPolicySequence",
+        "minimumReleaseGeneration",
+        "minimumRollbackEpoch",
+        "releaseIdentitySha256",
+        "statementPayloadSha256",
+        "useLimit"
+      ],
+      "properties": {
+        "approvedIssuerRequestSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "authorizationExpiresAtUnix": {
+          "$ref": "#/$defs/u64Positive"
+        },
+        "authorizationIdBase64url": {
+          "$ref": "#/$defs/base64url32"
+        },
+        "authorizationIssuedAtUnix": {
+          "$ref": "#/$defs/u64Positive"
+        },
+        "authorizationNonceSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "authorizationSequence": {
+          "$ref": "#/$defs/u64Positive"
+        },
+        "minimumPolicySequence": {
+          "$ref": "#/$defs/u64Positive"
+        },
+        "minimumReleaseGeneration": {
+          "$ref": "#/$defs/u64Positive"
+        },
+        "minimumRollbackEpoch": {
+          "$ref": "#/$defs/u64"
+        },
+        "releaseIdentitySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "statementPayloadSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "useLimit": {
+          "const": 1
+        }
+      }
+    },
+    "statementPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "attestationPins",
+        "releaseIdentity",
+        "releaseIdentitySha256",
+        "trustRootBundleSha256"
+      ],
+      "properties": {
+        "attestationPins": {
+          "$ref": "production-stable-release-issuer-request.v1.schema.json#/$defs/attestationPins"
+        },
+        "releaseIdentity": {
+          "$ref": "release-identity.v1.schema.json"
+        },
+        "releaseIdentitySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "trustRootBundleSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "base64url32": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "u64": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 18446744073709551615
+    },
+    "u64Positive": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 18446744073709551615
+    }
+  }
+}

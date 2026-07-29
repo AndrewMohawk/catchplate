@@ -1,0 +1,147 @@
+{
+  "apiVersion": "serverware.discardHeadersParity/v2",
+  "legacyV1": {
+    "canonicalRequest": {
+      "v": 1,
+      "principal": "agent:parity",
+      "client_ip": "192.0.2.44",
+      "route_id": "route:legacy-parity",
+      "credential_ref": null,
+      "credential_version": "none",
+      "policy_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "request": {
+        "method": "GET",
+        "scheme": "https",
+        "authority": "api.example.test",
+        "path": "/resource",
+        "query": [],
+        "headers": {
+          "accept": "application/json",
+          "host": "api.example.test"
+        },
+        "body_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "operation": {
+        "operation": "test.read"
+      }
+    },
+    "canonicalJson": "{\"client_ip\":\"192.0.2.44\",\"credential_ref\":null,\"credential_version\":\"none\",\"operation\":{\"operation\":\"test.read\"},\"policy_hash\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"principal\":\"agent:parity\",\"request\":{\"authority\":\"api.example.test\",\"body_sha256\":\"sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"headers\":{\"accept\":\"application/json\",\"host\":\"api.example.test\"},\"method\":\"GET\",\"path\":\"/resource\",\"query\":[],\"scheme\":\"https\"},\"route_id\":\"route:legacy-parity\",\"v\":1}",
+    "operationJson": "{\"credential_ref\":null,\"credential_version\":\"none\",\"operation\":{\"operation\":\"test.read\"},\"policy_hash\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"principal\":\"agent:parity\",\"request\":{\"authority\":\"api.example.test\",\"body_sha256\":\"sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"headers\":{\"accept\":\"application/json\",\"host\":\"api.example.test\"},\"method\":\"GET\",\"path\":\"/resource\",\"query\":[],\"scheme\":\"https\"},\"route_id\":\"route:legacy-parity\"}"
+  },
+  "discardV2": {
+    "canonicalRequest": {
+      "v": 2,
+      "principal": "agent:parity",
+      "client_ip": "192.0.2.44",
+      "route_id": "route:npm-parity",
+      "credential_ref": "credential:npm-parity",
+      "credential_version": "7",
+      "policy_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "request": {
+        "method": "PUT",
+        "scheme": "https",
+        "authority": "registry.npmjs.org",
+        "path": "/package",
+        "query": [],
+        "headers": {
+          "content-length": "0",
+          "content-type": "application/json",
+          "host": "registry.npmjs.org",
+          "npm-command": "publish",
+          "user-agent": "npm/10.8.2 node/v22.5.1"
+        },
+        "discard_headers": [
+          "npm-session"
+        ],
+        "body_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "operation": {
+        "operation": "npm.publish",
+        "packageName": "package",
+        "packageVersion": "1.2.3"
+      }
+    },
+    "canonicalJson": "{\"client_ip\":\"192.0.2.44\",\"credential_ref\":\"credential:npm-parity\",\"credential_version\":\"7\",\"operation\":{\"operation\":\"npm.publish\",\"packageName\":\"package\",\"packageVersion\":\"1.2.3\"},\"policy_hash\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"principal\":\"agent:parity\",\"request\":{\"authority\":\"registry.npmjs.org\",\"body_sha256\":\"sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"discard_headers\":[\"npm-session\"],\"headers\":{\"content-length\":\"0\",\"content-type\":\"application/json\",\"host\":\"registry.npmjs.org\",\"npm-command\":\"publish\",\"user-agent\":\"npm/10.8.2 node/v22.5.1\"},\"method\":\"PUT\",\"path\":\"/package\",\"query\":[],\"scheme\":\"https\"},\"route_id\":\"route:npm-parity\",\"v\":2}",
+    "operationJson": "{\"credential_ref\":\"credential:npm-parity\",\"credential_version\":\"7\",\"operation\":{\"operation\":\"npm.publish\",\"packageName\":\"package\",\"packageVersion\":\"1.2.3\"},\"policy_hash\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"principal\":\"agent:parity\",\"request\":{\"authority\":\"registry.npmjs.org\",\"body_sha256\":\"sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"discard_headers\":[\"npm-session\"],\"headers\":{\"content-length\":\"0\",\"content-type\":\"application/json\",\"host\":\"registry.npmjs.org\",\"npm-command\":\"publish\",\"user-agent\":\"npm/10.8.2 node/v22.5.1\"},\"method\":\"PUT\",\"path\":\"/package\",\"query\":[],\"scheme\":\"https\"},\"route_id\":\"route:npm-parity\"}",
+    "discardedEvidence": {
+      "schema": "serverware.discardedRequestHeaders/v1",
+      "declared_names": [
+        "npm-session"
+      ],
+      "present_names": [
+        "npm-session"
+      ],
+      "present_count": 1,
+      "raw_values_logged": false,
+      "value_commitment": null,
+      "value_commitment_reason": "no_dedicated_audit_hmac_key"
+    },
+    "discardedValues": [
+      "npm-session-attempt-a",
+      "npm-session-attempt-b"
+    ],
+    "duplicatePhysicalHeaders": [
+      ["Npm-Session", "npm-session-attempt-a"],
+      ["npm-session", "npm-session-attempt-b"]
+    ]
+  },
+  "rawAbsoluteTarget": {
+    "valid": [
+      "https://api.example.test/resource?data=a%26b%3Dc&literal=%2B&space=a%20b",
+      "https://api.example.test/caf%C3%A9?currency=%E2%82%AC",
+      "https://[2001:db8::1]:8443/resource?value=ok",
+      "https://registry.npmjs.org/@scope%2fpackage?write=true"
+    ],
+    "invalid": [
+      "HTTPS://api.example.test/resource?value=ok",
+      "https://EXAMPLE.test:443/resource?value=ok",
+      "https://user@api.example.test/resource?value=ok",
+      "https://%61pi.example.test/resource?value=ok",
+      "https://api.example.test:%34%34%33/resource?value=ok",
+      "https://api.example.test:0/resource?value=ok",
+      "https://api.example.test:443/resource?value=ok",
+      "https://api.example.test:0443/resource?value=ok",
+      "https://api.example.test:65536/resource?value=ok",
+      "https://api.example.test/resource#fragment",
+      "https://api.example.test\\attacker/resource?value=ok",
+      "https://api.example.test/café?value=ok",
+      "https://api.example.test/resource?value=a b",
+      "https://api.example.test/resource?value=customer+name",
+      "https://api.example.test/resource?value=%2b",
+      "https://api.example.test/resource?value=a%26b%3dc",
+      "https://api.example.test/resource?value=a=b",
+      "https://api.example.test/resource?value",
+      "https://api.example.test/resource?=value",
+      "https://api.example.test/resource?value=1&&other=2",
+      "https://api.example.test/resource?value=%",
+      "https://api.example.test/resource?value=%25",
+      "https://api.example.test/resource?value=%252B",
+      "https://api.example.test/resource?value=%41",
+      "https://api.example.test/resource?value=%C0%AF",
+      "https://api.example.test/resource?value=%ED%A0%80",
+      "https://api.example.test/%C0%AF",
+      "https://api.example.test/%ED%A0%80",
+      "https://api.example.test/%252E%252E/resource",
+      "https://api.example.test/path%5Cseparator",
+      "https://api.example.test/resource?value=a/b",
+      "https://api.example.test/resource?value=a;b",
+      "https://api.example.test/resource?space=a%20b&literal=%2B&data=a%26b%3Dc",
+      "https://api.example.test/resource?data=first&data=second",
+      "https://api.example.test/resource?b=2&a=1",
+      "https://api.example.test/resource?",
+      "https://api.example.test",
+      "https://api.example.test?value=ok",
+      "https://api.example.test/a/%2E%2E/b",
+      "https://api.example.test/a/../b"
+    ],
+    "canonicalQuery": {
+      "input": "https://api.example.test/resource?data=a%26b%3Dc&literal=%2B&space=a%20b",
+      "pairs": [
+        ["data", "a&b=c"],
+        ["literal", "+"],
+        ["space", "a b"]
+      ],
+      "wire": "data=a%26b%3Dc&literal=%2B&space=a%20b"
+    }
+  }
+}

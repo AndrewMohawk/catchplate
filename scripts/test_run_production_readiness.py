@@ -25,6 +25,18 @@ import test_nitro_kms_evidence as nitro_evidence_test  # noqa: E402
 import launch_authorization  # noqa: E402
 import run_production_readiness  # noqa: E402
 
+FINAL_FIXTURE_IDENTITY_API_VERSION = "serverware.finalCompletionIdentity/v3"
+FINAL_FIXTURE_PIPELINE = "manifest-v6-promoted-oci-nitro-eif"
+FINAL_FIXTURE_BRIDGE_API_VERSION = (
+    "serverware.productionReleaseCompletionBridge/v1"
+)
+FINAL_FIXTURE_ARTIFACT_BINDINGS_API_VERSION = (
+    "serverware.manifestV6CompletionArtifactBindings/v1"
+)
+FINAL_FIXTURE_CANONICAL_PROFILE = (
+    "serverware.canonicalJson/integer-string-bool-null-array-object-nfc-v1"
+)
+
 
 def test_temp_root() -> Path:
     root = ROOT / ".tmp"
@@ -61,20 +73,8 @@ def write_env(path: Path, env: dict[str, str]) -> None:
 
 
 def run_runner(*args: str) -> subprocess.CompletedProcess[bytes]:
-    argv = list(args)
-    if "--verification-mode" in argv and argv[argv.index("--verification-mode") + 1] == "final":
-        env_path = Path(argv[argv.index("--env-file") + 1])
-        if "--launcher-trusted-production-env-path" not in argv:
-            argv.extend(
-                [
-                    "--launcher-trusted-production-env-path",
-                    str(env_path),
-                    "--launcher-trusted-production-env-sha256",
-                    "sha256:" + hashlib.sha256(env_path.read_bytes()).hexdigest(),
-                ]
-            )
     return subprocess.run(
-        [sys.executable, "scripts/run_production_readiness.py", *argv],
+        [sys.executable, "scripts/run_production_readiness.py", *args],
         cwd=ROOT,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -87,20 +87,8 @@ def run_runner_in_environment(
     environment: dict[str, str],
     *args: str,
 ) -> subprocess.CompletedProcess[bytes]:
-    argv = list(args)
-    if "--verification-mode" in argv and argv[argv.index("--verification-mode") + 1] == "final":
-        env_path = Path(argv[argv.index("--env-file") + 1])
-        if "--launcher-trusted-production-env-path" not in argv:
-            argv.extend(
-                [
-                    "--launcher-trusted-production-env-path",
-                    str(env_path),
-                    "--launcher-trusted-production-env-sha256",
-                    "sha256:" + hashlib.sha256(env_path.read_bytes()).hexdigest(),
-                ]
-            )
     return subprocess.run(
-        [sys.executable, "scripts/run_production_readiness.py", *argv],
+        [sys.executable, "scripts/run_production_readiness.py", *args],
         cwd=ROOT,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -113,7 +101,7 @@ def detail(result: subprocess.CompletedProcess[bytes]) -> str:
     return result.stdout.decode("utf-8", errors="replace") + result.stderr.decode("utf-8", errors="replace")
 
 
-def verify_final_observation_body_revalidation(
+def verify_readiness_observation_body_revalidation(
     tmp: Path,
     collector_args: SimpleNamespace,
     observation_body: Path,
@@ -146,26 +134,47 @@ def verify_final_observation_body_revalidation(
                 "must contain between 0 and 4 bytes",
             ),
         ):
-            proof_path = tmp / f"final-observation-{label}-completion.json"
+            proof_path = tmp / f"readiness-observation-{label}-completion.json"
             generation = hashlib.sha256(label.encode("ascii")).hexdigest()[:32]
             digest_path = run_production_readiness.completion_proof_digest_path(
                 proof_path, generation
             )
             generated_at = int(time.time())
+            manual_nonce_assurance = {
+                "apiVersion": (
+                    run_production_readiness.NONCE_ROLLBACK_ASSURANCE_BINDING_API_VERSION
+                ),
+                "enforcement": "not-native-launcher-enforced",
+                "verified": False,
+            }
             proof = {
-                "apiVersion": "serverware.completionProof/v5",
-                "kind": "ServerwareCompletionProof",
-                "ok": True,
+                "apiVersion": "serverware.completionProof/v6",
+                "kind": "ServerwarePreEnclaveReadiness",
+                "verificationOk": True,
+                "finalCompletionVerified": False,
+                "actionAuthorization": None,
+                "okForAction": False,
                 "verification_passed": True,
-                "verification_mode": "final",
-                "result_scope": "final-completion",
-                "readiness_only": False,
+                "verification_mode": "readiness",
+                "result_scope": "readiness-only",
+                "readiness_only": True,
                 "readiness_ok": True,
-                "completion_status": "hardware-backed-release-completion",
-                "release_completion": "pass",
-                "final_completion": True,
-                "hardware_proof": True,
-                "assurance_ceiling": {"final_completion": True},
+                "completion_status": "pre-enclave-readiness",
+                "release_completion": "not-final",
+                "hardware_proof": False,
+                "assurance_ceiling": {
+                    "level": "pre-enclave-readiness",
+                    "final_completion": False,
+                    "hardware_proof": False,
+                    "hardware_evidence_verified": False,
+                    "reason": (
+                        "trusted-host readiness does not prove final enclave "
+                        "execution"
+                    ),
+                    "required_final_evidence": [
+                        "independent Manifest-v6 public Nitro verification"
+                    ],
+                },
                 "generated_at_unix": generated_at,
                 "artifacts": {
                     "proxy_observation_body": {
@@ -178,16 +187,63 @@ def verify_final_observation_body_revalidation(
                 "current_completion_host": {},
                 "production_env_binding": {},
                 "running_production_containers": {},
-                "production_host_preflight": {},
-                "bootstrap_launcher": {"sealed": True, "fixture": True},
+                "production_host_preflight": {
+                    "verification_mode": "readiness",
+                    "readiness_only": True,
+                    "final_nitro_execution_proven": False,
+                    "ok_for_action": False,
+                    "authority_boundary": {
+                        "apiVersion": (
+                            "serverware.productionHostReadinessBoundary/v1"
+                        ),
+                        "verificationMode": "readiness",
+                        "launchManifestApiVersion": (
+                            "serverware.productionReadinessLaunch/v3"
+                        ),
+                        "launchAuthorizationRequestApiVersion": (
+                            "serverware.launchAuthorizationRequest/v2"
+                        ),
+                        "launchAuthorizationApiVersion": (
+                            "serverware.launchAuthorization/v2"
+                        ),
+                        "bootstrapReceiptApiVersion": (
+                            "serverware.bootstrapReceipt/v3"
+                        ),
+                        "authorizationScope": "trusted-host-readiness",
+                        "freshnessAuthority": "trusted-host-wall-clock",
+                        "launcherEvidenceVerified": False,
+                        "currentFreshnessVerifiedUsingTrustedHostWallClock": (
+                            False
+                        ),
+                        "secureTimeProven": False,
+                        "finalNitroExecutionProven": False,
+                        "actionAuthority": False,
+                        "hostBootstrapEvidenceClassification": (
+                            "non-authoritative-readiness-context-only"
+                        ),
+                        "finalAuthority": (
+                            "independent-manifest-v6-public-nitro-verifier-and-"
+                            "protected-state"
+                        ),
+                    },
+                    "nonce_rollback_assurance": manual_nonce_assurance
+                },
+                "bootstrap_launcher": {"required": False, "verified": False},
+                "nonce_rollback_assurance": {
+                    **manual_nonce_assurance,
+                    "launchManifest": {
+                        "apiVersion": "serverware.productionReadinessLaunch/v3",
+                        "purpose": "readiness-only",
+                        "verified": False,
+                    },
+                    "purpose": "readiness-only",
+                },
                 "nitro_kms_evidence": {},
                 "nitro_evidence_binding": {},
                 "hardware_assurance_evidence": {},
                 "final_challenge_consumption": {
-                    "consumed": True,
-                    "completion_identity": {
-                        "launch_authorization": "fixture-launch-authorization"
-                    },
+                    "required": False,
+                    "consumed": False,
                 },
                 "production_images_build": {},
                 "production_images_published": {},
@@ -196,6 +252,18 @@ def verify_final_observation_body_revalidation(
                 "benchmark": {},
                 "release_security_evidence": {},
                 "production_proxy_response_proof": {},
+                "production_continuity": {
+                    "required": False,
+                    "verified": False,
+                    "pipeline": "readiness-only",
+                },
+                "proof_core_sha256": "sha256:" + "0" * 64,
+                "independently_authenticated": False,
+                "aggregate_authentication": {
+                    "required": False,
+                    "independently_authenticated": False,
+                    "scope": "readiness-only",
+                },
                 "proof_path": str(proof_path),
                 "integrity_metadata": {
                     "generation": generation,
@@ -205,12 +273,118 @@ def verify_final_observation_body_revalidation(
                     "authenticity_requires_external_signature_or_checkpoint": True,
                 },
             }
+            proof["proof_core_sha256"] = _fixture_json_digest(
+                run_production_readiness.completion_proof_v6_core(proof)
+            )
             run_production_readiness.write_private_json(proof_path, proof)
             digest_path.write_text(
                 run_production_readiness.sha256_prefixed_file(proof_path) + "\n",
                 encoding="ascii",
             )
             digest_path.chmod(0o600)
+            noncanonical_path = (
+                tmp / f"readiness-observation-{label}-pretty.json"
+            )
+            noncanonical_generation = hashlib.sha256(
+                f"{label}-pretty".encode("ascii")
+            ).hexdigest()[:32]
+            noncanonical_digest_path = (
+                run_production_readiness.completion_proof_digest_path(
+                    noncanonical_path,
+                    noncanonical_generation,
+                )
+            )
+            noncanonical_proof = json.loads(json.dumps(proof))
+            noncanonical_proof["proof_path"] = str(noncanonical_path)
+            noncanonical_proof["integrity_metadata"] = {
+                **noncanonical_proof["integrity_metadata"],
+                "generation": noncanonical_generation,
+                "detached_sha256_path": str(noncanonical_digest_path),
+            }
+            noncanonical_path.write_bytes(
+                (
+                    json.dumps(
+                        noncanonical_proof,
+                        indent=2,
+                        sort_keys=True,
+                        ensure_ascii=True,
+                    )
+                    + "\n"
+                ).encode("utf-8")
+            )
+            noncanonical_digest_path.write_text(
+                run_production_readiness.sha256_prefixed_file(
+                    noncanonical_path
+                )
+                + "\n",
+                encoding="ascii",
+            )
+            noncanonical_digest_path.chmod(0o600)
+            try:
+                run_production_readiness.verify_completion_output(
+                    noncanonical_path
+                )
+            except ValueError as exc:
+                if "exact canonical JSON bytes plus LF" not in str(exc):
+                    raise
+            else:
+                raise AssertionError(
+                    "readiness consumer accepted pretty-printed proof bytes"
+                )
+            if label == "changed":
+                boundary_proof = json.loads(json.dumps(proof))
+                boundary_proof_path = (
+                    tmp / "readiness-observation-authority-boundary.json"
+                )
+                boundary_generation = hashlib.sha256(
+                    b"authority-boundary"
+                ).hexdigest()[:32]
+                boundary_digest_path = (
+                    run_production_readiness.completion_proof_digest_path(
+                        boundary_proof_path, boundary_generation
+                    )
+                )
+                boundary_proof["proof_path"] = str(boundary_proof_path)
+                boundary_proof["integrity_metadata"] = {
+                    **boundary_proof["integrity_metadata"],
+                    "generation": boundary_generation,
+                    "detached_sha256_path": str(boundary_digest_path),
+                }
+                boundary_proof["production_host_preflight"][
+                    "authority_boundary"
+                ]["actionAuthority"] = True
+                boundary_proof["proof_core_sha256"] = _fixture_json_digest(
+                    run_production_readiness.completion_proof_v6_core(
+                        boundary_proof
+                    )
+                )
+                run_production_readiness.write_private_json(
+                    boundary_proof_path, boundary_proof
+                )
+                boundary_digest_path.write_text(
+                    run_production_readiness.sha256_prefixed_file(
+                        boundary_proof_path
+                    )
+                    + "\n",
+                    encoding="ascii",
+                )
+                boundary_digest_path.chmod(0o600)
+                collector_args.runner_started_at_unix = generated_at
+                collector_args.pre_run_completion_proof_state = {
+                    "exists": False
+                }
+                try:
+                    run_production_readiness.verify_completion_output(
+                        boundary_proof_path, collector_args
+                    )
+                except ValueError as exc:
+                    if "readiness-only authority boundary" not in str(exc):
+                        raise
+                else:
+                    raise AssertionError(
+                        "readiness verification accepted host preflight "
+                        "action authority"
+                    )
             observation_body.write_bytes(mutated_body)
             collector_args.runner_started_at_unix = generated_at
             collector_args.pre_run_completion_proof_state = {"exists": False}
@@ -223,7 +397,7 @@ def verify_final_observation_body_revalidation(
                     raise
             else:
                 raise AssertionError(
-                    f"final completion accepted an observation body {label} after collection"
+                    f"readiness verification accepted an observation body {label} after collection"
                 )
             if label == "changed" and (
                 observation_body.stat().st_size != collected_bytes
@@ -253,6 +427,1583 @@ def verify_final_observation_body_revalidation(
             original_bootstrap_identity
         )
         observation_body.write_bytes(b"body")
+
+
+def _fixture_digest(label: str) -> str:
+    return "sha256:" + hashlib.sha256(label.encode("utf-8")).hexdigest()
+
+
+def _fixture_sha384(label: str) -> str:
+    return "sha384:" + hashlib.sha384(label.encode("utf-8")).hexdigest()
+
+
+def _fixture_json_digest(value: object) -> str:
+    return "sha256:" + hashlib.sha256(
+        canonical_json(value).encode("utf-8")
+    ).hexdigest()
+
+
+def _fixture_merkle_leaf_digest(value: object) -> str:
+    return "sha256:" + hashlib.sha256(
+        b"\x00" + canonical_json(value).encode("utf-8")
+    ).hexdigest()
+
+
+def _completion_bound_fixture(
+    artifact: dict[str, object],
+    *,
+    identity: dict[str, object],
+    identity_sha256: str,
+    label: str,
+) -> dict[str, object]:
+    binding: dict[str, object] = {
+        "artifact": artifact,
+        "completionIdentity": identity,
+        "completionIdentitySha256": identity_sha256,
+        "label": label,
+    }
+    return {**binding, "bindingSha256": _fixture_json_digest(binding)}
+
+
+def _obsolete_release_completion_result_v1_fixture() -> dict[str, object]:
+    raise AssertionError(
+        "obsolete final-shaped completionProof/v6 fixture is unreachable"
+    )
+    core_names = (
+        "builderA",
+        "builderB",
+        "continuity",
+        "custody",
+        "eif",
+        "hardware",
+        "promotion",
+        "release",
+        "response",
+        "runtime",
+        "source",
+        "trust",
+        "witness",
+    )
+    identity: dict[str, object] = {
+        "apiVersion": FINAL_FIXTURE_IDENTITY_API_VERSION,
+        "challengeNonceSha256": _fixture_digest("challenge"),
+        "coreDigests": {
+            name: _fixture_digest(f"core-{name}") for name in core_names
+        },
+        "pipeline": FINAL_FIXTURE_PIPELINE,
+        "releaseGeneration": 9,
+        "rollbackEpoch": 3,
+    }
+    identity_sha256 = _fixture_json_digest(identity)
+    pcrs = {
+        "PCR0": _fixture_sha384("eif"),
+        "PCR1": _fixture_sha384("pcr1"),
+        "PCR2": _fixture_sha384("pcr2"),
+    }
+    trust_roles = (
+        "sourceGitInventory",
+        "sourceUntrackedApproval",
+        "buildWatchdog",
+        "promotion",
+        "builderA",
+        "builderB",
+        "manifestV6EifBuilder",
+        "completion",
+        "completionCheckpoint",
+        "witness",
+        "kmsAudit",
+        "clientState",
+        "clientStateCheckpoint",
+        "stateCommit",
+        "currentHeadAuthorization",
+        "currentHeadRedemption",
+    )
+    trust_key_ids = {
+        role: _fixture_digest(f"trust-role-{role}") for role in trust_roles
+    }
+    promotion_canonical_payload = {
+        "apiVersion": "serverware.verificationPromotionAcceptance/v2",
+        "candidatePromotionContractSha256": _fixture_digest(
+            "candidate-promotion-contract"
+        ),
+    }
+    promotion_acceptance_sha256 = _fixture_json_digest(
+        promotion_canonical_payload
+    )
+    builder_artifact = {
+        "statementFileSha256": _fixture_digest("builder-statement-file"),
+        "statementPayloadSha256": _fixture_digest(
+            "builder-statement-payload"
+        ),
+        "transcriptFileSha256": _fixture_digest("builder-transcript-file"),
+        "transcriptPayloadSha256": _fixture_digest(
+            "builder-transcript-payload"
+        ),
+    }
+    artifact_bindings_payload: dict[str, object] = {
+        "apiVersion": (
+            FINAL_FIXTURE_ARTIFACT_BINDINGS_API_VERSION
+        ),
+        "builders": {
+            "left": _completion_bound_fixture(
+                dict(builder_artifact),
+                identity=identity,
+                identity_sha256=identity_sha256,
+                label="left-raw-builder-statement-and-transcript",
+            ),
+            "right": _completion_bound_fixture(
+                {
+                    key: _fixture_digest(f"right-{key}")
+                    for key in builder_artifact
+                },
+                identity=identity,
+                identity_sha256=identity_sha256,
+                label="right-raw-builder-statement-and-transcript",
+            ),
+        },
+        "candidateManifestAndSource": _completion_bound_fixture(
+            {
+                "candidateManifestFileSha256": _fixture_digest(
+                    "candidate-file"
+                ),
+                "candidateManifestPayloadSha256": _fixture_digest(
+                    "candidate-payload"
+                ),
+                "sourceClosureSha256": _fixture_digest("source-closure"),
+                "sourceInputManifestFileSha256": _fixture_digest(
+                    "source-input-file"
+                ),
+                "sourceInputManifestPayloadSha256": _fixture_digest(
+                    "source-input-payload"
+                ),
+                "watchdogReceiptFileSha256": _fixture_digest(
+                    "watchdog-file"
+                ),
+                "watchdogReceiptPayloadSha256": _fixture_digest(
+                    "watchdog-payload"
+                ),
+            },
+            identity=identity,
+            identity_sha256=identity_sha256,
+            label="candidate-manifest-source-and-watchdog",
+        ),
+        "completionIdentity": identity,
+        "completionIdentitySha256": identity_sha256,
+        "completionProof": _completion_bound_fixture(
+            {
+                "authenticationPayloadSha256": _fixture_digest(
+                    "completion-authentication-payload"
+                ),
+                "fileSha256": _fixture_digest("completion-proof-file"),
+                "proofCoreSha256": _fixture_digest("completion-proof-core"),
+                "publicVerifierBridgeSha256": _fixture_digest(
+                    "completion-public-bridge"
+                ),
+            },
+            identity=identity,
+            identity_sha256=identity_sha256,
+            label="completion-proof-v6",
+        ),
+        "eifMapping": _completion_bound_fixture(
+            {
+                "candidateToEifBuildStatementFileSha256": _fixture_digest(
+                    "candidate-eif-file"
+                ),
+                "candidateToEifBuildStatementPayloadSha256": _fixture_digest(
+                    "candidate-eif-payload"
+                ),
+                "candidateToEifBuilderKeyId": trust_key_ids[
+                    "manifestV6EifBuilder"
+                ],
+                "eifSha384": pcrs["PCR0"],
+                "pcrs": pcrs,
+            },
+            identity=identity,
+            identity_sha256=identity_sha256,
+            label="candidate-promotion-to-eif-mapping",
+        ),
+        "productionIdentity": _completion_bound_fixture(
+            {
+                "productionIdentityFileSha256": _fixture_digest(
+                    "production-identity-file"
+                ),
+                "productionReleaseIdentitySha256": _fixture_digest(
+                    "production-release-identity"
+                ),
+                "runtimeCustodyFileSha256": _fixture_digest(
+                    "runtime-custody-file"
+                ),
+                "runtimeStateFileSha256": _fixture_digest(
+                    "runtime-state-file"
+                ),
+            },
+            identity=identity,
+            identity_sha256=identity_sha256,
+            label="production-identity-runtime-and-custody",
+        ),
+        "promotion": _completion_bound_fixture(
+            {
+                "importedImageMappingsSha256": _fixture_digest(
+                    "imported-image-mappings"
+                ),
+                "promotedManifestFileSha256": _fixture_digest(
+                    "promoted-manifest-file"
+                ),
+                "promotedManifestPayloadSha256": _fixture_digest(
+                    "promoted-manifest-payload"
+                ),
+                "promotionAcceptanceSha256": promotion_acceptance_sha256,
+                "promotionReceiptFileSha256": _fixture_digest(
+                    "promotion-receipt-file"
+                ),
+                "promotionReceiptPayloadSha256": _fixture_digest(
+                    "promotion-receipt-payload"
+                ),
+            },
+            identity=identity,
+            identity_sha256=identity_sha256,
+            label="promotion-receipt-and-imported-image-mappings",
+        ),
+    }
+    artifact_bindings: dict[str, object] = {
+        **artifact_bindings_payload,
+        "artifactBindingsSha256": _fixture_json_digest(
+            artifact_bindings_payload
+        ),
+    }
+    challenge_consumption = {
+        "challengeNonceSha256": identity["challengeNonceSha256"],
+        "consumedAtUnix": 100,
+        "consumptionId": "fixture-challenge-consumption",
+        "expiresAtUnix": 200,
+        "oneUse": True,
+        "status": "consumed",
+    }
+    witness_leaf_sha256 = _fixture_merkle_leaf_digest(
+        {
+            "releaseGeneration": 9,
+            "releaseCoreSha256": identity["coreDigests"]["release"],
+            "rollbackEpoch": 3,
+        }
+    )
+    next_state_payload: dict[str, object] = {
+        "apiVersion": "serverware.monotonicReleaseWitnessState/v2",
+        "challengeConsumptionSha256": _fixture_json_digest(
+            challenge_consumption
+        ),
+        "checkpointSha256": _fixture_digest("witness-checkpoint"),
+        "logId": _fixture_digest("witness-log"),
+        "provider": "fixture-witness-provider",
+        "releaseGeneration": 9,
+        "rollbackEpoch": 3,
+        "rootHash": witness_leaf_sha256,
+        "sequence": 1,
+        "treeSize": 1,
+        "witnessKeyId": trust_key_ids["witness"],
+    }
+    next_client_state: dict[str, object] = {
+        **next_state_payload,
+        "stateSha256": _fixture_json_digest(next_state_payload),
+    }
+    state_transition_payload = {
+        "oldStateSha256": _fixture_digest("prior-state"),
+        "newStateSha256": next_client_state["stateSha256"],
+    }
+    state_transition = {
+        **state_transition_payload,
+        "transitionSha256": _fixture_json_digest(state_transition_payload),
+    }
+    state_commit_receipt_identity = {
+        "apiVersion": (
+            "serverware.publicNitroStateCommitReceiptIdentity/v1"
+        ),
+        "commitId": "fixture-commit",
+        "receiptFileSha256": _fixture_digest("state-commit-file"),
+        "receiptPayloadSha256": _fixture_digest("state-commit-payload"),
+        "signingKeyId": trust_key_ids["stateCommit"],
+        "storeId": "fixture-store",
+    }
+    pre_authorization_core = {
+        "apiVersion": (
+            "serverware.publicNitroPreAuthorizationResultCore/v1"
+        ),
+        "canonicalProfile": (
+            FINAL_FIXTURE_CANONICAL_PROFILE
+        ),
+        "challengeConsumptionSha256": next_client_state[
+            "challengeConsumptionSha256"
+        ],
+        "challengeNonceSha256": identity["challengeNonceSha256"],
+        "completionIdentitySha256": identity_sha256,
+        "completionProofFileSha256": _fixture_digest(
+            "completion-proof-file"
+        ),
+        "newStateSha256": next_client_state["stateSha256"],
+        "oldStateSha256": state_transition["oldStateSha256"],
+        "pendingResultSha256": _fixture_digest("pending-result"),
+        "pipeline": FINAL_FIXTURE_PIPELINE,
+        "requestSha256": _fixture_digest("request"),
+        "responseBytesSha256": _fixture_digest("response-bytes"),
+        "transitionSha256": state_transition["transitionSha256"],
+    }
+    current_head = {
+        "apiVersion": "serverware.publicNitroStateStoreHead/v2",
+        "challengeConsumptionSha256": next_client_state[
+            "challengeConsumptionSha256"
+        ],
+        "commitId": "fixture-commit",
+        "generation": 4,
+        "redemptionSequence": 1,
+        "stateCommitReceiptSha256": state_commit_receipt_identity[
+            "receiptFileSha256"
+        ],
+        "stateSha256": next_client_state["stateSha256"],
+        "storeId": "fixture-store",
+    }
+    current_head_sha256 = _fixture_json_digest(current_head)
+    reservation_identity = {
+        "apiVersion": (
+            "serverware.publicNitroCurrentHeadReservationIdentity/v1"
+        ),
+        "authorizationId": "fixture-authorization",
+        "challengeConsumptionSha256": next_client_state[
+            "challengeConsumptionSha256"
+        ],
+        "completionResultSha256": _fixture_digest(
+            "completion-result-before-redemption"
+        ),
+        "currentRedemptionSequence": 1,
+        "expectedFinalGeneration": 5,
+        "expectedOneUseSequence": 2,
+        "expiresAtUnix": 200,
+        "generation": 4,
+        "headSha256": current_head_sha256,
+        "oneUse": True,
+        "receiptIdentitySha256": _fixture_json_digest(
+            state_commit_receipt_identity
+        ),
+        "reservationId": "fixture-reservation",
+        "status": "reserved",
+        "storeId": "fixture-store",
+        "verifierNonceConsumptionSha256": _fixture_digest(
+            "authorization-nonce-consumption"
+        ),
+    }
+    reservation_identity_sha256 = _fixture_json_digest(
+        reservation_identity
+    )
+    authorization_identity = {
+        "apiVersion": (
+            "serverware.publicNitroCurrentHeadAuthorizationIdentity/v1"
+        ),
+        "authorizationFileSha256": _fixture_digest("authorization-file"),
+        "authorizationId": "fixture-authorization",
+        "authorizationPayloadSha256": _fixture_digest(
+            "authorization-payload"
+        ),
+        "currentHeadSha256": current_head_sha256,
+        "reservationIdentitySha256": reservation_identity_sha256,
+        "signingKeyId": trust_key_ids["currentHeadAuthorization"],
+        "storeId": "fixture-store",
+    }
+    current_final_head = {
+        "apiVersion": "serverware.publicNitroStateStoreFinalHead/v1",
+        "authorizationId": "fixture-authorization",
+        "challengeConsumptionSha256": next_client_state[
+            "challengeConsumptionSha256"
+        ],
+        "commitId": "fixture-commit",
+        "completionResultSha256": reservation_identity[
+            "completionResultSha256"
+        ],
+        "generation": 5,
+        "previousHeadSha256": current_head_sha256,
+        "redemptionId": "fixture-redemption",
+        "redemptionSequence": 2,
+        "redemptionVerifierNonceSha256": _fixture_digest(
+            "redemption-verifier-nonce"
+        ),
+        "reservationId": "fixture-reservation",
+        "stateCommitReceiptSha256": state_commit_receipt_identity[
+            "receiptFileSha256"
+        ],
+        "stateSha256": next_client_state["stateSha256"],
+        "storeId": "fixture-store",
+    }
+    current_final_head_sha256 = _fixture_json_digest(current_final_head)
+    redemption_identity = {
+        "apiVersion": (
+            "serverware.publicNitroCurrentHeadRedemptionReceiptIdentity/v1"
+        ),
+        "oneUseSequence": 2,
+        "redemptionFileSha256": _fixture_digest("redemption-file"),
+        "redemptionId": "fixture-redemption",
+        "redemptionPayloadSha256": _fixture_digest("redemption-payload"),
+        "signingKeyId": trust_key_ids["currentHeadRedemption"],
+        "storeId": "fixture-store",
+    }
+    release_identity = {
+        "apiVersion": "serverware.releaseIdentity/v1",
+        "build": {
+            "builderCoreSha256s": sorted(
+                [
+                    _fixture_digest("builder-a-core"),
+                    _fixture_digest("builder-b-core"),
+                ]
+            ),
+            "buildWatchdogReceiptSha256": _fixture_digest(
+                "build-watchdog"
+            ),
+            "candidateManifestFileSha256": _fixture_digest(
+                "candidate-file"
+            ),
+            "candidateManifestPayloadSha256": _fixture_digest(
+                "candidate-payload"
+            ),
+            "dependencyClosureSha256": _fixture_digest(
+                "dependency-closure"
+            ),
+            "eifBuildCoreSha256": _fixture_digest("eif-build-core"),
+            "importedImageMappingsSha256": _fixture_digest(
+                "imported-image-mappings"
+            ),
+            "promotedManifestSha256": _fixture_digest(
+                "promoted-manifest"
+            ),
+            "promotionReceiptSha256": _fixture_digest(
+                "promotion-receipt"
+            ),
+            "releaseCoreSha256": identity["coreDigests"]["release"],
+        },
+        "configuration": {
+            "caSpkiSha256": _fixture_digest("ca-spki"),
+            "publicAttestation": {
+                field: _fixture_digest(field)
+                for field in (
+                    "nonceStoreIdentitySha256",
+                    "nonceStoreKeySpkiSha256",
+                    "producerDescriptorSha256",
+                    "producerExecutableSha256",
+                    "producerRequestSchemaSha256",
+                    "sandboxDescriptorSha256",
+                    "sandboxLauncherSha256",
+                    "witnessStoreIdentitySha256",
+                    "witnessStoreKeySpkiSha256",
+                )
+            },
+            "releaseKeySpkiSha256": _fixture_digest("release-key"),
+            "responseKeySpkiSha256": _fixture_digest("response-key"),
+            "tlsScopeSigningKeySpkiSha256": _fixture_digest(
+                "tls-scope-key"
+            ),
+            "trustRootBundleSha256": _fixture_digest("trust-root-bundle"),
+            "witnessKeySpkiSha256": trust_key_ids["witness"],
+        },
+        "eif": {"imageSha384": pcrs["PCR0"], "pcrs": pcrs},
+        "monotonicRelease": {
+            "releaseGeneration": 9,
+            "rollbackEpoch": 3,
+        },
+        "pipeline": FINAL_FIXTURE_PIPELINE,
+        "policy": {
+            "hash": _fixture_digest("policy"),
+            "sequence": 7,
+        },
+        "source": {
+            "sourceClosureSha256": _fixture_digest("source-closure"),
+            "sourceInputApprovalSha256": _fixture_digest(
+                "source-input-approval"
+            ),
+            "sourceInputManifestFileSha256": _fixture_digest(
+                "source-input-file"
+            ),
+            "sourceInputManifestPayloadSha256": _fixture_digest(
+                "source-input-payload"
+            ),
+        },
+    }
+    inclusion = {
+        "leafIndex": 0,
+        "leafSha256": witness_leaf_sha256,
+        "proof": [],
+        "rootHash": next_client_state["rootHash"],
+        "treeSize": next_client_state["treeSize"],
+    }
+    witness_core_payload = {
+        "challengeConsumption": challenge_consumption,
+        "consistencyProof": [],
+        "expiresAtUnix": 200,
+        "inclusion": inclusion,
+        "issuedAtUnix": 100,
+        "logId": next_client_state["logId"],
+        "priorStateSha256": state_transition["oldStateSha256"],
+        "provider": next_client_state["provider"],
+        "releaseGeneration": 9,
+        "releaseCoreSha256": identity["coreDigests"]["release"],
+        "revocation": {
+            "asOfUnix": 100,
+            "completionIdentity": identity,
+            "completionIdentitySha256": identity_sha256,
+            "releaseCoreSha256": identity["coreDigests"]["release"],
+            "revocationListSha256": _fixture_json_digest([]),
+            "revokedIdentities": [],
+            "status": "active",
+        },
+        "rollbackEpoch": 3,
+        "sequence": next_client_state["sequence"],
+        "treeSize": next_client_state["treeSize"],
+        "rootHash": next_client_state["rootHash"],
+    }
+    witness_core = {
+        "apiVersion": "serverware.completionWitnessCore/v1",
+        "pipeline": FINAL_FIXTURE_PIPELINE,
+        "payload": witness_core_payload,
+    }
+    witness = {
+        "checkpointSha256": next_client_state["checkpointSha256"],
+        "completionIdentity": identity,
+        "completionIdentitySha256": identity_sha256,
+        "core": witness_core,
+        "coreSha256": _fixture_json_digest(witness_core),
+        "productionReleaseIdentitySha256": _fixture_digest(
+            "production-release-identity"
+        ),
+        "releaseGeneration": 9,
+        "rollbackEpoch": 3,
+        "sequence": next_client_state["sequence"],
+        "treeSize": next_client_state["treeSize"],
+        "rootHash": next_client_state["rootHash"],
+        "leafIndex": inclusion["leafIndex"],
+        "consumptionId": challenge_consumption["consumptionId"],
+        "challengeConsumptionSha256": next_client_state[
+            "challengeConsumptionSha256"
+        ],
+        "revocationChecked": True,
+    }
+    kms_audit_proofs = {
+        name: _fixture_digest(f"kms-{name}")
+        for name in (
+            "broker-kek",
+            "ca",
+            "credentials",
+            "release",
+            "response",
+            "tls",
+        )
+    }
+    final_rollback_boundary = (
+        "this is durable historical evidence, never a reusable action "
+        "capability; an action gate must atomically re-check this exact "
+        "final head as live and consume the redemption receipt identity "
+        "once while performing the action"
+    )
+    public_result = {
+        "okForAction": False,
+        "status": "redemption-verified-non-actionable",
+        "apiVersion": "serverware.publicNitroVerificationResult/v2",
+        "pipeline": FINAL_FIXTURE_PIPELINE,
+        "productionIdentitySha256": _fixture_digest(
+            "production-identity-file"
+        ),
+        "candidateManifestFileSha256": _fixture_digest("candidate-file"),
+        "sourceClosureSha256": _fixture_digest("source-closure"),
+        "buildWatchdogReceiptFileSha256": _fixture_digest(
+            "watchdog-file"
+        ),
+        "promotionReceiptFileSha256": _fixture_digest(
+            "promotion-receipt-file"
+        ),
+        "nitroAttestationDocumentSha256": _fixture_digest(
+            "nitro-attestation"
+        ),
+        "eifSha384": pcrs["PCR0"],
+        "pcrs": pcrs,
+        "tlsExporterSha256": _fixture_digest("tls-exporter"),
+        "tlsSpkiSha256": _fixture_digest("tls-spki"),
+        "requestSha256": pre_authorization_core["requestSha256"],
+        "responseBytesSha256": pre_authorization_core[
+            "responseBytesSha256"
+        ],
+        "completionIdentity": identity,
+        "completionIdentitySha256": identity_sha256,
+        "completionCoreDigests": identity["coreDigests"],
+        "releaseIdentity": release_identity,
+        "releaseIdentitySha256": _fixture_json_digest(release_identity),
+        "completionProofFileSha256": _fixture_digest(
+            "completion-proof-file"
+        ),
+        "runtimeKeyCustodyFileSha256": _fixture_digest(
+            "runtime-custody-file"
+        ),
+        "candidateToEifBuildStatementFileSha256": _fixture_digest(
+            "candidate-eif-file"
+        ),
+        "kmsAuditProofSha256s": kms_audit_proofs,
+        "witness": witness,
+        "nextClientState": next_client_state,
+        "challengeConsumptionSha256": next_client_state[
+            "challengeConsumptionSha256"
+        ],
+        "stateTransition": state_transition,
+        "externalBoundary": (
+            "AWS Nitro EIF/KMS, enclave TLS exporter extension, off-host "
+            "witness, CAS/current-head reservation and atomic redemption "
+            "store, independent builders/promoter, and their trust roots "
+            "must be provisioned outside this verifier"
+        ),
+        "preAuthorizationResultCore": pre_authorization_core,
+        "preAuthorizationResultCoreSha256": _fixture_json_digest(
+            pre_authorization_core
+        ),
+        "stateCommitReceiptSha256": state_commit_receipt_identity[
+            "receiptFileSha256"
+        ],
+        "stateCommitReceiptIdentity": state_commit_receipt_identity,
+        "stateCommitId": "fixture-commit",
+        "stateCommitCommittedAtUnix": 100,
+        "stateCommitExpiresAtUnix": 200,
+        "stateStoreId": "fixture-store",
+        "stateStoreGeneration": 5,
+        "stateStoreRedemptionSequence": 2,
+        "stateCommitPhase": "committed-awaiting-current-head-authorization",
+        "rollbackResistanceBoundary": final_rollback_boundary,
+        "currentHeadAuthorizationFileSha256": authorization_identity[
+            "authorizationFileSha256"
+        ],
+        "currentHeadAuthorizationId": "fixture-authorization",
+        "currentHeadAuthorizationIdentity": authorization_identity,
+        "currentHeadAuthorizationIdentitySha256": _fixture_json_digest(
+            authorization_identity
+        ),
+        "currentHeadAuthorizationIssuedAtUnix": 110,
+        "currentHeadAuthorizationExpiresAtUnix": 190,
+        "currentHead": current_head,
+        "currentHeadSha256": current_head_sha256,
+        "currentHeadVerifierNonceSha256": _fixture_digest(
+            "authorization-verifier-nonce"
+        ),
+        "currentHeadReservationId": "fixture-reservation",
+        "currentHeadReservationIdentity": reservation_identity,
+        "currentHeadReservationIdentitySha256": (
+            reservation_identity_sha256
+        ),
+        "currentHeadExpectedFinalGeneration": 5,
+        "currentHeadExpectedOneUseSequence": 2,
+        "verificationOk": True,
+        "finalCompletionVerified": True,
+        "actionAuthorization": None,
+        "currentFinalHead": current_final_head,
+        "currentFinalHeadSha256": current_final_head_sha256,
+        "currentHeadRedemptionReceiptFileSha256": redemption_identity[
+            "redemptionFileSha256"
+        ],
+        "currentHeadRedemptionReceiptIdentity": redemption_identity,
+        "currentHeadRedemptionReceiptIdentitySha256": _fixture_json_digest(
+            redemption_identity
+        ),
+        "currentHeadRedemptionId": "fixture-redemption",
+        "currentHeadRedemptionVerifierNonceSha256": current_final_head[
+            "redemptionVerifierNonceSha256"
+        ],
+        "currentHeadRedemptionVerified": True,
+        "currentHeadOneUseSequence": 2,
+    }
+    state_commit = {
+        "apiVersion": "serverware.publicNitroStateCommit/v1",
+        "status": "redemption-verified-non-actionable",
+        "actionable": False,
+        "redemptionVerified": True,
+        "commitId": "fixture-commit",
+        "storeId": "fixture-store",
+        "signingKeyId": state_commit_receipt_identity["signingKeyId"],
+        "receiptFileSha256": state_commit_receipt_identity[
+            "receiptFileSha256"
+        ],
+        "receiptPayloadSha256": state_commit_receipt_identity[
+            "receiptPayloadSha256"
+        ],
+        "priorStateSha256": state_transition["oldStateSha256"],
+        "currentStateSha256": next_client_state["stateSha256"],
+        "transitionSha256": state_transition["transitionSha256"],
+        "challengeConsumptionSha256": next_client_state[
+            "challengeConsumptionSha256"
+        ],
+        "currentHeadAuthorizationId": "fixture-authorization",
+        "currentHeadAuthorizationFileSha256": authorization_identity[
+            "authorizationFileSha256"
+        ],
+        "currentHeadSha256": current_head_sha256,
+        "currentHeadVerifierNonceSha256": public_result[
+            "currentHeadVerifierNonceSha256"
+        ],
+        "currentHeadReservationId": "fixture-reservation",
+        "currentHeadRedemptionId": "fixture-redemption",
+        "currentHeadRedemptionReceiptFileSha256": redemption_identity[
+            "redemptionFileSha256"
+        ],
+        "currentHeadRedemptionReceiptIdentitySha256": public_result[
+            "currentHeadRedemptionReceiptIdentitySha256"
+        ],
+        "currentHeadRedemptionVerifierNonceSha256": public_result[
+            "currentHeadRedemptionVerifierNonceSha256"
+        ],
+        "currentFinalHeadSha256": current_final_head_sha256,
+        "currentHeadOneUseSequence": 2,
+        "rollbackResistanceBoundary": final_rollback_boundary,
+    }
+    candidate_to_eif = {
+        "fileSha256": _fixture_digest("candidate-eif-file"),
+        "payloadSha256": _fixture_digest("candidate-eif-payload"),
+        "signingKeyId": trust_key_ids["manifestV6EifBuilder"],
+        "signingKeyFileSha256": _fixture_digest(
+            "candidate-eif-key-file"
+        ),
+        "builderStatementsSha256": _fixture_digest("builder-statements"),
+        "completionIdentity": identity,
+        "completionIdentitySha256": identity_sha256,
+        "dependencyClosureSha256": _fixture_digest(
+            "dependency-closure"
+        ),
+        "importedImageMappingsSha256": _fixture_digest(
+            "imported-image-mappings"
+        ),
+        "eifSha384": pcrs["PCR0"],
+        "pcrs": pcrs,
+        "releaseGeneration": 9,
+        "rollbackEpoch": 3,
+    }
+    protected_state_payload = {
+        "apiVersion": "serverware.protectedNitroClientStateIdentity/v1",
+        "canonicalProfile": (
+            FINAL_FIXTURE_CANONICAL_PROFILE
+        ),
+        "protectedClientStateId": "fixture-protected-state",
+        "stateEnvelopeFileSha256": _fixture_digest(
+            "protected-state-envelope"
+        ),
+        "statePayloadSha256": _fixture_digest("protected-state-payload"),
+        "clientStateSha256": state_transition["oldStateSha256"],
+        "stateSigningKeyId": trust_key_ids["clientState"],
+        "stateSigningKeyFileSha256": _fixture_digest("state-key-file"),
+        "checkpointFileSha256": _fixture_digest(
+            "protected-checkpoint-file"
+        ),
+        "checkpointPayloadSha256": _fixture_digest(
+            "protected-checkpoint-payload"
+        ),
+        "checkpointKeyId": trust_key_ids["clientStateCheckpoint"],
+        "checkpointKeyFileSha256": _fixture_digest(
+            "checkpoint-key-file"
+        ),
+        "checkpointProvider": "fixture-checkpoint-provider",
+        "checkpointTreeSize": 8,
+        "checkpointRootHashSha256": _fixture_digest(
+            "protected-checkpoint-root"
+        ),
+        "trustRootBundleSha256": _fixture_digest("trust-root-bundle"),
+        "trustRootPinId": "fixture-trust-root-pin",
+        "provenanceBoundary": (
+            "client-or-out-of-band-pinned-protected-state/v1"
+        ),
+    }
+    protected_state = {
+        **protected_state_payload,
+        "identitySha256": _fixture_json_digest(protected_state_payload),
+    }
+    host_bootstrap_boundary_payload: dict[str, object] = {
+        "apiVersion": "serverware.hostBootstrapBoundary/v1",
+        "launchManifestApiVersion": "serverware.productionReadinessLaunch/v3",
+        "launchAuthorizationRequestApiVersion": (
+            "serverware.launchAuthorizationRequest/v2"
+        ),
+        "launchAuthorizationApiVersion": "serverware.launchAuthorization/v2",
+        "bootstrapReceiptApiVersion": "serverware.bootstrapReceipt/v3",
+        "nonceRollbackAssuranceBindingApiVersion": (
+            "serverware.productionNonceRollbackAssuranceBinding/v1"
+        ),
+        "authorizationScope": "trusted-host-readiness",
+        "freshnessAuthority": "trusted-host-wall-clock",
+        "evidenceProvidedToFinalVerifier": False,
+        "authoritativeForFinalCompletion": False,
+        "requiredForFinalCompletion": False,
+        "relationship": "non-authoritative-readiness-context-only",
+        "finalAuthority": (
+            "independent-manifest-v6-public-nitro-verifier-and-protected-state"
+        ),
+        "completionIdentitySha256": identity_sha256,
+        "bindingMechanism": (
+            "verifier-validated-canonical-binding-to-authenticated-completion-identity"
+        ),
+    }
+    host_bootstrap_boundary = {
+        **host_bootstrap_boundary_payload,
+        "boundarySha256": _fixture_json_digest(
+            host_bootstrap_boundary_payload
+        ),
+    }
+    production_identity_payload: dict[str, object] = {
+        "apiVersion": (
+            FINAL_FIXTURE_BRIDGE_API_VERSION
+        ),
+        "canonicalProfile": (
+            FINAL_FIXTURE_CANONICAL_PROFILE
+        ),
+        "pipeline": FINAL_FIXTURE_PIPELINE,
+        "legacyDockerNsmAccepted": False,
+        "completionIdentity": identity,
+        "completionIdentitySha256": identity_sha256,
+        "releaseArtifactBindings": artifact_bindings,
+        "publicNitroEvidenceBundleFileSha256": _fixture_digest(
+            "public-bundle-file"
+        ),
+        "publicNitroExpectationsFileSha256": _fixture_digest(
+            "public-expectations-file"
+        ),
+        "publicVerifierResultSha256": _fixture_json_digest(public_result),
+        "productionIdentitySha256": public_result[
+            "productionIdentitySha256"
+        ],
+        "candidateManifestFileSha256": public_result[
+            "candidateManifestFileSha256"
+        ],
+        "candidateManifestPayloadSha256": _fixture_digest(
+            "candidate-payload"
+        ),
+        "sourceInputManifestFileSha256": _fixture_digest(
+            "source-input-file"
+        ),
+        "sourceClosureSha256": public_result["sourceClosureSha256"],
+        "buildWatchdogReceiptFileSha256": public_result[
+            "buildWatchdogReceiptFileSha256"
+        ],
+        "promotionReceiptFileSha256": public_result[
+            "promotionReceiptFileSha256"
+        ],
+        "promotedManifestFileSha256": _fixture_digest(
+            "promoted-manifest-file"
+        ),
+        "promotedManifestPayloadSha256": _fixture_digest(
+            "promoted-manifest-payload"
+        ),
+        "promotedManifestMeasuredFileSha256": _fixture_digest(
+            "promoted-manifest-file"
+        ),
+        "candidateToEif": candidate_to_eif,
+        "runtimeStateFileSha256": _fixture_digest("runtime-state-file"),
+        "runtimeKeyCustodyFileSha256": public_result[
+            "runtimeKeyCustodyFileSha256"
+        ],
+        "enclaveInstanceId": "fixture-enclave",
+        "enclaveBootId": "fixture-enclave-boot",
+        "runtimeKeyGenerations": {
+            name: index + 1
+            for index, name in enumerate(
+                (
+                    "brokerKek",
+                    "ca",
+                    "credentialRelease",
+                    "policy",
+                    "release",
+                    "response",
+                    "tls",
+                    "tlsScope",
+                )
+            )
+        },
+        "releaseGeneration": 9,
+        "rollbackEpoch": 3,
+        "policyHash": _fixture_digest("policy"),
+        "policySequence": 7,
+        "caSpkiSha256": _fixture_digest("ca-spki"),
+        "eifSha384": pcrs["PCR0"],
+        "pcrs": pcrs,
+        "rawNitroAttestationDocumentSha256": public_result[
+            "nitroAttestationDocumentSha256"
+        ],
+        "tlsExporterSha256": public_result["tlsExporterSha256"],
+        "tlsSpkiSha256": public_result["tlsSpkiSha256"],
+        "tlsPeerSpkiSha256": _fixture_digest("tls-peer-spki"),
+        "tlsStackMeasurementSha256": _fixture_digest(
+            "tls-stack-measurement"
+        ),
+        "attestationRequestSha256": _fixture_digest(
+            "attestation-request"
+        ),
+        "requestSha256": public_result["requestSha256"],
+        "responseBytesSha256": public_result["responseBytesSha256"],
+        "releaseKeyCustodyEvidenceSha256": public_result[
+            "runtimeKeyCustodyFileSha256"
+        ],
+        "kmsAuditProofSha256s": kms_audit_proofs,
+        "completionProofFileSha256": public_result[
+            "completionProofFileSha256"
+        ],
+        "completionAuthenticationKeyId": trust_key_ids["completion"],
+        "completionCheckpointKeyId": trust_key_ids[
+            "completionCheckpoint"
+        ],
+        "hostBootstrapBoundarySha256": host_bootstrap_boundary[
+            "boundarySha256"
+        ],
+        "witnessCheckpointSha256": witness["checkpointSha256"],
+        "witnessChallengeConsumptionSha256": witness[
+            "challengeConsumptionSha256"
+        ],
+        "witnessLeafIndex": witness["leafIndex"],
+        "challengeSha256": identity["challengeNonceSha256"],
+        "candidateExecutionContract": {
+            field: _fixture_digest(field)
+            for field in (
+                "commandContractSha256",
+                "semanticContractSha256",
+                "dependencyManifestFileSha256",
+                "dependencyManifestPayloadSha256",
+                "planSha256",
+                "sourceClosureSha256",
+                "sourceFilesSha256",
+                "installedSourceFilesSha256",
+            )
+        },
+        "watchdogAndBuilderGrammar": {
+            field: _fixture_digest(field)
+            for field in (
+                "builderEventGrammarSha256",
+                "candidateRequestSha256",
+                "outputIdentitiesSha256",
+                "requestSha256",
+                "watchdogEventOrderSha256",
+            )
+        },
+        "promotionAcceptance": {
+            "acceptanceSha256": promotion_acceptance_sha256,
+            "canonicalPayload": promotion_canonical_payload,
+            "canonicalPayloadSha256": promotion_acceptance_sha256,
+            "imageMappingsSha256": _fixture_digest(
+                "imported-image-mappings"
+            ),
+            "inspectionInventorySha256": _fixture_digest(
+                "promotion-inspection-inventory"
+            ),
+        },
+        "publicHandoff": {
+            "httpResponseEnvelopeSha256": _fixture_digest(
+                "http-response-envelope"
+            ),
+            "runtimeCustodyApiVersion": (
+                "serverware.enclaveKeyCustody/v3"
+            ),
+            "tlsScopeApiVersion": "serverware.enclaveTlsScope/v2",
+            "responseStatementApiVersion": (
+                "serverware.attestationResponse/v2"
+            ),
+            "protectedPriorClientStateEnvelopeSha256": _fixture_digest(
+                "protected-state-envelope"
+            ),
+            "protectedPriorClientStateCheckpointSha256": _fixture_digest(
+                "protected-checkpoint-file"
+            ),
+            "trustRootBundleSha256": _fixture_digest(
+                "trust-root-bundle"
+            ),
+            "trustRootPinId": "fixture-trust-root-pin",
+            "candidateToEifBuildStatementFileSha256": candidate_to_eif[
+                "fileSha256"
+            ],
+        },
+        "protectedPriorClientState": protected_state,
+        "stateCommit": state_commit,
+        "trustRootPin": {
+            "bundleFileSha256": _fixture_digest("trust-root-bundle"),
+            "expectedBundleFileSha256": _fixture_digest(
+                "trust-root-bundle"
+            ),
+            "pinId": "fixture-trust-root-pin",
+            "keyIds": trust_key_ids,
+            "provenanceBoundary": (
+                "Only a client or out-of-band comparison of the expected "
+                "bundle digest and key IDs establishes provenance; these "
+                "on-host CLI paths are transport only."
+            ),
+        },
+    }
+    production_identity = {
+        **production_identity_payload,
+        "identitySha256": _fixture_json_digest(production_identity_payload),
+    }
+    result_payload: dict[str, object] = {
+        "apiVersion": (
+            run_production_readiness.FINAL_COMPLETION_RESULT_API_VERSION
+        ),
+        "verificationOk": True,
+        "finalCompletionVerified": True,
+        "actionAuthorization": None,
+        "okForAction": False,
+        "verificationMode": "final",
+        "redemptionVerified": True,
+        "readinessOnly": False,
+        "independentlyAuthenticated": True,
+        "pipeline": FINAL_FIXTURE_PIPELINE,
+        "canonicalProfile": (
+            FINAL_FIXTURE_CANONICAL_PROFILE
+        ),
+        "verifiedAtUnix": 150,
+        "productionReleaseIdentity": production_identity,
+        "publicVerifierResult": public_result,
+        "aggregateAuthentication": {
+            "independentlyAuthenticated": True,
+            "completionIdentity": identity,
+            "completionIdentitySha256": identity_sha256,
+            "completionProofFileSha256": public_result[
+                "completionProofFileSha256"
+            ],
+            "completionAuthenticationKeyId": production_identity[
+                "completionAuthenticationKeyId"
+            ],
+            "completionCheckpointKeyId": production_identity[
+                "completionCheckpointKeyId"
+            ],
+            "hostBootstrapBoundarySha256": host_bootstrap_boundary[
+                "boundarySha256"
+            ],
+            "keysAreDistinct": True,
+        },
+        "completionIdentity": identity,
+        "completionIdentitySha256": identity_sha256,
+        "releaseArtifactBindings": artifact_bindings,
+        "nextClientState": next_client_state,
+        "stateCommit": state_commit,
+        "hostBootstrapBoundary": host_bootstrap_boundary,
+        "externalPinProvenanceBoundary": (
+            "The verifier proves equality to supplied pins. It cannot prove "
+            "that an on-host argument was independently sourced; the client "
+            "or another out-of-band trust channel must pin the bundle digest "
+            "and protected-state key IDs."
+        ),
+        "externalProvisioningBoundary": (
+            "Actual AWS Nitro EIF construction and PCR policy, AWS KMS "
+            "CiphertextForRecipient releases, enclave-owned TLS exporter "
+            "support, independent builders/promoter, off-host monotonic "
+            "witness storage, CAS/current-head reservation and atomic "
+            "authorization redemption, and a stateful action gate that "
+            "re-checks the live final head and consumes the redemption "
+            "receipt identity while performing the action must still be "
+            "provisioned. This persisted completion is never an action "
+            "capability."
+        ),
+    }
+    return {
+        **result_payload,
+        "resultSha256": _fixture_json_digest(result_payload),
+    }
+
+
+def _fixture_ed25519_material(
+    label: str,
+) -> tuple[Ed25519PrivateKey, str, str]:
+    private_key = Ed25519PrivateKey.from_private_bytes(
+        hashlib.sha256(f"serverware-fixture:{label}".encode("ascii")).digest()
+    )
+    public_pem = private_key.public_key().public_bytes(
+        serialization.Encoding.PEM,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode("ascii")
+    public_der = private_key.public_key().public_bytes(
+        serialization.Encoding.DER,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    return private_key, public_pem, "sha256:" + hashlib.sha256(public_der).hexdigest()
+
+
+def _fixture_ed25519_signature(
+    private_key: Ed25519PrivateKey,
+    domain: bytes,
+    value: object,
+) -> str:
+    signature = private_key.sign(
+        domain + canonical_json(value).encode("ascii")
+    )
+    return "ed25519:" + base64.urlsafe_b64encode(signature).decode(
+        "ascii"
+    ).rstrip("=")
+
+
+def release_completion_result_v1_fixture() -> dict[str, object]:
+    import production_attestation_producer_issuer as producer_issuer
+    import verify_release_completion as final_verifier
+    import verify_nitro_tee as native_verifier
+
+    public_private, public_pem, public_key_id = _fixture_ed25519_material(
+        "public-nitro-result"
+    )
+    result_private, _, result_key_id = _fixture_ed25519_material(
+        "release-completion-result"
+    )
+    core_names = (
+        "builderA",
+        "builderB",
+        "continuity",
+        "custody",
+        "eif",
+        "hardware",
+        "promotion",
+        "release",
+        "response",
+        "runtime",
+        "source",
+        "trust",
+        "witness",
+    )
+    completion_identity: dict[str, object] = {
+        "apiVersion": FINAL_FIXTURE_IDENTITY_API_VERSION,
+        "challengeNonceSha256": _fixture_digest("challenge"),
+        "coreDigests": {
+            name: _fixture_digest(f"completion-core:{name}")
+            for name in core_names
+        },
+        "pipeline": FINAL_FIXTURE_PIPELINE,
+        "releaseGeneration": 9,
+        "rollbackEpoch": 3,
+    }
+    completion_identity_sha256 = _fixture_json_digest(
+        completion_identity
+    )
+    public_roles = {
+        role: _fixture_digest(f"final-role:{role}")
+        for role in (
+            "builderA",
+            "builderB",
+            "buildWatchdog",
+            "clientState",
+            "clientStateCheckpoint",
+            "currentHeadAuthorization",
+            "currentHeadRedemption",
+            "keyCustody",
+            "kmsAudit",
+            "manifestV6EifBuilder",
+            "nitroAttestationVerifier",
+            "promotion",
+            "sourceGitInventory",
+            "sourceUntrackedApproval",
+            "stateCommit",
+            "stateStore",
+            "storeAssurance",
+            "tlsRelease",
+            "verifierState",
+            "witness",
+            "witnessStore",
+        )
+    }
+    public_roles["publicNitroResult"] = public_key_id
+    public_roles = {
+        role: public_roles[role] for role in sorted(public_roles)
+    }
+    public_role_registry_sha256 = _fixture_json_digest(
+        {
+            "apiVersion": "serverware.publicNitroRoleRegistry/v1",
+            "roles": public_roles,
+        }
+    )
+    challenge_consumption_sha256 = _fixture_digest(
+        "witness-challenge-consumption"
+    )
+    witness = {
+        "checkpointSha256": _fixture_digest("witness-checkpoint"),
+        "challengeConsumptionSha256": challenge_consumption_sha256,
+        "leafIndex": 4,
+        "releaseGeneration": 9,
+        "rollbackEpoch": 3,
+        "sequence": 11,
+        "treeSize": 12,
+        "rootHash": _fixture_digest("witness-root"),
+        "witnessKeyId": public_roles["witness"],
+        "witnessStoreKeyId": public_roles["witnessStore"],
+        "witnessStoreIdentitySha256": _fixture_digest(
+            "witness-store-identity"
+        ),
+        "witnessStoreAssuranceSha256": _fixture_digest(
+            "witness-store-assurance"
+        ),
+    }
+    next_state_core: dict[str, object] = {
+        "apiVersion": "serverware.monotonicReleaseWitnessState/v2",
+        "challengeConsumptionSha256": challenge_consumption_sha256,
+        "checkpointSha256": witness["checkpointSha256"],
+        "logId": _fixture_digest("witness-log"),
+        "provider": "fixture-witness-provider",
+        "releaseGeneration": 9,
+        "rollbackEpoch": 3,
+        "rootHash": witness["rootHash"],
+        "sequence": witness["sequence"],
+        "treeSize": witness["treeSize"],
+        "witnessKeyId": public_roles["witness"],
+    }
+    next_state = {
+        **next_state_core,
+        "stateSha256": _fixture_json_digest(next_state_core),
+    }
+    transition_core = {
+        "oldStateSha256": _fixture_digest("prior-client-state"),
+        "newStateSha256": next_state["stateSha256"],
+    }
+    state_transition = {
+        **transition_core,
+        "transitionSha256": _fixture_json_digest(transition_core),
+    }
+    state_commit = {
+        "apiVersion": "serverware.publicNitroStateCommit/v1",
+        "status": "redemption-verified-non-actionable",
+        "actionable": False,
+        "redemptionVerified": True,
+        "commitId": "fixture-commit",
+        "storeId": "fixture-store",
+        "signingKeyId": public_roles["stateCommit"],
+        "stateStoreSigningKeyId": public_roles["stateStore"],
+        "receiptFileSha256": _fixture_digest("state-commit-receipt"),
+        "receiptPayloadSha256": _fixture_digest(
+            "state-commit-receipt-payload"
+        ),
+        "priorStateSha256": state_transition["oldStateSha256"],
+        "currentStateSha256": state_transition["newStateSha256"],
+        "transitionSha256": state_transition["transitionSha256"],
+        "challengeConsumptionSha256": challenge_consumption_sha256,
+        "currentHeadAuthorizationId": "fixture-authorization",
+        "currentHeadAuthorizationFileSha256": _fixture_digest(
+            "current-head-authorization"
+        ),
+        "currentHeadAuthorizationKeyId": public_roles[
+            "currentHeadAuthorization"
+        ],
+        "currentHeadSha256": _fixture_digest("current-head"),
+        "currentHeadVerifierNonceSha256": _fixture_digest(
+            "current-head-verifier-nonce"
+        ),
+        "currentHeadReservationId": "fixture-reservation",
+        "currentHeadRedemptionId": "fixture-redemption",
+        "currentHeadRedemptionReceiptFileSha256": _fixture_digest(
+            "current-head-redemption-receipt"
+        ),
+        "currentHeadRedemptionReceiptIdentitySha256": _fixture_digest(
+            "current-head-redemption-identity"
+        ),
+        "currentHeadRedemptionVerifierNonceSha256": _fixture_digest(
+            "current-head-redemption-verifier-nonce"
+        ),
+        "currentHeadRedemptionKeyId": public_roles[
+            "currentHeadRedemption"
+        ],
+        "currentFinalHeadSha256": _fixture_digest("current-final-head"),
+        "currentHeadOneUseSequence": 12,
+        "verifierStateKeyId": public_roles["verifierState"],
+        "storeAssuranceKeyId": public_roles["storeAssurance"],
+        "tlsReleaseKeyId": public_roles["tlsRelease"],
+        "rollbackResistanceBoundary": (
+            "historical non-actionable evidence after atomic redemption"
+        ),
+    }
+    pcrs = {
+        "PCR0": _fixture_sha384("eif"),
+        "PCR1": _fixture_sha384("pcr1"),
+        "PCR2": _fixture_sha384("pcr2"),
+    }
+    public_result: dict[str, object] = {
+        "apiVersion": "serverware.publicNitroVerificationResult/v2",
+        "verificationOk": True,
+        "finalCompletionVerified": True,
+        "actionAuthorization": None,
+        "okForAction": False,
+        "status": "redemption-verified-non-actionable",
+        "pipeline": FINAL_FIXTURE_PIPELINE,
+        "canonicalProfile": FINAL_FIXTURE_CANONICAL_PROFILE,
+        "verifiedAtUnix": 150,
+        "evidenceBundleFileSha256": _fixture_digest(
+            "public-nitro-evidence-bundle"
+        ),
+        "expectationsFileSha256": _fixture_digest(
+            "public-nitro-expectations"
+        ),
+        "trustRootBundleFileSha256": _fixture_digest(
+            "public-nitro-trust-roots"
+        ),
+        "completionIdentity": completion_identity,
+        "completionIdentitySha256": completion_identity_sha256,
+        "completionCoreDigests": completion_identity["coreDigests"],
+        "candidateManifestFileSha256": _fixture_digest(
+            "candidate-manifest"
+        ),
+        "candidateManifestPayloadSha256": _fixture_digest(
+            "candidate-manifest-payload"
+        ),
+        "sourceInputManifestFileSha256": _fixture_digest(
+            "source-input-manifest"
+        ),
+        "sourceClosureSha256": _fixture_digest("source-closure"),
+        "buildWatchdogReceiptFileSha256": _fixture_digest(
+            "build-watchdog-receipt"
+        ),
+        "promotionReceiptFileSha256": _fixture_digest(
+            "promotion-receipt"
+        ),
+        "promotedManifestFileSha256": _fixture_digest(
+            "promoted-manifest"
+        ),
+        "productionIdentitySha256": _fixture_digest(
+            "production-identity"
+        ),
+        "runtimeStateFileSha256": _fixture_digest("runtime-state"),
+        "runtimeKeyCustodyFileSha256": _fixture_digest(
+            "runtime-key-custody"
+        ),
+        "candidateToEifBuildStatementFileSha256": _fixture_digest(
+            "candidate-to-eif"
+        ),
+        "eifSha384": pcrs["PCR0"],
+        "pcrs": pcrs,
+        "nitroAttestationDocumentSha256": _fixture_digest(
+            "nitro-attestation-document"
+        ),
+        "attestationRequestSha256": _fixture_digest(
+            "attestation-request"
+        ),
+        "requestSha256": _fixture_digest("request"),
+        "responseBytesSha256": _fixture_digest("response-bytes"),
+        "tlsExporterSha256": _fixture_digest("tls-exporter"),
+        "tlsSpkiSha256": _fixture_digest("tls-spki"),
+        "tlsPeerSpkiSha256": _fixture_digest("tls-peer-spki"),
+        "tlsStackMeasurementSha256": _fixture_digest(
+            "tls-stack-measurement"
+        ),
+        "kmsAuditProofSha256s": {
+            name: _fixture_digest(f"kms-audit:{name}")
+            for name in (
+                "broker-kek",
+                "ca",
+                "credentials",
+                "release",
+                "response",
+                "tls",
+            )
+        },
+        "witness": witness,
+        "nextClientState": next_state,
+        "stateTransition": state_transition,
+        "stateCommit": state_commit,
+        "roleKeyIds": public_roles,
+        "roleRegistrySha256": public_role_registry_sha256,
+    }
+    signer_tls_spki_sha256 = _fixture_digest(
+        "public-nitro-signer-server-tls"
+    )
+    signing_request = (
+        native_verifier.build_public_nitro_result_signing_request(
+            public_result,
+            provider="fixture-public-nitro-verifier",
+            signing_key_id=public_key_id,
+            signing_key_spki_sha256=public_key_id,
+            signer_server_tls_spki_sha256=(
+                signer_tls_spki_sha256
+            ),
+        )
+    )
+
+    def invoke_native_signer(request: object) -> bytes:
+        if request != signing_request:
+            raise AssertionError(
+                "production relay changed the native signing request"
+            )
+        envelope_core = signing_request["envelopeCore"]
+        signature = _fixture_ed25519_signature(
+            public_private,
+            native_verifier.PUBLIC_NITRO_LIVE_RESULT_ENVELOPE_DOMAIN,
+            envelope_core,
+        )
+        response = {
+            "apiVersion": (
+                native_verifier
+                .PUBLIC_NITRO_RESULT_SIGNING_RESPONSE_VERSION
+            ),
+            "envelope": {
+                **envelope_core,
+                "signature": signature,
+            },
+            "operationIdSha256":
+            signing_request["operationIdSha256"],
+            "recoveryKeySha256":
+            signing_request["recoveryKeySha256"],
+            "requestSha256": signing_request["requestSha256"],
+            "status": "signed",
+            "transportPins": signing_request["transportPins"],
+        }
+        return producer_issuer.canonical_json(response) + b"\n"
+
+    relayed_response = (
+        producer_issuer.relay_public_nitro_result_signer_operation(
+            signing_request,
+            invoke_signer=invoke_native_signer,
+            signing_key=public_private.public_key(),
+        )
+    )
+    signing_response = json.loads(relayed_response.decode("utf-8"))
+    public_envelope = (
+        native_verifier.verify_public_nitro_result_signing_response(
+            signing_request,
+            signing_response,
+            signing_key=public_private.public_key(),
+        )
+    )
+    final_consumed_result = (
+        final_verifier.verify_signed_public_nitro_result_envelope(
+            public_envelope,
+            trusted_public_key_pem=public_pem,
+            expected_provider="fixture-public-nitro-verifier",
+            expected_key_id=public_key_id,
+            expected_spki_sha256=public_key_id,
+        )
+    )
+    if final_consumed_result != public_result:
+        raise AssertionError(
+            "final-v1 did not consume the native/production signed result"
+        )
+    public_envelope_file_sha256 = "sha256:" + hashlib.sha256(
+        (canonical_json(public_envelope) + "\n").encode("ascii")
+    ).hexdigest()
+    launch_authority_key_id = _fixture_digest(
+        "final-role:launchAuthority"
+    )
+    host_context = {
+        "apiVersion": "serverware.hostReadinessContext/v1",
+        "provided": True,
+        "completionProofApiVersion": "serverware.completionProof/v6",
+        "completionProofFileSha256": _fixture_digest(
+            "host-readiness-completion-proof-file"
+        ),
+        "completionProofCoreSha256": _fixture_digest(
+            "host-readiness-completion-proof-core"
+        ),
+        "generatedAtUnix": 1_700_000_000,
+        "launchAuthorityKeyId": launch_authority_key_id,
+        "authoritativeForFinalCompletion": False,
+    }
+    host_boundary_core: dict[str, object] = {
+        "apiVersion": "serverware.hostBootstrapBoundary/v1",
+        "launchManifestApiVersion": "serverware.productionReadinessLaunch/v3",
+        "launchAuthorizationRequestApiVersion": (
+            "serverware.launchAuthorizationRequest/v2"
+        ),
+        "launchAuthorizationApiVersion": "serverware.launchAuthorization/v2",
+        "bootstrapReceiptApiVersion": "serverware.bootstrapReceipt/v3",
+        "nonceRollbackAssuranceBindingApiVersion": (
+            "serverware.productionNonceRollbackAssuranceBinding/v1"
+        ),
+        "authorizationScope": "trusted-host-readiness",
+        "freshnessAuthority": "trusted-host-wall-clock",
+        "evidenceProvidedToFinalVerifier": True,
+        "hostReadinessContextSha256": _fixture_json_digest(host_context),
+        "hostReadinessCompletionProofFileSha256": host_context[
+            "completionProofFileSha256"
+        ],
+        "launchAuthorityKeyId": launch_authority_key_id,
+        "authoritativeForFinalCompletion": False,
+        "requiredForFinalCompletion": False,
+        "relationship": "non-authoritative-readiness-context-only",
+        "finalAuthority": (
+            "independent-manifest-v6-public-nitro-verifier-and-protected-state"
+        ),
+        "completionIdentitySha256": completion_identity_sha256,
+        "bindingMechanism": (
+            "signed-final-result-core-non-authoritative-context-binding"
+        ),
+    }
+    host_boundary = {
+        **host_boundary_core,
+        "boundarySha256": _fixture_json_digest(host_boundary_core),
+    }
+    final_roles = {
+        **public_roles,
+        "launchAuthority": launch_authority_key_id,
+        "releaseCompletionResult": result_key_id,
+    }
+    final_roles = {
+        role: final_roles[role] for role in sorted(final_roles)
+    }
+    global_role_registry_core = {
+        "apiVersion": "serverware.finalRoleRegistry/v1",
+        "roles": final_roles,
+    }
+    global_role_registry = {
+        **global_role_registry_core,
+        "registrySha256": _fixture_json_digest(
+            global_role_registry_core
+        ),
+    }
+    final_core = (
+        final_verifier.build_release_completion_verification_v1_core(
+            public_envelope=public_envelope,
+            public_envelope_file_sha256=public_envelope_file_sha256,
+            public_result=public_result,
+            evidence_bundle_file_sha256=public_result[
+                "evidenceBundleFileSha256"
+            ],
+            expectations_file_sha256=public_result[
+                "expectationsFileSha256"
+            ],
+            trust_root_bundle_file_sha256=public_result[
+                "trustRootBundleFileSha256"
+            ],
+            completion_identity=completion_identity,
+            completion_identity_sha256=completion_identity_sha256,
+            host_context=host_context,
+            host_boundary=host_boundary,
+            global_role_registry=global_role_registry,
+            result_signer_key_id=result_key_id,
+        )
+    )
+    result_sha256 = _fixture_json_digest(final_core)
+    return {
+        **final_core,
+        "resultSha256": result_sha256,
+        "authenticity": {
+            "apiVersion": (
+                "serverware.releaseCompletionResultSignature/v1"
+            ),
+            "provider": "fixture-release-completion-signer",
+            "signingKeyId": result_key_id,
+            "signingKeySpkiSha256": result_key_id,
+            "resultSha256": result_sha256,
+            "signature": _fixture_ed25519_signature(
+                result_private,
+                (
+                    b"serverware.releaseCompletionResultSignature/v1"
+                    b"\x00Ed25519\x00"
+                ),
+                final_core,
+            ),
+        },
+    }
+
+
+def release_completion_fixture_validation_kwargs() -> dict[str, str]:
+    _, public_pem, public_key_id = _fixture_ed25519_material(
+        "public-nitro-result"
+    )
+    _, result_pem, result_key_id = _fixture_ed25519_material(
+        "release-completion-result"
+    )
+    result = release_completion_result_v1_fixture()
+    return {
+        "trusted_result_public_key_pem": result_pem,
+        "expected_result_provider": "fixture-release-completion-signer",
+        "expected_result_key_id": result_key_id,
+        "expected_result_spki_sha256": result_key_id,
+        "trusted_public_nitro_result_public_key_pem": public_pem,
+        "expected_public_nitro_result_provider": (
+            "fixture-public-nitro-verifier"
+        ),
+        "expected_public_nitro_result_key_id": public_key_id,
+        "expected_public_nitro_result_spki_sha256": public_key_id,
+        "expected_final_role_registry_sha256": result[
+            "globalRoleRegistry"
+        ]["registrySha256"],
+    }
 
 
 def verify_launcher_style_helper_import() -> None:
@@ -381,6 +2132,99 @@ def verify_sealed_bootstrap_receipt_contract() -> None:
             "metadata": metadata(),
         }
 
+    evidence_key = Ed25519PrivateKey.from_private_bytes(bytes.fromhex("31" * 32))
+    verifier_state_key = Ed25519PrivateKey.from_private_bytes(
+        bytes.fromhex("32" * 32)
+    )
+    verifier_state_store_attestation_key = (
+        Ed25519PrivateKey.from_private_bytes(bytes.fromhex("33" * 32))
+    )
+    evidence_spki = evidence_key.public_key().public_bytes(
+        serialization.Encoding.DER,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    verifier_state_spki = verifier_state_key.public_key().public_bytes(
+        serialization.Encoding.DER,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    verifier_state_store_attestation_spki = (
+        verifier_state_store_attestation_key.public_key().public_bytes(
+            serialization.Encoding.DER,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+    )
+    assurance = {
+        "apiVersion": "serverware.nonceAuthorityAssurance/v1",
+        "administrativeDomainSha256": "sha256:" + "a" * 64,
+        "assuranceEvidenceSha256": "sha256:" + "b" * 64,
+        "assuranceEvidenceType": "linearizableCasOperatorAttestation",
+        "assuranceLevel": "productionRollbackProtected",
+        "authorityEpoch": 1,
+        "authorityGeneration": 2,
+        "authorityIdentitySha256": "sha256:" + "c" * 64,
+        "backendClass": "independentlyAdministeredLinearizableCas",
+        "productionEligible": True,
+        "rollbackProtection": {
+            "administrativeRollbackResistance": True,
+            "backendAttestationRequired": True,
+            "exactSuccessorRequired": True,
+            "freshVerifierChallengeRequired": True,
+            "keyProtection": "nonExportableKmsHsm",
+            "mechanism": "linearizableCasWithRollbackProtectedStorage",
+            "stateCommitment": "hashChainedLinearizableCommitment",
+            "verifierStateStoreClass": "independentlyAdministeredLinearizableCas",
+        },
+    }
+    assurance_sha256 = "sha256:" + hashlib.sha256(
+        canonical_json(assurance).encode("ascii")
+    ).hexdigest()
+    pins_contract = {
+        "apiVersion": (
+            run_production_readiness.NONCE_ROLLBACK_ASSURANCE_PINS_API_VERSION
+        ),
+        "independentVerifierPins": {
+            "expectedNonceAuthorityAssuranceIssuerSpkiSha256": (
+                "sha256:" + hashlib.sha256(evidence_spki).hexdigest()
+            ),
+            "expectedNonceAuthorityAssuranceSha256": assurance_sha256,
+        },
+        "publicConfigPins": {
+            "nonceAuthorityAssurance": assurance,
+            "nonceAuthorityAssuranceEvidenceSigningPublicKeySpkiDerBase64url": (
+                base64.urlsafe_b64encode(evidence_spki)
+                .decode("ascii")
+                .rstrip("=")
+            ),
+            "nonceAuthorityAssuranceSha256": assurance_sha256,
+            "nonceAuthorityVerifierStateSigningPublicKeySpkiDerBase64url": (
+                base64.urlsafe_b64encode(verifier_state_spki)
+                .decode("ascii")
+                .rstrip("=")
+            ),
+            "nonceAuthorityVerifierStateStoreAdministrativeDomainSha256": (
+                "sha256:" + "d" * 64
+            ),
+            "nonceAuthorityVerifierStateStoreAssuranceEvidenceSha256": (
+                "sha256:" + "f" * 64
+            ),
+            "nonceAuthorityVerifierStateStoreAttestationPublicKeySpkiDerBase64url": (
+                base64.urlsafe_b64encode(
+                    verifier_state_store_attestation_spki
+                )
+                .decode("ascii")
+                .rstrip("=")
+            ),
+            "nonceAuthorityVerifierStateStoreIdentitySha256": (
+                "sha256:" + "e" * 64
+            ),
+        },
+    }
+    pins_bytes = canonical_json(pins_contract).encode("ascii") + b"\n"
+    pins_file_sha256 = "sha256:" + hashlib.sha256(pins_bytes).hexdigest()
+    pins_contract_sha256 = "sha256:" + hashlib.sha256(
+        pins_bytes[:-1]
+    ).hexdigest()
+
     launcher_digest = "sha256:" + "3" * 64
     release_root = "/opt/serverware/releases/fixture"
     receipt = {
@@ -396,6 +2240,38 @@ def verify_sealed_bootstrap_receipt_contract() -> None:
         ),
         "manifest": file_record("/etc/serverware/production-release-launch.json", "4"),
         "sourceTreeDigest": "sha256:" + "5" * 64,
+        "nonceRollbackAssurance": {
+            "apiVersion": (
+                run_production_readiness.NONCE_ROLLBACK_ASSURANCE_BINDING_API_VERSION
+            ),
+            "contractSha256": pins_contract_sha256,
+            "pinsFile": {
+                **file_record(
+                    "/etc/serverware/nonce-rollback-assurance-pins.json",
+                    "0",
+                ),
+                "sha256": pins_file_sha256,
+            },
+            "retainedSnapshotFd": 199,
+            "retainedSnapshotSha256": pins_file_sha256,
+            "verifierStateService": {
+                "signingPublicKeySpkiDerBase64url": (
+                    pins_contract["publicConfigPins"][
+                        "nonceAuthorityVerifierStateSigningPublicKeySpkiDerBase64url"
+                    ]
+                ),
+                "storeAdministrativeDomainSha256": (
+                    "sha256:" + "d" * 64
+                ),
+                "storeAssuranceEvidenceSha256": "sha256:" + "f" * 64,
+                "storeAttestationPublicKeySpkiDerBase64url": (
+                    pins_contract["publicConfigPins"][
+                        "nonceAuthorityVerifierStateStoreAttestationPublicKeySpkiDerBase64url"
+                    ]
+                ),
+                "storeIdentitySha256": "sha256:" + "e" * 64,
+            },
+        },
         "productionEnv": file_record("/etc/serverware/production-readiness.env", "9"),
         "python": {
             **file_record(f"{release_root}/runtime/python/bin/python3", "a"),
@@ -445,6 +2321,8 @@ def verify_sealed_bootstrap_receipt_contract() -> None:
     }
 
     authority_key = Ed25519PrivateKey.from_private_bytes(bytes.fromhex("11" * 32))
+    witness_key = Ed25519PrivateKey.from_private_bytes(bytes.fromhex("12" * 32))
+    fixture_now = int(time.time())
 
     def authority_spki(key: Ed25519PrivateKey) -> bytes:
         return key.public_key().public_bytes(
@@ -456,22 +2334,44 @@ def verify_sealed_bootstrap_receipt_contract() -> None:
         target: dict[str, object],
         *,
         key: Ed25519PrivateKey = authority_key,
-        issued_at: int = 100,
-        expires_at: int = 120,
-        verified_at: int = 101,
+        issued_at: int | None = None,
+        expires_at: int | None = None,
+        verified_at: int | None = None,
     ) -> dict[str, object]:
+        selected_issued_at = fixture_now if issued_at is None else issued_at
+        selected_expires_at = (
+            selected_issued_at + launch_authorization.MAX_VALIDITY_SECONDS
+            if expires_at is None
+            else expires_at
+        )
+        selected_verified_at = (
+            selected_issued_at if verified_at is None else verified_at
+        )
         inputs = target["inputs"]
         assert isinstance(inputs, dict)
         launcher = target["launcher"]
         manifest = target["manifest"]
-        assert isinstance(launcher, dict) and isinstance(manifest, dict)
+        nonce_assurance = target["nonceRollbackAssurance"]
+        assert (
+            isinstance(launcher, dict)
+            and isinstance(manifest, dict)
+            and isinstance(nonce_assurance, dict)
+        )
         request = {
-            "apiVersion": launch_authorization.REQUEST_API_VERSION,
+            "apiVersion": (
+                run_production_readiness.LAUNCH_AUTHORIZATION_REQUEST_API_VERSION
+            ),
             "kind": launch_authorization.REQUEST_KIND,
             "launcherNonce": target["launchId"],
             "bootIdSha256": target["bootIdSha256"],
             "launcherSha256": launcher["sha256"],
             "manifestSha256": manifest["sha256"],
+            "nonceRollbackAssuranceContractSha256": nonce_assurance[
+                "contractSha256"
+            ],
+            "nonceRollbackAssurancePinsSha256": nonce_assurance[
+                "retainedSnapshotSha256"
+            ],
             "releaseProvenanceSha256": inputs["releaseProvenance"]["sha256"],
             "provenanceDigest": "sha256:" + "0" * 64,
             "reproducibleBuildVerificationSha256": inputs[
@@ -482,25 +2382,93 @@ def verify_sealed_bootstrap_receipt_contract() -> None:
             "deploymentIdentitySha256": "sha256:" + "a" * 64,
             "releaseSequence": 42,
             "rollbackEpoch": 7,
+            "authorizationScope": launch_authorization.AUTHORIZATION_SCOPE,
+            "freshnessAuthority": launch_authorization.FRESHNESS_AUTHORITY,
+            "launchAuthorityWitnessChallenge": "3" * 64,
+            "launchAuthorityWitnessKeyId": launch_authorization.spki_key_id(
+                authority_spki(witness_key)
+            ),
+            "launchAuthorityWitnessIdentitySha256": "sha256:" + "4" * 64,
+            "launchAuthorityWitnessAdministrativeDomainSha256": (
+                "sha256:" + "5" * 64
+            ),
+            "launchAuthorityWitnessStoreAssuranceSha256": (
+                "sha256:" + "6" * 64
+            ),
+        }
+        request_sha256 = (
+            run_production_readiness._v2_launch_authorization_request_sha256(
+                request
+            )
+        )
+        key_spki = authority_spki(key)
+        authorization_id = "2" * 64
+        authority_key_id = launch_authorization.spki_key_id(key_spki)
+        witness_statement = {
+            "operation": launch_authorization.WITNESS_OPERATION,
+            "operationId": request["launcherNonce"],
+            "authorizationId": authorization_id,
+            "requestSha256": request_sha256,
+            "challenge": request["launchAuthorityWitnessChallenge"],
+            "issuedAtUnixSeconds": selected_issued_at,
+            "expiresAtUnixSeconds": selected_expires_at,
+            "authorityKeyId": authority_key_id,
+            "witnessKeyId": request["launchAuthorityWitnessKeyId"],
+            "witnessIdentitySha256": request[
+                "launchAuthorityWitnessIdentitySha256"
+            ],
+            "witnessAdministrativeDomainSha256": request[
+                "launchAuthorityWitnessAdministrativeDomainSha256"
+            ],
+            "storeAssuranceSha256": request[
+                "launchAuthorityWitnessStoreAssuranceSha256"
+            ],
+            "registryGeneration": 5,
+            "registrySha256": "sha256:" + "7" * 64,
+            "predecessorStateSha256": "sha256:" + "8" * 64,
+            "successorStateSha256": "sha256:" + "9" * 64,
+            "deploymentAudience": request["deploymentAudience"],
+            "deploymentIdentitySha256": request["deploymentIdentitySha256"],
+            "releaseSequence": request["releaseSequence"],
+            "rollbackEpoch": request["rollbackEpoch"],
+            "authorizationScope": request["authorizationScope"],
+            "stateTransitionCommitted": True,
+            "checkpointSequence": 11,
+        }
+        witness = {
+            "apiVersion": launch_authorization.WITNESS_API_VERSION,
+            "kind": launch_authorization.WITNESS_KIND,
+            "statement": witness_statement,
+            "signature": launch_authorization.canonical_base64url(
+                witness_key.sign(
+                    launch_authorization.launch_authority_witness_signing_bytes(
+                        witness_statement
+                    )
+                )
+            ),
         }
         envelope = launch_authorization.sign_launch_authorization(
             request,
             private_key=key,
-            authorization_id="2" * 64,
-            issued_at_unix_seconds=issued_at,
-            expires_at_unix_seconds=expires_at,
+            authorization_id=authorization_id,
+            issued_at_unix_seconds=selected_issued_at,
+            expires_at_unix_seconds=selected_expires_at,
+            monotonic_witness=witness,
         )
         return {
             "request": request,
-            "requestSha256": launch_authorization.launch_authorization_request_sha256(
-                request
-            ),
+            "requestSha256": request_sha256,
             "envelope": envelope,
             "authorizationSha256": "sha256:"
             + hashlib.sha256(
                 launch_authorization.canonical_json_bytes(envelope)
             ).hexdigest(),
-            "verifiedAtUnixSeconds": verified_at,
+            "witnessPublicKeySpkiDerBase64url": (
+                launch_authorization.canonical_base64url(
+                    authority_spki(witness_key)
+                )
+            ),
+            "verifiedAtUnixSeconds": selected_verified_at,
         }
 
     receipt["launchAuthorization"] = authorization_for(receipt)
@@ -526,6 +2494,119 @@ def verify_sealed_bootstrap_receipt_contract() -> None:
         require_inputs=True,
         authority_identity=test_authority_identity,
     )
+    run_production_readiness.validate_nonce_rollback_assurance_contract(
+        pins_contract
+    )
+    contract_mutations = []
+    unknown_contract = json.loads(json.dumps(pins_contract))
+    unknown_contract["unexpected"] = True
+    contract_mutations.append(("unknown pins field", unknown_contract))
+    missing_store_attestation_key = json.loads(json.dumps(pins_contract))
+    missing_store_attestation_key["publicConfigPins"].pop(
+        "nonceAuthorityVerifierStateStoreAttestationPublicKeySpkiDerBase64url"
+    )
+    contract_mutations.append(
+        ("missing verifier-state store attestation key", missing_store_attestation_key)
+    )
+    stale_store_key_alias = json.loads(json.dumps(pins_contract))
+    stale_store_key_alias["publicConfigPins"][
+        "nonceAuthorityVerifierStateStoreAttestationSigningPublicKeySpkiDerBase64url"
+    ] = stale_store_key_alias["publicConfigPins"].pop(
+        "nonceAuthorityVerifierStateStoreAttestationPublicKeySpkiDerBase64url"
+    )
+    contract_mutations.append(
+        ("stale verifier-state store attestation key alias", stale_store_key_alias)
+    )
+    missing_store_assurance_evidence = json.loads(
+        json.dumps(pins_contract)
+    )
+    missing_store_assurance_evidence["publicConfigPins"].pop(
+        "nonceAuthorityVerifierStateStoreAssuranceEvidenceSha256"
+    )
+    contract_mutations.append(
+        (
+            "missing verifier-state store assurance evidence",
+            missing_store_assurance_evidence,
+        )
+    )
+    stale_store_assurance_alias = json.loads(json.dumps(pins_contract))
+    stale_store_assurance_alias["publicConfigPins"][
+        "nonceAuthorityVerifierStateStoreAssuranceSha256"
+    ] = stale_store_assurance_alias["publicConfigPins"].pop(
+        "nonceAuthorityVerifierStateStoreAssuranceEvidenceSha256"
+    )
+    contract_mutations.append(
+        (
+            "stale verifier-state store assurance evidence alias",
+            stale_store_assurance_alias,
+        )
+    )
+    wrong_profile = json.loads(json.dumps(pins_contract))
+    wrong_profile["publicConfigPins"]["nonceAuthorityAssurance"][
+        "backendClass"
+    ] = "unapprovedBackend"
+    contract_mutations.append(("wrong assurance profile", wrong_profile))
+    colliding_roles = json.loads(json.dumps(pins_contract))
+    colliding_roles["publicConfigPins"][
+        "nonceAuthorityVerifierStateStoreIdentitySha256"
+    ] = assurance["authorityIdentitySha256"]
+    contract_mutations.append(("authority and store collision", colliding_roles))
+    colliding_store_evidence = json.loads(json.dumps(pins_contract))
+    colliding_store_evidence["publicConfigPins"][
+        "nonceAuthorityVerifierStateStoreAssuranceEvidenceSha256"
+    ] = assurance["assuranceEvidenceSha256"]
+    contract_mutations.append(
+        ("authority and store assurance evidence collision", colliding_store_evidence)
+    )
+    unsafe_integer = json.loads(json.dumps(pins_contract))
+    unsafe_integer["publicConfigPins"]["nonceAuthorityAssurance"][
+        "authorityGeneration"
+    ] = (1 << 53)
+    contract_mutations.append(("non-interoperable integer", unsafe_integer))
+    for label, mutated_contract in contract_mutations:
+        try:
+            run_production_readiness.validate_nonce_rollback_assurance_contract(
+                mutated_contract
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                f"nonce rollback assurance accepted {label}"
+            )
+    manual_assurance = (
+        run_production_readiness.validate_retained_nonce_rollback_assurance(
+            retained_path=None,
+            expected_pins_sha256=None,
+            expected_contract_sha256=None,
+            bootstrap_receipt=None,
+            required=False,
+        )
+    )
+    if manual_assurance != {
+        "apiVersion": (
+            run_production_readiness.NONCE_ROLLBACK_ASSURANCE_BINDING_API_VERSION
+        ),
+        "enforcement": "not-native-launcher-enforced",
+        "verified": False,
+    }:
+        raise AssertionError(
+            f"manual nonce rollback assurance classification is invalid: {manual_assurance}"
+        )
+    try:
+        run_production_readiness.validate_retained_nonce_rollback_assurance(
+            retained_path="/proc/self/fd/199",
+            expected_pins_sha256=pins_file_sha256,
+            expected_contract_sha256=pins_contract_sha256,
+            bootstrap_receipt=None,
+            required=False,
+        )
+    except ValueError:
+        pass
+    else:
+        raise AssertionError(
+            "manual readiness accepted launcher nonce assurance arguments"
+        )
     import_paths = [
         str(value["path"]) for value in receipt["python"]["importRoots"]
     ]
@@ -612,10 +2693,22 @@ def verify_sealed_bootstrap_receipt_contract() -> None:
         wrong_key_receipt,
         key=wrong_key,
     )
+    wrong_witness_key_receipt = mutate("witness key mismatch")
+    wrong_witness_key_receipt["launchAuthorization"][
+        "witnessPublicKeySpkiDerBase64url"
+    ] = launch_authorization.canonical_base64url(
+        authority_spki(wrong_key)
+    )
     mutate("nonce mismatch")["launchAuthorization"]["request"]["launcherNonce"] = (
         "9" * 64
     )
     mutate("manifest mismatch")["manifest"]["sha256"] = "sha256:" + "1" * 64
+    mutate("nonce contract mismatch")["nonceRollbackAssurance"][
+        "contractSha256"
+    ] = "sha256:" + "1" * 64
+    mutate("nonce pins mismatch")["nonceRollbackAssurance"][
+        "retainedSnapshotSha256"
+    ] = "sha256:" + "1" * 64
     mutate("provenance mismatch")["launchAuthorization"]["request"][
         "provenanceDigest"
     ] = "sha256:" + "1" * 64
@@ -664,10 +2757,50 @@ def verify_sealed_bootstrap_receipt_contract() -> None:
             )
         return descriptor
 
+    def load_from_fixed_receipt_fd(
+        descriptor: int,
+        environment: dict[str, str],
+    ) -> tuple[dict[str, object] | None, int | None]:
+        try:
+            saved_fixed_descriptor = os.dup(
+                run_production_readiness.BOOTSTRAP_RECEIPT_FIXED_FD
+            )
+        except OSError:
+            saved_fixed_descriptor = None
+        try:
+            os.dup2(
+                descriptor,
+                run_production_readiness.BOOTSTRAP_RECEIPT_FIXED_FD,
+                inheritable=True,
+            )
+            return run_production_readiness.load_sealed_bootstrap_receipt(
+                {
+                    **environment,
+                    run_production_readiness.BOOTSTRAP_RECEIPT_FD_ENV: str(
+                        run_production_readiness.BOOTSTRAP_RECEIPT_FIXED_FD
+                    ),
+                },
+                required=True,
+            )
+        finally:
+            try:
+                os.close(run_production_readiness.BOOTSTRAP_RECEIPT_FIXED_FD)
+            except OSError:
+                pass
+            if saved_fixed_descriptor is not None:
+                os.dup2(
+                    saved_fixed_descriptor,
+                    run_production_readiness.BOOTSTRAP_RECEIPT_FIXED_FD,
+                    inheritable=True,
+                )
+                os.close(saved_fixed_descriptor)
+
     canonical = canonical_json(receipt).encode("ascii")
     descriptor = open_receipt(canonical, seal=True)
     environment = {
-        run_production_readiness.BOOTSTRAP_RECEIPT_FD_ENV: str(descriptor),
+        run_production_readiness.BOOTSTRAP_RECEIPT_FD_ENV: str(
+            run_production_readiness.BOOTSTRAP_RECEIPT_FIXED_FD
+        ),
         run_production_readiness.BOOTSTRAP_RECEIPT_SHA256_ENV: (
             "sha256:" + hashlib.sha256(canonical).hexdigest()
         ),
@@ -676,26 +2809,223 @@ def verify_sealed_bootstrap_receipt_contract() -> None:
         ),
     }
     try:
-        summary, selected = run_production_readiness.load_sealed_bootstrap_receipt(
+        wrong_descriptor = (
+            descriptor
+            if descriptor
+            != run_production_readiness.BOOTSTRAP_RECEIPT_FIXED_FD
+            else descriptor + 1
+        )
+        try:
+            run_production_readiness.load_sealed_bootstrap_receipt(
+                {
+                    **environment,
+                    run_production_readiness.BOOTSTRAP_RECEIPT_FD_ENV: str(
+                        wrong_descriptor
+                    ),
+                },
+                required=True,
+            )
+        except ValueError as exc:
+            if "must be exactly 198" not in str(exc):
+                raise
+        else:
+            raise AssertionError(
+                "bootstrap receipt loader accepted a descriptor other than FD 198"
+            )
+        summary, selected = load_from_fixed_receipt_fd(
+            descriptor,
             environment,
-            required=True,
         )
         if (
-            selected != descriptor
+            selected != run_production_readiness.BOOTSTRAP_RECEIPT_FIXED_FD
             or summary is None
             or summary.get("sealed") is not True
             or summary.get("launchId") != receipt["launchId"]
         ):
             raise AssertionError(f"sealed bootstrap receipt summary is invalid: {summary}")
+        original_time = run_production_readiness.time.time
+        run_production_readiness.time.time = lambda: receipt[
+            "launchAuthorization"
+        ]["envelope"]["statement"]["expiresAtUnixSeconds"]
+        try:
+            try:
+                load_from_fixed_receipt_fd(descriptor, environment)
+            except ValueError as exc:
+                if "not current at consumption" not in str(exc):
+                    raise
+            else:
+                raise AssertionError(
+                    "bootstrap receipt loader accepted an authorization expired at consumption"
+                )
+        finally:
+            run_production_readiness.time.time = original_time
     finally:
         os.close(descriptor)
+
+    pins_descriptor = open_receipt(pins_bytes, seal=True)
+    retained_receipt = json.loads(json.dumps(receipt))
+    retained_receipt["nonceRollbackAssurance"][
+        "retainedSnapshotFd"
+    ] = pins_descriptor
+    try:
+        retained = (
+            run_production_readiness.validate_retained_nonce_rollback_assurance(
+                retained_path=f"/proc/self/fd/{pins_descriptor}",
+                expected_pins_sha256=pins_file_sha256,
+                expected_contract_sha256=pins_contract_sha256,
+                bootstrap_receipt=retained_receipt,
+                required=True,
+            )
+        )
+        if (
+            retained.get("verified") is not True
+            or retained.get("retainedSnapshotFd") != pins_descriptor
+            or retained.get("contractSha256") != pins_contract_sha256
+            or retained.get("verifierStateService")
+            != retained_receipt["nonceRollbackAssurance"][
+                "verifierStateService"
+            ]
+        ):
+            raise AssertionError(
+                f"retained nonce rollback assurance summary is invalid: {retained}"
+            )
+        colliding_receipt = json.loads(json.dumps(retained_receipt))
+        colliding_receipt["nonceRollbackAssurance"][
+            "retainedSnapshotFd"
+        ] = run_production_readiness.BOOTSTRAP_RECEIPT_FIXED_FD
+        try:
+            run_production_readiness.validate_retained_nonce_rollback_assurance(
+                retained_path=(
+                    f"/proc/self/fd/"
+                    f"{run_production_readiness.BOOTSTRAP_RECEIPT_FIXED_FD}"
+                ),
+                expected_pins_sha256=pins_file_sha256,
+                expected_contract_sha256=pins_contract_sha256,
+                bootstrap_receipt=colliding_receipt,
+                required=True,
+            )
+        except ValueError as exc:
+            if "collides with the fixed bootstrap receipt descriptor" not in str(
+                exc
+            ):
+                raise
+        else:
+            raise AssertionError(
+                "retained nonce rollback assurance accepted fixed receipt FD "
+                "198 as its pins descriptor"
+            )
+        for label, path, file_digest, contract_digest in (
+            (
+                "malformed descriptor path",
+                f"/dev/fd/{pins_descriptor}",
+                pins_file_sha256,
+                pins_contract_sha256,
+            ),
+            (
+                "pins digest substitution",
+                f"/proc/self/fd/{pins_descriptor}",
+                "sha256:" + "1" * 64,
+                pins_contract_sha256,
+            ),
+            (
+                "contract digest substitution",
+                f"/proc/self/fd/{pins_descriptor}",
+                pins_file_sha256,
+                "sha256:" + "1" * 64,
+            ),
+        ):
+            try:
+                run_production_readiness.validate_retained_nonce_rollback_assurance(
+                    retained_path=path,
+                    expected_pins_sha256=file_digest,
+                    expected_contract_sha256=contract_digest,
+                    bootstrap_receipt=retained_receipt,
+                    required=True,
+                )
+            except ValueError:
+                pass
+            else:
+                raise AssertionError(
+                    f"retained nonce rollback assurance accepted {label}"
+                )
+        substituted_service_receipt = json.loads(
+            json.dumps(retained_receipt)
+        )
+        substituted_service_receipt["nonceRollbackAssurance"][
+            "verifierStateService"
+        ]["storeAssuranceEvidenceSha256"] = "sha256:" + "1" * 64
+        try:
+            run_production_readiness.validate_retained_nonce_rollback_assurance(
+                retained_path=f"/proc/self/fd/{pins_descriptor}",
+                expected_pins_sha256=pins_file_sha256,
+                expected_contract_sha256=pins_contract_sha256,
+                bootstrap_receipt=substituted_service_receipt,
+                required=True,
+            )
+        except ValueError as exc:
+            if "verifier-state service configuration" not in str(exc):
+                raise
+        else:
+            raise AssertionError(
+                "retained nonce rollback assurance accepted a substituted "
+                "verifier-state service configuration"
+            )
+    finally:
+        os.close(pins_descriptor)
+
+    unsealed_pins = open_receipt(pins_bytes, seal=False)
+    unsealed_pins_receipt = json.loads(json.dumps(receipt))
+    unsealed_pins_receipt["nonceRollbackAssurance"][
+        "retainedSnapshotFd"
+    ] = unsealed_pins
+    try:
+        try:
+            run_production_readiness.validate_retained_nonce_rollback_assurance(
+                retained_path=f"/proc/self/fd/{unsealed_pins}",
+                expected_pins_sha256=pins_file_sha256,
+                expected_contract_sha256=pins_contract_sha256,
+                bootstrap_receipt=unsealed_pins_receipt,
+                required=True,
+            )
+        except ValueError as exc:
+            if "immutable seals" not in str(exc):
+                raise
+        else:
+            raise AssertionError(
+                "retained nonce rollback assurance accepted an unsealed descriptor"
+            )
+    finally:
+        os.close(unsealed_pins)
+
+    replaced_pins = open_receipt(pins_bytes + b" ", seal=True)
+    replaced_pins_receipt = json.loads(json.dumps(receipt))
+    replaced_pins_receipt["nonceRollbackAssurance"][
+        "retainedSnapshotFd"
+    ] = replaced_pins
+    try:
+        try:
+            run_production_readiness.validate_retained_nonce_rollback_assurance(
+                retained_path=f"/proc/self/fd/{replaced_pins}",
+                expected_pins_sha256=pins_file_sha256,
+                expected_contract_sha256=pins_contract_sha256,
+                bootstrap_receipt=replaced_pins_receipt,
+                required=True,
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                "retained nonce rollback assurance accepted replaced bytes"
+            )
+    finally:
+        os.close(replaced_pins)
 
     unsealed = open_receipt(canonical, seal=False)
     try:
         try:
-            run_production_readiness.load_sealed_bootstrap_receipt(
-                {**environment, run_production_readiness.BOOTSTRAP_RECEIPT_FD_ENV: str(unsealed)},
-                required=True,
+            load_from_fixed_receipt_fd(
+                unsealed,
+                environment,
             )
         except ValueError as exc:
             if "immutable seals" not in str(exc):
@@ -712,6 +3042,9 @@ def verify_sealed_bootstrap_receipt_contract() -> None:
     missing_input = json.loads(json.dumps(receipt))
     missing_input["inputs"].pop("bench")
     mutations.append(("open input set", missing_input))
+    v2_downgrade = json.loads(json.dumps(receipt))
+    v2_downgrade["apiVersion"] = "serverware.bootstrapReceipt/v2"
+    mutations.append(("v2 receipt downgrade", v2_downgrade))
     open_metadata = json.loads(json.dumps(receipt))
     open_metadata["manifest"]["metadata"]["unexpected"] = 1
     mutations.append(("open nested metadata", open_metadata))
@@ -728,15 +3061,14 @@ def verify_sealed_bootstrap_receipt_contract() -> None:
         mutated_descriptor = open_receipt(mutated_bytes, seal=True)
         try:
             try:
-                run_production_readiness.load_sealed_bootstrap_receipt(
+                load_from_fixed_receipt_fd(
+                    mutated_descriptor,
                     {
                         **environment,
-                        run_production_readiness.BOOTSTRAP_RECEIPT_FD_ENV: str(mutated_descriptor),
                         run_production_readiness.BOOTSTRAP_RECEIPT_SHA256_ENV: (
                             "sha256:" + hashlib.sha256(mutated_bytes).hexdigest()
                         ),
                     },
-                    required=True,
                 )
             except ValueError:
                 pass
@@ -896,6 +3228,113 @@ def verify_proxy_trust_input_path_security() -> None:
             run_production_readiness.read_fd_bytes = original_read_fd_bytes
 
 
+def verify_completion_authorization_freshness_boundaries() -> None:
+    receipt = {"fixture": "sealed-fd-198-receipt"}
+    original_validate = (
+        run_production_readiness.validate_bootstrap_receipt_summary
+    )
+    original_identity = (
+        run_production_readiness.bootstrap_launch_authorization_identity
+    )
+    run_production_readiness.validate_bootstrap_receipt_summary = (
+        lambda value: value
+    )
+    run_production_readiness.bootstrap_launch_authorization_identity = (
+        lambda value: {
+            "authorization_sha256": _fixture_digest(
+                "completion-freshness-authorization"
+            ),
+            "expires_at_unix_seconds": 120,
+        }
+    )
+    try:
+        result = (
+            run_production_readiness
+            .revalidate_bootstrap_launch_authorization_at_completion(
+                expected_receipt=receipt,
+                expected_descriptor=198,
+                generated_at_unix=119,
+                now_unix_seconds=119,
+                receipt_loader=lambda *, required: (receipt, 198),
+            )
+        )
+        if result["freshAtCompletion"] is not True:
+            raise AssertionError(
+                "completion freshness revalidation did not pass before expiry"
+            )
+
+        for label, generated_at, published_at in (
+            ("generation at expiry", 120, 119),
+            ("publication at expiry", 119, 120),
+        ):
+            try:
+                (
+                    run_production_readiness
+                    .revalidate_bootstrap_launch_authorization_at_completion(
+                        expected_receipt=receipt,
+                        expected_descriptor=198,
+                        generated_at_unix=generated_at,
+                        now_unix_seconds=published_at,
+                        receipt_loader=lambda *, required: (receipt, 198),
+                    )
+                )
+            except ValueError as exc:
+                if "expired before completion" not in str(exc):
+                    raise
+            else:
+                raise AssertionError(
+                    f"completion freshness accepted {label}"
+                )
+
+        try:
+            (
+                run_production_readiness
+                .revalidate_bootstrap_launch_authorization_at_completion(
+                    expected_receipt=receipt,
+                    expected_descriptor=197,
+                    generated_at_unix=119,
+                    now_unix_seconds=119,
+                    receipt_loader=lambda *, required: (receipt, 198),
+                )
+            )
+        except ValueError as exc:
+            if "exact FD 198" not in str(exc):
+                raise
+        else:
+            raise AssertionError(
+                "completion freshness accepted a non-FD-198 authorization"
+            )
+
+        try:
+            (
+                run_production_readiness
+                .revalidate_bootstrap_launch_authorization_at_completion(
+                    expected_receipt=receipt,
+                    expected_descriptor=198,
+                    generated_at_unix=119,
+                    now_unix_seconds=119,
+                    receipt_loader=lambda *, required: (
+                        {"fixture": "replacement"},
+                        198,
+                    ),
+                )
+            )
+        except ValueError as exc:
+            if "changed before completion publication" not in str(exc):
+                raise
+        else:
+            raise AssertionError(
+                "completion freshness accepted a replaced FD 198 receipt"
+            )
+    finally:
+        run_production_readiness.validate_bootstrap_receipt_summary = (
+            original_validate
+        )
+        run_production_readiness.bootstrap_launch_authorization_identity = (
+            original_identity
+        )
+
+
 def main() -> None:
     verify_launcher_style_helper_import()
     for invalid_path in ("relative/path", "/", "/tmp/../etc/passwd", "/tmp//receipt", "/tmp/receipt/"):
@@ -907,6 +3346,7 @@ def main() -> None:
             raise AssertionError(f"bootstrap receipt accepted a non-normalized path: {invalid_path}")
     verify_sealed_bootstrap_receipt_contract()
     verify_proxy_trust_input_path_security()
+    verify_completion_authorization_freshness_boundaries()
     with tempfile.TemporaryDirectory(
         dir=test_temp_root(),
         prefix="readiness-runner-",
@@ -971,50 +3411,6 @@ def main() -> None:
             ),
         )
         security_args = (*artifact_args, *trust_args)
-        final_challenge_receipt = tmp / "final-challenge-receipt.json"
-        final_challenge_receipt.write_bytes(
-            production_readiness_test.final_challenge_receipt_file().read_bytes()
-        )
-        final_challenge_authority_key = tmp / "final-challenge-authority.pub.pem"
-        final_challenge_authority_key.write_bytes(
-            production_readiness_test.trusted_public_key_file(final_challenge_authority_key.name).read_bytes()
-        )
-        final_challenge_args = (
-            "--final-challenge-receipt",
-            str(final_challenge_receipt),
-            "--final-challenge-authority-public-key",
-            str(final_challenge_authority_key),
-            "--final-challenge-authority-public-key-id",
-            production_readiness_test.trusted_public_key_id(
-                final_challenge_authority_key.name
-            ),
-            "--final-challenge-authority-provider",
-            "production-final-challenge-authority",
-        )
-        hardware_assurance = tmp / "hardware-assurance.json"
-        hardware_assurance.write_bytes(
-            production_readiness_test.hardware_assurance_file().read_bytes()
-        )
-        hardware_assurance_key = tmp / "hardware-assurance-verifier.pub.pem"
-        hardware_assurance_key.write_bytes(
-            production_readiness_test.trusted_public_key_file(
-                hardware_assurance_key.name
-            ).read_bytes()
-        )
-        expected_hardware_challenge = "a" * 43
-        hardware_assurance_args = (
-            "--hardware-assurance",
-            str(hardware_assurance),
-            "--hardware-assurance-trusted-public-key",
-            str(hardware_assurance_key),
-            "--hardware-assurance-trusted-public-key-id",
-            production_readiness_test.trusted_public_key_id(
-                hardware_assurance_key.name
-            ),
-            "--hardware-assurance-expected-challenge-nonce",
-            expected_hardware_challenge,
-        )
-
         minimal_env = tmp / "minimal.env"
         minimal_values = {
                 "SERVERWARE_RELEASE_CHANNEL": "prod",
@@ -2108,9 +4504,8 @@ def main() -> None:
                 "runner accepted a same-length substituted observation body"
             )
         observation_body.write_bytes(b"body")
-        collector_args.verification_mode = "final"
         collector_args.proxy_proof_summary_out = str(
-            tmp / "final-observation-collector-summary.json"
+            tmp / "readiness-observation-collector-summary.json"
         )
         run_production_readiness.run_collector(
             observation_collector_command(observation_collector_summary),
@@ -2136,14 +4531,13 @@ def main() -> None:
             "emitted_body_bytes": 4,
         }:
             raise AssertionError(
-                "runner final mode did not retain the observation artifact/body contract"
+                "readiness runner did not retain the observation artifact/body contract"
             )
-        verify_final_observation_body_revalidation(
+        verify_readiness_observation_body_revalidation(
             tmp,
             collector_args,
             observation_body,
         )
-        collector_args.verification_mode = "readiness"
         collector_args.proxy_proof_contract = "buffered-v3"
         collector_args.proxy_observation_body = None
         collector_args.proxy_max_observation_body_bytes = None
@@ -2353,889 +4747,70 @@ def main() -> None:
         if missing_trust.returncode == 0 or "missing release completion trust settings" not in detail(missing_trust):
             raise AssertionError(f"runner accepted missing release completion trust settings: {detail(missing_trust)}")
 
-        missing_final_mode = run_runner(
-            "--env-file", str(env_trust_file), "--dry-run", "--verification-mode", "final", *security_args
-        )
-        if missing_final_mode.returncode == 0 or "must be pinned" not in detail(missing_final_mode):
-            raise AssertionError(f"runner accepted final mode absent from the hashed env: {detail(missing_final_mode)}")
-
-        production_python = str(Path(sys.executable).resolve())
-        executable_manifest = {
-            setting: "sha256:" + "0" * 64
-            for setting in run_production_readiness.PINNED_EXECUTABLE_COMMAND_SETTINGS
-        }
-        executable_manifest[run_production_readiness.PRODUCTION_PYTHON_EXECUTABLE_ENV] = (
-            "sha256:" + hashlib.sha256(Path(production_python).read_bytes()).hexdigest()
-        )
-        executable_manifest[run_production_readiness.PRODUCTION_DOCKER_EXECUTABLE_ENV] = (
-            executable_manifest[run_production_readiness.PRODUCTION_PYTHON_EXECUTABLE_ENV]
-        )
-        pinned_compose_plugin = tmp / "pinned-compose-plugin"
-        pinned_compose_plugin.write_bytes(Path(production_python).read_bytes())
-        pinned_compose_plugin.chmod(0o700)
-        final_mode_trust_values = {
-            **env_trust_values,
-            "SERVERWARE_COMPLETION_VERIFICATION_MODE": "final",
-            run_production_readiness.FINAL_LAUNCHER_CONTRACT_ENV: (
-                run_production_readiness.FINAL_LAUNCHER_CONTRACT
-            ),
-            run_production_readiness.PRODUCTION_PYTHON_EXECUTABLE_ENV: production_python,
-            run_production_readiness.PRODUCTION_DOCKER_EXECUTABLE_ENV: production_python,
-            run_production_readiness.EXECUTABLE_DIGEST_MANIFEST_ENV: canonical_json(
-                executable_manifest
-            ),
-            run_production_readiness.DOCKER_COMPOSE_PLUGIN_EXECUTABLE_ENV: str(pinned_compose_plugin),
-            run_production_readiness.DOCKER_COMPOSE_PLUGIN_SHA256_ENV: (
-                "sha256:" + hashlib.sha256(pinned_compose_plugin.read_bytes()).hexdigest()
-            ),
-            run_production_readiness.DOCKER_UNIX_SOCKET_ENV: "/run/docker.sock",
-            run_production_readiness.DOCKER_DAEMON_ID_ENV: "fixture-daemon-id",
-            run_production_readiness.DOCKER_COMPOSE_PROJECT_NAME_ENV: (
-                "serverware-production"
-            ),
-            run_production_readiness.POLICY_TRUST_ROOT_ENV: str(
-                tmp / "policy-signing.pub.pem"
-            ),
-            run_production_readiness.POLICY_TRUST_ROOT_ID_ENV: (
-                production_readiness_test.trusted_public_key_id(
-                    "policy-signing.pub.pem"
-                )
-            ),
-            run_production_readiness.POLICY_ACTIVATION_TRUST_ROOT_ENV: str(
-                tmp / "policy-activation.pub.pem"
-            ),
-            run_production_readiness.POLICY_ACTIVATION_TRUST_ROOT_ID_ENV: (
-                production_readiness_test.trusted_public_key_id(
-                    "policy-activation.pub.pem"
-                )
-            ),
-            run_production_readiness.REPRODUCIBLE_BUILD_TRUST_ROOT_ENV: str(
-                tmp / "reproducible-build.pub.pem"
-            ),
-            run_production_readiness.REPRODUCIBLE_BUILD_TRUST_ROOT_ID_ENV: (
-                production_readiness_test.trusted_public_key_id(
-                    "reproducible-build.pub.pem"
-                )
-            ),
-            run_production_readiness.PRODUCTION_HOST_PREFLIGHT_SCRIPT_SHA256_ENV: (
-                "sha256:"
-                + hashlib.sha256(
-                    (ROOT / "scripts" / "production_host_preflight.py").read_bytes()
-                ).hexdigest()
-            ),
-            run_production_readiness.VERIFY_PRODUCTION_READINESS_SCRIPT_SHA256_ENV: (
-                "sha256:"
-                + hashlib.sha256(
-                    (ROOT / "scripts" / "verify_production_readiness.py").read_bytes()
-                ).hexdigest()
-            ),
-            run_production_readiness.VERIFY_RELEASE_COMPLETION_SCRIPT_SHA256_ENV: (
-                "sha256:"
-                + hashlib.sha256(
-                    (ROOT / "scripts" / "verify_release_completion.py").read_bytes()
-                ).hexdigest()
-            ),
-            run_production_readiness.PRODUCTION_HOST_PREFLIGHT_SIGNING_PRIVATE_KEY_ENV: str(
-                final_challenge_authority_key
-            ),
-            run_production_readiness.PRODUCTION_HOST_PREFLIGHT_SIGNING_PUBLIC_KEY_ENV: str(
-                final_challenge_authority_key
-            ),
-            run_production_readiness.PRODUCTION_HOST_PREFLIGHT_SIGNING_KEY_ID_ENV: (
-                production_readiness_test.trusted_public_key_id(
-                    final_challenge_authority_key.name
-                )
-            ),
-            run_production_readiness.PRODUCTION_HOST_PREFLIGHT_MAX_AGE_ENV: "300",
-        }
-        final_mode_trust_file = tmp / "final-mode-trust.env"
-        write_env(final_mode_trust_file, final_mode_trust_values)
-        final_without_authority = run_runner(
-            "--env-file", str(final_mode_trust_file), "--dry-run", "--verification-mode", "final", *security_args
-        )
-        if final_without_authority.returncode == 0 or "requires off-host challenge authority inputs" not in detail(
-            final_without_authority
-        ):
-            raise AssertionError(
-                f"runner accepted final mode without off-host challenge authority inputs: {detail(final_without_authority)}"
-            )
-
-        oversized_provider_env = tmp / "oversized-provider.env"
-        write_env(
-            oversized_provider_env,
-            {
-                **final_mode_trust_values,
-                "SERVERWARE_FINAL_CHALLENGE_RECEIPT": str(final_challenge_receipt),
-                "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY": str(final_challenge_authority_key),
-                "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY_ID": (
-                    production_readiness_test.trusted_public_key_id(
-                        final_challenge_authority_key.name
-                    )
-                ),
-                "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PROVIDER": "x" * 257,
-            },
-        )
-        oversized_provider = run_runner(
+        rejected_final_mode = run_runner(
             "--env-file",
-            str(oversized_provider_env),
-            "--dry-run",
-            "--verification-mode",
-            "final",
-            *artifact_args,
-        )
-        if oversized_provider.returncode == 0 or "must not exceed 256 characters" not in detail(oversized_provider):
-            raise AssertionError(f"runner accepted an oversized final authority provider: {detail(oversized_provider)}")
-
-        authority_only_env = tmp / "authority-only.env"
-        write_env(
-            authority_only_env,
-            {
-                **final_mode_trust_values,
-                "SERVERWARE_FINAL_CHALLENGE_RECEIPT": str(final_challenge_receipt),
-                "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY": str(final_challenge_authority_key),
-                "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY_ID": (
-                    production_readiness_test.trusted_public_key_id(
-                        final_challenge_authority_key.name
-                    )
-                ),
-                "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PROVIDER": "production-final-challenge-authority",
-            },
-        )
-        final_without_hardware = run_runner(
-            "--env-file",
-            str(authority_only_env),
+            str(tmp / "does-not-exist.env"),
             "--dry-run",
             "--verification-mode",
             "final",
             *security_args,
         )
+        rejected_final_detail = detail(rejected_final_mode)
         if (
-            final_without_hardware.returncode == 0
-            or "requires hardware assurance inputs" not in detail(final_without_hardware)
+            rejected_final_mode.returncode == 0
+            or "this runner is trusted-host readiness only"
+            not in rejected_final_detail
+            or "scripts/verify_release_completion.py --verification-mode final"
+            not in rejected_final_detail
+            or "does-not-exist.env" in rejected_final_detail
         ):
             raise AssertionError(
-                f"runner accepted final mode without hardware assurance: {detail(final_without_hardware)}"
+                "readiness runner did not reject final mode before reading inputs: "
+                + rejected_final_detail
             )
 
-        readiness_with_final_input = run_runner(
+        rejected_legacy_final_option = run_runner(
             "--env-file",
-            str(minimal_env),
-            "--dry-run",
+            str(tmp / "does-not-exist.env"),
             "--final-challenge-receipt",
-            str(final_challenge_receipt),
+            str(tmp / "obsolete-final-challenge.json"),
             *security_args,
         )
-        if readiness_with_final_input.returncode == 0 or "only valid with --verification-mode final" not in detail(
-            readiness_with_final_input
-        ):
-            raise AssertionError(
-                f"runner accepted a final challenge authority input in readiness mode: {detail(readiness_with_final_input)}"
-            )
-
-        final_env_file = tmp / "final-authority.env"
-        final_env_values = {
-            **final_mode_trust_values,
-            "SERVERWARE_FINAL_CHALLENGE_RECEIPT": str(final_challenge_receipt),
-            "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY": str(final_challenge_authority_key),
-            "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY_ID": (
-                production_readiness_test.trusted_public_key_id(
-                    final_challenge_authority_key.name
-                )
-            ),
-            "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PROVIDER": "production-final-challenge-authority",
-            "SERVERWARE_HARDWARE_ASSURANCE": str(hardware_assurance),
-            "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY": str(
-                hardware_assurance_key
-            ),
-            "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY_ID": (
-                production_readiness_test.trusted_public_key_id(
-                    hardware_assurance_key.name
-                )
-            ),
-            "SERVERWARE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE": expected_hardware_challenge,
-        }
-        write_env(final_env_file, final_env_values)
-        final_run = run_runner(
-            "--env-file",
-            str(final_env_file),
-            "--dry-run",
-            "--verification-mode",
-            "final",
-            *final_challenge_args,
-            *hardware_assurance_args,
-            *security_args,
-        )
-        if final_run.returncode != 0:
-            raise AssertionError(f"runner rejected env-pinned final authority inputs: {detail(final_run)}")
-        final_stream_body = tmp / "final-proxy-response-body.bin"
-        final_streaming_env_file = tmp / "final-streaming-authority.env"
-        final_streaming_values = {
-            **final_env_values,
-            "SERVERWARE_PROXY_PROOF_CONTRACT": "streaming-v1",
-            "SERVERWARE_PROXY_STREAM_BODY_FILE": str(final_stream_body),
-            "SERVERWARE_PROXY_PROOF_MAX_STREAM_BYTES": "8192",
-            "SERVERWARE_PROXY_EXPECTED_OPERATION_CONTEXT_DIGEST": expected_operation_context_digest,
-        }
-        write_env(final_streaming_env_file, final_streaming_values)
-        final_streaming_run = run_runner(
-            "--env-file",
-            str(final_streaming_env_file),
-            "--dry-run",
-            "--verification-mode",
-            "final",
-            *security_args,
-        )
-        if final_streaming_run.returncode != 0:
-            raise AssertionError(
-                "runner rejected env-pinned final streaming proof settings: "
-                + detail(final_streaming_run)
-            )
-        final_streaming_plan = json.loads(final_streaming_run.stdout.decode("utf-8"))
-        final_streaming_collector = final_streaming_plan["commands"][-2]["argv"]
-        final_streaming_completion = final_streaming_plan["commands"][-1]["argv"]
         if (
-            final_streaming_collector[
-                final_streaming_collector.index("--body-out") + 1
-            ]
-            != str(final_stream_body)
-            or final_streaming_completion[
-                final_streaming_completion.index("--proxy-proof-contract") + 1
-            ]
-            != "streaming-v1"
-            or final_streaming_completion[
-                final_streaming_completion.index("--proxy-max-stream-bytes") + 1
-            ]
-            != "8192"
-            or final_streaming_completion[
-                final_streaming_completion.index("--proxy-operation-context-digest")
-                + 1
-            ]
-            != expected_operation_context_digest
+            rejected_legacy_final_option.returncode == 0
+            or "unrecognized arguments: --final-challenge-receipt"
+            not in detail(rejected_legacy_final_option)
         ):
             raise AssertionError(
-                "runner did not derive final streaming commands from the hashed environment"
+                "readiness runner accepted an obsolete final integration "
+                "option: "
+                + detail(rejected_legacy_final_option)
             )
-        final_streaming_overrides = {
-            "--proxy-proof-contract": "buffered-v3",
-            "--proxy-stream-body": str(tmp / "caller-stream-body.bin"),
-            "--proxy-max-stream-bytes": "8191",
-            "--proxy-operation-context-digest": "sha256:" + "e" * 64,
-        }
-        for option, value in final_streaming_overrides.items():
-            substituted_streaming = run_runner(
-                "--env-file",
-                str(final_streaming_env_file),
-                "--dry-run",
-                "--verification-mode",
-                "final",
-                option,
-                value,
-                *security_args,
-            )
-            if substituted_streaming.returncode == 0 or "must match" not in detail(
-                substituted_streaming
-            ):
-                raise AssertionError(
-                    f"runner accepted caller-selected final streaming setting {option}: "
-                    + detail(substituted_streaming)
-                )
 
-        final_observation_body = tmp / "final-proxy-observation-body.bin"
-        final_observation_env_file = tmp / "final-observation-authority.env"
-        final_observation_values = {
-            **final_env_values,
-            "SERVERWARE_PROXY_PROOF_CONTRACT": "observation-v1",
-            run_production_readiness.PROXY_OBSERVATION_BODY_FILE_ENV: str(
-                final_observation_body
-            ),
-            run_production_readiness.PROXY_PROOF_MAX_OBSERVATION_BODY_BYTES_ENV: "8192",
-        }
-        write_env(final_observation_env_file, final_observation_values)
-        final_observation_run = run_runner(
-            "--env-file",
-            str(final_observation_env_file),
-            "--dry-run",
-            "--verification-mode",
-            "final",
-            *security_args,
-        )
-        if final_observation_run.returncode != 0:
-            raise AssertionError(
-                "runner rejected env-pinned final observation proof settings: "
-                + detail(final_observation_run)
-            )
-        final_observation_plan = json.loads(
-            final_observation_run.stdout.decode("utf-8")
-        )
-        final_observation_collector = final_observation_plan["commands"][-2][
-            "argv"
-        ]
-        final_observation_completion = final_observation_plan["commands"][-1][
-            "argv"
-        ]
-        if (
-            "--observation" not in final_observation_collector
-            or final_observation_collector[
-                final_observation_collector.index("--body-out") + 1
-            ]
-            != str(final_observation_body)
-            or final_observation_completion[
-                final_observation_completion.index("--proxy-proof-contract") + 1
-            ]
-            != "observation-v1"
-            or final_observation_completion[
-                final_observation_completion.index(
-                    "--proxy-max-observation-body-bytes"
-                )
-                + 1
-            ]
-            != "8192"
-            or "--proxy-operation-context-digest" in final_observation_completion
-        ):
-            raise AssertionError(
-                "runner did not derive final observation commands from the hashed environment"
-            )
-        final_observation_overrides = {
-            "--proxy-proof-contract": "buffered-v3",
-            "--proxy-observation-body": str(
-                tmp / "caller-observation-body.bin"
-            ),
-            "--proxy-max-observation-body-bytes": "8191",
-        }
-        for option, value in final_observation_overrides.items():
-            substituted_observation = run_runner(
-                "--env-file",
-                str(final_observation_env_file),
-                "--dry-run",
-                "--verification-mode",
-                "final",
-                option,
-                value,
-                *security_args,
-            )
-            if (
-                substituted_observation.returncode == 0
-                or "must match" not in detail(substituted_observation)
-            ):
-                raise AssertionError(
-                    f"runner accepted caller-selected final observation setting {option}: "
-                    + detail(substituted_observation)
-                )
-
-        missing_final_contract_env = tmp / "missing-final-proof-contract.env"
+        final_env_selection = tmp / "final-mode.env"
         write_env(
-            missing_final_contract_env,
+            final_env_selection,
             {
-                key: value
-                for key, value in final_env_values.items()
-                if key != "SERVERWARE_PROXY_PROOF_CONTRACT"
+                **env_trust_values,
+                "SERVERWARE_COMPLETION_VERIFICATION_MODE": "final",
             },
         )
-        missing_final_contract = run_runner(
+        rejected_final_env = run_runner(
             "--env-file",
-            str(missing_final_contract_env),
+            str(final_env_selection),
             "--dry-run",
-            "--verification-mode",
-            "final",
             *security_args,
         )
         if (
-            missing_final_contract.returncode == 0
-            or "SERVERWARE_PROXY_PROOF_CONTRACT" not in detail(missing_final_contract)
+            rejected_final_env.returncode == 0
+            or "must be readiness" not in detail(rejected_final_env)
+            or "Manifest-v6 public Nitro verifier"
+            not in detail(rejected_final_env)
         ):
             raise AssertionError(
-                "runner accepted final verification without an env-pinned proof contract: "
-                + detail(missing_final_contract)
+                "readiness runner accepted a legacy env-selected final path: "
+                + detail(rejected_final_env)
             )
-        alternate_policy_args = list(security_args)
-        alternate_policy_args[
-            alternate_policy_args.index("--policy-trusted-public-key") + 1
-        ] = str(tmp / "caller-selected-policy.pub.pem")
-        rejected_policy_path = run_runner(
-            "--env-file",
-            str(final_env_file),
-            "--dry-run",
-            "--verification-mode",
-            "final",
-            *alternate_policy_args,
-        )
-        if (
-            rejected_policy_path.returncode == 0
-            or run_production_readiness.POLICY_TRUST_ROOT_ENV
-            not in detail(rejected_policy_path)
-        ):
-            raise AssertionError(
-                "runner accepted a caller-selected final policy trust-root path: "
-                + detail(rejected_policy_path)
-            )
-        rejected_policy_id = run_runner(
-            "--env-file",
-            str(final_env_file),
-            "--dry-run",
-            "--verification-mode",
-            "final",
-            "--policy-trusted-public-key-id",
-            "sha256:" + "0" * 64,
-            *security_args,
-        )
-        if (
-            rejected_policy_id.returncode == 0
-            or run_production_readiness.POLICY_TRUST_ROOT_ID_ENV
-            not in detail(rejected_policy_id)
-        ):
-            raise AssertionError(
-                "runner accepted a caller-selected final policy SPKI pin: "
-                + detail(rejected_policy_id)
-            )
-        for injected_name in ("PYTHONPATH", "LD_PRELOAD", "DOCKER_CONTEXT", "COMPOSE_FILE"):
-            injected_environment = {**os.environ, injected_name: "/tmp/attacker-selected-runtime"}
-            injected = run_runner_in_environment(
-                injected_environment,
-                "--env-file",
-                str(final_env_file),
-                "--dry-run",
-                "--verification-mode",
-                "final",
-                *security_args,
-            )
-            if injected.returncode == 0 or "forbidden runtime/loader injection" not in detail(injected):
-                raise AssertionError(
-                    f"runner accepted ambient final process injection {injected_name}: {detail(injected)}"
-                )
-        non_serverware_env = tmp / "non-serverware-final.env"
-        write_env(non_serverware_env, {**final_env_values, "PYTHONHOME": "/tmp/attacker-python"})
-        rejected_non_serverware = run_runner(
-            "--env-file",
-            str(non_serverware_env),
-            "--dry-run",
-            "--verification-mode",
-            "final",
-            *security_args,
-        )
-        if rejected_non_serverware.returncode == 0 or "non-SERVERWARE" not in detail(
-            rejected_non_serverware
-        ):
-            raise AssertionError(
-                "runner accepted a runtime injection setting from the hashed production env: "
-                + detail(rejected_non_serverware)
-            )
-        missing_launcher_contract_env = tmp / "missing-launcher-contract.env"
-        write_env(
-            missing_launcher_contract_env,
-            {
-                key: value
-                for key, value in final_env_values.items()
-                if key != run_production_readiness.FINAL_LAUNCHER_CONTRACT_ENV
-            },
-        )
-        rejected_missing_launcher_contract = run_runner(
-            "--env-file",
-            str(missing_launcher_contract_env),
-            "--dry-run",
-            "--verification-mode",
-            "final",
-            *security_args,
-        )
-        if (
-            rejected_missing_launcher_contract.returncode == 0
-            or run_production_readiness.FINAL_LAUNCHER_CONTRACT_ENV
-            not in detail(rejected_missing_launcher_contract)
-        ):
-            raise AssertionError(
-                "runner accepted final mode without the external startup contract declaration: "
-                + detail(rejected_missing_launcher_contract)
-            )
-        wrong_script_env = tmp / "wrong-script-pin.env"
-        write_env(
-            wrong_script_env,
-            {
-                **final_env_values,
-                run_production_readiness.VERIFY_RELEASE_COMPLETION_SCRIPT_SHA256_ENV: (
-                    "sha256:" + "f" * 64
-                ),
-            },
-        )
-        rejected_wrong_script = run_runner(
-            "--env-file",
-            str(wrong_script_env),
-            "--dry-run",
-            "--verification-mode",
-            "final",
-            *security_args,
-        )
-        if rejected_wrong_script.returncode == 0 or "script pin" not in detail(rejected_wrong_script):
-            raise AssertionError(
-                f"runner accepted replaced verifier script bytes: {detail(rejected_wrong_script)}"
-            )
-        wrong_preflight_script_env = tmp / "wrong-preflight-script-pin.env"
-        write_env(
-            wrong_preflight_script_env,
-            {
-                **final_env_values,
-                run_production_readiness.PRODUCTION_HOST_PREFLIGHT_SCRIPT_SHA256_ENV: (
-                    "sha256:" + "d" * 64
-                ),
-            },
-        )
-        rejected_wrong_preflight_script = run_runner(
-            "--env-file",
-            str(wrong_preflight_script_env),
-            "--dry-run",
-            "--verification-mode",
-            "final",
-            *security_args,
-        )
-        if (
-            rejected_wrong_preflight_script.returncode == 0
-            or "script pin" not in detail(rejected_wrong_preflight_script)
-        ):
-            raise AssertionError(
-                "runner accepted replaced production host preflight script bytes: "
-                + detail(rejected_wrong_preflight_script)
-            )
-        wrong_plugin_env = tmp / "wrong-compose-pin.env"
-        write_env(
-            wrong_plugin_env,
-            {
-                **final_env_values,
-                run_production_readiness.DOCKER_COMPOSE_PLUGIN_SHA256_ENV: (
-                    "sha256:" + "e" * 64
-                ),
-            },
-        )
-        rejected_wrong_plugin = run_runner(
-            "--env-file",
-            str(wrong_plugin_env),
-            "--dry-run",
-            "--verification-mode",
-            "final",
-            *security_args,
-        )
-        if rejected_wrong_plugin.returncode == 0 or "executable pin" not in detail(rejected_wrong_plugin):
-            raise AssertionError(
-                f"runner accepted replaced Compose plugin bytes: {detail(rejected_wrong_plugin)}"
-            )
-        final_argv = json.loads(final_run.stdout.decode("utf-8"))["commands"][-1]["argv"]
-        if (
-            final_argv[final_argv.index("--verification-mode") + 1] != "final"
-            or final_argv[final_argv.index("--final-challenge-receipt") + 1] != str(final_challenge_receipt)
-            or final_argv[final_argv.index("--final-challenge-authority-public-key") + 1]
-            != str(final_challenge_authority_key)
-            or final_argv[final_argv.index("--final-challenge-authority-public-key-id") + 1]
-            != production_readiness_test.trusted_public_key_id(
-                final_challenge_authority_key.name
-            )
-            or final_argv[final_argv.index("--final-challenge-authority-provider") + 1]
-            != "production-final-challenge-authority"
-            or final_argv[final_argv.index("--hardware-assurance") + 1] != str(hardware_assurance)
-            or final_argv[final_argv.index("--hardware-assurance-trusted-public-key-id") + 1]
-            != production_readiness_test.trusted_public_key_id(
-                hardware_assurance_key.name
-            )
-            or final_argv[final_argv.index("--hardware-assurance-expected-challenge-nonce") + 1]
-            != expected_hardware_challenge
-            or final_argv[final_argv.index("--policy-trusted-public-key-id") + 1]
-            != final_env_values[run_production_readiness.POLICY_TRUST_ROOT_ID_ENV]
-            or final_argv[
-                final_argv.index("--policy-activation-trusted-public-key-id") + 1
-            ]
-            != final_env_values[
-                run_production_readiness.POLICY_ACTIVATION_TRUST_ROOT_ID_ENV
-            ]
-            or final_argv[
-                final_argv.index("--reproducible-build-trusted-public-key-id") + 1
-            ]
-            != final_env_values[
-                run_production_readiness.REPRODUCIBLE_BUILD_TRUST_ROOT_ID_ENV
-            ]
-        ):
-            raise AssertionError(f"runner did not propagate env-pinned final inputs: {final_argv}")
-
-        alternate_env_file = tmp / "alternate-final-authority.env"
-        write_env(alternate_env_file, {**final_env_values, "SERVERWARE_RELEASE_CHANNEL": "alternate-prod"})
-        alternate_self_consistent = run_runner(
-            "--env-file",
-            str(alternate_env_file),
-            "--dry-run",
-            "--verification-mode",
-            "final",
-            "--launcher-trusted-production-env-path",
-            str(final_env_file),
-            "--launcher-trusted-production-env-sha256",
-            "sha256:" + hashlib.sha256(final_env_file.read_bytes()).hexdigest(),
-            *security_args,
-        )
-        if (
-            alternate_self_consistent.returncode == 0
-            or "out-of-band launcher trust path" not in detail(alternate_self_consistent)
-        ):
-            raise AssertionError(
-                "runner accepted an alternate self-consistent final env outside the launcher trust root: "
-                + detail(alternate_self_consistent)
-            )
-
-        final_proxy_overrides = {
-            "--python": str(tmp / "caller-python"),
-            "--proxy-response-proof": str(tmp / "caller-proof.json"),
-            "--proxy-proof-contract": "streaming-v1",
-            "--proxy-proof-collector-command": str(tmp / "caller-collector"),
-            "--proxy-address": "caller.proxy.internal:9443",
-            "--proxy-proof-url": "https://caller-proof.internal/health",
-            "--proxy-proof-ca": str(tmp / "caller-ca.pem"),
-            "--proxy-collector-key": str(tmp / "caller-collector.key"),
-            "--proxy-collector-public-key": str(tmp / "caller-collector.pub"),
-            "--proxy-proof-verifier-public-key": str(tmp / "caller-verifier.pub"),
-            "--proxy-server-instance-id": "spiffe://caller/instance",
-            "--proxy-agent-id": "caller-agent",
-            "--proxy-principal-id": "agent:caller",
-            "--proxy-client-request-digest": "sha256:" + "d" * 64,
-            "--proxy-request-digest": "sha256:" + "e" * 64,
-            "--proxy-operation-digest": "sha256:" + "f" * 64,
-            "--proxy-proof-max-age-seconds": "239",
-            "--p99-limit-ms": "19.0",
-            "--docker-executable": str(tmp / "caller-docker"),
-            "--docker-compose-plugin-executable": str(tmp / "caller-compose"),
-            "--docker-unix-socket": "/run/caller-docker.sock",
-            "--docker-daemon-id": "caller-daemon",
-        }
-        for option, caller_value in final_proxy_overrides.items():
-            substituted = run_runner(
-                "--env-file",
-                str(final_env_file),
-                "--dry-run",
-                "--verification-mode",
-                "final",
-                option,
-                caller_value,
-                *security_args,
-            )
-            if substituted.returncode == 0 or "must match" not in detail(substituted):
-                raise AssertionError(
-                    f"runner accepted caller-selected final setting {option}: {detail(substituted)}"
-                )
-
-        substituted_digest_pin = run_runner(
-            "--env-file",
-            str(final_env_file),
-            "--dry-run",
-            "--verification-mode",
-            "final",
-            "--proxy-operation-digest",
-            "sha256:" + "d" * 64,
-            *security_args,
-        )
-        if substituted_digest_pin.returncode == 0 or "must match SERVERWARE_PROXY_EXPECTED_OPERATION_DIGEST" not in detail(
-            substituted_digest_pin
-        ):
-            raise AssertionError(
-                "runner accepted a caller-substituted final operation digest pin: "
-                + detail(substituted_digest_pin)
-            )
-
-        pinned_executable = tmp / "post-preflight-executable"
-        pinned_executable.write_bytes(b"#!/bin/sh\nexit 0\n")
-        pinned_executable.chmod(0o755)
-        executable_pin = "sha256:" + hashlib.sha256(pinned_executable.read_bytes()).hexdigest()
-        pin_map = {
-            str(pinned_executable): (
-                run_production_readiness.PROOF_COLLECTOR_COMMAND_SETTING,
-                executable_pin,
-            )
-        }
-        run_production_readiness.remeasure_command_before_use(
-            [str(pinned_executable)],
-            pin_map,
-        )
-        pinned_executable.write_bytes(b"#!/bin/sh\nexit 7\n")
-        pinned_executable.chmod(0o755)
-        try:
-            run_production_readiness.remeasure_command_before_use(
-                [str(pinned_executable)],
-                pin_map,
-            )
-        except ValueError as exc:
-            if "do not match" not in str(exc):
-                raise
-        else:
-            raise AssertionError("runner accepted executable bytes replaced after preflight")
-
-        measured_race = tmp / "measured-race"
-        replacement = tmp / "measured-race-replacement"
-        measured_race.write_bytes(b"#!/bin/sh\nprintf 'measured-bytes\\n'\n")
-        replacement.write_bytes(b"#!/bin/sh\nprintf 'replacement-bytes\\n'\n")
-        measured_race.chmod(0o700)
-        replacement.chmod(0o700)
-        measured_race_digest = "sha256:" + hashlib.sha256(measured_race.read_bytes()).hexdigest()
-
-        def replace_after_open(_measured: run_production_readiness.MeasuredExecutable) -> None:
-            os.replace(replacement, measured_race)
-
-        if sys.platform.startswith("linux"):
-            measured_execution = run_production_readiness.run_measured_command(
-                [str(measured_race)],
-                setting=run_production_readiness.PROOF_COLLECTOR_COMMAND_SETTING,
-                expected_digest=measured_race_digest,
-                after_open=replace_after_open,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                check=False,
-                text=True,
-            )
-            if measured_execution.returncode != 0 or measured_execution.stdout != "measured-bytes\n":
-                raise AssertionError(
-                    "descriptor execution reopened replacement bytes after measurement: "
-                    f"returncode={measured_execution.returncode} stdout={measured_execution.stdout!r} "
-                    f"stderr={measured_execution.stderr!r}"
-                )
-            measured_script = tmp / "measured-script.py"
-            replacement_script = tmp / "replacement-script.py"
-            measured_script.write_text("print('measured-script-bytes')\n", encoding="ascii")
-            replacement_script.write_text("print('replacement-script-bytes')\n", encoding="ascii")
-            measured_script_digest = (
-                "sha256:" + hashlib.sha256(measured_script.read_bytes()).hexdigest()
-            )
-
-            def replace_script_after_open(
-                _measured: run_production_readiness.MeasuredScript,
-            ) -> None:
-                os.replace(replacement_script, measured_script)
-
-            measured_script_execution = run_production_readiness.run_measured_python_script(
-                [str(Path(sys.executable).resolve()), str(measured_script)],
-                python_setting=run_production_readiness.PRODUCTION_PYTHON_EXECUTABLE_ENV,
-                python_expected_digest=(
-                    "sha256:"
-                    + hashlib.sha256(Path(sys.executable).resolve().read_bytes()).hexdigest()
-                ),
-                script_setting=(
-                    run_production_readiness.PRODUCTION_HOST_PREFLIGHT_SCRIPT_SHA256_ENV
-                ),
-                script_expected_digest=measured_script_digest,
-                after_script_open=replace_script_after_open,
-                cwd=ROOT,
-                env=dict(run_production_readiness.FINAL_CHILD_FIXED_ENV),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                check=False,
-                text=True,
-            )
-            if (
-                measured_script_execution.returncode != 0
-                or measured_script_execution.stdout != "measured-script-bytes\n"
-            ):
-                raise AssertionError(
-                    "isolated Python reopened replacement script bytes after measurement: "
-                    f"returncode={measured_script_execution.returncode} "
-                    f"stdout={measured_script_execution.stdout!r} "
-                    f"stderr={measured_script_execution.stderr!r}"
-                )
-
-        malformed_hardware_id_env = tmp / "malformed-hardware-id.env"
-        write_env(
-            malformed_hardware_id_env,
-            {
-                **final_env_values,
-                "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY_ID": "sha256:not-a-key-id",
-            },
-        )
-        malformed_hardware_id = run_runner(
-            "--env-file",
-            str(malformed_hardware_id_env),
-            "--dry-run",
-            "--verification-mode",
-            "final",
-            *security_args,
-        )
-        if (
-            malformed_hardware_id.returncode == 0
-            or "hardware assurance trusted public key ID must be sha256" not in detail(
-                malformed_hardware_id
-            )
-        ):
-            raise AssertionError(
-                f"runner accepted a malformed hardware verifier key ID: {detail(malformed_hardware_id)}"
-            )
-
-        same_authority_id_env = tmp / "same-final-authority-id.env"
-        write_env(
-            same_authority_id_env,
-            {
-                **final_env_values,
-                "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY_ID": (
-                    final_env_values[
-                        "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY_ID"
-                    ]
-                ),
-            },
-        )
-        same_authority_id = run_runner(
-            "--env-file",
-            str(same_authority_id_env),
-            "--dry-run",
-            "--verification-mode",
-            "final",
-            *security_args,
-        )
-        if (
-            same_authority_id.returncode == 0
-            or "must use different public keys" not in detail(same_authority_id)
-        ):
-            raise AssertionError(
-                f"runner accepted one key ID for both final trust roles: {detail(same_authority_id)}"
-            )
-
-        mismatched_mode = run_runner(
-            "--env-file",
-            str(final_env_file),
-            "--dry-run",
-            *security_args,
-        )
-        if mismatched_mode.returncode == 0 or "must match" not in detail(mismatched_mode):
-            raise AssertionError(f"runner accepted a command/env verification-mode mismatch: {detail(mismatched_mode)}")
-
-        substituted_authority = run_runner(
-            "--env-file",
-            str(final_env_file),
-            "--dry-run",
-            "--verification-mode",
-            "final",
-            "--final-challenge-authority-provider",
-            "caller-selected-authority",
-            *security_args,
-        )
-        if substituted_authority.returncode == 0 or "must match" not in detail(substituted_authority):
-            raise AssertionError(
-                "runner accepted a caller-selected final authority over the pinned env value: "
-                + detail(substituted_authority)
-            )
-
-        cli_only_final = run_runner(
-            "--env-file",
-            str(final_mode_trust_file),
-            "--dry-run",
-            "--verification-mode",
-            "final",
-            *final_challenge_args,
-            *hardware_assurance_args,
-            *security_args,
-        )
-        if cli_only_final.returncode == 0 or "must be pinned" not in detail(cli_only_final):
-            raise AssertionError(f"runner accepted CLI-only final trust inputs: {detail(cli_only_final)}")
-
-        removed_ledger = run_runner(
-            "--env-file",
-            str(minimal_env),
-            "--dry-run",
-            "--verification-mode",
-            "final",
-            "--final-challenge-ledger",
-            str(tmp / "ledger.json"),
-            *security_args,
-        )
-        if removed_ledger.returncode == 0 or "unrecognized arguments: --final-challenge-ledger" not in detail(
-            removed_ledger
-        ):
-            raise AssertionError(f"runner still accepts a local final challenge ledger: {detail(removed_ledger)}")
 
         missing_proof_env = tmp / "missing-proof.env"
         write_env(missing_proof_env, {"SERVERWARE_RELEASE_CHANNEL": "prod"})

@@ -10,19 +10,24 @@ import time
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
-from urllib.parse import parse_qsl, quote, unquote, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote, unquote, urlencode, urlunsplit
 
 from serverware import db, http_client, runtime
 from serverware.policies import PolicyDecision
 from serverware.policy_bundle import (
+    GMAIL_V1_OPERATION_QUERY_KEYS,
     NPM_PUBLIC_REGISTRY_HOST,
     NPM_PUBLIC_REGISTRY_RECEIPT_CONTRACT,
     NPM_PUBLIC_REGISTRY_RECEIPT_FIELDS,
     X_V2_RECENT_SEARCH_PATHS,
+    adapter_operation_field_names,
     bounded_pattern_matches,
+    canonical_json,
     is_serverware_internal_header,
     provider_request_profile,
     strict_json_loads,
+    validate_raw_absolute_target,
+    validated_request_urlsplit,
 )
 
 
@@ -30,6 +35,7 @@ OLDER_THAN_RE = re.compile(r"\bolder_than:(\d+)([dmy])\b", re.IGNORECASE)
 NEWER_THAN_RE = re.compile(r"\bnewer_than:(\d+)([dmy])\b", re.IGNORECASE)
 _GENERIC_NON_FORWARDED_HEADERS = {
     "connection",
+    "content-encoding",
     "content-length",
     "host",
     "proxy-authorization",
@@ -87,7 +93,79 @@ _JSON_OPERATION_FIELD_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,127}$")
 _GMAIL_PROOF_NONCE_HEADER = "x-serverware-proof-nonce"
 _GMAIL_STREAM_PROOF_NONCE_HEADER = "x-serverware-stream-proof-nonce"
 _MIN_GMAIL_CHILD_AUTHORITY_SECONDS = 0.250
+_GMAIL_INTERNAL_DATE_FUTURE_SKEW_MS = 5 * 60 * 1000
 _MAX_NPM_ATTACHMENT_BYTES = 16 * 1024 * 1024
+
+
+def _parse_content_type(value: str) -> str | None:
+    """Return a canonical media type after rejecting ambiguous parameters."""
+    try:
+        encoded = value.encode("utf-8")
+    except UnicodeEncodeError:
+        return None
+    match = _CONTENT_TYPE_RE.fullmatch(value) if 0 < len(encoded) <= 8192 else None
+    if match is None:
+        return None
+
+    separator = value.find(";", match.end(2))
+    if separator < 0:
+        return f"{match.group(1)}/{match.group(2)}".lower()
+    parameters = value[separator:]
+    seen: set[str] = set()
+    index = 0
+    while index < len(parameters):
+        while index < len(parameters) and parameters[index] in " \t":
+            index += 1
+        if index >= len(parameters):
+            break
+        if parameters[index] != ";":
+            return None
+        index += 1
+        while index < len(parameters) and parameters[index] in " \t":
+            index += 1
+        name_start = index
+        while (
+            index < len(parameters)
+            and re.fullmatch(_HTTP_TOKEN_PATTERN, parameters[index]) is not None
+        ):
+            index += 1
+        name = parameters[name_start:index].lower()
+        if not name or name in seen:
+            return None
+        seen.add(name)
+        while index < len(parameters) and parameters[index] in " \t":
+            index += 1
+        if index >= len(parameters) or parameters[index] != "=":
+            return None
+        index += 1
+        while index < len(parameters) and parameters[index] in " \t":
+            index += 1
+        if index >= len(parameters):
+            return None
+        if parameters[index] == '"':
+            index += 1
+            closed = False
+            while index < len(parameters):
+                if parameters[index] == "\\":
+                    index += 2
+                    continue
+                if parameters[index] == '"':
+                    index += 1
+                    closed = True
+                    break
+                index += 1
+            if not closed:
+                return None
+        else:
+            value_start = index
+            while (
+                index < len(parameters)
+                and re.fullmatch(_HTTP_TOKEN_PATTERN, parameters[index]) is not None
+            ):
+                index += 1
+            if index == value_start:
+                return None
+    return f"{match.group(1)}/{match.group(2)}".lower()
 
 
 def _secure_bounded_metadata_get(
@@ -99,48 +177,215 @@ def _secure_bounded_metadata_get(
     max_body_bytes: int,
     deadline: http_client.HttpDeadline,
 ) -> Any:
-    origin_parts = urlsplit(origin)
-    path_parts = urlsplit(path)
-    if (
-        origin_parts.scheme != "https"
-        or not origin_parts.hostname
-        or origin_parts.path
-        or origin_parts.query
-        or origin_parts.fragment
-        or origin_parts.username is not None
-        or origin_parts.password is not None
-        or not path.startswith("/")
-        or path.startswith("//")
-        or path_parts.scheme
-        or path_parts.netloc
-        or path_parts.fragment
-    ):
-        raise http_client.HttpClientError("Gmail metadata request origin or path is invalid")
-    if set(headers) != {"Authorization"}:
-        raise http_client.HttpClientError("Gmail metadata request headers are invalid")
-    url = urlunsplit(
-        (
-            origin_parts.scheme,
-            origin_parts.netloc,
-            path_parts.path,
-            path_parts.query,
-            "",
+    del origin, path, headers, timeout_seconds, max_body_bytes, deadline
+    raise http_client.HttpClientError(
+        "Gmail metadata hydration is disabled because an explicit child "
+        "credential reservation and audit claim are unavailable"
+    )
+
+
+def preflight_request_admission(
+    flow: Any,
+    route: Any,
+    normalized_headers: dict[str, str],
+) -> PolicyDecision:
+    """Apply pure bounded byte-level checks before any adapter parser runs."""
+    request_cfg = (
+        route.adapter_config.get("request")
+        if isinstance(route.adapter_config, dict)
+        else None
+    )
+    if not isinstance(request_cfg, dict):
+        return PolicyDecision(
+            allowed=False,
+            status_code=500,
+            reason="request policy is missing",
+            payload={"error": "request_policy_missing"},
         )
-    )
-    return http_client.request_json(
-        url,
-        headers=headers,
-        timeout=timeout_seconds,
-        max_bytes=max_body_bytes,
-        deadline=deadline,
-        require_https=True,
-        expected_statuses=(200,),
-        expected_content_types=("application/json",),
-    )
+    max_body_bytes = request_cfg.get("maxBodyBytes")
+    if (
+        type(max_body_bytes) is not int
+        or max_body_bytes < 0
+    ):
+        return PolicyDecision(
+            allowed=False,
+            status_code=500,
+            reason="request body limit is missing or invalid",
+            payload={"error": "request_body_limit_invalid"},
+        )
+
+    try:
+        raw_body = flow.request.raw_content
+    except Exception:
+        return PolicyDecision(
+            allowed=False,
+            status_code=400,
+            reason="request body bytes are unavailable",
+            payload={"error": "request_body_unavailable"},
+        )
+    if not isinstance(raw_body, bytes):
+        return PolicyDecision(
+            allowed=False,
+            status_code=400,
+            reason="request body is not buffered bytes",
+            payload={"error": "request_body_not_buffered"},
+        )
+    body = raw_body
+
+    if "transfer-encoding" in normalized_headers:
+        return PolicyDecision(
+            allowed=False,
+            status_code=400,
+            reason="request transfer framing is not allowed",
+            payload={"error": "request_transfer_encoding_denied"},
+        )
+    content_length = normalized_headers.get("content-length")
+    if content_length is not None:
+        if (
+            len(content_length) > 20
+            or re.fullmatch(r"[0-9]+", content_length) is None
+        ):
+            return PolicyDecision(
+                allowed=False,
+                status_code=400,
+                reason="request Content-Length is malformed",
+                payload={"error": "request_content_length_invalid"},
+            )
+        if int(content_length) != len(body):
+            return PolicyDecision(
+                allowed=False,
+                status_code=400,
+                reason="request Content-Length does not match the buffered body",
+                payload={"error": "request_content_length_mismatch"},
+            )
+
+    if len(body) > max_body_bytes:
+        return PolicyDecision(
+            allowed=False,
+            status_code=413,
+            reason="request body exceeded policy limit",
+            payload={
+                "error": "request_body_too_large",
+                "maxBodyBytes": max_body_bytes,
+            },
+        )
+
+    body_mode = request_cfg.get("bodyMode")
+    if (body_mode == "none" or max_body_bytes == 0) and body:
+        return PolicyDecision(
+            allowed=False,
+            status_code=403,
+            reason="request body is forbidden by policy",
+            payload={"error": "request_body_not_allowed"},
+        )
+
+    content_encoding = normalized_headers.get("content-encoding")
+    if content_encoding is not None and content_encoding != "identity":
+        return PolicyDecision(
+            allowed=False,
+            status_code=415,
+            reason="encoded request bodies are not supported",
+            payload={"error": "request_content_encoding_denied"},
+        )
+
+    content_type = normalized_headers.get("content-type")
+    media_type: str | None = None
+    if content_type is not None:
+        media_type = _parse_content_type(content_type)
+        if media_type is None:
+            return PolicyDecision(
+                allowed=False,
+                status_code=415,
+                reason="request Content-Type is malformed",
+                payload={"error": "request_content_type_denied"},
+            )
+
+    expected_media_types: set[str] | None = None
+    raw_allowed_media_types = request_cfg.get("allowedMediaTypes")
+    if raw_allowed_media_types is not None:
+        if (
+            not isinstance(raw_allowed_media_types, list)
+            or any(
+                not isinstance(value, str)
+                or _MEDIA_TYPE_RE.fullmatch(value) is None
+                for value in raw_allowed_media_types
+            )
+        ):
+            return PolicyDecision(
+                allowed=False,
+                status_code=500,
+                reason="request media-type policy is invalid",
+                payload={"error": "request_media_type_policy_invalid"},
+            )
+        expected_media_types = {
+            value.lower() for value in raw_allowed_media_types
+        }
+    elif body_mode == "json":
+        expected_media_types = {"application/json"}
+    elif body_mode == "formUrlencoded":
+        expected_media_types = {"application/x-www-form-urlencoded"}
+
+    if expected_media_types is not None:
+        if media_type is None and body:
+            return PolicyDecision(
+                allowed=False,
+                status_code=415,
+                reason="request Content-Type is required for a body",
+                payload={"error": "request_content_type_required"},
+            )
+        if media_type is not None and media_type not in expected_media_types:
+            return PolicyDecision(
+                allowed=False,
+                status_code=415,
+                reason="request Content-Type is not allowed by policy",
+                payload={
+                    "error": (
+                        "request_json_content_type_denied"
+                        if body_mode == "json"
+                        else "request_form_content_type_denied"
+                        if body_mode == "formUrlencoded"
+                        else "request_content_type_denied"
+                    ),
+                    "contentType": media_type,
+                },
+            )
+
+    get_content = getattr(flow.request, "get_content", None)
+    if not callable(get_content):
+        return PolicyDecision(
+            allowed=False,
+            status_code=400,
+            reason="request body access is unavailable",
+            payload={"error": "request_body_unavailable"},
+        )
+    try:
+        decoded_body = get_content(strict=True)
+    except Exception:
+        return PolicyDecision(
+            allowed=False,
+            status_code=400,
+            reason="request body access failed",
+            payload={"error": "request_body_unavailable"},
+        )
+    if not isinstance(decoded_body, bytes) or decoded_body != body:
+        return PolicyDecision(
+            allowed=False,
+            status_code=400,
+            reason="request body access did not preserve the buffered bytes",
+            payload={"error": "request_body_unavailable"},
+        )
+    return PolicyDecision(allowed=True)
 
 
 class ApiAdapter:
     id = "generic.rest"
+
+    def validate_credential_metadata(
+        self,
+        route: Any,
+        metadata: dict[str, Any] | None,
+    ) -> PolicyDecision:
+        return PolicyDecision(allowed=True)
 
     def validate_credential(self, route: Any, credential: dict[str, Any] | None) -> PolicyDecision:
         return PolicyDecision(allowed=True)
@@ -171,10 +416,53 @@ class ApiAdapter:
                 ):
                     valid_lists = False
                     break
+        discard_headers = (
+            request_cfg.get("discardHeaders", [])
+            if isinstance(request_cfg, dict)
+            else None
+        )
+        if (
+            valid_lists
+            and (
+                not isinstance(discard_headers, list)
+                or any(not isinstance(value, str) for value in discard_headers)
+                or len(discard_headers) != len(set(discard_headers))
+            )
+        ):
+            valid_lists = False
+        value_rules = (
+            request_cfg.get("valueRules")
+            if isinstance(request_cfg, dict)
+            else None
+        )
+        if (
+            valid_lists
+            and (
+                not isinstance(value_rules, list)
+                or len(value_rules) > 32
+                or any(not isinstance(rule, dict) for rule in value_rules)
+            )
+        ):
+            valid_lists = False
+        expected_fields = set(expected or {})
+        required_fields = expected_fields - {"discardHeaders"}
+        required_discard_headers = set(
+            (expected or {}).get("discardHeaders") or []
+        )
         if (
             not isinstance(request_cfg, dict)
-            or set(request_cfg) != set(expected or {})
+            or not required_fields.issubset(request_cfg)
+            or not set(request_cfg).issubset(expected_fields)
             or not valid_lists
+            or (
+                bool(required_discard_headers)
+                and (
+                    "discardHeaders" not in request_cfg
+                    or not required_discard_headers.issubset(
+                        discard_headers or []
+                    )
+                )
+            )
             or type(request_cfg.get("maxBodyBytes")) is not int
             or request_cfg.get("maxBodyBytes") != (expected or {}).get("maxBodyBytes")
         ):
@@ -200,14 +488,14 @@ class ApiAdapter:
 
         allowed_query_keys = set(request_cfg["allowedQueryKeys"])
         for key, _ in parse_qsl(
-            urlsplit(flow.request.pretty_url).query,
+            validated_request_urlsplit(flow.request.pretty_url).query,
             keep_blank_values=True,
         ):
             if key not in allowed_query_keys:
                 return PolicyDecision(
                     allowed=False,
                     status_code=403,
-                    reason=f"{self.id} request query key is not allowed by policy: {key}",
+                    reason=f"{self.id} request contains a query key not allowed by policy",
                     payload={"error": "request_query_key_not_allowed", "queryKey": key},
                 )
 
@@ -245,18 +533,14 @@ class ApiAdapter:
                 reason=f"{self.id} request Content-Type must occur exactly once",
                 payload={"error": "request_content_type_ambiguous"},
             )
-        value = content_types[0]
-        match = _CONTENT_TYPE_RE.fullmatch(value) if len(value.encode("utf-8")) <= 8192 else None
-        if match is None:
+        media_type = _parse_content_type(content_types[0])
+        if media_type is None:
             return PolicyDecision(
                 allowed=False,
                 status_code=415,
                 reason=f"{self.id} request Content-Type is malformed",
                 payload={"error": "request_content_type_denied"},
             )
-        if not body:
-            return PolicyDecision(allowed=True)
-        media_type = f"{match.group(1)}/{match.group(2)}".lower()
         if media_type not in set(request_cfg["allowedMediaTypes"]):
             return PolicyDecision(
                 allowed=False,
@@ -274,6 +558,38 @@ class ApiAdapter:
                 status_code=500,
                 reason="generic request policy is missing",
                 payload={"error": "generic_request_policy_missing"},
+            )
+        credential_mode = route.adapter_config.get("credentialMode")
+        if getattr(route, "credential_ref", None):
+            if (
+                credential_mode != "required"
+                or not isinstance(
+                    route.adapter_config.get("credentialBinding"), dict
+                )
+                or "noCredentialProof" in route.adapter_config
+            ):
+                return PolicyDecision(
+                    allowed=False,
+                    status_code=500,
+                    reason="generic credential binding is invalid",
+                    payload={"error": "generic_credential_binding_invalid"},
+                )
+        elif (
+            credential_mode != "none"
+            or "credentialBinding" in route.adapter_config
+            or route.adapter_config.get("noCredentialProof")
+            != {
+                "credentialRefAbsent": True,
+                "secretInjectionDisabled": True,
+                "sensitiveHeadersForwarded": False,
+                "authorizationForwarded": False,
+            }
+        ):
+            return PolicyDecision(
+                allowed=False,
+                status_code=500,
+                reason="generic no-credential proof is invalid",
+                payload={"error": "generic_no_credential_proof_invalid"},
             )
 
         allowed_headers = {str(item).strip().lower() for item in request_cfg.get("allowedHeaders") or []}
@@ -332,12 +648,15 @@ class ApiAdapter:
                 )
 
         allowed_query_keys = {str(item) for item in request_cfg.get("allowedQueryKeys") or []}
-        for key, _ in parse_qsl(urlsplit(flow.request.pretty_url).query, keep_blank_values=True):
+        for key, _ in parse_qsl(
+            validated_request_urlsplit(flow.request.pretty_url).query,
+            keep_blank_values=True,
+        ):
             if key not in allowed_query_keys:
                 return PolicyDecision(
                     allowed=False,
                     status_code=403,
-                    reason=f"generic request query key is not allowed by policy: {key}",
+                    reason="generic request contains a query key not allowed by policy",
                     payload={"error": "request_query_key_not_allowed", "queryKey": key},
                 )
 
@@ -357,6 +676,46 @@ class ApiAdapter:
                 reason="generic request body exceeded policy limit",
                 payload={"error": "request_body_too_large", "maxBodyBytes": int(max_body)},
             )
+
+        content_types = self._response_header_values(
+            flow.request.headers,
+            "content-type",
+        )
+        if not content_types:
+            if body:
+                return PolicyDecision(
+                    allowed=False,
+                    status_code=415,
+                    reason="generic request Content-Type is required for a body",
+                    payload={"error": "request_content_type_required"},
+                )
+        elif len(content_types) != 1:
+            return PolicyDecision(
+                allowed=False,
+                status_code=415,
+                reason="generic request Content-Type must occur exactly once",
+                payload={"error": "request_content_type_ambiguous"},
+            )
+        else:
+            media_type = _parse_content_type(content_types[0])
+            if media_type is None:
+                return PolicyDecision(
+                    allowed=False,
+                    status_code=415,
+                    reason="generic request Content-Type is malformed",
+                    payload={"error": "request_content_type_denied"},
+                )
+            allowed_media_types = request_cfg.get("allowedMediaTypes")
+            if (
+                not isinstance(allowed_media_types, list)
+                or media_type not in set(allowed_media_types)
+            ):
+                return PolicyDecision(
+                    allowed=False,
+                    status_code=415,
+                    reason="generic request Content-Type is not allowed by policy",
+                    payload={"error": "request_content_type_denied"},
+                )
 
         body_mode = request_cfg.get("bodyMode")
         if body_mode in _STRUCTURED_STREAMING_MODES:
@@ -383,7 +742,7 @@ class ApiAdapter:
                     payload={"error": "request_json_content_type_denied", "contentType": content_type},
                 )
             try:
-                json.loads(body.decode("utf-8"))
+                strict_json_loads(body)
             except Exception:
                 return PolicyDecision(
                     allowed=False,
@@ -461,11 +820,14 @@ class ApiAdapter:
     ) -> PolicyDecision | None:
         if not getattr(route, "credential_ref", None):
             return None
-        if body_mode == "any":
+        if body_mode in {"any", "stream"}:
             return PolicyDecision(
                 allowed=False,
                 status_code=500,
-                reason="credential-bearing generic requests cannot use opaque bodyMode any",
+                reason=(
+                    "credential-bearing generic requests cannot use opaque "
+                    f"bodyMode {body_mode}"
+                ),
                 payload={
                     "error": "credential_opaque_request_body_denied",
                     "adapter": self.id,
@@ -638,7 +1000,7 @@ class ApiAdapter:
             return PolicyDecision(allowed=True)
         if mode == "json" or allowed_fields:
             try:
-                payload = json.loads(flow.response.get_text(strict=False))
+                payload = strict_json_loads(flow.response.raw_content or b"")
             except Exception:
                 return PolicyDecision(
                     allowed=False,
@@ -649,7 +1011,7 @@ class ApiAdapter:
             if allowed_fields:
                 payload = self._redact_json(payload, allowed_fields)
             flow.response.headers["Content-Type"] = "application/json"
-            flow.response.set_text(json.dumps(payload, separators=(",", ":"), sort_keys=True))
+            flow.response.set_text(canonical_json(payload))
         self._normalize_response_headers(flow, response_cfg, mode)
         return PolicyDecision(allowed=True)
 
@@ -679,19 +1041,53 @@ class ApiAdapter:
             )
         if 400 <= status_code < 600:
             error_cfg = response_cfg.get("error")
-            if isinstance(error_cfg, dict) and error_cfg:
+            if (
+                isinstance(error_cfg, dict)
+                and error_cfg
+                and self._response_envelope_admits_status(flow, route, status_code)
+            ):
                 return error_cfg, None
             return None, PolicyDecision(
                 allowed=False,
                 status_code=502,
-                reason="provider error response policy is missing",
-                payload={"error": "response_error_policy_missing", "upstreamStatus": status_code},
+                reason="provider error status is outside the explicit policy/profile intersection",
+                payload={
+                    "error": "response_error_profile_status_denied",
+                    "upstreamStatus": status_code,
+                },
             )
         return None, PolicyDecision(
             allowed=False,
             status_code=502,
             reason="provider returned an invalid response status",
             payload={"error": "response_status_invalid", "upstreamStatus": status_code},
+        )
+
+    @staticmethod
+    def _response_envelope_admits_status(
+        flow: Any,
+        route: Any,
+        status_code: int,
+    ) -> bool:
+        operation_fields = flow.metadata.get("serverware_operation") or {}
+        operation = (
+            operation_fields.get("operation")
+            if isinstance(operation_fields, dict)
+            else None
+        )
+        applicable = [
+            constraint
+            for constraint in (getattr(route, "constraints", ()) or ())
+            if isinstance(constraint, dict)
+            and constraint.get("type") == "responseEnvelope"
+            and (
+                not constraint.get("operations")
+                or operation in (constraint.get("operations") or [])
+            )
+        ]
+        return bool(applicable) and all(
+            status_code in (constraint.get("statusCodes") or [])
+            for constraint in applicable
         )
 
     @staticmethod
@@ -716,12 +1112,7 @@ class ApiAdapter:
             except UnicodeEncodeError:
                 encoded_value = b""
             if encoded_value and len(encoded_value) <= 8192:
-                match = _CONTENT_TYPE_RE.fullmatch(values[0])
-                valid = bool(
-                    match
-                    and f"{match.group(1)}/{match.group(2)}".lower()
-                    == "application/json"
-                )
+                valid = _parse_content_type(values[0]) == "application/json"
         if valid:
             return None
         return PolicyDecision(
@@ -926,30 +1317,30 @@ class ApiAdapter:
             if not line.strip():
                 continue
             try:
-                item = json.loads(line)
+                item = strict_json_loads(line)
             except Exception as exc:
                 raise ValueError("json lines body contains invalid JSON") from exc
             redacted = self._redact_json(item, paths)
-            output.append(json.dumps(redacted, separators=(",", ":"), sort_keys=True).encode("utf-8"))
+            output.append(canonical_json(redacted).encode("utf-8"))
         return b"\n".join(output) + (b"\n" if output else b"")
 
     def _redact_json_array(self, raw: bytes, paths: list[tuple[str, ...]]) -> bytes:
         try:
-            payload = json.loads(raw)
+            payload = strict_json_loads(raw)
         except Exception as exc:
             raise ValueError("json array body contains invalid JSON") from exc
         if not isinstance(payload, list):
             raise ValueError("json array body must be a top-level array")
         redacted = [self._redact_json(item, paths) for item in payload]
-        return json.dumps(redacted, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        return canonical_json(redacted).encode("utf-8")
 
     def _redact_json_nested(self, raw: bytes, paths: list[tuple[str, ...]]) -> bytes:
         try:
-            payload = json.loads(raw)
+            payload = strict_json_loads(raw)
         except Exception as exc:
             raise ValueError("json nested body contains invalid JSON") from exc
         redacted = self._redact_json(payload, paths)
-        return json.dumps(redacted, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        return canonical_json(redacted).encode("utf-8")
 
     def _redact_json_sse(self, raw: bytes, paths: list[tuple[str, ...]]) -> bytes:
         output: list[bytes] = []
@@ -979,11 +1370,11 @@ class ApiAdapter:
         if data == b"[DONE]":
             return [b"data: [DONE]\n\n"]
         try:
-            payload = json.loads(data)
+            payload = strict_json_loads(data)
         except Exception as exc:
             raise ValueError("json sse event contains invalid JSON") from exc
         redacted = self._redact_json(payload, paths)
-        return [b"data: " + json.dumps(redacted, separators=(",", ":"), sort_keys=True).encode("utf-8") + b"\n\n"]
+        return [b"data: " + canonical_json(redacted).encode("utf-8") + b"\n\n"]
 
     def _redact_form_urlencoded(self, raw: bytes, paths: list[tuple[str, ...]]) -> bytes:
         allowed = {".".join(path) for path in paths if path}
@@ -1094,9 +1485,18 @@ class GmailV1Adapter(ApiAdapter):
         profile_decision = self._validate_provider_request_profile(flow, route)
         if not profile_decision.allowed:
             return profile_decision
-        denied_equivalents = {str(item).lower() for item in route.adapter_config.get("denyEquivalentEndpoints") or []}
+        denied_equivalents = {
+            str(item).strip("/").lower()
+            for item in route.adapter_config.get("denyEquivalentEndpoints") or []
+        }
         if denied_equivalents:
-            path_segments = {segment.lower() for segment in (urlsplit(flow.request.pretty_url).path or "").split("/") if segment}
+            path_segments = {
+                segment.lower()
+                for segment in (
+                    validated_request_urlsplit(flow.request.pretty_url).path or ""
+                ).split("/")
+                if segment
+            }
             blocked = sorted(denied_equivalents.intersection(path_segments))
             if blocked:
                 return PolicyDecision(
@@ -1134,10 +1534,24 @@ class GmailV1Adapter(ApiAdapter):
                     reason=f"gmail query asks for mail older than {days} days",
                     payload={"error": "gmail_recent_policy", "max_days": days},
                 )
-            return PolicyDecision(allowed=True)
+            operation = "gmail.messages.list"
+        else:
+            operation = "gmail.message.get"
+        admitted_query = GMAIL_V1_OPERATION_QUERY_KEYS.get(operation)
+        if admitted_query is None or not set(flow.request.query).issubset(
+            admitted_query
+        ):
+            return PolicyDecision(
+                allowed=False,
+                status_code=403,
+                reason="Gmail query key is not admitted for the operation",
+                payload={"error": "gmail_operation_query_denied"},
+            )
 
-        message_id = params["message_id"]
-        if route.adapter_config.get("allowMessageGetOnlyFromPriorSearch", True):
+        if not self._is_list(params) and route.adapter_config.get(
+            "allowMessageGetOnlyFromPriorSearch", True
+        ):
+            message_id = params["message_id"]
             if not runtime.gmail_message_allowed(self._proof_context(flow, route, params), message_id):
                 return PolicyDecision(
                     allowed=False,
@@ -1158,7 +1572,13 @@ class GmailV1Adapter(ApiAdapter):
 
     def operation_fields(self, flow: Any, route: Any, params: dict[str, str]) -> dict[str, str]:
         operation = "gmail.messages.list" if self._is_list(params) else "gmail.message.get"
-        return {"operation": operation}
+        fields = {
+            "operation": operation,
+            "gmailUser": params.get("user", "me"),
+        }
+        if not self._is_list(params):
+            fields["messageId"] = params["message_id"]
+        return fields
 
     def _cutoff_ms(self, route: Any) -> int:
         cutoff = datetime.now(timezone.utc) - timedelta(days=self._days(route))
@@ -1268,7 +1688,7 @@ class GmailV1Adapter(ApiAdapter):
         route: Any,
         params: dict[str, str],
     ) -> tuple[str, str]:
-        parts = urlsplit(flow.request.pretty_url)
+        parts = validated_request_urlsplit(flow.request.pretty_url)
         try:
             explicit_port = parts.port
         except ValueError as exc:
@@ -1364,7 +1784,7 @@ class GmailV1Adapter(ApiAdapter):
         request_digest = self._digest_json(
             {
                 "method": "GET",
-                "path": urlsplit(path).path,
+                "path": path.partition("?")[0],
                 "query": [["fields", "id,internalDate"], ["format", "metadata"]],
             }
         )
@@ -1383,7 +1803,7 @@ class GmailV1Adapter(ApiAdapter):
         route: Any,
         params: dict[str, str],
         *,
-        authorization_factory: Callable[[], str] | None = None,
+        authorization_factory: Callable[[], tuple[str, float]] | None = None,
     ) -> PolicyDecision:
         media_type_decision = super().prepare_response(
             flow,
@@ -1495,6 +1915,19 @@ class GmailV1Adapter(ApiAdapter):
                 planned += 1
         if planned == 0:
             return PolicyDecision(allowed=True)
+        return PolicyDecision(
+            allowed=False,
+            status_code=503,
+            reason=(
+                "Gmail list metadata hydration is disabled because each hidden "
+                "credential-bearing child request lacks an explicit bounded "
+                "reservation, claim, and audit lifecycle"
+            ),
+            payload={
+                "error": "gmail_metadata_hydration_accounting_unavailable",
+                "plannedChildren": planned,
+            },
+        )
         if authorization_factory is None:
             return PolicyDecision(
                 allowed=False,
@@ -1562,7 +1995,7 @@ class GmailV1Adapter(ApiAdapter):
                 continue
             path = (
                 f"/gmail/v1/users/{encoded_user}/messages/{quote(message_id, safe='')}"
-                "?format=metadata&fields=id,internalDate"
+                "?format=metadata&fields=id%2CinternalDate"
             )
             dispatch_deadline: float | None = None
             dispatch_expires_at_epoch_ms = flow.metadata.get(
@@ -1784,6 +2217,20 @@ class GmailV1Adapter(ApiAdapter):
                 reason=f"gmail response contains mail older than {self._days(route)} days",
                 payload={"error": "gmail_response_too_old", "max_days": self._days(route)},
             )
+        if value > int(time.time() * 1000) + _GMAIL_INTERNAL_DATE_FUTURE_SKEW_MS:
+            return PolicyDecision(
+                allowed=False,
+                status_code=502,
+                reason=(
+                    "gmail response internalDate is materially in the future"
+                ),
+                payload={
+                    "error": "gmail_response_internal_date_in_future",
+                    "maxFutureSkewSeconds": (
+                        _GMAIL_INTERNAL_DATE_FUTURE_SKEW_MS // 1000
+                    ),
+                },
+            )
         return PolicyDecision(allowed=True)
 
     def validate_response(self, flow: Any, route: Any, params: dict[str, str]) -> PolicyDecision:
@@ -1879,6 +2326,22 @@ class GmailV1Adapter(ApiAdapter):
             return PolicyDecision(allowed=True)
 
         decision = PolicyDecision(allowed=True)
+        requested_message_id = self._valid_message_id(params.get("message_id"))
+        response_message_id = self._valid_message_id(payload.get("id"))
+        if (
+            requested_message_id is None
+            or response_message_id is None
+            or response_message_id != requested_message_id
+        ):
+            return PolicyDecision(
+                allowed=False,
+                status_code=502,
+                reason="gmail detail response id does not match the requested message id",
+                payload={
+                    "error": "gmail_response_message_id_mismatch",
+                    "requestedMessageId": requested_message_id,
+                },
+            )
         if validate_internal_date:
             decision = self._validate_internal_date(route, payload)
             if decision.allowed and payload.get("id"):
@@ -1996,11 +2459,11 @@ class GmailV1Adapter(ApiAdapter):
                     for item in payload["messages"]
                 ]
             }
-            flow.response.set_text(json.dumps(filtered_payload, separators=(",", ":"), sort_keys=True))
+            flow.response.set_text(canonical_json(filtered_payload))
             return
 
         filtered = filter_message(payload)
-        flow.response.set_text(json.dumps(filtered, separators=(",", ":"), sort_keys=True))
+        flow.response.set_text(canonical_json(filtered))
 
 
 X_V2_READ_OPERATION_PATHS: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -2096,28 +2559,6 @@ X_V2_READ_OPERATION_PATHS: tuple[tuple[str, tuple[str, ...]], ...] = (
         ),
     ),
     (
-        "streams.read",
-        (
-            "/2/activity/stream",
-            "/2/likes/compliance/stream",
-            "/2/likes/firehose/stream",
-            "/2/likes/sample10/stream",
-            "/2/tweets/compliance/stream",
-            "/2/tweets/firehose/stream",
-            "/2/tweets/firehose/stream/lang/en",
-            "/2/tweets/firehose/stream/lang/ja",
-            "/2/tweets/firehose/stream/lang/ko",
-            "/2/tweets/firehose/stream/lang/pt",
-            "/2/tweets/label/stream",
-            "/2/tweets/sample/stream",
-            "/2/tweets/sample10/stream",
-            "/2/tweets/search/stream",
-            "/2/tweets/search/stream/rules",
-            "/2/tweets/search/stream/rules/counts",
-            "/2/users/compliance/stream",
-        ),
-    ),
-    (
         "trends.read",
         (
             "/2/trends/by/woeid/{woeid}",
@@ -2204,12 +2645,28 @@ def _x_read_operation(path: str) -> str | None:
 class XV2Adapter(ApiAdapter):
     id = "x.v2"
 
-    def validate_credential(self, route: Any, credential: dict[str, Any] | None) -> PolicyDecision:
+    def validate_credential_metadata(
+        self,
+        route: Any,
+        metadata: dict[str, Any] | None,
+    ) -> PolicyDecision:
         allowed_app_ids = set(route.adapter_config.get("appIds") or [])
         if not allowed_app_ids:
             return PolicyDecision(allowed=True)
-        metadata = (credential or {}).get("metadata") or {}
-        credential_app_id = metadata.get("x_app_id") or metadata.get("app_id")
+        metadata = metadata or {}
+        app_ids = {
+            value
+            for name in ("x_app_id", "app_id")
+            if isinstance((value := metadata.get(name)), str) and value
+        }
+        if len(app_ids) != 1:
+            return PolicyDecision(
+                allowed=False,
+                status_code=403,
+                reason="x.v2 credential app aliases are missing or contradictory",
+                payload={"error": "x_app_id_ambiguous"},
+            )
+        credential_app_id = next(iter(app_ids))
         if credential_app_id not in allowed_app_ids:
             return PolicyDecision(
                 allowed=False,
@@ -2219,8 +2676,17 @@ class XV2Adapter(ApiAdapter):
             )
         return PolicyDecision(allowed=True)
 
+    def validate_credential(self, route: Any, credential: dict[str, Any] | None) -> PolicyDecision:
+        metadata = (credential or {}).get("metadata")
+        return self.validate_credential_metadata(
+            route,
+            metadata if isinstance(metadata, dict) else None,
+        )
+
     def _operation(self, flow: Any) -> str | None:
-        path = (urlsplit(flow.request.pretty_url).path or "/").rstrip("/") or "/"
+        path = (
+            validated_request_urlsplit(flow.request.pretty_url).path or "/"
+        ).rstrip("/") or "/"
         method = flow.request.method.upper()
         if method == "POST" and path == "/2/tweets":
             return "tweets.write"
@@ -2245,7 +2711,9 @@ class XV2Adapter(ApiAdapter):
         profile_decision = self._validate_provider_request_profile(flow, route)
         if not profile_decision.allowed:
             return profile_decision
-        path = (urlsplit(flow.request.pretty_url).path or "/").rstrip("/") or "/"
+        path = (
+            validated_request_urlsplit(flow.request.pretty_url).path or "/"
+        ).rstrip("/") or "/"
         if (
             route.adapter_config.get("mode") == "recentSearchOnly"
             and path not in X_V2_RECENT_SEARCH_PATHS
@@ -2281,7 +2749,36 @@ class XV2Adapter(ApiAdapter):
 
     def operation_fields(self, flow: Any, route: Any, params: dict[str, str]) -> dict[str, str]:
         operation = self._operation(flow)
-        return {"operation": operation or ""}
+        fields = {"operation": operation or ""}
+        path = (
+            validated_request_urlsplit(flow.request.pretty_url).path or "/"
+        ).rstrip("/") or "/"
+        identifier = params.get("id")
+        if isinstance(identifier, str):
+            if path.startswith("/2/tweets/"):
+                fields["tweetId"] = identifier
+            elif path.startswith("/2/users/"):
+                fields["userId"] = identifier
+            elif path.startswith("/2/lists/"):
+                fields["listId"] = identifier
+            elif path.startswith("/2/spaces/"):
+                fields["spaceId"] = identifier
+        for param_name, field_name in (
+            ("username", "username"),
+            ("tweet_id", "tweetId"),
+            ("user_id", "userId"),
+            ("list_id", "listId"),
+            ("space_id", "spaceId"),
+        ):
+            value = params.get(param_name)
+            if isinstance(value, str):
+                fields[field_name] = value
+        catalog = adapter_operation_field_names(
+            self.id, str(fields["operation"])
+        )
+        if catalog is None or not set(fields).issubset(catalog):
+            raise ValueError("x.v2 emitted an unknown operation field")
+        return fields
 
 
 class NpmRegistryAdapter(ApiAdapter):
@@ -2445,7 +2942,7 @@ class NpmRegistryAdapter(ApiAdapter):
         return super().validate_response(flow, route, params)
 
     def _registry_path(self, flow: Any) -> str:
-        path = urlsplit(flow.request.pretty_url).path or "/"
+        path = validated_request_urlsplit(flow.request.pretty_url).path or "/"
         if path.startswith("/npm/"):
             return path[4:] or "/"
         if path == "/npm":

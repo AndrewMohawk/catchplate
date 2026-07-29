@@ -277,6 +277,7 @@ assert set(receipt_response) == {
     "status",
     "body_b64",
     "body_sha256",
+    "response_headers",
     "response_signing_key_id",
     "statement_b64",
     "statement_sha256",
@@ -303,7 +304,7 @@ assert receipt_statement_bytes == json.dumps(
     json.loads(receipt_statement_bytes), sort_keys=True, separators=(",", ":"), ensure_ascii=True
 ).encode(), receipt_response
 receipt_statement = json.loads(receipt_statement_bytes)
-assert receipt_statement["version"] == "serverware.responseSignature/v2", receipt_statement
+assert receipt_statement["version"] == "serverware.responseSignature/v3", receipt_statement
 assert receipt_statement["request"] == {
     "method": receipt_request["method"],
     "path": receipt_request["path"],
@@ -312,6 +313,19 @@ assert receipt_statement["request"] == {
 assert receipt_statement["nonce"] == receipt_request["nonce"], receipt_statement
 assert receipt_statement["status_code"] == receipt_response["status"], receipt_statement
 assert receipt_statement["body_sha256"] == receipt_response["body_sha256"], receipt_statement
+receipt_response_headers = receipt_response["response_headers"]
+receipt_response_headers_bytes = json.dumps(
+    receipt_response_headers, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+).encode()
+assert receipt_statement["response_headers_sha256"] == (
+    "sha256:" + hashlib.sha256(receipt_response_headers_bytes).hexdigest()
+), receipt_statement
+assert receipt_statement["response_header_count"] == len(receipt_response_headers), receipt_statement
+assert all(
+    item["name"] == item["name"].lower()
+    and not item["name"].startswith("x-serverware-response-")
+    for item in receipt_response_headers
+), receipt_response_headers
 assert receipt_statement["response_signing_key_id"] == receipt_response["response_signing_key_id"], receipt_statement
 assert observed_at <= receipt_statement["issued_at_ms"] < dispatch_expires_at, receipt_statement
 assert receipt_statement["issued_at_ms"] < reservation_expires_at, receipt_statement

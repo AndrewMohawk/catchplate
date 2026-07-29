@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import fcntl
 import hashlib
 import json
 import os
+import re
 import stat
 import threading
 import time
@@ -35,6 +37,31 @@ _MAX_RESPONSE_SIGNING_KEY_BYTES = 64 * 1024
 _PUBLICATION_REVALIDATE_SECONDS = 1.0
 _PUBLICATION_LOCK_TIMEOUT_SECONDS = 1.0
 _PUBLICATION_CACHE: tuple[str, str, bytes, bytes, float] | None = None
+_RESPONSE_HEADER_NAME_RE = re.compile(rb"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
+_RESPONSE_HEADER_VALUE_RE = re.compile(rb"[\x00-\x08\x0a-\x1f\x7f]")
+_RESPONSE_HEADER_MAX_COUNT = 128
+_RESPONSE_HEADER_MAX_TOTAL_BYTES = 64 * 1024
+_RESPONSE_PROOF_HEADER_PREFIX = b"x-serverware-response-"
+_RESPONSE_HOP_BY_HOP_HEADERS = frozenset(
+    {
+        b"connection",
+        b"keep-alive",
+        b"proxy-authenticate",
+        b"proxy-authorization",
+        b"te",
+        b"trailer",
+        b"transfer-encoding",
+        b"upgrade",
+    }
+)
+_RESPONSE_REPEATABLE_HEADERS = frozenset(
+    {
+        b"link",
+        b"set-cookie",
+        b"warning",
+        b"www-authenticate",
+    }
+)
 
 
 @dataclass
@@ -59,6 +86,81 @@ def sha256_prefixed(value: bytes) -> str:
 
 def b64e(value: bytes) -> str:
     return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
+
+
+def validate_response_nonce(value: Any) -> str:
+    if not isinstance(value, str) or not value or "=" in value:
+        raise ValueError(
+            "response signature nonce must be canonical unpadded base64url"
+        )
+    try:
+        encoded = value.encode("ascii")
+        decoded = base64.b64decode(
+            encoded + b"=" * (-len(encoded) % 4),
+            altchars=b"-_",
+            validate=True,
+        )
+    except (UnicodeEncodeError, ValueError, binascii.Error) as exc:
+        raise ValueError(
+            "response signature nonce must be canonical unpadded base64url"
+        ) from exc
+    if len(decoded) != 32 or b64e(decoded) != value:
+        raise ValueError(
+            "response signature nonce must encode exactly 32 bytes canonically"
+        )
+    return value
+
+
+def canonical_response_header_items(
+    headers: list[tuple[bytes, bytes]],
+) -> list[dict[str, str]]:
+    if len(headers) > _RESPONSE_HEADER_MAX_COUNT:
+        raise ValueError("response header count exceeds the signing bound")
+    grouped: dict[bytes, list[bytes]] = {}
+    total_bytes = 0
+    for name, value in headers:
+        if type(name) is not bytes or type(value) is not bytes:
+            raise ValueError("response headers must be byte pairs")
+        lowered = name.lower()
+        total_bytes += len(lowered) + len(value)
+        if total_bytes > _RESPONSE_HEADER_MAX_TOTAL_BYTES:
+            raise ValueError("response headers exceed the signing bound")
+        if (
+            len(lowered) > 256
+            or not _RESPONSE_HEADER_NAME_RE.fullmatch(lowered)
+        ):
+            raise ValueError("response header name is invalid")
+        if _RESPONSE_HEADER_VALUE_RE.search(value):
+            raise ValueError("response header value is invalid")
+        if (
+            lowered.startswith(_RESPONSE_PROOF_HEADER_PREFIX)
+            or lowered in _RESPONSE_HOP_BY_HOP_HEADERS
+        ):
+            raise ValueError(
+                "response header set contains a proof or hop-by-hop field"
+            )
+        values = grouped.setdefault(lowered, [])
+        if values and lowered not in _RESPONSE_REPEATABLE_HEADERS:
+            raise ValueError("response contains a duplicate singleton header")
+        values.append(value)
+    return [
+        {
+            "name": name.decode("ascii"),
+            "value_b64": b64e(value),
+        }
+        for name in sorted(grouped)
+        for value in grouped[name]
+    ]
+
+
+def response_headers_binding(
+    headers: list[tuple[bytes, bytes]],
+) -> tuple[str, int]:
+    items = canonical_response_header_items(headers)
+    return (
+        sha256_prefixed(canonical_json(items).encode("ascii")),
+        len(items),
+    )
 
 
 def _read_stable_key_file(
@@ -824,12 +926,15 @@ def response_statement(
     query: str,
     status_code: int,
     body: bytes,
-    nonce: str | None,
+    response_headers: list[tuple[bytes, bytes]],
+    nonce: str,
     context: dict[str, Any],
 ) -> dict[str, Any]:
+    nonce = validate_response_nonce(nonce)
     key_info = response_public_key_info()
+    headers_digest, header_count = response_headers_binding(response_headers)
     return {
-        "version": "serverware.responseSignature/v2",
+        "version": "serverware.responseSignature/v3",
         "issued_at_ms": int(time.time() * 1000),
         "request": {
             "method": method.upper(),
@@ -838,6 +943,8 @@ def response_statement(
         },
         "status_code": status_code,
         "body_sha256": sha256_prefixed(body),
+        "response_headers_sha256": headers_digest,
+        "response_header_count": header_count,
         "nonce": nonce,
         "response_signing_key_id": key_info["spki_sha256"],
         "context": context,
@@ -850,6 +957,9 @@ def sign_statement(statement: dict[str, Any]) -> str:
 
 
 def response_signature_headers(statement: dict[str, Any]) -> dict[str, str]:
+    if statement.get("version") != "serverware.responseSignature/v3":
+        raise ValueError("response signature statement version is invalid")
+    validate_response_nonce(statement.get("nonce"))
     encoded_statement = b64e(canonical_json(statement).encode("utf-8"))
     signature = sign_statement(statement)
     return {

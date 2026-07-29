@@ -1,0 +1,695 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/production-launch-manifest.v3.schema.json",
+  "title": "Serverware Production Readiness Launch Manifest v3",
+  "$comment": "This closed manifest configures trusted-host readiness only. Schema validity is not canonical-byte verification, signature verification, launch authorization, TEE proof, or final completion.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "kind",
+    "releaseRoot",
+    "stateDirectory",
+    "sourceTreeDigest",
+    "authorization",
+    "launchAttemptJournal",
+    "globalRoleRegistry",
+    "nonceRollbackAssurance",
+    "productionEnv",
+    "python",
+    "scripts",
+    "composeFile",
+    "inputs",
+    "outputs"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "serverware.productionReadinessLaunch/v3"
+    },
+    "kind": {"const": "ProductionReadinessLaunch"},
+    "releaseRoot": {"$ref": "#/$defs/absolutePath"},
+    "stateDirectory": {"$ref": "#/$defs/absolutePath"},
+    "sourceTreeDigest": {"$ref": "#/$defs/sha256"},
+    "authorization": {
+      "$ref": "#/$defs/launchAuthorizationConfiguration"
+    },
+    "launchAttemptJournal": {
+      "$ref": "#/$defs/launchAttemptJournalConfiguration"
+    },
+    "globalRoleRegistry": {
+      "$ref": "#/$defs/globalRoleRegistryBinding"
+    },
+    "nonceRollbackAssurance": {
+      "$ref": "#/$defs/nonceRollbackAssuranceBinding"
+    },
+    "productionEnv": {"$ref": "#/$defs/fileRecord"},
+    "python": {"$ref": "#/$defs/pythonRecord"},
+    "scripts": {"$ref": "#/$defs/scriptsRecord"},
+    "composeFile": {"$ref": "#/$defs/fileRecord"},
+    "inputs": {"$ref": "#/$defs/inputs"},
+    "outputs": {"$ref": "#/$defs/outputs"}
+  },
+  "$defs": {
+    "safeUnsignedInteger": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "safePositiveInteger": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "signature": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{85}[AQgw]$"
+    },
+    "ed25519SpkiDerBase64url": {
+      "type": "string",
+      "pattern": "^MCowBQYDK2VwAyEA[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$"
+    },
+    "absolutePath": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 4096,
+      "pattern": "^/(?:[A-Za-z0-9._+@:-]+/)*[A-Za-z0-9._+@:-]+$",
+      "not": {
+        "anyOf": [
+          {"pattern": "(^|/)\\.{1,2}(/|$)|//"},
+          {"pattern": "[^/A-Za-z0-9._+@:-]"}
+        ]
+      }
+    },
+    "fileRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": {"$ref": "#/$defs/absolutePath"},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "launchAuthorizationConfiguration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authorizationScope",
+        "deploymentAudience",
+        "deploymentIdentitySha256",
+        "freshnessAuthority",
+        "monotonicWitness",
+        "releaseSequence",
+        "rollbackEpoch"
+      ],
+      "properties": {
+        "authorizationScope": {"const": "trusted-host-readiness"},
+        "deploymentAudience": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-z0-9][a-z0-9._:-]{0,127}$"
+        },
+        "deploymentIdentitySha256": {"$ref": "#/$defs/sha256"},
+        "freshnessAuthority": {"const": "trusted-host-wall-clock"},
+        "monotonicWitness": {
+          "$ref": "#/$defs/launchAuthorityWitnessConfiguration"
+        },
+        "releaseSequence": {"$ref": "#/$defs/safePositiveInteger"},
+        "rollbackEpoch": {"$ref": "#/$defs/safeUnsignedInteger"}
+      }
+    },
+    "launchAuthorityWitnessConfiguration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "administrativeDomainSha256",
+        "identitySha256",
+        "signingKeyId",
+        "signingPublicKeySpkiDerBase64url",
+        "storeAssurance",
+        "storeAssuranceIssuerKeyId",
+        "storeAssuranceIssuerPublicKeySpkiDerBase64url",
+        "storeAssuranceSha256"
+      ],
+      "properties": {
+        "administrativeDomainSha256": {"$ref": "#/$defs/sha256"},
+        "identitySha256": {"$ref": "#/$defs/sha256"},
+        "signingKeyId": {"$ref": "#/$defs/sha256"},
+        "signingPublicKeySpkiDerBase64url": {
+          "$ref": "#/$defs/ed25519SpkiDerBase64url"
+        },
+        "storeAssurance": {
+          "$ref": "#/$defs/launchAuthorityWitnessStoreAssuranceEnvelope"
+        },
+        "storeAssuranceIssuerKeyId": {"$ref": "#/$defs/sha256"},
+        "storeAssuranceIssuerPublicKeySpkiDerBase64url": {
+          "$ref": "#/$defs/ed25519SpkiDerBase64url"
+        },
+        "storeAssuranceSha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "launchAuthorityWitnessStoreAssuranceEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["apiVersion", "kind", "statement", "signature"],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.launchAuthorityWitnessStoreAssurance/v1"
+        },
+        "kind": {"const": "LaunchAuthorityWitnessStoreAssurance"},
+        "statement": {
+          "$ref": "#/$defs/launchAuthorityWitnessStoreAssuranceStatement"
+        },
+        "signature": {"$ref": "#/$defs/signature"}
+      }
+    },
+    "launchAuthorityWitnessStoreAssuranceStatement": {
+      "type": "object",
+      "additionalProperties": false,
+      "$comment": "independentAdministration additionally requires launchAuthority.signingKeyId, launchAuthorityWitness.signingKeyId, launchAuthorityWitness.identitySha256, launchAuthorityWitness.administrativeDomainSha256, launchAuthorityWitnessStore.identitySha256, launchAuthorityWitnessStore.administrativeDomainSha256, and launchAuthorityWitnessStore.assuranceIssuerKeyId to be pairwise distinct. Draft 2020-12 has no portable sibling-value comparison, so the generator enforces this invariant and native launch acceptance must independently enforce it.",
+      "required": [
+        "assuranceIssuerKeyId",
+        "witnessKeyId",
+        "witnessIdentitySha256",
+        "witnessAdministrativeDomainSha256",
+        "storeIdentitySha256",
+        "storeAdministrativeDomainSha256",
+        "storeClass",
+        "rollbackResistance",
+        "independentAdministration"
+      ],
+      "properties": {
+        "assuranceIssuerKeyId": {"$ref": "#/$defs/sha256"},
+        "witnessKeyId": {"$ref": "#/$defs/sha256"},
+        "witnessIdentitySha256": {"$ref": "#/$defs/sha256"},
+        "witnessAdministrativeDomainSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "storeIdentitySha256": {"$ref": "#/$defs/sha256"},
+        "storeAdministrativeDomainSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "storeClass": {
+          "enum": [
+            "hardwareMonotonicCounter",
+            "independentlyAdministeredLinearizableCas",
+            "appendOnlyTransparencyLedger"
+          ]
+        },
+        "rollbackResistance": {
+          "const": "externally-witnessed-monotonic"
+        },
+        "independentAdministration": {"const": true}
+      }
+    },
+    "launchAttemptJournalConfiguration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "path",
+        "lockPath",
+        "domain",
+        "maxBytes",
+        "consistencyScope",
+        "rollbackAuthority"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.launchAuthorizationAttemptJournal/v1"
+        },
+        "path": {"$ref": "#/$defs/absolutePath"},
+        "lockPath": {"$ref": "#/$defs/absolutePath"},
+        "domain": {
+          "const": "serverware.launchAuthorizationAttemptJournal/v1"
+        },
+        "maxBytes": {"const": 65536},
+        "consistencyScope": {
+          "const": "trusted-host-readiness-availability-and-consistency-only"
+        },
+        "rollbackAuthority": {"const": "external-monotonic-witness"}
+      }
+    },
+    "globalRoleRegistryBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "canonicalProfile",
+        "claimScope",
+        "registry",
+        "registrySha256",
+        "pinsFile"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.productionLaunchGlobalRoleRegistryBinding/v1"
+        },
+        "canonicalProfile": {
+          "const": "serverware.canonicalJson/integer-string-bool-null-array-object-nfc-v1"
+        },
+        "claimScope": {
+          "const": "roles-present-in-native-launch-contract"
+        },
+        "registry": {"$ref": "#/$defs/globalRoleRegistry"},
+        "registrySha256": {"$ref": "#/$defs/sha256"},
+        "pinsFile": {"$ref": "#/$defs/fileRecord"}
+      }
+    },
+    "globalRoleRegistry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "claimScope",
+        "roles",
+        "rolesOutsideClaim"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.productionLaunchGlobalRoleRegistry/v1"
+        },
+        "claimScope": {
+          "const": "roles-present-in-native-launch-contract"
+        },
+        "roles": {"$ref": "#/$defs/globalRoles"},
+        "rolesOutsideClaim": {
+          "type": "array",
+          "minItems": 10,
+          "maxItems": 10,
+          "prefixItems": [
+            {"const": "actionGate"},
+            {"const": "publicAttestationNonceStore"},
+            {"const": "publicAttestationProducer"},
+            {"const": "publicAttestationWitnessStore"},
+            {"const": "finalVerifier"},
+            {"const": "nonceAuthorityVerifierStateStoreAssurance"},
+            {"const": "release"},
+            {"const": "response"},
+            {"const": "verifierStateTlsClient"},
+            {"const": "verifierStateTlsServer"}
+          ],
+          "items": false
+        }
+      }
+    },
+    "globalRoles": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "launchAuthority",
+        "launchAuthorityWitness",
+        "launchAuthorityWitnessStoreAssurance",
+        "launchAuthorityWitnessTls",
+        "nonceAuthorityAssuranceEvidence",
+        "nonceAuthorityVerifierState",
+        "nonceAuthorityVerifierStateStoreAttestation",
+        "policyActivation",
+        "policyIdentity",
+        "reproducibleBuild"
+      ],
+      "properties": {
+        "launchAuthority": {"$ref": "#/$defs/sha256"},
+        "launchAuthorityWitness": {"$ref": "#/$defs/sha256"},
+        "launchAuthorityWitnessStoreAssurance": {
+          "$ref": "#/$defs/sha256"
+        },
+        "launchAuthorityWitnessTls": {"$ref": "#/$defs/sha256"},
+        "nonceAuthorityAssuranceEvidence": {
+          "$ref": "#/$defs/sha256"
+        },
+        "nonceAuthorityVerifierState": {"$ref": "#/$defs/sha256"},
+        "nonceAuthorityVerifierStateStoreAttestation": {
+          "$ref": "#/$defs/sha256"
+        },
+        "policyActivation": {"$ref": "#/$defs/sha256"},
+        "policyIdentity": {"$ref": "#/$defs/sha256"},
+        "reproducibleBuild": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "nonceRollbackAssuranceBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "canonicalProfile",
+        "contract",
+        "contractSha256",
+        "enforcement",
+        "pinsFile",
+        "purpose"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.productionNonceRollbackAssuranceBinding/v1"
+        },
+        "canonicalProfile": {
+          "const": "serverware.canonicalJson/integer-string-bool-null-array-object-nfc-v1"
+        },
+        "contract": {"$ref": "#/$defs/nonceRollbackAssurancePins"},
+        "contractSha256": {"$ref": "#/$defs/sha256"},
+        "enforcement": {"const": "native-launcher-measured"},
+        "pinsFile": {"$ref": "#/$defs/fileRecord"},
+        "purpose": {"const": "readiness-only"}
+      }
+    },
+    "nonceRollbackAssurancePins": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "independentVerifierPins",
+        "publicConfigPins"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.productionNonceRollbackAssurancePins/v1"
+        },
+        "independentVerifierPins": {
+          "$ref": "#/$defs/independentVerifierPins"
+        },
+        "publicConfigPins": {"$ref": "#/$defs/publicConfigPins"}
+      }
+    },
+    "independentVerifierPins": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "expectedNonceAuthorityAssuranceIssuerSpkiSha256",
+        "expectedNonceAuthorityAssuranceSha256"
+      ],
+      "properties": {
+        "expectedNonceAuthorityAssuranceIssuerSpkiSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "expectedNonceAuthorityAssuranceSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "publicConfigPins": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "nonceAuthorityAssurance",
+        "nonceAuthorityAssuranceEvidenceSigningPublicKeySpkiDerBase64url",
+        "nonceAuthorityAssuranceSha256",
+        "nonceAuthorityVerifierStateSigningPublicKeySpkiDerBase64url",
+        "nonceAuthorityVerifierStateStoreAdministrativeDomainSha256",
+        "nonceAuthorityVerifierStateStoreAssuranceEvidenceSha256",
+        "nonceAuthorityVerifierStateStoreAttestationPublicKeySpkiDerBase64url",
+        "nonceAuthorityVerifierStateStoreIdentitySha256"
+      ],
+      "properties": {
+        "nonceAuthorityAssurance": {
+          "$ref": "#/$defs/nonceAuthorityAssurance"
+        },
+        "nonceAuthorityAssuranceEvidenceSigningPublicKeySpkiDerBase64url": {
+          "$ref": "#/$defs/ed25519SpkiDerBase64url"
+        },
+        "nonceAuthorityAssuranceSha256": {"$ref": "#/$defs/sha256"},
+        "nonceAuthorityVerifierStateSigningPublicKeySpkiDerBase64url": {
+          "$ref": "#/$defs/ed25519SpkiDerBase64url"
+        },
+        "nonceAuthorityVerifierStateStoreAdministrativeDomainSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "nonceAuthorityVerifierStateStoreAssuranceEvidenceSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "nonceAuthorityVerifierStateStoreAttestationPublicKeySpkiDerBase64url": {
+          "$ref": "#/$defs/ed25519SpkiDerBase64url"
+        },
+        "nonceAuthorityVerifierStateStoreIdentitySha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "nonceAuthorityAssurance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "administrativeDomainSha256",
+        "assuranceEvidenceSha256",
+        "assuranceEvidenceType",
+        "assuranceLevel",
+        "authorityEpoch",
+        "authorityGeneration",
+        "authorityIdentitySha256",
+        "backendClass",
+        "productionEligible",
+        "rollbackProtection"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nonceAuthorityAssurance/v1"
+        },
+        "administrativeDomainSha256": {"$ref": "#/$defs/sha256"},
+        "assuranceEvidenceSha256": {"$ref": "#/$defs/sha256"},
+        "assuranceEvidenceType": {
+          "enum": [
+            "hardwareMonotonicCounterAttestation",
+            "linearizableCasOperatorAttestation",
+            "transparencyLedgerOperatorAttestation"
+          ]
+        },
+        "assuranceLevel": {"const": "productionRollbackProtected"},
+        "authorityEpoch": {"$ref": "#/$defs/safePositiveInteger"},
+        "authorityGeneration": {"$ref": "#/$defs/safePositiveInteger"},
+        "authorityIdentitySha256": {"$ref": "#/$defs/sha256"},
+        "backendClass": {
+          "enum": [
+            "hardwareMonotonicCounter",
+            "independentlyAdministeredLinearizableCas",
+            "appendOnlyTransparencyLedger"
+          ]
+        },
+        "productionEligible": {"const": true},
+        "rollbackProtection": {
+          "$ref": "#/$defs/nonceRollbackProtection"
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "assuranceEvidenceType": {
+              "const": "hardwareMonotonicCounterAttestation"
+            },
+            "backendClass": {"const": "hardwareMonotonicCounter"},
+            "rollbackProtection": {
+              "properties": {
+                "keyProtection": {"const": "nonExportableHsm"},
+                "mechanism": {"const": "hardwareMonotonicCounter"},
+                "stateCommitment": {
+                  "const": "monotonicCounterCommitment"
+                },
+                "verifierStateStoreClass": {
+                  "const": "hardwareProtectedStateStore"
+                }
+              }
+            }
+          }
+        },
+        {
+          "properties": {
+            "assuranceEvidenceType": {
+              "const": "linearizableCasOperatorAttestation"
+            },
+            "backendClass": {
+              "const": "independentlyAdministeredLinearizableCas"
+            },
+            "rollbackProtection": {
+              "properties": {
+                "keyProtection": {"const": "nonExportableKmsHsm"},
+                "mechanism": {
+                  "const": "linearizableCasWithRollbackProtectedStorage"
+                },
+                "stateCommitment": {
+                  "const": "hashChainedLinearizableCommitment"
+                },
+                "verifierStateStoreClass": {
+                  "const": "independentlyAdministeredLinearizableCas"
+                }
+              }
+            }
+          }
+        },
+        {
+          "properties": {
+            "assuranceEvidenceType": {
+              "const": "transparencyLedgerOperatorAttestation"
+            },
+            "backendClass": {"const": "appendOnlyTransparencyLedger"},
+            "rollbackProtection": {
+              "properties": {
+                "keyProtection": {"const": "nonExportableKmsHsm"},
+                "mechanism": {"const": "appendOnlyWitnessedLedger"},
+                "stateCommitment": {
+                  "const": "appendOnlyMerkleCommitment"
+                },
+                "verifierStateStoreClass": {
+                  "const": "independentlyAdministeredLinearizableCas"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "nonceRollbackProtection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "administrativeRollbackResistance",
+        "backendAttestationRequired",
+        "exactSuccessorRequired",
+        "freshVerifierChallengeRequired",
+        "keyProtection",
+        "mechanism",
+        "stateCommitment",
+        "verifierStateStoreClass"
+      ],
+      "properties": {
+        "administrativeRollbackResistance": {"const": true},
+        "backendAttestationRequired": {"const": true},
+        "exactSuccessorRequired": {"const": true},
+        "freshVerifierChallengeRequired": {"const": true},
+        "keyProtection": {
+          "enum": ["nonExportableHsm", "nonExportableKmsHsm"]
+        },
+        "mechanism": {
+          "enum": [
+            "hardwareMonotonicCounter",
+            "linearizableCasWithRollbackProtectedStorage",
+            "appendOnlyWitnessedLedger"
+          ]
+        },
+        "stateCommitment": {
+          "enum": [
+            "monotonicCounterCommitment",
+            "hashChainedLinearizableCommitment",
+            "appendOnlyMerkleCommitment"
+          ]
+        },
+        "verifierStateStoreClass": {
+          "enum": [
+            "hardwareProtectedStateStore",
+            "independentlyAdministeredLinearizableCas"
+          ]
+        }
+      }
+    },
+    "pythonRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "importRoots"],
+      "properties": {
+        "path": {"$ref": "#/$defs/absolutePath"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "importRoots": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 4,
+          "items": {"$ref": "#/$defs/importRootRecord"}
+        }
+      }
+    },
+    "importRootRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": {"$ref": "#/$defs/absolutePath"},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "scriptsRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["preflight", "runner"],
+      "properties": {
+        "preflight": {"$ref": "#/$defs/fileRecord"},
+        "runner": {"$ref": "#/$defs/fileRecord"}
+      }
+    },
+    "inputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "productionImagesBuild",
+        "productionImagesEnv",
+        "productionImagesPublished",
+        "releaseProvenanceSummary",
+        "releaseProvenance",
+        "imageSignaturesSummary",
+        "imageSignatures",
+        "bench",
+        "kmsMaterials",
+        "policyBundle",
+        "policyTrustedPublicKey",
+        "policyIdentityVerification",
+        "policyActivationVerification",
+        "policyActivationSignature",
+        "policyActivationTrustedPublicKey",
+        "reproducibleBuildVerification",
+        "reproducibleBuildSignature",
+        "reproducibleBuildTrustedPublicKey"
+      ],
+      "properties": {
+        "productionImagesBuild": {"$ref": "#/$defs/fileRecord"},
+        "productionImagesEnv": {"$ref": "#/$defs/fileRecord"},
+        "productionImagesPublished": {"$ref": "#/$defs/fileRecord"},
+        "releaseProvenanceSummary": {"$ref": "#/$defs/fileRecord"},
+        "releaseProvenance": {"$ref": "#/$defs/fileRecord"},
+        "imageSignaturesSummary": {"$ref": "#/$defs/fileRecord"},
+        "imageSignatures": {"$ref": "#/$defs/fileRecord"},
+        "bench": {"$ref": "#/$defs/fileRecord"},
+        "kmsMaterials": {"$ref": "#/$defs/fileRecord"},
+        "policyBundle": {"$ref": "#/$defs/fileRecord"},
+        "policyTrustedPublicKey": {"$ref": "#/$defs/fileRecord"},
+        "policyIdentityVerification": {"$ref": "#/$defs/fileRecord"},
+        "policyActivationVerification": {"$ref": "#/$defs/fileRecord"},
+        "policyActivationSignature": {"$ref": "#/$defs/fileRecord"},
+        "policyActivationTrustedPublicKey": {
+          "$ref": "#/$defs/fileRecord"
+        },
+        "reproducibleBuildVerification": {
+          "$ref": "#/$defs/fileRecord"
+        },
+        "reproducibleBuildSignature": {
+          "$ref": "#/$defs/fileRecord"
+        },
+        "reproducibleBuildTrustedPublicKey": {
+          "$ref": "#/$defs/fileRecord"
+        }
+      }
+    },
+    "outputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "configOut",
+        "claimsFile",
+        "nitroEvidenceOut",
+        "readinessOut",
+        "completionProofOut",
+        "proxyProofSummaryOut",
+        "productionHostPreflight"
+      ],
+      "properties": {
+        "configOut": {"$ref": "#/$defs/absolutePath"},
+        "claimsFile": {"$ref": "#/$defs/absolutePath"},
+        "nitroEvidenceOut": {"$ref": "#/$defs/absolutePath"},
+        "readinessOut": {"$ref": "#/$defs/absolutePath"},
+        "completionProofOut": {"$ref": "#/$defs/absolutePath"},
+        "proxyProofSummaryOut": {"$ref": "#/$defs/absolutePath"},
+        "productionHostPreflight": {"$ref": "#/$defs/absolutePath"}
+      }
+    }
+  }
+}

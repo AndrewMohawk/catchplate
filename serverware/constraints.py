@@ -18,6 +18,9 @@ from serverware.policy_bundle import bounded_pattern_matches, canonical_json, st
 SECONDS_PER_DAY = 86_400
 SUPPORTED_REQUEST_CONSTRAINTS = {
     "rateLimit",
+    "slidingWindowLimit",
+    "weightedBudget",
+    "traversalBudget",
     "operationPolicy",
     "queryDateWindow",
     "queryNumericBounds",
@@ -26,8 +29,22 @@ SUPPORTED_REQUEST_CONSTRAINTS = {
     "jsonBody",
     "formBody",
 }
-SUPPORTED_RESPONSE_CONSTRAINTS = {"responseDateWindow", "responseJson", "responseBinding"}
+SUPPORTED_RESPONSE_CONSTRAINTS = {
+    "responseDateWindow",
+    "responseJson",
+    "responseBinding",
+    "traversalBudget",
+}
 SUPPORTED_CONSTRAINTS = SUPPORTED_REQUEST_CONSTRAINTS | SUPPORTED_RESPONSE_CONSTRAINTS
+SHARED_RATE_LIMIT_CONSTRAINTS = {"rateLimit"}
+DURABLE_BUDGET_CONSTRAINTS = {
+    "slidingWindowLimit",
+    "weightedBudget",
+}
+SHARED_BUDGET_CONSTRAINTS = (
+    SHARED_RATE_LIMIT_CONSTRAINTS | DURABLE_BUDGET_CONSTRAINTS
+)
+STATEFUL_REQUEST_CONSTRAINTS = SHARED_BUDGET_CONSTRAINTS | {"traversalBudget"}
 MIN_I64 = -(2**63)
 MAX_I64 = 2**63 - 1
 _MAX_LOCAL_RATE_COUNTER_ENTRIES = 65_536
@@ -62,19 +79,39 @@ def evaluate_request_constraints(
     rate_limits_only: bool = False,
     skip_shared_rate_limits: bool = False,
     skip_rate_limits: bool = False,
+    durable_budget_reservation_id: str | None = None,
+    durable_request_digest: str | None = None,
+    durable_operation_digest: str | None = None,
 ) -> PolicyDecision:
     vocabulary_denial = _validate_constraint_vocabulary(route, status_code=503)
     if vocabulary_denial is not None:
         return vocabulary_denial
+    metadata = getattr(flow, "metadata", {})
+    if not isinstance(metadata, dict):
+        metadata = {}
+    if durable_budget_reservation_id is None:
+        candidate_reservation_id = metadata.get(
+            "serverware_release_attempt_id"
+        ) or getattr(flow, "id", None)
+        if candidate_reservation_id is not None:
+            durable_budget_reservation_id = str(candidate_reservation_id)
+    if durable_request_digest is None:
+        candidate_request_digest = metadata.get("serverware_request_digest")
+        if isinstance(candidate_request_digest, str):
+            durable_request_digest = candidate_request_digest
+    if durable_operation_digest is None:
+        candidate_operation_digest = metadata.get("serverware_operation_digest")
+        if isinstance(candidate_operation_digest, str):
+            durable_operation_digest = candidate_operation_digest
     for constraint in route.constraints:
         constraint_type = str(constraint.get("type") or "")
         if constraint_type not in SUPPORTED_REQUEST_CONSTRAINTS:
             continue
         if not _phase_includes(constraint, "request"):
             continue
-        if rate_limits_only and constraint_type != "rateLimit":
+        if rate_limits_only and constraint_type not in STATEFUL_REQUEST_CONSTRAINTS:
             continue
-        if skip_rate_limits and constraint_type == "rateLimit":
+        if skip_rate_limits and constraint_type in STATEFUL_REQUEST_CONSTRAINTS:
             continue
 
         if constraint_type == "rateLimit":
@@ -88,6 +125,30 @@ def evaluate_request_constraints(
                 operation_fields=operation_fields,
                 consume=consume_rate_limits,
                 skip_shared=skip_shared_rate_limits,
+            )
+        elif constraint_type in {"slidingWindowLimit", "weightedBudget"}:
+            decision = _enforce_durable_budget(
+                constraint,
+                route=route,
+                principal_id=principal_id,
+                credential_ref=credential_ref,
+                credential_version=credential_version,
+                policy_hash=policy_hash,
+                operation_fields=operation_fields,
+                consume=consume_rate_limits,
+                skip_shared=skip_shared_rate_limits,
+                reservation_id=durable_budget_reservation_id,
+                request_digest=durable_request_digest,
+                operation_digest=durable_operation_digest,
+            )
+        elif constraint_type == "traversalBudget":
+            if skip_shared_rate_limits:
+                continue
+            return _deny(
+                constraint,
+                "traversal budget orchestration is unavailable",
+                "traversal_budget_orchestration_unavailable",
+                statusCode=503,
             )
         elif constraint_type == "operationPolicy":
             decision = _enforce_operation_policy(constraint, operation_fields)
@@ -168,6 +229,8 @@ def evaluate_response_constraints(
             decision = _enforce_response_json(constraint, flow)
         elif constraint_type == "responseBinding":
             decision = _enforce_response_binding(constraint, flow, operation_fields)
+        elif constraint_type == "traversalBudget":
+            continue
         else:
             return _unsupported_constraint_denial(constraint, status_code=502)
         if not decision.allowed:
@@ -181,6 +244,8 @@ def evaluate_response_constraints(
 
 
 def _phase_includes(constraint: dict[str, Any], phase: str) -> bool:
+    if constraint.get("type") == "traversalBudget":
+        return phase in {"request", "response"}
     configured = constraint.get("phase") or "request"
     if configured == "both":
         return True
@@ -208,11 +273,14 @@ def _validate_constraint_vocabulary(
                 constraint,
                 status_code=status_code,
             )
-        expected_phase = (
-            "response"
-            if constraint_type in SUPPORTED_RESPONSE_CONSTRAINTS
-            else "request"
-        )
+        if constraint_type == "traversalBudget":
+            if "phase" in constraint:
+                return _unsupported_constraint_denial(
+                    constraint,
+                    status_code=status_code,
+                )
+            continue
+        expected_phase = "response" if constraint_type in SUPPORTED_RESPONSE_CONSTRAINTS else "request"
         if constraint.get("phase", "request") != expected_phase:
             return _unsupported_constraint_denial(
                 constraint,
@@ -452,7 +520,7 @@ def shared_rate_limit_claims(
     claims: list[dict[str, Any]] = []
     for constraint in route.constraints:
         if (
-            constraint.get("type") != "rateLimit"
+            constraint.get("type") not in SHARED_RATE_LIMIT_CONSTRAINTS
             or constraint.get("store", "local") != "shared"
             or not _phase_includes(constraint, "request")
         ):
@@ -472,9 +540,622 @@ def shared_rate_limit_claims(
             "window_kind": window_kind,
             "max_count": int(constraint.get("max") or 0),
         }
-        if window_kind == "fixed":
+        if window_kind in {"fixed", "sliding"}:
             claim["window_seconds"] = int(constraint.get("windowSeconds") or 0)
         claims.append(claim)
+    return claims
+
+
+def shared_durable_budget_claims(
+    route: Any,
+    *,
+    principal_id: str,
+    credential_ref: str | None,
+    credential_version: int,
+    policy_hash: str,
+    operation_fields: dict[str, str],
+) -> list[dict[str, Any]]:
+    if (
+        not isinstance(policy_hash, str)
+        or re.fullmatch(r"sha256:[0-9a-f]{64}", policy_hash) is None
+    ):
+        raise ValueError("durable budget policy hash is invalid")
+    route_id = getattr(route, "id", None)
+    if not isinstance(route_id, str) or not route_id:
+        raise ValueError("durable budget route identity is invalid")
+    claims: list[dict[str, Any]] = []
+    for constraint in route.constraints:
+        constraint_type = constraint.get("type")
+        if constraint_type not in DURABLE_BUDGET_CONSTRAINTS:
+            continue
+        _validate_durable_budget_contract(constraint)
+        units, unit_field = _durable_budget_units(
+            constraint, operation_fields
+        )
+        claims.append(
+            {
+                "type": constraint_type,
+                "constraint_id": str(
+                    constraint.get("id") or "unnamed"
+                ),
+                "budget_key": _rate_key(
+                    constraint,
+                    route=route,
+                    principal_id=principal_id,
+                    credential_ref=credential_ref,
+                    credential_version=credential_version,
+                    operation_fields=operation_fields,
+                ),
+                "principal_id": principal_id,
+                "route_id": route_id,
+                "credential_id": credential_ref or "",
+                "credential_version": credential_version,
+                "policy_hash": policy_hash,
+                "operation": operation_fields.get("operation") or "",
+                "window_semantics": "sliding",
+                "measure": (
+                    "weightedCanonicalInteger"
+                    if constraint_type == "weightedBudget"
+                    else "operationCount"
+                ),
+                "reservation_mode": "atomicReserveCommitRelease",
+                "on_overflow": "deny",
+                "unit_field": unit_field,
+                "units": units,
+                "window_seconds": int(constraint["windowSeconds"]),
+                "max_units": int(constraint["max"]),
+            }
+        )
+    return claims
+
+
+def _canonical_nonnegative_integer(value: Any) -> int | None:
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value if 0 <= value <= 9_007_199_254_740_991 else None
+    if (
+        not isinstance(value, str)
+        or re.fullmatch(r"(?:0|[1-9][0-9]{0,15})", value) is None
+    ):
+        return None
+    parsed = int(value)
+    return parsed if parsed <= 9_007_199_254_740_991 else None
+
+
+def _validate_durable_budget_contract(constraint: dict[str, Any]) -> None:
+    constraint_type = constraint.get("type")
+    maximum = constraint.get("max")
+    window_seconds = constraint.get("windowSeconds")
+    key = constraint.get("key")
+    expected_measure = {
+        "slidingWindowLimit": "operationCount",
+        "weightedBudget": "weightedCanonicalInteger",
+    }.get(constraint_type)
+    maximum_bound = (
+        9_007_199_254_740_991
+        if constraint_type == "weightedBudget"
+        else 1_000_000_000
+    )
+    if (
+        expected_measure is None
+        or constraint.get("store") != "shared"
+        or constraint.get("windowSemantics") != "sliding"
+        or constraint.get("measure") != expected_measure
+        or constraint.get("reservationMode") != "atomicReserveCommitRelease"
+        or constraint.get("onOverflow") != "deny"
+        or "calendarWindow" in constraint
+        or not isinstance(window_seconds, int)
+        or isinstance(window_seconds, bool)
+        or not 1 <= window_seconds <= 31_536_000
+        or not isinstance(maximum, int)
+        or isinstance(maximum, bool)
+        or not 1 <= maximum <= maximum_bound
+        or not isinstance(key, dict)
+        or not set(key).issubset({"scope", "operationFields"})
+    ):
+        raise ValueError("durable sliding budget contract is invalid")
+    scope = key.get("scope")
+    operation_key_fields = key.get("operationFields", [])
+    if (
+        not isinstance(scope, list)
+        or not 1 <= len(scope) <= 5
+        or len(scope)
+        != len({item for item in scope if isinstance(item, str)})
+        or any(
+            item
+            not in {
+                "principal",
+                "credential",
+                "credentialVersion",
+                "route",
+                "operation",
+            }
+            for item in scope
+        )
+        or not isinstance(operation_key_fields, list)
+        or len(operation_key_fields) > 16
+        or len(operation_key_fields)
+        != len(
+            {
+                item
+                for item in operation_key_fields
+                if isinstance(item, str)
+            }
+        )
+        or any(
+            not isinstance(item, str)
+            or re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,127}", item) is None
+            for item in operation_key_fields
+        )
+    ):
+        raise ValueError("durable sliding budget key contract is invalid")
+
+
+def _durable_budget_units(
+    constraint: dict[str, Any],
+    operation_fields: dict[str, str],
+) -> tuple[int, str]:
+    _validate_durable_budget_contract(constraint)
+    constraint_type = str(constraint.get("type") or "")
+    if constraint_type == "slidingWindowLimit":
+        return 1, "operations"
+    if constraint_type != "weightedBudget":
+        raise ValueError("constraint is not a durable sliding budget")
+    weight = constraint.get("weight")
+    if not isinstance(weight, dict):
+        raise ValueError("weighted budget is missing its weight contract")
+    source = weight.get("source")
+    field = weight.get("field")
+    unit = weight.get("unit")
+    if (
+        set(weight)
+        != {
+            "source",
+            "field",
+            "representation",
+            "unit",
+            "minimumPerOperation",
+            "maximumPerOperation",
+        }
+        or source not in {"requestValue", "operationField"}
+        or not isinstance(field, str)
+        or re.fullmatch(r"[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*", field)
+        is None
+        or len(field) > 256
+        or weight.get("representation") != "canonicalNonNegativeInteger"
+        or not isinstance(unit, str)
+        or re.fullmatch(r"[a-z][a-z0-9._-]{0,31}", unit) is None
+    ):
+        raise ValueError("weighted budget weight contract is invalid")
+    units = _canonical_nonnegative_integer(operation_fields.get(field))
+    minimum = weight.get("minimumPerOperation")
+    maximum = weight.get("maximumPerOperation")
+    if (
+        units is None
+        or not isinstance(minimum, int)
+        or isinstance(minimum, bool)
+        or not isinstance(maximum, int)
+        or isinstance(maximum, bool)
+        or not 0 <= minimum <= maximum <= 9_007_199_254_740_991
+        or maximum < 1
+        or not minimum <= units <= maximum
+    ):
+        raise ValueError("weighted budget units are missing, noncanonical, or out of range")
+    return units, f"{unit}:{source}:{field}"
+
+
+def _enforce_durable_budget(
+    constraint: dict[str, Any],
+    *,
+    route: Any,
+    principal_id: str,
+    credential_ref: str | None,
+    credential_version: int,
+    policy_hash: str | None,
+    operation_fields: dict[str, str],
+    consume: bool,
+    skip_shared: bool,
+    reservation_id: str | None,
+    request_digest: str | None,
+    operation_digest: str | None,
+) -> PolicyDecision:
+    constraint_type = str(constraint.get("type") or "")
+    maximum = constraint.get("max")
+    window_seconds = constraint.get("windowSeconds")
+    if (
+        constraint_type not in {"slidingWindowLimit", "weightedBudget"}
+        or constraint.get("store") != "shared"
+        or constraint.get("windowSemantics") != "sliding"
+        or constraint.get("measure")
+        != (
+            "weightedCanonicalInteger"
+            if constraint_type == "weightedBudget"
+            else "operationCount"
+        )
+        or constraint.get("reservationMode") != "atomicReserveCommitRelease"
+        or constraint.get("onOverflow") != "deny"
+        or not isinstance(window_seconds, int)
+        or isinstance(window_seconds, bool)
+        or not 1 <= window_seconds <= 31_536_000
+        or not isinstance(maximum, int)
+        or isinstance(maximum, bool)
+        or not 1
+        <= maximum
+        <= (
+            9_007_199_254_740_991
+            if constraint_type == "weightedBudget"
+            else 1_000_000_000
+        )
+    ):
+        return _deny(
+            constraint,
+            "durable sliding budget constraint is invalid",
+            "constraint_invalid_durable_budget",
+            statusCode=503,
+        )
+    try:
+        units, unit_field = _durable_budget_units(constraint, operation_fields)
+    except ValueError as exc:
+        return _deny(
+            constraint,
+            "durable budget weight evidence is invalid",
+            "durable_budget_weight_invalid",
+            detail=str(exc),
+        )
+    if units > maximum:
+        return _deny(
+            constraint,
+            "credential weighted budget exceeded",
+            "credential_weighted_budget_exceeded",
+            max=maximum,
+            units=units,
+            remaining=0,
+        )
+    if skip_shared or not consume:
+        return PolicyDecision(True)
+    if (
+        not isinstance(reservation_id, str)
+        or not reservation_id
+        or not isinstance(request_digest, str)
+        or re.fullmatch(r"sha256:[0-9a-f]{64}", request_digest) is None
+        or not isinstance(policy_hash, str)
+        or re.fullmatch(r"sha256:[0-9a-f]{64}", policy_hash) is None
+    ):
+        return _deny(
+            constraint,
+            "durable budget request binding is unavailable",
+            "durable_budget_binding_unavailable",
+            statusCode=503,
+        )
+    if operation_digest is None:
+        operation_digest = "sha256:" + hashlib.sha256(
+            canonical_json(operation_fields).encode("utf-8")
+        ).hexdigest()
+    bound_reservation_id = "sha256:" + hashlib.sha256(
+        canonical_json(
+            {
+                "reservation": reservation_id,
+                "constraint": constraint.get("id"),
+                "budgetKey": _rate_key(
+                    constraint,
+                    route=route,
+                    principal_id=principal_id,
+                    credential_ref=credential_ref,
+                    credential_version=credential_version,
+                    operation_fields=operation_fields,
+                ),
+            }
+        ).encode("utf-8")
+    ).hexdigest()
+    budget_key = _rate_key(
+        constraint,
+        route=route,
+        principal_id=principal_id,
+        credential_ref=credential_ref,
+        credential_version=credential_version,
+        operation_fields=operation_fields,
+    )
+    try:
+        reserved = db.reserve_durable_budget(
+            reservation_id=bound_reservation_id,
+            budget_key=budget_key,
+            principal_id=principal_id,
+            route_id=route.id,
+            credential_id=credential_ref or "",
+            credential_version=credential_version,
+            policy_hash=policy_hash,
+            constraint_id=str(constraint.get("id") or "unnamed"),
+            operation_digest=operation_digest,
+            request_digest=request_digest,
+            unit_field=unit_field,
+            units=units,
+            window_seconds=window_seconds,
+            max_units=maximum,
+            reservation_ttl_seconds=300,
+        )
+        if not reserved.get("allowed"):
+            return _deny(
+                constraint,
+                "credential durable budget exceeded",
+                "credential_durable_budget_exceeded",
+                max=maximum,
+                units=units,
+                remaining=reserved.get("remaining_units", 0),
+                retry_after_seconds=reserved.get("retry_after_seconds", 1),
+                store="shared",
+            )
+        db.commit_durable_budget_reservation(
+            reservation_id=bound_reservation_id,
+            budget_key=budget_key,
+            request_digest=request_digest,
+            operation_digest=operation_digest,
+        )
+    except Exception as exc:
+        return _deny(
+            constraint,
+            "durable budget store is unavailable",
+            "durable_budget_store_unavailable",
+            statusCode=503,
+            detail=str(exc),
+            store="shared",
+        )
+    return PolicyDecision(True)
+
+
+def traversal_budget_claims(
+    route: Any,
+    *,
+    principal_id: str,
+    credential_ref: str | None,
+    credential_version: int,
+    policy_hash: str,
+    operation_fields: dict[str, str],
+    canonical_query_fields: dict[str, Any],
+    request_cursor_values: dict[str, str],
+) -> list[dict[str, Any]]:
+    route_id = getattr(route, "id", None)
+    if (
+        not isinstance(policy_hash, str)
+        or re.fullmatch(r"sha256:[0-9a-f]{64}", policy_hash) is None
+        or not isinstance(principal_id, str)
+        or not principal_id
+        or not isinstance(route_id, str)
+        or not route_id
+        or not isinstance(credential_ref, str)
+        or not credential_ref
+        or not isinstance(credential_version, int)
+        or isinstance(credential_version, bool)
+        or not 0 <= credential_version <= 2**63 - 1
+        or not isinstance(operation_fields, dict)
+        or not isinstance(canonical_query_fields, dict)
+        or not isinstance(request_cursor_values, dict)
+    ):
+        raise ValueError("traversal request binding is invalid")
+    claims: list[dict[str, Any]] = []
+    for constraint in route.constraints:
+        if constraint.get("type") != "traversalBudget":
+            continue
+        operations = constraint.get("operations")
+        operation = operation_fields.get("operation")
+        if (
+            not isinstance(operation, str)
+            or re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,127}", operation) is None
+            or operations is not None
+            and (
+                not isinstance(operations, list)
+                or not 1 <= len(operations) <= 128
+                or len(operations)
+                != len(
+                    {
+                        item
+                        for item in operations
+                        if isinstance(item, str)
+                    }
+                )
+                or any(
+                    not isinstance(item, str)
+                    or re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,127}", item)
+                    is None
+                    for item in operations
+                )
+            )
+        ):
+            raise ValueError("traversal operation binding is invalid")
+        if operations is not None and operation not in operations:
+            continue
+        traversal = constraint.get("traversal")
+        if (
+            not isinstance(traversal, dict)
+            or set(traversal)
+            != {
+                "store",
+                "phases",
+                "cursor",
+                "lineage",
+                "limits",
+                "accounting",
+                "onReplay",
+                "onCrossLineage",
+                "onMissingEvidence",
+            }
+            or traversal.get("store") != "shared"
+            or traversal.get("phases") != ["request", "response"]
+            or traversal.get("onReplay") != "deny"
+            or traversal.get("onCrossLineage") != "deny"
+            or traversal.get("onMissingEvidence") != "deny"
+        ):
+            raise ValueError("traversal budget contract is invalid")
+        cursor = traversal.get("cursor")
+        lineage = traversal.get("lineage")
+        limits = traversal.get("limits")
+        accounting = traversal.get("accounting")
+        if not all(
+            isinstance(value, dict)
+            for value in (cursor, lineage, limits, accounting)
+        ):
+            raise ValueError("traversal budget contract is incomplete")
+        field_pattern = r"[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*"
+        if (
+            set(cursor)
+            != {
+                "requestSource",
+                "requestField",
+                "responseField",
+                "digest",
+                "firstPageMayOmit",
+            }
+            or cursor.get("requestSource") not in {"query", "header", "jsonBody"}
+            or not isinstance(cursor.get("requestField"), str)
+            or re.fullmatch(field_pattern, cursor["requestField"]) is None
+            or not isinstance(cursor.get("responseField"), str)
+            or re.fullmatch(field_pattern, cursor["responseField"]) is None
+            or cursor.get("digest") != "sha256"
+            or cursor.get("firstPageMayOmit") is not True
+        ):
+            raise ValueError("traversal cursor contract is invalid")
+        query_fields = lineage.get("queryFields")
+        if (
+            set(lineage) != {"scope", "queryFields", "queryDigest"}
+            or lineage.get("scope")
+            != ["principal", "route", "credential", "credentialVersion"]
+            or lineage.get("queryDigest") != "sha256"
+            or not isinstance(query_fields, list)
+            or not 1 <= len(query_fields) <= 32
+            or len(query_fields)
+            != len(
+                {
+                    field
+                    for field in query_fields
+                    if isinstance(field, str)
+                }
+            )
+            or any(
+                not isinstance(field, str)
+                or re.fullmatch(field_pattern, field) is None
+                for field in query_fields
+            )
+            or (
+                cursor.get("requestSource") == "query"
+                and cursor.get("requestField") in query_fields
+            )
+            or set(canonical_query_fields) != set(query_fields)
+        ):
+            raise ValueError("traversal lineage contract is invalid")
+        limit_contract = {
+            "maxPages": (1, 10_000),
+            "maxLifetimeSeconds": (1, 86_400),
+            "maxRecords": (1, 10_000_000),
+            "maxDecodedBytes": (1, 1_073_741_824),
+        }
+        if set(limits) != set(limit_contract) or any(
+            not isinstance(limits.get(name), int)
+            or isinstance(limits.get(name), bool)
+            or not minimum <= limits[name] <= maximum
+            for name, (minimum, maximum) in limit_contract.items()
+        ):
+            raise ValueError("traversal limits contract is invalid")
+        if (
+            set(accounting) != {"recordCountField", "byteSource", "commit"}
+            or not isinstance(accounting.get("recordCountField"), str)
+            or re.fullmatch(field_pattern, accounting["recordCountField"]) is None
+            or accounting.get("byteSource") != "validatedDecodedResponseBytes"
+            or accounting.get("commit") != "atomicAfterResponseValidation"
+        ):
+            raise ValueError("traversal accounting contract is invalid")
+
+        def lineage_scalar_is_valid(value: Any, *, allow_none: bool) -> bool:
+            if value is None:
+                return allow_none
+            if isinstance(value, bool):
+                return True
+            if isinstance(value, int):
+                return -(2**63) <= value <= 2**63 - 1
+            if isinstance(value, str):
+                return len(value.encode("utf-8")) <= 4096
+            return False
+
+        query_evidence: dict[str, Any] = {}
+        for field in query_fields:
+            value = canonical_query_fields[field]
+            scalar_valid = lineage_scalar_is_valid(value, allow_none=True)
+            list_valid = (
+                isinstance(value, list)
+                and len(value) <= 64
+                and all(
+                    lineage_scalar_is_valid(item, allow_none=False)
+                    for item in value
+                )
+            )
+            if not scalar_valid and not list_valid:
+                raise ValueError("traversal canonical query evidence is invalid")
+            query_evidence[field] = value
+        if len(canonical_json(query_evidence).encode("utf-8")) > 65_536:
+            raise ValueError("traversal canonical query evidence is too large")
+        cursor_field = cursor.get("requestField")
+        unexpected_cursor_fields = set(request_cursor_values) - {cursor_field}
+        if unexpected_cursor_fields:
+            raise ValueError("traversal request has an unbound cursor")
+        raw_cursor = request_cursor_values.get(cursor_field)
+        if raw_cursor is not None and (
+            not isinstance(raw_cursor, str)
+            or not raw_cursor
+            or len(raw_cursor.encode("utf-8")) > 4096
+        ):
+            raise ValueError("traversal request cursor is invalid")
+        lineage_material = {
+            "principal": principal_id,
+            "route": route.id,
+            "credential": credential_ref or "",
+            "credentialVersion": credential_version,
+            "policyHash": policy_hash,
+            "operation": operation or "",
+            "query": query_evidence,
+        }
+        lineage_digest = "sha256:" + hashlib.sha256(
+            canonical_json(lineage_material).encode("utf-8")
+        ).hexdigest()
+        chain_key = "sha256:" + hashlib.sha256(
+            canonical_json(
+                {
+                    "constraint": constraint.get("id"),
+                    "lineage": lineage_digest,
+                }
+            ).encode("utf-8")
+        ).hexdigest()
+        claims.append(
+            {
+                "type": "traversalBudget",
+                "chain_key": chain_key,
+                "lineage_digest": lineage_digest,
+                "constraint_id": str(constraint.get("id") or "unnamed"),
+                "principal_id": principal_id,
+                "route_id": route_id,
+                "credential_id": credential_ref or "",
+                "credential_version": credential_version,
+                "policy_hash": policy_hash,
+                "operation": operation,
+                "store": "shared",
+                "phases": ["request", "response"],
+                "on_replay": "deny",
+                "on_cross_lineage": "deny",
+                "on_missing_evidence": "deny",
+                "request_cursor_digest": (
+                    "sha256:"
+                    + hashlib.sha256(raw_cursor.encode("utf-8")).hexdigest()
+                    if raw_cursor is not None
+                    else None
+                ),
+                "request_cursor_source": cursor.get("requestSource"),
+                "request_cursor_field": cursor_field,
+                "response_cursor_field": cursor.get("responseField"),
+                "record_count_field": accounting.get("recordCountField"),
+                "byte_source": accounting.get("byteSource"),
+                "commit_mode": accounting.get("commit"),
+                "max_pages": limits.get("maxPages"),
+                "max_records": limits.get("maxRecords"),
+                "max_bytes": limits.get("maxDecodedBytes"),
+                "lifetime_seconds": limits.get("maxLifetimeSeconds"),
+            }
+        )
     return claims
 
 
@@ -1443,6 +2124,31 @@ def _enforce_response_json(constraint: dict[str, Any], flow: Any) -> PolicyDecis
             "constraint_invalid_response_json",
             statusCode=502,
         )
+    for field, rule in fields.items():
+        expected_type = rule.get("type") if isinstance(rule, dict) else None
+        bounded = isinstance(rule, dict) and (
+            "equals" in rule or "enum" in rule
+        )
+        if expected_type == "string":
+            bounded = bounded or "maxLength" in rule
+        elif expected_type in {"number", "integer"}:
+            bounded = bounded or ("min" in rule and "max" in rule)
+        elif expected_type == "array":
+            bounded = bounded or "maxItems" in rule
+        if (
+            not isinstance(field, str)
+            or not isinstance(rule, dict)
+            or rule.get("required") is not True
+            or not isinstance(expected_type, str)
+            or not bounded
+        ):
+            return _deny(
+                constraint,
+                "response JSON proof is optional or unbounded",
+                "constraint_invalid_response_json",
+                statusCode=502,
+                field=field,
+            )
 
     item_paths = [str(item) for item in constraint.get("items") or []]
     items: list[Any] = []

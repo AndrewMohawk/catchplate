@@ -1,0 +1,1648 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/public-attestation-execution-sandbox.v2.schema.json",
+  "title": "Serverware public attestation execution sandbox v2",
+  "description": "A measured-process and retained-FD containment contract. The ordinary host kernel and host root are trusted; this is not hostile-host or whole-codebase proof.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "capabilities",
+    "cgroup",
+    "executionMode",
+    "executable",
+    "fdPolicy",
+    "identity",
+    "monitoring",
+    "namespaces",
+    "network",
+    "noNewPrivileges",
+    "process",
+    "productionClaim",
+    "rootFilesystem",
+    "seccomp",
+    "trustBoundary"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "serverware.publicAttestationExecutionSandbox/v2"
+    },
+    "executionMode": {
+      "enum": [
+        "fixture-non-production",
+        "production"
+      ]
+    },
+    "productionClaim": {
+      "type": "boolean"
+    },
+    "trustBoundary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "claim",
+        "hostKernelTrusted",
+        "hostRootTrusted",
+        "hostileHostProof",
+        "launcherStaticElfRequired"
+      ],
+      "properties": {
+        "claim": {
+          "const": "measured-process-and-retained-fd-containment-v2"
+        },
+        "hostKernelTrusted": {
+          "const": true
+        },
+        "hostRootTrusted": {
+          "const": true
+        },
+        "hostileHostProof": {
+          "const": false
+        },
+        "launcherStaticElfRequired": {
+          "const": true
+        }
+      }
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "gid",
+        "supplementaryGroups",
+        "uid"
+      ],
+      "properties": {
+        "uid": {
+          "$ref": "#/$defs/nonRootId"
+        },
+        "gid": {
+          "$ref": "#/$defs/nonRootId"
+        },
+        "supplementaryGroups": {
+          "type": "array",
+          "maxItems": 0
+        }
+      }
+    },
+    "noNewPrivileges": {
+      "const": true
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ambient",
+        "bounding",
+        "effective",
+        "inheritable",
+        "permitted"
+      ],
+      "properties": {
+        "ambient": {
+          "type": "array",
+          "maxItems": 0
+        },
+        "bounding": {
+          "type": "array",
+          "maxItems": 0
+        },
+        "effective": {
+          "type": "array",
+          "maxItems": 0
+        },
+        "inheritable": {
+          "type": "array",
+          "maxItems": 0
+        },
+        "permitted": {
+          "type": "array",
+          "maxItems": 0
+        }
+      }
+    },
+    "namespaces": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "required",
+        "userNamespace"
+      ],
+      "properties": {
+        "required": {
+          "const": [
+            "cgroup",
+            "ipc",
+            "mount",
+            "network",
+            "pid",
+            "uts"
+          ]
+        },
+        "userNamespace": {
+          "const": false
+        }
+      }
+    },
+    "rootFilesystem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bindMounts",
+        "emptyTmpfs",
+        "maxBytes",
+        "nodev",
+        "noexec",
+        "nosuid",
+        "path",
+        "readOnlyAfterSetup",
+        "rootDirectoryFdRole",
+        "rootDirectoryIdentity"
+      ],
+      "properties": {
+        "rootDirectoryFdRole": {
+          "const": "sandboxRoot"
+        },
+        "path": {
+          "$ref": "#/$defs/absolutePath"
+        },
+        "rootDirectoryIdentity": {
+          "$ref": "#/$defs/directoryIdentity"
+        },
+        "emptyTmpfs": {
+          "const": true
+        },
+        "maxBytes": {
+          "type": "integer",
+          "minimum": 1048576,
+          "maximum": 1073741824
+        },
+        "readOnlyAfterSetup": {
+          "const": true
+        },
+        "nodev": {
+          "const": true
+        },
+        "noexec": {
+          "const": true
+        },
+        "nosuid": {
+          "const": true
+        },
+        "bindMounts": {
+          "const": []
+        }
+      }
+    },
+    "seccomp": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "architecture",
+        "auditArchitecture",
+        "bootstrapProfile",
+        "contract",
+        "defaultAction",
+        "format",
+        "kernelAbi",
+        "runtimeProfile",
+        "transition",
+        "unknownSyscallAction"
+      ],
+      "properties": {
+        "contract": {
+          "const": "serverware.closedSeccompProfile/v1"
+        },
+        "format": {
+          "const": "linux-cbpf-sock-filter-le-v1"
+        },
+        "architecture": {
+          "enum": [
+            "aarch64",
+            "x86_64"
+          ]
+        },
+        "auditArchitecture": {
+          "type": "integer",
+          "enum": [
+            3221225534,
+            3221225655
+          ]
+        },
+        "defaultAction": {
+          "const": "kill-process"
+        },
+        "unknownSyscallAction": {
+          "const": "kill-process"
+        },
+        "kernelAbi": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "endianness",
+            "syscallTableId",
+            "syscallTableSha256",
+            "wordBits"
+          ],
+          "properties": {
+            "endianness": {
+              "const": "little"
+            },
+            "syscallTableId": {
+              "enum": [
+                "linux-uapi-aarch64-serverware-v1",
+                "linux-uapi-x86_64-serverware-v1"
+              ]
+            },
+            "syscallTableSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "wordBits": {
+              "const": 64
+            }
+          }
+        },
+        "bootstrapProfile": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "allowedSyscalls",
+            "instructionCount",
+            "profileFdRole",
+            "profileId",
+            "profileSha256"
+          ],
+          "properties": {
+            "profileFdRole": {
+              "const": "seccompProfile"
+            },
+            "profileId": {
+              "enum": [
+                "serverware-producer-bootstrap-aarch64-v1",
+                "serverware-producer-bootstrap-x86_64-v1"
+              ]
+            },
+            "profileSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "instructionCount": {
+              "const": 37
+            },
+            "allowedSyscalls": {
+              "const": [
+                "brk",
+                "clock_gettime",
+                "close",
+                "execveat",
+                "exit",
+                "exit_group",
+                "fstat",
+                "futex",
+                "getpid",
+                "getrandom",
+                "gettid",
+                "lseek",
+                "read",
+                "rt_sigreturn",
+                "seccomp",
+                "write"
+              ]
+            }
+          }
+        },
+        "runtimeProfile": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "allowedSyscalls",
+            "embeddedInStaticProducer",
+            "profileId",
+            "profileSha256"
+          ],
+          "properties": {
+            "profileId": {
+              "enum": [
+                "serverware-producer-runtime-aarch64-v1",
+                "serverware-producer-runtime-x86_64-v1"
+              ]
+            },
+            "profileSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "embeddedInStaticProducer": {
+              "const": true
+            },
+            "allowedSyscalls": {
+              "const": [
+                "brk",
+                "clock_gettime",
+                "close",
+                "exit",
+                "exit_group",
+                "fstat",
+                "futex",
+                "getpid",
+                "getrandom",
+                "gettid",
+                "lseek",
+                "read",
+                "rt_sigreturn",
+                "write"
+              ]
+            }
+          }
+        },
+        "transition": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "execFlags",
+            "execSyscall",
+            "executableFd",
+            "externalEnforcementPrerequisite",
+            "method",
+            "requiredSeccompFilterCount"
+          ],
+          "properties": {
+            "method": {
+              "const": "measured-static-entrypoint-additive-filter"
+            },
+            "execSyscall": {
+              "const": "execveat"
+            },
+            "executableFd": {
+              "const": 126
+            },
+            "execFlags": {
+              "const": [
+                "AT_EMPTY_PATH"
+              ]
+            },
+            "requiredSeccompFilterCount": {
+              "const": 2
+            },
+            "externalEnforcementPrerequisite": {
+              "description": "Hard production prerequisite. Current source fails production closed until a measured static producer entry stub installs the exact runtime filter before application code, every measured static service peer has its signed post-exec filter identity externally attested, the measured static launcher brokers every service frame, and the supervisor supplies the required read-only cgroup view.",
+              "const": "measured-static-entry-stubs-plus-launcher-frame-broker-plus-read-only-cgroupns-v1"
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "architecture": {
+                "const": "x86_64"
+              }
+            },
+            "required": [
+              "architecture"
+            ]
+          },
+          "then": {
+            "properties": {
+              "auditArchitecture": {
+                "const": 3221225534
+              },
+              "kernelAbi": {
+                "properties": {
+                  "syscallTableId": {
+                    "const": "linux-uapi-x86_64-serverware-v1"
+                  },
+                  "syscallTableSha256": {
+                    "const": "sha256:2e3b41282fd357204e77d43bf1b9cd9fcf7bfc271c32513bb813052d099e8e0b"
+                  }
+                }
+              },
+              "bootstrapProfile": {
+                "properties": {
+                  "profileId": {
+                    "const": "serverware-producer-bootstrap-x86_64-v1"
+                  }
+                }
+              },
+              "runtimeProfile": {
+                "properties": {
+                  "profileId": {
+                    "const": "serverware-producer-runtime-x86_64-v1"
+                  }
+                }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "auditArchitecture": {
+                "const": 3221225655
+              },
+              "kernelAbi": {
+                "properties": {
+                  "syscallTableId": {
+                    "const": "linux-uapi-aarch64-serverware-v1"
+                  },
+                  "syscallTableSha256": {
+                    "const": "sha256:2111fcbddd04d564b6d478b442b7cd543bf1075b13ce4eef7f9d42677070f21f"
+                  }
+                }
+              },
+              "bootstrapProfile": {
+                "properties": {
+                  "profileId": {
+                    "const": "serverware-producer-bootstrap-aarch64-v1"
+                  }
+                }
+              },
+              "runtimeProfile": {
+                "properties": {
+                  "profileId": {
+                    "const": "serverware-producer-runtime-aarch64-v1"
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "cgroup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "disposable",
+        "fdRole",
+        "identity",
+        "killMode",
+        "limits",
+        "ancestorProtection",
+        "membershipPath",
+        "migrationProtection",
+        "path",
+        "requireEmptyBeforeLaunch",
+        "requireEmptyOnExit",
+        "requiredControllers"
+      ],
+      "properties": {
+        "fdRole": {
+          "const": "cgroup"
+        },
+        "ancestorProtection": {
+          "const": "root-owned-nondelegated-no-acl-v1"
+        },
+        "migrationProtection": {
+          "const": "nonroot-no-cgroup-fds-no-writable-cgroupfs-v1"
+        },
+        "path": {
+          "$ref": "#/$defs/cgroupPath"
+        },
+        "membershipPath": {
+          "$ref": "#/$defs/cgroupMembershipPath"
+        },
+        "identity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "device",
+            "filesystemMagic",
+            "gid",
+            "inode",
+            "mode",
+            "mountId",
+            "uid"
+          ],
+          "properties": {
+            "device": {
+              "$ref": "#/$defs/u64"
+            },
+            "filesystemMagic": {
+              "const": 1667723888
+            },
+            "gid": {
+              "const": 0
+            },
+            "inode": {
+              "$ref": "#/$defs/u64Positive"
+            },
+            "mode": {
+              "type": "integer",
+              "minimum": 320,
+              "maximum": 511
+            },
+            "mountId": {
+              "$ref": "#/$defs/u64Positive"
+            },
+            "uid": {
+              "const": 0
+            }
+          }
+        },
+        "requiredControllers": {
+          "const": [
+            "cpu",
+            "io",
+            "memory",
+            "pids"
+          ]
+        },
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "cgroupMaxDepth",
+            "cgroupMaxDescendants",
+            "cpuMaxPeriodMicros",
+            "cpuMaxQuotaMicros",
+            "cpuWeight",
+            "ioMax",
+            "memoryHighBytes",
+            "memoryMaxBytes",
+            "memoryOomGroup",
+            "memorySwapMaxBytes",
+            "pidsMax"
+          ],
+          "properties": {
+            "memoryMaxBytes": {
+              "type": "integer",
+              "minimum": 16777216,
+              "maximum": 1099511627776
+            },
+            "memoryHighBytes": {
+              "type": "integer",
+              "minimum": 16777216,
+              "maximum": 1099511627776
+            },
+            "memorySwapMaxBytes": {
+              "const": 0
+            },
+            "memoryOomGroup": {
+              "const": true
+            },
+            "cpuMaxQuotaMicros": {
+              "type": "integer",
+              "minimum": 1000,
+              "maximum": 10000000
+            },
+            "cpuMaxPeriodMicros": {
+              "type": "integer",
+              "minimum": 1000,
+              "maximum": 1000000
+            },
+            "cpuWeight": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10000
+            },
+            "pidsMax": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 4096
+            },
+            "cgroupMaxDepth": {
+              "const": 0
+            },
+            "cgroupMaxDescendants": {
+              "const": 0
+            },
+            "ioMax": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 64,
+              "uniqueItems": true,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "major",
+                  "minor",
+                  "rbps",
+                  "riops",
+                  "wbps",
+                  "wiops"
+                ],
+                "properties": {
+                  "major": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 1048575
+                  },
+                  "minor": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 1048575
+                  },
+                  "rbps": {
+                    "$ref": "#/$defs/u64Positive"
+                  },
+                  "wbps": {
+                    "$ref": "#/$defs/u64Positive"
+                  },
+                  "riops": {
+                    "$ref": "#/$defs/u64Positive"
+                  },
+                  "wiops": {
+                    "$ref": "#/$defs/u64Positive"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "disposable": {
+          "const": true
+        },
+        "killMode": {
+          "const": "pid-namespace-init-plus-cgroup.kill"
+        },
+        "requireEmptyBeforeLaunch": {
+          "const": true
+        },
+        "requireEmptyOnExit": {
+          "const": true
+        }
+      }
+    },
+    "process": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "absoluteCommandDeadline",
+        "launcherIsSessionLeader",
+        "namespaceInitIsProducer",
+        "ownerLivenessFdRole",
+        "ownerLivenessTransport",
+        "parentDeathSignal",
+        "parentDeathSignalScope",
+        "producerIsProcessGroupLeader",
+        "producerStartsNewSession",
+        "reapEntireTreeBeforeExit"
+      ],
+      "properties": {
+        "absoluteCommandDeadline": {
+          "const": true
+        },
+        "launcherIsSessionLeader": {
+          "const": true
+        },
+        "namespaceInitIsProducer": {
+          "const": true
+        },
+        "parentDeathSignal": {
+          "const": "SIGKILL"
+        },
+        "parentDeathSignalScope": {
+          "const": "direct-producer-child-only"
+        },
+        "ownerLivenessFdRole": {
+          "const": "ownerLiveness"
+        },
+        "ownerLivenessTransport": {
+          "const": "connected-unix-seqpacket-eof"
+        },
+        "producerStartsNewSession": {
+          "const": true
+        },
+        "producerIsProcessGroupLeader": {
+          "const": true
+        },
+        "reapEntireTreeBeforeExit": {
+          "const": true
+        }
+      }
+    },
+    "network": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "allowedAddressFamilies",
+        "denyNewNetworkSockets",
+        "loopback",
+        "mode"
+      ],
+      "properties": {
+        "mode": {
+          "const": "none"
+        },
+        "loopback": {
+          "const": "down"
+        },
+        "allowedAddressFamilies": {
+          "const": [
+            "AF_UNIX"
+          ]
+        },
+        "denyNewNetworkSockets": {
+          "const": true
+        }
+      }
+    },
+    "executable": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "architecture",
+        "command",
+        "executionSource",
+        "executableSha256",
+        "format",
+        "postExecEnforcement",
+        "requireSealed",
+        "sourceFdRole",
+        "static"
+      ],
+      "properties": {
+        "sourceFdRole": {
+          "const": "producerExecutable"
+        },
+        "executableSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "executionSource": {
+          "const": "sealed-memfd"
+        },
+        "format": {
+          "const": "elf"
+        },
+        "architecture": {
+          "enum": [
+            "aarch64",
+            "x86_64"
+          ]
+        },
+        "static": {
+          "const": true
+        },
+        "requireSealed": {
+          "const": true
+        },
+        "postExecEnforcement": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "entryStubSha256",
+            "entryStubMeasured",
+            "mechanism",
+            "requiredBeforeApplicationCode",
+            "runtimeProfileSha256"
+          ],
+          "properties": {
+            "entryStubSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "mechanism": {
+              "const": "measured-static-entry-stub-additive-seccomp"
+            },
+            "entryStubMeasured": {
+              "const": true
+            },
+            "requiredBeforeApplicationCode": {
+              "const": true
+            },
+            "runtimeProfileSha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        },
+        "command": {
+          "$ref": "#/$defs/producerCommand"
+        }
+      }
+    },
+    "fdPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "closeAllOthers",
+        "immutableConfig",
+        "namedProducerFds",
+        "stderr",
+        "stdin",
+        "stdout"
+      ],
+      "properties": {
+        "stdin": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "access",
+            "maxBytes",
+            "requireSealed",
+            "source",
+            "targetFd"
+          ],
+          "properties": {
+            "source": {
+              "const": "launcher-stdin"
+            },
+            "targetFd": {
+              "const": 0
+            },
+            "access": {
+              "const": "read-only"
+            },
+            "maxBytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 262144
+            },
+            "requireSealed": {
+              "const": true
+            }
+          }
+        },
+        "stdout": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "access",
+            "source",
+            "targetFd"
+          ],
+          "properties": {
+            "source": {
+              "const": "launcher-stdout"
+            },
+            "targetFd": {
+              "const": 1
+            },
+            "access": {
+              "const": "write-only"
+            }
+          }
+        },
+        "stderr": {
+          "const": "closed"
+        },
+        "immutableConfig": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "access",
+            "binding",
+            "maxBytes",
+            "requireSealed",
+            "sourceFdRole",
+            "targetFd"
+          ],
+          "properties": {
+            "sourceFdRole": {
+              "const": "immutableConfig"
+            },
+            "targetFd": {
+              "type": "integer",
+              "minimum": 3,
+              "maximum": 63
+            },
+            "access": {
+              "const": "read-only"
+            },
+            "binding": {
+              "$ref": "#/$defs/immutableConfigBinding"
+            },
+            "maxBytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1048576
+            },
+            "requireSealed": {
+              "const": true
+            }
+          }
+        },
+        "namedProducerFds": {
+          "type": "array",
+          "minItems": 12,
+          "maxItems": 12,
+          "uniqueItems": true,
+          "items": {
+            "oneOf": [
+              {
+                "$ref": "#/$defs/sealedFileFd"
+              },
+              {
+                "$ref": "#/$defs/sealedReleaseBoundFileFd"
+              },
+              {
+                "$ref": "#/$defs/sealedMeasurementCopyFd"
+              },
+              {
+                "$ref": "#/$defs/sealedEphemeralSecretFd"
+              },
+              {
+                "$ref": "#/$defs/unixServiceFd"
+              }
+            ]
+          }
+        },
+        "closeAllOthers": {
+          "const": true
+        }
+      }
+    },
+    "monitoring": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "commandDeadlineMilliseconds",
+        "killAndReapTimeoutMilliseconds",
+        "limitMutationWatch",
+        "membershipPollMilliseconds",
+        "startupTimeoutMilliseconds"
+      ],
+      "properties": {
+        "commandDeadlineMilliseconds": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 30000
+        },
+        "startupTimeoutMilliseconds": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 10000
+        },
+        "membershipPollMilliseconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "killAndReapTimeoutMilliseconds": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 10000
+        },
+        "limitMutationWatch": {
+          "const": "inotify-fail-on-write-attrib-delete-move"
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "executionMode": {
+            "const": "production"
+          }
+        },
+        "required": [
+          "executionMode"
+        ]
+      },
+      "then": {
+        "properties": {
+          "productionClaim": {
+            "const": true
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "executionMode": {
+            "const": "fixture-non-production"
+          },
+          "productionClaim": {
+            "const": false
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "absolutePath": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 4096,
+      "pattern": "^/(?!.*//)(?!.*(?:^|/)\\.{1,2}(?:/|$))[A-Za-z0-9_+@=-]+(?:/[A-Za-z0-9._+@=-]+)*$"
+    },
+    "cgroupPath": {
+      "type": "string",
+      "minLength": 16,
+      "maxLength": 4096,
+      "pattern": "^/sys/fs/cgroup/(?!.*//)(?!.*(?:^|/)\\.{1,2}(?:/|$))[A-Za-z0-9_+@=-]+(?:/[A-Za-z0-9._+@=-]+)*$"
+    },
+    "cgroupMembershipPath": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 4096,
+      "pattern": "^/(?!.*//)(?!.*(?:^|/)\\.{1,2}(?:/|$))[A-Za-z0-9_+@=-]+(?:/[A-Za-z0-9._+@=-]+)*$"
+    },
+    "identifier": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9._:@+-]{0,127}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "u64": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 18446744073709551615
+    },
+    "u64Positive": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 18446744073709551615
+    },
+    "u32": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295
+    },
+    "nonRootId": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 2147483647
+    },
+    "filesystemIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "device",
+        "gid",
+        "inode",
+        "mode",
+        "uid"
+      ],
+      "properties": {
+        "device": {
+          "$ref": "#/$defs/u64"
+        },
+        "gid": {
+          "$ref": "#/$defs/u64"
+        },
+        "inode": {
+          "$ref": "#/$defs/u64Positive"
+        },
+        "mode": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4095
+        },
+        "uid": {
+          "$ref": "#/$defs/u64"
+        }
+      }
+    },
+    "directoryIdentity": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/filesystemIdentity"
+        },
+        {
+          "properties": {
+            "uid": {
+              "const": 0
+            }
+          }
+        }
+      ]
+    },
+    "regularFileIdentity": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/filesystemIdentity"
+        },
+        {
+          "properties": {
+            "uid": {
+              "const": 0
+            }
+          }
+        }
+      ]
+    },
+    "immutableConfigBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "configApiVersion",
+        "releaseIdentityConfigurationField",
+        "releaseIdentityField",
+        "releaseIdentityPublicAttestationField",
+        "releaseIdentitySandboxDescriptorSha256Field",
+        "sandboxDescriptorSha256Field"
+      ],
+      "properties": {
+        "configApiVersion": {
+          "const": "serverware.publicAttestationConfig/v2"
+        },
+        "releaseIdentityField": {
+          "const": "releaseIdentity"
+        },
+        "releaseIdentityConfigurationField": {
+          "const": "configuration"
+        },
+        "releaseIdentityPublicAttestationField": {
+          "const": "publicAttestation"
+        },
+        "releaseIdentitySandboxDescriptorSha256Field": {
+          "const": "sandboxDescriptorSha256"
+        },
+        "sandboxDescriptorSha256Field": {
+          "const": "sandboxDescriptorSha256"
+        }
+      }
+    },
+    "producerCommand": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "expectedTrustRootsSha256",
+        "fdRoles",
+        "ioTimeoutMilliseconds",
+        "operation"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.publicAttestationProducerCommand/v1"
+        },
+        "operation": {
+          "const": "produce-bundle"
+        },
+        "expectedTrustRootsSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "ioTimeoutMilliseconds": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 30000
+        },
+        "fdRoles": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "nonceRequest",
+            "nonceResponse",
+            "producerDescriptor",
+            "producerEphemeralSeed",
+            "producerExecutableMeasurement",
+            "producerRequestSchema",
+            "sandboxDescriptorMeasurement",
+            "sandboxLauncher",
+            "stableReleaseStatement",
+            "trustRoots",
+            "witnessRequest",
+            "witnessResponse"
+          ],
+          "properties": {
+            "nonceRequest": {
+              "const": "nonceRequest"
+            },
+            "nonceResponse": {
+              "const": "nonceResponse"
+            },
+            "producerDescriptor": {
+              "const": "producerDescriptor"
+            },
+            "producerEphemeralSeed": {
+              "const": "producerEphemeralSeed"
+            },
+            "producerExecutableMeasurement": {
+              "const": "producerExecutableMeasurement"
+            },
+            "producerRequestSchema": {
+              "const": "producerRequestSchema"
+            },
+            "sandboxDescriptorMeasurement": {
+              "const": "sandboxDescriptorMeasurement"
+            },
+            "sandboxLauncher": {
+              "const": "sandboxLauncher"
+            },
+            "stableReleaseStatement": {
+              "const": "stableReleaseStatement"
+            },
+            "trustRoots": {
+              "const": "trustRoots"
+            },
+            "witnessRequest": {
+              "const": "witnessRequest"
+            },
+            "witnessResponse": {
+              "const": "witnessResponse"
+            }
+          }
+        }
+      }
+    },
+    "sealedFileFd": {
+      "type": "object",
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "role": {
+                "const": "sandboxLauncher"
+              }
+            },
+            "required": [
+              "role"
+            ]
+          },
+          "then": {
+            "properties": {
+              "maxBytes": {
+                "const": 268435456
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "maxBytes": {
+                "const": 4194304
+              }
+            }
+          }
+        }
+      ],
+      "required": [
+        "access",
+        "expectedSha256",
+        "kind",
+        "maxBytes",
+        "requireSealed",
+        "role",
+        "targetFd"
+      ],
+      "properties": {
+        "role": {
+          "enum": [
+            "producerRequestSchema",
+            "sandboxLauncher",
+            "trustRoots"
+          ]
+        },
+        "targetFd": {
+          "type": "integer",
+          "minimum": 3,
+          "maximum": 63
+        },
+        "kind": {
+          "const": "sealed-regular-file"
+        },
+        "access": {
+          "const": "read-only"
+        },
+        "maxBytes": {
+          "enum": [
+            4194304,
+            268435456
+          ]
+        },
+        "expectedSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "requireSealed": {
+          "const": true
+        }
+      }
+    },
+    "sealedReleaseBoundFileFd": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "access",
+        "kind",
+        "maxBytes",
+        "requireSealed",
+        "role",
+        "targetFd"
+      ],
+      "properties": {
+        "role": {
+          "enum": [
+            "producerDescriptor",
+            "stableReleaseStatement"
+          ]
+        },
+        "targetFd": {
+          "type": "integer",
+          "minimum": 3,
+          "maximum": 63
+        },
+        "kind": {
+          "const": "sealed-release-bound-file"
+        },
+        "access": {
+          "const": "read-only"
+        },
+        "maxBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4194304
+        },
+        "requireSealed": {
+          "const": true
+        }
+      }
+    },
+    "sealedMeasurementCopyFd": {
+      "type": "object",
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "measurementOf": {
+                "const": "producerExecutable"
+              }
+            },
+            "required": [
+              "measurementOf"
+            ]
+          },
+          "then": {
+            "properties": {
+              "maxBytes": {
+                "const": 268435456
+              },
+              "role": {
+                "const": "producerExecutableMeasurement"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "maxBytes": {
+                "const": 65536
+              },
+              "role": {
+                "const": "sandboxDescriptorMeasurement"
+              }
+            }
+          }
+        }
+      ],
+      "required": [
+        "access",
+        "kind",
+        "maxBytes",
+        "measurementOf",
+        "requireSealed",
+        "role",
+        "targetFd"
+      ],
+      "properties": {
+        "role": {
+          "enum": [
+            "producerExecutableMeasurement",
+            "sandboxDescriptorMeasurement"
+          ]
+        },
+        "targetFd": {
+          "type": "integer",
+          "minimum": 3,
+          "maximum": 63
+        },
+        "kind": {
+          "const": "sealed-measurement-copy"
+        },
+        "access": {
+          "const": "read-only"
+        },
+        "maxBytes": {
+          "enum": [
+            65536,
+            268435456
+          ]
+        },
+        "requireSealed": {
+          "const": true
+        },
+        "measurementOf": {
+          "enum": [
+            "producerExecutable",
+            "sandboxDescriptor"
+          ]
+        }
+      }
+    },
+    "sealedEphemeralSecretFd": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "access",
+        "exactBytes",
+        "kind",
+        "requireSealed",
+        "role",
+        "targetFd"
+      ],
+      "properties": {
+        "role": {
+          "const": "producerEphemeralSeed"
+        },
+        "targetFd": {
+          "type": "integer",
+          "minimum": 3,
+          "maximum": 63
+        },
+        "kind": {
+          "const": "sealed-ephemeral-secret"
+        },
+        "access": {
+          "const": "read-only"
+        },
+        "exactBytes": {
+          "const": 32
+        },
+        "requireSealed": {
+          "const": true
+        }
+      }
+    },
+    "unixServiceFd": {
+      "type": "object",
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "role": {
+                "enum": [
+                  "nonceRequest",
+                  "nonceResponse"
+                ]
+              }
+            },
+            "required": [
+              "role"
+            ]
+          },
+          "then": {
+            "properties": {
+              "protocol": {
+                "const": "serverware.attestationNonceService/v2"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "protocol": {
+                "const": "serverware.attestationWitnessService/v2"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "role": {
+                "enum": [
+                  "nonceRequest",
+                  "witnessRequest"
+                ]
+              }
+            },
+            "required": [
+              "role"
+            ]
+          },
+          "then": {
+            "properties": {
+              "direction": {
+                "const": "producer-to-service"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "direction": {
+                "const": "service-to-producer"
+              }
+            }
+          }
+        }
+      ],
+      "required": [
+        "access",
+        "direction",
+        "endpointCustodyClaim",
+        "kind",
+        "messageCredentials",
+        "peerCgroupPath",
+        "peerCgroupAncestorClosureSha256",
+        "peerCgroupMigrationEnforcement",
+        "peerExecutableMapClosureSha256",
+        "peerExecutableSha256",
+        "peerGid",
+        "peerPostExecEnforcementProfileSha256",
+        "peerRequiredSeccompFilterCount",
+        "peerStaticElf",
+        "peerUid",
+        "protocol",
+        "protocolChallenge",
+        "rejectAncillaryFds",
+        "rejectUnknownControlMessages",
+        "role",
+        "socketType",
+        "targetFd"
+      ],
+      "properties": {
+        "role": {
+          "enum": [
+            "nonceRequest",
+            "nonceResponse",
+            "witnessRequest",
+            "witnessResponse"
+          ]
+        },
+        "targetFd": {
+          "type": "integer",
+          "minimum": 3,
+          "maximum": 63
+        },
+        "kind": {
+          "const": "connected-unix-service"
+        },
+        "access": {
+          "const": "read-write"
+        },
+        "direction": {
+          "enum": [
+            "producer-to-service",
+            "service-to-producer"
+          ]
+        },
+        "socketType": {
+          "const": "SOCK_SEQPACKET"
+        },
+        "messageCredentials": {
+          "const": "SCM_CREDENTIALS-every-frame"
+        },
+        "rejectAncillaryFds": {
+          "const": true
+        },
+        "rejectUnknownControlMessages": {
+          "const": true
+        },
+        "endpointCustodyClaim": {
+          "description": "Linux authenticates each sender but cannot prove that no trusted-host process retained another endpoint duplicate.",
+          "const": "sender-authenticated-not-exclusive"
+        },
+        "protocol": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9._:/+-]+$"
+        },
+        "peerUid": {
+          "$ref": "#/$defs/nonRootId"
+        },
+        "peerGid": {
+          "$ref": "#/$defs/nonRootId"
+        },
+        "peerExecutableSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "peerCgroupPath": {
+          "$ref": "#/$defs/cgroupMembershipPath"
+        },
+        "peerStaticElf": {
+          "const": true
+        },
+        "peerExecutableMapClosureSha256": {
+          "description": "Digest of the canonical executable-map closure measured from procfs. Production permits only the pinned static executable plus kernel vDSO/vsyscall mappings and rejects anonymous executable maps, deleted or memfd maps, shared objects, and writable executable mappings.",
+          "$ref": "#/$defs/sha256"
+        },
+        "peerPostExecEnforcementProfileSha256": {
+          "description": "Expected externally attested post-exec filter identity. Linux process status exposes seccomp mode and filter count, not filter bytes; this digest alone is not runtime proof and production remains fail-closed without the external enforcement prerequisite.",
+          "$ref": "#/$defs/sha256"
+        },
+        "peerRequiredSeccompFilterCount": {
+          "description": "Structural procfs check only; this count does not establish filter semantics or identity.",
+          "const": 2
+        },
+        "peerCgroupAncestorClosureSha256": {
+          "description": "Digest of the root-to-leaf cgroup-v2 ancestor identities, modes, ACL absence, controller/type metadata, and protected migration/delegation control identities.",
+          "$ref": "#/$defs/sha256"
+        },
+        "peerCgroupMigrationEnforcement": {
+          "const": "nonroot-empty-caps-private-cgroupns-no-writable-cgroupfs-no-cgroup-fds-v1"
+        },
+        "protocolChallenge": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "apiVersion",
+            "challengeBytes",
+            "required"
+          ],
+          "properties": {
+            "apiVersion": {
+              "const": "serverware.publicAttestationServiceChannelChallenge/v1"
+            },
+            "challengeBytes": {
+              "const": 32
+            },
+            "required": {
+              "const": true
+            }
+          }
+        }
+      }
+    }
+  }
+}

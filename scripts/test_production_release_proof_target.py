@@ -274,6 +274,9 @@ def main() -> None:
         "--systemd-unit-out",
         "--launcher-path",
         "--source-tree-digest",
+        "--nonce-rollback-assurance-pins",
+        "--expected-nonce-rollback-assurance-pins-sha256",
+        "--pipeline-metadata-out",
         "--python-import-root \"$(PRODUCTION_RELEASE_ROOT)\"",
         "--production-host-preflight",
         "/usr/bin/systemctl daemon-reload",
@@ -287,6 +290,108 @@ def main() -> None:
             raise AssertionError(f"final production launcher target omits {required}")
     if "python3" in final_launcher_body or "scripts/run_production_readiness.py" in final_launcher_body:
         raise AssertionError("final production launcher target starts Python outside systemd")
+
+    generator_source = (
+        ROOT / "scripts" / "generate_production_launch_manifest.py"
+    ).read_text(encoding="utf-8")
+    launcher_source = (
+        ROOT
+        / "data-plane"
+        / "decision-gate-rs"
+        / "src"
+        / "bin"
+        / "serverware-production-launcher.rs"
+    ).read_text(encoding="utf-8")
+    readiness_source = (
+        ROOT / "scripts" / "run_production_readiness.py"
+    ).read_text(encoding="utf-8")
+    preflight_source = (
+        ROOT / "scripts" / "production_host_preflight.py"
+    ).read_text(encoding="utf-8")
+    completion_source = (
+        ROOT / "scripts" / "verify_release_completion.py"
+    ).read_text(encoding="utf-8")
+    adversarial_launcher_source = (
+        ROOT / "scripts" / "test_production_launcher_adversarial.py"
+    ).read_text(encoding="utf-8")
+    for label, source, required in (
+        (
+            "manifest generator",
+            generator_source,
+            (
+                'API_VERSION = "serverware.productionReadinessLaunch/v3"',
+                '"nonceRollbackAssurance"',
+                '"native-launcher-measured"',
+                '"purpose": "readiness-only"',
+                '"nonceAuthorityVerifierStateStoreAttestationPublicKeySpkiDerBase64url"',
+                '"nonceAuthorityVerifierStateStoreAssuranceEvidenceSha256"',
+            ),
+        ),
+        (
+            "native launcher",
+            launcher_source,
+            (
+                'serverware.bootstrapReceipt/v3',
+                'nonceRollbackAssuranceContractSha256',
+                'nonceRollbackAssurancePinsSha256',
+                '--launcher-nonce-rollback-assurance-pins',
+                'legacy v2 launch manifests are readiness-only',
+                'nonce_authority_verifier_state_store_attestation_public_key_spki_der_base64url',
+                'nonce_authority_verifier_state_store_assurance_evidence_sha256',
+                'let receipt_fd_reservation = reserve_receipt_fd()?;',
+                'create_sealed_receipt(&receipt_bytes, receipt_fd_reservation)',
+            ),
+        ),
+        (
+            "readiness child",
+            readiness_source,
+            (
+                '--launcher-nonce-rollback-assurance-pins',
+                'validate_retained_nonce_rollback_assurance',
+                '"readiness"',
+                '"nonceAuthorityVerifierStateStoreAttestationPublicKeySpkiDerBase64url"',
+                '"nonceAuthorityVerifierStateStoreAssuranceEvidenceSha256"',
+            ),
+        ),
+        (
+            "preflight child",
+            preflight_source,
+            (
+                '--launcher-nonce-rollback-assurance-pins',
+                'nonce_rollback_assurance',
+                'pass_fds=tuple(sorted({receipt_fd, pins_fd}))',
+            ),
+        ),
+        (
+            "offline completion verifier",
+            completion_source,
+            (
+                'verify_launcher_nonce_rollback_manifest_v3',
+                '"nonce_rollback_assurance"',
+                '"readiness-only"',
+                '"nonceAuthorityVerifierStateStoreAttestationPublicKeySpkiDerBase64url"',
+                '"nonceAuthorityVerifierStateStoreAssuranceEvidenceSha256"',
+            ),
+        ),
+        (
+            "adversarial launcher test",
+            adversarial_launcher_source,
+            (
+                'CODER_IMAGE_REF = "serverware-production-launcher-adversarial:coder-v3"',
+                'IMAGE_REF_ENV = "SERVERWARE_ADVERSARIAL_LAUNCHER_IMAGE"',
+                'IMAGE_ID_ENV = "SERVERWARE_ADVERSARIAL_LAUNCHER_IMAGE_ID"',
+                '"--prepare-image"',
+                '"--test-prebuilt-image"',
+                '"--expected-image-id"',
+                '"--pull=never"',
+            ),
+        ),
+    ):
+        for marker in required:
+            if marker not in source:
+                raise AssertionError(
+                    f"{label} omits nonce rollback assurance source marker: {marker}"
+                )
 
     bench_body = target_body(makefile, "decision-gate-bench-evidence")
     if "$(DECISION_GATE_BENCH_FILE)" not in bench_body or "bench_decision_gate.py --self-test" not in bench_body:

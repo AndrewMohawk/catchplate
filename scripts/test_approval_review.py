@@ -342,10 +342,59 @@ def exercise_python_release_lifecycle_contracts(runtime, canonical_json) -> None
             "a plaintext production release-authority URL",
         )
 
-    canonical_request = {"request": {"method": "POST"}, "operation": {}}
+    canonical_request = {
+        "v": 1,
+        "principal": "agent:test",
+        "client_ip": None,
+        "route_id": "route:test",
+        "credential_ref": "credential:test",
+        "credential_version": "1",
+        "policy_hash": "sha256:" + "b" * 64,
+        "request": {
+            "method": "POST",
+            "scheme": "https",
+            "authority": "upstream.invalid",
+            "path": "/resource",
+            "query": [],
+            "headers": {"host": "upstream.invalid"},
+            "body_sha256": "sha256:" + hashlib.sha256(b"").hexdigest(),
+        },
+        "operation": {"operation": "test.write"},
+    }
     request_digest = "sha256:" + hashlib.sha256(
         canonical_json(canonical_request).encode("utf-8")
     ).hexdigest()
+    operation_digest = "sha256:" + hashlib.sha256(
+        canonical_json(
+            {
+                key: canonical_request[key]
+                for key in (
+                    "principal",
+                    "route_id",
+                    "credential_ref",
+                    "credential_version",
+                    "policy_hash",
+                    "request",
+                    "operation",
+                )
+            }
+        ).encode("utf-8")
+    ).hexdigest()
+    expected_reserve = runtime.expected_release_authorization_identity(
+        attempt_id=attempt_id,
+        flow_id=attempt_id,
+        principal_id="agent:test",
+        route_id="route:test",
+        credential_ref="credential:test",
+        credential_version=1,
+        policy_hash="sha256:" + "b" * 64,
+        request_digest=request_digest,
+        operation_digest=operation_digest,
+        operation_context=dict(canonical_request["operation"]),
+        shared_quotas=[],
+        require_jit_grant=True,
+    )
+    reserve_guard = runtime.ReleaseAuthorizationGuard(expected_reserve)
     with (
         patch.dict(
             os.environ,
@@ -359,20 +408,11 @@ def exercise_python_release_lifecycle_contracts(runtime, canonical_json) -> None
         patch.object(runtime.db, "complete_release_authorization") as complete_db,
     ):
         fallback_calls = (
-            lambda: runtime.reserve_release_authorization(
-                attempt_id=attempt_id,
-                flow_id=attempt_id,
-                principal_id="agent:test",
-                route_id="route:test",
-                credential_ref="credential:test",
-                credential_version=1,
-                policy_hash="sha256:" + "b" * 64,
-                request_digest=request_digest,
-                operation_digest=None,
-                operation_context={},
+            lambda: runtime.reserve_expected_release_authorization(
+                guard=reserve_guard,
+                operation_context=dict(canonical_request["operation"]),
                 canonical_request=canonical_request,
                 shared_quotas=[],
-                require_jit_grant=True,
             ),
             lambda: runtime.dispatch_release_authorization(
                 attempt_id=attempt_id,
@@ -395,6 +435,17 @@ def exercise_python_release_lifecycle_contracts(runtime, canonical_json) -> None
                 fallback_call,
                 f"production direct database fallback for {action}",
             )
+        expect_rejected(
+            lambda: runtime.complete_release_authorization(
+                attempt_id=attempt_id,
+                binding_digest=binding_digest,
+                outcome="not_forwarded",
+                grant_id=grant_id,
+                approval_request_id=approval_request_id,
+                previous_lifecycle=reserved,
+            ),
+            "untyped not_forwarded completion without a retained guard",
+        )
         reserve_db.assert_not_called()
         dispatch_db.assert_not_called()
         complete_db.assert_not_called()
@@ -409,7 +460,7 @@ def exercise_python_release_lifecycle_contracts(runtime, canonical_json) -> None
 
 def exercise_python_atomic_reserve_contract(runtime, canonical_json) -> None:
     canonical_request = {
-        "v": 1,
+        "v": 2,
         "principal": "agent:demo",
         "client_ip": "127.0.0.1",
         "route_id": "demo.npm.publish.jit",
@@ -423,6 +474,7 @@ def exercise_python_atomic_reserve_contract(runtime, canonical_json) -> None:
             "path": "/@scope%2fpkg",
             "query": [],
             "headers": {"host": "registry.npmjs.org"},
+            "discard_headers": ["npm-session"],
             "body_sha256": "sha256:" + "b" * 64,
         },
         "operation": {
@@ -434,7 +486,7 @@ def exercise_python_atomic_reserve_contract(runtime, canonical_json) -> None:
     request_digest = "sha256:" + hashlib.sha256(
         canonical_json(canonical_request).encode("utf-8")
     ).hexdigest()
-    expected_binding_digest = runtime.release_authorization_binding_digest(
+    expected_reserve = runtime.expected_release_authorization_identity(
         attempt_id="attempt:python-proxy",
         flow_id="attempt:python-proxy",
         principal_id="agent:demo",
@@ -448,6 +500,8 @@ def exercise_python_atomic_reserve_contract(runtime, canonical_json) -> None:
         shared_quotas=[],
         require_jit_grant=True,
     )
+    expected_binding_digest = expected_reserve.binding_digest
+    reserve_guard = runtime.ReleaseAuthorizationGuard(expected_reserve)
     approval_expires_at = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()
     response = {
         "apiVersion": "serverware.releaseAuthorization/v1",
@@ -473,9 +527,9 @@ def exercise_python_atomic_reserve_contract(runtime, canonical_json) -> None:
     }
     captured: list[dict] = []
 
-    def request_bytes(request, **_kwargs):
+    def request_json_bytes(request, **_kwargs):
         captured.append(json.loads(request.data.decode("utf-8")))
-        return SimpleNamespace(body=json.dumps(response).encode("utf-8"))
+        return SimpleNamespace(value=response)
 
     with (
         patch.object(runtime, "atomic_release_authorization_enabled", return_value=True),
@@ -486,23 +540,22 @@ def exercise_python_atomic_reserve_contract(runtime, canonical_json) -> None:
         ),
         patch.object(runtime, "_release_authorization_token", return_value="test-token"),
         patch.object(runtime, "_release_authorization_ssl_context", return_value=None),
-        patch.object(runtime, "request_bytes", side_effect=request_bytes),
+        patch.object(
+            runtime,
+            "request_json_bytes",
+            side_effect=request_json_bytes,
+        ),
     ):
-        result = runtime.reserve_release_authorization(
-            attempt_id="attempt:python-proxy",
-            flow_id="attempt:python-proxy",
-            principal_id="agent:demo",
-            route_id="demo.npm.publish.jit",
-            credential_ref="cred-demo-bearer",
-            credential_version=2,
-            policy_hash=canonical_request["policy_hash"],
-            request_digest=request_digest,
-            operation_digest="sha256:" + "d" * 64,
+        result = runtime.reserve_expected_release_authorization(
+            guard=reserve_guard,
             operation_context=dict(canonical_request["operation"]),
             canonical_request=canonical_request,
             shared_quotas=[],
-            require_jit_grant=True,
         )
+        if reserve_guard.phase != "denied":
+            raise AssertionError(
+                "validated reserve denial did not disarm the caller-owned guard"
+            )
     if len(captured) != 1:
         raise AssertionError(f"Python reserve did not make exactly one request: {captured}")
     payload = captured[0]
@@ -550,32 +603,71 @@ def exercise_python_atomic_reserve_contract(runtime, canonical_json) -> None:
     oversized_digest = "sha256:" + hashlib.sha256(
         canonical_json(oversized).encode("utf-8")
     ).hexdigest()
+    oversized_expected = runtime.expected_release_authorization_identity(
+        attempt_id="attempt:oversized",
+        flow_id="attempt:oversized",
+        principal_id="agent:demo",
+        route_id="demo.npm.publish.jit",
+        credential_ref="cred-demo-bearer",
+        credential_version=2,
+        policy_hash="sha256:" + "a" * 64,
+        request_digest=oversized_digest,
+        operation_digest="sha256:" + "d" * 64,
+        operation_context={},
+        shared_quotas=[],
+        require_jit_grant=True,
+    )
+    oversized_guard = runtime.ReleaseAuthorizationGuard(oversized_expected)
+    oversized_cleanups: list[Any] = []
+
+    def cancel_oversized(expected: Any) -> dict[str, Any]:
+        oversized_cleanups.append(expected)
+        return {
+            "authorized": False,
+            "state": "absent",
+            "reason": "reservation_absent",
+            "attempt_id": expected.attempt_id,
+            "binding_digest": expected.binding_digest,
+            "idempotent_replay": True,
+            "grant_id": None,
+            "approval_request_id": None,
+            "approval_status": None,
+            "approval_expires_at": None,
+            "approval_created": None,
+            "reservation_expires_at_epoch_ms": None,
+            "dispatch_started_at_epoch_ms": None,
+            "dispatch_expires_at_epoch_ms": None,
+            "completion_outcome": None,
+            "retry_after_seconds": 0,
+            "quotas": [],
+        }
+
     with (
         patch.object(runtime, "atomic_release_authorization_enabled", return_value=True),
         patch.object(runtime, "_release_authorization_base_url", return_value="https://control-plane.test"),
         patch.object(runtime, "_release_authorization_http_post") as post,
+        patch.object(
+            runtime,
+            "cancel_expected_release_authorization",
+            side_effect=cancel_oversized,
+        ),
     ):
         try:
-            runtime.reserve_release_authorization(
-                attempt_id="attempt:oversized",
-                flow_id="attempt:oversized",
-                principal_id="agent:demo",
-                route_id="demo.npm.publish.jit",
-                credential_ref="cred-demo-bearer",
-                credential_version=2,
-                policy_hash="sha256:" + "a" * 64,
-                request_digest=oversized_digest,
-                operation_digest="sha256:" + "d" * 64,
+            runtime.reserve_expected_release_authorization(
+                guard=oversized_guard,
                 operation_context={},
                 canonical_request=oversized,
                 shared_quotas=[],
-                require_jit_grant=True,
             )
         except runtime.ReleaseAuthorizationClientError:
             pass
         else:
             raise AssertionError("Python reserve accepted an oversized canonical request")
         post.assert_not_called()
+    if oversized_cleanups != [oversized_expected]:
+        raise AssertionError(
+            "oversized reserve did not terminalize its exact expected identity"
+        )
 
 
 def make_approval(

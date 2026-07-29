@@ -1,14 +1,79 @@
 {
-  "apiVersion": "serverware.productionReadinessLaunch/v2",
+  "apiVersion": "serverware.productionReadinessLaunch/v3",
   "authorization": {
+    "authorizationScope": "trusted-host-readiness",
     "deploymentAudience": "production.us-east-1:primary",
     "deploymentIdentitySha256": "sha256:<64-lowercase-hex>",
+    "freshnessAuthority": "trusted-host-wall-clock",
+    "monotonicWitness": {
+      "administrativeDomainSha256": "sha256:<independent-launch-witness-administrative-domain-64-lowercase-hex>",
+      "identitySha256": "sha256:<independent-launch-witness-identity-64-lowercase-hex>",
+      "signingKeyId": "sha256:<launch-witness-ed25519-spki-64-lowercase-hex>",
+      "signingPublicKeySpkiDerBase64url": "<canonical-base64url-launch-witness-Ed25519-SPKI-DER>",
+      "storeAssurance": {
+        "apiVersion": "serverware.launchAuthorityWitnessStoreAssurance/v1",
+        "kind": "LaunchAuthorityWitnessStoreAssurance",
+        "statement": {
+          "assuranceIssuerKeyId": "sha256:<witness-store-assurance-issuer-spki-64-lowercase-hex>",
+          "independentAdministration": true,
+          "rollbackResistance": "externally-witnessed-monotonic",
+          "storeAdministrativeDomainSha256": "sha256:<independent-witness-store-administrative-domain-64-lowercase-hex>",
+          "storeClass": "independentlyAdministeredLinearizableCas",
+          "storeIdentitySha256": "sha256:<independent-witness-store-identity-64-lowercase-hex>",
+          "witnessAdministrativeDomainSha256": "sha256:<independent-launch-witness-administrative-domain-64-lowercase-hex>",
+          "witnessIdentitySha256": "sha256:<independent-launch-witness-identity-64-lowercase-hex>",
+          "witnessKeyId": "sha256:<launch-witness-ed25519-spki-64-lowercase-hex>"
+        },
+        "signature": "<canonical-base64url-64-byte-Ed25519-signature>"
+      },
+      "storeAssuranceIssuerKeyId": "sha256:<witness-store-assurance-issuer-spki-64-lowercase-hex>",
+      "storeAssuranceIssuerPublicKeySpkiDerBase64url": "<canonical-base64url-witness-store-assurance-issuer-Ed25519-SPKI-DER>",
+      "storeAssuranceSha256": "sha256:<canonical-witness-store-assurance-64-lowercase-hex>"
+    },
     "releaseSequence": 1,
     "rollbackEpoch": 0
   },
   "composeFile": {
     "path": "/opt/serverware/releases/<source-digest>/docker-compose.production.yml",
     "sha256": "sha256:<64-lowercase-hex>"
+  },
+  "globalRoleRegistry": {
+    "apiVersion": "serverware.productionLaunchGlobalRoleRegistryBinding/v1",
+    "canonicalProfile": "serverware.canonicalJson/integer-string-bool-null-array-object-nfc-v1",
+    "claimScope": "roles-present-in-native-launch-contract",
+    "pinsFile": {
+      "path": "/etc/serverware/production-launch-global-role-registry.json",
+      "sha256": "sha256:<exact-canonical-registry-file-including-final-lf-64-lowercase-hex>"
+    },
+    "registry": {
+      "apiVersion": "serverware.productionLaunchGlobalRoleRegistry/v1",
+      "claimScope": "roles-present-in-native-launch-contract",
+      "roles": {
+        "launchAuthority": "sha256:<launch-authority-spki-64-lowercase-hex>",
+        "launchAuthorityWitness": "sha256:<launch-authority-witness-spki-64-lowercase-hex>",
+        "launchAuthorityWitnessStoreAssurance": "sha256:<launch-authority-witness-store-assurance-spki-64-lowercase-hex>",
+        "launchAuthorityWitnessTls": "sha256:<launch-authority-witness-tls-spki-64-lowercase-hex>",
+        "nonceAuthorityAssuranceEvidence": "sha256:<nonce-authority-assurance-evidence-spki-64-lowercase-hex>",
+        "nonceAuthorityVerifierState": "sha256:<nonce-authority-verifier-state-spki-64-lowercase-hex>",
+        "nonceAuthorityVerifierStateStoreAttestation": "sha256:<nonce-authority-verifier-state-store-attestation-spki-64-lowercase-hex>",
+        "policyActivation": "sha256:<policy-activation-spki-64-lowercase-hex>",
+        "policyIdentity": "sha256:<policy-identity-spki-64-lowercase-hex>",
+        "reproducibleBuild": "sha256:<reproducible-build-spki-64-lowercase-hex>"
+      },
+      "rolesOutsideClaim": [
+        "actionGate",
+        "publicAttestationNonceStore",
+        "publicAttestationProducer",
+        "publicAttestationWitnessStore",
+        "finalVerifier",
+        "nonceAuthorityVerifierStateStoreAssurance",
+        "release",
+        "response",
+        "verifierStateTlsClient",
+        "verifierStateTlsServer"
+      ]
+    },
+    "registrySha256": "sha256:<canonical-registry-without-final-lf-64-lowercase-hex>"
   },
   "inputs": {
     "bench": {
@@ -85,6 +150,64 @@
     }
   },
   "kind": "ProductionReadinessLaunch",
+  "launchAttemptJournal": {
+    "apiVersion": "serverware.launchAuthorizationAttemptJournal/v1",
+    "consistencyScope": "trusted-host-readiness-availability-and-consistency-only",
+    "domain": "serverware.launchAuthorizationAttemptJournal/v1",
+    "lockPath": "/var/lib/serverware/production-proof/launch-authorization-attempt.v1.lock",
+    "maxBytes": 65536,
+    "path": "/var/lib/serverware/production-proof/launch-authorization-attempt.v1.json",
+    "rollbackAuthority": "external-monotonic-witness"
+  },
+  "nonceRollbackAssurance": {
+    "apiVersion": "serverware.productionNonceRollbackAssuranceBinding/v1",
+    "canonicalProfile": "serverware.canonicalJson/integer-string-bool-null-array-object-nfc-v1",
+    "contract": {
+      "apiVersion": "serverware.productionNonceRollbackAssurancePins/v1",
+      "independentVerifierPins": {
+        "expectedNonceAuthorityAssuranceIssuerSpkiSha256": "sha256:<independently-approved-assurance-issuer-spki-64-lowercase-hex>",
+        "expectedNonceAuthorityAssuranceSha256": "sha256:<independently-approved-assurance-contract-64-lowercase-hex>"
+      },
+      "publicConfigPins": {
+        "nonceAuthorityAssurance": {
+          "administrativeDomainSha256": "sha256:<nonce-authority-administrative-domain-64-lowercase-hex>",
+          "apiVersion": "serverware.nonceAuthorityAssurance/v1",
+          "assuranceEvidenceSha256": "sha256:<nonce-authority-assurance-evidence-64-lowercase-hex>",
+          "assuranceEvidenceType": "linearizableCasOperatorAttestation",
+          "assuranceLevel": "productionRollbackProtected",
+          "authorityEpoch": 1,
+          "authorityGeneration": 1,
+          "authorityIdentitySha256": "sha256:<nonce-authority-identity-64-lowercase-hex>",
+          "backendClass": "independentlyAdministeredLinearizableCas",
+          "productionEligible": true,
+          "rollbackProtection": {
+            "administrativeRollbackResistance": true,
+            "backendAttestationRequired": true,
+            "exactSuccessorRequired": true,
+            "freshVerifierChallengeRequired": true,
+            "keyProtection": "nonExportableKmsHsm",
+            "mechanism": "linearizableCasWithRollbackProtectedStorage",
+            "stateCommitment": "hashChainedLinearizableCommitment",
+            "verifierStateStoreClass": "independentlyAdministeredLinearizableCas"
+          }
+        },
+        "nonceAuthorityAssuranceEvidenceSigningPublicKeySpkiDerBase64url": "<canonical-base64url-Ed25519-assurance-evidence-SPKI-DER>",
+        "nonceAuthorityAssuranceSha256": "sha256:<independently-approved-assurance-contract-64-lowercase-hex>",
+        "nonceAuthorityVerifierStateSigningPublicKeySpkiDerBase64url": "<canonical-base64url-Ed25519-verifier-state-SPKI-DER>",
+        "nonceAuthorityVerifierStateStoreAdministrativeDomainSha256": "sha256:<independent-store-administrative-domain-64-lowercase-hex>",
+        "nonceAuthorityVerifierStateStoreAssuranceEvidenceSha256": "sha256:<independent-store-assurance-evidence-64-lowercase-hex>",
+        "nonceAuthorityVerifierStateStoreAttestationPublicKeySpkiDerBase64url": "<canonical-base64url-Ed25519-store-attestation-SPKI-DER>",
+        "nonceAuthorityVerifierStateStoreIdentitySha256": "sha256:<independent-store-identity-64-lowercase-hex>"
+      }
+    },
+    "contractSha256": "sha256:<canonical-contract-without-final-lf-64-lowercase-hex>",
+    "enforcement": "native-launcher-measured",
+    "pinsFile": {
+      "path": "/etc/serverware/nonce-rollback-assurance-pins.json",
+      "sha256": "sha256:<canonical-pin-file-including-final-lf-64-lowercase-hex>"
+    },
+    "purpose": "readiness-only"
+  },
   "outputs": {
     "claimsFile": "/var/lib/serverware/production-proof/production-readiness-claims.json",
     "completionProofOut": "/var/lib/serverware/production-proof/serverware-completion-proof.json",

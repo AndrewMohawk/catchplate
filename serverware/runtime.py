@@ -45,7 +45,12 @@ from serverware.config import (
     RELEASE_AUTHORIZATION_RESERVATION_TTL_SECONDS,
     SECRET_LEASE_TTL_SECONDS,
 )
-from serverware.http_client import HttpClientError, http_error_body, request_bytes
+from serverware.http_client import (
+    HttpClientError,
+    http_error_body,
+    request_bytes,
+    request_json_bytes,
+)
 from serverware.key_release import KeyReleaseError, ensure_material_released
 from serverware.policy_bundle import canonical_json, strict_json_loads
 
@@ -85,6 +90,346 @@ class ReleaseAuthorizationClientError(RuntimeError):
     pass
 
 
+class DurablePolicyStateError(RuntimeError):
+    pass
+
+
+def _durable_policy_digest(value: Any) -> str:
+    return "sha256:" + hashlib.sha256(
+        canonical_json(value).encode("utf-8")
+    ).hexdigest()
+
+
+def _release_authorization_actor_id() -> str:
+    return DATA_PLANE_INSTANCE_ID or "serverware-python-mitm"
+
+
+def _durable_policy_reservation_id(
+    *,
+    expected: ReleaseAuthorizationExpectedIdentity,
+    claim_digest: str,
+) -> str:
+    return _durable_policy_digest(
+        {
+            "attemptId": expected.attempt_id,
+            "policyHash": expected.policy_hash,
+            "requestDigest": expected.request_digest,
+            "operationDigest": expected.operation_digest,
+            "claimDigest": claim_digest,
+        }
+    )
+
+
+def durable_policy_reserve_binding(
+    expected: ReleaseAuthorizationExpectedIdentity,
+    claims: list[dict[str, Any]] | None,
+) -> dict[str, Any] | None:
+    if not claims:
+        return None
+    bounded_claims = strict_json_loads(
+        canonical_json(copy.deepcopy(claims)).encode("utf-8")
+    )
+    if not isinstance(bounded_claims, list) or not bounded_claims:
+        raise ReleaseAuthorizationClientError(
+            "durable policy claims must be a non-empty array"
+        )
+    claim_digest = _durable_policy_digest(bounded_claims)
+    return {
+        "actorId": _release_authorization_actor_id(),
+        "attemptId": expected.attempt_id,
+        "claimDigest": claim_digest,
+        "claims": bounded_claims,
+        "reservationId": _durable_policy_reservation_id(
+            expected=expected,
+            claim_digest=claim_digest,
+        ),
+    }
+
+
+def _durable_policy_transition_identity(
+    durable: dict[str, Any],
+) -> dict[str, Any]:
+    required = {
+        "attempt_id",
+        "claim_digest",
+        "reservation_id",
+        "actor_id",
+    }
+    if (
+        not isinstance(durable, dict)
+        or not required.issubset(durable)
+        or _SHA256_DIGEST_RE.fullmatch(str(durable.get("attempt_id") or ""))
+        is None
+        or _SHA256_DIGEST_RE.fullmatch(str(durable.get("claim_digest") or ""))
+        is None
+        or _SHA256_DIGEST_RE.fullmatch(str(durable.get("reservation_id") or ""))
+        is None
+        or not _valid_release_authorization_identity(durable.get("actor_id"))
+    ):
+        raise ReleaseAuthorizationClientError(
+            "durable policy transition identity is invalid"
+        )
+    return {
+        "actorId": str(durable["actor_id"]),
+        "attemptId": str(durable["attempt_id"]),
+        "claimDigest": str(durable["claim_digest"]),
+        "reservationId": str(durable["reservation_id"]),
+    }
+
+
+def _durable_policy_response(
+    raw: Any,
+    *,
+    expected_states: set[str],
+    attempt_id: str,
+    claim_digest: str,
+    require_reservation_id: bool,
+) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        raise DurablePolicyStateError(
+            "durable policy state response must be an object"
+        )
+    allowed = {
+        "state",
+        "attempt_id",
+        "claim_digest",
+        "reservation_id",
+        "reason",
+        "retry_after_seconds",
+    }
+    if (
+        set(raw) - allowed
+        or raw.get("state") not in expected_states
+        or raw.get("attempt_id") != attempt_id
+        or raw.get("claim_digest") != claim_digest
+    ):
+        raise DurablePolicyStateError(
+            "durable policy state response binding is invalid"
+        )
+    reason = raw.get("reason")
+    retry_after = raw.get("retry_after_seconds")
+    if (
+        reason is not None
+        and (
+            not isinstance(reason, str)
+            or not reason
+            or reason != reason.strip()
+            or len(reason.encode("utf-8")) > 256
+            or any(
+                ord(character) < 32 or ord(character) == 127
+                for character in reason
+            )
+        )
+    ) or (
+        retry_after is not None
+        and (
+            not isinstance(retry_after, int)
+            or isinstance(retry_after, bool)
+            or not 1 <= retry_after <= 31_536_000
+        )
+    ):
+        raise DurablePolicyStateError(
+            "durable policy state result metadata is invalid"
+        )
+    reservation_id = raw.get("reservation_id")
+    if require_reservation_id and (
+        not isinstance(reservation_id, str)
+        or not reservation_id
+        or reservation_id != reservation_id.strip()
+        or len(reservation_id.encode("utf-8")) > 256
+    ):
+        raise DurablePolicyStateError(
+            "durable policy reservation identity is invalid"
+        )
+    return dict(raw)
+
+
+def reserve_durable_policy_state(
+    *,
+    attempt_id: str,
+    policy_hash: str,
+    request_digest: str,
+    operation_digest: str,
+    release_binding_digest: str,
+    claims: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    raise DurablePolicyStateError(
+        "standalone durable policy reservation is disabled; "
+        "use releaseAuthorizationReserve/v2"
+    )
+
+
+def _transition_durable_policy_state(
+    action: str,
+    reservation: dict[str, Any] | None,
+    *,
+    response_evidence: list[dict[str, Any]] | None = None,
+    failure_reason: str | None = None,
+    response_body_sha256: str | None = None,
+    dispatch_deadline_at_epoch_ms: int | None = None,
+) -> dict[str, Any] | None:
+    raise DurablePolicyStateError(
+        "standalone durable policy transitions are disabled; "
+        "use releaseAuthorizationDispatch/v2 or "
+        "releaseAuthorizationComplete/v2"
+    )
+
+
+def dispatch_durable_policy_state(
+    reservation: dict[str, Any] | None,
+    *,
+    dispatch_deadline_at_epoch_ms: int,
+) -> dict[str, Any] | None:
+    return _transition_durable_policy_state(
+        "dispatch",
+        reservation,
+        dispatch_deadline_at_epoch_ms=dispatch_deadline_at_epoch_ms,
+    )
+
+
+def abort_durable_policy_state(
+    reservation: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    return _transition_durable_policy_state("abort", reservation)
+
+
+def complete_durable_policy_state(
+    reservation: dict[str, Any] | None,
+    *,
+    response_evidence: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    return _transition_durable_policy_state(
+        "response",
+        reservation,
+        response_evidence=response_evidence,
+    )
+
+
+def fail_durable_policy_state(
+    reservation: dict[str, Any] | None,
+    *,
+    failure_reason: str,
+    response_body_sha256: str,
+    traversal_evidence: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    return _transition_durable_policy_state(
+        "indeterminate",
+        reservation,
+        response_evidence=traversal_evidence,
+        failure_reason=failure_reason,
+        response_body_sha256=response_body_sha256,
+    )
+
+
+@dataclass(frozen=True)
+class ReleaseAuthorizationExpectedIdentity:
+    attempt_id: str
+    flow_id: str
+    principal_id: str
+    route_id: str
+    credential_ref: str | None
+    credential_version: int
+    policy_hash: str
+    request_digest: str
+    operation_digest: str | None
+    require_jit_grant: bool
+    binding_digest: str
+    shared_quota_bindings: tuple[str, ...]
+
+
+class ReleaseAuthorizationGuard:
+    """Own one expected reservation from pre-transport through terminalization."""
+
+    def __init__(
+        self,
+        expected: ReleaseAuthorizationExpectedIdentity,
+        *,
+        durable_policy: dict[str, Any] | None = None,
+    ) -> None:
+        if not isinstance(expected, ReleaseAuthorizationExpectedIdentity):
+            raise TypeError("release authorization guard identity is invalid")
+        self.expected = expected
+        self.durable_policy = copy.deepcopy(durable_policy)
+        self.phase = "reserve_pending"
+        self.cleanup_emitted = False
+        self.cleanup_result: dict[str, Any] | None = None
+        self.cleanup_error = False
+        self.cleanup_error_detail: str | None = None
+        self._cleanup_lock = threading.Lock()
+
+    @property
+    def requires_not_forwarded(self) -> bool:
+        return self.phase in {"reserve_pending", "reserved"}
+
+    @property
+    def dispatch_uncertain(self) -> bool:
+        return self.phase in {"dispatch_authorized", "dispatch_uncertain"}
+
+    def promote_reserved(self) -> None:
+        if self.phase != "reserve_pending":
+            raise ReleaseAuthorizationClientError(
+                "release authorization guard cannot promote from its current phase"
+            )
+        self.phase = "reserved"
+
+    def disarm_denial(self) -> None:
+        if self.phase != "reserve_pending":
+            raise ReleaseAuthorizationClientError(
+                "release authorization guard cannot disarm from its current phase"
+            )
+        self.phase = "denied"
+
+    def mark_dispatch_authorized(self) -> None:
+        if self.phase != "reserved":
+            raise ReleaseAuthorizationClientError(
+                "release authorization guard is not reserved"
+            )
+        self.phase = "dispatch_authorized"
+
+    def mark_dispatch_uncertain(self) -> None:
+        if self.phase not in {"dispatch_authorized", "dispatch_uncertain"}:
+            raise ReleaseAuthorizationClientError(
+                "release authorization guard is not dispatch-authorized"
+            )
+        self.phase = "dispatch_uncertain"
+
+    def mark_terminal(self) -> None:
+        self.phase = "terminal"
+
+    def cancel_not_forwarded_once(self) -> dict[str, Any] | None:
+        with self._cleanup_lock:
+            if self.cleanup_emitted:
+                return self.cleanup_result
+            if not self.requires_not_forwarded:
+                return self.cleanup_result
+            self.cleanup_emitted = True
+            try:
+                if self.durable_policy is None:
+                    self.cleanup_result = (
+                        cancel_expected_release_authorization(
+                            self.expected
+                        )
+                    )
+                else:
+                    self.cleanup_result = (
+                        cancel_expected_release_authorization(
+                            self.expected,
+                            durable_policy=self.durable_policy,
+                        )
+                    )
+            except Exception as exc:
+                self.cleanup_error = True
+                self.cleanup_result = None
+                self.phase = "cleanup_unknown"
+                try:
+                    self.cleanup_error_detail = str(exc)[:256]
+                except Exception:
+                    self.cleanup_error_detail = type(exc).__name__[:256]
+            if self.cleanup_result is not None:
+                self.phase = "terminal"
+            return self.cleanup_result
+
+
 _RELEASE_AUTHORIZATION_CANONICAL_REQUEST_MAX_BYTES = 64 * 1024
 _RELEASE_AUTHORIZATION_ID_MAX_BYTES = 256
 _RELEASE_AUTHORIZATION_RETRY_MAX_SECONDS = 31_536_000
@@ -113,6 +458,7 @@ _RELEASE_AUTHORIZATION_RESPONSE_FIELDS = {
     "retryAfterSeconds",
     "quotas",
     "store",
+    "durablePolicy",
 }
 _RELEASE_AUTHORIZATION_REQUIRED_RESPONSE_FIELDS = {
     "apiVersion",
@@ -126,6 +472,19 @@ _RELEASE_AUTHORIZATION_REQUIRED_RESPONSE_FIELDS = {
     "retryAfterSeconds",
     "quotas",
     "store",
+}
+_RELEASE_AUTHORIZATION_DURABLE_RESPONSE_FIELDS = {
+    "state",
+    "attemptId",
+    "claimDigest",
+    "reservationId",
+    "actorId",
+    "reservationDeadlineAtEpochMs",
+    "dispatchDeadlineAtEpochMs",
+    "responseEvidenceDigest",
+    "failureReason",
+    "responseBodySha256",
+    "uncertainty",
 }
 
 
@@ -515,10 +874,35 @@ def atomic_release_authorization_enabled() -> bool:
     return configured == "1"
 
 
+def get_credential_generation(
+    credential_id: str | None,
+) -> dict[str, Any] | None:
+    """Return bounded non-secret generation metadata for pre-reserve admission."""
+    if not credential_id:
+        return None
+    with db.credential_generation_snapshot(credential_id) as generation:
+        if (
+            not isinstance(generation, dict)
+            or set(generation)
+            != {
+                "id",
+                "kind",
+                "credential_version",
+                "metadata",
+                "lifecycle_status",
+            }
+        ):
+            return None
+        encoded = canonical_json(generation).encode("utf-8")
+        if len(encoded) > 32 * 1024:
+            raise ValueError("credential generation metadata exceeds 32 KiB")
+        return copy.deepcopy(generation)
+
+
 def get_credential_version(credential_id: str | None) -> int | None:
     if not credential_id:
         return 0
-    credential = db.get_credential(credential_id)
+    credential = get_credential_generation(credential_id)
     if not credential:
         return None
     version = credential.get("credential_version")
@@ -908,6 +1292,317 @@ def release_authorization_binding_digest(
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
+def expected_release_authorization_identity(
+    *,
+    attempt_id: str,
+    flow_id: str,
+    principal_id: str,
+    route_id: str,
+    credential_ref: str | None,
+    credential_version: int,
+    policy_hash: str,
+    request_digest: str,
+    operation_digest: str | None,
+    operation_context: dict[str, Any],
+    shared_quotas: list[dict[str, Any]],
+    require_jit_grant: bool,
+) -> ReleaseAuthorizationExpectedIdentity:
+    identities = {
+        "attempt_id": attempt_id,
+        "flow_id": flow_id,
+        "principal_id": principal_id,
+        "route_id": route_id,
+    }
+    if any(
+        not _valid_release_authorization_identity(value)
+        for value in identities.values()
+    ):
+        raise ReleaseAuthorizationClientError(
+            "release authorization expected identity is invalid"
+        )
+    if not hmac.compare_digest(attempt_id, flow_id):
+        raise ReleaseAuthorizationClientError(
+            "release authorization flow identity must equal attempt identity"
+        )
+    if credential_ref is not None and not _valid_release_authorization_identity(
+        credential_ref
+    ):
+        raise ReleaseAuthorizationClientError(
+            "release authorization expected credential identity is invalid"
+        )
+    if (
+        type(credential_version) is not int
+        or not 0 <= credential_version <= _UINT64_MAX
+        or not isinstance(policy_hash, str)
+        or _SHA256_DIGEST_RE.fullmatch(policy_hash) is None
+        or not isinstance(request_digest, str)
+        or _SHA256_DIGEST_RE.fullmatch(request_digest) is None
+        or (
+            operation_digest is not None
+            and (
+                not isinstance(operation_digest, str)
+                or _SHA256_DIGEST_RE.fullmatch(operation_digest) is None
+            )
+        )
+    ):
+        raise ReleaseAuthorizationClientError(
+            "release authorization expected digest or generation is invalid"
+        )
+    normalized_shared_quotas = _normalized_expected_release_authorization_quotas(
+        shared_quotas
+    )
+    binding_digest = release_authorization_binding_digest(
+        attempt_id=attempt_id,
+        flow_id=flow_id,
+        principal_id=principal_id,
+        route_id=route_id,
+        credential_ref=credential_ref,
+        credential_version=credential_version,
+        policy_hash=policy_hash,
+        request_digest=request_digest,
+        operation_digest=operation_digest,
+        operation_context=operation_context,
+        shared_quotas=normalized_shared_quotas,
+        require_jit_grant=require_jit_grant,
+    )
+    return ReleaseAuthorizationExpectedIdentity(
+        attempt_id=attempt_id,
+        flow_id=flow_id,
+        principal_id=principal_id,
+        route_id=route_id,
+        credential_ref=credential_ref,
+        credential_version=credential_version,
+        policy_hash=policy_hash,
+        request_digest=request_digest,
+        operation_digest=operation_digest,
+        require_jit_grant=bool(require_jit_grant),
+        binding_digest=binding_digest,
+        shared_quota_bindings=tuple(
+            canonical_json(item) for item in normalized_shared_quotas
+        ),
+    )
+
+
+def release_reservation_id(attempt_id: str, binding_digest: str) -> str:
+    if (
+        not _valid_release_authorization_identity(attempt_id)
+        or _SHA256_DIGEST_RE.fullmatch(binding_digest) is None
+    ):
+        raise ReleaseAuthorizationClientError(
+            "release reservation identity input is invalid"
+        )
+    return "sha256:" + hashlib.sha256(
+        canonical_json(
+            {
+                "apiVersion": "serverware.releaseReservationIdentity/v1",
+                "attemptId": attempt_id,
+                "bindingDigest": binding_digest,
+            }
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def credential_lease_release_authorization(
+    expected: ReleaseAuthorizationExpectedIdentity,
+    reserved: dict[str, Any],
+) -> dict[str, Any] | None:
+    if not isinstance(expected, ReleaseAuthorizationExpectedIdentity):
+        raise ReleaseAuthorizationClientError(
+            "credential lease release identity is invalid"
+        )
+    if (
+        reserved.get("authorized") is not True
+        or reserved.get("state") != "reserved"
+        or reserved.get("attempt_id") != expected.attempt_id
+        or reserved.get("binding_digest") != expected.binding_digest
+    ):
+        raise ReleaseAuthorizationClientError(
+            "credential lease release reservation is invalid"
+        )
+    quotas = _normalized_release_authorization_quota_snapshot(
+        reserved.get("quotas")
+    )
+    if tuple(
+        canonical_json(_release_authorization_quota_binding(quota))
+        for quota in quotas
+    ) != expected.shared_quota_bindings:
+        raise ReleaseAuthorizationClientError(
+            "credential release authority quota binding is invalid"
+        )
+    grant_id = reserved.get("grant_id")
+    approval_request_id = reserved.get("approval_request_id")
+    durable = reserved.get("durable_policy")
+    if expected.require_jit_grant:
+        kind = "jitGrant"
+        if not (
+            _valid_release_authorization_identity(grant_id)
+            and _valid_release_authorization_identity(approval_request_id)
+        ):
+            raise ReleaseAuthorizationClientError(
+                "JIT credential release authority is incomplete"
+            )
+    elif expected.shared_quota_bindings or durable is not None:
+        kind = "atomicReservation"
+        if (
+            grant_id is not None
+            or approval_request_id is not None
+            or (not quotas and durable is None)
+        ):
+            raise ReleaseAuthorizationClientError(
+                "atomic credential release authority conflicts with JIT state"
+            )
+    else:
+        return None
+    quota_claims = [
+        {
+            "counterKey": quota["counter_key"],
+            "constraintId": quota["constraint_id"],
+            "operation": quota["operation"],
+            "windowKind": quota["window_kind"],
+            "windowSeconds": quota["window_seconds"],
+            "windowStartEpochMs": quota["window_start_epoch_ms"],
+            "windowEndEpochMs": quota["window_end_epoch_ms"],
+            "max": quota["max"],
+            "count": quota["count"],
+            "remaining": quota["remaining"],
+            "reservationState": quota["reservation_state"],
+        }
+        for quota in quotas
+    ]
+    expires_at = reserved.get("reservation_expires_at_epoch_ms")
+    if (
+        type(expires_at) is not int
+        or expires_at <= int(time.time() * 1000)
+        or expected.credential_ref is None
+        or expected.credential_version < 1
+    ):
+        raise ReleaseAuthorizationClientError(
+            "credential release authority is expired or credentialless"
+        )
+    release = {
+        "apiVersion": (
+            "serverware.credentialLeaseReleaseAuthorization/v2"
+            if durable is not None
+            else "serverware.credentialLeaseReleaseAuthorization/v1"
+        ),
+        "kind": kind,
+        "state": "reserved",
+        "attemptId": expected.attempt_id,
+        "reservationId": release_reservation_id(
+            expected.attempt_id, expected.binding_digest
+        ),
+        "bindingDigest": expected.binding_digest,
+        "principalId": expected.principal_id,
+        "routeId": expected.route_id,
+        "credentialId": expected.credential_ref,
+        "credentialVersion": expected.credential_version,
+        "policyHash": expected.policy_hash,
+        "requestDigest": expected.request_digest,
+        "operationDigest": expected.operation_digest,
+        "quotaClaims": quota_claims,
+        "grantId": grant_id,
+        "approvalRequestId": approval_request_id,
+        "reservationExpiresAtEpochMs": expires_at,
+    }
+    if durable is not None:
+        if (
+            not isinstance(durable, dict)
+            or durable.get("state") != "reserved"
+            or durable.get("attempt_id") != expected.attempt_id
+            or durable.get("actor_id") != _release_authorization_actor_id()
+            or durable.get("reservation_deadline_at_epoch_ms") != expires_at
+        ):
+            raise ReleaseAuthorizationClientError(
+                "credential release durable authority is invalid"
+            )
+        release["durablePolicy"] = {
+            "reservationId": durable["reservation_id"],
+            "actorId": durable["actor_id"],
+            "claimDigest": durable["claim_digest"],
+            "reservationDeadlineAtEpochMs": durable[
+                "reservation_deadline_at_epoch_ms"
+            ],
+            "releaseBindingDigest": expected.binding_digest,
+        }
+    return release
+
+
+def credential_lease_request_authority(
+    expected: ReleaseAuthorizationExpectedIdentity,
+    reserved: dict[str, Any],
+    *,
+    operation_context: dict[str, Any],
+    controlled: bool,
+) -> dict[str, Any] | None:
+    if not controlled:
+        return None
+    if not isinstance(expected, ReleaseAuthorizationExpectedIdentity):
+        raise ReleaseAuthorizationClientError(
+            "credential lease request identity is invalid"
+        )
+    if (
+        expected.credential_ref is None
+        or expected.credential_version < 1
+        or expected.operation_digest is None
+        or reserved.get("authorized") is not True
+        or reserved.get("state") != "reserved"
+        or reserved.get("attempt_id") != expected.attempt_id
+        or reserved.get("binding_digest") != expected.binding_digest
+    ):
+        raise ReleaseAuthorizationClientError(
+            "credential lease request reservation is invalid"
+        )
+    quotas = _normalized_release_authorization_quota_snapshot(
+        reserved.get("quotas")
+    )
+    if tuple(
+        canonical_json(_release_authorization_quota_binding(quota))
+        for quota in quotas
+    ) != expected.shared_quota_bindings:
+        raise ReleaseAuthorizationClientError(
+            "credential request authority quota binding is invalid"
+        )
+    expected_quotas = [
+        strict_json_loads(binding)
+        for binding in expected.shared_quota_bindings
+    ]
+    recomputed = release_authorization_binding_digest(
+        attempt_id=expected.attempt_id,
+        flow_id=expected.flow_id,
+        principal_id=expected.principal_id,
+        route_id=expected.route_id,
+        credential_ref=expected.credential_ref,
+        credential_version=expected.credential_version,
+        policy_hash=expected.policy_hash,
+        request_digest=expected.request_digest,
+        operation_digest=expected.operation_digest,
+        operation_context=operation_context,
+        shared_quotas=expected_quotas,
+        require_jit_grant=expected.require_jit_grant,
+    )
+    expires_at = reserved.get("reservation_expires_at_epoch_ms")
+    if (
+        not hmac.compare_digest(recomputed, expected.binding_digest)
+        or type(expires_at) is not int
+        or expires_at <= int(time.time() * 1000)
+    ):
+        raise ReleaseAuthorizationClientError(
+            "credential request authority is expired or rebound"
+        )
+    return {
+        "apiVersion": "serverware.credentialLeaseRequestAuthority/v1",
+        "attemptId": expected.attempt_id,
+        "reservationId": release_reservation_id(
+            expected.attempt_id, expected.binding_digest
+        ),
+        "bindingDigest": expected.binding_digest,
+        "requestDigest": expected.request_digest,
+        "operationDigest": expected.operation_digest,
+        "operationContext": copy.deepcopy(operation_context),
+        "reservationExpiresAtEpochMs": expires_at,
+    }
+
+
 def _release_authorization_quota_binding(quota: dict[str, Any]) -> dict[str, Any]:
     binding = {
         "counter_key": quota["counter_key"],
@@ -1007,6 +1702,190 @@ def _validate_release_authorization_quotas(
             )
 
 
+def _normalized_release_authorization_durable_response(
+    value: Any,
+    *,
+    attempt_id: str,
+) -> dict[str, Any]:
+    if (
+        not isinstance(value, dict)
+        or set(value) != _RELEASE_AUTHORIZATION_DURABLE_RESPONSE_FIELDS
+    ):
+        raise ReleaseAuthorizationClientError(
+            "release authorization durable response fields are invalid"
+        )
+    state = value.get("state")
+    if state not in {
+        "denied",
+        "reserved",
+        "dispatched",
+        "committed",
+        "aborted",
+        "indeterminate",
+    }:
+        raise ReleaseAuthorizationClientError(
+            "release authorization durable response state is invalid"
+        )
+    if (
+        value.get("attemptId") != attempt_id
+        or _SHA256_DIGEST_RE.fullmatch(str(value.get("claimDigest") or ""))
+        is None
+        or not _valid_release_authorization_identity(value.get("actorId"))
+    ):
+        raise ReleaseAuthorizationClientError(
+            "release authorization durable response binding is invalid"
+        )
+    reservation_id = value.get("reservationId")
+    reservation_deadline = _release_u64(
+        value.get("reservationDeadlineAtEpochMs"),
+        field="durable reservation deadline",
+    )
+    dispatch_deadline = _release_u64(
+        value.get("dispatchDeadlineAtEpochMs"),
+        field="durable dispatch deadline",
+    )
+    response_evidence_digest = value.get("responseEvidenceDigest")
+    response_body_sha256 = value.get("responseBodySha256")
+    for digest, field in (
+        (response_evidence_digest, "durable response evidence digest"),
+        (response_body_sha256, "durable response body digest"),
+    ):
+        if digest is not None and (
+            not isinstance(digest, str)
+            or _SHA256_DIGEST_RE.fullmatch(digest) is None
+        ):
+            raise ReleaseAuthorizationClientError(
+                f"release authorization {field} is invalid"
+            )
+    failure_reason = value.get("failureReason")
+    uncertainty = value.get("uncertainty")
+    for text, field in (
+        (failure_reason, "durable failure reason"),
+        (uncertainty, "durable uncertainty"),
+    ):
+        if text is not None and not _valid_release_authorization_identity(text):
+            raise ReleaseAuthorizationClientError(
+                f"release authorization {field} is invalid"
+            )
+    if state == "denied" and reservation_id is None:
+        if any(
+            item is not None
+            for item in (
+                reservation_deadline,
+                dispatch_deadline,
+                response_evidence_digest,
+                failure_reason,
+                response_body_sha256,
+                uncertainty,
+            )
+        ):
+            raise ReleaseAuthorizationClientError(
+                "reserve-denied durable response carries reservation state"
+            )
+    elif (
+        not isinstance(reservation_id, str)
+        or _SHA256_DIGEST_RE.fullmatch(reservation_id) is None
+        or reservation_deadline is None
+    ):
+        raise ReleaseAuthorizationClientError(
+            "release authorization durable reservation is incomplete"
+        )
+    if state == "reserved" and any(
+        item is not None
+        for item in (
+            dispatch_deadline,
+            response_evidence_digest,
+            failure_reason,
+            response_body_sha256,
+            uncertainty,
+        )
+    ):
+        raise ReleaseAuthorizationClientError(
+            "reserved durable response carries terminal state"
+        )
+    if state == "dispatched" and (
+        dispatch_deadline is None
+        or any(
+            item is not None
+            for item in (
+                response_evidence_digest,
+                failure_reason,
+                response_body_sha256,
+                uncertainty,
+            )
+        )
+    ):
+        raise ReleaseAuthorizationClientError(
+            "dispatched durable response is incomplete"
+        )
+    if state in {"committed", "indeterminate"} or (
+        state == "denied" and reservation_id is not None
+    ):
+        if (
+            response_evidence_digest is None
+            or response_body_sha256 is None
+        ):
+            raise ReleaseAuthorizationClientError(
+                "terminal durable response evidence is incomplete"
+            )
+    if (
+        state in {"committed", "denied"}
+        and reservation_id is not None
+        and dispatch_deadline is None
+    ):
+        raise ReleaseAuthorizationClientError(
+            "terminal durable response dispatch binding is incomplete"
+        )
+    if state == "indeterminate" and (
+        failure_reason
+        != "provider_outcome_or_response_validation_uncertain"
+        or uncertainty != "charged_fail_closed"
+    ):
+        raise ReleaseAuthorizationClientError(
+            "durable uncertainty semantics are invalid"
+        )
+    if (
+        state == "denied"
+        and reservation_id is not None
+        and (failure_reason is None or uncertainty is not None)
+    ):
+        raise ReleaseAuthorizationClientError(
+            "denied durable response reason is incomplete"
+        )
+    if state == "aborted" and any(
+        item is not None
+        for item in (
+            dispatch_deadline,
+            response_evidence_digest,
+            failure_reason,
+            response_body_sha256,
+            uncertainty,
+        )
+    ):
+        raise ReleaseAuthorizationClientError(
+            "aborted durable response carries transition evidence"
+        )
+    if state == "committed" and (
+        failure_reason is not None or uncertainty is not None
+    ):
+        raise ReleaseAuthorizationClientError(
+            "durable terminal response carries conflicting failure state"
+        )
+    return {
+        "state": state,
+        "attempt_id": attempt_id,
+        "claim_digest": str(value["claimDigest"]),
+        "reservation_id": reservation_id,
+        "actor_id": str(value["actorId"]),
+        "reservation_deadline_at_epoch_ms": reservation_deadline,
+        "dispatch_deadline_at_epoch_ms": dispatch_deadline,
+        "response_evidence_digest": response_evidence_digest,
+        "failure_reason": failure_reason,
+        "response_body_sha256": response_body_sha256,
+        "uncertainty": uncertainty,
+    }
+
+
 def _normalized_release_authorization_response(
     body: Any,
     *,
@@ -1022,9 +1901,18 @@ def _normalized_release_authorization_response(
         raise ReleaseAuthorizationClientError(
             "release authorization response fields are invalid"
         )
-    if body.get("apiVersion") != "serverware.releaseAuthorization/v1":
+    api_version = body.get("apiVersion")
+    if api_version not in {
+        "serverware.releaseAuthorization/v1",
+        "serverware.releaseAuthorization/v2",
+    }:
         raise ReleaseAuthorizationClientError(
             "release authorization response version is invalid"
+        )
+    durable_present = "durablePolicy" in body
+    if (api_version == "serverware.releaseAuthorization/v2") != durable_present:
+        raise ReleaseAuthorizationClientError(
+            "release authorization response protocol is inconsistent"
         )
     if body.get("ok") is not True or body.get("attemptId") != attempt_id:
         raise ReleaseAuthorizationClientError(
@@ -1170,7 +2058,8 @@ def _normalized_release_authorization_response(
             raise ReleaseAuthorizationClientError(
                 "release authorization JIT approval response is incomplete"
             )
-    return {
+    normalized = {
+        "api_version": api_version,
         "authorized": authorized,
         "state": state,
         "reason": reason,
@@ -1190,6 +2079,14 @@ def _normalized_release_authorization_response(
         "quotas": quotas,
         "store": store,
     }
+    if durable_present:
+        normalized["durable_policy"] = (
+            _normalized_release_authorization_durable_response(
+                body["durablePolicy"],
+                attempt_id=attempt_id,
+            )
+        )
+    return normalized
 
 
 def _validate_release_authorization_binding(
@@ -1237,6 +2134,52 @@ def _release_authorization_grant_identities_match(
     )
 
 
+def _validate_durable_policy_response_binding(
+    response: dict[str, Any],
+    *,
+    expected: dict[str, Any] | None,
+    expected_states: set[str],
+) -> dict[str, Any] | None:
+    durable = response.get("durable_policy")
+    if expected is None:
+        if durable is not None or response.get("api_version") not in {
+            None,
+            "serverware.releaseAuthorization/v1",
+        }:
+            raise ReleaseAuthorizationClientError(
+                "release authorization unexpectedly changed protocol"
+            )
+        return None
+    if (
+        response.get("api_version") != "serverware.releaseAuthorization/v2"
+        or not isinstance(durable, dict)
+        or durable.get("state") not in expected_states
+        or durable.get("attempt_id") != expected.get("attemptId")
+        or durable.get("claim_digest") != expected.get("claimDigest")
+        or durable.get("actor_id") != expected.get("actorId")
+    ):
+        raise ReleaseAuthorizationClientError(
+            "release authorization durable policy binding changed"
+        )
+    expected_reservation_id = expected.get("reservationId")
+    if (
+        durable.get("state") == "denied"
+        and durable.get("reservation_id") is None
+    ):
+        return durable
+    if (
+        not isinstance(expected_reservation_id, str)
+        or not hmac.compare_digest(
+            str(durable.get("reservation_id") or ""),
+            expected_reservation_id,
+        )
+    ):
+        raise ReleaseAuthorizationClientError(
+            "release authorization durable reservation changed"
+        )
+    return durable
+
+
 def validate_reserve_release_authorization_response(
     response: dict[str, Any],
     *,
@@ -1244,6 +2187,7 @@ def validate_reserve_release_authorization_response(
     require_jit_grant: bool,
     expected_binding_digest: str,
     expected_shared_quotas: list[dict[str, Any]],
+    expected_durable_policy: dict[str, Any] | None = None,
     now_epoch_ms: int | None = None,
 ) -> dict[str, Any]:
     _validate_release_authorization_binding(
@@ -1296,6 +2240,7 @@ def validate_reserve_release_authorization_response(
                 "jit_grant_expired",
                 "shared_quota_denied",
                 "shared_quota_window_expired",
+                "durable_policy_denied",
                 "release_authorization_busy",
             }
             and (require_jit_grant or not jit_denial)
@@ -1339,6 +2284,20 @@ def validate_reserve_release_authorization_response(
         raise ReleaseAuthorizationClientError(
             "denied release authorization response must not carry quota reservations"
         )
+    durable = _validate_durable_policy_response_binding(
+        response,
+        expected=expected_durable_policy,
+        expected_states=({"reserved"} if authorized is True else {"denied"}),
+    )
+    if (
+        durable is not None
+        and authorized is True
+        and durable.get("reservation_deadline_at_epoch_ms")
+        != reservation_expires_at
+    ):
+        raise ReleaseAuthorizationClientError(
+            "release authorization durable reservation deadline changed"
+        )
     return response
 
 
@@ -1350,6 +2309,7 @@ def validate_dispatch_release_authorization_response(
     grant_id: str | None,
     approval_request_id: str | None,
     previous_lifecycle: dict[str, Any],
+    expected_dispatch_deadline_at_epoch_ms: int | None = None,
     now_epoch_ms: int | None = None,
 ) -> dict[str, Any]:
     _validate_release_authorization_binding(
@@ -1413,6 +2373,34 @@ def validate_dispatch_release_authorization_response(
         temporal_anchor_epoch_ms=dispatch_started_at,
         reservation_expires_at_epoch_ms=reservation_expires_at,
     )
+    previous_durable = previous_lifecycle.get("durable_policy")
+    durable = _validate_durable_policy_response_binding(
+        response,
+        expected=(
+            {
+                "attemptId": previous_durable.get("attempt_id"),
+                "claimDigest": previous_durable.get("claim_digest"),
+                "actorId": previous_durable.get("actor_id"),
+                "reservationId": previous_durable.get("reservation_id"),
+            }
+            if isinstance(previous_durable, dict)
+            else None
+        ),
+        expected_states={"dispatched"},
+    )
+    if durable is not None and durable.get(
+        "dispatch_deadline_at_epoch_ms"
+    ) != response.get("dispatch_expires_at_epoch_ms"):
+        raise ReleaseAuthorizationClientError(
+            "release authorization durable dispatch deadline changed"
+        )
+    if (
+        expected_dispatch_deadline_at_epoch_ms is not None
+        and dispatch_expires_at != expected_dispatch_deadline_at_epoch_ms
+    ):
+        raise ReleaseAuthorizationClientError(
+            "release authorization submitted dispatch deadline changed"
+        )
     return response
 
 
@@ -1425,6 +2413,7 @@ def validate_complete_release_authorization_response(
     grant_id: str | None,
     approval_request_id: str | None,
     previous_lifecycle: dict[str, Any],
+    expected_durable_transition: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     _validate_release_authorization_binding(
         response,
@@ -1560,6 +2549,89 @@ def validate_complete_release_authorization_response(
         temporal_anchor_epoch_ms=None,
         reservation_expires_at_epoch_ms=reservation_expires_at,
     )
+    previous_durable = previous_lifecycle.get("durable_policy")
+    durable_states = {
+        ("committed", "forwarded"): {"committed", "denied"},
+        ("cancelled", "not_forwarded"): {"aborted"},
+        ("committed_indeterminate", "unknown"): {"indeterminate"},
+    }.get((state, completion_outcome), set())
+    durable = _validate_durable_policy_response_binding(
+        response,
+        expected=(
+            {
+                "attemptId": previous_durable.get("attempt_id"),
+                "claimDigest": previous_durable.get("claim_digest"),
+                "actorId": previous_durable.get("actor_id"),
+                "reservationId": previous_durable.get("reservation_id"),
+            }
+            if isinstance(previous_durable, dict)
+            else None
+        ),
+        expected_states=durable_states,
+    )
+    if durable is not None:
+        if expected_durable_transition is not None:
+            exact_terminal_evidence = durable.get("state") in {
+                "committed",
+                "denied",
+                "indeterminate",
+            }
+            if exact_terminal_evidence:
+                if (
+                    durable.get("response_evidence_digest")
+                    != expected_durable_transition.get(
+                        "responseEvidenceDigest"
+                    )
+                    or durable.get("response_body_sha256")
+                    != expected_durable_transition.get(
+                        "responseBodySha256"
+                    )
+                ):
+                    raise ReleaseAuthorizationClientError(
+                        "release authorization durable terminal evidence changed"
+                    )
+            if (
+                state == "committed"
+                and durable.get("state") in {"committed", "denied"}
+                and durable.get("dispatch_deadline_at_epoch_ms")
+                != expected_durable_transition.get(
+                    "dispatchDeadlineAtEpochMs"
+                )
+            ):
+                raise ReleaseAuthorizationClientError(
+                    "release authorization durable completion deadline changed"
+                )
+            if (
+                state == "committed_indeterminate"
+                and durable.get("state") == "indeterminate"
+            ):
+                if (
+                    durable.get("dispatch_deadline_at_epoch_ms")
+                    != expected_durable_transition.get(
+                        "dispatchDeadlineAtEpochMs"
+                    )
+                    or durable.get("failure_reason")
+                    != expected_durable_transition.get("failureReason")
+                    or durable.get("uncertainty")
+                    != expected_durable_transition.get("uncertainty")
+                ):
+                    raise ReleaseAuthorizationClientError(
+                        "release authorization durable uncertainty changed"
+                    )
+            if state == "cancelled" and any(
+                durable.get(field) is not None
+                for field in (
+                    "dispatch_deadline_at_epoch_ms",
+                    "response_evidence_digest",
+                    "failure_reason",
+                    "response_body_sha256",
+                    "uncertainty",
+                )
+            ):
+                raise ReleaseAuthorizationClientError(
+                    "release authorization durable abort carries completion evidence"
+                )
+        response["durable_policy"] = durable
     return response
 
 
@@ -1571,6 +2643,14 @@ def _normalized_direct_release_authorization_response(
             "release authorization direct response must be an object"
         )
     normalized = dict(result)
+    normalized.setdefault(
+        "api_version",
+        (
+            "serverware.releaseAuthorization/v2"
+            if isinstance(normalized.get("durable_policy"), dict)
+            else "serverware.releaseAuthorization/v1"
+        ),
+    )
     normalized.setdefault("idempotent_replay", False)
     normalized.setdefault("grant_id", None)
     normalized.setdefault("approval_request_id", None)
@@ -1598,6 +2678,36 @@ def _normalized_direct_release_authorization_response(
             "ha": bool(normalized.get("release_authorization_store_ha")),
         },
     )
+    if isinstance(normalized.get("durable_policy"), dict):
+        durable = dict(normalized["durable_policy"])
+        direct_fields = {
+            "state": "state",
+            "attempt_id": "attemptId",
+            "claim_digest": "claimDigest",
+            "reservation_id": "reservationId",
+            "actor_id": "actorId",
+            "reservation_deadline_at_epoch_ms": (
+                "reservationDeadlineAtEpochMs"
+            ),
+            "dispatch_deadline_at_epoch_ms": "dispatchDeadlineAtEpochMs",
+            "response_evidence_digest": "responseEvidenceDigest",
+            "failure_reason": "failureReason",
+            "response_body_sha256": "responseBodySha256",
+            "uncertainty": "uncertainty",
+        }
+        if set(durable) != set(direct_fields):
+            raise ReleaseAuthorizationClientError(
+                "release authorization direct durable response fields are invalid"
+            )
+        normalized["durable_policy"] = (
+            _normalized_release_authorization_durable_response(
+                {
+                    wire_name: durable[field]
+                    for field, wire_name in direct_fields.items()
+                },
+                attempt_id=str(normalized.get("attempt_id") or ""),
+            )
+        )
     return normalized
 
 
@@ -1645,6 +2755,9 @@ def _release_authorization_http_post(
     expected_binding_digest: str | None = None,
     expected_shared_quotas: list[dict[str, Any]] | None = None,
     previous_lifecycle: dict[str, Any] | None = None,
+    expected_durable_policy: dict[str, Any] | None = None,
+    expected_durable_transition: dict[str, Any] | None = None,
+    expected_dispatch_deadline_at_epoch_ms: int | None = None,
 ) -> dict[str, Any]:
     base_url = _release_authorization_base_url()
     token = _release_authorization_token()
@@ -1661,7 +2774,8 @@ def _release_authorization_http_post(
     ).encode("utf-8")
     context = _release_authorization_ssl_context(base_url)
     last_error: BaseException | None = None
-    for retry in range(2):
+    attempts = 1 if action == "reserve" else 2
+    for retry in range(attempts):
         request = urllib.request.Request(
             f"{base_url}/{action}",
             data=encoded,
@@ -1672,15 +2786,16 @@ def _release_authorization_http_post(
             method="POST",
         )
         try:
-            response = request_bytes(
+            response = request_json_bytes(
                 request,
                 timeout=DECISION_GATE_TIMEOUT_SECONDS,
                 max_bytes=256 * 1024,
                 context=context,
+                expected_statuses=(200,),
+                expected_content_types=("application/json",),
             )
-            body = strict_json_loads(response.body)
             normalized = _normalized_release_authorization_response(
-                body,
+                response.value,
                 attempt_id=str(payload["attemptId"]),
             )
             if action == "reserve":
@@ -1694,6 +2809,7 @@ def _release_authorization_http_post(
                     require_jit_grant=require_jit_grant,
                     expected_binding_digest=expected_binding_digest,
                     expected_shared_quotas=expected_shared_quotas,
+                    expected_durable_policy=expected_durable_policy,
                 )
             if action == "dispatch":
                 if previous_lifecycle is None:
@@ -1707,6 +2823,9 @@ def _release_authorization_http_post(
                     grant_id=grant_id,
                     approval_request_id=approval_request_id,
                     previous_lifecycle=previous_lifecycle,
+                    expected_dispatch_deadline_at_epoch_ms=(
+                        expected_dispatch_deadline_at_epoch_ms
+                    ),
                 )
             if action == "complete":
                 if previous_lifecycle is None:
@@ -1721,6 +2840,9 @@ def _release_authorization_http_post(
                     grant_id=grant_id,
                     approval_request_id=approval_request_id,
                     previous_lifecycle=previous_lifecycle,
+                    expected_durable_transition=(
+                        expected_durable_transition
+                    ),
                 )
             raise ReleaseAuthorizationClientError(
                 f"release authorization action is invalid: {action}"
@@ -1733,21 +2855,16 @@ def _release_authorization_http_post(
                 detail = error_body.get("detail") if isinstance(error_body, dict) else None
             except Exception:
                 detail = None
+            finally:
+                exc.close()
             last_error = ReleaseAuthorizationClientError(
                 str(detail or f"release authorization HTTP {exc.code}")
             )
-            if exc.code != 503 or retry:
+            if exc.code != 503 or retry + 1 >= attempts:
                 break
-        except (
-            HttpClientError,
-            urllib.error.URLError,
-            TimeoutError,
-            OSError,
-            json.JSONDecodeError,
-            ValueError,
-        ) as exc:
+        except Exception as exc:
             last_error = exc
-            if retry:
+            if retry + 1 >= attempts:
                 break
         time.sleep(0.05)
     raise ReleaseAuthorizationClientError(
@@ -1763,100 +2880,419 @@ def _require_development_release_authorization_fallback() -> None:
         )
 
 
-def reserve_release_authorization(
+def _reserve_expected_release_authorization_once(
     *,
-    attempt_id: str,
-    flow_id: str,
-    principal_id: str,
-    route_id: str,
-    credential_ref: str | None,
-    credential_version: int,
-    policy_hash: str,
-    request_digest: str,
-    operation_digest: str | None,
+    expected: ReleaseAuthorizationExpectedIdentity,
     operation_context: dict[str, Any],
     canonical_request: dict[str, Any],
     shared_quotas: list[dict[str, Any]],
-    require_jit_grant: bool,
+    durable_policy: dict[str, Any] | None,
 ) -> dict[str, Any]:
+    if not isinstance(expected, ReleaseAuthorizationExpectedIdentity):
+        raise ReleaseAuthorizationClientError(
+            "release authorization expected identity is invalid"
+        )
     if not atomic_release_authorization_enabled():
         raise ReleaseAuthorizationClientError(
             "atomic release authorization is disabled"
         )
     bounded_canonical_request = _bounded_release_canonical_request(
         canonical_request,
-        request_digest=request_digest,
+        request_digest=expected.request_digest,
     )
-    expected_binding_digest = release_authorization_binding_digest(
-        attempt_id=attempt_id,
-        flow_id=flow_id,
-        principal_id=principal_id,
-        route_id=route_id,
-        credential_ref=credential_ref,
-        credential_version=credential_version,
-        policy_hash=policy_hash,
-        request_digest=request_digest,
-        operation_digest=operation_digest,
+    recomputed = release_authorization_binding_digest(
+        attempt_id=expected.attempt_id,
+        flow_id=expected.flow_id,
+        principal_id=expected.principal_id,
+        route_id=expected.route_id,
+        credential_ref=expected.credential_ref,
+        credential_version=expected.credential_version,
+        policy_hash=expected.policy_hash,
+        request_digest=expected.request_digest,
+        operation_digest=expected.operation_digest,
         operation_context=operation_context,
         shared_quotas=shared_quotas,
-        require_jit_grant=require_jit_grant,
+        require_jit_grant=expected.require_jit_grant,
     )
+    if not hmac.compare_digest(recomputed, expected.binding_digest):
+        raise ReleaseAuthorizationClientError(
+            "release authorization outbound binding changed after guard creation"
+        )
     if _release_authorization_base_url():
+        payload = {
+            "apiVersion": (
+                "serverware.releaseAuthorizationReserve/v2"
+                if durable_policy is not None
+                else "serverware.releaseAuthorizationReserve/v1"
+            ),
+            "attemptId": expected.attempt_id,
+            "flowId": expected.flow_id,
+            "principalId": expected.principal_id,
+            "routeId": expected.route_id,
+            "credentialRef": expected.credential_ref,
+            "credentialVersion": expected.credential_version,
+            "policyHash": expected.policy_hash,
+            "requestDigest": expected.request_digest,
+            "operationDigest": expected.operation_digest,
+            "operationContext": operation_context,
+            "canonicalRequest": bounded_canonical_request,
+        }
+        if durable_policy is not None:
+            payload["durablePolicy"] = {
+                key: copy.deepcopy(durable_policy[key])
+                for key in ("actorId", "claimDigest", "claims")
+            }
         return _release_authorization_http_post(
             "reserve",
-            {
-                "apiVersion": "serverware.releaseAuthorizationReserve/v1",
-                "attemptId": attempt_id,
-                "flowId": flow_id,
-                "principalId": principal_id,
-                "routeId": route_id,
-                "credentialRef": credential_ref,
-                "credentialVersion": credential_version,
-                "policyHash": policy_hash,
-                "requestDigest": request_digest,
-                "operationDigest": operation_digest,
-                "operationContext": operation_context,
-                "canonicalRequest": bounded_canonical_request,
-            },
-            require_jit_grant=require_jit_grant,
-            expected_binding_digest=expected_binding_digest,
+            payload,
+            require_jit_grant=expected.require_jit_grant,
+            expected_binding_digest=expected.binding_digest,
             expected_shared_quotas=shared_quotas,
+            expected_durable_policy=durable_policy,
         )
     _require_development_release_authorization_fallback()
-    if require_jit_grant:
+    if expected.require_jit_grant:
         raise ReleaseAuthorizationClientError(
             "JIT release authorization requires the control-plane release authority"
         )
     try:
+        reserve = (
+            db.reserve_release_authorization_v2
+            if durable_policy is not None
+            else db.reserve_release_authorization
+        )
+        reserve_arguments: dict[str, Any] = {
+            "attempt_id": expected.attempt_id,
+            "flow_id": expected.flow_id,
+            "principal_id": expected.principal_id,
+            "route_id": expected.route_id,
+            "credential_id": expected.credential_ref or "",
+            "credential_version": expected.credential_version,
+            "policy_hash": expected.policy_hash,
+            "request_digest": expected.request_digest,
+            "operation_digest": expected.operation_digest,
+            "operation_context": operation_context,
+            "shared_quotas": shared_quotas,
+            "require_jit_grant": expected.require_jit_grant,
+            "reservation_ttl_seconds": (
+                RELEASE_AUTHORIZATION_RESERVATION_TTL_SECONDS
+            ),
+            "actor_id": _release_authorization_actor_id(),
+        }
+        if durable_policy is not None:
+            reserve_arguments["durable_policy_binding"] = {
+                key: copy.deepcopy(durable_policy[key])
+                for key in ("actorId", "claimDigest", "claims")
+            }
         result = _normalized_direct_release_authorization_response(
-            db.reserve_release_authorization(
-                attempt_id=attempt_id,
-                flow_id=flow_id,
-                principal_id=principal_id,
-                route_id=route_id,
-                credential_id=credential_ref or "",
-                credential_version=credential_version,
-                policy_hash=policy_hash,
-                request_digest=request_digest,
-                operation_digest=operation_digest,
-                operation_context=operation_context,
-                shared_quotas=shared_quotas,
-                require_jit_grant=require_jit_grant,
-                reservation_ttl_seconds=RELEASE_AUTHORIZATION_RESERVATION_TTL_SECONDS,
-                actor_id=DATA_PLANE_INSTANCE_ID or "serverware-python-mitm",
-            )
+            reserve(**reserve_arguments)
         )
         return validate_reserve_release_authorization_response(
             result,
-            attempt_id=attempt_id,
-            require_jit_grant=require_jit_grant,
-            expected_binding_digest=expected_binding_digest,
+            attempt_id=expected.attempt_id,
+            require_jit_grant=expected.require_jit_grant,
+            expected_binding_digest=expected.binding_digest,
             expected_shared_quotas=shared_quotas,
+            expected_durable_policy=durable_policy,
         )
     except Exception as exc:
         raise ReleaseAuthorizationClientError(
             f"release authorization reserve is uncertain: {exc}"
         ) from exc
+
+
+def reserve_expected_release_authorization(
+    *,
+    guard: ReleaseAuthorizationGuard,
+    operation_context: dict[str, Any],
+    canonical_request: dict[str, Any],
+    shared_quotas: list[dict[str, Any]],
+    durable_policy_claims: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    if (
+        not isinstance(guard, ReleaseAuthorizationGuard)
+        or guard.phase != "reserve_pending"
+        or guard.cleanup_emitted
+    ):
+        raise ReleaseAuthorizationClientError(
+            "release authorization reserve guard is missing or already used"
+        )
+    try:
+        durable_policy = durable_policy_reserve_binding(
+            guard.expected,
+            durable_policy_claims,
+        )
+        if durable_policy != guard.durable_policy:
+            raise ReleaseAuthorizationClientError(
+                "release authorization guard durable identity changed"
+            )
+        result = _reserve_expected_release_authorization_once(
+            expected=guard.expected,
+            operation_context=operation_context,
+            canonical_request=canonical_request,
+            shared_quotas=shared_quotas,
+            durable_policy=durable_policy,
+        )
+        state = result.get("state")
+        if state == "denied":
+            guard.disarm_denial()
+        elif state == "reserved":
+            guard.promote_reserved()
+        else:
+            raise ReleaseAuthorizationClientError(
+                "release authorization reserve returned an invalid lifecycle"
+            )
+        return result
+    except Exception as exc:
+        guard.cancel_not_forwarded_once()
+        if isinstance(exc, ReleaseAuthorizationClientError):
+            raise
+        raise ReleaseAuthorizationClientError(
+            "release authorization reserve is uncertain"
+        ) from exc
+
+
+def _validate_expected_not_forwarded_response(
+    response: dict[str, Any],
+    *,
+    expected: ReleaseAuthorizationExpectedIdentity,
+    durable_policy: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    _validate_release_authorization_binding(
+        response,
+        attempt_id=expected.attempt_id,
+        binding_digest=expected.binding_digest,
+    )
+    state = response.get("state")
+    if state == "absent":
+        exact = (
+            response.get("authorized") is False
+            and response.get("reason") == "reservation_absent"
+            and response.get("idempotent_replay") is True
+            and response.get("grant_id") is None
+            and response.get("approval_request_id") is None
+            and response.get("approval_status") is None
+            and response.get("approval_expires_at") is None
+            and response.get("approval_created") is None
+            and response.get("reservation_expires_at_epoch_ms") is None
+            and response.get("dispatch_started_at_epoch_ms") is None
+            and response.get("dispatch_expires_at_epoch_ms") is None
+            and response.get("completion_outcome") is None
+            and response.get("retry_after_seconds") == 0
+            and response.get("quotas") == []
+        )
+    else:
+        quotas = response.get("quotas")
+        grant_id = response.get("grant_id")
+        approval_request_id = response.get("approval_request_id")
+        jit_identities_match = (
+            (
+                _valid_release_authorization_identity(grant_id)
+                and _valid_release_authorization_identity(approval_request_id)
+            )
+            if expected.require_jit_grant
+            else grant_id is None and approval_request_id is None
+        )
+        quota_bindings = (
+            tuple(
+                canonical_json(_release_authorization_quota_binding(quota))
+                for quota in quotas
+            )
+            if isinstance(quotas, list)
+            else ()
+        )
+        exact = (
+            response.get("authorized") is False
+            and state == "cancelled"
+            and response.get("reason") == "cancelled"
+            and response.get("completion_outcome") == "not_forwarded"
+            and jit_identities_match
+            and response.get("approval_status") is None
+            and response.get("approval_expires_at") is None
+            and response.get("approval_created") is None
+            and isinstance(
+                response.get("reservation_expires_at_epoch_ms"),
+                int,
+            )
+            and not isinstance(
+                response.get("reservation_expires_at_epoch_ms"),
+                bool,
+            )
+            and response.get("dispatch_started_at_epoch_ms") is None
+            and response.get("dispatch_expires_at_epoch_ms") is None
+            and response.get("retry_after_seconds") == 0
+            and isinstance(quotas, list)
+            and quota_bindings == expected.shared_quota_bindings
+            and all(
+                quota.get("reservation_state")
+                in {"refunded", "refund_skipped_window"}
+                for quota in quotas
+            )
+        )
+    if not exact:
+        raise ReleaseAuthorizationClientError(
+            "release authorization expected cancellation response is invalid"
+        )
+    durable = _validate_durable_policy_response_binding(
+        response,
+        expected=durable_policy,
+        expected_states={"aborted"},
+    )
+    if durable is not None and any(
+        durable.get(field) is not None
+        for field in (
+            "dispatch_deadline_at_epoch_ms",
+            "response_evidence_digest",
+            "failure_reason",
+            "response_body_sha256",
+            "uncertainty",
+        )
+    ):
+        raise ReleaseAuthorizationClientError(
+            "release authorization durable abort carries transition evidence"
+        )
+    return response
+
+
+def cancel_expected_release_authorization(
+    expected: ReleaseAuthorizationExpectedIdentity,
+    *,
+    durable_policy: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Emit one bound cleanup; transport loss is terminal and never retried/refunded."""
+    if not isinstance(expected, ReleaseAuthorizationExpectedIdentity):
+        raise ReleaseAuthorizationClientError(
+            "release authorization cancellation identity is invalid"
+        )
+    if _release_authorization_base_url():
+        base_url = _release_authorization_base_url()
+        token = _release_authorization_token()
+        if not token:
+            raise ReleaseAuthorizationClientError(
+                "release authorization control-plane client is not configured"
+            )
+        payload = {
+            "apiVersion": (
+                "serverware.releaseAuthorizationComplete/v2"
+                if durable_policy is not None
+                else "serverware.releaseAuthorizationComplete/v1"
+            ),
+            "attemptId": expected.attempt_id,
+            "bindingDigest": expected.binding_digest,
+            "outcome": "not_forwarded",
+        }
+        if durable_policy is not None:
+            payload["durablePolicy"] = {
+                "actorId": durable_policy["actorId"],
+                "attemptId": expected.attempt_id,
+                "claimDigest": durable_policy["claimDigest"],
+                "reservationId": durable_policy["reservationId"],
+            }
+        encoded = json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        ).encode("utf-8")
+        request = urllib.request.Request(
+            f"{base_url}/complete",
+            data=encoded,
+            headers={
+                "Content-Type": "application/json",
+                "X-Serverware-Data-Plane-Token": token,
+            },
+            method="POST",
+        )
+        try:
+            response = request_json_bytes(
+                request,
+                timeout=DECISION_GATE_TIMEOUT_SECONDS,
+                max_bytes=256 * 1024,
+                context=_release_authorization_ssl_context(base_url),
+                expected_statuses=(200,),
+                expected_content_types=("application/json",),
+            )
+            normalized = _normalized_release_authorization_response(
+                response.value,
+                attempt_id=expected.attempt_id,
+            )
+            return _validate_expected_not_forwarded_response(
+                normalized,
+                expected=expected,
+                durable_policy=durable_policy,
+            )
+        except urllib.error.HTTPError as exc:
+            try:
+                http_error_body(exc, max_bytes=64 * 1024)
+            except Exception:
+                pass
+            finally:
+                exc.close()
+            raise ReleaseAuthorizationClientError(
+                "release authorization expected cancellation is uncertain"
+            ) from exc
+        except Exception as exc:
+            raise ReleaseAuthorizationClientError(
+                "release authorization expected cancellation is uncertain"
+            ) from exc
+
+    _require_development_release_authorization_fallback()
+    try:
+        if durable_policy is None:
+            raw_result = db.cancel_release_authorization_if_present(
+                attempt_id=expected.attempt_id,
+                binding_digest=expected.binding_digest,
+                actor_id=_release_authorization_actor_id(),
+            )
+        else:
+            raw_result = db.complete_release_authorization_v2(
+                attempt_id=expected.attempt_id,
+                binding_digest=expected.binding_digest,
+                outcome="not_forwarded",
+                actor_id=_release_authorization_actor_id(),
+                durable_policy_transition={
+                    "actorId": durable_policy["actorId"],
+                    "attemptId": expected.attempt_id,
+                    "claimDigest": durable_policy["claimDigest"],
+                    "reservationId": durable_policy["reservationId"],
+                },
+            )
+        result = _normalized_direct_release_authorization_response(raw_result)
+        return _validate_expected_not_forwarded_response(
+            result,
+            expected=expected,
+            durable_policy=durable_policy,
+        )
+    except Exception as exc:
+        raise ReleaseAuthorizationClientError(
+            "release authorization expected cancellation is uncertain"
+        ) from exc
+
+
+def release_authorization_dispatch_deadline(
+    previous_lifecycle: dict[str, Any],
+) -> int:
+    reservation_expires_at = previous_lifecycle.get(
+        "reservation_expires_at_epoch_ms"
+    )
+    now_epoch_ms = int(time.time() * 1000)
+    if (
+        type(reservation_expires_at) is not int
+        or reservation_expires_at <= now_epoch_ms
+    ):
+        raise ReleaseAuthorizationClientError(
+            "release authorization reservation is expired"
+        )
+    deadline = min(
+        reservation_expires_at,
+        now_epoch_ms + RELEASE_AUTHORIZATION_DISPATCH_TTL_SECONDS * 1000,
+    )
+    if deadline <= now_epoch_ms:
+        raise ReleaseAuthorizationClientError(
+            "release authorization dispatch deadline is empty"
+        )
+    return deadline
 
 
 def dispatch_release_authorization(
@@ -1866,29 +3302,61 @@ def dispatch_release_authorization(
     grant_id: str | None = None,
     approval_request_id: str | None = None,
     previous_lifecycle: dict[str, Any],
+    dispatch_deadline_at_epoch_ms: int | None = None,
 ) -> dict[str, Any]:
+    durable = previous_lifecycle.get("durable_policy")
+    if durable is not None:
+        if dispatch_deadline_at_epoch_ms is None:
+            raise ReleaseAuthorizationClientError(
+                "release authorization v2 dispatch deadline is missing"
+            )
+        durable_transition = {
+            **_durable_policy_transition_identity(durable),
+            "dispatchDeadlineAtEpochMs": dispatch_deadline_at_epoch_ms,
+        }
+        api_version = "serverware.releaseAuthorizationDispatch/v2"
+    else:
+        if dispatch_deadline_at_epoch_ms is not None:
+            raise ReleaseAuthorizationClientError(
+                "release authorization v1 cannot carry a durable deadline"
+            )
+        durable_transition = None
+        api_version = "serverware.releaseAuthorizationDispatch/v1"
     if _release_authorization_base_url():
+        payload = {
+            "apiVersion": api_version,
+            "attemptId": attempt_id,
+            "bindingDigest": binding_digest,
+        }
+        if durable_transition is not None:
+            payload["durablePolicy"] = durable_transition
         return _release_authorization_http_post(
             "dispatch",
-            {
-                "apiVersion": "serverware.releaseAuthorizationDispatch/v1",
-                "attemptId": attempt_id,
-                "bindingDigest": binding_digest,
-            },
+            payload,
             grant_id=grant_id,
             approval_request_id=approval_request_id,
             previous_lifecycle=previous_lifecycle,
+            expected_dispatch_deadline_at_epoch_ms=(
+                dispatch_deadline_at_epoch_ms
+            ),
         )
     _require_development_release_authorization_fallback()
     try:
-        result = _normalized_direct_release_authorization_response(
-            db.dispatch_release_authorization(
+        if durable_transition is None:
+            raw_result = db.dispatch_release_authorization(
                 attempt_id=attempt_id,
                 binding_digest=binding_digest,
                 dispatch_ttl_seconds=RELEASE_AUTHORIZATION_DISPATCH_TTL_SECONDS,
-                actor_id=DATA_PLANE_INSTANCE_ID or "serverware-python-mitm",
+                actor_id=_release_authorization_actor_id(),
             )
-        )
+        else:
+            raw_result = db.dispatch_release_authorization_v2(
+                attempt_id=attempt_id,
+                binding_digest=binding_digest,
+                actor_id=_release_authorization_actor_id(),
+                durable_policy_transition=durable_transition,
+            )
+        result = _normalized_direct_release_authorization_response(raw_result)
         return validate_dispatch_release_authorization_response(
             result,
             attempt_id=attempt_id,
@@ -1896,6 +3364,9 @@ def dispatch_release_authorization(
             grant_id=grant_id,
             approval_request_id=approval_request_id,
             previous_lifecycle=previous_lifecycle,
+            expected_dispatch_deadline_at_epoch_ms=(
+                dispatch_deadline_at_epoch_ms
+            ),
         )
     except Exception as exc:
         raise ReleaseAuthorizationClientError(
@@ -1911,34 +3382,140 @@ def complete_release_authorization(
     grant_id: str | None = None,
     approval_request_id: str | None = None,
     previous_lifecycle: dict[str, Any],
+    durable_completion: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if outcome not in {"forwarded", "not_forwarded", "unknown"}:
         raise ReleaseAuthorizationClientError(
             "release authorization completion outcome is invalid"
         )
+    durable = previous_lifecycle.get("durable_policy")
+    if outcome == "not_forwarded" and durable is None:
+        raise ReleaseAuthorizationClientError(
+            "not_forwarded completion requires a retained expected reservation guard"
+        )
+    durable_transition = None
+    api_version = "serverware.releaseAuthorizationComplete/v1"
+    if durable is not None:
+        durable_transition = _durable_policy_transition_identity(durable)
+        completion = (
+            {}
+            if outcome == "not_forwarded" and durable_completion is None
+            else durable_completion
+        )
+        if outcome == "forwarded":
+            required = {
+                "response_evidence",
+                "response_body_sha256",
+                "dispatch_deadline_at_epoch_ms",
+            }
+        elif outcome == "unknown":
+            required = {
+                "response_evidence",
+                "response_body_sha256",
+                "failure_reason",
+                "uncertainty",
+            }
+        else:
+            required = set()
+        if not isinstance(completion, dict) or (
+            set(completion) - {
+                "response_evidence",
+                "response_body_sha256",
+                "dispatch_deadline_at_epoch_ms",
+                "failure_reason",
+                "uncertainty",
+            }
+        ) or not required.issubset(completion):
+            raise ReleaseAuthorizationClientError(
+                "release authorization v2 completion evidence is incomplete"
+            )
+        if outcome in {"forwarded", "unknown"}:
+            evidence = copy.deepcopy(
+                completion["response_evidence"]
+            )
+            body_digest = completion["response_body_sha256"]
+            if (
+                not isinstance(evidence, list)
+                or not isinstance(body_digest, str)
+                or _SHA256_DIGEST_RE.fullmatch(body_digest) is None
+            ):
+                raise ReleaseAuthorizationClientError(
+                    "release authorization v2 completion evidence is invalid"
+                )
+            durable_transition.update(
+                {
+                    "responseEvidence": evidence,
+                    "responseEvidenceDigest": _durable_policy_digest(
+                        evidence
+                    ),
+                    "responseBodySha256": body_digest,
+                }
+            )
+        deadline = completion.get(
+            "dispatch_deadline_at_epoch_ms"
+        )
+        if deadline is not None:
+            if type(deadline) is not int or deadline < 1:
+                raise ReleaseAuthorizationClientError(
+                    "release authorization v2 completion deadline is invalid"
+                )
+            durable_transition["dispatchDeadlineAtEpochMs"] = deadline
+        if outcome == "unknown":
+            if (
+                completion.get("failure_reason")
+                != "provider_outcome_or_response_validation_uncertain"
+                or completion.get("uncertainty")
+                != "charged_fail_closed"
+            ):
+                raise ReleaseAuthorizationClientError(
+                    "release authorization v2 uncertainty semantics are invalid"
+                )
+            durable_transition.update(
+                {
+                    "failureReason": completion["failure_reason"],
+                    "uncertainty": completion["uncertainty"],
+                }
+            )
+        api_version = "serverware.releaseAuthorizationComplete/v2"
+    elif durable_completion is not None:
+        raise ReleaseAuthorizationClientError(
+            "release authorization v1 cannot carry durable evidence"
+        )
     if _release_authorization_base_url():
+        payload = {
+            "apiVersion": api_version,
+            "attemptId": attempt_id,
+            "bindingDigest": binding_digest,
+            "outcome": outcome,
+        }
+        if durable_transition is not None:
+            payload["durablePolicy"] = durable_transition
         return _release_authorization_http_post(
             "complete",
-            {
-                "apiVersion": "serverware.releaseAuthorizationComplete/v1",
-                "attemptId": attempt_id,
-                "bindingDigest": binding_digest,
-                "outcome": outcome,
-            },
+            payload,
             grant_id=grant_id,
             approval_request_id=approval_request_id,
             previous_lifecycle=previous_lifecycle,
+            expected_durable_transition=durable_transition,
         )
     _require_development_release_authorization_fallback()
     try:
-        result = _normalized_direct_release_authorization_response(
-            db.complete_release_authorization(
+        if durable_transition is None:
+            raw_result = db.complete_release_authorization(
                 attempt_id=attempt_id,
                 binding_digest=binding_digest,
                 outcome=outcome,
-                actor_id=DATA_PLANE_INSTANCE_ID or "serverware-python-mitm",
+                actor_id=_release_authorization_actor_id(),
             )
-        )
+        else:
+            raw_result = db.complete_release_authorization_v2(
+                attempt_id=attempt_id,
+                binding_digest=binding_digest,
+                outcome=outcome,
+                actor_id=_release_authorization_actor_id(),
+                durable_policy_transition=durable_transition,
+            )
+        result = _normalized_direct_release_authorization_response(raw_result)
         return validate_complete_release_authorization_response(
             result,
             attempt_id=attempt_id,
@@ -1947,6 +3524,7 @@ def complete_release_authorization(
             grant_id=grant_id,
             approval_request_id=approval_request_id,
             previous_lifecycle=previous_lifecycle,
+            expected_durable_transition=durable_transition,
         )
     except Exception as exc:
         raise ReleaseAuthorizationClientError(
@@ -1999,9 +3577,275 @@ def get_control_plane_credential(credential_id: str | None) -> dict[str, Any] | 
     return db.get_credential(credential_id, include_secret=True)
 
 
-def get_credential(credential_id: str | None) -> dict[str, Any] | None:
+def _claim_release_controlled_credential(
+    credential_id: str,
+    request_authority: dict[str, Any],
+    release_authorization: dict[str, Any] | None,
+    *,
+    expected: ReleaseAuthorizationExpectedIdentity,
+    jit_policy: dict[str, Any] | None,
+) -> None:
+    request_authority_fields = {
+        "apiVersion",
+        "attemptId",
+        "reservationId",
+        "bindingDigest",
+        "requestDigest",
+        "operationDigest",
+        "operationContext",
+        "reservationExpiresAtEpochMs",
+    }
+    if (
+        not isinstance(expected, ReleaseAuthorizationExpectedIdentity)
+        or expected.credential_ref != credential_id
+        or not isinstance(request_authority, dict)
+        or set(request_authority) != request_authority_fields
+        or request_authority.get("apiVersion")
+        != "serverware.credentialLeaseRequestAuthority/v1"
+        or request_authority.get("attemptId") != expected.attempt_id
+        or request_authority.get("reservationId")
+        != release_reservation_id(expected.attempt_id, expected.binding_digest)
+        or request_authority.get("bindingDigest") != expected.binding_digest
+        or request_authority.get("requestDigest") != expected.request_digest
+        or request_authority.get("operationDigest") != expected.operation_digest
+        or type(request_authority.get("reservationExpiresAtEpochMs")) is not int
+        or int(request_authority["reservationExpiresAtEpochMs"])
+        <= int(time.time() * 1000)
+    ):
+        raise ReleaseAuthorizationClientError(
+            "credential request authority is malformed"
+        )
+    operation_context = request_authority.get("operationContext")
+    if not isinstance(operation_context, dict):
+        raise ReleaseAuthorizationClientError(
+            "credential request operation context is malformed"
+        )
+    recomputed = release_authorization_binding_digest(
+        attempt_id=expected.attempt_id,
+        flow_id=expected.flow_id,
+        principal_id=expected.principal_id,
+        route_id=expected.route_id,
+        credential_ref=expected.credential_ref,
+        credential_version=expected.credential_version,
+        policy_hash=expected.policy_hash,
+        request_digest=expected.request_digest,
+        operation_digest=expected.operation_digest,
+        operation_context=operation_context,
+        shared_quotas=[
+            strict_json_loads(binding)
+            for binding in expected.shared_quota_bindings
+        ],
+        require_jit_grant=expected.require_jit_grant,
+    )
+    if not hmac.compare_digest(recomputed, expected.binding_digest):
+        raise ReleaseAuthorizationClientError(
+            "credential request authority operation was rebound"
+        )
+
+    release_authorization_fields = {
+        "apiVersion",
+        "kind",
+        "state",
+        "attemptId",
+        "reservationId",
+        "bindingDigest",
+        "principalId",
+        "routeId",
+        "credentialId",
+        "credentialVersion",
+        "policyHash",
+        "requestDigest",
+        "operationDigest",
+        "quotaClaims",
+        "grantId",
+        "approvalRequestId",
+        "reservationExpiresAtEpochMs",
+    }
+    if release_authorization is None:
+        kind = "decisionBound"
+        grant_id = None
+        approval_request_id = None
+        quota_claims: list[dict[str, Any]] = []
+    elif (
+        not isinstance(release_authorization, dict)
+        or frozenset(release_authorization)
+        not in {
+            frozenset(release_authorization_fields),
+            frozenset(release_authorization_fields | {"durablePolicy"}),
+        }
+        or release_authorization.get("apiVersion")
+        not in {
+            "serverware.credentialLeaseReleaseAuthorization/v1",
+            "serverware.credentialLeaseReleaseAuthorization/v2",
+        }
+        or release_authorization.get("state") != "reserved"
+        or release_authorization.get("attemptId") != expected.attempt_id
+        or release_authorization.get("reservationId")
+        != request_authority["reservationId"]
+        or release_authorization.get("bindingDigest") != expected.binding_digest
+        or release_authorization.get("principalId") != expected.principal_id
+        or release_authorization.get("routeId") != expected.route_id
+        or release_authorization.get("credentialId") != credential_id
+        or release_authorization.get("credentialVersion")
+        != expected.credential_version
+        or release_authorization.get("policyHash") != expected.policy_hash
+        or release_authorization.get("requestDigest") != expected.request_digest
+        or release_authorization.get("operationDigest")
+        != expected.operation_digest
+        or release_authorization.get("reservationExpiresAtEpochMs")
+        != request_authority["reservationExpiresAtEpochMs"]
+    ):
+        raise ReleaseAuthorizationClientError(
+            "release-controlled credential authority is malformed"
+        )
+    else:
+        kind = release_authorization.get("kind")
+        grant_id = release_authorization.get("grantId")
+        approval_request_id = release_authorization.get("approvalRequestId")
+        quota_claims = release_authorization.get("quotaClaims")
+    durable_policy = (
+        release_authorization.get("durablePolicy")
+        if isinstance(release_authorization, dict)
+        else None
+    )
+    if release_authorization is not None:
+        release_v2 = (
+            release_authorization.get("apiVersion")
+            == "serverware.credentialLeaseReleaseAuthorization/v2"
+        )
+        if release_v2 != (durable_policy is not None):
+            raise ReleaseAuthorizationClientError(
+                "credential release authority protocol was downgraded"
+            )
+    if kind == "jitGrant":
+        if not (
+            _valid_release_authorization_identity(grant_id)
+            and _valid_release_authorization_identity(approval_request_id)
+        ):
+            raise ReleaseAuthorizationClientError(
+                "JIT credential authority is incomplete"
+            )
+    elif kind == "atomicReservation":
+        if (
+            grant_id is not None
+            or approval_request_id is not None
+            or not isinstance(quota_claims, list)
+            or (not quota_claims and durable_policy is None)
+        ):
+            raise ReleaseAuthorizationClientError(
+                "atomic credential authority conflicts with JIT fields"
+            )
+    elif kind == "decisionBound":
+        if (
+            release_authorization is not None
+            or expected.require_jit_grant
+            or expected.shared_quota_bindings
+            or quota_claims
+        ):
+            raise ReleaseAuthorizationClientError(
+                "decision-bound credential authority carries release controls"
+            )
+    else:
+        raise ReleaseAuthorizationClientError(
+            "credential release authority kind is invalid"
+        )
+    claim_nonce = os.urandom(32)
+    request_binding_sha256 = "sha256:" + hashlib.sha256(
+        canonical_json(
+            {
+                "apiVersion": "serverware.pythonCredentialClaim/v2",
+                "requestAuthority": request_authority,
+                "releaseAuthorization": release_authorization,
+                "nonceSha256": hashlib.sha256(claim_nonce).hexdigest(),
+            }
+        ).encode("utf-8")
+    ).hexdigest()
+    recipient_key_id = "sha256:" + hashlib.sha256(
+        b"serverware-python-development-proxy"
+    ).hexdigest()
+    recipient_nonce_sha256 = "sha256:" + hashlib.sha256(claim_nonce).hexdigest()
+    jit = jit_policy if isinstance(jit_policy, dict) else {}
+    db.claim_release_credential_issuance(
+        release_kind=str(kind),
+        attempt_id=str(request_authority["attemptId"]),
+        reservation_id=str(request_authority["reservationId"]),
+        binding_digest=str(request_authority["bindingDigest"]),
+        request_digest=str(request_authority["requestDigest"]),
+        operation_digest=str(request_authority["operationDigest"]),
+        operation_context=copy.deepcopy(operation_context),
+        quota_claims=quota_claims,
+        durable_policy=copy.deepcopy(durable_policy),
+        request_binding_sha256=request_binding_sha256,
+        request_authority_sha256=(
+            "sha256:"
+            + hashlib.sha256(
+                canonical_json(request_authority).encode("utf-8")
+            ).hexdigest()
+        ),
+        recipient_key_id=recipient_key_id,
+        recipient_nonce_sha256=recipient_nonce_sha256,
+        principal_id=expected.principal_id,
+        route_id=expected.route_id,
+        credential_id=credential_id,
+        credential_version=expected.credential_version,
+        policy_hash=expected.policy_hash,
+        grant_id=grant_id,
+        approval_request_id=approval_request_id,
+        reservation_expires_at_epoch_ms=int(
+            request_authority["reservationExpiresAtEpochMs"]
+        ),
+        actor_id=_release_authorization_actor_id(),
+        required_approver_roles={"approver"} if kind == "jitGrant" else set(),
+        allowed_approver_ids=(
+            set((jit.get("approvers") or {}).get("users") or []) or None
+            if kind == "jitGrant"
+            else None
+        ),
+        require_approver_webauthn=(
+            ((jit.get("approvers") or {}).get("authn") or {}).get(
+                "webauthnRequired"
+            )
+            is True
+            if kind == "jitGrant"
+            else False
+        ),
+    )
+
+
+def get_credential(
+    credential_id: str | None,
+    *,
+    request_authority: dict[str, Any] | None = None,
+    release_authorization: dict[str, Any] | None = None,
+    expected_release_identity: ReleaseAuthorizationExpectedIdentity | None = None,
+    jit_policy: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
     if not credential_id:
         return None
+    controlled_context = (
+        request_authority,
+        release_authorization,
+        expected_release_identity,
+        jit_policy,
+    )
+    if any(value is not None for value in controlled_context):
+        if request_authority is None or expected_release_identity is None:
+            raise ReleaseAuthorizationClientError(
+                "controlled credential dispatch requires exact request authority"
+            )
+        _claim_release_controlled_credential(
+            credential_id,
+            request_authority,
+            release_authorization,
+            expected=expected_release_identity,
+            jit_policy=jit_policy,
+        )
+        start_runtime_workers()
+        _inc("credential_lease_misses")
+        credential = db.get_credential(credential_id, include_secret=True)
+        if not credential:
+            return None
+        return _project_credential_for_data_plane(credential)
     start_runtime_workers()
     current = db.get_credential(credential_id)
     if not current:
@@ -2052,8 +3896,29 @@ def _credential_secret_fingerprint(credential: dict[str, Any]) -> str | None:
     return "sha256:" + hashlib.sha256(secret.encode("utf-8")).hexdigest()
 
 
-def get_bound_credential_lease(credential_id: str | None) -> BoundCredentialLease | None:
-    credential = get_credential(credential_id)
+def get_bound_credential_lease(
+    credential_id: str | None,
+    *,
+    request_authority: dict[str, Any] | None = None,
+    release_authorization: dict[str, Any] | None = None,
+    expected_release_identity: ReleaseAuthorizationExpectedIdentity | None = None,
+    jit_policy: dict[str, Any] | None = None,
+) -> BoundCredentialLease | None:
+    if (
+        request_authority is None
+        and release_authorization is None
+        and expected_release_identity is None
+        and jit_policy is None
+    ):
+        credential = get_credential(credential_id)
+    else:
+        credential = get_credential(
+            credential_id,
+            request_authority=request_authority,
+            release_authorization=release_authorization,
+            expected_release_identity=expected_release_identity,
+            jit_policy=jit_policy,
+        )
     if not credential_id or not isinstance(credential, dict):
         return None
     credential_version = credential.get("credential_version")
@@ -2065,6 +3930,23 @@ def get_bound_credential_lease(credential_id: str | None) -> BoundCredentialLeas
     ):
         return None
     now = time.monotonic()
+    if request_authority is not None:
+        remaining_seconds = (
+            int(request_authority["reservationExpiresAtEpochMs"])
+            - int(time.time() * 1000)
+        ) / 1000
+        if remaining_seconds <= 0:
+            return None
+        return BoundCredentialLease(
+            credential=copy.deepcopy(credential),
+            binding=CredentialLeaseBinding(
+                credential_id=credential_id,
+                credential_version=credential_version,
+                secret_fingerprint=fingerprint,
+                expires_at_monotonic=now
+                + min(float(SECRET_LEASE_TTL_SECONDS), remaining_seconds),
+            ),
+        )
     cache_key = (credential_id, credential_version)
     with _credential_lock:
         cached = _credential_cache.get(cache_key)
@@ -2207,6 +4089,7 @@ def gmail_message_allowed(context: dict[str, Any], message_id: str) -> bool:
 
 
 def prune_expired_caches() -> None:
+    db.reconcile_policy_state_bundles(limit=32)
     now = time.monotonic()
     with _credential_lock:
         expired_credentials = [key for key, (expires, _) in _credential_cache.items() if expires <= now]

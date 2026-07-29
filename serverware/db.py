@@ -33,6 +33,7 @@ from serverware.config import (
     OAUTH_PENDING_CREDENTIAL_MAX_COUNT,
     OIDC_SESSION_ACTIVATION_RETRY_TTL_SECONDS,
     RBAC_BINDINGS_PATH,
+    RELEASE_CHANNEL,
     SETUP_SESSION_AUDIT_CLAIM_TTL_SECONDS,
     SETUP_SESSION_AUDIT_OUTBOX_MAX_PENDING,
     SETUP_SESSION_EVENT_MAX_BYTES,
@@ -160,6 +161,134 @@ def _stored_approval_json_digest(stored: str) -> str:
             raise ValueError("approval review payload digest is invalid")
         return digest
     return _approval_json_digest(_decrypt_approval_json(stored))
+
+
+_RELEASE_OPERATION_CONTEXT_STORAGE_VERSION = (
+    "serverware.releaseOperationContextStorage/v1"
+)
+
+
+def _validate_release_operation_context(
+    operation_context: dict[str, Any],
+    *,
+    require_operation: bool = True,
+) -> None:
+    def validate_json_value(value: Any, *, depth: int = 0) -> None:
+        if depth > 32:
+            raise ReleaseAuthorizationError(
+                "release authorization operation context is too deep"
+            )
+        if value is None or isinstance(value, (str, bool)):
+            return
+        if isinstance(value, int) and not isinstance(value, bool):
+            if not 0 <= value <= 18_446_744_073_709_551_615:
+                raise ReleaseAuthorizationError(
+                    "release authorization operation context integer is outside u64"
+                )
+            return
+        if isinstance(value, list):
+            for item in value:
+                validate_json_value(item, depth=depth + 1)
+            return
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if (
+                    not isinstance(key, str)
+                    or len(key.encode("utf-8")) > 1024
+                ):
+                    raise ReleaseAuthorizationError(
+                        "release authorization operation context key is invalid"
+                    )
+                validate_json_value(item, depth=depth + 1)
+            return
+        raise ReleaseAuthorizationError(
+            "release authorization operation context contains a non-canonical value"
+        )
+
+    if not isinstance(operation_context, dict):
+        raise ReleaseAuthorizationError(
+            "release authorization operation context must be an object"
+        )
+    validate_json_value(operation_context)
+    if require_operation:
+        operation = operation_context.get("operation")
+        if (
+            not isinstance(operation, str)
+            or not operation
+            or len(operation.encode("utf-8")) > 256
+        ):
+            raise ReleaseAuthorizationError(
+                "release authorization operation context requires a bounded operation"
+            )
+
+
+def _protect_release_operation_context_json(payload_json: str) -> str:
+    try:
+        operation_context = loads(payload_json, None)
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise ReleaseAuthorizationError(
+            "release authorization operation context is invalid"
+        ) from exc
+    if not isinstance(operation_context, dict) or dumps(operation_context) != payload_json:
+        raise ReleaseAuthorizationError(
+            "release authorization operation context is not canonical"
+        )
+    digest = "sha256:" + hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
+    return dumps(
+        {
+            "apiVersion": _RELEASE_OPERATION_CONTEXT_STORAGE_VERSION,
+            "ciphertext": encrypt_secret(payload_json),
+            "digest": digest,
+        }
+    )
+
+
+def _recover_release_operation_context_json(stored: str) -> tuple[str, str]:
+    try:
+        protected = loads(stored, None)
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise ReleaseAuthorizationError(
+            "stored release authorization operation context is invalid"
+        ) from exc
+    if not isinstance(protected, dict):
+        raise ReleaseAuthorizationError(
+            "stored release authorization operation context is invalid"
+        )
+    if set(protected) == {"digest"}:
+        raise ReleaseAuthorizationError(
+            "stored release authorization operation context predates request authority"
+        )
+    if (
+        set(protected) != {"apiVersion", "ciphertext", "digest"}
+        or protected.get("apiVersion") != _RELEASE_OPERATION_CONTEXT_STORAGE_VERSION
+        or not isinstance(protected.get("ciphertext"), str)
+        or re.fullmatch(
+            r"sha256:[0-9a-f]{64}", str(protected.get("digest") or "")
+        )
+        is None
+    ):
+        raise ReleaseAuthorizationError(
+            "stored release authorization operation context is invalid"
+        )
+    try:
+        payload_json = decrypt_secret(str(protected["ciphertext"]))
+        operation_context = loads(payload_json, None)
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise ReleaseAuthorizationError(
+            "stored release authorization operation context cannot be recovered"
+        ) from exc
+    if not isinstance(operation_context, dict) or dumps(operation_context) != payload_json:
+        raise ReleaseAuthorizationError(
+            "stored release authorization operation context is not canonical"
+        )
+    actual_digest = (
+        "sha256:" + hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
+    )
+    if not hmac.compare_digest(str(protected["digest"]), actual_digest):
+        raise ReleaseAuthorizationError(
+            "stored release authorization operation context digest mismatch"
+        )
+    return payload_json, actual_digest
 
 
 def _approval_url_commitment(url: str) -> str:
@@ -372,6 +501,18 @@ class RateLimitStoreError(RuntimeError):
     pass
 
 
+class DurableBudgetStoreError(MetadataStoreError):
+    pass
+
+
+class TraversalBudgetStoreError(MetadataStoreError):
+    pass
+
+
+class PolicyStateBundleStoreError(MetadataStoreError):
+    pass
+
+
 class ReleaseAuthorizationError(MetadataStoreError):
     pass
 
@@ -384,6 +525,13 @@ class _ReleaseAuthorizationDenied(Exception):
     def __init__(self, result: dict[str, Any]):
         self.result = result
         super().__init__(str(result.get("reason") or "release authorization denied"))
+
+
+class _PolicyStateBundleDenied(Exception):
+    def __init__(self, reason: str, retry_after_seconds: int = 0):
+        self.reason = reason
+        self.retry_after_seconds = retry_after_seconds
+        super().__init__(reason)
 
 
 class _OIDCBrowserSessionActivationDenied(Exception):
@@ -524,6 +672,26 @@ _GRANT_ATTEMPT_ID_MAX_BYTES = 256
 _RELEASE_AUTHORIZATION_LOCK_WAIT_MS = 500
 _RELEASE_AUTHORIZATION_ATTEMPT_ID_MAX_BYTES = 256
 _RELEASE_AUTHORIZATION_BINDING_MAX_BYTES = 64 * 1024
+_RELEASE_AUTHORIZATION_BINDING_V2 = "serverware.releaseAuthorizationBinding/v2"
+_RELEASE_AUTHORIZATION_V2_COORDINATOR = object()
+_DEVELOPMENT_RELEASE_CHANNELS = frozenset({"dev", "development", "local", "test"})
+_DURABLE_COMPLETION_DEADLINE_UNSET = object()
+_DURABLE_COMPLETION_DEADLINE_RECONCILER_UNBOUND = 0
+_DURABLE_POLICY_UNKNOWN_FAILURE_REASON = (
+    "provider_outcome_or_response_validation_uncertain"
+)
+_DURABLE_POLICY_CHARGED_UNCERTAINTY = "charged_fail_closed"
+_DURABLE_BUDGET_MAX_UNITS = 9_007_199_254_740_991
+_DURABLE_BUDGET_MAX_WINDOW_SECONDS = 31_536_000
+_POLICY_STATE_DISPATCH_MAX_TTL_MS = 300_000
+_POLICY_STATE_RECONCILE_RETRYABLE_SQLSTATES = frozenset(
+    {"40001", "40P01", "55P03"}
+)
+_POLICY_STATE_LEGACY_RELEASE_BINDING_DIGEST = "sha256:" + "0" * 64
+_TRAVERSAL_MAX_PAGES = 10_000
+_TRAVERSAL_MAX_RECORDS = 10_000_000
+_TRAVERSAL_MAX_BYTES = 1_073_741_824
+_TRAVERSAL_MAX_LIFETIME_SECONDS = 86_400
 _RELEASE_AUTHORIZATION_STATES = {
     "reserved",
     "dispatching",
@@ -1724,6 +1892,9 @@ def _lock_postgres_metadata_migration_tables(conn: Any) -> None:
         conn.execute(f"SET LOCAL lock_timeout = '{_AUDIT_LOCK_WAIT_MS}ms'")
         conn.execute(
             "LOCK TABLE metadata_audit_outbox, rate_limit_counters, "
+            "durable_budget_definitions, durable_budget_events, "
+            "traversal_budget_chains, traversal_budget_cursors, "
+            "traversal_budget_page_reservations, "
             "release_authorization_quota_reservations "
             "IN ACCESS EXCLUSIVE MODE"
         )
@@ -4823,6 +4994,13 @@ def _bootstrap_sqlite_audit_store() -> None:
 
 @_serialize_sqlite_metadata_migration
 def init_db(path: Path = DB_PATH) -> None:
+    metadata_backend = metadata_store_backend_name()
+    audit_backend = audit_store_backend_name()
+    if metadata_backend != audit_backend:
+        raise MetadataStoreError(
+            "mixed metadata/audit store backends are unsupported because "
+            "policy publication and audit commitment require one transaction"
+        )
     ensure_data_dirs()
     grants.init_grant_store()
     init_audit_store()
@@ -4841,6 +5019,8 @@ def init_db(path: Path = DB_PATH) -> None:
                 "SELECT pg_advisory_xact_lock(?)",
                 (_METADATA_MIGRATION_LOCK_KEY,),
             )
+            # Match publication lock order before taking migration table locks.
+            _lock_policy_high_water(conn)
         if not isinstance(conn, PostgresMetadataConnection):
             conn.execute(
                 """
@@ -5357,6 +5537,169 @@ def init_db(path: Path = DB_PATH) -> None:
                 updated_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS durable_budget_definitions (
+                budget_key TEXT PRIMARY KEY,
+                principal_id TEXT NOT NULL,
+                route_id TEXT NOT NULL,
+                credential_id TEXT NOT NULL,
+                credential_version BIGINT NOT NULL,
+                policy_hash TEXT NOT NULL,
+                constraint_id TEXT NOT NULL,
+                unit_field TEXT NOT NULL,
+                window_kind TEXT NOT NULL,
+                window_seconds BIGINT NOT NULL,
+                max_units BIGINT NOT NULL,
+                last_observed_epoch_ms BIGINT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                CHECK (window_kind = 'sliding'),
+                CHECK (window_seconds > 0),
+                CHECK (max_units > 0),
+                CHECK (last_observed_epoch_ms >= 0)
+            );
+
+            CREATE TABLE IF NOT EXISTS durable_budget_events (
+                reservation_id TEXT PRIMARY KEY,
+                bundle_reservation_id TEXT,
+                budget_key TEXT NOT NULL
+                    REFERENCES durable_budget_definitions(budget_key) ON DELETE CASCADE,
+                request_digest TEXT NOT NULL,
+                operation_digest TEXT,
+                units BIGINT NOT NULL,
+                state TEXT NOT NULL,
+                occurred_at_epoch_ms BIGINT NOT NULL,
+                expires_at_epoch_ms BIGINT NOT NULL,
+                reservation_expires_at_epoch_ms BIGINT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                CHECK (units >= 0),
+                CHECK (expires_at_epoch_ms > occurred_at_epoch_ms),
+                CHECK (state IN (
+                    'reserved', 'dispatched', 'committed', 'cancelled', 'expired'
+                ))
+            );
+
+            CREATE INDEX IF NOT EXISTS durable_budget_events_active
+                ON durable_budget_events (
+                    budget_key, state, expires_at_epoch_ms, reservation_id
+                );
+
+            CREATE TABLE IF NOT EXISTS traversal_budget_chains (
+                chain_key TEXT PRIMARY KEY,
+                lineage_digest TEXT NOT NULL,
+                principal_id TEXT NOT NULL,
+                route_id TEXT NOT NULL,
+                credential_id TEXT NOT NULL,
+                credential_version BIGINT NOT NULL,
+                policy_hash TEXT NOT NULL,
+                constraint_id TEXT NOT NULL,
+                state TEXT NOT NULL,
+                started_at_epoch_ms BIGINT NOT NULL,
+                expires_at_epoch_ms BIGINT NOT NULL,
+                last_observed_epoch_ms BIGINT NOT NULL,
+                max_pages BIGINT NOT NULL,
+                max_records BIGINT NOT NULL,
+                max_bytes BIGINT NOT NULL,
+                page_count BIGINT NOT NULL DEFAULT 0,
+                record_count BIGINT NOT NULL DEFAULT 0,
+                byte_count BIGINT NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                CHECK (state IN ('active', 'exhausted', 'expired', 'poisoned')),
+                CHECK (expires_at_epoch_ms > started_at_epoch_ms),
+                CHECK (last_observed_epoch_ms >= started_at_epoch_ms),
+                CHECK (max_pages > 0),
+                CHECK (max_records > 0),
+                CHECK (max_bytes > 0),
+                CHECK (page_count >= 0),
+                CHECK (record_count >= 0),
+                CHECK (byte_count >= 0)
+            );
+
+            CREATE TABLE IF NOT EXISTS traversal_budget_cursors (
+                cursor_digest TEXT PRIMARY KEY,
+                chain_key TEXT NOT NULL
+                    REFERENCES traversal_budget_chains(chain_key) ON DELETE CASCADE,
+                lineage_digest TEXT NOT NULL,
+                state TEXT NOT NULL,
+                reserved_by TEXT,
+                issued_at_epoch_ms BIGINT NOT NULL,
+                expires_at_epoch_ms BIGINT NOT NULL,
+                updated_at TEXT NOT NULL,
+                CHECK (state IN ('available', 'reserved', 'consumed')),
+                CHECK (
+                    (state = 'reserved' AND reserved_by IS NOT NULL)
+                    OR (state != 'reserved' AND reserved_by IS NULL)
+                )
+            );
+
+            CREATE INDEX IF NOT EXISTS traversal_budget_cursors_chain
+                ON traversal_budget_cursors (
+                    chain_key, state, expires_at_epoch_ms, cursor_digest
+                );
+
+            CREATE TABLE IF NOT EXISTS traversal_budget_page_reservations (
+                reservation_id TEXT PRIMARY KEY,
+                bundle_reservation_id TEXT,
+                chain_key TEXT NOT NULL
+                    REFERENCES traversal_budget_chains(chain_key) ON DELETE CASCADE,
+                lineage_digest TEXT NOT NULL,
+                request_digest TEXT NOT NULL,
+                request_cursor_digest TEXT,
+                page_number BIGINT NOT NULL,
+                state TEXT NOT NULL,
+                response_digest TEXT,
+                response_records BIGINT,
+                response_bytes BIGINT,
+                next_cursor_digest TEXT,
+                reservation_expires_at_epoch_ms BIGINT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                CHECK (page_number > 0),
+                CHECK (state IN (
+                    'reserved', 'dispatched', 'committed', 'cancelled',
+                    'denied', 'indeterminate', 'expired'
+                )),
+                CHECK (response_records IS NULL OR response_records >= 0),
+                CHECK (response_bytes IS NULL OR response_bytes >= 0)
+            );
+
+            CREATE INDEX IF NOT EXISTS traversal_budget_pages_chain
+                ON traversal_budget_page_reservations (
+                    chain_key, state, page_number, reservation_id
+                );
+
+            CREATE TABLE IF NOT EXISTS policy_state_bundles (
+                reservation_id TEXT PRIMARY KEY,
+                attempt_id TEXT NOT NULL UNIQUE,
+                policy_hash TEXT NOT NULL,
+                request_digest TEXT NOT NULL,
+                operation_digest TEXT NOT NULL,
+                claim_digest TEXT NOT NULL,
+                claims_json TEXT NOT NULL,
+                release_binding_digest TEXT NOT NULL,
+                reservation_deadline_at_epoch_ms BIGINT NOT NULL,
+                state TEXT NOT NULL,
+                actor_id TEXT NOT NULL,
+                dispatch_started_at_epoch_ms BIGINT,
+                dispatch_deadline_at_epoch_ms BIGINT,
+                completion_dispatch_deadline_at_epoch_ms BIGINT,
+                response_evidence_digest TEXT,
+                response_evidence_json TEXT,
+                terminal_reason TEXT,
+                response_body_sha256 TEXT,
+                uncertainty TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                CHECK (state IN (
+                    'reserved', 'dispatched', 'committed', 'aborted',
+                    'indeterminate', 'denied'
+                ))
+            );
+
+            CREATE INDEX IF NOT EXISTS policy_state_bundles_state
+                ON policy_state_bundles (state, updated_at, reservation_id);
+
             CREATE TABLE IF NOT EXISTS release_authorization_attempts (
                 attempt_id TEXT PRIMARY KEY,
                 binding_digest TEXT NOT NULL,
@@ -5395,8 +5738,14 @@ def init_db(path: Path = DB_PATH) -> None:
             CREATE TABLE IF NOT EXISTS release_authorization_credential_issuances (
                 attempt_id TEXT PRIMARY KEY
                     REFERENCES release_authorization_attempts(attempt_id) ON DELETE CASCADE,
+                release_kind TEXT NOT NULL,
+                reservation_id TEXT NOT NULL,
                 binding_digest TEXT NOT NULL,
+                request_digest TEXT NOT NULL,
+                operation_digest TEXT,
+                quota_claims_digest TEXT NOT NULL,
                 request_binding_sha256 TEXT NOT NULL,
+                request_authority_sha256 TEXT NOT NULL,
                 recipient_key_id TEXT NOT NULL,
                 recipient_nonce_sha256 TEXT NOT NULL,
                 reservation_expires_at_epoch_ms BIGINT NOT NULL,
@@ -5477,6 +5826,23 @@ def init_db(path: Path = DB_PATH) -> None:
                 policy_hash TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS policy_publications (
+                policy_hash TEXT PRIMARY KEY,
+                scope TEXT NOT NULL,
+                policy_id TEXT NOT NULL,
+                sequence BIGINT NOT NULL,
+                rollback_epoch BIGINT NOT NULL,
+                status TEXT NOT NULL,
+                previous_policy_hash TEXT,
+                created_at TEXT NOT NULL,
+                committed_at TEXT,
+                updated_at TEXT NOT NULL,
+                CHECK (status IN ('pending', 'committed'))
+            );
+
+            CREATE INDEX IF NOT EXISTS policy_publications_scope_status
+                ON policy_publications (scope, status, sequence);
 
             CREATE TABLE IF NOT EXISTS webauthn_credentials (
                 id TEXT PRIMARY KEY,
@@ -5738,7 +6104,218 @@ def init_db(path: Path = DB_PATH) -> None:
                 ON webauthn_recovery_revocations (status, expires_at);
             """
         )
+        if not isinstance(conn, PostgresMetadataConnection):
+            _lock_policy_high_water(conn)
         _lock_postgres_metadata_migration_tables(conn)
+        if isinstance(conn, PostgresMetadataConnection):
+            conn.execute(
+                "LOCK TABLE policy_high_water, policy_publications "
+                "IN SHARE ROW EXCLUSIVE MODE"
+            )
+        conn.execute(
+            """
+            INSERT INTO policy_publications (
+                policy_hash, scope, policy_id, sequence, rollback_epoch,
+                status, previous_policy_hash, created_at, committed_at,
+                updated_at
+            )
+            SELECT
+                high_water.policy_hash, high_water.scope,
+                high_water.policy_id, high_water.sequence,
+                high_water.rollback_epoch, 'committed', NULL,
+                high_water.updated_at, high_water.updated_at,
+                high_water.updated_at
+            FROM policy_high_water AS high_water
+            WHERE high_water.scope = ?
+              AND NOT EXISTS (
+                  SELECT 1 FROM policy_publications AS publication
+                  WHERE publication.policy_hash = high_water.policy_hash
+              )
+            """,
+            ("active",),
+        )
+        _ensure_column(
+            conn,
+            "policy_state_bundles",
+            "release_binding_digest",
+            "TEXT",
+        )
+        _ensure_column(
+            conn,
+            "policy_state_bundles",
+            "reservation_deadline_at_epoch_ms",
+            "BIGINT",
+        )
+        _ensure_column(
+            conn,
+            "durable_budget_events",
+            "bundle_reservation_id",
+            "TEXT",
+        )
+        _ensure_column(
+            conn,
+            "traversal_budget_page_reservations",
+            "bundle_reservation_id",
+            "TEXT",
+        )
+        _ensure_column(
+            conn,
+            "policy_state_bundles",
+            "dispatch_started_at_epoch_ms",
+            "BIGINT",
+        )
+        _ensure_column(
+            conn,
+            "policy_state_bundles",
+            "dispatch_deadline_at_epoch_ms",
+            "BIGINT",
+        )
+        _ensure_column(
+            conn,
+            "policy_state_bundles",
+            "completion_dispatch_deadline_at_epoch_ms",
+            "BIGINT",
+        )
+        _ensure_column(
+            conn,
+            "policy_state_bundles",
+            "response_body_sha256",
+            "TEXT",
+        )
+        _ensure_column(
+            conn,
+            "policy_state_bundles",
+            "uncertainty",
+            "TEXT",
+        )
+        for bundle in conn.execute(
+            "SELECT * "
+            "FROM policy_state_bundles"
+        ).fetchall():
+            migrated_claims = _normalize_policy_state_claims(
+                loads(str(bundle["claims_json"]), None),
+                policy_hash=str(bundle["policy_hash"]),
+            )
+            release = conn.execute(
+                "SELECT * FROM release_authorization_attempts "
+                "WHERE attempt_id = ?",
+                (bundle["attempt_id"],),
+            ).fetchone()
+            candidate_release_binding = (
+                str(bundle["release_binding_digest"])
+                if bundle["release_binding_digest"] is not None
+                else (
+                    str(release["binding_digest"])
+                    if release is not None
+                    else None
+                )
+            )
+            candidate = {
+                "attempt_id": bundle["attempt_id"],
+                "policy_hash": bundle["policy_hash"],
+                "request_digest": bundle["request_digest"],
+                "operation_digest": bundle["operation_digest"],
+                "release_binding_digest": candidate_release_binding,
+            }
+            exact_release = (
+                candidate_release_binding is not None
+                and _policy_state_release_binding_is_exact(
+                    candidate, migrated_claims, release
+                )
+            )
+            if (
+                bundle["release_binding_digest"] is None
+                and exact_release
+            ):
+                conn.execute(
+                    "UPDATE policy_state_bundles "
+                    "SET release_binding_digest = ? "
+                    "WHERE reservation_id = ? "
+                    "AND release_binding_digest IS NULL",
+                    (
+                        candidate_release_binding,
+                        bundle["reservation_id"],
+                    ),
+                )
+            if (
+                bundle["reservation_deadline_at_epoch_ms"] is None
+                and exact_release
+                and type(release["reservation_expires_at_epoch_ms"]) is int
+                and int(release["reservation_expires_at_epoch_ms"]) > 0
+            ):
+                conn.execute(
+                    "UPDATE policy_state_bundles "
+                    "SET reservation_deadline_at_epoch_ms = ? "
+                    "WHERE reservation_id = ? "
+                    "AND reservation_deadline_at_epoch_ms IS NULL",
+                    (
+                        release["reservation_expires_at_epoch_ms"],
+                        bundle["reservation_id"],
+                    ),
+                )
+            if str(bundle["state"]) in {
+                "dispatched",
+                "committed",
+                "indeterminate",
+                "denied",
+                "aborted",
+            }:
+                dispatch_started_at = (
+                    release["dispatch_started_at_epoch_ms"]
+                    if release is not None
+                    else None
+                )
+                dispatch_deadline_at = (
+                    release["dispatch_expires_at_epoch_ms"]
+                    if release is not None
+                    else None
+                )
+                exact_dispatch = (
+                    exact_release
+                    and type(dispatch_started_at) is int
+                    and type(dispatch_deadline_at) is int
+                    and 0 <= int(dispatch_started_at)
+                    < int(dispatch_deadline_at)
+                    <= int(dispatch_started_at)
+                    + _POLICY_STATE_DISPATCH_MAX_TTL_MS
+                )
+                conn.execute(
+                    "UPDATE policy_state_bundles "
+                    "SET dispatch_started_at_epoch_ms = ?, "
+                    "dispatch_deadline_at_epoch_ms = ? "
+                    "WHERE reservation_id = ?",
+                    (
+                        dispatch_started_at if exact_dispatch else None,
+                        dispatch_deadline_at if exact_dispatch else None,
+                        bundle["reservation_id"],
+                    ),
+                )
+            for index, claim in enumerate(migrated_claims):
+                child_id = _policy_state_child_reservation_id(
+                    str(bundle["reservation_id"]), index, claim
+                )
+                table = (
+                    "durable_budget_events"
+                    if claim["type"]
+                    in {"slidingWindowLimit", "weightedBudget"}
+                    else "traversal_budget_page_reservations"
+                )
+                conn.execute(
+                    f"UPDATE {table} SET bundle_reservation_id = ? "
+                    "WHERE reservation_id = ? "
+                    "AND bundle_reservation_id IS NULL",
+                    (bundle["reservation_id"], child_id),
+                )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS policy_state_bundles_dispatch_deadline "
+            "ON policy_state_bundles "
+            "(state, dispatch_deadline_at_epoch_ms, reservation_id)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS policy_state_bundles_reservation_deadline "
+            "ON policy_state_bundles "
+            "(state, reservation_deadline_at_epoch_ms, reservation_id)"
+        )
         _ensure_column(
             conn,
             "release_authorization_quota_reservations",
@@ -5750,6 +6327,42 @@ def init_db(path: Path = DB_PATH) -> None:
             "release_authorization_quota_reservations",
             "operation_storage_version",
             "BIGINT",
+        )
+        _ensure_column(
+            conn,
+            "release_authorization_credential_issuances",
+            "release_kind",
+            "TEXT",
+        )
+        _ensure_column(
+            conn,
+            "release_authorization_credential_issuances",
+            "reservation_id",
+            "TEXT",
+        )
+        _ensure_column(
+            conn,
+            "release_authorization_credential_issuances",
+            "request_digest",
+            "TEXT",
+        )
+        _ensure_column(
+            conn,
+            "release_authorization_credential_issuances",
+            "operation_digest",
+            "TEXT",
+        )
+        _ensure_column(
+            conn,
+            "release_authorization_credential_issuances",
+            "quota_claims_digest",
+            "TEXT",
+        )
+        _ensure_column(
+            conn,
+            "release_authorization_credential_issuances",
+            "request_authority_sha256",
+            "TEXT",
         )
         _ensure_column(conn, "rate_limit_counters", "encrypted_operation", "TEXT")
         _ensure_column(
@@ -5868,29 +6481,46 @@ def init_db(path: Path = DB_PATH) -> None:
         ).fetchall():
             binding_digest = str(row["binding_digest"])
             stored_binding = loads(str(row["binding_json"] or ""), {})
-            operation_context = loads(str(row["operation_context_json"] or ""), {})
             binding_is_commitment = stored_binding == {"digest": binding_digest}
-            if (
+            stored_operation_context = str(row["operation_context_json"] or "")
+            operation_context = loads(stored_operation_context, {})
+            operation_context_is_commitment = (
                 isinstance(operation_context, dict)
                 and set(operation_context) == {"digest"}
                 and re.fullmatch(
                     r"sha256:[0-9a-f]{64}", str(operation_context.get("digest") or "")
                 )
-            ):
-                operation_context_digest = str(operation_context["digest"])
-                if binding_is_commitment:
-                    continue
-            else:
-                operation_context_digest = (
-                    "sha256:"
-                    + hashlib.sha256(dumps(operation_context).encode("utf-8")).hexdigest()
+                is not None
+            )
+            operation_context_is_protected = (
+                isinstance(operation_context, dict)
+                and set(operation_context) == {"apiVersion", "ciphertext", "digest"}
+                and operation_context.get("apiVersion")
+                == _RELEASE_OPERATION_CONTEXT_STORAGE_VERSION
+            )
+            if operation_context_is_protected:
+                _recover_release_operation_context_json(stored_operation_context)
+                migrated_operation_context_json = stored_operation_context
+            elif operation_context_is_commitment:
+                migrated_operation_context_json = stored_operation_context
+            elif isinstance(operation_context, dict):
+                migrated_operation_context_json = (
+                    _protect_release_operation_context_json(dumps(operation_context))
                 )
+            else:
+                raise RuntimeError(
+                    "stored release authorization operation context is invalid"
+                )
+            if binding_is_commitment and (
+                migrated_operation_context_json == stored_operation_context
+            ):
+                continue
             conn.execute(
                 "UPDATE release_authorization_attempts SET binding_json = ?, "
                 "operation_context_json = ? WHERE attempt_id = ?",
                 (
                     dumps({"digest": binding_digest}),
-                    dumps({"digest": operation_context_digest}),
+                    migrated_operation_context_json,
                     row["attempt_id"],
                 ),
             )
@@ -6169,6 +6799,7 @@ def init_db(path: Path = DB_PATH) -> None:
                 conn, str(row["id"]), int(row["credential_version"] or 1)
             )
     initialize_rbac_authority()
+    reconcile_policy_state_bundles(limit=100)
 
 
 def _ensure_column(conn: Any, table: str, column: str, decl: str) -> None:
@@ -7675,6 +8306,313 @@ def get_policy_high_water() -> dict[str, Any] | None:
     }
 
 
+def _validate_policy_high_water_values(
+    *,
+    policy_id: str,
+    sequence: int,
+    rollback_epoch: int,
+    policy_hash: str,
+) -> None:
+    if not policy_id or len(policy_id.encode("utf-8")) > 256:
+        raise MetadataStoreError("policy id must be a non-empty string up to 256 bytes")
+    if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
+        raise MetadataStoreError("policy sequence must be a positive integer")
+    if (
+        isinstance(rollback_epoch, bool)
+        or not isinstance(rollback_epoch, int)
+        or rollback_epoch < 1
+    ):
+        raise MetadataStoreError("policy rollback epoch must be a positive integer")
+    if not isinstance(policy_hash, str) or not re.fullmatch(
+        r"sha256:[0-9a-f]{64}", policy_hash
+    ):
+        raise MetadataStoreError("policy hash must be a canonical SHA-256 digest")
+
+
+def _policy_publication_row(conn: Any, policy_hash: str) -> Any | None:
+    return conn.execute(
+        "SELECT policy_hash, scope, policy_id, sequence, rollback_epoch, "
+        "status, previous_policy_hash, created_at, committed_at, updated_at "
+        "FROM policy_publications WHERE policy_hash = ?",
+        (policy_hash,),
+    ).fetchone()
+
+
+def get_policy_publication(policy_hash: str) -> dict[str, Any] | None:
+    if not isinstance(policy_hash, str) or re.fullmatch(
+        r"sha256:[0-9a-f]{64}", policy_hash
+    ) is None:
+        raise MetadataStoreError(
+            "policy publication hash must be a canonical SHA-256 digest"
+        )
+    with connect() as conn:
+        row = _policy_publication_row(conn, policy_hash)
+    if not row:
+        return None
+    return {
+        "policy_hash": str(row["policy_hash"]),
+        "scope": str(row["scope"]),
+        "policy_id": str(row["policy_id"]),
+        "sequence": int(row["sequence"]),
+        "rollback_epoch": int(row["rollback_epoch"]),
+        "status": str(row["status"]),
+        "previous_policy_hash": (
+            str(row["previous_policy_hash"])
+            if row["previous_policy_hash"] is not None
+            else None
+        ),
+        "created_at": str(row["created_at"]),
+        "committed_at": (
+            str(row["committed_at"])
+            if row["committed_at"] is not None
+            else None
+        ),
+        "updated_at": str(row["updated_at"]),
+    }
+
+
+def _policy_row_matches(
+    row: Any,
+    *,
+    policy_id: str,
+    sequence: int,
+    rollback_epoch: int,
+    policy_hash: str,
+) -> bool:
+    return bool(
+        row
+        and str(row["policy_id"]) == policy_id
+        and int(row["sequence"]) == sequence
+        and int(row["rollback_epoch"]) == rollback_epoch
+        and str(row["policy_hash"]) == policy_hash
+    )
+
+
+def stage_policy_publication(
+    *,
+    policy_id: str,
+    sequence: int,
+    rollback_epoch: int,
+    policy_hash: str,
+    _connection: Any | None = None,
+) -> dict[str, Any]:
+    """Durably record a candidate without authorizing it for active readers."""
+    _validate_policy_high_water_values(
+        policy_id=policy_id,
+        sequence=sequence,
+        rollback_epoch=rollback_epoch,
+        policy_hash=policy_hash,
+    )
+    connection_scope = (
+        connect() if _connection is None else contextlib.nullcontext(_connection)
+    )
+    with connection_scope as conn:
+        _lock_policy_high_water(conn)
+        current = _policy_high_water_row(conn)
+        if current and not _policy_row_matches(
+            current,
+            policy_id=policy_id,
+            sequence=sequence,
+            rollback_epoch=rollback_epoch,
+            policy_hash=policy_hash,
+        ):
+            current_policy_id = str(current["policy_id"])
+            current_sequence = int(current["sequence"])
+            current_rollback_epoch = int(current["rollback_epoch"])
+            if policy_id != current_policy_id:
+                raise MetadataStoreError(
+                    f"policy id changed from {current_policy_id} to {policy_id}"
+                )
+            if rollback_epoch < current_rollback_epoch:
+                raise MetadataStoreError(
+                    f"policy rollback epoch {rollback_epoch} is below persisted high-water "
+                    f"{current_rollback_epoch}"
+                )
+            if sequence <= current_sequence:
+                raise MetadataStoreError(
+                    f"policy sequence {sequence} does not exceed persisted high-water "
+                    f"{current_sequence}"
+                )
+
+        publication = _policy_publication_row(conn, policy_hash)
+        if publication:
+            if not _policy_row_matches(
+                publication,
+                policy_id=policy_id,
+                sequence=sequence,
+                rollback_epoch=rollback_epoch,
+                policy_hash=policy_hash,
+            ):
+                raise MetadataStoreError(
+                    "policy publication digest has conflicting monotonic metadata"
+                )
+            if str(publication["status"]) == "committed":
+                if not _policy_row_matches(
+                    current,
+                    policy_id=policy_id,
+                    sequence=sequence,
+                    rollback_epoch=rollback_epoch,
+                    policy_hash=policy_hash,
+                ):
+                    raise MetadataStoreError(
+                        "committed policy publication does not match active high-water"
+                    )
+                return {
+                    "policy_hash": policy_hash,
+                    "status": "committed",
+                    "previous_policy_hash": publication[
+                        "previous_policy_hash"
+                    ],
+                    "updated_at": str(publication["updated_at"]),
+                }
+            current_policy_hash = (
+                str(current["policy_hash"]) if current else None
+            )
+            previous_policy_hash = publication["previous_policy_hash"]
+            if (
+                str(previous_policy_hash)
+                if previous_policy_hash is not None
+                else None
+            ) != current_policy_hash:
+                raise MetadataStoreError(
+                    "pending policy publication predecessor is stale"
+                )
+            return {
+                "policy_hash": policy_hash,
+                "status": "pending",
+                "previous_policy_hash": previous_policy_hash,
+                "updated_at": str(publication["updated_at"]),
+            }
+
+        now_s = iso_now()
+        conn.execute(
+            "INSERT INTO policy_publications "
+            "(policy_hash, scope, policy_id, sequence, rollback_epoch, status, "
+            "previous_policy_hash, created_at, committed_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                policy_hash,
+                "active",
+                policy_id,
+                sequence,
+                rollback_epoch,
+                "pending",
+                str(current["policy_hash"]) if current else None,
+                now_s,
+                None,
+                now_s,
+            ),
+        )
+    return {
+        "policy_hash": policy_hash,
+        "status": "pending",
+        "previous_policy_hash": (
+            str(current["policy_hash"]) if current else None
+        ),
+        "updated_at": now_s,
+    }
+
+
+def verify_policy_high_water(
+    *,
+    policy_id: str,
+    sequence: int,
+    rollback_epoch: int,
+    policy_hash: str,
+    _connection: Any | None = None,
+    _allow_pending: bool = False,
+) -> dict[str, Any]:
+    """Verify exact authority state without changing it."""
+    _validate_policy_high_water_values(
+        policy_id=policy_id,
+        sequence=sequence,
+        rollback_epoch=rollback_epoch,
+        policy_hash=policy_hash,
+    )
+    connection_scope = (
+        connect() if _connection is None else contextlib.nullcontext(_connection)
+    )
+    with connection_scope as conn:
+        current = _policy_high_water_row(conn)
+        if not _policy_row_matches(
+            current,
+            policy_id=policy_id,
+            sequence=sequence,
+            rollback_epoch=rollback_epoch,
+            policy_hash=policy_hash,
+        ):
+            raise MetadataStoreError(
+                "signed policy is not the exact persisted high-water state"
+            )
+        publication = _policy_publication_row(conn, policy_hash)
+        allowed_statuses = {"committed", "pending"} if _allow_pending else {"committed"}
+        if (
+            not _policy_row_matches(
+                publication,
+                policy_id=policy_id,
+                sequence=sequence,
+                rollback_epoch=rollback_epoch,
+                policy_hash=policy_hash,
+            )
+            or str(publication["scope"]) != "active"
+            or str(publication["status"]) not in allowed_statuses
+        ):
+            raise MetadataStoreError(
+                "signed policy publication is not committed"
+            )
+    return {
+        "policy_id": policy_id,
+        "sequence": sequence,
+        "rollback_epoch": rollback_epoch,
+        "policy_hash": policy_hash,
+        "updated_at": str(current["updated_at"]),
+    }
+
+
+def commit_policy_publication(
+    *,
+    policy_id: str,
+    sequence: int,
+    rollback_epoch: int,
+    policy_hash: str,
+    previous_policy_hash: str | None,
+    _connection: Any,
+) -> dict[str, Any]:
+    """Commit a staged publication in the high-water transaction."""
+    _lock_policy_high_water(_connection)
+    verified = verify_policy_high_water(
+        policy_id=policy_id,
+        sequence=sequence,
+        rollback_epoch=rollback_epoch,
+        policy_hash=policy_hash,
+        _connection=_connection,
+        _allow_pending=True,
+    )
+    publication = _policy_publication_row(_connection, policy_hash)
+    stored_previous_policy_hash = publication["previous_policy_hash"]
+    if (
+        str(stored_previous_policy_hash)
+        if stored_previous_policy_hash is not None
+        else None
+    ) != previous_policy_hash:
+        raise MetadataStoreError(
+            "policy publication predecessor changed before commitment"
+        )
+    if str(publication["status"]) == "pending":
+        now_s = iso_now()
+        updated = _connection.execute(
+            "UPDATE policy_publications SET status = ?, committed_at = ?, "
+            "updated_at = ? WHERE policy_hash = ? AND status = ?",
+            ("committed", now_s, now_s, policy_hash, "pending"),
+        )
+        if updated.rowcount != 1:
+            raise MetadataStoreError(
+                "policy publication commitment lost a concurrent update"
+            )
+        verified["updated_at"] = now_s
+    return verified
+
+
 def advance_policy_high_water(
     *,
     policy_id: str,
@@ -7683,16 +8621,12 @@ def advance_policy_high_water(
     policy_hash: str,
     _connection: Any | None = None,
 ) -> dict[str, Any]:
-    if not policy_id or len(policy_id.encode("utf-8")) > 256:
-        raise MetadataStoreError("policy id must be a non-empty string up to 256 bytes")
-    if sequence < 1:
-        raise MetadataStoreError("policy sequence must be a positive integer")
-    if rollback_epoch < 1:
-        raise MetadataStoreError("policy rollback epoch must be a positive integer")
-    if not isinstance(policy_hash, str) or not re.fullmatch(
-        r"sha256:[0-9a-f]{64}", policy_hash
-    ):
-        raise MetadataStoreError("policy hash must be a canonical SHA-256 digest")
+    _validate_policy_high_water_values(
+        policy_id=policy_id,
+        sequence=sequence,
+        rollback_epoch=rollback_epoch,
+        policy_hash=policy_hash,
+    )
 
     now_s = iso_now()
     connection_scope = (
@@ -11944,11 +12878,38 @@ def credential_generation_snapshot(item_id: str):
     with connect() as conn:
         _lock_credential_mutation(conn, item_id)
         row = conn.execute(
-            "SELECT * FROM credentials WHERE id = ?", (item_id,)
+            "SELECT id, kind, credential_version, metadata, lifecycle_status "
+            "FROM credentials WHERE id = ?",
+            (item_id,),
         ).fetchone()
         if row is not None and str(row["lifecycle_status"] or "active") != "active":
             row = None
-        yield row_to_credential(row, include_secret=False) if row else None
+        metadata = None
+        if row is not None:
+            raw_metadata = row["metadata"]
+            if (
+                not isinstance(raw_metadata, str)
+                or len(raw_metadata.encode("utf-8")) > 32 * 1024
+            ):
+                raise MetadataStoreError(
+                    "credential generation metadata exceeds 32 KiB"
+                )
+            metadata = loads(raw_metadata, {})
+            if not isinstance(metadata, dict):
+                raise MetadataStoreError(
+                    "credential generation metadata must be an object"
+                )
+        yield (
+            {
+                "id": str(row["id"]),
+                "kind": str(row["kind"]),
+                "credential_version": int(row["credential_version"]),
+                "metadata": metadata,
+                "lifecycle_status": str(row["lifecycle_status"] or "active"),
+            }
+            if row is not None
+            else None
+        )
 
 
 def list_credentials() -> list[dict[str, Any]]:
@@ -14668,6 +15629,5595 @@ def clear_rate_limit_counters(
         return deleted
 
 
+def _bounded_store_text(
+    label: str,
+    value: Any,
+    *,
+    maximum: int = 512,
+    allow_empty: bool = False,
+    error_type: type[MetadataStoreError],
+) -> str:
+    if (
+        not isinstance(value, str)
+        or (not allow_empty and not value)
+        or value != value.strip()
+        or len(value.encode("utf-8")) > maximum
+        or any(ord(character) < 32 or ord(character) == 127 for character in value)
+    ):
+        qualifier = "trimmed"
+        if not allow_empty:
+            qualifier = "non-empty trimmed"
+        raise error_type(
+            f"{label} must be a {qualifier} string of at most {maximum} bytes"
+        )
+    return value
+
+
+def _store_digest(
+    label: str,
+    value: Any,
+    *,
+    required: bool = True,
+    error_type: type[MetadataStoreError],
+) -> str | None:
+    if value is None and not required:
+        return None
+    digest = _bounded_store_text(
+        label,
+        value,
+        maximum=71,
+        error_type=error_type,
+    )
+    if re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is None:
+        raise error_type(f"{label} must be a lowercase sha256 digest")
+    return digest
+
+
+def _bounded_store_integer(
+    label: str,
+    value: Any,
+    *,
+    minimum: int,
+    maximum: int,
+    error_type: type[MetadataStoreError],
+) -> int:
+    if (
+        not isinstance(value, int)
+        or isinstance(value, bool)
+        or not minimum <= value <= maximum
+    ):
+        raise error_type(f"{label} must be between {minimum} and {maximum}")
+    return value
+
+
+def _durable_budget_definition_material(
+    *,
+    budget_key: str,
+    principal_id: str,
+    route_id: str,
+    credential_id: str,
+    credential_version: int,
+    policy_hash: str,
+    constraint_id: str,
+    unit_field: str,
+    window_seconds: int,
+    max_units: int,
+) -> dict[str, Any]:
+    return {
+        "budget_key": budget_key,
+        "principal_id": principal_id,
+        "route_id": route_id,
+        "credential_id": credential_id,
+        "credential_version": credential_version,
+        "policy_hash": policy_hash,
+        "constraint_id": constraint_id,
+        "unit_field": unit_field,
+        "window_kind": "sliding",
+        "window_seconds": window_seconds,
+        "max_units": max_units,
+    }
+
+
+def _normalize_durable_budget_definition(
+    *,
+    budget_key: Any,
+    principal_id: Any,
+    route_id: Any,
+    credential_id: Any,
+    credential_version: Any,
+    policy_hash: Any,
+    constraint_id: Any,
+    unit_field: Any,
+    window_seconds: Any,
+    max_units: Any,
+) -> dict[str, Any]:
+    error = DurableBudgetStoreError
+    return _durable_budget_definition_material(
+        budget_key=_store_digest(
+            "durable budget key", budget_key, error_type=error
+        )
+        or "",
+        principal_id=_bounded_store_text(
+            "durable budget principal", principal_id, error_type=error
+        ),
+        route_id=_bounded_store_text(
+            "durable budget route", route_id, error_type=error
+        ),
+        credential_id=_bounded_store_text(
+            "durable budget credential",
+            credential_id,
+            allow_empty=True,
+            error_type=error,
+        ),
+        credential_version=_bounded_store_integer(
+            "durable budget credential version",
+            credential_version,
+            minimum=0,
+            maximum=2**63 - 1,
+            error_type=error,
+        ),
+        policy_hash=_store_digest(
+            "durable budget policy hash", policy_hash, error_type=error
+        )
+        or "",
+        constraint_id=_bounded_store_text(
+            "durable budget constraint", constraint_id, error_type=error
+        ),
+        unit_field=_bounded_store_text(
+            "durable budget unit field", unit_field, error_type=error
+        ),
+        window_seconds=_bounded_store_integer(
+            "durable budget sliding window",
+            window_seconds,
+            minimum=1,
+            maximum=_DURABLE_BUDGET_MAX_WINDOW_SECONDS,
+            error_type=error,
+        ),
+        max_units=_bounded_store_integer(
+            "durable budget maximum",
+            max_units,
+            minimum=1,
+            maximum=_DURABLE_BUDGET_MAX_UNITS,
+            error_type=error,
+        ),
+    )
+
+
+def _durable_budget_definition_from_row(row: Any) -> dict[str, Any]:
+    return _durable_budget_definition_material(
+        budget_key=str(row["budget_key"]),
+        principal_id=str(row["principal_id"]),
+        route_id=str(row["route_id"]),
+        credential_id=str(row["credential_id"]),
+        credential_version=int(row["credential_version"]),
+        policy_hash=str(row["policy_hash"]),
+        constraint_id=str(row["constraint_id"]),
+        unit_field=str(row["unit_field"]),
+        window_seconds=int(row["window_seconds"]),
+        max_units=int(row["max_units"]),
+    )
+
+
+def _expire_durable_budget_reservations(
+    conn: Any,
+    *,
+    budget_key: str,
+    now_epoch_ms: int,
+    now_s: str,
+) -> None:
+    conn.execute(
+        """
+        UPDATE durable_budget_events
+        SET state = 'expired', updated_at = ?
+        WHERE budget_key = ? AND state = 'reserved'
+          AND bundle_reservation_id IS NULL
+          AND reservation_expires_at_epoch_ms <= ?
+        """,
+        (now_s, budget_key, now_epoch_ms),
+    )
+
+
+def _durable_budget_active_rows(
+    conn: Any,
+    *,
+    budget_key: str,
+    now_epoch_ms: int,
+) -> list[Any]:
+    return list(
+        conn.execute(
+            """
+            SELECT reservation_id, units, expires_at_epoch_ms
+            FROM durable_budget_events
+            WHERE budget_key = ?
+              AND (
+                    state = 'dispatched'
+                    OR (
+                        state IN ('reserved', 'committed')
+                        AND expires_at_epoch_ms > ?
+                    )
+              )
+            ORDER BY expires_at_epoch_ms ASC, reservation_id ASC
+            """,
+            (budget_key, now_epoch_ms),
+        ).fetchall()
+    )
+
+
+def _durable_budget_active_total(
+    conn: Any,
+    *,
+    budget_key: str,
+    now_epoch_ms: int,
+) -> int:
+    row = conn.execute(
+        """
+        SELECT COALESCE(SUM(units), 0) AS total_units
+        FROM durable_budget_events
+        WHERE budget_key = ?
+          AND (
+                state = 'dispatched'
+                OR (
+                    state IN ('reserved', 'committed')
+                    AND expires_at_epoch_ms > ?
+                )
+          )
+        """,
+        (budget_key, now_epoch_ms),
+    ).fetchone()
+    try:
+        total = int(row["total_units"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise DurableBudgetStoreError(
+            "durable budget active total is invalid"
+        ) from exc
+    if not 0 <= total <= _DURABLE_BUDGET_MAX_UNITS:
+        raise DurableBudgetStoreError("durable budget active total is corrupt")
+    return total
+
+
+def _durable_budget_retry_after(
+    rows: list[Any],
+    *,
+    current_units: int,
+    requested_units: int,
+    max_units: int,
+    now_epoch_ms: int,
+) -> int:
+    remaining = current_units
+    for row in rows:
+        remaining -= int(row["units"])
+        if remaining + requested_units <= max_units:
+            return max(
+                1,
+                (int(row["expires_at_epoch_ms"]) - now_epoch_ms + 999) // 1000,
+            )
+    return 1
+
+
+def _durable_budget_result(
+    *,
+    allowed: bool,
+    reason: str,
+    definition: dict[str, Any],
+    reservation_id: str,
+    state: str,
+    units: int,
+    total_units: int,
+    now_epoch_ms: int,
+    expires_at_epoch_ms: int | None,
+    retry_after_seconds: int = 0,
+    idempotent_replay: bool = False,
+) -> dict[str, Any]:
+    return {
+        "allowed": allowed,
+        "reason": reason,
+        "budget_key": definition["budget_key"],
+        "reservation_id": reservation_id,
+        "state": state,
+        "window_kind": "sliding",
+        "window_seconds": definition["window_seconds"],
+        "max_units": definition["max_units"],
+        "units": units,
+        "total_units": total_units,
+        "remaining_units": max(definition["max_units"] - total_units, 0),
+        "expires_at_epoch_ms": expires_at_epoch_ms,
+        "retry_after_seconds": max(0, retry_after_seconds),
+        "idempotent_replay": idempotent_replay,
+        "observed_at_epoch_ms": now_epoch_ms,
+        "durable_budget_store_backend": metadata_store_backend_name(),
+        "durable_budget_store_ha": metadata_uses_postgres(),
+    }
+
+
+def reserve_durable_budget(
+    *,
+    reservation_id: str,
+    budget_key: str,
+    principal_id: str,
+    route_id: str,
+    credential_id: str,
+    credential_version: int,
+    policy_hash: str,
+    constraint_id: str,
+    operation_digest: str | None,
+    request_digest: str,
+    unit_field: str,
+    units: int,
+    window_seconds: int,
+    max_units: int,
+    reservation_ttl_seconds: int,
+    now_epoch_ms: int | None = None,
+) -> dict[str, Any]:
+    definition = _normalize_durable_budget_definition(
+        budget_key=budget_key,
+        principal_id=principal_id,
+        route_id=route_id,
+        credential_id=credential_id,
+        credential_version=credential_version,
+        policy_hash=policy_hash,
+        constraint_id=constraint_id,
+        unit_field=unit_field,
+        window_seconds=window_seconds,
+        max_units=max_units,
+    )
+    reservation_id = _bounded_store_text(
+        "durable budget reservation",
+        reservation_id,
+        maximum=_RELEASE_AUTHORIZATION_ATTEMPT_ID_MAX_BYTES,
+        error_type=DurableBudgetStoreError,
+    )
+    request_digest = (
+        _store_digest(
+            "durable budget request digest",
+            request_digest,
+            error_type=DurableBudgetStoreError,
+        )
+        or ""
+    )
+    operation_digest = _store_digest(
+        "durable budget operation digest",
+        operation_digest,
+        required=False,
+        error_type=DurableBudgetStoreError,
+    )
+    units = _bounded_store_integer(
+        "durable budget units",
+        units,
+        minimum=0,
+        maximum=_DURABLE_BUDGET_MAX_UNITS,
+        error_type=DurableBudgetStoreError,
+    )
+    reservation_ttl_seconds = _bounded_store_integer(
+        "durable budget reservation TTL",
+        reservation_ttl_seconds,
+        minimum=1,
+        maximum=300,
+        error_type=DurableBudgetStoreError,
+    )
+    if units > definition["max_units"]:
+        return _durable_budget_result(
+            allowed=False,
+            reason="requested_units_exceed_budget",
+            definition=definition,
+            reservation_id=reservation_id,
+            state="denied",
+            units=units,
+            total_units=0,
+            now_epoch_ms=0 if now_epoch_ms is None else now_epoch_ms,
+            expires_at_epoch_ms=None,
+        )
+
+    with connect() as conn:
+        _begin_release_transaction(conn)
+        now_ms = _rate_limit_transaction_now_epoch_ms(conn, now_epoch_ms)
+        now_s = datetime.fromtimestamp(now_ms / 1000, timezone.utc).isoformat()
+        _lock_release_resources(conn, {f"durable-budget:{definition['budget_key']}"})
+        conn.execute(
+            """
+            INSERT INTO durable_budget_definitions (
+                budget_key, principal_id, route_id, credential_id,
+                credential_version, policy_hash, constraint_id,
+                unit_field, window_kind, window_seconds,
+                max_units, last_observed_epoch_ms, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'sliding', ?, ?, ?, ?, ?)
+            ON CONFLICT (budget_key) DO NOTHING
+            """,
+            (
+                definition["budget_key"],
+                definition["principal_id"],
+                definition["route_id"],
+                definition["credential_id"],
+                definition["credential_version"],
+                definition["policy_hash"],
+                definition["constraint_id"],
+                definition["unit_field"],
+                definition["window_seconds"],
+                definition["max_units"],
+                now_ms,
+                now_s,
+                now_s,
+            ),
+        )
+        suffix = " FOR UPDATE" if isinstance(conn, PostgresMetadataConnection) else ""
+        stored_definition = conn.execute(
+            "SELECT * FROM durable_budget_definitions WHERE budget_key = ?" + suffix,
+            (definition["budget_key"],),
+        ).fetchone()
+        if stored_definition is None:
+            raise DurableBudgetStoreError("durable budget definition disappeared")
+        if _durable_budget_definition_from_row(stored_definition) != definition:
+            raise DurableBudgetStoreError(
+                "durable budget key is bound to different policy dimensions"
+            )
+        if now_ms < int(stored_definition["last_observed_epoch_ms"]):
+            raise DurableBudgetStoreError(
+                "durable budget clock moved before its last observation"
+            )
+        _expire_durable_budget_reservations(
+            conn,
+            budget_key=definition["budget_key"],
+            now_epoch_ms=now_ms,
+            now_s=now_s,
+        )
+        existing = conn.execute(
+            "SELECT * FROM durable_budget_events WHERE reservation_id = ?" + suffix,
+            (reservation_id,),
+        ).fetchone()
+        if existing is not None:
+            expected = {
+                "budget_key": definition["budget_key"],
+                "request_digest": request_digest,
+                "operation_digest": operation_digest,
+                "units": units,
+            }
+            actual = {
+                "budget_key": str(existing["budget_key"]),
+                "request_digest": str(existing["request_digest"]),
+                "operation_digest": (
+                    str(existing["operation_digest"])
+                    if existing["operation_digest"] is not None
+                    else None
+                ),
+                "units": int(existing["units"]),
+            }
+            if actual != expected:
+                raise DurableBudgetStoreError(
+                    "durable budget reservation id is bound to different evidence"
+                )
+            conn.execute(
+                "UPDATE durable_budget_definitions "
+                "SET last_observed_epoch_ms = ?, updated_at = ? WHERE budget_key = ?",
+                (now_ms, now_s, definition["budget_key"]),
+            )
+            total = _durable_budget_active_total(
+                conn,
+                budget_key=definition["budget_key"],
+                now_epoch_ms=now_ms,
+            )
+            state = str(existing["state"])
+            active_replay = state in {"reserved", "dispatched"} or (
+                state == "committed"
+                and int(existing["expires_at_epoch_ms"]) > now_ms
+            )
+            return _durable_budget_result(
+                allowed=active_replay,
+                reason=(
+                    state
+                    if active_replay or state != "committed"
+                    else "committed_window_expired"
+                ),
+                definition=definition,
+                reservation_id=reservation_id,
+                state=state,
+                units=units,
+                total_units=total,
+                now_epoch_ms=now_ms,
+                expires_at_epoch_ms=int(existing["expires_at_epoch_ms"]),
+                idempotent_replay=True,
+            )
+
+        total = _durable_budget_active_total(
+            conn,
+            budget_key=definition["budget_key"],
+            now_epoch_ms=now_ms,
+        )
+        if total + units > definition["max_units"]:
+            active_rows = _durable_budget_active_rows(
+                conn,
+                budget_key=definition["budget_key"],
+                now_epoch_ms=now_ms,
+            )
+            retry_after = _durable_budget_retry_after(
+                active_rows,
+                current_units=total,
+                requested_units=units,
+                max_units=definition["max_units"],
+                now_epoch_ms=now_ms,
+            )
+            conn.execute(
+                "UPDATE durable_budget_definitions "
+                "SET last_observed_epoch_ms = ?, updated_at = ? WHERE budget_key = ?",
+                (now_ms, now_s, definition["budget_key"]),
+            )
+            return _durable_budget_result(
+                allowed=False,
+                reason="sliding_budget_exceeded",
+                definition=definition,
+                reservation_id=reservation_id,
+                state="denied",
+                units=units,
+                total_units=total,
+                now_epoch_ms=now_ms,
+                expires_at_epoch_ms=None,
+                retry_after_seconds=retry_after,
+            )
+
+        expires_at_ms = now_ms + definition["window_seconds"] * 1000
+        reservation_expires_at_ms = min(
+            expires_at_ms,
+            now_ms + reservation_ttl_seconds * 1000,
+        )
+        conn.execute(
+            """
+            INSERT INTO durable_budget_events (
+                reservation_id, budget_key, request_digest, operation_digest,
+                units, state, occurred_at_epoch_ms, expires_at_epoch_ms,
+                reservation_expires_at_epoch_ms, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, 'reserved', ?, ?, ?, ?, ?)
+            """,
+            (
+                reservation_id,
+                definition["budget_key"],
+                request_digest,
+                operation_digest,
+                units,
+                now_ms,
+                expires_at_ms,
+                reservation_expires_at_ms,
+                now_s,
+                now_s,
+            ),
+        )
+        conn.execute(
+            "UPDATE durable_budget_definitions "
+            "SET last_observed_epoch_ms = ?, updated_at = ? WHERE budget_key = ?",
+            (now_ms, now_s, definition["budget_key"]),
+        )
+        return _durable_budget_result(
+            allowed=True,
+            reason="reserved",
+            definition=definition,
+            reservation_id=reservation_id,
+            state="reserved",
+            units=units,
+            total_units=total + units,
+            now_epoch_ms=now_ms,
+            expires_at_epoch_ms=expires_at_ms,
+        )
+
+
+def _transition_durable_budget_reservation(
+    *,
+    reservation_id: str,
+    budget_key: str,
+    request_digest: str,
+    operation_digest: str | None,
+    target_state: str,
+    now_epoch_ms: int | None,
+) -> dict[str, Any]:
+    error = DurableBudgetStoreError
+    reservation_id = _bounded_store_text(
+        "durable budget reservation",
+        reservation_id,
+        maximum=_RELEASE_AUTHORIZATION_ATTEMPT_ID_MAX_BYTES,
+        error_type=error,
+    )
+    budget_key = _store_digest(
+        "durable budget key", budget_key, error_type=error
+    ) or ""
+    request_digest = _store_digest(
+        "durable budget request digest", request_digest, error_type=error
+    ) or ""
+    operation_digest = _store_digest(
+        "durable budget operation digest",
+        operation_digest,
+        required=False,
+        error_type=error,
+    )
+    if target_state not in {"committed", "cancelled"}:
+        raise error("durable budget transition is invalid")
+
+    with connect() as conn:
+        _begin_release_transaction(conn)
+        now_ms = _rate_limit_transaction_now_epoch_ms(conn, now_epoch_ms)
+        now_s = datetime.fromtimestamp(now_ms / 1000, timezone.utc).isoformat()
+        _lock_release_resources(conn, {f"durable-budget:{budget_key}"})
+        suffix = " FOR UPDATE" if isinstance(conn, PostgresMetadataConnection) else ""
+        definition_row = conn.execute(
+            "SELECT * FROM durable_budget_definitions WHERE budget_key = ?" + suffix,
+            (budget_key,),
+        ).fetchone()
+        event = conn.execute(
+            "SELECT * FROM durable_budget_events WHERE reservation_id = ?" + suffix,
+            (reservation_id,),
+        ).fetchone()
+        if definition_row is None or event is None:
+            raise error("durable budget reservation is absent")
+        definition = _durable_budget_definition_from_row(definition_row)
+        expected = (budget_key, request_digest, operation_digest)
+        actual = (
+            str(event["budget_key"]),
+            str(event["request_digest"]),
+            (
+                str(event["operation_digest"])
+                if event["operation_digest"] is not None
+                else None
+            ),
+        )
+        if actual != expected:
+            raise error("durable budget transition evidence does not match")
+        if now_ms < int(definition_row["last_observed_epoch_ms"]):
+            raise error("durable budget clock moved before its last observation")
+        _expire_durable_budget_reservations(
+            conn,
+            budget_key=budget_key,
+            now_epoch_ms=now_ms,
+            now_s=now_s,
+        )
+        event = conn.execute(
+            "SELECT * FROM durable_budget_events WHERE reservation_id = ?" + suffix,
+            (reservation_id,),
+        ).fetchone()
+        assert event is not None
+        state = str(event["state"])
+        if state == target_state:
+            idempotent_replay = True
+        elif target_state == "cancelled" and state != "reserved":
+            raise error(
+                f"durable budget reservation cannot transition from {state}"
+            )
+        elif target_state == "committed" and state not in {"reserved", "dispatched"}:
+            raise error(
+                f"durable budget reservation cannot transition from {state}"
+            )
+        else:
+            if target_state == "committed" and state == "reserved":
+                expires_at_ms = now_ms + definition["window_seconds"] * 1000
+                conn.execute(
+                    "UPDATE durable_budget_events SET state = 'committed', "
+                    "occurred_at_epoch_ms = ?, expires_at_epoch_ms = ?, "
+                    "reservation_expires_at_epoch_ms = NULL, updated_at = ? "
+                    "WHERE reservation_id = ? AND state = 'reserved'",
+                    (now_ms, expires_at_ms, now_s, reservation_id),
+                )
+                event = conn.execute(
+                    "SELECT * FROM durable_budget_events "
+                    "WHERE reservation_id = ?" + suffix,
+                    (reservation_id,),
+                ).fetchone()
+                assert event is not None
+            else:
+                conn.execute(
+                    "UPDATE durable_budget_events SET state = ?, "
+                    "reservation_expires_at_epoch_ms = NULL, updated_at = ? "
+                    "WHERE reservation_id = ? AND state IN ('reserved', 'dispatched')",
+                    (target_state, now_s, reservation_id),
+                )
+            state = target_state
+            idempotent_replay = False
+        conn.execute(
+            "UPDATE durable_budget_definitions "
+            "SET last_observed_epoch_ms = ?, updated_at = ? WHERE budget_key = ?",
+            (now_ms, now_s, budget_key),
+        )
+        total = _durable_budget_active_total(
+            conn, budget_key=budget_key, now_epoch_ms=now_ms
+        )
+        return _durable_budget_result(
+            allowed=state == "committed",
+            reason=state,
+            definition=definition,
+            reservation_id=reservation_id,
+            state=state,
+            units=int(event["units"]),
+            total_units=total,
+            now_epoch_ms=now_ms,
+            expires_at_epoch_ms=int(event["expires_at_epoch_ms"]),
+            idempotent_replay=idempotent_replay,
+        )
+
+
+def commit_durable_budget_reservation(
+    *,
+    reservation_id: str,
+    budget_key: str,
+    request_digest: str,
+    operation_digest: str | None,
+    now_epoch_ms: int | None = None,
+) -> dict[str, Any]:
+    return _transition_durable_budget_reservation(
+        reservation_id=reservation_id,
+        budget_key=budget_key,
+        request_digest=request_digest,
+        operation_digest=operation_digest,
+        target_state="committed",
+        now_epoch_ms=now_epoch_ms,
+    )
+
+
+def mark_durable_budget_dispatched(
+    *,
+    reservation_id: str,
+    budget_key: str,
+    request_digest: str,
+    operation_digest: str | None,
+    now_epoch_ms: int | None = None,
+) -> dict[str, Any]:
+    error = DurableBudgetStoreError
+    reservation_id = _bounded_store_text(
+        "durable budget reservation",
+        reservation_id,
+        maximum=_RELEASE_AUTHORIZATION_ATTEMPT_ID_MAX_BYTES,
+        error_type=error,
+    )
+    budget_key = _store_digest(
+        "durable budget key", budget_key, error_type=error
+    ) or ""
+    request_digest = _store_digest(
+        "durable budget request digest", request_digest, error_type=error
+    ) or ""
+    operation_digest = _store_digest(
+        "durable budget operation digest",
+        operation_digest,
+        required=False,
+        error_type=error,
+    )
+    with connect() as conn:
+        _begin_release_transaction(conn)
+        now_ms = _rate_limit_transaction_now_epoch_ms(conn, now_epoch_ms)
+        now_s = datetime.fromtimestamp(now_ms / 1000, timezone.utc).isoformat()
+        _lock_release_resources(conn, {f"durable-budget:{budget_key}"})
+        suffix = " FOR UPDATE" if isinstance(conn, PostgresMetadataConnection) else ""
+        definition_row = conn.execute(
+            "SELECT * FROM durable_budget_definitions WHERE budget_key = ?" + suffix,
+            (budget_key,),
+        ).fetchone()
+        event = conn.execute(
+            "SELECT * FROM durable_budget_events WHERE reservation_id = ?" + suffix,
+            (reservation_id,),
+        ).fetchone()
+        if definition_row is None or event is None:
+            raise error("durable budget reservation is absent")
+        expected = (budget_key, request_digest, operation_digest)
+        actual = (
+            str(event["budget_key"]),
+            str(event["request_digest"]),
+            (
+                str(event["operation_digest"])
+                if event["operation_digest"] is not None
+                else None
+            ),
+        )
+        if actual != expected:
+            raise error("durable budget dispatch evidence does not match")
+        if now_ms < int(definition_row["last_observed_epoch_ms"]):
+            raise error("durable budget clock moved before its last observation")
+        _expire_durable_budget_reservations(
+            conn,
+            budget_key=budget_key,
+            now_epoch_ms=now_ms,
+            now_s=now_s,
+        )
+        event = conn.execute(
+            "SELECT * FROM durable_budget_events WHERE reservation_id = ?" + suffix,
+            (reservation_id,),
+        ).fetchone()
+        assert event is not None
+        state = str(event["state"])
+        if state == "dispatched":
+            idempotent_replay = True
+        elif state != "reserved":
+            raise error(
+                f"durable budget reservation cannot dispatch from {state}"
+            )
+        else:
+            expires_at_ms = now_ms + int(definition_row["window_seconds"]) * 1000
+            updated = conn.execute(
+                "UPDATE durable_budget_events SET state = 'dispatched', "
+                "occurred_at_epoch_ms = ?, expires_at_epoch_ms = ?, "
+                "reservation_expires_at_epoch_ms = NULL, updated_at = ? "
+                "WHERE reservation_id = ? AND state = 'reserved'",
+                (now_ms, expires_at_ms, now_s, reservation_id),
+            )
+            if updated.rowcount != 1:
+                raise error("durable budget dispatch transition raced")
+            event = conn.execute(
+                "SELECT * FROM durable_budget_events "
+                "WHERE reservation_id = ?" + suffix,
+                (reservation_id,),
+            ).fetchone()
+            assert event is not None
+            state = "dispatched"
+            idempotent_replay = False
+        conn.execute(
+            "UPDATE durable_budget_definitions "
+            "SET last_observed_epoch_ms = ?, updated_at = ? WHERE budget_key = ?",
+            (now_ms, now_s, budget_key),
+        )
+        definition = _durable_budget_definition_from_row(definition_row)
+        return _durable_budget_result(
+            allowed=True,
+            reason=state,
+            definition=definition,
+            reservation_id=reservation_id,
+            state=state,
+            units=int(event["units"]),
+            total_units=_durable_budget_active_total(
+                conn, budget_key=budget_key, now_epoch_ms=now_ms
+            ),
+            now_epoch_ms=now_ms,
+            expires_at_epoch_ms=int(event["expires_at_epoch_ms"]),
+            idempotent_replay=idempotent_replay,
+        )
+
+
+def cancel_durable_budget_reservation(
+    *,
+    reservation_id: str,
+    budget_key: str,
+    request_digest: str,
+    operation_digest: str | None,
+    now_epoch_ms: int | None = None,
+) -> dict[str, Any]:
+    return _transition_durable_budget_reservation(
+        reservation_id=reservation_id,
+        budget_key=budget_key,
+        request_digest=request_digest,
+        operation_digest=operation_digest,
+        target_state="cancelled",
+        now_epoch_ms=now_epoch_ms,
+    )
+
+
+def _normalize_traversal_identity(
+    *,
+    chain_key: Any,
+    lineage_digest: Any,
+    principal_id: Any,
+    route_id: Any,
+    credential_id: Any,
+    credential_version: Any,
+    policy_hash: Any,
+    constraint_id: Any,
+    max_pages: Any,
+    max_records: Any,
+    max_bytes: Any,
+    lifetime_seconds: Any,
+) -> dict[str, Any]:
+    error = TraversalBudgetStoreError
+    return {
+        "chain_key": _store_digest(
+            "traversal chain key", chain_key, error_type=error
+        )
+        or "",
+        "lineage_digest": _store_digest(
+            "traversal lineage digest", lineage_digest, error_type=error
+        )
+        or "",
+        "principal_id": _bounded_store_text(
+            "traversal principal", principal_id, error_type=error
+        ),
+        "route_id": _bounded_store_text(
+            "traversal route", route_id, error_type=error
+        ),
+        "credential_id": _bounded_store_text(
+            "traversal credential",
+            credential_id,
+            allow_empty=True,
+            error_type=error,
+        ),
+        "credential_version": _bounded_store_integer(
+            "traversal credential version",
+            credential_version,
+            minimum=0,
+            maximum=2**63 - 1,
+            error_type=error,
+        ),
+        "policy_hash": _store_digest(
+            "traversal policy hash", policy_hash, error_type=error
+        )
+        or "",
+        "constraint_id": _bounded_store_text(
+            "traversal constraint", constraint_id, error_type=error
+        ),
+        "max_pages": _bounded_store_integer(
+            "traversal maximum pages",
+            max_pages,
+            minimum=1,
+            maximum=_TRAVERSAL_MAX_PAGES,
+            error_type=error,
+        ),
+        "max_records": _bounded_store_integer(
+            "traversal maximum records",
+            max_records,
+            minimum=1,
+            maximum=_TRAVERSAL_MAX_RECORDS,
+            error_type=error,
+        ),
+        "max_bytes": _bounded_store_integer(
+            "traversal maximum bytes",
+            max_bytes,
+            minimum=1,
+            maximum=_TRAVERSAL_MAX_BYTES,
+            error_type=error,
+        ),
+        "lifetime_seconds": _bounded_store_integer(
+            "traversal lifetime",
+            lifetime_seconds,
+            minimum=1,
+            maximum=_TRAVERSAL_MAX_LIFETIME_SECONDS,
+            error_type=error,
+        ),
+    }
+
+
+def _traversal_chain_identity_from_row(row: Any) -> dict[str, Any]:
+    return {
+        "chain_key": str(row["chain_key"]),
+        "lineage_digest": str(row["lineage_digest"]),
+        "principal_id": str(row["principal_id"]),
+        "route_id": str(row["route_id"]),
+        "credential_id": str(row["credential_id"]),
+        "credential_version": int(row["credential_version"]),
+        "policy_hash": str(row["policy_hash"]),
+        "constraint_id": str(row["constraint_id"]),
+        "max_pages": int(row["max_pages"]),
+        "max_records": int(row["max_records"]),
+        "max_bytes": int(row["max_bytes"]),
+        "lifetime_seconds": (
+            int(row["expires_at_epoch_ms"]) - int(row["started_at_epoch_ms"])
+        )
+        // 1000,
+    }
+
+
+def _expire_traversal_page_reservations(
+    conn: Any,
+    *,
+    chain_key: str,
+    now_epoch_ms: int,
+    now_s: str,
+) -> None:
+    stale = conn.execute(
+        """
+        SELECT reservation_id, request_cursor_digest
+        FROM traversal_budget_page_reservations
+        WHERE chain_key = ? AND state = 'reserved'
+          AND bundle_reservation_id IS NULL
+          AND reservation_expires_at_epoch_ms <= ?
+        ORDER BY reservation_id ASC
+        """,
+        (chain_key, now_epoch_ms),
+    ).fetchall()
+    for row in stale:
+        reservation_id = str(row["reservation_id"])
+        conn.execute(
+            "UPDATE traversal_budget_page_reservations "
+            "SET state = 'expired', updated_at = ? "
+            "WHERE reservation_id = ? AND state = 'reserved'",
+            (now_s, reservation_id),
+        )
+        if row["request_cursor_digest"] is not None:
+            conn.execute(
+                "UPDATE traversal_budget_cursors "
+                "SET state = 'available', reserved_by = NULL, updated_at = ? "
+                "WHERE cursor_digest = ? AND state = 'reserved' AND reserved_by = ?",
+                (now_s, row["request_cursor_digest"], reservation_id),
+            )
+
+
+def _traversal_result(
+    *,
+    allowed: bool,
+    reason: str,
+    chain: Any,
+    reservation_id: str,
+    reservation_state: str,
+    page_number: int | None,
+    idempotent_replay: bool = False,
+) -> dict[str, Any]:
+    return {
+        "allowed": allowed,
+        "reason": reason,
+        "chain_key": str(chain["chain_key"]),
+        "lineage_digest": str(chain["lineage_digest"]),
+        "chain_state": str(chain["state"]),
+        "reservation_id": reservation_id,
+        "reservation_state": reservation_state,
+        "page_number": page_number,
+        "page_count": int(chain["page_count"]),
+        "record_count": int(chain["record_count"]),
+        "byte_count": int(chain["byte_count"]),
+        "max_pages": int(chain["max_pages"]),
+        "max_records": int(chain["max_records"]),
+        "max_bytes": int(chain["max_bytes"]),
+        "started_at_epoch_ms": int(chain["started_at_epoch_ms"]),
+        "expires_at_epoch_ms": int(chain["expires_at_epoch_ms"]),
+        "idempotent_replay": idempotent_replay,
+        "traversal_budget_store_backend": metadata_store_backend_name(),
+        "traversal_budget_store_ha": metadata_uses_postgres(),
+    }
+
+
+def reserve_traversal_page(
+    *,
+    reservation_id: str,
+    chain_key: str,
+    lineage_digest: str,
+    principal_id: str,
+    route_id: str,
+    credential_id: str,
+    credential_version: int,
+    policy_hash: str,
+    constraint_id: str,
+    request_digest: str,
+    request_cursor_digest: str | None,
+    max_pages: int,
+    max_records: int,
+    max_bytes: int,
+    lifetime_seconds: int,
+    reservation_ttl_seconds: int,
+    now_epoch_ms: int | None = None,
+) -> dict[str, Any]:
+    identity = _normalize_traversal_identity(
+        chain_key=chain_key,
+        lineage_digest=lineage_digest,
+        principal_id=principal_id,
+        route_id=route_id,
+        credential_id=credential_id,
+        credential_version=credential_version,
+        policy_hash=policy_hash,
+        constraint_id=constraint_id,
+        max_pages=max_pages,
+        max_records=max_records,
+        max_bytes=max_bytes,
+        lifetime_seconds=lifetime_seconds,
+    )
+    error = TraversalBudgetStoreError
+    reservation_id = _bounded_store_text(
+        "traversal reservation",
+        reservation_id,
+        maximum=_RELEASE_AUTHORIZATION_ATTEMPT_ID_MAX_BYTES,
+        error_type=error,
+    )
+    request_digest = _store_digest(
+        "traversal request digest", request_digest, error_type=error
+    ) or ""
+    request_cursor_digest = _store_digest(
+        "traversal cursor digest",
+        request_cursor_digest,
+        required=False,
+        error_type=error,
+    )
+    reservation_ttl_seconds = _bounded_store_integer(
+        "traversal reservation TTL",
+        reservation_ttl_seconds,
+        minimum=1,
+        maximum=300,
+        error_type=error,
+    )
+
+    with connect() as conn:
+        _begin_release_transaction(conn)
+        now_ms = _rate_limit_transaction_now_epoch_ms(conn, now_epoch_ms)
+        now_s = datetime.fromtimestamp(now_ms / 1000, timezone.utc).isoformat()
+        resources = {f"traversal-chain:{identity['chain_key']}"}
+        if request_cursor_digest is not None:
+            resources.add(f"traversal-cursor:{request_cursor_digest}")
+        _lock_release_resources(conn, resources)
+        suffix = " FOR UPDATE" if isinstance(conn, PostgresMetadataConnection) else ""
+        existing_reservation = conn.execute(
+            "SELECT * FROM traversal_budget_page_reservations "
+            "WHERE reservation_id = ?" + suffix,
+            (reservation_id,),
+        ).fetchone()
+        if existing_reservation is not None:
+            expected = (
+                identity["chain_key"],
+                identity["lineage_digest"],
+                request_digest,
+                request_cursor_digest,
+            )
+            actual = (
+                str(existing_reservation["chain_key"]),
+                str(existing_reservation["lineage_digest"]),
+                str(existing_reservation["request_digest"]),
+                (
+                    str(existing_reservation["request_cursor_digest"])
+                    if existing_reservation["request_cursor_digest"] is not None
+                    else None
+                ),
+            )
+            if actual != expected:
+                raise error(
+                    "traversal reservation id is bound to different request evidence"
+                )
+            chain = conn.execute(
+                "SELECT * FROM traversal_budget_chains WHERE chain_key = ?" + suffix,
+                (identity["chain_key"],),
+            ).fetchone()
+            if chain is None:
+                raise error("traversal reservation chain disappeared")
+            if _traversal_chain_identity_from_row(chain) != identity:
+                raise error(
+                    "traversal reservation replay is bound to different "
+                    "policy dimensions"
+                )
+            if now_ms < int(chain["last_observed_epoch_ms"]):
+                raise error("traversal clock moved before its last observation")
+            conn.execute(
+                "UPDATE traversal_budget_chains "
+                "SET last_observed_epoch_ms = ?, updated_at = ? WHERE chain_key = ?",
+                (now_ms, now_s, identity["chain_key"]),
+            )
+            chain = conn.execute(
+                "SELECT * FROM traversal_budget_chains WHERE chain_key = ?",
+                (identity["chain_key"],),
+            ).fetchone()
+            state = str(existing_reservation["state"])
+            return _traversal_result(
+                allowed=state in {"reserved", "dispatched", "committed"},
+                reason=state,
+                chain=chain,
+                reservation_id=reservation_id,
+                reservation_state=state,
+                page_number=int(existing_reservation["page_number"]),
+                idempotent_replay=True,
+            )
+
+        chain = conn.execute(
+            "SELECT * FROM traversal_budget_chains WHERE chain_key = ?" + suffix,
+            (identity["chain_key"],),
+        ).fetchone()
+        if chain is None:
+            if request_cursor_digest is not None:
+                cursor = conn.execute(
+                    "SELECT chain_key, lineage_digest FROM traversal_budget_cursors "
+                    "WHERE cursor_digest = ?" + suffix,
+                    (request_cursor_digest,),
+                ).fetchone()
+                reason = "cursor_cross_lineage" if cursor is not None else "cursor_unknown"
+                return {
+                    "allowed": False,
+                    "reason": reason,
+                    "chain_key": identity["chain_key"],
+                    "lineage_digest": identity["lineage_digest"],
+                    "reservation_id": reservation_id,
+                    "reservation_state": "denied",
+                    "traversal_budget_store_backend": metadata_store_backend_name(),
+                    "traversal_budget_store_ha": metadata_uses_postgres(),
+                }
+            expires_at_ms = now_ms + identity["lifetime_seconds"] * 1000
+            conn.execute(
+                """
+                INSERT INTO traversal_budget_chains (
+                    chain_key, lineage_digest, principal_id, route_id,
+                    credential_id, credential_version, policy_hash,
+                    constraint_id, state, started_at_epoch_ms,
+                    expires_at_epoch_ms, last_observed_epoch_ms,
+                    max_pages, max_records, max_bytes,
+                    page_count, record_count, byte_count, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?,
+                        0, 0, 0, ?, ?)
+                """,
+                (
+                    identity["chain_key"],
+                    identity["lineage_digest"],
+                    identity["principal_id"],
+                    identity["route_id"],
+                    identity["credential_id"],
+                    identity["credential_version"],
+                    identity["policy_hash"],
+                    identity["constraint_id"],
+                    now_ms,
+                    expires_at_ms,
+                    now_ms,
+                    identity["max_pages"],
+                    identity["max_records"],
+                    identity["max_bytes"],
+                    now_s,
+                    now_s,
+                ),
+            )
+            chain = conn.execute(
+                "SELECT * FROM traversal_budget_chains WHERE chain_key = ?" + suffix,
+                (identity["chain_key"],),
+            ).fetchone()
+        if chain is None:
+            raise error("traversal chain insert did not create a row")
+        if _traversal_chain_identity_from_row(chain) != identity:
+            raise error("traversal chain key is bound to different policy dimensions")
+        if now_ms < int(chain["last_observed_epoch_ms"]):
+            raise error("traversal clock moved before its last observation")
+        conn.execute(
+            "UPDATE traversal_budget_chains "
+            "SET last_observed_epoch_ms = ?, updated_at = ? WHERE chain_key = ?",
+            (now_ms, now_s, identity["chain_key"]),
+        )
+        if now_ms >= int(chain["expires_at_epoch_ms"]):
+            conn.execute(
+                "UPDATE traversal_budget_chains SET state = 'expired', "
+                "last_observed_epoch_ms = ?, updated_at = ? WHERE chain_key = ?",
+                (now_ms, now_s, identity["chain_key"]),
+            )
+            chain = conn.execute(
+                "SELECT * FROM traversal_budget_chains WHERE chain_key = ?",
+                (identity["chain_key"],),
+            ).fetchone()
+            return _traversal_result(
+                allowed=False,
+                reason="traversal_lifetime_expired",
+                chain=chain,
+                reservation_id=reservation_id,
+                reservation_state="denied",
+                page_number=None,
+            )
+        _expire_traversal_page_reservations(
+            conn,
+            chain_key=identity["chain_key"],
+            now_epoch_ms=now_ms,
+            now_s=now_s,
+        )
+        chain = conn.execute(
+            "SELECT * FROM traversal_budget_chains WHERE chain_key = ?" + suffix,
+            (identity["chain_key"],),
+        ).fetchone()
+        assert chain is not None
+        if str(chain["state"]) != "active":
+            return _traversal_result(
+                allowed=False,
+                reason=f"traversal_{chain['state']}",
+                chain=chain,
+                reservation_id=reservation_id,
+                reservation_state="denied",
+                page_number=None,
+            )
+
+        active_reservations = int(
+            conn.execute(
+                "SELECT COUNT(*) AS count "
+                "FROM traversal_budget_page_reservations "
+                "WHERE chain_key = ? AND state IN ('reserved', 'dispatched')",
+                (identity["chain_key"],),
+            ).fetchone()["count"]
+        )
+        root_history = int(
+            conn.execute(
+                "SELECT COUNT(*) AS count "
+                "FROM traversal_budget_page_reservations "
+                "WHERE chain_key = ? AND request_cursor_digest IS NULL "
+                "AND state NOT IN ('cancelled', 'expired')",
+                (identity["chain_key"],),
+            ).fetchone()["count"]
+        )
+        if request_cursor_digest is None and root_history:
+            return _traversal_result(
+                allowed=False,
+                reason="root_request_replayed",
+                chain=chain,
+                reservation_id=reservation_id,
+                reservation_state="denied",
+                page_number=None,
+            )
+        if int(chain["page_count"]) + active_reservations >= int(chain["max_pages"]):
+            return _traversal_result(
+                allowed=False,
+                reason="traversal_page_budget_exceeded",
+                chain=chain,
+                reservation_id=reservation_id,
+                reservation_state="denied",
+                page_number=None,
+            )
+        if (
+            int(chain["record_count"]) >= int(chain["max_records"])
+            or int(chain["byte_count"]) >= int(chain["max_bytes"])
+        ):
+            conn.execute(
+                "UPDATE traversal_budget_chains SET state = 'exhausted', "
+                "last_observed_epoch_ms = ?, updated_at = ? WHERE chain_key = ?",
+                (now_ms, now_s, identity["chain_key"]),
+            )
+            chain = conn.execute(
+                "SELECT * FROM traversal_budget_chains WHERE chain_key = ?",
+                (identity["chain_key"],),
+            ).fetchone()
+            return _traversal_result(
+                allowed=False,
+                reason="traversal_result_budget_exceeded",
+                chain=chain,
+                reservation_id=reservation_id,
+                reservation_state="denied",
+                page_number=None,
+            )
+
+        if request_cursor_digest is not None:
+            cursor = conn.execute(
+                "SELECT * FROM traversal_budget_cursors WHERE cursor_digest = ?"
+                + suffix,
+                (request_cursor_digest,),
+            ).fetchone()
+            if cursor is None:
+                return _traversal_result(
+                    allowed=False,
+                    reason="cursor_unknown",
+                    chain=chain,
+                    reservation_id=reservation_id,
+                    reservation_state="denied",
+                    page_number=None,
+                )
+            if (
+                str(cursor["chain_key"]) != identity["chain_key"]
+                or str(cursor["lineage_digest"]) != identity["lineage_digest"]
+            ):
+                return _traversal_result(
+                    allowed=False,
+                    reason="cursor_cross_lineage",
+                    chain=chain,
+                    reservation_id=reservation_id,
+                    reservation_state="denied",
+                    page_number=None,
+                )
+            if (
+                str(cursor["state"]) != "available"
+                or int(cursor["expires_at_epoch_ms"]) <= now_ms
+            ):
+                return _traversal_result(
+                    allowed=False,
+                    reason="cursor_replayed_or_expired",
+                    chain=chain,
+                    reservation_id=reservation_id,
+                    reservation_state="denied",
+                    page_number=None,
+                )
+            updated = conn.execute(
+                "UPDATE traversal_budget_cursors "
+                "SET state = 'reserved', reserved_by = ?, updated_at = ? "
+                "WHERE cursor_digest = ? AND state = 'available'",
+                (reservation_id, now_s, request_cursor_digest),
+            )
+            if updated.rowcount != 1:
+                raise error("traversal cursor reservation raced")
+
+        page_number = int(chain["page_count"]) + active_reservations + 1
+        reservation_expires_at_ms = min(
+            int(chain["expires_at_epoch_ms"]),
+            now_ms + reservation_ttl_seconds * 1000,
+        )
+        conn.execute(
+            """
+            INSERT INTO traversal_budget_page_reservations (
+                reservation_id, chain_key, lineage_digest, request_digest,
+                request_cursor_digest, page_number, state,
+                reservation_expires_at_epoch_ms, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, 'reserved', ?, ?, ?)
+            """,
+            (
+                reservation_id,
+                identity["chain_key"],
+                identity["lineage_digest"],
+                request_digest,
+                request_cursor_digest,
+                page_number,
+                reservation_expires_at_ms,
+                now_s,
+                now_s,
+            ),
+        )
+        conn.execute(
+            "UPDATE traversal_budget_chains "
+            "SET last_observed_epoch_ms = ?, updated_at = ? WHERE chain_key = ?",
+            (now_ms, now_s, identity["chain_key"]),
+        )
+        chain = conn.execute(
+            "SELECT * FROM traversal_budget_chains WHERE chain_key = ?",
+            (identity["chain_key"],),
+        ).fetchone()
+        return _traversal_result(
+            allowed=True,
+            reason="reserved",
+            chain=chain,
+            reservation_id=reservation_id,
+            reservation_state="reserved",
+            page_number=page_number,
+        )
+
+
+def mark_traversal_page_dispatched(
+    *,
+    reservation_id: str,
+    chain_key: str,
+    request_digest: str,
+    now_epoch_ms: int | None = None,
+) -> dict[str, Any]:
+    error = TraversalBudgetStoreError
+    reservation_id = _bounded_store_text(
+        "traversal reservation",
+        reservation_id,
+        maximum=_RELEASE_AUTHORIZATION_ATTEMPT_ID_MAX_BYTES,
+        error_type=error,
+    )
+    chain_key = _store_digest(
+        "traversal chain key", chain_key, error_type=error
+    ) or ""
+    request_digest = _store_digest(
+        "traversal request digest", request_digest, error_type=error
+    ) or ""
+    with connect() as conn:
+        _begin_release_transaction(conn)
+        now_ms = _rate_limit_transaction_now_epoch_ms(conn, now_epoch_ms)
+        now_s = datetime.fromtimestamp(now_ms / 1000, timezone.utc).isoformat()
+        _lock_release_resources(conn, {f"traversal-chain:{chain_key}"})
+        suffix = " FOR UPDATE" if isinstance(conn, PostgresMetadataConnection) else ""
+        page = conn.execute(
+            "SELECT * FROM traversal_budget_page_reservations "
+            "WHERE reservation_id = ?" + suffix,
+            (reservation_id,),
+        ).fetchone()
+        chain = conn.execute(
+            "SELECT * FROM traversal_budget_chains WHERE chain_key = ?" + suffix,
+            (chain_key,),
+        ).fetchone()
+        if page is None or chain is None:
+            raise error("traversal reservation is absent")
+        if (
+            str(page["chain_key"]) != chain_key
+            or str(page["request_digest"]) != request_digest
+        ):
+            raise error("traversal dispatch evidence does not match")
+        if now_ms < int(chain["last_observed_epoch_ms"]):
+            raise error("traversal clock moved before its last observation")
+        conn.execute(
+            "UPDATE traversal_budget_chains "
+            "SET last_observed_epoch_ms = ?, updated_at = ? WHERE chain_key = ?",
+            (now_ms, now_s, chain_key),
+        )
+        chain = conn.execute(
+            "SELECT * FROM traversal_budget_chains WHERE chain_key = ?",
+            (chain_key,),
+        ).fetchone()
+        state = str(page["state"])
+        if state == "dispatched":
+            idempotent_replay = True
+        elif state != "reserved":
+            raise error(f"traversal page cannot dispatch from {state}")
+        elif (
+            int(page["reservation_expires_at_epoch_ms"]) <= now_ms
+            or int(chain["expires_at_epoch_ms"]) <= now_ms
+        ):
+            _expire_traversal_page_reservations(
+                conn,
+                chain_key=chain_key,
+                now_epoch_ms=now_ms,
+                now_s=now_s,
+            )
+            raise error("traversal reservation expired before dispatch")
+        else:
+            updated = conn.execute(
+                "UPDATE traversal_budget_page_reservations "
+                "SET state = 'dispatched', updated_at = ? "
+                "WHERE reservation_id = ? AND state = 'reserved'",
+                (now_s, reservation_id),
+            )
+            if updated.rowcount != 1:
+                raise error("traversal dispatch transition raced")
+            state = "dispatched"
+            idempotent_replay = False
+        return _traversal_result(
+            allowed=True,
+            reason=state,
+            chain=chain,
+            reservation_id=reservation_id,
+            reservation_state=state,
+            page_number=int(page["page_number"]),
+            idempotent_replay=idempotent_replay,
+        )
+
+
+def _consume_traversal_request_cursor(
+    conn: Any,
+    *,
+    page: Any,
+    now_s: str,
+) -> None:
+    cursor_digest = page["request_cursor_digest"]
+    if cursor_digest is None:
+        return
+    updated = conn.execute(
+        "UPDATE traversal_budget_cursors "
+        "SET state = 'consumed', reserved_by = NULL, updated_at = ? "
+        "WHERE cursor_digest = ? AND state = 'reserved' AND reserved_by = ?",
+        (now_s, cursor_digest, page["reservation_id"]),
+    )
+    if updated.rowcount != 1:
+        raise TraversalBudgetStoreError(
+            "traversal request cursor lost its reservation"
+        )
+
+
+def complete_traversal_page(
+    *,
+    reservation_id: str,
+    chain_key: str,
+    request_digest: str,
+    response_digest: str,
+    response_records: int,
+    response_bytes: int,
+    next_cursor_digest: str | None,
+    now_epoch_ms: int | None = None,
+) -> dict[str, Any]:
+    error = TraversalBudgetStoreError
+    reservation_id = _bounded_store_text(
+        "traversal reservation",
+        reservation_id,
+        maximum=_RELEASE_AUTHORIZATION_ATTEMPT_ID_MAX_BYTES,
+        error_type=error,
+    )
+    chain_key = _store_digest(
+        "traversal chain key", chain_key, error_type=error
+    ) or ""
+    request_digest = _store_digest(
+        "traversal request digest", request_digest, error_type=error
+    ) or ""
+    response_digest = _store_digest(
+        "traversal response digest", response_digest, error_type=error
+    ) or ""
+    next_cursor_digest = _store_digest(
+        "traversal next cursor digest",
+        next_cursor_digest,
+        required=False,
+        error_type=error,
+    )
+    response_records = _bounded_store_integer(
+        "traversal response records",
+        response_records,
+        minimum=0,
+        maximum=_TRAVERSAL_MAX_RECORDS,
+        error_type=error,
+    )
+    response_bytes = _bounded_store_integer(
+        "traversal response bytes",
+        response_bytes,
+        minimum=0,
+        maximum=_TRAVERSAL_MAX_BYTES,
+        error_type=error,
+    )
+    with connect() as conn:
+        _begin_release_transaction(conn)
+        now_ms = _rate_limit_transaction_now_epoch_ms(conn, now_epoch_ms)
+        now_s = datetime.fromtimestamp(now_ms / 1000, timezone.utc).isoformat()
+        resources = {f"traversal-chain:{chain_key}"}
+        if next_cursor_digest is not None:
+            resources.add(f"traversal-cursor:{next_cursor_digest}")
+        _lock_release_resources(conn, resources)
+        suffix = " FOR UPDATE" if isinstance(conn, PostgresMetadataConnection) else ""
+        page = conn.execute(
+            "SELECT * FROM traversal_budget_page_reservations "
+            "WHERE reservation_id = ?" + suffix,
+            (reservation_id,),
+        ).fetchone()
+        chain = conn.execute(
+            "SELECT * FROM traversal_budget_chains WHERE chain_key = ?" + suffix,
+            (chain_key,),
+        ).fetchone()
+        if page is None or chain is None:
+            raise error("traversal completion reservation is absent")
+        if (
+            str(page["chain_key"]) != chain_key
+            or str(page["request_digest"]) != request_digest
+        ):
+            raise error("traversal completion request evidence does not match")
+        if now_ms < int(chain["last_observed_epoch_ms"]):
+            raise error("traversal clock moved before its last observation")
+        state = str(page["state"])
+        if state in {"committed", "denied"}:
+            expected = (
+                response_digest,
+                response_records,
+                response_bytes,
+                next_cursor_digest,
+            )
+            actual = (
+                str(page["response_digest"]),
+                int(page["response_records"]),
+                int(page["response_bytes"]),
+                (
+                    str(page["next_cursor_digest"])
+                    if page["next_cursor_digest"] is not None
+                    else None
+                ),
+            )
+            if actual != expected:
+                raise error(
+                    "traversal completion replay has different response evidence"
+                )
+            conn.execute(
+                "UPDATE traversal_budget_chains "
+                "SET last_observed_epoch_ms = ?, updated_at = ? WHERE chain_key = ?",
+                (now_ms, now_s, chain_key),
+            )
+            chain = conn.execute(
+                "SELECT * FROM traversal_budget_chains WHERE chain_key = ?",
+                (chain_key,),
+            ).fetchone()
+            return _traversal_result(
+                allowed=state == "committed",
+                reason=state,
+                chain=chain,
+                reservation_id=reservation_id,
+                reservation_state=state,
+                page_number=int(page["page_number"]),
+                idempotent_replay=True,
+            )
+        if state != "dispatched":
+            raise error(f"traversal page cannot complete from {state}")
+
+        denial_reason: str | None = None
+        if str(chain["state"]) != "active":
+            denial_reason = f"traversal_{chain['state']}"
+        elif now_ms >= int(chain["expires_at_epoch_ms"]):
+            denial_reason = "traversal_lifetime_expired"
+        elif int(chain["page_count"]) + 1 > int(chain["max_pages"]):
+            denial_reason = "traversal_page_budget_exceeded"
+        elif int(chain["record_count"]) + response_records > int(chain["max_records"]):
+            denial_reason = "traversal_record_budget_exceeded"
+        elif int(chain["byte_count"]) + response_bytes > int(chain["max_bytes"]):
+            denial_reason = "traversal_byte_budget_exceeded"
+        if next_cursor_digest is not None:
+            existing_cursor = conn.execute(
+                "SELECT chain_key, lineage_digest FROM traversal_budget_cursors "
+                "WHERE cursor_digest = ?" + suffix,
+                (next_cursor_digest,),
+            ).fetchone()
+            if existing_cursor is not None:
+                denial_reason = "next_cursor_collision"
+            if next_cursor_digest == page["request_cursor_digest"]:
+                denial_reason = "next_cursor_replayed"
+
+        _consume_traversal_request_cursor(conn, page=page, now_s=now_s)
+        if denial_reason is not None:
+            conn.execute(
+                """
+                UPDATE traversal_budget_page_reservations
+                SET state = 'denied', response_digest = ?,
+                    response_records = ?, response_bytes = ?,
+                    next_cursor_digest = ?, updated_at = ?
+                WHERE reservation_id = ? AND state = 'dispatched'
+                """,
+                (
+                    response_digest,
+                    response_records,
+                    response_bytes,
+                    next_cursor_digest,
+                    now_s,
+                    reservation_id,
+                ),
+            )
+            current_chain_state = str(chain["state"])
+            if current_chain_state in {"poisoned", "expired", "exhausted"}:
+                next_chain_state = current_chain_state
+            elif denial_reason in {"next_cursor_collision", "next_cursor_replayed"}:
+                next_chain_state = "poisoned"
+            elif denial_reason == "traversal_lifetime_expired":
+                next_chain_state = "expired"
+            else:
+                next_chain_state = "exhausted"
+            conn.execute(
+                "UPDATE traversal_budget_chains "
+                "SET state = ?, page_count = page_count + 1, "
+                "last_observed_epoch_ms = ?, updated_at = ? WHERE chain_key = ?",
+                (next_chain_state, now_ms, now_s, chain_key),
+            )
+            chain = conn.execute(
+                "SELECT * FROM traversal_budget_chains WHERE chain_key = ?",
+                (chain_key,),
+            ).fetchone()
+            return _traversal_result(
+                allowed=False,
+                reason=denial_reason,
+                chain=chain,
+                reservation_id=reservation_id,
+                reservation_state="denied",
+                page_number=int(page["page_number"]),
+            )
+
+        page_count = int(chain["page_count"]) + 1
+        record_count = int(chain["record_count"]) + response_records
+        byte_count = int(chain["byte_count"]) + response_bytes
+        exhausted = (
+            next_cursor_digest is None
+            or page_count >= int(chain["max_pages"])
+            or record_count >= int(chain["max_records"])
+            or byte_count >= int(chain["max_bytes"])
+        )
+        if next_cursor_digest is not None and not exhausted:
+            conn.execute(
+                """
+                INSERT INTO traversal_budget_cursors (
+                    cursor_digest, chain_key, lineage_digest, state, reserved_by,
+                    issued_at_epoch_ms, expires_at_epoch_ms, updated_at
+                )
+                VALUES (?, ?, ?, 'available', NULL, ?, ?, ?)
+                """,
+                (
+                    next_cursor_digest,
+                    chain_key,
+                    chain["lineage_digest"],
+                    now_ms,
+                    chain["expires_at_epoch_ms"],
+                    now_s,
+                ),
+            )
+        conn.execute(
+            """
+            UPDATE traversal_budget_page_reservations
+            SET state = 'committed', response_digest = ?,
+                response_records = ?, response_bytes = ?,
+                next_cursor_digest = ?, updated_at = ?
+            WHERE reservation_id = ? AND state = 'dispatched'
+            """,
+            (
+                response_digest,
+                response_records,
+                response_bytes,
+                next_cursor_digest,
+                now_s,
+                reservation_id,
+            ),
+        )
+        conn.execute(
+            """
+            UPDATE traversal_budget_chains
+            SET state = ?, page_count = ?, record_count = ?, byte_count = ?,
+                last_observed_epoch_ms = ?, updated_at = ?
+            WHERE chain_key = ?
+            """,
+            (
+                "exhausted" if exhausted else "active",
+                page_count,
+                record_count,
+                byte_count,
+                now_ms,
+                now_s,
+                chain_key,
+            ),
+        )
+        chain = conn.execute(
+            "SELECT * FROM traversal_budget_chains WHERE chain_key = ?",
+            (chain_key,),
+        ).fetchone()
+        return _traversal_result(
+            allowed=True,
+            reason="committed",
+            chain=chain,
+            reservation_id=reservation_id,
+            reservation_state="committed",
+            page_number=int(page["page_number"]),
+        )
+
+
+def terminate_traversal_page(
+    *,
+    reservation_id: str,
+    chain_key: str,
+    request_digest: str,
+    outcome: str,
+    now_epoch_ms: int | None = None,
+) -> dict[str, Any]:
+    error = TraversalBudgetStoreError
+    if outcome not in {"not_forwarded", "indeterminate"}:
+        raise error("traversal termination outcome is invalid")
+    reservation_id = _bounded_store_text(
+        "traversal reservation",
+        reservation_id,
+        maximum=_RELEASE_AUTHORIZATION_ATTEMPT_ID_MAX_BYTES,
+        error_type=error,
+    )
+    chain_key = _store_digest(
+        "traversal chain key", chain_key, error_type=error
+    ) or ""
+    request_digest = _store_digest(
+        "traversal request digest", request_digest, error_type=error
+    ) or ""
+    with connect() as conn:
+        _begin_release_transaction(conn)
+        now_ms = _rate_limit_transaction_now_epoch_ms(conn, now_epoch_ms)
+        now_s = datetime.fromtimestamp(now_ms / 1000, timezone.utc).isoformat()
+        _lock_release_resources(conn, {f"traversal-chain:{chain_key}"})
+        suffix = " FOR UPDATE" if isinstance(conn, PostgresMetadataConnection) else ""
+        page = conn.execute(
+            "SELECT * FROM traversal_budget_page_reservations "
+            "WHERE reservation_id = ?" + suffix,
+            (reservation_id,),
+        ).fetchone()
+        chain = conn.execute(
+            "SELECT * FROM traversal_budget_chains WHERE chain_key = ?" + suffix,
+            (chain_key,),
+        ).fetchone()
+        if page is None or chain is None:
+            raise error("traversal termination reservation is absent")
+        if (
+            str(page["chain_key"]) != chain_key
+            or str(page["request_digest"]) != request_digest
+        ):
+            raise error("traversal termination evidence does not match")
+        if now_ms < int(chain["last_observed_epoch_ms"]):
+            raise error("traversal clock moved before its last observation")
+        state = str(page["state"])
+        target = "cancelled" if outcome == "not_forwarded" else "indeterminate"
+        if state == target:
+            idempotent_replay = True
+        elif outcome == "not_forwarded" and state == "reserved":
+            cursor_digest = page["request_cursor_digest"]
+            if cursor_digest is not None:
+                conn.execute(
+                    "UPDATE traversal_budget_cursors "
+                    "SET state = 'available', reserved_by = NULL, updated_at = ? "
+                    "WHERE cursor_digest = ? AND state = 'reserved' AND reserved_by = ?",
+                    (now_s, cursor_digest, reservation_id),
+                )
+            conn.execute(
+                "UPDATE traversal_budget_page_reservations "
+                "SET state = 'cancelled', updated_at = ? WHERE reservation_id = ?",
+                (now_s, reservation_id),
+            )
+            idempotent_replay = False
+        elif outcome == "indeterminate" and state in {"reserved", "dispatched"}:
+            if state == "dispatched":
+                _consume_traversal_request_cursor(conn, page=page, now_s=now_s)
+            elif page["request_cursor_digest"] is not None:
+                conn.execute(
+                    "UPDATE traversal_budget_cursors "
+                    "SET state = 'consumed', reserved_by = NULL, updated_at = ? "
+                    "WHERE cursor_digest = ? AND state = 'reserved' AND reserved_by = ?",
+                    (now_s, page["request_cursor_digest"], reservation_id),
+                )
+            conn.execute(
+                "UPDATE traversal_budget_page_reservations "
+                "SET state = 'indeterminate', updated_at = ? WHERE reservation_id = ?",
+                (now_s, reservation_id),
+            )
+            conn.execute(
+                "UPDATE traversal_budget_chains "
+                "SET state = 'poisoned', page_count = page_count + 1, "
+                "last_observed_epoch_ms = ?, updated_at = ? WHERE chain_key = ?",
+                (now_ms, now_s, chain_key),
+            )
+            idempotent_replay = False
+        else:
+            raise error(
+                f"traversal page cannot terminate as {outcome} from {state}"
+            )
+        conn.execute(
+            "UPDATE traversal_budget_chains "
+            "SET last_observed_epoch_ms = ?, updated_at = ? WHERE chain_key = ?",
+            (now_ms, now_s, chain_key),
+        )
+        chain = conn.execute(
+            "SELECT * FROM traversal_budget_chains WHERE chain_key = ?",
+            (chain_key,),
+        ).fetchone()
+        return _traversal_result(
+            allowed=False,
+            reason=target,
+            chain=chain,
+            reservation_id=reservation_id,
+            reservation_state=target,
+            page_number=int(page["page_number"]),
+            idempotent_replay=idempotent_replay,
+        )
+
+
+_POLICY_STATE_BUDGET_CLAIM_FIELDS = {
+    "type",
+    "constraint_id",
+    "budget_key",
+    "principal_id",
+    "route_id",
+    "credential_id",
+    "credential_version",
+    "policy_hash",
+    "operation",
+    "window_semantics",
+    "measure",
+    "reservation_mode",
+    "on_overflow",
+    "unit_field",
+    "units",
+    "window_seconds",
+    "max_units",
+}
+_POLICY_STATE_TRAVERSAL_CLAIM_FIELDS = {
+    "type",
+    "constraint_id",
+    "chain_key",
+    "lineage_digest",
+    "principal_id",
+    "route_id",
+    "credential_id",
+    "credential_version",
+    "policy_hash",
+    "operation",
+    "store",
+    "phases",
+    "on_replay",
+    "on_cross_lineage",
+    "on_missing_evidence",
+    "request_cursor_digest",
+    "request_cursor_source",
+    "request_cursor_field",
+    "response_cursor_field",
+    "record_count_field",
+    "byte_source",
+    "commit_mode",
+    "max_pages",
+    "max_records",
+    "max_bytes",
+    "lifetime_seconds",
+}
+_POLICY_STATE_MAX_CLAIMS = 64
+_POLICY_STATE_MAX_CLAIMS_BYTES = 256 * 1024
+
+
+def _policy_state_digest(value: Any) -> str:
+    return "sha256:" + hashlib.sha256(dumps(value).encode("utf-8")).hexdigest()
+
+
+def _policy_state_child_reservation_id(
+    reservation_id: str,
+    claim_index: int,
+    claim: dict[str, Any],
+) -> str:
+    return _policy_state_digest(
+        {
+            "bundleReservationId": reservation_id,
+            "claimIndex": claim_index,
+            "claim": claim,
+        }
+    )
+
+
+def _normalize_policy_state_claims(
+    claims: Any,
+    *,
+    policy_hash: str,
+) -> list[dict[str, Any]]:
+    error = PolicyStateBundleStoreError
+    if (
+        not isinstance(claims, list)
+        or not 1 <= len(claims) <= _POLICY_STATE_MAX_CLAIMS
+    ):
+        raise error("durable policy claims must be a bounded non-empty array")
+    normalized: list[dict[str, Any]] = []
+    identities: set[tuple[str, str]] = set()
+    for raw in claims:
+        if not isinstance(raw, dict):
+            raise error("durable policy claim must be an object")
+        claim_type = raw.get("type")
+        if claim_type in {"slidingWindowLimit", "weightedBudget"}:
+            if set(raw) != _POLICY_STATE_BUDGET_CLAIM_FIELDS:
+                raise error("durable budget claim fields are invalid")
+            definition = _normalize_durable_budget_definition(
+                budget_key=raw.get("budget_key"),
+                principal_id=raw.get("principal_id"),
+                route_id=raw.get("route_id"),
+                credential_id=raw.get("credential_id"),
+                credential_version=raw.get("credential_version"),
+                policy_hash=raw.get("policy_hash"),
+                constraint_id=raw.get("constraint_id"),
+                unit_field=raw.get("unit_field"),
+                window_seconds=raw.get("window_seconds"),
+                max_units=raw.get("max_units"),
+            )
+            units = _bounded_store_integer(
+                "durable policy budget units",
+                raw.get("units"),
+                minimum=0,
+                maximum=_DURABLE_BUDGET_MAX_UNITS,
+                error_type=error,
+            )
+            operation = _bounded_store_text(
+                "durable policy budget operation",
+                raw.get("operation"),
+                allow_empty=True,
+                error_type=error,
+            )
+            expected_measure = (
+                "weightedCanonicalInteger"
+                if claim_type == "weightedBudget"
+                else "operationCount"
+            )
+            if (
+                definition["policy_hash"] != policy_hash
+                or raw.get("window_semantics") != "sliding"
+                or raw.get("measure") != expected_measure
+                or raw.get("reservation_mode")
+                != "atomicReserveCommitRelease"
+                or raw.get("on_overflow") != "deny"
+                or units > definition["max_units"]
+                or (
+                    claim_type == "slidingWindowLimit"
+                    and (
+                        units != 1
+                        or definition["unit_field"] != "operations"
+                    )
+                )
+                or (
+                    claim_type == "weightedBudget"
+                    and re.fullmatch(
+                        r"[a-z][a-z0-9._-]{0,31}:"
+                        r"(?:requestValue|operationField):"
+                        r"[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*",
+                        definition["unit_field"],
+                    )
+                    is None
+                )
+            ):
+                raise error("durable budget claim semantics are invalid")
+            claim = {
+                "type": claim_type,
+                "constraint_id": definition["constraint_id"],
+                "budget_key": definition["budget_key"],
+                "principal_id": definition["principal_id"],
+                "route_id": definition["route_id"],
+                "credential_id": definition["credential_id"],
+                "credential_version": definition["credential_version"],
+                "policy_hash": definition["policy_hash"],
+                "operation": operation,
+                "window_semantics": "sliding",
+                "measure": expected_measure,
+                "reservation_mode": "atomicReserveCommitRelease",
+                "on_overflow": "deny",
+                "unit_field": definition["unit_field"],
+                "units": units,
+                "window_seconds": definition["window_seconds"],
+                "max_units": definition["max_units"],
+            }
+        elif claim_type == "traversalBudget":
+            if set(raw) != _POLICY_STATE_TRAVERSAL_CLAIM_FIELDS:
+                raise error("traversal budget claim fields are invalid")
+            identity = _normalize_traversal_identity(
+                chain_key=raw.get("chain_key"),
+                lineage_digest=raw.get("lineage_digest"),
+                principal_id=raw.get("principal_id"),
+                route_id=raw.get("route_id"),
+                credential_id=raw.get("credential_id"),
+                credential_version=raw.get("credential_version"),
+                policy_hash=raw.get("policy_hash"),
+                constraint_id=raw.get("constraint_id"),
+                max_pages=raw.get("max_pages"),
+                max_records=raw.get("max_records"),
+                max_bytes=raw.get("max_bytes"),
+                lifetime_seconds=raw.get("lifetime_seconds"),
+            )
+            cursor_digest = _store_digest(
+                "traversal request cursor digest",
+                raw.get("request_cursor_digest"),
+                required=False,
+                error_type=error,
+            )
+            operation = _bounded_store_text(
+                "traversal operation",
+                raw.get("operation"),
+                error_type=error,
+            )
+            request_source = raw.get("request_cursor_source")
+            field_values: dict[str, str] = {}
+            for field_name in (
+                "request_cursor_field",
+                "response_cursor_field",
+                "record_count_field",
+            ):
+                value = _bounded_store_text(
+                    f"traversal {field_name}",
+                    raw.get(field_name),
+                    error_type=error,
+                )
+                if (
+                    len(value) > 256
+                    or re.fullmatch(
+                        r"[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*", value
+                    )
+                    is None
+                ):
+                    raise error(f"traversal {field_name} is invalid")
+                field_values[field_name] = value
+            if (
+                identity["policy_hash"] != policy_hash
+                or raw.get("store") != "shared"
+                or raw.get("phases") != ["request", "response"]
+                or raw.get("on_replay") != "deny"
+                or raw.get("on_cross_lineage") != "deny"
+                or raw.get("on_missing_evidence") != "deny"
+                or request_source not in {"query", "header"}
+                or raw.get("byte_source")
+                != "validatedDecodedResponseBytes"
+                or raw.get("commit_mode")
+                != "atomicAfterResponseValidation"
+            ):
+                raise error("traversal budget claim semantics are invalid")
+            claim = {
+                "type": "traversalBudget",
+                "constraint_id": identity["constraint_id"],
+                "chain_key": identity["chain_key"],
+                "lineage_digest": identity["lineage_digest"],
+                "principal_id": identity["principal_id"],
+                "route_id": identity["route_id"],
+                "credential_id": identity["credential_id"],
+                "credential_version": identity["credential_version"],
+                "policy_hash": identity["policy_hash"],
+                "operation": operation,
+                "store": "shared",
+                "phases": ["request", "response"],
+                "on_replay": "deny",
+                "on_cross_lineage": "deny",
+                "on_missing_evidence": "deny",
+                "request_cursor_digest": cursor_digest,
+                "request_cursor_source": request_source,
+                **field_values,
+                "byte_source": "validatedDecodedResponseBytes",
+                "commit_mode": "atomicAfterResponseValidation",
+                "max_pages": identity["max_pages"],
+                "max_records": identity["max_records"],
+                "max_bytes": identity["max_bytes"],
+                "lifetime_seconds": identity["lifetime_seconds"],
+            }
+        else:
+            raise error("durable policy claim type is unsupported")
+        identity_key = (claim["type"], claim["constraint_id"])
+        if identity_key in identities:
+            raise error("durable policy claim identity is duplicated")
+        identities.add(identity_key)
+        if raw != claim:
+            raise error("durable policy claim is not canonical")
+        normalized.append(claim)
+    if len(dumps(normalized).encode("utf-8")) > _POLICY_STATE_MAX_CLAIMS_BYTES:
+        raise error("durable policy claims are too large")
+    return normalized
+
+
+def _normalize_release_durable_policy_binding(
+    value: Any,
+    *,
+    policy_hash: str,
+    actor_id: Any,
+) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != {
+        "actorId",
+        "claimDigest",
+        "claims",
+    }:
+        raise ReleaseAuthorizationError(
+            "durable policy binding fields are invalid"
+        )
+    actor = _release_text("durable policy actor_id", actor_id)
+    claimed_actor = _release_text(
+        "durable policy binding actorId", value.get("actorId")
+    )
+    if not hmac.compare_digest(actor, claimed_actor):
+        raise ReleaseAuthorizationConflictError(
+            "durable policy binding actor does not match authenticated actor"
+        )
+    claim_digest = (
+        _release_digest(
+            "durable policy binding claimDigest", value.get("claimDigest")
+        )
+        or ""
+    )
+    try:
+        claims = _normalize_policy_state_claims(
+            value.get("claims"),
+            policy_hash=policy_hash,
+        )
+    except PolicyStateBundleStoreError as exc:
+        raise ReleaseAuthorizationError(str(exc)) from exc
+    normalized = {
+        "actorId": actor,
+        "claimDigest": claim_digest,
+        "claims": claims,
+    }
+    if value != normalized:
+        raise ReleaseAuthorizationError(
+            "durable policy binding is not canonical"
+        )
+    if not hmac.compare_digest(
+        claim_digest,
+        _policy_state_digest(claims),
+    ):
+        raise ReleaseAuthorizationConflictError(
+            "durable policy binding claim digest is invalid"
+        )
+    return normalized
+
+
+def _release_durable_reservation_id(
+    *,
+    attempt_id: str,
+    policy_hash: str,
+    request_digest: str,
+    operation_digest: str,
+    claim_digest: str,
+) -> str:
+    return _policy_state_digest(
+        {
+            "attemptId": attempt_id,
+            "policyHash": policy_hash,
+            "requestDigest": request_digest,
+            "operationDigest": operation_digest,
+            "claimDigest": claim_digest,
+        }
+    )
+
+
+def _normalize_credential_lease_durable_policy(
+    value: Any,
+    *,
+    actor_id: Any,
+) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != {
+        "reservationId",
+        "actorId",
+        "claimDigest",
+        "reservationDeadlineAtEpochMs",
+        "releaseBindingDigest",
+    }:
+        raise ReleaseAuthorizationError(
+            "credential lease durable policy fields are invalid"
+        )
+    actor = _release_text(
+        "credential lease durable policy actor",
+        actor_id,
+    )
+    claimed_actor = _release_text(
+        "credential lease durable policy actorId",
+        value.get("actorId"),
+    )
+    if not hmac.compare_digest(actor, claimed_actor):
+        raise ReleaseAuthorizationConflictError(
+            "credential lease durable policy actor was substituted"
+        )
+    reservation_deadline = value.get(
+        "reservationDeadlineAtEpochMs"
+    )
+    if (
+        not isinstance(reservation_deadline, int)
+        or isinstance(reservation_deadline, bool)
+        or reservation_deadline < 1
+    ):
+        raise ReleaseAuthorizationError(
+            "credential lease durable policy deadline is invalid"
+        )
+    return {
+        "reservation_id": (
+            _release_digest(
+                "credential lease durable policy reservationId",
+                value.get("reservationId"),
+            )
+            or ""
+        ),
+        "actor_id": actor,
+        "claim_digest": (
+            _release_digest(
+                "credential lease durable policy claimDigest",
+                value.get("claimDigest"),
+            )
+            or ""
+        ),
+        "reservation_deadline_at_epoch_ms": reservation_deadline,
+        "release_binding_digest": (
+            _release_digest(
+                "credential lease durable policy releaseBindingDigest",
+                value.get("releaseBindingDigest"),
+            )
+            or ""
+        ),
+    }
+
+
+def _normalize_release_durable_policy_transition(
+    value: Any,
+    *,
+    phase: str,
+    outcome: str | None,
+    actor_id: Any,
+    attempt_id: str,
+) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ReleaseAuthorizationError(
+            "durable policy transition must be an object"
+        )
+    required = {
+        "actorId",
+        "attemptId",
+        "claimDigest",
+        "reservationId",
+    }
+    optional: set[str] = set()
+    if phase == "dispatch":
+        required.add("dispatchDeadlineAtEpochMs")
+    elif phase == "complete" and outcome == "not_forwarded":
+        pass
+    elif phase == "complete" and outcome == "forwarded":
+        required.update(
+            {
+                "dispatchDeadlineAtEpochMs",
+                "responseEvidence",
+                "responseEvidenceDigest",
+                "responseBodySha256",
+            }
+        )
+    elif phase == "complete" and outcome == "unknown":
+        required.update(
+            {
+                "responseEvidence",
+                "responseEvidenceDigest",
+                "failureReason",
+                "responseBodySha256",
+                "uncertainty",
+            }
+        )
+        optional.add("dispatchDeadlineAtEpochMs")
+    else:
+        raise ReleaseAuthorizationError(
+            "durable policy transition phase is invalid"
+        )
+    if not required <= set(value) or set(value) - required - optional:
+        raise ReleaseAuthorizationError(
+            "durable policy transition fields are invalid"
+        )
+    actor = _release_text("durable policy actor_id", actor_id)
+    claimed_actor = _release_text(
+        "durable policy transition actorId", value.get("actorId")
+    )
+    transition_attempt = _release_text(
+        "durable policy transition attemptId",
+        value.get("attemptId"),
+        maximum=_RELEASE_AUTHORIZATION_ATTEMPT_ID_MAX_BYTES,
+    )
+    if (
+        not hmac.compare_digest(actor, claimed_actor)
+        or not hmac.compare_digest(attempt_id, transition_attempt)
+    ):
+        raise ReleaseAuthorizationConflictError(
+            "durable policy transition actor or attempt was substituted"
+        )
+    claim_digest = (
+        _release_digest(
+            "durable policy transition claimDigest",
+            value.get("claimDigest"),
+        )
+        or ""
+    )
+    reservation_id = (
+        _release_digest(
+            "durable policy transition reservationId",
+            value.get("reservationId"),
+        )
+        or ""
+    )
+    dispatch_deadline = value.get("dispatchDeadlineAtEpochMs")
+    if (
+        "dispatchDeadlineAtEpochMs" in value
+        and dispatch_deadline is None
+    ):
+        raise ReleaseAuthorizationError(
+            "durable policy transition dispatch deadline cannot be null"
+        )
+    if dispatch_deadline is not None and (
+        not isinstance(dispatch_deadline, int)
+        or isinstance(dispatch_deadline, bool)
+        or dispatch_deadline < 1
+    ):
+        raise ReleaseAuthorizationError(
+            "durable policy transition dispatch deadline is invalid"
+        )
+    response_evidence = value.get("responseEvidence")
+    response_evidence_digest = value.get("responseEvidenceDigest")
+    response_body_sha256 = value.get("responseBodySha256")
+    if outcome in {"forwarded", "unknown"}:
+        if (
+            not isinstance(response_evidence, list)
+            or len(response_evidence) > _POLICY_STATE_MAX_CLAIMS
+            or len(dumps(response_evidence).encode("utf-8"))
+            > _POLICY_STATE_MAX_CLAIMS_BYTES
+        ):
+            raise ReleaseAuthorizationError(
+                "durable policy response evidence is invalid"
+            )
+        response_evidence_digest = (
+            _release_digest(
+                "durable policy response evidence digest",
+                response_evidence_digest,
+            )
+            or ""
+        )
+        if not hmac.compare_digest(
+            response_evidence_digest,
+            _policy_state_digest(response_evidence),
+        ):
+            raise ReleaseAuthorizationConflictError(
+                "durable policy response evidence digest was substituted"
+            )
+        response_body_sha256 = (
+            _release_digest(
+                "durable policy response body digest",
+                response_body_sha256,
+            )
+            or ""
+        )
+    failure_reason = value.get("failureReason")
+    uncertainty = value.get("uncertainty")
+    if outcome == "unknown":
+        if (
+            failure_reason != _DURABLE_POLICY_UNKNOWN_FAILURE_REASON
+            or uncertainty != _DURABLE_POLICY_CHARGED_UNCERTAINTY
+        ):
+            raise ReleaseAuthorizationConflictError(
+                "durable policy uncertainty evidence was substituted"
+            )
+    return {
+        "actor_id": actor,
+        "attempt_id": transition_attempt,
+        "claim_digest": claim_digest,
+        "reservation_id": reservation_id,
+        "dispatch_deadline_at_epoch_ms": dispatch_deadline,
+        "response_evidence": response_evidence,
+        "response_evidence_digest": response_evidence_digest,
+        "failure_reason": failure_reason,
+        "response_body_sha256": response_body_sha256,
+        "uncertainty": uncertainty,
+    }
+
+
+def _policy_state_resources(
+    reservation_id: str,
+    attempt_id: str,
+    claims: list[dict[str, Any]],
+) -> set[str]:
+    resources = {
+        f"attempt:{attempt_id}",
+        f"policy-state-bundle:{reservation_id}",
+    }
+    for claim in claims:
+        if claim["type"] in {"slidingWindowLimit", "weightedBudget"}:
+            resources.add(f"durable-budget:{claim['budget_key']}")
+        else:
+            resources.add(f"traversal-chain:{claim['chain_key']}")
+            if claim["request_cursor_digest"] is not None:
+                resources.add(
+                    f"traversal-cursor:{claim['request_cursor_digest']}"
+                )
+    return resources
+
+
+def _policy_state_result(
+    *,
+    state: str,
+    attempt_id: str,
+    claim_digest: str,
+    reservation_id: str,
+    reason: str | None = None,
+    retry_after_seconds: int = 0,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "state": state,
+        "attempt_id": attempt_id,
+        "claim_digest": claim_digest,
+        "reservation_id": reservation_id,
+    }
+    if reason is not None:
+        result["reason"] = reason
+    if retry_after_seconds > 0:
+        result["retry_after_seconds"] = retry_after_seconds
+    return result
+
+
+def _durable_policy_v2_result(
+    row: Any,
+    *,
+    state: str | None = None,
+) -> dict[str, Any]:
+    result_state = state or str(row["state"])
+    response_dispatch_deadline = (
+        row["completion_dispatch_deadline_at_epoch_ms"]
+        if result_state == "indeterminate"
+        and row["uncertainty"] == _DURABLE_POLICY_CHARGED_UNCERTAINTY
+        else row["dispatch_deadline_at_epoch_ms"]
+    )
+    if (
+        response_dispatch_deadline
+        == _DURABLE_COMPLETION_DEADLINE_RECONCILER_UNBOUND
+    ):
+        response_dispatch_deadline = None
+    return {
+        "state": result_state,
+        "attempt_id": str(row["attempt_id"]),
+        "claim_digest": str(row["claim_digest"]),
+        "reservation_id": str(row["reservation_id"]),
+        "actor_id": str(row["actor_id"]),
+        "reservation_deadline_at_epoch_ms": (
+            int(row["reservation_deadline_at_epoch_ms"])
+            if row["reservation_deadline_at_epoch_ms"] is not None
+            else None
+        ),
+        "dispatch_deadline_at_epoch_ms": (
+            int(response_dispatch_deadline)
+            if response_dispatch_deadline is not None
+            else None
+        ),
+        "response_evidence_digest": (
+            str(row["response_evidence_digest"])
+            if row["response_evidence_digest"] is not None
+            else None
+        ),
+        "failure_reason": (
+            str(row["terminal_reason"])
+            if str(row["state"]) in {"denied", "indeterminate"}
+            and row["terminal_reason"] is not None
+            else None
+        ),
+        "response_body_sha256": (
+            str(row["response_body_sha256"])
+            if row["response_body_sha256"] is not None
+            else None
+        ),
+        "uncertainty": (
+            str(row["uncertainty"])
+            if row["uncertainty"] is not None
+            else None
+        ),
+    }
+
+
+def _denied_durable_policy_v2_result(
+    *,
+    attempt_id: str,
+    claim_digest: str,
+    actor_id: str,
+) -> dict[str, Any]:
+    return {
+        "state": "denied",
+        "attempt_id": attempt_id,
+        "claim_digest": claim_digest,
+        "reservation_id": None,
+        "actor_id": actor_id,
+        "reservation_deadline_at_epoch_ms": None,
+        "dispatch_deadline_at_epoch_ms": None,
+        "response_evidence_digest": None,
+        "failure_reason": None,
+        "response_body_sha256": None,
+        "uncertainty": None,
+    }
+
+
+def _policy_state_bundle_binding(
+    row: Any,
+) -> dict[str, Any]:
+    return {
+        "reservation_id": str(row["reservation_id"]),
+        "attempt_id": str(row["attempt_id"]),
+        "policy_hash": str(row["policy_hash"]),
+        "request_digest": str(row["request_digest"]),
+        "operation_digest": str(row["operation_digest"]),
+        "claim_digest": str(row["claim_digest"]),
+        "claims_json": str(row["claims_json"]),
+        "release_binding_digest": str(row["release_binding_digest"]),
+        "reservation_deadline_at_epoch_ms": (
+            int(row["reservation_deadline_at_epoch_ms"])
+            if row["reservation_deadline_at_epoch_ms"] is not None
+            else None
+        ),
+        "actor_id": str(row["actor_id"]),
+    }
+
+
+def _reserve_policy_budget_on_connection(
+    conn: Any,
+    *,
+    claim: dict[str, Any],
+    child_reservation_id: str,
+    bundle_reservation_id: str,
+    request_digest: str,
+    operation_digest: str,
+    reservation_deadline_at_epoch_ms: int,
+    now_ms: int,
+    now_s: str,
+) -> None:
+    definition = _durable_budget_definition_material(
+        budget_key=claim["budget_key"],
+        principal_id=claim["principal_id"],
+        route_id=claim["route_id"],
+        credential_id=claim["credential_id"],
+        credential_version=claim["credential_version"],
+        policy_hash=claim["policy_hash"],
+        constraint_id=claim["constraint_id"],
+        unit_field=claim["unit_field"],
+        window_seconds=claim["window_seconds"],
+        max_units=claim["max_units"],
+    )
+    conn.execute(
+        """
+        INSERT INTO durable_budget_definitions (
+            budget_key, principal_id, route_id, credential_id,
+            credential_version, policy_hash, constraint_id,
+            unit_field, window_kind, window_seconds, max_units,
+            last_observed_epoch_ms, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'sliding', ?, ?, ?, ?, ?)
+        ON CONFLICT (budget_key) DO NOTHING
+        """,
+        (
+            definition["budget_key"],
+            definition["principal_id"],
+            definition["route_id"],
+            definition["credential_id"],
+            definition["credential_version"],
+            definition["policy_hash"],
+            definition["constraint_id"],
+            definition["unit_field"],
+            definition["window_seconds"],
+            definition["max_units"],
+            now_ms,
+            now_s,
+            now_s,
+        ),
+    )
+    suffix = " FOR UPDATE" if isinstance(conn, PostgresMetadataConnection) else ""
+    stored = conn.execute(
+        "SELECT * FROM durable_budget_definitions WHERE budget_key = ?" + suffix,
+        (definition["budget_key"],),
+    ).fetchone()
+    if (
+        stored is None
+        or _durable_budget_definition_from_row(stored) != definition
+        or now_ms < int(stored["last_observed_epoch_ms"])
+    ):
+        raise PolicyStateBundleStoreError(
+            "durable budget definition binding is invalid"
+        )
+    _expire_durable_budget_reservations(
+        conn,
+        budget_key=definition["budget_key"],
+        now_epoch_ms=now_ms,
+        now_s=now_s,
+    )
+    if (
+        conn.execute(
+            "SELECT reservation_id FROM durable_budget_events "
+            "WHERE reservation_id = ?" + suffix,
+            (child_reservation_id,),
+        ).fetchone()
+        is not None
+    ):
+        raise PolicyStateBundleStoreError(
+            "durable policy child reservation already exists without its bundle"
+        )
+    total = _durable_budget_active_total(
+        conn,
+        budget_key=definition["budget_key"],
+        now_epoch_ms=now_ms,
+    )
+    if total + claim["units"] > definition["max_units"]:
+        retry_after = _durable_budget_retry_after(
+            _durable_budget_active_rows(
+                conn,
+                budget_key=definition["budget_key"],
+                now_epoch_ms=now_ms,
+            ),
+            current_units=total,
+            requested_units=claim["units"],
+            max_units=definition["max_units"],
+            now_epoch_ms=now_ms,
+        )
+        raise _PolicyStateBundleDenied(
+            "sliding_budget_exceeded", retry_after
+        )
+    expires_at_ms = now_ms + definition["window_seconds"] * 1000
+    conn.execute(
+        """
+        INSERT INTO durable_budget_events (
+            reservation_id, bundle_reservation_id, budget_key,
+            request_digest, operation_digest,
+            units, state, occurred_at_epoch_ms, expires_at_epoch_ms,
+            reservation_expires_at_epoch_ms, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, 'reserved', ?, ?, ?, ?, ?)
+        """,
+        (
+            child_reservation_id,
+            bundle_reservation_id,
+            definition["budget_key"],
+            request_digest,
+            operation_digest,
+            claim["units"],
+            now_ms,
+            expires_at_ms,
+            min(expires_at_ms, reservation_deadline_at_epoch_ms),
+            now_s,
+            now_s,
+        ),
+    )
+    conn.execute(
+        "UPDATE durable_budget_definitions "
+        "SET last_observed_epoch_ms = ?, updated_at = ? WHERE budget_key = ?",
+        (now_ms, now_s, definition["budget_key"]),
+    )
+
+
+def _reserve_policy_traversal_on_connection(
+    conn: Any,
+    *,
+    claim: dict[str, Any],
+    child_reservation_id: str,
+    bundle_reservation_id: str,
+    request_digest: str,
+    reservation_deadline_at_epoch_ms: int,
+    now_ms: int,
+    now_s: str,
+) -> None:
+    suffix = " FOR UPDATE" if isinstance(conn, PostgresMetadataConnection) else ""
+    identity = _normalize_traversal_identity(
+        chain_key=claim["chain_key"],
+        lineage_digest=claim["lineage_digest"],
+        principal_id=claim["principal_id"],
+        route_id=claim["route_id"],
+        credential_id=claim["credential_id"],
+        credential_version=claim["credential_version"],
+        policy_hash=claim["policy_hash"],
+        constraint_id=claim["constraint_id"],
+        max_pages=claim["max_pages"],
+        max_records=claim["max_records"],
+        max_bytes=claim["max_bytes"],
+        lifetime_seconds=claim["lifetime_seconds"],
+    )
+    chain = conn.execute(
+        "SELECT * FROM traversal_budget_chains WHERE chain_key = ?" + suffix,
+        (identity["chain_key"],),
+    ).fetchone()
+    request_cursor_digest = claim["request_cursor_digest"]
+    if chain is None:
+        if request_cursor_digest is not None:
+            existing_cursor = conn.execute(
+                "SELECT chain_key FROM traversal_budget_cursors "
+                "WHERE cursor_digest = ?" + suffix,
+                (request_cursor_digest,),
+            ).fetchone()
+            raise _PolicyStateBundleDenied(
+                "cursor_cross_lineage"
+                if existing_cursor is not None
+                else "cursor_unknown"
+            )
+        expires_at_ms = now_ms + identity["lifetime_seconds"] * 1000
+        conn.execute(
+            """
+            INSERT INTO traversal_budget_chains (
+                chain_key, lineage_digest, principal_id, route_id,
+                credential_id, credential_version, policy_hash,
+                constraint_id, state, started_at_epoch_ms,
+                expires_at_epoch_ms, last_observed_epoch_ms,
+                max_pages, max_records, max_bytes,
+                page_count, record_count, byte_count, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?,
+                    0, 0, 0, ?, ?)
+            """,
+            (
+                identity["chain_key"],
+                identity["lineage_digest"],
+                identity["principal_id"],
+                identity["route_id"],
+                identity["credential_id"],
+                identity["credential_version"],
+                identity["policy_hash"],
+                identity["constraint_id"],
+                now_ms,
+                expires_at_ms,
+                now_ms,
+                identity["max_pages"],
+                identity["max_records"],
+                identity["max_bytes"],
+                now_s,
+                now_s,
+            ),
+        )
+        chain = conn.execute(
+            "SELECT * FROM traversal_budget_chains WHERE chain_key = ?" + suffix,
+            (identity["chain_key"],),
+        ).fetchone()
+    if (
+        chain is None
+        or _traversal_chain_identity_from_row(chain) != identity
+        or now_ms < int(chain["last_observed_epoch_ms"])
+    ):
+        raise PolicyStateBundleStoreError(
+            "traversal chain binding is invalid"
+        )
+    if now_ms >= int(chain["expires_at_epoch_ms"]):
+        conn.execute(
+            "UPDATE traversal_budget_chains SET state = 'expired', "
+            "last_observed_epoch_ms = ?, updated_at = ? WHERE chain_key = ?",
+            (now_ms, now_s, identity["chain_key"]),
+        )
+        raise _PolicyStateBundleDenied("traversal_lifetime_expired")
+    _expire_traversal_page_reservations(
+        conn,
+        chain_key=identity["chain_key"],
+        now_epoch_ms=now_ms,
+        now_s=now_s,
+    )
+    chain = conn.execute(
+        "SELECT * FROM traversal_budget_chains WHERE chain_key = ?" + suffix,
+        (identity["chain_key"],),
+    ).fetchone()
+    if chain is None or str(chain["state"]) != "active":
+        raise _PolicyStateBundleDenied(
+            f"traversal_{chain['state'] if chain is not None else 'missing'}"
+        )
+    active = int(
+        conn.execute(
+            "SELECT COUNT(*) AS count FROM traversal_budget_page_reservations "
+            "WHERE chain_key = ? AND state IN ('reserved', 'dispatched')",
+            (identity["chain_key"],),
+        ).fetchone()["count"]
+    )
+    if request_cursor_digest is None:
+        roots = int(
+            conn.execute(
+                "SELECT COUNT(*) AS count "
+                "FROM traversal_budget_page_reservations "
+                "WHERE chain_key = ? AND request_cursor_digest IS NULL "
+                "AND state NOT IN ('cancelled', 'expired')",
+                (identity["chain_key"],),
+            ).fetchone()["count"]
+        )
+        if roots:
+            raise _PolicyStateBundleDenied("root_request_replayed")
+    if int(chain["page_count"]) + active >= int(chain["max_pages"]):
+        raise _PolicyStateBundleDenied("traversal_page_budget_exceeded")
+    if (
+        int(chain["record_count"]) >= int(chain["max_records"])
+        or int(chain["byte_count"]) >= int(chain["max_bytes"])
+    ):
+        raise _PolicyStateBundleDenied("traversal_result_budget_exceeded")
+    if request_cursor_digest is not None:
+        cursor = conn.execute(
+            "SELECT * FROM traversal_budget_cursors WHERE cursor_digest = ?"
+            + suffix,
+            (request_cursor_digest,),
+        ).fetchone()
+        if cursor is None:
+            raise _PolicyStateBundleDenied("cursor_unknown")
+        if (
+            str(cursor["chain_key"]) != identity["chain_key"]
+            or str(cursor["lineage_digest"]) != identity["lineage_digest"]
+        ):
+            raise _PolicyStateBundleDenied("cursor_cross_lineage")
+        if (
+            str(cursor["state"]) != "available"
+            or int(cursor["expires_at_epoch_ms"]) <= now_ms
+        ):
+            raise _PolicyStateBundleDenied("cursor_replayed_or_expired")
+        updated = conn.execute(
+            "UPDATE traversal_budget_cursors "
+            "SET state = 'reserved', reserved_by = ?, updated_at = ? "
+            "WHERE cursor_digest = ? AND state = 'available'",
+            (
+                child_reservation_id,
+                now_s,
+                request_cursor_digest,
+            ),
+        )
+        if updated.rowcount != 1:
+            raise PolicyStateBundleStoreError(
+                "traversal cursor reservation raced"
+            )
+    page_number = int(chain["page_count"]) + active + 1
+    conn.execute(
+        """
+        INSERT INTO traversal_budget_page_reservations (
+            reservation_id, bundle_reservation_id, chain_key,
+            lineage_digest, request_digest,
+            request_cursor_digest, page_number, state,
+            reservation_expires_at_epoch_ms, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'reserved', ?, ?, ?)
+        """,
+        (
+            child_reservation_id,
+            bundle_reservation_id,
+            identity["chain_key"],
+            identity["lineage_digest"],
+            request_digest,
+            request_cursor_digest,
+            page_number,
+            min(
+                int(chain["expires_at_epoch_ms"]),
+                reservation_deadline_at_epoch_ms,
+            ),
+            now_s,
+            now_s,
+        ),
+    )
+    conn.execute(
+        "UPDATE traversal_budget_chains "
+        "SET last_observed_epoch_ms = ?, updated_at = ? WHERE chain_key = ?",
+        (now_ms, now_s, identity["chain_key"]),
+    )
+
+
+def reserve_policy_state_bundle(
+    *,
+    attempt_id: str,
+    policy_hash: str,
+    request_digest: str,
+    operation_digest: str,
+    release_binding_digest: str,
+    claims: list[dict[str, Any]],
+    claim_digest: str,
+    actor_id: str,
+    _connection: Any | None = None,
+    _resources_locked: bool = False,
+) -> dict[str, Any]:
+    error = PolicyStateBundleStoreError
+    attempt_id = _bounded_store_text(
+        "durable policy attempt",
+        attempt_id,
+        maximum=_RELEASE_AUTHORIZATION_ATTEMPT_ID_MAX_BYTES,
+        error_type=error,
+    )
+    policy_hash = _store_digest(
+        "durable policy hash", policy_hash, error_type=error
+    ) or ""
+    request_digest = _store_digest(
+        "durable policy request digest", request_digest, error_type=error
+    ) or ""
+    operation_digest = _store_digest(
+        "durable policy operation digest",
+        operation_digest,
+        error_type=error,
+    ) or ""
+    release_binding_digest = _store_digest(
+        "durable policy release binding digest",
+        release_binding_digest,
+        error_type=error,
+    ) or ""
+    claim_digest = _store_digest(
+        "durable policy claim digest", claim_digest, error_type=error
+    ) or ""
+    actor_id = _bounded_store_text(
+        "durable policy actor", actor_id, error_type=error
+    )
+    normalized_claims = _normalize_policy_state_claims(
+        claims, policy_hash=policy_hash
+    )
+    claims_json = dumps(normalized_claims)
+    if not hmac.compare_digest(
+        claim_digest, _policy_state_digest(normalized_claims)
+    ):
+        raise error("durable policy claim digest is invalid")
+    reservation_id = _policy_state_digest(
+        {
+            "attemptId": attempt_id,
+            "policyHash": policy_hash,
+            "requestDigest": request_digest,
+            "operationDigest": operation_digest,
+            "claimDigest": claim_digest,
+        }
+    )
+    expected_binding = {
+        "reservation_id": reservation_id,
+        "attempt_id": attempt_id,
+        "policy_hash": policy_hash,
+        "request_digest": request_digest,
+        "operation_digest": operation_digest,
+        "claim_digest": claim_digest,
+        "claims_json": claims_json,
+        "release_binding_digest": release_binding_digest,
+        "actor_id": actor_id,
+    }
+    try:
+        manager = (
+            connect()
+            if _connection is None
+            else contextlib.nullcontext(_connection)
+        )
+        with manager as conn:
+            if _connection is None:
+                _begin_release_transaction(conn)
+            if not _resources_locked:
+                _lock_release_resources(
+                    conn,
+                    _policy_state_resources(
+                        reservation_id,
+                        attempt_id,
+                        normalized_claims,
+                    ),
+                )
+            now_ms = _rate_limit_transaction_now_epoch_ms(conn, None)
+            now_s = datetime.fromtimestamp(
+                now_ms / 1000, timezone.utc
+            ).isoformat()
+            suffix = (
+                " FOR UPDATE"
+                if isinstance(conn, PostgresMetadataConnection)
+                else ""
+            )
+            release = _release_attempt_row(
+                conn, attempt_id, for_update=True
+            )
+            release_material = {
+                "attempt_id": attempt_id,
+                "policy_hash": policy_hash,
+                "request_digest": request_digest,
+                "operation_digest": operation_digest,
+                "release_binding_digest": release_binding_digest,
+            }
+            if (
+                release is None
+                or not _policy_state_release_binding_is_exact(
+                    release_material, normalized_claims, release
+                )
+                or str(release["state"]) != "reserved"
+                or release["dispatch_started_at_epoch_ms"] is not None
+                or release["dispatch_expires_at_epoch_ms"] is not None
+                or release["completion_outcome"] is not None
+            ):
+                raise error(
+                    "durable policy reserve requires an exact reserved "
+                    "release authorization"
+                )
+            reservation_deadline_at_epoch_ms = int(
+                release["reservation_expires_at_epoch_ms"]
+            )
+            if (
+                not now_ms < reservation_deadline_at_epoch_ms
+                <= now_ms + _POLICY_STATE_DISPATCH_MAX_TTL_MS
+            ):
+                raise error(
+                    "durable policy release reservation deadline is invalid"
+                )
+            expected_binding[
+                "reservation_deadline_at_epoch_ms"
+            ] = reservation_deadline_at_epoch_ms
+            existing = conn.execute(
+                "SELECT * FROM policy_state_bundles "
+                "WHERE attempt_id = ? OR reservation_id = ?" + suffix,
+                (attempt_id, reservation_id),
+            ).fetchone()
+            if existing is not None:
+                if _policy_state_bundle_binding(existing) != expected_binding:
+                    raise error(
+                        "durable policy bundle identity is rebound"
+                    )
+                state = str(existing["state"])
+                if state != "reserved":
+                    raise error(
+                        f"durable policy reserve cannot replay from {state}"
+                    )
+                _validate_policy_state_replay(
+                    conn,
+                    row=existing,
+                    claims=normalized_claims,
+                    expected_state="reserved",
+                )
+                return _policy_state_result(
+                    state="reserved",
+                    attempt_id=attempt_id,
+                    claim_digest=claim_digest,
+                    reservation_id=reservation_id,
+                    reason="idempotent_replay",
+                )
+            for index, claim in enumerate(normalized_claims):
+                child_id = _policy_state_child_reservation_id(
+                    reservation_id, index, claim
+                )
+                if claim["type"] in {
+                    "slidingWindowLimit",
+                    "weightedBudget",
+                }:
+                    _reserve_policy_budget_on_connection(
+                        conn,
+                        claim=claim,
+                        child_reservation_id=child_id,
+                        bundle_reservation_id=reservation_id,
+                        request_digest=request_digest,
+                        operation_digest=operation_digest,
+                        reservation_deadline_at_epoch_ms=(
+                            reservation_deadline_at_epoch_ms
+                        ),
+                        now_ms=now_ms,
+                        now_s=now_s,
+                    )
+                else:
+                    _reserve_policy_traversal_on_connection(
+                        conn,
+                        claim=claim,
+                        child_reservation_id=child_id,
+                        bundle_reservation_id=reservation_id,
+                        request_digest=request_digest,
+                        reservation_deadline_at_epoch_ms=(
+                            reservation_deadline_at_epoch_ms
+                        ),
+                        now_ms=now_ms,
+                        now_s=now_s,
+                    )
+            conn.execute(
+                """
+                INSERT INTO policy_state_bundles (
+                    reservation_id, attempt_id, policy_hash, request_digest,
+                    operation_digest, claim_digest, claims_json,
+                    release_binding_digest,
+                    reservation_deadline_at_epoch_ms, state, actor_id,
+                    created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'reserved', ?, ?, ?)
+                """,
+                (
+                    reservation_id,
+                    attempt_id,
+                    policy_hash,
+                    request_digest,
+                    operation_digest,
+                    claim_digest,
+                    claims_json,
+                    release_binding_digest,
+                    reservation_deadline_at_epoch_ms,
+                    actor_id,
+                    now_s,
+                    now_s,
+                ),
+            )
+            return _policy_state_result(
+                state="reserved",
+                attempt_id=attempt_id,
+                claim_digest=claim_digest,
+                reservation_id=reservation_id,
+            )
+    except _PolicyStateBundleDenied as denied:
+        if _connection is not None:
+            raise
+        return _policy_state_result(
+            state="denied",
+            attempt_id=attempt_id,
+            claim_digest=claim_digest,
+            reservation_id=reservation_id,
+            reason=denied.reason,
+            retry_after_seconds=denied.retry_after_seconds,
+        )
+
+
+def _load_policy_state_bundle_for_transition(
+    conn: Any,
+    *,
+    reservation_id: Any,
+    attempt_id: Any,
+    claim_digest: Any,
+    allow_unknown_migration_evidence: bool = False,
+    resources_locked: bool = False,
+) -> tuple[Any, list[dict[str, Any]]]:
+    error = PolicyStateBundleStoreError
+    reservation_id = _store_digest(
+        "durable policy reservation", reservation_id, error_type=error
+    ) or ""
+    attempt_id = _bounded_store_text(
+        "durable policy attempt",
+        attempt_id,
+        maximum=_RELEASE_AUTHORIZATION_ATTEMPT_ID_MAX_BYTES,
+        error_type=error,
+    )
+    claim_digest = _store_digest(
+        "durable policy claim digest", claim_digest, error_type=error
+    ) or ""
+    preview = conn.execute(
+        "SELECT * FROM policy_state_bundles WHERE reservation_id = ?",
+        (reservation_id,),
+    ).fetchone()
+    if preview is None:
+        raise error("durable policy bundle is absent")
+    if (
+        str(preview["attempt_id"]) != attempt_id
+        or not hmac.compare_digest(
+            str(preview["claim_digest"]), claim_digest
+        )
+    ):
+        raise error("durable policy bundle transition evidence does not match")
+    digest_fields = (
+        "reservation_id",
+        "policy_hash",
+        "request_digest",
+        "operation_digest",
+        "claim_digest",
+    )
+    stored_digests = {
+        field: (
+            _store_digest(
+                f"stored durable policy {field.replace('_', ' ')}",
+                preview[field],
+                error_type=error,
+            )
+            or ""
+        )
+        for field in digest_fields
+    }
+    release_binding_value = preview["release_binding_digest"]
+    if release_binding_value is None:
+        if not allow_unknown_migration_evidence:
+            raise error(
+                "stored durable policy release binding is unknown"
+            )
+    else:
+        _store_digest(
+            "stored durable policy release binding digest",
+            release_binding_value,
+            error_type=error,
+        )
+    reservation_deadline = preview[
+        "reservation_deadline_at_epoch_ms"
+    ]
+    if reservation_deadline is None:
+        if not allow_unknown_migration_evidence:
+            raise error(
+                "stored durable policy reservation deadline is unknown"
+            )
+    elif (
+        type(reservation_deadline) is not int
+        or int(reservation_deadline) < 1
+    ):
+        raise error(
+            "stored durable policy reservation deadline is invalid"
+        )
+    expected_reservation_id = _policy_state_digest(
+        {
+            "attemptId": attempt_id,
+            "policyHash": stored_digests["policy_hash"],
+            "requestDigest": stored_digests["request_digest"],
+            "operationDigest": stored_digests["operation_digest"],
+            "claimDigest": stored_digests["claim_digest"],
+        }
+    )
+    if not hmac.compare_digest(
+        stored_digests["reservation_id"], expected_reservation_id
+    ):
+        raise error("stored durable policy reservation binding is invalid")
+    _bounded_store_text(
+        "stored durable policy actor",
+        preview["actor_id"],
+        error_type=error,
+    )
+    raw_claims = loads(str(preview["claims_json"]), None)
+    claims = _normalize_policy_state_claims(
+        raw_claims,
+        policy_hash=str(preview["policy_hash"]),
+    )
+    if (
+        dumps(claims) != str(preview["claims_json"])
+        or not hmac.compare_digest(
+            _policy_state_digest(claims), str(preview["claim_digest"])
+        )
+    ):
+        raise error("stored durable policy claims are invalid")
+    if not resources_locked:
+        _lock_release_resources(
+            conn,
+            _policy_state_resources(reservation_id, attempt_id, claims),
+        )
+    suffix = " FOR UPDATE" if isinstance(conn, PostgresMetadataConnection) else ""
+    row = conn.execute(
+        "SELECT * FROM policy_state_bundles WHERE reservation_id = ?" + suffix,
+        (reservation_id,),
+    ).fetchone()
+    if (
+        row is None
+        or _policy_state_bundle_binding(row)
+        != _policy_state_bundle_binding(preview)
+    ):
+        raise error("durable policy bundle changed while acquiring locks")
+    locked_claims = _normalize_policy_state_claims(
+        loads(str(row["claims_json"]), None),
+        policy_hash=str(row["policy_hash"]),
+    )
+    if locked_claims != claims:
+        raise error("durable policy claims changed while acquiring locks")
+    return row, claims
+
+
+def _policy_state_child_rows(
+    conn: Any,
+    *,
+    row: Any,
+    claims: list[dict[str, Any]],
+) -> list[tuple[dict[str, Any], str, Any, Any | None]]:
+    suffix = " FOR UPDATE" if isinstance(conn, PostgresMetadataConnection) else ""
+    children: list[tuple[dict[str, Any], str, Any, Any | None]] = []
+    for index, claim in enumerate(claims):
+        child_id = _policy_state_child_reservation_id(
+            str(row["reservation_id"]), index, claim
+        )
+        if claim["type"] in {"slidingWindowLimit", "weightedBudget"}:
+            child = conn.execute(
+                "SELECT * FROM durable_budget_events "
+                "WHERE reservation_id = ?" + suffix,
+                (child_id,),
+            ).fetchone()
+            definition = conn.execute(
+                "SELECT * FROM durable_budget_definitions "
+                "WHERE budget_key = ?" + suffix,
+                (claim["budget_key"],),
+            ).fetchone()
+            if (
+                child is None
+                or definition is None
+                or str(child["bundle_reservation_id"])
+                != str(row["reservation_id"])
+                or str(child["budget_key"]) != claim["budget_key"]
+                or str(child["request_digest"]) != str(row["request_digest"])
+                or str(child["operation_digest"])
+                != str(row["operation_digest"])
+                or int(child["units"]) != claim["units"]
+                or _durable_budget_definition_from_row(definition)
+                != _durable_budget_definition_material(
+                    budget_key=claim["budget_key"],
+                    principal_id=claim["principal_id"],
+                    route_id=claim["route_id"],
+                    credential_id=claim["credential_id"],
+                    credential_version=claim["credential_version"],
+                    policy_hash=claim["policy_hash"],
+                    constraint_id=claim["constraint_id"],
+                    unit_field=claim["unit_field"],
+                    window_seconds=claim["window_seconds"],
+                    max_units=claim["max_units"],
+                )
+            ):
+                raise PolicyStateBundleStoreError(
+                    "durable policy budget child binding is invalid"
+                )
+            children.append((claim, child_id, child, definition))
+        else:
+            child = conn.execute(
+                "SELECT * FROM traversal_budget_page_reservations "
+                "WHERE reservation_id = ?" + suffix,
+                (child_id,),
+            ).fetchone()
+            chain = conn.execute(
+                "SELECT * FROM traversal_budget_chains "
+                "WHERE chain_key = ?" + suffix,
+                (claim["chain_key"],),
+            ).fetchone()
+            expected_identity = _normalize_traversal_identity(
+                chain_key=claim["chain_key"],
+                lineage_digest=claim["lineage_digest"],
+                principal_id=claim["principal_id"],
+                route_id=claim["route_id"],
+                credential_id=claim["credential_id"],
+                credential_version=claim["credential_version"],
+                policy_hash=claim["policy_hash"],
+                constraint_id=claim["constraint_id"],
+                max_pages=claim["max_pages"],
+                max_records=claim["max_records"],
+                max_bytes=claim["max_bytes"],
+                lifetime_seconds=claim["lifetime_seconds"],
+            )
+            if (
+                child is None
+                or chain is None
+                or str(child["bundle_reservation_id"])
+                != str(row["reservation_id"])
+                or str(child["chain_key"]) != claim["chain_key"]
+                or str(child["lineage_digest"]) != claim["lineage_digest"]
+                or str(child["request_digest"]) != str(row["request_digest"])
+                or (
+                    str(child["request_cursor_digest"])
+                    if child["request_cursor_digest"] is not None
+                    else None
+                )
+                != claim["request_cursor_digest"]
+                or _traversal_chain_identity_from_row(chain)
+                != expected_identity
+            ):
+                raise PolicyStateBundleStoreError(
+                    "durable policy traversal child binding is invalid"
+                )
+            children.append((claim, child_id, child, chain))
+    return children
+
+
+def _policy_state_cursor_for_update(
+    conn: Any,
+    cursor_digest: str,
+) -> Any:
+    suffix = " FOR UPDATE" if isinstance(conn, PostgresMetadataConnection) else ""
+    return conn.execute(
+        "SELECT * FROM traversal_budget_cursors "
+        "WHERE cursor_digest = ?" + suffix,
+        (cursor_digest,),
+    ).fetchone()
+
+
+def _validate_policy_state_replay(
+    conn: Any,
+    *,
+    row: Any,
+    claims: list[dict[str, Any]],
+    expected_state: str,
+    terminal_reason: str | None = None,
+    terminal_evidence: list[dict[str, Any]] | None = None,
+) -> None:
+    error = PolicyStateBundleStoreError
+    if str(row["state"]) != expected_state:
+        raise error("durable policy replay bundle state is invalid")
+    terminal_states = {"committed", "denied", "indeterminate"}
+    if expected_state in {"reserved", "dispatched", "aborted"}:
+        if (
+            row["response_evidence_digest"] is not None
+            or row["response_evidence_json"] is not None
+        ):
+            raise error("durable policy replay has unexpected response evidence")
+    if expected_state in {"reserved", "dispatched"}:
+        if row["terminal_reason"] is not None:
+            raise error("durable policy replay has unexpected terminal evidence")
+    elif expected_state == "aborted":
+        if terminal_reason is None or str(row["terminal_reason"]) != terminal_reason:
+            raise error("durable policy abort replay evidence is invalid")
+    elif expected_state in terminal_states:
+        if terminal_evidence is None:
+            raise error("durable policy terminal replay evidence is required")
+        evidence_json = dumps(terminal_evidence)
+        if (
+            str(row["response_evidence_digest"])
+            != _policy_state_digest(terminal_evidence)
+            or str(row["response_evidence_json"]) != evidence_json
+            or (
+                expected_state == "indeterminate"
+                and (
+                    terminal_reason is None
+                    or str(row["terminal_reason"]) != terminal_reason
+                )
+            )
+            or (
+                expected_state == "committed"
+                and row["terminal_reason"] is not None
+            )
+            or (
+                expected_state == "denied"
+                and (
+                    terminal_reason is None
+                    or str(row["terminal_reason"]) != terminal_reason
+                )
+            )
+        ):
+            raise error("durable policy terminal replay evidence is invalid")
+    else:
+        raise error("durable policy replay state is unsupported")
+
+    dispatch_started_at = row["dispatch_started_at_epoch_ms"]
+    dispatch_deadline_at = row["dispatch_deadline_at_epoch_ms"]
+    if expected_state == "reserved":
+        if dispatch_started_at is not None or dispatch_deadline_at is not None:
+            raise error("durable policy reserved replay has dispatch evidence")
+    elif expected_state == "dispatched":
+        if (
+            type(dispatch_started_at) is not int
+            or type(dispatch_deadline_at) is not int
+            or not 0 <= int(dispatch_started_at) < int(dispatch_deadline_at)
+            <= int(dispatch_started_at) + _POLICY_STATE_DISPATCH_MAX_TTL_MS
+        ):
+            raise error("durable policy dispatch replay metadata is invalid")
+
+    evidence_by_constraint = {
+        item["constraint_id"]: item for item in (terminal_evidence or [])
+    }
+    children = _policy_state_child_rows(conn, row=row, claims=claims)
+    for claim, child_id, child, definition_or_chain in children:
+        child_state = str(child["state"])
+        if claim["type"] in {"slidingWindowLimit", "weightedBudget"}:
+            expected_child_state = {
+                "reserved": "reserved",
+                "dispatched": "dispatched",
+                "aborted": "cancelled",
+                "committed": "committed",
+                "denied": "committed",
+                "indeterminate": "committed",
+            }[expected_state]
+            if child_state != expected_child_state:
+                raise error("durable policy budget replay state is invalid")
+            occurred_at = int(child["occurred_at_epoch_ms"])
+            expires_at = int(child["expires_at_epoch_ms"])
+            if (
+                occurred_at < 0
+                or expires_at
+                != occurred_at + claim["window_seconds"] * 1000
+            ):
+                raise error("durable policy budget replay window is invalid")
+            if expected_state == "reserved":
+                expected_reservation_deadline = min(
+                    expires_at,
+                    int(row["reservation_deadline_at_epoch_ms"]),
+                )
+                if (
+                    type(child["reservation_expires_at_epoch_ms"]) is not int
+                    or int(child["reservation_expires_at_epoch_ms"])
+                    != expected_reservation_deadline
+                ):
+                    raise error(
+                        "durable policy budget replay reservation is invalid"
+                    )
+            else:
+                if child["reservation_expires_at_epoch_ms"] is not None:
+                    raise error(
+                        "durable policy terminal budget remains reserved"
+                    )
+                if (
+                    expected_state == "dispatched"
+                    and occurred_at != int(dispatch_started_at)
+                ):
+                    raise error(
+                        "durable policy dispatch budget timestamp is invalid"
+                    )
+            continue
+
+        chain = definition_or_chain
+        if chain is None:
+            raise error("durable policy traversal replay chain is absent")
+        expected_page_state = {
+            "reserved": "reserved",
+            "dispatched": "dispatched",
+            "aborted": "cancelled",
+            "committed": "committed",
+            "denied": "denied",
+            "indeterminate": "indeterminate",
+        }[expected_state]
+        if (
+            child_state != expected_page_state
+            or int(child["page_number"]) < 1
+            or int(child["reservation_expires_at_epoch_ms"])
+            != min(
+                int(chain["expires_at_epoch_ms"]),
+                int(row["reservation_deadline_at_epoch_ms"]),
+            )
+        ):
+            raise error("durable policy traversal replay page is invalid")
+        request_cursor_digest = child["request_cursor_digest"]
+        if request_cursor_digest is not None:
+            cursor = _policy_state_cursor_for_update(
+                conn, str(request_cursor_digest)
+            )
+            expected_cursor_state = (
+                "reserved"
+                if expected_state in {"reserved", "dispatched"}
+                else "available"
+                if expected_state == "aborted"
+                else "consumed"
+            )
+            if (
+                cursor is None
+                or str(cursor["chain_key"]) != claim["chain_key"]
+                or str(cursor["lineage_digest"]) != claim["lineage_digest"]
+                or str(cursor["state"]) != expected_cursor_state
+                or (
+                    str(cursor["reserved_by"])
+                    if cursor["reserved_by"] is not None
+                    else None
+                )
+                != (
+                    child_id
+                    if expected_cursor_state == "reserved"
+                    else None
+                )
+                or int(cursor["expires_at_epoch_ms"])
+                != int(chain["expires_at_epoch_ms"])
+            ):
+                raise error("durable policy traversal replay cursor is invalid")
+        if expected_state in {"reserved", "dispatched", "aborted"}:
+            if (
+                str(chain["state"]) != "active"
+                or child["response_digest"] is not None
+                or child["response_records"] is not None
+                or child["response_bytes"] is not None
+                or child["next_cursor_digest"] is not None
+            ):
+                raise error("durable policy traversal replay is incomplete")
+            continue
+        if expected_state == "indeterminate":
+            if (
+                str(chain["state"]) != "poisoned"
+                or child["response_digest"] is not None
+                or child["response_records"] is not None
+                or child["response_bytes"] is not None
+                or child["next_cursor_digest"] is not None
+            ):
+                raise error(
+                    "durable policy indeterminate traversal replay is invalid"
+                )
+            continue
+        evidence = evidence_by_constraint.get(claim["constraint_id"])
+        if (
+            evidence is None
+            or str(child["response_digest"]) != evidence["response_digest"]
+            or int(child["response_records"]) != evidence["record_count"]
+            or int(child["response_bytes"]) != evidence["decoded_bytes"]
+            or (
+                str(child["next_cursor_digest"])
+                if child["next_cursor_digest"] is not None
+                else None
+            )
+            != (
+                evidence["next_cursor_digest"]
+                if expected_state == "committed"
+                else None
+            )
+        ):
+            raise error("durable policy traversal replay response is invalid")
+        if expected_state == "denied":
+            if str(chain["state"]) != "poisoned":
+                raise error("durable policy denied traversal is not poisoned")
+            continue
+        if str(chain["state"]) not in {"active", "exhausted"}:
+            raise error("durable policy committed traversal state is invalid")
+        next_cursor_digest = evidence["next_cursor_digest"]
+        if next_cursor_digest is not None:
+            next_cursor = _policy_state_cursor_for_update(
+                conn, next_cursor_digest
+            )
+            if str(chain["state"]) == "active":
+                if (
+                    next_cursor is None
+                    or str(next_cursor["chain_key"]) != claim["chain_key"]
+                    or str(next_cursor["lineage_digest"])
+                    != claim["lineage_digest"]
+                    or str(next_cursor["state"]) != "available"
+                    or next_cursor["reserved_by"] is not None
+                    or int(next_cursor["expires_at_epoch_ms"])
+                    != int(chain["expires_at_epoch_ms"])
+                ):
+                    raise error(
+                        "durable policy next cursor replay is invalid"
+                    )
+            elif next_cursor is not None:
+                raise error(
+                    "durable policy exhausted replay released a cursor"
+                )
+
+
+def _validate_policy_state_transition_actor(row: Any, actor_id: Any) -> None:
+    actor = _bounded_store_text(
+        "durable policy actor",
+        actor_id,
+        error_type=PolicyStateBundleStoreError,
+    )
+    if not hmac.compare_digest(str(row["actor_id"]), actor):
+        raise PolicyStateBundleStoreError(
+            "durable policy transition actor does not match"
+        )
+
+
+def dispatch_policy_state_bundle(
+    *,
+    reservation_id: str,
+    attempt_id: str,
+    claim_digest: str,
+    actor_id: str,
+    dispatch_deadline_at_epoch_ms: int,
+    _connection: Any | None = None,
+    _resources_locked: bool = False,
+) -> dict[str, Any]:
+    manager = (
+        connect()
+        if _connection is None
+        else contextlib.nullcontext(_connection)
+    )
+    with manager as conn:
+        if _connection is None:
+            _begin_release_transaction(conn)
+        row, claims = _load_policy_state_bundle_for_transition(
+            conn,
+            reservation_id=reservation_id,
+            attempt_id=attempt_id,
+            claim_digest=claim_digest,
+            resources_locked=_resources_locked,
+        )
+        _validate_policy_state_transition_actor(row, actor_id)
+        state = str(row["state"])
+        now_ms = _rate_limit_transaction_now_epoch_ms(conn, None)
+        if (
+            not isinstance(dispatch_deadline_at_epoch_ms, int)
+            or isinstance(dispatch_deadline_at_epoch_ms, bool)
+            or not now_ms < dispatch_deadline_at_epoch_ms
+            <= now_ms + _POLICY_STATE_DISPATCH_MAX_TTL_MS
+        ):
+            raise PolicyStateBundleStoreError(
+                "durable policy dispatch deadline is invalid"
+            )
+        release = _release_attempt_row(
+            conn, str(row["attempt_id"]), for_update=True
+        )
+        if (
+            release is None
+            or not _policy_state_release_binding_is_exact(
+                row, claims, release
+            )
+            or type(release["reservation_expires_at_epoch_ms"]) is not int
+            or int(release["reservation_expires_at_epoch_ms"])
+            != int(row["reservation_deadline_at_epoch_ms"])
+            or type(release["dispatch_started_at_epoch_ms"]) is not int
+            or type(release["dispatch_expires_at_epoch_ms"]) is not int
+            or int(release["dispatch_expires_at_epoch_ms"])
+            != dispatch_deadline_at_epoch_ms
+            or not 0 <= int(release["dispatch_started_at_epoch_ms"])
+            < int(release["dispatch_expires_at_epoch_ms"])
+            <= int(release["dispatch_started_at_epoch_ms"])
+            + _POLICY_STATE_DISPATCH_MAX_TTL_MS
+        ):
+            raise PolicyStateBundleStoreError(
+                "durable policy dispatch requires exact release authority"
+            )
+        release_dispatch_started_at = int(
+            release["dispatch_started_at_epoch_ms"]
+        )
+        if state == "dispatched":
+            if (
+                type(row["dispatch_started_at_epoch_ms"]) is not int
+                or int(row["dispatch_started_at_epoch_ms"])
+                != release_dispatch_started_at
+                or int(row["dispatch_deadline_at_epoch_ms"] or 0)
+                != dispatch_deadline_at_epoch_ms
+                or str(release["state"])
+                not in {
+                    "dispatching",
+                    "committed",
+                    "committed_indeterminate",
+                }
+                or (
+                    str(release["state"]) == "dispatching"
+                    and release["completion_outcome"] is not None
+                )
+                or (
+                    str(release["state"]) == "committed"
+                    and str(release["completion_outcome"]) != "forwarded"
+                )
+                or (
+                    str(release["state"]) == "committed_indeterminate"
+                    and str(release["completion_outcome"]) != "unknown"
+                )
+            ):
+                raise PolicyStateBundleStoreError(
+                    "durable policy dispatch replay release state changed"
+                )
+            _validate_policy_state_replay(
+                conn,
+                row=row,
+                claims=claims,
+                expected_state="dispatched",
+            )
+            return _policy_state_result(
+                state=state,
+                attempt_id=str(row["attempt_id"]),
+                claim_digest=str(row["claim_digest"]),
+                reservation_id=str(row["reservation_id"]),
+                reason="idempotent_replay",
+            )
+        if state != "reserved":
+            raise PolicyStateBundleStoreError(
+                f"durable policy bundle cannot dispatch from {state}"
+            )
+        if (
+            str(release["state"]) != "dispatching"
+            or release["completion_outcome"] is not None
+        ):
+            raise PolicyStateBundleStoreError(
+                "durable policy dispatch does not match release authority"
+            )
+        now_s = datetime.fromtimestamp(now_ms / 1000, timezone.utc).isoformat()
+        children = _policy_state_child_rows(conn, row=row, claims=claims)
+        for claim, _, child, chain in children:
+            if str(child["state"]) != "reserved":
+                raise PolicyStateBundleStoreError(
+                    "durable policy child is not reserved"
+                )
+            if claim["type"] in {"slidingWindowLimit", "weightedBudget"}:
+                if int(child["reservation_expires_at_epoch_ms"]) <= now_ms:
+                    raise PolicyStateBundleStoreError(
+                        "durable policy budget reservation expired"
+                    )
+            elif (
+                int(child["reservation_expires_at_epoch_ms"]) <= now_ms
+                or chain is None
+                or int(chain["expires_at_epoch_ms"]) <= now_ms
+                or str(chain["state"]) != "active"
+            ):
+                raise PolicyStateBundleStoreError(
+                    "durable policy traversal reservation expired"
+                )
+        for claim, child_id, _, definition_or_chain in children:
+            if claim["type"] in {"slidingWindowLimit", "weightedBudget"}:
+                expires_at_ms = (
+                    now_ms + claim["window_seconds"] * 1000
+                )
+                updated = conn.execute(
+                    "UPDATE durable_budget_events SET state = 'dispatched', "
+                    "occurred_at_epoch_ms = ?, expires_at_epoch_ms = ?, "
+                    "reservation_expires_at_epoch_ms = NULL, updated_at = ? "
+                    "WHERE reservation_id = ? "
+                    "AND bundle_reservation_id = ? "
+                    "AND budget_key = ? AND request_digest = ? "
+                    "AND operation_digest = ? AND units = ? "
+                    "AND state = 'reserved'",
+                    (
+                        release_dispatch_started_at,
+                        release_dispatch_started_at
+                        + claim["window_seconds"] * 1000,
+                        now_s,
+                        child_id,
+                        row["reservation_id"],
+                        claim["budget_key"],
+                        row["request_digest"],
+                        row["operation_digest"],
+                        claim["units"],
+                    ),
+                )
+                definition_updated = conn.execute(
+                    "UPDATE durable_budget_definitions "
+                    "SET last_observed_epoch_ms = ?, updated_at = ? "
+                    "WHERE budget_key = ? AND principal_id = ? "
+                    "AND route_id = ? AND credential_id = ? "
+                    "AND credential_version = ? AND policy_hash = ? "
+                    "AND constraint_id = ? AND unit_field = ? "
+                    "AND window_kind = 'sliding' "
+                    "AND window_seconds = ? AND max_units = ?",
+                    (
+                        now_ms,
+                        now_s,
+                        claim["budget_key"],
+                        claim["principal_id"],
+                        claim["route_id"],
+                        claim["credential_id"],
+                        claim["credential_version"],
+                        claim["policy_hash"],
+                        claim["constraint_id"],
+                        claim["unit_field"],
+                        claim["window_seconds"],
+                        claim["max_units"],
+                    ),
+                )
+                if definition_updated.rowcount != 1:
+                    raise PolicyStateBundleStoreError(
+                        "durable policy dispatch lost its budget definition"
+                    )
+            else:
+                updated = conn.execute(
+                    "UPDATE traversal_budget_page_reservations "
+                    "SET state = 'dispatched', updated_at = ? "
+                    "WHERE reservation_id = ? "
+                    "AND bundle_reservation_id = ? "
+                    "AND chain_key = ? AND lineage_digest = ? "
+                    "AND request_digest = ? AND state = 'reserved'",
+                    (
+                        now_s,
+                        child_id,
+                        row["reservation_id"],
+                        claim["chain_key"],
+                        claim["lineage_digest"],
+                        row["request_digest"],
+                    ),
+                )
+                chain_updated = conn.execute(
+                    "UPDATE traversal_budget_chains "
+                    "SET last_observed_epoch_ms = ?, updated_at = ? "
+                    "WHERE chain_key = ? AND lineage_digest = ? "
+                    "AND principal_id = ? AND route_id = ? "
+                    "AND credential_id = ? AND credential_version = ? "
+                    "AND policy_hash = ? AND constraint_id = ? "
+                    "AND state = 'active'",
+                    (
+                        now_ms,
+                        now_s,
+                        claim["chain_key"],
+                        claim["lineage_digest"],
+                        claim["principal_id"],
+                        claim["route_id"],
+                        claim["credential_id"],
+                        claim["credential_version"],
+                        claim["policy_hash"],
+                        claim["constraint_id"],
+                    ),
+                )
+                if chain_updated.rowcount != 1:
+                    raise PolicyStateBundleStoreError(
+                        "durable policy dispatch lost its traversal chain"
+                    )
+            if updated.rowcount != 1:
+                raise PolicyStateBundleStoreError(
+                    "durable policy dispatch transition raced"
+                )
+        updated = conn.execute(
+            "UPDATE policy_state_bundles SET state = 'dispatched', "
+            "dispatch_started_at_epoch_ms = ?, "
+            "dispatch_deadline_at_epoch_ms = ?, updated_at = ? "
+            "WHERE reservation_id = ? AND attempt_id = ? "
+            "AND claim_digest = ? AND release_binding_digest = ? "
+            "AND reservation_deadline_at_epoch_ms = ? "
+            "AND state = 'reserved'",
+            (
+                release_dispatch_started_at,
+                dispatch_deadline_at_epoch_ms,
+                now_s,
+                row["reservation_id"],
+                row["attempt_id"],
+                row["claim_digest"],
+                row["release_binding_digest"],
+                row["reservation_deadline_at_epoch_ms"],
+            ),
+        )
+        if updated.rowcount != 1:
+            raise PolicyStateBundleStoreError(
+                "durable policy bundle dispatch raced"
+            )
+        return _policy_state_result(
+            state="dispatched",
+            attempt_id=str(row["attempt_id"]),
+            claim_digest=str(row["claim_digest"]),
+            reservation_id=str(row["reservation_id"]),
+        )
+
+
+def _abort_policy_state_bundle_on_connection(
+    conn: Any,
+    *,
+    row: Any,
+    claims: list[dict[str, Any]],
+    source_state: str,
+    terminal_reason: str,
+    now_ms: int,
+    now_s: str,
+) -> dict[str, Any]:
+    if source_state not in {"reserved", "dispatched"}:
+        raise PolicyStateBundleStoreError(
+            "durable policy abort source state is invalid"
+        )
+    children = _policy_state_child_rows(conn, row=row, claims=claims)
+    for claim, _, child, _ in children:
+        child_state = str(child["state"])
+        if source_state == "dispatched":
+            allowed_states = {"dispatched"}
+        else:
+            allowed_states = {"reserved"}
+        if child_state not in allowed_states:
+            raise PolicyStateBundleStoreError(
+                "durable policy child cannot be aborted"
+            )
+    for claim, child_id, child, definition_or_chain in children:
+        child_state = str(child["state"])
+        if claim["type"] in {"slidingWindowLimit", "weightedBudget"}:
+            if child_state in {"reserved", "dispatched"}:
+                updated = conn.execute(
+                    "UPDATE durable_budget_events SET state = 'cancelled', "
+                    "reservation_expires_at_epoch_ms = NULL, updated_at = ? "
+                    "WHERE reservation_id = ? "
+                    "AND bundle_reservation_id = ? "
+                    "AND budget_key = ? AND request_digest = ? "
+                    "AND operation_digest = ? AND units = ? AND state = ?",
+                    (
+                        now_s,
+                        child_id,
+                        row["reservation_id"],
+                        claim["budget_key"],
+                        row["request_digest"],
+                        row["operation_digest"],
+                        claim["units"],
+                        child_state,
+                    ),
+                )
+                if updated.rowcount != 1:
+                    raise PolicyStateBundleStoreError(
+                        "durable policy budget abort transition raced"
+                    )
+            definition_updated = conn.execute(
+                "UPDATE durable_budget_definitions "
+                "SET last_observed_epoch_ms = ?, updated_at = ? "
+                "WHERE budget_key = ? AND principal_id = ? "
+                "AND route_id = ? AND credential_id = ? "
+                "AND credential_version = ? AND policy_hash = ? "
+                "AND constraint_id = ? AND unit_field = ? "
+                "AND window_kind = 'sliding' "
+                "AND window_seconds = ? AND max_units = ?",
+                (
+                    now_ms,
+                    now_s,
+                    claim["budget_key"],
+                    claim["principal_id"],
+                    claim["route_id"],
+                    claim["credential_id"],
+                    claim["credential_version"],
+                    claim["policy_hash"],
+                    claim["constraint_id"],
+                    claim["unit_field"],
+                    claim["window_seconds"],
+                    claim["max_units"],
+                ),
+            )
+            if definition_updated.rowcount != 1:
+                raise PolicyStateBundleStoreError(
+                    "durable policy budget definition disappeared during abort"
+                )
+            continue
+        if (
+            child_state in {"reserved", "dispatched"}
+            and child["request_cursor_digest"] is not None
+        ):
+            cursor_updated = conn.execute(
+                "UPDATE traversal_budget_cursors "
+                "SET state = 'available', reserved_by = NULL, "
+                "updated_at = ? WHERE cursor_digest = ? "
+                "AND state = 'reserved' AND reserved_by = ?",
+                (
+                    now_s,
+                    child["request_cursor_digest"],
+                    child_id,
+                ),
+            )
+            if cursor_updated.rowcount != 1:
+                raise PolicyStateBundleStoreError(
+                    "durable policy abort lost its reserved cursor"
+                )
+        if child_state in {"reserved", "dispatched"}:
+            page_updated = conn.execute(
+                "UPDATE traversal_budget_page_reservations "
+                "SET state = 'cancelled', updated_at = ? "
+                "WHERE reservation_id = ? "
+                "AND bundle_reservation_id = ? "
+                "AND chain_key = ? AND lineage_digest = ? "
+                "AND request_digest = ? AND state = ?",
+                (
+                    now_s,
+                    child_id,
+                    row["reservation_id"],
+                    claim["chain_key"],
+                    claim["lineage_digest"],
+                    row["request_digest"],
+                    child_state,
+                ),
+            )
+            if page_updated.rowcount != 1:
+                raise PolicyStateBundleStoreError(
+                    "durable policy traversal abort transition raced"
+                )
+        chain_updated = conn.execute(
+            "UPDATE traversal_budget_chains "
+            "SET last_observed_epoch_ms = ?, updated_at = ? "
+            "WHERE chain_key = ? AND lineage_digest = ? "
+            "AND principal_id = ? AND route_id = ? "
+            "AND credential_id = ? AND credential_version = ? "
+            "AND policy_hash = ? AND constraint_id = ? "
+            "AND state = 'active'",
+            (
+                now_ms,
+                now_s,
+                claim["chain_key"],
+                claim["lineage_digest"],
+                claim["principal_id"],
+                claim["route_id"],
+                claim["credential_id"],
+                claim["credential_version"],
+                claim["policy_hash"],
+                claim["constraint_id"],
+            ),
+        )
+        if chain_updated.rowcount != 1:
+            raise PolicyStateBundleStoreError(
+                "durable policy traversal chain disappeared during abort"
+            )
+    bundle_updated = conn.execute(
+        "UPDATE policy_state_bundles SET state = 'aborted', "
+        "terminal_reason = ?, updated_at = ? "
+        "WHERE reservation_id = ? AND attempt_id = ? "
+        "AND claim_digest = ? AND release_binding_digest = ? "
+        "AND state = ?",
+        (
+            terminal_reason,
+            now_s,
+            row["reservation_id"],
+            row["attempt_id"],
+            row["claim_digest"],
+            row["release_binding_digest"],
+            source_state,
+        ),
+    )
+    if bundle_updated.rowcount != 1:
+        raise PolicyStateBundleStoreError(
+            "durable policy bundle abort transition raced"
+        )
+    return _policy_state_result(
+        state="aborted",
+        attempt_id=str(row["attempt_id"]),
+        claim_digest=str(row["claim_digest"]),
+        reservation_id=str(row["reservation_id"]),
+        reason=terminal_reason,
+    )
+
+
+def abort_policy_state_bundle(
+    *,
+    reservation_id: str,
+    attempt_id: str,
+    claim_digest: str,
+    actor_id: str,
+    _connection: Any | None = None,
+    _resources_locked: bool = False,
+) -> dict[str, Any]:
+    manager = (
+        connect()
+        if _connection is None
+        else contextlib.nullcontext(_connection)
+    )
+    with manager as conn:
+        if _connection is None:
+            _begin_release_transaction(conn)
+        row, claims = _load_policy_state_bundle_for_transition(
+            conn,
+            reservation_id=reservation_id,
+            attempt_id=attempt_id,
+            claim_digest=claim_digest,
+            resources_locked=_resources_locked,
+        )
+        _validate_policy_state_transition_actor(row, actor_id)
+        state = str(row["state"])
+        if state == "aborted":
+            _validate_policy_state_replay(
+                conn,
+                row=row,
+                claims=claims,
+                expected_state="aborted",
+                terminal_reason="not_forwarded",
+            )
+            return _policy_state_result(
+                state=state,
+                attempt_id=str(row["attempt_id"]),
+                claim_digest=str(row["claim_digest"]),
+                reservation_id=str(row["reservation_id"]),
+                reason="idempotent_replay",
+            )
+        if state != "reserved":
+            raise PolicyStateBundleStoreError(
+                f"durable policy bundle cannot abort from {state}"
+            )
+        now_ms = _rate_limit_transaction_now_epoch_ms(conn, None)
+        now_s = datetime.fromtimestamp(now_ms / 1000, timezone.utc).isoformat()
+        return _abort_policy_state_bundle_on_connection(
+            conn,
+            row=row,
+            claims=claims,
+            source_state=state,
+            terminal_reason="not_forwarded",
+            now_ms=now_ms,
+            now_s=now_s,
+        )
+
+
+def _normalize_policy_traversal_response_evidence(
+    evidence: Any,
+    traversal_claims: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    error = PolicyStateBundleStoreError
+    if not isinstance(evidence, list) or len(evidence) != len(
+        traversal_claims
+    ):
+        raise error("traversal response evidence coverage is invalid")
+    normalized: list[dict[str, Any]] = []
+    for raw, claim in zip(evidence, traversal_claims, strict=True):
+        if not isinstance(raw, dict) or set(raw) != {
+            "constraint_id",
+            "lineage_digest",
+            "request_cursor_digest",
+            "response_digest",
+            "next_cursor_digest",
+            "record_count",
+            "decoded_bytes",
+            "validation",
+        }:
+            raise error("traversal response evidence fields are invalid")
+        response_digest = _store_digest(
+            "traversal response digest",
+            raw.get("response_digest"),
+            error_type=error,
+        )
+        next_cursor_digest = _store_digest(
+            "traversal next cursor digest",
+            raw.get("next_cursor_digest"),
+            required=False,
+            error_type=error,
+        )
+        record_count = _bounded_store_integer(
+            "traversal response record count",
+            raw.get("record_count"),
+            minimum=0,
+            maximum=_TRAVERSAL_MAX_RECORDS,
+            error_type=error,
+        )
+        decoded_bytes = _bounded_store_integer(
+            "traversal response decoded bytes",
+            raw.get("decoded_bytes"),
+            minimum=0,
+            maximum=_TRAVERSAL_MAX_BYTES,
+            error_type=error,
+        )
+        normalized_item = {
+            "constraint_id": claim["constraint_id"],
+            "lineage_digest": claim["lineage_digest"],
+            "request_cursor_digest": claim["request_cursor_digest"],
+            "response_digest": response_digest,
+            "next_cursor_digest": next_cursor_digest,
+            "record_count": record_count,
+            "decoded_bytes": decoded_bytes,
+            "validation": "passed",
+        }
+        if raw != normalized_item:
+            raise error("traversal response evidence binding is invalid")
+        normalized.append(normalized_item)
+    return normalized
+
+
+def _normalize_policy_traversal_failure_evidence(
+    evidence: Any,
+    traversal_claims: list[dict[str, Any]],
+    *,
+    failure_reason: str,
+    response_body_sha256: str,
+) -> list[dict[str, Any]]:
+    error = PolicyStateBundleStoreError
+    if not isinstance(evidence, list) or len(evidence) != len(
+        traversal_claims
+    ):
+        raise error("traversal failure evidence coverage is invalid")
+    normalized: list[dict[str, Any]] = []
+    for raw, claim in zip(evidence, traversal_claims, strict=True):
+        expected = {
+            "constraint_id": claim["constraint_id"],
+            "lineage_digest": claim["lineage_digest"],
+            "request_cursor_digest": claim["request_cursor_digest"],
+            "outcome": "indeterminate",
+            "reason": failure_reason,
+            "response_body_sha256": response_body_sha256,
+        }
+        if not isinstance(raw, dict) or raw != expected:
+            raise error("traversal failure evidence binding is invalid")
+        normalized.append(expected)
+    return normalized
+
+
+def _commit_policy_budget_children(
+    conn: Any,
+    *,
+    children: list[tuple[dict[str, Any], str, Any, Any | None]],
+    now_ms: int,
+    now_s: str,
+    reserved_occurred_at_epoch_ms: int | None = None,
+) -> None:
+    for claim, child_id, child, _ in children:
+        if claim["type"] not in {"slidingWindowLimit", "weightedBudget"}:
+            continue
+        state = str(child["state"])
+        if state == "committed":
+            continue
+        if state not in {"reserved", "dispatched"}:
+            raise PolicyStateBundleStoreError(
+                f"durable budget child cannot commit from {state}"
+            )
+        occurred_at = (
+            reserved_occurred_at_epoch_ms
+            if reserved_occurred_at_epoch_ms is not None
+            else (
+                int(child["occurred_at_epoch_ms"])
+                if state == "dispatched"
+                else now_ms
+            )
+        )
+        expires_at = occurred_at + claim["window_seconds"] * 1000
+        updated = conn.execute(
+            "UPDATE durable_budget_events SET state = 'committed', "
+            "occurred_at_epoch_ms = ?, expires_at_epoch_ms = ?, "
+            "reservation_expires_at_epoch_ms = NULL, updated_at = ? "
+            "WHERE reservation_id = ? AND bundle_reservation_id = ? "
+            "AND budget_key = ? AND request_digest = ? "
+            "AND operation_digest = ? AND units = ? AND state = ?",
+            (
+                occurred_at,
+                expires_at,
+                now_s,
+                child_id,
+                child["bundle_reservation_id"],
+                claim["budget_key"],
+                child["request_digest"],
+                child["operation_digest"],
+                claim["units"],
+                state,
+            ),
+        )
+        if updated.rowcount != 1:
+            raise PolicyStateBundleStoreError(
+                "durable policy budget commit raced"
+            )
+        definition_updated = conn.execute(
+            "UPDATE durable_budget_definitions "
+            "SET last_observed_epoch_ms = ?, updated_at = ? "
+            "WHERE budget_key = ? AND principal_id = ? "
+            "AND route_id = ? AND credential_id = ? "
+            "AND credential_version = ? AND policy_hash = ? "
+            "AND constraint_id = ? AND unit_field = ? "
+            "AND window_kind = 'sliding' "
+            "AND window_seconds = ? AND max_units = ?",
+            (
+                now_ms,
+                now_s,
+                claim["budget_key"],
+                claim["principal_id"],
+                claim["route_id"],
+                claim["credential_id"],
+                claim["credential_version"],
+                claim["policy_hash"],
+                claim["constraint_id"],
+                claim["unit_field"],
+                claim["window_seconds"],
+                claim["max_units"],
+            ),
+        )
+        if definition_updated.rowcount != 1:
+            raise PolicyStateBundleStoreError(
+                "durable policy budget definition disappeared during commit"
+            )
+
+
+def _fail_policy_state_bundle_on_connection(
+    conn: Any,
+    *,
+    row: Any,
+    claims: list[dict[str, Any]],
+    failure_reason: str,
+    normalized_evidence: list[dict[str, Any]],
+    now_ms: int,
+    now_s: str,
+    charge_occurred_at_epoch_ms: int | None = None,
+    response_body_sha256: str | None = None,
+    uncertainty: str | None = None,
+    completion_dispatch_deadline_at_epoch_ms: int | None = None,
+) -> dict[str, Any]:
+    evidence_json = dumps(normalized_evidence)
+    evidence_digest = _policy_state_digest(normalized_evidence)
+    state = str(row["state"])
+    if state not in {"reserved", "dispatched"}:
+        raise PolicyStateBundleStoreError(
+            f"durable policy bundle cannot fail from {state}"
+        )
+    if (
+        charge_occurred_at_epoch_ms is not None
+        and (
+            type(charge_occurred_at_epoch_ms) is not int
+            or not 0 <= charge_occurred_at_epoch_ms <= now_ms
+        )
+    ):
+        raise PolicyStateBundleStoreError(
+            "durable policy conservative charge timestamp is invalid"
+        )
+    children = _policy_state_child_rows(conn, row=row, claims=claims)
+    for claim, _, child, definition_or_chain in children:
+        if str(child["state"]) not in {"reserved", "dispatched"}:
+            raise PolicyStateBundleStoreError(
+                "durable policy child cannot fail indeterminately"
+            )
+        if (
+            claim["type"] == "traversalBudget"
+            and (
+                definition_or_chain is None
+                or str(definition_or_chain["state"]) != "active"
+            )
+        ):
+            raise PolicyStateBundleStoreError(
+                "durable policy traversal chain cannot fail from its state"
+            )
+    _commit_policy_budget_children(
+        conn,
+        children=children,
+        now_ms=now_ms,
+        now_s=now_s,
+        reserved_occurred_at_epoch_ms=charge_occurred_at_epoch_ms,
+    )
+    for claim, child_id, child, definition_or_chain in children:
+        if claim["type"] != "traversalBudget":
+            continue
+        if child["request_cursor_digest"] is not None:
+            cursor_updated = conn.execute(
+                "UPDATE traversal_budget_cursors "
+                "SET state = 'consumed', reserved_by = NULL, updated_at = ? "
+                "WHERE cursor_digest = ? AND state = 'reserved' "
+                "AND reserved_by = ?",
+                (now_s, child["request_cursor_digest"], child_id),
+            )
+            if cursor_updated.rowcount != 1:
+                raise PolicyStateBundleStoreError(
+                    "traversal failure lost its reserved cursor"
+                )
+        page_updated = conn.execute(
+            "UPDATE traversal_budget_page_reservations "
+            "SET state = 'indeterminate', updated_at = ? "
+            "WHERE reservation_id = ? "
+            "AND bundle_reservation_id = ? "
+            "AND chain_key = ? AND lineage_digest = ? "
+            "AND request_digest = ? AND state = ?",
+            (
+                now_s,
+                child_id,
+                row["reservation_id"],
+                claim["chain_key"],
+                claim["lineage_digest"],
+                row["request_digest"],
+                str(child["state"]),
+            ),
+        )
+        if page_updated.rowcount != 1:
+            raise PolicyStateBundleStoreError(
+                "traversal failure transition raced"
+            )
+        chain_updated = conn.execute(
+            "UPDATE traversal_budget_chains "
+            "SET state = 'poisoned', page_count = page_count + 1, "
+            "last_observed_epoch_ms = ?, updated_at = ? "
+            "WHERE chain_key = ? AND lineage_digest = ? "
+            "AND principal_id = ? AND route_id = ? "
+            "AND credential_id = ? AND credential_version = ? "
+            "AND policy_hash = ? AND constraint_id = ? "
+            "AND state = 'active' AND page_count = ? "
+            "AND record_count = ? AND byte_count = ?",
+            (
+                now_ms,
+                now_s,
+                claim["chain_key"],
+                claim["lineage_digest"],
+                claim["principal_id"],
+                claim["route_id"],
+                claim["credential_id"],
+                claim["credential_version"],
+                claim["policy_hash"],
+                claim["constraint_id"],
+                int(definition_or_chain["page_count"]),
+                int(definition_or_chain["record_count"]),
+                int(definition_or_chain["byte_count"]),
+            ),
+        )
+        if chain_updated.rowcount != 1:
+            raise PolicyStateBundleStoreError(
+                "traversal failure lost its chain"
+            )
+    bundle_updated = conn.execute(
+        "UPDATE policy_state_bundles SET state = 'indeterminate', "
+        "response_evidence_digest = ?, response_evidence_json = ?, "
+        "terminal_reason = ?, response_body_sha256 = ?, uncertainty = ?, "
+        "completion_dispatch_deadline_at_epoch_ms = ?, "
+        "updated_at = ? WHERE reservation_id = ? "
+        "AND attempt_id = ? AND claim_digest = ? "
+        "AND (release_binding_digest = ? OR "
+        "(release_binding_digest IS NULL AND ? IS NULL)) "
+        "AND state = ?",
+        (
+            evidence_digest,
+            evidence_json,
+            failure_reason,
+            response_body_sha256,
+            uncertainty,
+            completion_dispatch_deadline_at_epoch_ms,
+            now_s,
+            row["reservation_id"],
+            row["attempt_id"],
+            row["claim_digest"],
+            row["release_binding_digest"],
+            row["release_binding_digest"],
+            state,
+        ),
+    )
+    if bundle_updated.rowcount != 1:
+        raise PolicyStateBundleStoreError(
+            "durable policy failure transition raced"
+        )
+    return _policy_state_result(
+        state="indeterminate",
+        attempt_id=str(row["attempt_id"]),
+        claim_digest=str(row["claim_digest"]),
+        reservation_id=str(row["reservation_id"]),
+        reason=failure_reason,
+    )
+
+
+def fail_policy_state_bundle(
+    *,
+    reservation_id: str,
+    attempt_id: str,
+    claim_digest: str,
+    actor_id: str,
+    failure_reason: str,
+    response_body_sha256: str,
+    traversal_evidence: list[dict[str, Any]],
+    _connection: Any | None = None,
+    _resources_locked: bool = False,
+    _uncertainty: str | None = None,
+    _completion_dispatch_deadline_at_epoch_ms: Any = (
+        _DURABLE_COMPLETION_DEADLINE_UNSET
+    ),
+) -> dict[str, Any]:
+    error = PolicyStateBundleStoreError
+    failure_reason = _bounded_store_text(
+        "durable policy failure reason",
+        failure_reason,
+        maximum=256,
+        error_type=error,
+    )
+    response_body_sha256 = _store_digest(
+        "durable policy failure response digest",
+        response_body_sha256,
+        error_type=error,
+    ) or ""
+    if _uncertainty is not None and _uncertainty != _DURABLE_POLICY_CHARGED_UNCERTAINTY:
+        raise PolicyStateBundleStoreError(
+            "durable policy uncertainty is invalid"
+        )
+    bind_completion_deadline = (
+        _completion_dispatch_deadline_at_epoch_ms
+        is not _DURABLE_COMPLETION_DEADLINE_UNSET
+    )
+    if bind_completion_deadline and (
+        _completion_dispatch_deadline_at_epoch_ms is not None
+        and (
+            not isinstance(
+                _completion_dispatch_deadline_at_epoch_ms,
+                int,
+            )
+            or isinstance(
+                _completion_dispatch_deadline_at_epoch_ms,
+                bool,
+            )
+            or _completion_dispatch_deadline_at_epoch_ms < 0
+        )
+    ):
+        raise PolicyStateBundleStoreError(
+            "durable policy completion dispatch deadline is invalid"
+        )
+    manager = (
+        connect()
+        if _connection is None
+        else contextlib.nullcontext(_connection)
+    )
+    with manager as conn:
+        if _connection is None:
+            _begin_release_transaction(conn)
+        row, claims = _load_policy_state_bundle_for_transition(
+            conn,
+            reservation_id=reservation_id,
+            attempt_id=attempt_id,
+            claim_digest=claim_digest,
+            resources_locked=_resources_locked,
+        )
+        _validate_policy_state_transition_actor(row, actor_id)
+        traversal_claims = [
+            claim for claim in claims if claim["type"] == "traversalBudget"
+        ]
+        normalized_evidence = _normalize_policy_traversal_failure_evidence(
+            traversal_evidence,
+            traversal_claims,
+            failure_reason=failure_reason,
+            response_body_sha256=response_body_sha256,
+        )
+        evidence_json = dumps(normalized_evidence)
+        evidence_digest = _policy_state_digest(normalized_evidence)
+        state = str(row["state"])
+        if state == "indeterminate":
+            if (
+                str(row["response_evidence_digest"]) != evidence_digest
+                or str(row["response_evidence_json"]) != evidence_json
+                or str(row["terminal_reason"]) != failure_reason
+                or (
+                    bind_completion_deadline
+                    and (
+                        int(
+                            row[
+                                "completion_dispatch_deadline_at_epoch_ms"
+                            ]
+                        )
+                        if row[
+                            "completion_dispatch_deadline_at_epoch_ms"
+                        ]
+                        is not None
+                        else None
+                    )
+                    != _completion_dispatch_deadline_at_epoch_ms
+                )
+                or (
+                    _uncertainty is not None
+                    and (
+                        (
+                            str(row["response_body_sha256"])
+                            if row["response_body_sha256"] is not None
+                            else None
+                        )
+                        != response_body_sha256
+                        or (
+                            str(row["uncertainty"])
+                            if row["uncertainty"] is not None
+                            else None
+                        )
+                        != _uncertainty
+                    )
+                )
+            ):
+                raise error(
+                    "durable policy failure replay has different evidence"
+                )
+            _validate_policy_state_replay(
+                conn,
+                row=row,
+                claims=claims,
+                expected_state="indeterminate",
+                terminal_reason=failure_reason,
+                terminal_evidence=normalized_evidence,
+            )
+            return _policy_state_result(
+                state=state,
+                attempt_id=str(row["attempt_id"]),
+                claim_digest=str(row["claim_digest"]),
+                reservation_id=str(row["reservation_id"]),
+                reason="idempotent_replay",
+            )
+        now_ms = _rate_limit_transaction_now_epoch_ms(conn, None)
+        now_s = datetime.fromtimestamp(now_ms / 1000, timezone.utc).isoformat()
+        return _fail_policy_state_bundle_on_connection(
+            conn,
+            row=row,
+            claims=claims,
+            failure_reason=failure_reason,
+            normalized_evidence=normalized_evidence,
+            now_ms=now_ms,
+            now_s=now_s,
+            response_body_sha256=response_body_sha256,
+            uncertainty=_uncertainty,
+            completion_dispatch_deadline_at_epoch_ms=(
+                _completion_dispatch_deadline_at_epoch_ms
+                if bind_completion_deadline
+                else None
+            ),
+        )
+
+
+def complete_policy_state_bundle(
+    *,
+    reservation_id: str,
+    attempt_id: str,
+    claim_digest: str,
+    actor_id: str,
+    response_evidence: list[dict[str, Any]],
+    _connection: Any | None = None,
+    _resources_locked: bool = False,
+    _response_body_sha256: str | None = None,
+) -> dict[str, Any]:
+    error = PolicyStateBundleStoreError
+    if _response_body_sha256 is not None:
+        _response_body_sha256 = (
+            _store_digest(
+                "durable policy response body digest",
+                _response_body_sha256,
+                error_type=error,
+            )
+            or ""
+        )
+    manager = (
+        connect()
+        if _connection is None
+        else contextlib.nullcontext(_connection)
+    )
+    with manager as conn:
+        if _connection is None:
+            _begin_release_transaction(conn)
+        row, claims = _load_policy_state_bundle_for_transition(
+            conn,
+            reservation_id=reservation_id,
+            attempt_id=attempt_id,
+            claim_digest=claim_digest,
+            resources_locked=_resources_locked,
+        )
+        _validate_policy_state_transition_actor(row, actor_id)
+        traversal_claims = [
+            claim for claim in claims if claim["type"] == "traversalBudget"
+        ]
+        state = str(row["state"])
+        if state == "indeterminate":
+            stored_failure_evidence = (
+                _policy_state_terminal_failure_evidence(
+                    row, traversal_claims
+                )
+            )
+            _validate_policy_state_replay(
+                conn,
+                row=row,
+                claims=claims,
+                expected_state="indeterminate",
+                terminal_reason=str(row["terminal_reason"]),
+                terminal_evidence=stored_failure_evidence,
+            )
+            return _policy_state_result(
+                state="indeterminate",
+                attempt_id=str(row["attempt_id"]),
+                claim_digest=str(row["claim_digest"]),
+                reservation_id=str(row["reservation_id"]),
+                reason="idempotent_replay",
+            )
+        normalized_evidence = _normalize_policy_traversal_response_evidence(
+            response_evidence, traversal_claims
+        )
+        evidence_json = dumps(normalized_evidence)
+        evidence_digest = _policy_state_digest(normalized_evidence)
+        if state in {"committed", "denied"}:
+            if (
+                str(row["response_evidence_digest"]) != evidence_digest
+                or str(row["response_evidence_json"]) != evidence_json
+                or (
+                    _response_body_sha256 is not None
+                    and (
+                        str(row["response_body_sha256"])
+                        if row["response_body_sha256"] is not None
+                        else None
+                    )
+                    != _response_body_sha256
+                )
+            ):
+                raise error(
+                    "durable policy completion replay has different evidence"
+                )
+            _validate_policy_state_replay(
+                conn,
+                row=row,
+                claims=claims,
+                expected_state=state,
+                terminal_reason=(
+                    str(row["terminal_reason"])
+                    if state == "denied"
+                    else None
+                ),
+                terminal_evidence=normalized_evidence,
+            )
+            return _policy_state_result(
+                state=state,
+                attempt_id=str(row["attempt_id"]),
+                claim_digest=str(row["claim_digest"]),
+                reservation_id=str(row["reservation_id"]),
+                reason=(
+                    str(row["terminal_reason"])
+                    if row["terminal_reason"] is not None
+                    else "idempotent_replay"
+                ),
+            )
+        if state != "dispatched":
+            raise error(
+                f"durable policy bundle cannot complete from {state}"
+            )
+        release = _release_attempt_row(
+            conn, str(row["attempt_id"]), for_update=True
+        )
+        children = _policy_state_child_rows(conn, row=row, claims=claims)
+        evidence_by_constraint = {
+            item["constraint_id"]: item for item in normalized_evidence
+        }
+        denial_reason: str | None = None
+        next_cursor_digests: set[str] = set()
+        for claim, _, child, chain in children:
+            if str(child["state"]) != "dispatched":
+                raise error("durable policy child is not dispatched")
+            if claim["type"] != "traversalBudget":
+                continue
+            assert chain is not None
+            evidence = evidence_by_constraint[claim["constraint_id"]]
+            next_cursor = evidence["next_cursor_digest"]
+            if next_cursor is not None:
+                if (
+                    next_cursor == child["request_cursor_digest"]
+                    or next_cursor in next_cursor_digests
+                    or conn.execute(
+                        "SELECT cursor_digest FROM traversal_budget_cursors "
+                        "WHERE cursor_digest = ?",
+                        (next_cursor,),
+                    ).fetchone()
+                    is not None
+                ):
+                    denial_reason = "next_cursor_replayed_or_collided"
+                next_cursor_digests.add(next_cursor)
+
+        validation_now_ms = _rate_limit_transaction_now_epoch_ms(conn, None)
+        for claim, _, _, chain in children:
+            if claim["type"] != "traversalBudget":
+                continue
+            assert chain is not None
+            evidence = evidence_by_constraint[claim["constraint_id"]]
+            if str(chain["state"]) != "active":
+                denial_reason = f"traversal_{chain['state']}"
+            elif validation_now_ms >= int(chain["expires_at_epoch_ms"]):
+                denial_reason = "traversal_lifetime_expired"
+            elif int(chain["page_count"]) + 1 > int(chain["max_pages"]):
+                denial_reason = "traversal_page_budget_exceeded"
+            elif (
+                int(chain["record_count"]) + evidence["record_count"]
+                > int(chain["max_records"])
+            ):
+                denial_reason = "traversal_record_budget_exceeded"
+            elif (
+                int(chain["byte_count"]) + evidence["decoded_bytes"]
+                > int(chain["max_bytes"])
+            ):
+                denial_reason = "traversal_byte_budget_exceeded"
+
+        # Re-read the database clock immediately before the first successful
+        # mutation. The release row remains locked under the bundle's
+        # canonical advisory-lock set.
+        now_ms = _rate_limit_transaction_now_epoch_ms(conn, None)
+        now_s = datetime.fromtimestamp(now_ms / 1000, timezone.utc).isoformat()
+        dispatch_failure_reason = _policy_state_dispatch_failure_reason(
+            row, claims, release, now_ms=now_ms
+        )
+        if dispatch_failure_reason is not None:
+            normalized_failure_evidence = _policy_state_failure_evidence(
+                claims,
+                failure_reason=dispatch_failure_reason,
+                response_body_sha256=_POLICY_STATE_EMPTY_RESPONSE_DIGEST,
+            )
+            return _fail_policy_state_bundle_on_connection(
+                conn,
+                row=row,
+                claims=claims,
+                failure_reason=dispatch_failure_reason,
+                normalized_evidence=normalized_failure_evidence,
+                now_ms=now_ms,
+                now_s=now_s,
+                charge_occurred_at_epoch_ms=(
+                    int(row["dispatch_started_at_epoch_ms"])
+                    if _policy_state_release_dispatch_is_exact(
+                        row, claims, release
+                    )
+                    else now_ms
+                ),
+            )
+        _commit_policy_budget_children(
+            conn, children=children, now_ms=now_ms, now_s=now_s
+        )
+        for claim, child_id, child, chain in children:
+            if claim["type"] != "traversalBudget":
+                continue
+            assert chain is not None
+            evidence = evidence_by_constraint[claim["constraint_id"]]
+            if child["request_cursor_digest"] is not None:
+                updated = conn.execute(
+                    "UPDATE traversal_budget_cursors "
+                    "SET state = 'consumed', reserved_by = NULL, updated_at = ? "
+                    "WHERE cursor_digest = ? AND state = 'reserved' "
+                    "AND reserved_by = ?",
+                    (now_s, child["request_cursor_digest"], child_id),
+                )
+                if updated.rowcount != 1:
+                    raise error(
+                        "traversal completion lost its reserved cursor"
+                    )
+            if denial_reason is not None:
+                updated = conn.execute(
+                    "UPDATE traversal_budget_page_reservations "
+                    "SET state = 'denied', response_digest = ?, "
+                    "response_records = ?, response_bytes = ?, "
+                    "next_cursor_digest = NULL, updated_at = ? "
+                    "WHERE reservation_id = ? "
+                    "AND bundle_reservation_id = ? "
+                    "AND chain_key = ? AND lineage_digest = ? "
+                    "AND request_digest = ? AND page_number = ? "
+                    "AND state = 'dispatched'",
+                    (
+                        evidence["response_digest"],
+                        evidence["record_count"],
+                        evidence["decoded_bytes"],
+                        now_s,
+                        child_id,
+                        row["reservation_id"],
+                        claim["chain_key"],
+                        claim["lineage_digest"],
+                        row["request_digest"],
+                        int(child["page_number"]),
+                    ),
+                )
+                chain_updated = conn.execute(
+                    "UPDATE traversal_budget_chains "
+                    "SET state = 'poisoned', page_count = page_count + 1, "
+                    "record_count = record_count + ?, "
+                    "byte_count = byte_count + ?, "
+                    "last_observed_epoch_ms = ?, updated_at = ? "
+                    "WHERE chain_key = ? AND lineage_digest = ? "
+                    "AND principal_id = ? AND route_id = ? "
+                    "AND credential_id = ? AND credential_version = ? "
+                    "AND policy_hash = ? AND constraint_id = ? "
+                    "AND state = ? AND page_count = ? "
+                    "AND record_count = ? AND byte_count = ?",
+                    (
+                        evidence["record_count"],
+                        evidence["decoded_bytes"],
+                        now_ms,
+                        now_s,
+                        claim["chain_key"],
+                        claim["lineage_digest"],
+                        claim["principal_id"],
+                        claim["route_id"],
+                        claim["credential_id"],
+                        claim["credential_version"],
+                        claim["policy_hash"],
+                        claim["constraint_id"],
+                        str(chain["state"]),
+                        int(chain["page_count"]),
+                        int(chain["record_count"]),
+                        int(chain["byte_count"]),
+                    ),
+                )
+            else:
+                page_count = int(chain["page_count"]) + 1
+                record_count = (
+                    int(chain["record_count"]) + evidence["record_count"]
+                )
+                byte_count = (
+                    int(chain["byte_count"]) + evidence["decoded_bytes"]
+                )
+                next_cursor = evidence["next_cursor_digest"]
+                exhausted = (
+                    next_cursor is None
+                    or page_count >= int(chain["max_pages"])
+                    or record_count >= int(chain["max_records"])
+                    or byte_count >= int(chain["max_bytes"])
+                )
+                if next_cursor is not None and not exhausted:
+                    conn.execute(
+                        """
+                        INSERT INTO traversal_budget_cursors (
+                            cursor_digest, chain_key, lineage_digest, state,
+                            reserved_by, issued_at_epoch_ms,
+                            expires_at_epoch_ms, updated_at
+                        )
+                        VALUES (?, ?, ?, 'available', NULL, ?, ?, ?)
+                        """,
+                        (
+                            next_cursor,
+                            claim["chain_key"],
+                            claim["lineage_digest"],
+                            now_ms,
+                            chain["expires_at_epoch_ms"],
+                            now_s,
+                        ),
+                    )
+                updated = conn.execute(
+                    "UPDATE traversal_budget_page_reservations "
+                    "SET state = 'committed', response_digest = ?, "
+                    "response_records = ?, response_bytes = ?, "
+                    "next_cursor_digest = ?, updated_at = ? "
+                    "WHERE reservation_id = ? "
+                    "AND bundle_reservation_id = ? "
+                    "AND chain_key = ? AND lineage_digest = ? "
+                    "AND request_digest = ? AND page_number = ? "
+                    "AND state = 'dispatched'",
+                    (
+                        evidence["response_digest"],
+                        evidence["record_count"],
+                        evidence["decoded_bytes"],
+                        next_cursor,
+                        now_s,
+                        child_id,
+                        row["reservation_id"],
+                        claim["chain_key"],
+                        claim["lineage_digest"],
+                        row["request_digest"],
+                        int(child["page_number"]),
+                    ),
+                )
+                chain_updated = conn.execute(
+                    "UPDATE traversal_budget_chains SET state = ?, "
+                    "page_count = ?, record_count = ?, byte_count = ?, "
+                    "last_observed_epoch_ms = ?, updated_at = ? "
+                    "WHERE chain_key = ? AND lineage_digest = ? "
+                    "AND principal_id = ? AND route_id = ? "
+                    "AND credential_id = ? AND credential_version = ? "
+                    "AND policy_hash = ? AND constraint_id = ? "
+                    "AND state = 'active' AND page_count = ? "
+                    "AND record_count = ? AND byte_count = ?",
+                    (
+                        "exhausted" if exhausted else "active",
+                        page_count,
+                        record_count,
+                        byte_count,
+                        now_ms,
+                        now_s,
+                        claim["chain_key"],
+                        claim["lineage_digest"],
+                        claim["principal_id"],
+                        claim["route_id"],
+                        claim["credential_id"],
+                        claim["credential_version"],
+                        claim["policy_hash"],
+                        claim["constraint_id"],
+                        int(chain["page_count"]),
+                        int(chain["record_count"]),
+                        int(chain["byte_count"]),
+                    ),
+                )
+            if updated.rowcount != 1:
+                raise error("traversal completion transition raced")
+            if chain_updated.rowcount != 1:
+                raise error("traversal completion chain transition raced")
+        target_state = "denied" if denial_reason is not None else "committed"
+        updated = conn.execute(
+            "UPDATE policy_state_bundles SET state = ?, "
+            "response_evidence_digest = ?, response_evidence_json = ?, "
+            "terminal_reason = ?, response_body_sha256 = ?, "
+            "uncertainty = NULL, updated_at = ? "
+            "WHERE reservation_id = ? AND attempt_id = ? "
+            "AND claim_digest = ? AND release_binding_digest = ? "
+            "AND dispatch_started_at_epoch_ms = ? "
+            "AND dispatch_deadline_at_epoch_ms = ? "
+            "AND state = 'dispatched'",
+            (
+                target_state,
+                evidence_digest,
+                evidence_json,
+                denial_reason,
+                _response_body_sha256,
+                now_s,
+                row["reservation_id"],
+                row["attempt_id"],
+                row["claim_digest"],
+                row["release_binding_digest"],
+                row["dispatch_started_at_epoch_ms"],
+                row["dispatch_deadline_at_epoch_ms"],
+            ),
+        )
+        if updated.rowcount != 1:
+            raise error("durable policy completion transition raced")
+        return _policy_state_result(
+            state=target_state,
+            attempt_id=str(row["attempt_id"]),
+            claim_digest=str(row["claim_digest"]),
+            reservation_id=str(row["reservation_id"]),
+            reason=denial_reason,
+        )
+
+
+def _policy_state_release_binding_is_exact(
+    bundle: Any,
+    claims: list[dict[str, Any]],
+    release: Any,
+) -> bool:
+    if release is None:
+        return False
+    try:
+        immutable_fields = (
+            "attempt_id",
+            "policy_hash",
+            "request_digest",
+            "operation_digest",
+        )
+        immutable_match = all(
+            str(release[field]) == str(bundle[field])
+            for field in immutable_fields
+        )
+        release_binding_match = hmac.compare_digest(
+            str(release["binding_digest"]),
+            str(bundle["release_binding_digest"]),
+        )
+        claims_match = all(
+            str(release["principal_id"]) == claim["principal_id"]
+            and str(release["route_id"]) == claim["route_id"]
+            and str(release["credential_id"]) == claim["credential_id"]
+            and int(release["credential_version"])
+            == claim["credential_version"]
+            and str(release["policy_hash"]) == claim["policy_hash"]
+            for claim in claims
+        )
+    except (KeyError, TypeError, ValueError):
+        return False
+    return immutable_match and release_binding_match and claims_match
+
+
+def _policy_state_release_reservation_is_exact(
+    bundle: Any,
+    claims: list[dict[str, Any]],
+    release: Any,
+) -> bool:
+    if not _policy_state_release_binding_is_exact(bundle, claims, release):
+        return False
+    try:
+        release_deadline = release["reservation_expires_at_epoch_ms"]
+        bundle_deadline = bundle["reservation_deadline_at_epoch_ms"]
+        return (
+            type(release_deadline) is int
+            and type(bundle_deadline) is int
+            and int(release_deadline) == int(bundle_deadline)
+            and int(bundle_deadline) > 0
+        )
+    except (KeyError, TypeError, ValueError, IndexError):
+        return False
+
+
+def _policy_state_release_dispatch_is_exact(
+    bundle: Any,
+    claims: list[dict[str, Any]],
+    release: Any,
+) -> bool:
+    if not _policy_state_release_reservation_is_exact(
+        bundle, claims, release
+    ):
+        return False
+    try:
+        release_started_at = release["dispatch_started_at_epoch_ms"]
+        release_deadline_at = release["dispatch_expires_at_epoch_ms"]
+        bundle_started_at = bundle["dispatch_started_at_epoch_ms"]
+        bundle_deadline_at = bundle["dispatch_deadline_at_epoch_ms"]
+        return (
+            type(release_started_at) is int
+            and type(release_deadline_at) is int
+            and type(bundle_started_at) is int
+            and type(bundle_deadline_at) is int
+            and int(release_started_at) == int(bundle_started_at)
+            and int(release_deadline_at) == int(bundle_deadline_at)
+            and 0 <= int(bundle_started_at) < int(bundle_deadline_at)
+            <= int(bundle_started_at) + _POLICY_STATE_DISPATCH_MAX_TTL_MS
+        )
+    except (KeyError, TypeError, ValueError, IndexError):
+        return False
+
+
+_POLICY_STATE_EMPTY_RESPONSE_DIGEST = (
+    "sha256:" + hashlib.sha256(b"").hexdigest()
+)
+
+
+def _policy_state_release_forwarded_completion_is_exact(
+    bundle: Any,
+    claims: list[dict[str, Any]],
+    release: Any,
+    *,
+    now_ms: int,
+) -> bool:
+    if not _policy_state_release_dispatch_is_exact(bundle, claims, release):
+        return False
+    try:
+        completed_at = release["completed_at_epoch_ms"]
+        dispatch_started_at = bundle["dispatch_started_at_epoch_ms"]
+        dispatch_deadline_at = bundle["dispatch_deadline_at_epoch_ms"]
+        return (
+            str(release["state"]) == "committed"
+            and str(release["completion_outcome"]) == "forwarded"
+            and type(completed_at) is int
+            and type(dispatch_started_at) is int
+            and type(dispatch_deadline_at) is int
+            and 0 <= int(dispatch_started_at)
+            <= int(completed_at)
+            <= now_ms
+            and int(completed_at) < int(dispatch_deadline_at)
+            and now_ms < int(dispatch_deadline_at)
+        )
+    except (KeyError, TypeError, ValueError, IndexError):
+        return False
+
+
+def _policy_state_dispatch_failure_reason(
+    bundle: Any,
+    claims: list[dict[str, Any]],
+    release: Any,
+    *,
+    now_ms: int,
+) -> str | None:
+    deadline_at = bundle["dispatch_deadline_at_epoch_ms"]
+    if type(deadline_at) is not int:
+        return "durable_dispatch_deadline_invalid"
+    if release is None:
+        return "durable_dispatch_deadline_release_absent"
+    if not _policy_state_release_dispatch_is_exact(bundle, claims, release):
+        return "durable_dispatch_deadline_binding_mismatch"
+    if _policy_state_release_forwarded_completion_is_exact(
+        bundle, claims, release, now_ms=now_ms
+    ):
+        return None
+    try:
+        completed_at = release["completed_at_epoch_ms"]
+        dispatch_started_at = bundle["dispatch_started_at_epoch_ms"]
+        forwarded_completion_timestamp_is_valid = (
+            str(release["state"]) == "committed"
+            and str(release["completion_outcome"]) == "forwarded"
+            and type(completed_at) is int
+            and type(dispatch_started_at) is int
+            and 0 <= int(dispatch_started_at)
+            <= int(completed_at)
+            <= now_ms
+            and int(completed_at) < int(deadline_at)
+        )
+    except (KeyError, TypeError, ValueError, IndexError):
+        forwarded_completion_timestamp_is_valid = False
+    if (
+        forwarded_completion_timestamp_is_valid
+        and now_ms >= int(deadline_at)
+    ):
+        return "durable_dispatch_deadline_forwarded"
+    return "durable_dispatch_deadline_release_indeterminate"
+
+
+def _policy_state_failure_evidence(
+    claims: list[dict[str, Any]],
+    *,
+    failure_reason: str,
+    response_body_sha256: str,
+) -> list[dict[str, Any]]:
+    traversal_claims = [
+        claim for claim in claims if claim["type"] == "traversalBudget"
+    ]
+    evidence = [
+        {
+            "constraint_id": claim["constraint_id"],
+            "lineage_digest": claim["lineage_digest"],
+            "request_cursor_digest": claim["request_cursor_digest"],
+            "outcome": "indeterminate",
+            "reason": failure_reason,
+            "response_body_sha256": response_body_sha256,
+        }
+        for claim in traversal_claims
+    ]
+    return _normalize_policy_traversal_failure_evidence(
+        evidence,
+        traversal_claims,
+        failure_reason=failure_reason,
+        response_body_sha256=response_body_sha256,
+    )
+
+
+def _policy_state_terminal_failure_evidence(
+    row: Any,
+    traversal_claims: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    error = PolicyStateBundleStoreError
+    terminal_reason = _bounded_store_text(
+        "durable policy terminal reason",
+        row["terminal_reason"],
+        maximum=256,
+        error_type=error,
+    )
+    raw = loads(str(row["response_evidence_json"]), None)
+    if not traversal_claims:
+        response_body_sha256 = _POLICY_STATE_EMPTY_RESPONSE_DIGEST
+    elif (
+        not isinstance(raw, list)
+        or not raw
+        or not isinstance(raw[0], dict)
+    ):
+        raise error("durable policy terminal failure evidence is invalid")
+    else:
+        response_body_sha256 = _store_digest(
+            "durable policy terminal response digest",
+            raw[0].get("response_body_sha256"),
+            error_type=error,
+        ) or ""
+    return _normalize_policy_traversal_failure_evidence(
+        raw,
+        traversal_claims,
+        failure_reason=terminal_reason,
+        response_body_sha256=response_body_sha256,
+    )
+
+
+def _policy_state_stale_candidate_rows(
+    conn: Any,
+    *,
+    now_ms: int,
+    limit: int,
+    skip_locked: bool,
+) -> list[Any]:
+    suffix = (
+        " FOR UPDATE SKIP LOCKED"
+        if skip_locked and isinstance(conn, PostgresMetadataConnection)
+        else ""
+    )
+    return conn.execute(
+        """
+        SELECT reservation_id, attempt_id, claim_digest
+        FROM policy_state_bundles
+        WHERE (
+            state = 'reserved'
+            AND (
+                reservation_deadline_at_epoch_ms IS NULL
+                OR reservation_deadline_at_epoch_ms <= ?
+            )
+        ) OR (
+            state = 'dispatched'
+            AND (
+                dispatch_deadline_at_epoch_ms IS NULL
+                OR dispatch_deadline_at_epoch_ms <= ?
+            )
+        )
+        ORDER BY CASE
+                     WHEN state = 'reserved'
+                     THEN reservation_deadline_at_epoch_ms
+                     ELSE dispatch_deadline_at_epoch_ms
+                 END ASC,
+                 reservation_id ASC
+        LIMIT ?
+        """
+        + suffix,
+        (now_ms, now_ms, limit),
+    ).fetchall()
+
+
+def _policy_state_retryable_postgres_conflict(exc: BaseException) -> bool:
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if getattr(current, "sqlstate", None) in (
+            _POLICY_STATE_RECONCILE_RETRYABLE_SQLSTATES
+        ):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
+def _reconcile_policy_state_bundle_on_connection(
+    conn: Any,
+    *,
+    preview: Any,
+    now_ms: int,
+) -> str | None:
+    row, claims = _load_policy_state_bundle_for_transition(
+        conn,
+        reservation_id=preview["reservation_id"],
+        attempt_id=preview["attempt_id"],
+        claim_digest=preview["claim_digest"],
+        allow_unknown_migration_evidence=True,
+    )
+    state = str(row["state"])
+    if state not in {"reserved", "dispatched"}:
+        return None
+    deadline_at = (
+        row["reservation_deadline_at_epoch_ms"]
+        if state == "reserved"
+        else row["dispatch_deadline_at_epoch_ms"]
+    )
+    if type(deadline_at) is int and int(deadline_at) > now_ms:
+        return None
+    release = _release_attempt_row(
+        conn, str(row["attempt_id"]), for_update=True
+    )
+    release_marker = (
+        loads(str(release["binding_json"]), None)
+        if release is not None
+        else None
+    )
+    if (
+        isinstance(release_marker, dict)
+        and release_marker.get("apiVersion")
+        == _RELEASE_AUTHORIZATION_BINDING_V2
+    ):
+        _release_attempt_protocol(conn, release)
+        return "deferred_v2"
+    exact_reservation = _policy_state_release_reservation_is_exact(
+        row, claims, release
+    )
+    exact_dispatch = _policy_state_release_dispatch_is_exact(
+        row, claims, release
+    )
+    now_s = datetime.fromtimestamp(
+        now_ms / 1000, timezone.utc
+    ).isoformat()
+    proven_not_forwarded = False
+    terminal_reason = ""
+    if state == "reserved" and exact_reservation:
+        release_never_dispatched = (
+            release["dispatch_started_at_epoch_ms"] is None
+            and release["dispatch_expires_at_epoch_ms"] is None
+        )
+        if (
+            release_never_dispatched
+            and str(release["state"]) == "reserved"
+            and release["completion_outcome"] is None
+            and int(release["reservation_expires_at_epoch_ms"]) <= now_ms
+        ):
+            proven_not_forwarded = True
+            terminal_reason = (
+                "reservation_deadline_exact_release_not_forwarded"
+            )
+        elif (
+            release_never_dispatched
+            and str(release["state"]) == "cancelled"
+            and str(release["completion_outcome"]) == "not_forwarded"
+            and type(release["completed_at_epoch_ms"]) is int
+            and 0 <= int(release["completed_at_epoch_ms"]) <= now_ms
+        ):
+            proven_not_forwarded = True
+            terminal_reason = (
+                "reservation_deadline_exact_release_cancelled"
+            )
+
+    if proven_not_forwarded:
+        _abort_policy_state_bundle_on_connection(
+            conn,
+            row=row,
+            claims=claims,
+            source_state=state,
+            terminal_reason=terminal_reason,
+            now_ms=now_ms,
+            now_s=now_s,
+        )
+        return "aborted"
+
+    release_dispatch_started_at = (
+        release["dispatch_started_at_epoch_ms"]
+        if release is not None
+        else None
+    )
+    release_dispatch_deadline_at = (
+        release["dispatch_expires_at_epoch_ms"]
+        if release is not None
+        else None
+    )
+    exact_reserved_dispatch_start = (
+        state == "reserved"
+        and exact_reservation
+        and type(release_dispatch_started_at) is int
+        and type(release_dispatch_deadline_at) is int
+        and 0 <= int(release_dispatch_started_at) <= now_ms
+        and int(release_dispatch_started_at)
+        < int(release_dispatch_deadline_at)
+        <= int(release_dispatch_started_at)
+        + _POLICY_STATE_DISPATCH_MAX_TTL_MS
+    )
+    if state == "reserved":
+        if type(deadline_at) is not int:
+            failure_reason = "durable_reservation_deadline_unknown"
+        elif release is None:
+            failure_reason = "durable_reservation_deadline_release_absent"
+        elif not exact_reservation:
+            failure_reason = (
+                "durable_reservation_deadline_binding_mismatch"
+            )
+        elif exact_reserved_dispatch_start:
+            failure_reason = (
+                "durable_reservation_release_may_have_forwarded"
+            )
+        else:
+            failure_reason = (
+                "durable_reservation_release_indeterminate"
+            )
+    else:
+        failure_reason = _policy_state_dispatch_failure_reason(
+            row, claims, release, now_ms=now_ms
+        )
+        if failure_reason is None:
+            failure_reason = "durable_dispatch_deadline_forwarded"
+    charge_occurred_at_epoch_ms = (
+        int(row["dispatch_started_at_epoch_ms"])
+        if state == "dispatched" and exact_dispatch
+        else int(release_dispatch_started_at)
+        if exact_reserved_dispatch_start
+        else now_ms
+    )
+    normalized_evidence = _policy_state_failure_evidence(
+        claims,
+        failure_reason=failure_reason,
+        response_body_sha256=_POLICY_STATE_EMPTY_RESPONSE_DIGEST,
+    )
+    _fail_policy_state_bundle_on_connection(
+        conn,
+        row=row,
+        claims=claims,
+        failure_reason=failure_reason,
+        normalized_evidence=normalized_evidence,
+        now_ms=now_ms,
+        now_s=now_s,
+        charge_occurred_at_epoch_ms=charge_occurred_at_epoch_ms,
+    )
+    return "indeterminate"
+
+
+def reconcile_policy_state_bundles(
+    *,
+    limit: int = 100,
+    now_epoch_ms: int | None = None,
+) -> dict[str, Any]:
+    if (
+        not isinstance(limit, int)
+        or isinstance(limit, bool)
+        or not 1 <= limit <= 500
+    ):
+        raise PolicyStateBundleStoreError(
+            "durable policy reconciliation limit must be between 1 and 500"
+        )
+    processed: list[str] = []
+    aborted = 0
+    indeterminate = 0
+    if metadata_uses_postgres():
+        try:
+            with connect() as conn:
+                _begin_release_transaction(conn)
+                candidate_now_ms = _rate_limit_transaction_now_epoch_ms(
+                    conn, now_epoch_ms
+                )
+                candidates = _policy_state_stale_candidate_rows(
+                    conn,
+                    now_ms=candidate_now_ms,
+                    limit=limit,
+                    skip_locked=True,
+                )
+        except Exception as exc:
+            if _policy_state_retryable_postgres_conflict(exc):
+                candidates = []
+            else:
+                raise
+        for preview in candidates:
+            try:
+                with connect() as conn:
+                    _begin_release_transaction(conn)
+                    now_ms = _rate_limit_transaction_now_epoch_ms(
+                        conn, now_epoch_ms
+                    )
+                    outcome = _reconcile_policy_state_bundle_on_connection(
+                        conn, preview=preview, now_ms=now_ms
+                    )
+            except Exception as exc:
+                if _policy_state_retryable_postgres_conflict(exc):
+                    continue
+                raise
+            if outcome is None:
+                continue
+            if outcome == "deferred_v2":
+                continue
+            processed.append(str(preview["reservation_id"]))
+            aborted += int(outcome == "aborted")
+            indeterminate += int(outcome == "indeterminate")
+    else:
+        for _ in range(limit):
+            with connect() as conn:
+                _begin_release_transaction(conn)
+                now_ms = _rate_limit_transaction_now_epoch_ms(
+                    conn, now_epoch_ms
+                )
+                candidates = _policy_state_stale_candidate_rows(
+                    conn,
+                    now_ms=now_ms,
+                    limit=1,
+                    skip_locked=False,
+                )
+                if not candidates:
+                    break
+                preview = candidates[0]
+                outcome = _reconcile_policy_state_bundle_on_connection(
+                    conn, preview=preview, now_ms=now_ms
+                )
+                if outcome == "deferred_v2":
+                    break
+                if outcome is None:
+                    continue
+                processed.append(str(preview["reservation_id"]))
+                aborted += int(outcome == "aborted")
+                indeterminate += int(outcome == "indeterminate")
+    return {
+        "ok": True,
+        "processed": len(processed),
+        "aborted": aborted,
+        "indeterminate": indeterminate,
+        "reservation_ids": processed,
+        "limit": limit,
+    }
+
+
 def release_authorization_writer_status() -> dict[str, Any]:
     metadata_backend = metadata_store_backend_name()
     grant_backend = grants.backend_name()
@@ -14721,6 +21271,93 @@ def _release_digest(label: str, value: Any, *, required: bool = True) -> str | N
     return digest
 
 
+def _load_release_policy_snapshot() -> Any:
+    from serverware.policy_bundle import get_policy_snapshot
+
+    return get_policy_snapshot()
+
+
+def _route_requires_release_authorization_v2(
+    route: Any,
+    operation_context: dict[str, Any],
+) -> bool:
+    operation = operation_context.get("operation")
+    constraints = getattr(route, "constraints", None)
+    if not isinstance(constraints, (list, tuple)):
+        raise ReleaseAuthorizationError(
+            "release authorization route constraints are unavailable"
+        )
+    for constraint in constraints:
+        if not isinstance(constraint, dict):
+            raise ReleaseAuthorizationError(
+                "release authorization route constraint is invalid"
+            )
+        constraint_type = constraint.get("type")
+        if constraint_type in {"slidingWindowLimit", "weightedBudget"}:
+            return True
+        if constraint_type != "traversalBudget":
+            continue
+        operations = constraint.get("operations")
+        if operations is None:
+            return True
+        if not isinstance(operations, list) or any(
+            not isinstance(item, str) or not item for item in operations
+        ):
+            raise ReleaseAuthorizationError(
+                "release authorization traversal operations are invalid"
+            )
+        if operation in operations:
+            return True
+    return False
+
+
+def _require_v1_route_protocol_authority(
+    *,
+    policy_hash: str,
+    route_id: str,
+    operation_context: dict[str, Any],
+    authority_policy_hash: str | None,
+    authority_route_id: str | None,
+) -> None:
+    if RELEASE_CHANNEL.strip().lower() in _DEVELOPMENT_RELEASE_CHANNELS:
+        return
+    if authority_policy_hash is None or authority_route_id is None:
+        raise ReleaseAuthorizationError(
+            "release authorization v1 requires route-derived protocol authority"
+        )
+    if (
+        not hmac.compare_digest(authority_policy_hash, policy_hash)
+        or not hmac.compare_digest(authority_route_id, route_id)
+    ):
+        raise ReleaseAuthorizationError(
+            "release authorization v1 route-derived protocol authority changed"
+        )
+    snapshot = _load_release_policy_snapshot()
+    if snapshot is None or not hmac.compare_digest(
+        str(getattr(snapshot, "hash", "")),
+        policy_hash,
+    ):
+        raise ReleaseAuthorizationError(
+            "release authorization v1 policy authority is unavailable"
+        )
+    route = next(
+        (
+            item
+            for item in getattr(snapshot, "routes", ())
+            if hmac.compare_digest(str(getattr(item, "id", "")), route_id)
+        ),
+        None,
+    )
+    if route is None:
+        raise ReleaseAuthorizationError(
+            "release authorization v1 route authority is unavailable"
+        )
+    if _route_requires_release_authorization_v2(route, operation_context):
+        raise ReleaseAuthorizationConflictError(
+            "release authorization route operation requires v2"
+        )
+
+
 def _release_now_epoch_ms(value: int | None = None) -> int:
     now = int(value if value is not None else utcnow().timestamp() * 1000)
     if now < 0:
@@ -14754,8 +21391,10 @@ def _revalidate_release_policy_authority(
     *,
     policy_hash: str,
     route_id: str,
+    authority_locked: bool = False,
 ) -> bool:
-    _lock_policy_high_water(conn)
+    if not authority_locked:
+        _lock_policy_high_water(conn)
     current = _policy_high_water_row(conn)
     return bool(
         current is not None
@@ -14887,11 +21526,13 @@ def _release_attempt_authority_reason(
     required_approver_roles: set[str],
     allowed_approver_ids: set[str] | None,
     require_approver_webauthn: bool,
+    authority_locked: bool = False,
 ) -> str | None:
     if not _revalidate_release_policy_authority(
         conn,
         policy_hash=str(attempt["policy_hash"]),
         route_id=str(attempt["route_id"]),
+        authority_locked=authority_locked,
     ):
         return "active_policy_changed"
     credential_reason = _validate_release_credential_authority(
@@ -14937,6 +21578,38 @@ def _lock_release_resources(conn: Any, resources: list[str] | set[str]) -> None:
         )
 
 
+def _lock_release_authority_resources(
+    conn: Any,
+    *,
+    lock_policy: bool,
+    lock_webauthn: bool,
+    lock_rbac: bool,
+    credential_id: str,
+) -> None:
+    """Acquire release authority locks after the full sorted release resource set.
+
+    The global PostgreSQL release order is:
+    1. sorted attempt, quota, and durable policy advisory resources;
+    2. policy high-water, WebAuthn, RBAC, and credential authority;
+    3. pending-approval authority; and
+    4. mutable attempt, quota, durable-policy, grant, and counter rows.
+
+    Callers must acquire all applicable release resources before this helper.
+    """
+    if lock_rbac and not lock_webauthn:
+        raise ReleaseAuthorizationError(
+            "release authorization RBAC lock requires WebAuthn authority order"
+        )
+    if lock_policy:
+        _lock_policy_high_water(conn)
+    if lock_webauthn:
+        _lock_webauthn_authority(conn)
+    if lock_rbac:
+        _lock_rbac_authority(conn)
+    if credential_id:
+        _lock_credential_mutation(conn, credential_id)
+
+
 def _release_attempt_row(
     conn: Any, attempt_id: str, *, for_update: bool = False
 ) -> Any | None:
@@ -14945,6 +21618,67 @@ def _release_attempt_row(
         "SELECT * FROM release_authorization_attempts WHERE attempt_id = ?" + suffix,
         (attempt_id,),
     ).fetchone()
+
+
+def _release_attempt_protocol(
+    conn: Any,
+    row: Any,
+    *,
+    require_exact_v2_bundle: bool = False,
+) -> str:
+    marker = loads(str(row["binding_json"]), None)
+    if not isinstance(marker, dict):
+        raise ReleaseAuthorizationError(
+            "stored release authorization binding marker is invalid"
+        )
+    digest = marker.get("digest")
+    if (
+        set(marker) not in ({"digest"}, {"apiVersion", "digest"})
+        or not isinstance(digest, str)
+        or not hmac.compare_digest(digest, str(row["binding_digest"]))
+    ):
+        raise ReleaseAuthorizationError(
+            "stored release authorization binding marker is invalid"
+        )
+    api_version = marker.get("apiVersion")
+    if api_version not in {None, _RELEASE_AUTHORIZATION_BINDING_V2}:
+        raise ReleaseAuthorizationError(
+            "stored release authorization binding version is unsupported"
+        )
+    bundle = conn.execute(
+        "SELECT * FROM policy_state_bundles WHERE attempt_id = ?",
+        (row["attempt_id"],),
+    ).fetchone()
+    is_v2 = api_version == _RELEASE_AUTHORIZATION_BINDING_V2 or bundle is not None
+    if not is_v2:
+        if require_exact_v2_bundle:
+            raise ReleaseAuthorizationConflictError(
+                "release authorization v2 requires an exact durable policy bundle"
+            )
+        return "v1"
+    if api_version != _RELEASE_AUTHORIZATION_BINDING_V2:
+        raise ReleaseAuthorizationConflictError(
+            "durable release authorization is missing its v2 binding marker"
+        )
+    if bundle is None:
+        raise ReleaseAuthorizationConflictError(
+            "release authorization v2 durable policy bundle is absent"
+        )
+    if not hmac.compare_digest(
+        str(bundle["release_binding_digest"]),
+        str(row["binding_digest"]),
+    ):
+        raise ReleaseAuthorizationConflictError(
+            "release authorization v2 durable bundle binding does not match"
+        )
+    return "v2"
+
+
+def _reject_v2_release_transition(conn: Any, row: Any) -> None:
+    if _release_attempt_protocol(conn, row) == "v2":
+        raise ReleaseAuthorizationConflictError(
+            "release authorization v2 must use the atomic v2 coordinator"
+        )
 
 
 def _release_consumption_row(
@@ -15010,6 +21744,103 @@ def _release_quota_rows(conn: Any, attempt_id: str) -> list[Any]:
             (attempt_id,),
         ).fetchall()
     )
+
+
+def _lock_release_attempt_resources(conn: Any, attempt_id: str) -> None:
+    """Lock every resource bound to an existing release attempt in global order.
+
+    `attempt:` sorts before every other release resource class. Locking it first
+    makes the immutable quota and durable identities safe to discover before the
+    remaining resource set is acquired in sorted order.
+    """
+    attempt_resource = f"attempt:{attempt_id}"
+    _lock_release_resources(conn, {attempt_resource})
+
+    resources = {
+        f"quota:{row['counter_key']}"
+        for row in _release_quota_rows(conn, attempt_id)
+    }
+    bundle = conn.execute(
+        "SELECT * FROM policy_state_bundles WHERE attempt_id = ?",
+        (attempt_id,),
+    ).fetchone()
+    if bundle is not None:
+        try:
+            claims = _normalize_policy_state_claims(
+                loads(str(bundle["claims_json"]), None),
+                policy_hash=str(bundle["policy_hash"]),
+            )
+        except PolicyStateBundleStoreError as exc:
+            raise ReleaseAuthorizationError(str(exc)) from exc
+        if (
+            dumps(claims) != str(bundle["claims_json"])
+            or not hmac.compare_digest(
+                _policy_state_digest(claims),
+                str(bundle["claim_digest"]),
+            )
+        ):
+            raise ReleaseAuthorizationConflictError(
+                "release authorization durable policy claims changed"
+            )
+        resources.update(
+            _policy_state_resources(
+                str(bundle["reservation_id"]),
+                attempt_id,
+                claims,
+            )
+        )
+    resources.discard(attempt_resource)
+    _lock_release_resources(conn, resources)
+
+
+def release_reservation_id(attempt_id: str, binding_digest: str) -> str:
+    attempt_id = _release_text(
+        "release authorization attempt_id",
+        attempt_id,
+        maximum=_RELEASE_AUTHORIZATION_ATTEMPT_ID_MAX_BYTES,
+    )
+    binding_digest = (
+        _release_digest("release authorization binding_digest", binding_digest) or ""
+    )
+    identity = {
+        "apiVersion": "serverware.releaseReservationIdentity/v1",
+        "attemptId": attempt_id,
+        "bindingDigest": binding_digest,
+    }
+    return "sha256:" + hashlib.sha256(dumps(identity).encode("utf-8")).hexdigest()
+
+
+def _release_credential_quota_claims(
+    conn: Any,
+    attempt_id: str,
+    *,
+    keyring: BoundSecretKeyring | None = None,
+) -> list[dict[str, Any]]:
+    keyring = keyring or load_bound_secret_keyring()
+    claims: list[dict[str, Any]] = []
+    for row in _release_quota_rows(conn, attempt_id):
+        window_kind = str(row["window_kind"])
+        claim = {
+            "counterKey": str(row["counter_key"]),
+            "constraintId": str(row["constraint_id"]),
+            "operation": _release_operation(row, keyring=keyring),
+            "windowKind": window_kind,
+            "windowSeconds": (
+                int(row["window_seconds"])
+                if window_kind == _RATE_LIMIT_FIXED_WINDOW
+                else None
+            ),
+            "windowStartEpochMs": int(row["window_start_epoch_ms"]),
+            "windowEndEpochMs": int(row["window_end_epoch_ms"]),
+            "max": int(row["max_count"]),
+            "count": int(row["count_after"]),
+            "remaining": max(
+                int(row["max_count"]) - int(row["count_after"]), 0
+            ),
+            "reservationState": str(row["reservation_state"]),
+        }
+        claims.append(claim)
+    return claims
 
 
 def _release_authorization_result(
@@ -15083,15 +21914,45 @@ def _release_authorization_result(
     }
 
 
+def _absent_release_authorization_result(
+    *,
+    attempt_id: str,
+    binding_digest: str,
+) -> dict[str, Any]:
+    return {
+        "authorized": False,
+        "state": "absent",
+        "reason": "reservation_absent",
+        "attempt_id": attempt_id,
+        "binding_digest": binding_digest,
+        "idempotent_replay": True,
+        "grant_id": None,
+        "approval_request_id": None,
+        "reservation_expires_at_epoch_ms": None,
+        "dispatch_started_at_epoch_ms": None,
+        "dispatch_expires_at_epoch_ms": None,
+        "completion_outcome": None,
+        "retry_after_seconds": 0,
+        "quotas": [],
+        "release_authorization_store_backend": metadata_store_backend_name(),
+        "release_authorization_store_ha": metadata_uses_postgres(),
+    }
+
+
 def _release_reservation_invalid_reason(
-    conn: Any, row: Any, *, now_epoch_ms: int
+    conn: Any,
+    row: Any,
+    *,
+    now_epoch_ms: int,
+    resources_locked: bool = False,
 ) -> str | None:
     if int(row["reservation_expires_at_epoch_ms"]) <= now_epoch_ms:
         return "reservation_ttl_expired"
     quotas = _release_quota_rows(conn, str(row["attempt_id"]))
-    _lock_release_resources(
-        conn, {f"quota:{item['counter_key']}" for item in quotas}
-    )
+    if not resources_locked:
+        _lock_release_resources(
+            conn, {f"quota:{item['counter_key']}" for item in quotas}
+        )
     for quota in quotas:
         if str(quota["reservation_state"]) != "reserved":
             return "shared_quota_reservation_invalid"
@@ -15126,11 +21987,15 @@ def _cancel_invalid_reserved_release(
     actor_id: str | None,
     idempotent_replay: bool,
     keyring: BoundSecretKeyring | None = None,
+    resources_locked: bool = False,
 ) -> dict[str, Any] | None:
     if str(row["state"]) != "reserved":
         return None
     reason = _release_reservation_invalid_reason(
-        conn, row, now_epoch_ms=now_epoch_ms
+        conn,
+        row,
+        now_epoch_ms=now_epoch_ms,
+        resources_locked=resources_locked,
     )
     if reason is None:
         return None
@@ -15140,6 +22005,7 @@ def _cancel_invalid_reserved_release(
         now_ms=now_epoch_ms,
         actor_id=actor_id,
         reason=reason,
+        resources_locked=resources_locked,
     )
     return _release_authorization_result(
         conn,
@@ -15280,7 +22146,45 @@ def reserve_release_authorization(
     required_approver_roles: set[str] | None = None,
     allowed_approver_ids: set[str] | None = None,
     require_approver_webauthn: bool = False,
+    durable_policy_binding: dict[str, Any] | None = None,
+    _connection: Any | None = None,
+    _resources_locked: bool = False,
+    _authority_locked: bool = False,
+    _v2_coordinator_token: object | None = None,
 ) -> dict[str, Any]:
+    if durable_policy_binding is not None and _connection is None:
+        return reserve_release_authorization_v2(
+            attempt_id=attempt_id,
+            flow_id=flow_id,
+            principal_id=principal_id,
+            route_id=route_id,
+            credential_id=credential_id,
+            credential_version=credential_version,
+            policy_hash=policy_hash,
+            request_digest=request_digest,
+            operation_digest=operation_digest,
+            operation_context=operation_context,
+            shared_quotas=shared_quotas,
+            require_jit_grant=require_jit_grant,
+            reservation_ttl_seconds=reservation_ttl_seconds,
+            durable_policy_binding=durable_policy_binding,
+            jit_approval_request=jit_approval_request,
+            now_epoch_ms=now_epoch_ms,
+            actor_id=actor_id,
+            authority_policy_hash=authority_policy_hash,
+            authority_route_id=authority_route_id,
+            required_approver_roles=required_approver_roles,
+            allowed_approver_ids=allowed_approver_ids,
+            require_approver_webauthn=require_approver_webauthn,
+        )
+    if (
+        durable_policy_binding is not None
+        and _v2_coordinator_token
+        is not _RELEASE_AUTHORIZATION_V2_COORDINATOR
+    ):
+        raise ReleaseAuthorizationError(
+            "release authorization v2 reserve requires the atomic v2 coordinator"
+        )
     require_atomic_release_writer()
     attempt_id = _release_text(
         "release authorization attempt_id",
@@ -15313,6 +22217,21 @@ def reserve_release_authorization(
         operation_digest,
         required=False,
     )
+    normalized_durable_policy = None
+    if durable_policy_binding is not None:
+        if operation_digest is None:
+            raise ReleaseAuthorizationError(
+                "release authorization v2 requires operation_digest"
+            )
+        if actor_id is None:
+            raise ReleaseAuthorizationError(
+                "release authorization v2 requires a server-derived actor_id"
+            )
+        normalized_durable_policy = _normalize_release_durable_policy_binding(
+            durable_policy_binding,
+            policy_hash=policy_hash,
+            actor_id=actor_id,
+        )
     if (authority_policy_hash is None) != (authority_route_id is None):
         raise ReleaseAuthorizationError(
             "release authorization policy authority is incomplete"
@@ -15355,16 +22274,24 @@ def reserve_release_authorization(
         raise ReleaseAuthorizationError(
             "release authorization approver authority requires JIT"
         )
-    if not isinstance(operation_context, dict):
-        raise ReleaseAuthorizationError("operation_context must be an object")
+    _validate_release_operation_context(
+        operation_context,
+        require_operation=False,
+    )
+    if normalized_durable_policy is None:
+        _require_v1_route_protocol_authority(
+            policy_hash=policy_hash,
+            route_id=route_id,
+            operation_context=operation_context,
+            authority_policy_hash=authority_policy_hash,
+            authority_route_id=authority_route_id,
+        )
     canonical_operation_context = dumps(operation_context)
     if len(canonical_operation_context.encode("utf-8")) > _RELEASE_AUTHORIZATION_BINDING_MAX_BYTES:
         raise ReleaseAuthorizationError("operation_context exceeds 64 KiB")
-    operation_context_digest = (
-        "sha256:"
-        + hashlib.sha256(canonical_operation_context.encode("utf-8")).hexdigest()
+    operation_context_json = _protect_release_operation_context_json(
+        canonical_operation_context
     )
-    operation_context_json = dumps({"digest": operation_context_digest})
     if not isinstance(reservation_ttl_seconds, int) or not 1 <= reservation_ttl_seconds <= 300:
         raise ReleaseAuthorizationError("reservation TTL must be between 1 and 300 seconds")
     quotas = _prepare_release_quotas(shared_quotas)
@@ -15382,38 +22309,81 @@ def reserve_release_authorization(
         "require_jit_grant": bool(require_jit_grant),
         "shared_quotas": quotas,
     }
+    if normalized_durable_policy is not None:
+        binding = {
+            "api_version": _RELEASE_AUTHORIZATION_BINDING_V2,
+            **binding,
+            "durable_policy": normalized_durable_policy,
+        }
     binding_json = dumps(binding)
     if len(binding_json.encode("utf-8")) > _RELEASE_AUTHORIZATION_BINDING_MAX_BYTES:
         raise ReleaseAuthorizationError("release authorization binding exceeds 64 KiB")
     binding_digest = "sha256:" + hashlib.sha256(binding_json.encode("utf-8")).hexdigest()
-    persisted_binding_json = dumps({"digest": binding_digest})
+    persisted_binding_json = dumps(
+        {
+            **(
+                {"apiVersion": _RELEASE_AUTHORIZATION_BINDING_V2}
+                if normalized_durable_policy is not None
+                else {}
+            ),
+            "digest": binding_digest,
+        }
+    )
+    resources = {f"attempt:{attempt_id}"}
+    resources.update(f"quota:{item['counter_key']}" for item in quotas)
+    if normalized_durable_policy is not None:
+        durable_reservation_id = _release_durable_reservation_id(
+            attempt_id=attempt_id,
+            policy_hash=policy_hash,
+            request_digest=request_digest,
+            operation_digest=operation_digest or "",
+            claim_digest=normalized_durable_policy["claimDigest"],
+        )
+        resources.update(
+            _policy_state_resources(
+                durable_reservation_id,
+                attempt_id,
+                normalized_durable_policy["claims"],
+            )
+        )
     keyring = load_bound_secret_keyring()
 
     try:
-        with connect() as conn:
-            _begin_release_transaction(conn)
+        manager = (
+            connect()
+            if _connection is None
+            else contextlib.nullcontext(_connection)
+        )
+        with manager as conn:
+            if _connection is None:
+                _begin_release_transaction(conn)
             try:
                 now_ms = _rate_limit_transaction_now_epoch_ms(conn, now_epoch_ms)
             except RateLimitStoreError as exc:
                 raise ReleaseAuthorizationError(str(exc)) from exc
             release_now = datetime.fromtimestamp(now_ms / 1000, timezone.utc)
             now_s = release_now.isoformat()
+            if not _resources_locked:
+                _lock_release_resources(conn, resources)
+            if not _authority_locked:
+                _lock_release_authority_resources(
+                    conn,
+                    lock_policy=True,
+                    lock_webauthn=require_jit_grant,
+                    lock_rbac=require_jit_grant and bool(normalized_approver_roles),
+                    credential_id=credential_id,
+                )
             if authority_policy_hash is not None and not _revalidate_release_policy_authority(
                 conn,
                 policy_hash=authority_policy_hash,
                 route_id=authority_route_id or "",
+                authority_locked=True,
             ):
                 raise _release_denial(
                     attempt_id=attempt_id,
                     binding_digest=binding_digest,
                     reason="active_policy_changed",
                 )
-            if require_jit_grant:
-                _lock_webauthn_authority(conn)
-                if normalized_approver_roles:
-                    _lock_rbac_authority(conn)
-            if credential_id:
-                _lock_credential_mutation(conn, credential_id)
             credential_reason = _validate_release_credential_authority(
                 conn,
                 credential_id=credential_id,
@@ -15425,60 +22395,12 @@ def reserve_release_authorization(
                     binding_digest=binding_digest,
                     reason=credential_reason,
                 )
-            existing = _release_attempt_row(conn, attempt_id, for_update=True)
-            if existing is not None:
-                if not hmac.compare_digest(str(existing["binding_digest"]), binding_digest):
-                    raise ReleaseAuthorizationConflictError(
-                        "release authorization attempt_id is bound to a different request"
-                    )
-                _validate_release_consumption_state(conn, existing)
-                if existing["state"] == "reserved":
-                    invalid = _cancel_invalid_reserved_release(
-                        conn,
-                        existing,
-                        now_epoch_ms=now_ms,
-                        actor_id=actor_id,
-                        idempotent_replay=True,
-                        keyring=keyring,
-                    )
-                    if invalid is not None:
-                        return invalid
-                    authority_reason = _release_attempt_authority_reason(
-                        conn,
-                        existing,
-                        now_epoch_ms=now_ms,
-                        required_approver_roles=normalized_approver_roles,
-                        allowed_approver_ids=allowed_approver_ids,
-                        require_approver_webauthn=require_approver_webauthn,
-                    )
-                    if authority_reason is not None:
-                        existing = _cancel_release_attempt(
-                            conn,
-                            existing,
-                            now_ms=now_ms,
-                            actor_id=actor_id,
-                            reason=authority_reason,
-                        )
-                        return _release_authorization_result(
-                            conn,
-                            existing,
-                            idempotent_replay=True,
-                            reason=authority_reason,
-                            keyring=keyring,
-                        )
-                return _release_authorization_result(
-                    conn, existing, idempotent_replay=True, keyring=keyring
-                )
-
             if require_jit_grant:
                 if not credential_id or credential_version < 1:
                     raise ReleaseAuthorizationError(
                         "JIT release authorization requires a credential binding"
                     )
 
-            resources = {f"attempt:{attempt_id}"}
-            resources.update(f"quota:{item['counter_key']}" for item in quotas)
-            _lock_release_resources(conn, resources)
             if now_epoch_ms is None:
                 try:
                     now_ms = _rate_limit_transaction_now_epoch_ms(conn, None)
@@ -15502,6 +22424,7 @@ def reserve_release_authorization(
                         actor_id=actor_id,
                         idempotent_replay=True,
                         keyring=keyring,
+                        resources_locked=True,
                     )
                     if invalid is not None:
                         return invalid
@@ -15512,6 +22435,7 @@ def reserve_release_authorization(
                         required_approver_roles=normalized_approver_roles,
                         allowed_approver_ids=allowed_approver_ids,
                         require_approver_webauthn=require_approver_webauthn,
+                        authority_locked=True,
                     )
                     if authority_reason is not None:
                         existing = _cancel_release_attempt(
@@ -15520,6 +22444,7 @@ def reserve_release_authorization(
                             now_ms=now_ms,
                             actor_id=actor_id,
                             reason=authority_reason,
+                            resources_locked=True,
                         )
                         return _release_authorization_result(
                             conn,
@@ -15961,12 +22886,14 @@ def _cancel_release_attempt(
     now_ms: int,
     actor_id: str | None,
     reason: str,
+    resources_locked: bool = False,
 ) -> Any:
     attempt_id = str(row["attempt_id"])
     quotas = _release_quota_rows(conn, attempt_id)
-    _lock_release_resources(
-        conn, {f"quota:{item['counter_key']}" for item in quotas}
-    )
+    if not resources_locked:
+        _lock_release_resources(
+            conn, {f"quota:{item['counter_key']}" for item in quotas}
+        )
     now_s = datetime.fromtimestamp(now_ms / 1000, timezone.utc).isoformat()
     for quota in quotas:
         if quota["reservation_state"] != "reserved":
@@ -16022,7 +22949,7 @@ def _cancel_release_attempt(
             """,
             (row["grant_id"], attempt_id),
         )
-    conn.execute(
+    updated = conn.execute(
         """
         UPDATE release_authorization_attempts
         SET state = 'cancelled', completion_outcome = 'not_forwarded',
@@ -16031,6 +22958,10 @@ def _cancel_release_attempt(
         """,
         (now_ms, now_s, attempt_id),
     )
+    if updated.rowcount != 1:
+        raise ReleaseAuthorizationError(
+            "release authorization cancellation lost its state transition"
+        )
     _insert_release_event(
         conn,
         attempt_id=attempt_id,
@@ -16160,7 +23091,12 @@ def _commit_release_attempt(
 
 
 def _bound_release_attempt(
-    conn: Any, attempt_id: str, binding_digest: str
+    conn: Any,
+    attempt_id: str,
+    binding_digest: str,
+    *,
+    resources_locked: bool = False,
+    allow_v2: bool = False,
 ) -> Any:
     attempt_id = _release_text(
         "release authorization attempt_id",
@@ -16170,7 +23106,8 @@ def _bound_release_attempt(
     binding_digest = _release_digest(
         "release authorization binding_digest", binding_digest
     ) or ""
-    _lock_release_resources(conn, {f"attempt:{attempt_id}"})
+    if not resources_locked:
+        _lock_release_attempt_resources(conn, attempt_id)
     row = _release_attempt_row(conn, attempt_id, for_update=True)
     if row is None:
         raise ReleaseAuthorizationError("release authorization attempt was not found")
@@ -16178,14 +23115,279 @@ def _bound_release_attempt(
         raise ReleaseAuthorizationConflictError(
             "release authorization binding does not match the durable attempt"
         )
+    if allow_v2:
+        _release_attempt_protocol(conn, row)
+    else:
+        _reject_v2_release_transition(conn, row)
     _validate_release_consumption_state(conn, row)
     return row
 
 
-def claim_release_credential_issuance(
+def _validate_credential_lease_request_authority(
+    conn: Any,
     *,
     attempt_id: str,
+    reservation_id: str,
     binding_digest: str,
+    request_digest: str,
+    operation_digest: str,
+    operation_context: dict[str, Any],
+    reservation_expires_at_epoch_ms: int,
+    principal_id: str,
+    route_id: str,
+    credential_id: str,
+    credential_version: int,
+    policy_hash: str,
+    now_epoch_ms: int,
+    for_update: bool = False,
+) -> tuple[Any, dict[str, Any]]:
+    attempt_id = _release_digest(
+        "credential request authority attempt ID", attempt_id
+    ) or ""
+    reservation_id = _release_digest(
+        "credential request authority reservation ID", reservation_id
+    ) or ""
+    binding_digest = _release_digest(
+        "credential request authority binding digest", binding_digest
+    ) or ""
+    request_digest = _release_digest(
+        "credential request authority request digest", request_digest
+    ) or ""
+    operation_digest = _release_digest(
+        "credential request authority operation digest", operation_digest
+    ) or ""
+    _validate_release_operation_context(operation_context)
+    operation_context_json = dumps(operation_context)
+    if (
+        len(operation_context_json.encode("utf-8"))
+        > _RELEASE_AUTHORIZATION_BINDING_MAX_BYTES
+    ):
+        raise ReleaseAuthorizationError(
+            "credential request authority operation context exceeds 64 KiB"
+        )
+    operation = operation_context.get("operation")
+    if (
+        not isinstance(operation, str)
+        or not operation
+        or len(operation.encode("utf-8")) > 256
+    ):
+        raise ReleaseAuthorizationError(
+            "credential request authority operation is invalid"
+        )
+    if (
+        not isinstance(reservation_expires_at_epoch_ms, int)
+        or isinstance(reservation_expires_at_epoch_ms, bool)
+        or reservation_expires_at_epoch_ms < 1
+    ):
+        raise ReleaseAuthorizationError(
+            "credential request authority reservation expiry is invalid"
+        )
+    expected_strings = {
+        "principal_id": principal_id,
+        "route_id": route_id,
+        "credential_id": credential_id,
+        "policy_hash": policy_hash,
+        "request_digest": request_digest,
+        "operation_digest": operation_digest,
+        "binding_digest": binding_digest,
+        "attempt_id": attempt_id,
+    }
+    for field, value in expected_strings.items():
+        if not isinstance(value, str) or not value:
+            raise ReleaseAuthorizationError(
+                f"credential request authority {field} must be non-empty"
+            )
+    if (
+        not isinstance(credential_version, int)
+        or isinstance(credential_version, bool)
+        or credential_version < 1
+    ):
+        raise ReleaseAuthorizationError(
+            "credential request authority credential version is invalid"
+        )
+    row = _release_attempt_row(conn, attempt_id, for_update=for_update)
+    if row is None:
+        raise ReleaseAuthorizationError(
+            "credential request authority attempt was not found"
+        )
+    expected = {
+        **expected_strings,
+        "credential_version": credential_version,
+        "reservation_expires_at_epoch_ms": reservation_expires_at_epoch_ms,
+        "state": "reserved",
+    }
+    for field, expected_value in expected.items():
+        actual = row[field]
+        if field in {"credential_version", "reservation_expires_at_epoch_ms"}:
+            actual = int(actual)
+        if isinstance(expected_value, str):
+            if not isinstance(actual, str) or not hmac.compare_digest(
+                actual, expected_value
+            ):
+                raise ReleaseAuthorizationConflictError(
+                    "credential request authority does not match the reserved attempt"
+                )
+        elif actual != expected_value:
+            raise ReleaseAuthorizationConflictError(
+                "credential request authority does not match the reserved attempt"
+            )
+    if not hmac.compare_digest(
+        release_reservation_id(attempt_id, binding_digest),
+        reservation_id,
+    ):
+        raise ReleaseAuthorizationConflictError(
+            "credential request authority reservation identity is invalid"
+        )
+    stored_operation_context_json, stored_operation_context_digest = (
+        _recover_release_operation_context_json(
+            str(row["operation_context_json"] or "")
+        )
+    )
+    request_operation_context_digest = (
+        "sha256:"
+        + hashlib.sha256(operation_context_json.encode("utf-8")).hexdigest()
+    )
+    if (
+        not hmac.compare_digest(
+            stored_operation_context_digest, request_operation_context_digest
+        )
+        or not hmac.compare_digest(
+            stored_operation_context_json, operation_context_json
+        )
+    ):
+        raise ReleaseAuthorizationConflictError(
+            "credential request authority operation context was substituted"
+        )
+    if reservation_expires_at_epoch_ms <= now_epoch_ms:
+        raise ReleaseAuthorizationError(
+            "credential request authority reservation expired"
+        )
+    request_authority_json = dumps(
+        {
+            "apiVersion": "serverware.credentialLeaseRequestAuthority/v1",
+            "attemptId": attempt_id,
+            "reservationId": reservation_id,
+            "bindingDigest": binding_digest,
+            "requestDigest": request_digest,
+            "operationDigest": operation_digest,
+            "operationContext": operation_context,
+            "reservationExpiresAtEpochMs": reservation_expires_at_epoch_ms,
+        }
+    )
+    request_authority_sha256 = (
+        "sha256:"
+        + hashlib.sha256(request_authority_json.encode("utf-8")).hexdigest()
+    )
+    durable_row = conn.execute(
+        "SELECT * FROM policy_state_bundles WHERE attempt_id = ?",
+        (attempt_id,),
+    ).fetchone()
+    durable_policy = None
+    if durable_row is not None:
+        durable_policy = {
+            "reservationId": str(durable_row["reservation_id"]),
+            "actorId": str(durable_row["actor_id"]),
+            "claimDigest": str(durable_row["claim_digest"]),
+            "reservationDeadlineAtEpochMs": int(
+                durable_row["reservation_deadline_at_epoch_ms"]
+            ),
+            "releaseBindingDigest": str(
+                durable_row["release_binding_digest"]
+            ),
+            "state": str(durable_row["state"]),
+        }
+    return row, {
+        "attempt_id": attempt_id,
+        "reservation_id": reservation_id,
+        "binding_digest": binding_digest,
+        "request_digest": request_digest,
+        "operation_digest": operation_digest,
+        "operation_context": operation_context,
+        "operation_context_sha256": stored_operation_context_digest,
+        "request_authority_sha256": request_authority_sha256,
+        "reservation_expires_at_epoch_ms": reservation_expires_at_epoch_ms,
+        "grant_id": row["grant_id"],
+        "approval_request_id": row["approval_request_id"],
+        "quota_claims": _release_credential_quota_claims(conn, attempt_id),
+        "durable_policy": durable_policy,
+        "release_protocol": _release_attempt_protocol(conn, row),
+    }
+
+
+def release_credential_request_authority_snapshot(
+    *,
+    attempt_id: str,
+    reservation_id: str,
+    binding_digest: str,
+    request_digest: str,
+    operation_digest: str,
+    operation_context: dict[str, Any],
+    reservation_expires_at_epoch_ms: int,
+    principal_id: str,
+    route_id: str,
+    credential_id: str,
+    credential_version: int,
+    policy_hash: str,
+    now_epoch_ms: int | None = None,
+    required_approver_roles: set[str] | None = None,
+    allowed_approver_ids: set[str] | None = None,
+    require_approver_webauthn: bool = False,
+) -> dict[str, Any]:
+    """Verify a v4 lease authority against the exact reserved request attempt."""
+    now_ms = _release_now_epoch_ms(now_epoch_ms)
+    with connect() as conn:
+        row, snapshot = _validate_credential_lease_request_authority(
+            conn,
+            attempt_id=attempt_id,
+            reservation_id=reservation_id,
+            binding_digest=binding_digest,
+            request_digest=request_digest,
+            operation_digest=operation_digest,
+            operation_context=operation_context,
+            reservation_expires_at_epoch_ms=reservation_expires_at_epoch_ms,
+            principal_id=principal_id,
+            route_id=route_id,
+            credential_id=credential_id,
+            credential_version=credential_version,
+            policy_hash=policy_hash,
+            now_epoch_ms=now_ms,
+        )
+        _validate_release_consumption_state(conn, row)
+        invalid_reason = _release_reservation_invalid_reason(
+            conn,
+            row,
+            now_epoch_ms=now_ms,
+        )
+        if invalid_reason is not None:
+            raise ReleaseAuthorizationError(
+                "credential request authority reservation is no longer active"
+            )
+        authority_reason = _release_attempt_authority_reason(
+            conn,
+            row,
+            now_epoch_ms=now_ms,
+            required_approver_roles=_normalize_release_approver_roles(
+                required_approver_roles
+            ),
+            allowed_approver_ids=allowed_approver_ids,
+            require_approver_webauthn=require_approver_webauthn,
+        )
+        if authority_reason is not None:
+            raise ReleaseAuthorizationError(
+                "credential request authority is no longer active"
+            )
+        return snapshot
+
+
+def claim_release_credential_issuance(
+    *,
+    release_kind: str,
+    attempt_id: str,
+    reservation_id: str,
+    binding_digest: str,
+    request_digest: str,
+    operation_digest: str | None,
+    quota_claims: list[dict[str, Any]],
     request_binding_sha256: str,
     recipient_key_id: str,
     recipient_nonce_sha256: str,
@@ -16194,23 +23396,61 @@ def claim_release_credential_issuance(
     credential_id: str,
     credential_version: int,
     policy_hash: str,
-    grant_id: str,
-    approval_request_id: str,
+    grant_id: str | None,
+    approval_request_id: str | None,
     reservation_expires_at_epoch_ms: int,
+    durable_policy: dict[str, Any] | None = None,
+    actor_id: str | None = None,
+    operation_context: dict[str, Any] | None = None,
+    request_authority_sha256: str | None = None,
     now_epoch_ms: int | None = None,
     required_approver_roles: set[str] | None = None,
     allowed_approver_ids: set[str] | None = None,
     require_approver_webauthn: bool = False,
 ) -> dict[str, Any]:
-    """Atomically claim the sole credential-bearing lease for a JIT attempt."""
+    """Atomically claim the sole credential-bearing lease for a reserved attempt."""
     require_atomic_release_writer()
+    if release_kind not in {"jitGrant", "atomicReservation", "decisionBound"}:
+        raise ReleaseAuthorizationError(
+            "credential issuance release kind is invalid"
+        )
     attempt_id = _release_text(
         "release authorization attempt_id",
         attempt_id,
         maximum=_RELEASE_AUTHORIZATION_ATTEMPT_ID_MAX_BYTES,
     )
+    reservation_id = (
+        _release_digest("release authorization reservation_id", reservation_id) or ""
+    )
     binding_digest = (
         _release_digest("release authorization binding_digest", binding_digest) or ""
+    )
+    request_digest = (
+        _release_digest("credential issuance request digest", request_digest) or ""
+    )
+    if operation_digest is not None:
+        operation_digest = (
+            _release_digest(
+                "credential issuance operation digest", operation_digest
+            )
+            or ""
+        )
+    if not isinstance(quota_claims, list) or len(quota_claims) > 64:
+        raise ReleaseAuthorizationError(
+            "credential issuance quota claims are invalid"
+        )
+    try:
+        quota_claims_json = dumps(quota_claims)
+    except (TypeError, ValueError) as exc:
+        raise ReleaseAuthorizationError(
+            "credential issuance quota claims are invalid"
+        ) from exc
+    if len(quota_claims_json.encode("utf-8")) > 64 * 1024:
+        raise ReleaseAuthorizationError(
+            "credential issuance quota claims are oversized"
+        )
+    quota_claims_digest = (
+        "sha256:" + hashlib.sha256(quota_claims_json.encode("utf-8")).hexdigest()
     )
     request_binding_sha256 = (
         _release_digest(
@@ -16218,6 +23458,17 @@ def claim_release_credential_issuance(
         )
         or ""
     )
+    request_authority_sha256 = (
+        _release_digest(
+            "credential issuance request authority digest",
+            request_authority_sha256,
+        )
+        or ""
+    )
+    if not isinstance(operation_context, dict):
+        raise ReleaseAuthorizationError(
+            "credential issuance operation context must be an object"
+        )
     recipient_key_id = (
         _release_digest("credential issuance recipient key ID", recipient_key_id)
         or ""
@@ -16244,21 +23495,34 @@ def claim_release_credential_issuance(
         raise ReleaseAuthorizationError(
             "credential issuance reservation expiry must be positive"
         )
+    normalized_durable_policy = None
+    if durable_policy is not None:
+        if actor_id is None:
+            raise ReleaseAuthorizationError(
+                "credential issuance v2 requires a server-derived actor"
+            )
+        normalized_durable_policy = (
+            _normalize_credential_lease_durable_policy(
+                durable_policy,
+                actor_id=actor_id,
+            )
+        )
     expected_strings = {
         "principal_id": principal_id,
         "route_id": route_id,
         "credential_id": credential_id,
         "policy_hash": policy_hash,
-        "grant_id": grant_id,
-        "approval_request_id": approval_request_id,
+        "request_digest": request_digest,
     }
     for field, value in expected_strings.items():
         if not isinstance(value, str) or not value:
             raise ReleaseAuthorizationError(
                 f"credential issuance {field} must be non-empty"
             )
-    normalized_approver_roles = _normalize_release_approver_roles(
-        required_approver_roles
+    normalized_approver_roles = (
+        _normalize_release_approver_roles(required_approver_roles)
+        if release_kind == "jitGrant"
+        else set()
     )
     normalized_approver_ids = (
         {
@@ -16269,7 +23533,7 @@ def claim_release_credential_issuance(
             )
             for item in allowed_approver_ids
         }
-        if allowed_approver_ids
+        if release_kind == "jitGrant" and allowed_approver_ids
         else None
     )
 
@@ -16288,12 +23552,95 @@ def claim_release_credential_issuance(
             raise ReleaseAuthorizationConflictError(
                 "release authorization binding does not match the durable attempt"
             )
-        _lock_policy_high_water(conn)
-        _lock_webauthn_authority(conn)
-        if normalized_approver_roles:
-            _lock_rbac_authority(conn)
-        _lock_credential_mutation(conn, credential_id)
-        row = _bound_release_attempt(conn, attempt_id, binding_digest)
+        _lock_release_attempt_resources(conn, attempt_id)
+        _lock_release_authority_resources(
+            conn,
+            lock_policy=True,
+            lock_webauthn=release_kind == "jitGrant",
+            lock_rbac=release_kind == "jitGrant" and bool(normalized_approver_roles),
+            credential_id=str(preview["credential_id"] or ""),
+        )
+        row, request_authority = _validate_credential_lease_request_authority(
+            conn,
+            attempt_id=attempt_id,
+            reservation_id=reservation_id,
+            binding_digest=binding_digest,
+            request_digest=request_digest,
+            operation_digest=operation_digest or "",
+            operation_context=operation_context,
+            reservation_expires_at_epoch_ms=reservation_expires_at_epoch_ms,
+            principal_id=principal_id,
+            route_id=route_id,
+            credential_id=credential_id,
+            credential_version=credential_version,
+            policy_hash=policy_hash,
+            now_epoch_ms=now_ms,
+            for_update=True,
+        )
+        if not hmac.compare_digest(
+            request_authority["request_authority_sha256"],
+            request_authority_sha256,
+        ):
+            raise ReleaseAuthorizationConflictError(
+                "credential issuance request authority digest mismatch"
+            )
+        _validate_release_consumption_state(conn, row)
+        release_protocol = _release_attempt_protocol(conn, row)
+        if (release_protocol == "v2") != (
+            normalized_durable_policy is not None
+        ):
+            raise ReleaseAuthorizationConflictError(
+                "credential issuance release protocol was downgraded"
+            )
+        if normalized_durable_policy is not None:
+            durable_row = conn.execute(
+                "SELECT * FROM policy_state_bundles "
+                "WHERE attempt_id = ?",
+                (attempt_id,),
+            ).fetchone()
+            durable_expected = {
+                "reservation_id": str(
+                    durable_row["reservation_id"]
+                )
+                if durable_row is not None
+                else None,
+                "actor_id": str(durable_row["actor_id"])
+                if durable_row is not None
+                else None,
+                "claim_digest": str(durable_row["claim_digest"])
+                if durable_row is not None
+                else None,
+                "reservation_deadline_at_epoch_ms": int(
+                    durable_row[
+                        "reservation_deadline_at_epoch_ms"
+                    ]
+                )
+                if durable_row is not None
+                else None,
+                "release_binding_digest": str(
+                    durable_row["release_binding_digest"]
+                )
+                if durable_row is not None
+                else None,
+            }
+            if (
+                durable_row is None
+                or str(durable_row["state"]) != "reserved"
+                or durable_expected != normalized_durable_policy
+                or not hmac.compare_digest(
+                    normalized_durable_policy[
+                        "release_binding_digest"
+                    ],
+                    binding_digest,
+                )
+                or normalized_durable_policy[
+                    "reservation_deadline_at_epoch_ms"
+                ]
+                != reservation_expires_at_epoch_ms
+            ):
+                raise ReleaseAuthorizationConflictError(
+                    "credential issuance durable policy does not match the reservation"
+                )
         if now_epoch_ms is None:
             try:
                 now_ms = _rate_limit_transaction_now_epoch_ms(conn, None)
@@ -16301,7 +23648,7 @@ def claim_release_credential_issuance(
                 raise ReleaseAuthorizationError(str(exc)) from exc
         if str(row["state"]) != "reserved":
             raise ReleaseAuthorizationConflictError(
-                "credential issuance requires a reserved release authorization"
+                "credential issuance requires a reserved request attempt"
             )
         expected = {
             **expected_strings,
@@ -16323,16 +23670,95 @@ def claim_release_credential_issuance(
                 raise ReleaseAuthorizationConflictError(
                     "credential issuance binding does not match the durable attempt"
                 )
+        if not hmac.compare_digest(
+            release_reservation_id(attempt_id, binding_digest),
+            reservation_id,
+        ):
+            raise ReleaseAuthorizationConflictError(
+                "credential issuance reservation identity is invalid"
+            )
+        actual_operation_digest = row["operation_digest"]
+        if operation_digest is None:
+            if actual_operation_digest is not None:
+                raise ReleaseAuthorizationConflictError(
+                    "credential issuance operation binding does not match the durable attempt"
+                )
+        elif (
+            not isinstance(actual_operation_digest, str)
+            or not hmac.compare_digest(actual_operation_digest, operation_digest)
+        ):
+            raise ReleaseAuthorizationConflictError(
+                "credential issuance operation binding does not match the durable attempt"
+            )
+        expected_quota_claims = _release_credential_quota_claims(
+            conn, attempt_id
+        )
+        if not hmac.compare_digest(
+            dumps(expected_quota_claims),
+            quota_claims_json,
+        ):
+            raise ReleaseAuthorizationConflictError(
+                "credential issuance quota claims do not match the durable reservation"
+            )
+        if release_kind == "jitGrant":
+            if (
+                not isinstance(grant_id, str)
+                or not grant_id
+                or not isinstance(approval_request_id, str)
+                or not approval_request_id
+                or row["grant_id"] is None
+                or row["approval_request_id"] is None
+                or not hmac.compare_digest(str(row["grant_id"]), grant_id)
+                or not hmac.compare_digest(
+                    str(row["approval_request_id"]), approval_request_id
+                )
+            ):
+                raise ReleaseAuthorizationConflictError(
+                    "JIT credential issuance authority does not match the durable attempt"
+                )
+        elif release_kind == "atomicReservation" and (
+            grant_id is not None
+            or approval_request_id is not None
+            or row["grant_id"] is not None
+            or row["approval_request_id"] is not None
+            or (
+                not expected_quota_claims
+                and normalized_durable_policy is None
+            )
+        ):
+            raise ReleaseAuthorizationConflictError(
+                "atomic credential issuance authority conflicts with JIT state"
+            )
+        elif release_kind == "decisionBound" and (
+            grant_id is not None
+            or approval_request_id is not None
+            or row["grant_id"] is not None
+            or row["approval_request_id"] is not None
+            or expected_quota_claims
+            or normalized_durable_policy is not None
+            or request_authority["durable_policy"] is not None
+        ):
+            raise ReleaseAuthorizationConflictError(
+                "decision-bound credential issuance carries release authority"
+            )
         invalid_reason = _release_reservation_invalid_reason(
-            conn, row, now_epoch_ms=now_ms
+            conn,
+            row,
+            now_epoch_ms=now_ms,
+            resources_locked=True,
         )
         if invalid_reason is not None:
+            if release_protocol == "v2":
+                raise ReleaseAuthorizationError(
+                    "release authorization v2 invalidation requires the atomic v2 coordinator"
+                )
             _cancel_release_attempt(
                 conn,
                 row,
                 now_ms=now_ms,
                 actor_id=None,
                 reason=invalid_reason,
+                resources_locked=True,
             )
             raise ReleaseAuthorizationError(
                 "credential issuance release authorization is no longer active"
@@ -16341,17 +23767,29 @@ def claim_release_credential_issuance(
             conn,
             row,
             now_epoch_ms=now_ms,
-            required_approver_roles=normalized_approver_roles,
-            allowed_approver_ids=normalized_approver_ids,
-            require_approver_webauthn=require_approver_webauthn,
+            required_approver_roles=(
+                normalized_approver_roles if release_kind == "jitGrant" else set()
+            ),
+            allowed_approver_ids=(
+                normalized_approver_ids if release_kind == "jitGrant" else None
+            ),
+            require_approver_webauthn=(
+                require_approver_webauthn if release_kind == "jitGrant" else False
+            ),
+            authority_locked=True,
         )
         if authority_reason is not None:
+            if release_protocol == "v2":
+                raise ReleaseAuthorizationError(
+                    "release authorization v2 invalidation requires the atomic v2 coordinator"
+                )
             _cancel_release_attempt(
                 conn,
                 row,
                 now_ms=now_ms,
                 actor_id=None,
                 reason=authority_reason,
+                resources_locked=True,
             )
             raise ReleaseAuthorizationError(
                 "credential issuance release authorization is no longer active"
@@ -16369,16 +23807,24 @@ def claim_release_credential_issuance(
         conn.execute(
             """
             INSERT INTO release_authorization_credential_issuances (
-                attempt_id, binding_digest, request_binding_sha256,
+                attempt_id, release_kind, reservation_id, binding_digest,
+                request_digest, operation_digest, quota_claims_digest,
+                request_binding_sha256, request_authority_sha256,
                 recipient_key_id, recipient_nonce_sha256,
                 reservation_expires_at_epoch_ms, claimed_at_epoch_ms, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 attempt_id,
+                release_kind,
+                reservation_id,
                 binding_digest,
+                request_digest,
+                operation_digest,
+                quota_claims_digest,
                 request_binding_sha256,
+                request_authority_sha256,
                 recipient_key_id,
                 recipient_nonce_sha256,
                 reservation_expires_at_epoch_ms,
@@ -16387,9 +23833,15 @@ def claim_release_credential_issuance(
             ),
         )
         return {
+            "release_kind": release_kind,
             "attempt_id": attempt_id,
+            "reservation_id": reservation_id,
             "binding_digest": binding_digest,
+            "request_digest": request_digest,
+            "operation_digest": operation_digest,
+            "quota_claims_digest": quota_claims_digest,
             "request_binding_sha256": request_binding_sha256,
+            "request_authority_sha256": request_authority_sha256,
             "recipient_key_id": recipient_key_id,
             "recipient_nonce_sha256": recipient_nonce_sha256,
             "reservation_expires_at_epoch_ms": reservation_expires_at_epoch_ms,
@@ -16405,8 +23857,25 @@ def dispatch_release_authorization(
     now_epoch_ms: int | None = None,
     actor_id: str | None = None,
     required_approver_roles: set[str] | None = None,
+    _connection: Any | None = None,
+    _resources_locked: bool = False,
+    _authority_locked: bool = False,
+    _v2_coordinator_token: object | None = None,
+    _dispatch_deadline_at_epoch_ms: int | None = None,
 ) -> dict[str, Any]:
     require_atomic_release_writer()
+    if (
+        _v2_coordinator_token is not None
+        and _v2_coordinator_token
+        is not _RELEASE_AUTHORIZATION_V2_COORDINATOR
+    ):
+        raise ReleaseAuthorizationError(
+            "release authorization v2 coordinator token is invalid"
+        )
+    allow_v2 = (
+        _v2_coordinator_token
+        is _RELEASE_AUTHORIZATION_V2_COORDINATOR
+    )
     if not isinstance(dispatch_ttl_seconds, int) or not 1 <= dispatch_ttl_seconds <= 300:
         raise ReleaseAuthorizationError("dispatch TTL must be between 1 and 300 seconds")
     attempt_id = _release_text(
@@ -16420,8 +23889,14 @@ def dispatch_release_authorization(
     normalized_approver_roles = _normalize_release_approver_roles(
         required_approver_roles
     )
-    with connect() as conn:
-        _begin_release_transaction(conn)
+    manager = (
+        connect()
+        if _connection is None
+        else contextlib.nullcontext(_connection)
+    )
+    with manager as conn:
+        if _connection is None:
+            _begin_release_transaction(conn)
         try:
             now_ms = _rate_limit_transaction_now_epoch_ms(conn, now_epoch_ms)
         except RateLimitStoreError as exc:
@@ -16435,15 +23910,26 @@ def dispatch_release_authorization(
             raise ReleaseAuthorizationConflictError(
                 "release authorization binding does not match the durable attempt"
             )
-        if preview["state"] == "reserved":
-            _lock_policy_high_water(conn)
-            if preview["grant_id"] is not None:
-                _lock_webauthn_authority(conn)
-                if normalized_approver_roles:
-                    _lock_rbac_authority(conn)
-            if preview["credential_id"]:
-                _lock_credential_mutation(conn, str(preview["credential_id"]))
-        row = _bound_release_attempt(conn, attempt_id, binding_digest)
+        if not _resources_locked:
+            _lock_release_attempt_resources(conn, attempt_id)
+        if preview["state"] == "reserved" and not _authority_locked:
+            _lock_release_authority_resources(
+                conn,
+                lock_policy=True,
+                lock_webauthn=preview["grant_id"] is not None,
+                lock_rbac=(
+                    preview["grant_id"] is not None
+                    and bool(normalized_approver_roles)
+                ),
+                credential_id=str(preview["credential_id"] or ""),
+            )
+        row = _bound_release_attempt(
+            conn,
+            attempt_id,
+            binding_digest,
+            resources_locked=True,
+            allow_v2=allow_v2,
+        )
         if now_epoch_ms is None:
             try:
                 now_ms = _rate_limit_transaction_now_epoch_ms(conn, None)
@@ -16475,6 +23961,7 @@ def dispatch_release_authorization(
             now_epoch_ms=now_ms,
             actor_id=actor_id,
             idempotent_replay=False,
+            resources_locked=True,
         )
         if invalid is not None:
             return invalid
@@ -16486,6 +23973,7 @@ def dispatch_release_authorization(
             required_approver_roles=normalized_approver_roles,
             allowed_approver_ids=None,
             require_approver_webauthn=False,
+            authority_locked=True,
         )
         if authority_reason is not None:
             row = _cancel_release_attempt(
@@ -16494,6 +23982,7 @@ def dispatch_release_authorization(
                 now_ms=now_ms,
                 actor_id=actor_id,
                 reason=authority_reason,
+                resources_locked=True,
             )
             return _release_authorization_result(
                 conn,
@@ -16501,7 +23990,19 @@ def dispatch_release_authorization(
                 idempotent_replay=False,
                 reason=authority_reason,
             )
-        dispatch_expires_at_ms = now_ms + dispatch_ttl_seconds * 1000
+        if _dispatch_deadline_at_epoch_ms is None:
+            dispatch_expires_at_ms = now_ms + dispatch_ttl_seconds * 1000
+        else:
+            if (
+                not isinstance(_dispatch_deadline_at_epoch_ms, int)
+                or isinstance(_dispatch_deadline_at_epoch_ms, bool)
+                or not now_ms < _dispatch_deadline_at_epoch_ms
+                <= now_ms + _POLICY_STATE_DISPATCH_MAX_TTL_MS
+            ):
+                raise ReleaseAuthorizationError(
+                    "release authorization dispatch deadline is invalid"
+                )
+            dispatch_expires_at_ms = _dispatch_deadline_at_epoch_ms
         updated = conn.execute(
             """
             UPDATE release_authorization_attempts
@@ -16533,6 +24034,67 @@ def dispatch_release_authorization(
         )
 
 
+def cancel_release_authorization_if_present(
+    *,
+    attempt_id: str,
+    binding_digest: str,
+    now_epoch_ms: int | None = None,
+    actor_id: str | None = None,
+) -> dict[str, Any]:
+    """Cancel only the exact reserved attempt; absence or mismatch is a no-op."""
+    require_atomic_release_writer()
+    attempt_id = _release_text(
+        "release authorization attempt_id",
+        attempt_id,
+        maximum=_RELEASE_AUTHORIZATION_ATTEMPT_ID_MAX_BYTES,
+    )
+    binding_digest = (
+        _release_digest(
+            "release authorization binding_digest",
+            binding_digest,
+        )
+        or ""
+    )
+    with connect() as conn:
+        _begin_release_transaction(conn)
+        try:
+            now_ms = _rate_limit_transaction_now_epoch_ms(conn, now_epoch_ms)
+        except RateLimitStoreError as exc:
+            raise ReleaseAuthorizationError(str(exc)) from exc
+        _lock_release_attempt_resources(conn, attempt_id)
+        row = _release_attempt_row(conn, attempt_id, for_update=True)
+        if row is None or not hmac.compare_digest(
+            str(row["binding_digest"]),
+            binding_digest,
+        ):
+            return _absent_release_authorization_result(
+                attempt_id=attempt_id,
+                binding_digest=binding_digest,
+            )
+        _reject_v2_release_transition(conn, row)
+        _validate_release_consumption_state(conn, row)
+        if str(row["state"]) == "reserved":
+            row = _cancel_release_attempt(
+                conn,
+                row,
+                now_ms=now_ms,
+                actor_id=actor_id,
+                reason="confirmed_not_forwarded_before_dispatch",
+                resources_locked=True,
+            )
+            return _release_authorization_result(
+                conn,
+                row,
+                idempotent_replay=False,
+                reason="cancelled",
+            )
+        return _release_authorization_result(
+            conn,
+            row,
+            idempotent_replay=True,
+        )
+
+
 def complete_release_authorization(
     *,
     attempt_id: str,
@@ -16540,19 +24102,46 @@ def complete_release_authorization(
     outcome: str,
     now_epoch_ms: int | None = None,
     actor_id: str | None = None,
+    _connection: Any | None = None,
+    _resources_locked: bool = False,
+    _v2_coordinator_token: object | None = None,
 ) -> dict[str, Any]:
     require_atomic_release_writer()
+    if (
+        _v2_coordinator_token is not None
+        and _v2_coordinator_token
+        is not _RELEASE_AUTHORIZATION_V2_COORDINATOR
+    ):
+        raise ReleaseAuthorizationError(
+            "release authorization v2 coordinator token is invalid"
+        )
+    allow_v2 = (
+        _v2_coordinator_token
+        is _RELEASE_AUTHORIZATION_V2_COORDINATOR
+    )
     if outcome not in {"forwarded", "not_forwarded", "unknown"}:
         raise ReleaseAuthorizationError(
             "release authorization outcome must be forwarded, not_forwarded, or unknown"
         )
-    with connect() as conn:
-        _begin_release_transaction(conn)
+    manager = (
+        connect()
+        if _connection is None
+        else contextlib.nullcontext(_connection)
+    )
+    with manager as conn:
+        if _connection is None:
+            _begin_release_transaction(conn)
         try:
             now_ms = _rate_limit_transaction_now_epoch_ms(conn, now_epoch_ms)
         except RateLimitStoreError as exc:
             raise ReleaseAuthorizationError(str(exc)) from exc
-        row = _bound_release_attempt(conn, attempt_id, binding_digest)
+        row = _bound_release_attempt(
+            conn,
+            attempt_id,
+            binding_digest,
+            resources_locked=_resources_locked,
+            allow_v2=allow_v2,
+        )
         if now_epoch_ms is None:
             try:
                 now_ms = _rate_limit_transaction_now_epoch_ms(conn, None)
@@ -16567,6 +24156,7 @@ def complete_release_authorization(
                 now_ms=now_ms,
                 actor_id=actor_id,
                 reason="confirmed_not_forwarded_before_dispatch",
+                resources_locked=True,
             )
             return _release_authorization_result(
                 conn, row, idempotent_replay=False, reason="cancelled"
@@ -16601,6 +24191,732 @@ def complete_release_authorization(
         )
 
 
+def _lock_release_authorization_v2_resources(
+    conn: Any,
+    *,
+    attempt_id: str,
+    reservation_id: str,
+    claim_digest: str,
+    actor_id: str,
+) -> tuple[Any, list[dict[str, Any]]]:
+    bundle = conn.execute(
+        "SELECT * FROM policy_state_bundles WHERE reservation_id = ?",
+        (reservation_id,),
+    ).fetchone()
+    if bundle is None:
+        raise ReleaseAuthorizationConflictError(
+            "release authorization v2 durable policy bundle is absent"
+        )
+    if (
+        str(bundle["attempt_id"]) != attempt_id
+        or not hmac.compare_digest(
+            str(bundle["claim_digest"]),
+            claim_digest,
+        )
+        or not hmac.compare_digest(str(bundle["actor_id"]), actor_id)
+    ):
+        raise ReleaseAuthorizationConflictError(
+            "release authorization v2 durable policy identity was substituted"
+        )
+    try:
+        claims = _normalize_policy_state_claims(
+            loads(str(bundle["claims_json"]), None),
+            policy_hash=str(bundle["policy_hash"]),
+        )
+    except PolicyStateBundleStoreError as exc:
+        raise ReleaseAuthorizationError(str(exc)) from exc
+    if (
+        dumps(claims) != str(bundle["claims_json"])
+        or not hmac.compare_digest(
+            _policy_state_digest(claims),
+            claim_digest,
+        )
+    ):
+        raise ReleaseAuthorizationConflictError(
+            "release authorization v2 durable policy claims changed"
+        )
+    quota_rows = _release_quota_rows(conn, attempt_id)
+    resources = _policy_state_resources(
+        reservation_id,
+        attempt_id,
+        claims,
+    )
+    resources.update(
+        f"quota:{row['counter_key']}" for row in quota_rows
+    )
+    _lock_release_resources(conn, resources)
+    locked_bundle = conn.execute(
+        "SELECT * FROM policy_state_bundles WHERE reservation_id = ?",
+        (reservation_id,),
+    ).fetchone()
+    if (
+        locked_bundle is None
+        or str(locked_bundle["attempt_id"]) != attempt_id
+        or not hmac.compare_digest(
+            str(locked_bundle["claim_digest"]),
+            claim_digest,
+        )
+        or not hmac.compare_digest(
+            str(locked_bundle["actor_id"]),
+            actor_id,
+        )
+        or str(locked_bundle["claims_json"]) != dumps(claims)
+    ):
+        raise ReleaseAuthorizationConflictError(
+            "release authorization v2 durable policy changed while acquiring its locks"
+        )
+    return locked_bundle, claims
+
+
+def _attach_durable_policy_v2_result(
+    outer: dict[str, Any],
+    durable: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        **outer,
+        "durable_policy": durable,
+    }
+
+
+def _release_v2_coordinator_errors(function):
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        try:
+            return function(*args, **kwargs)
+        except PolicyStateBundleStoreError as exc:
+            raise ReleaseAuthorizationError(str(exc)) from exc
+
+    return wrapped
+
+
+@_release_v2_coordinator_errors
+def reserve_release_authorization_v2(
+    *,
+    attempt_id: str,
+    flow_id: str,
+    principal_id: str,
+    route_id: str,
+    credential_id: str,
+    credential_version: int,
+    policy_hash: str,
+    request_digest: str,
+    operation_digest: str | None,
+    operation_context: dict[str, Any],
+    shared_quotas: list[dict[str, Any]],
+    require_jit_grant: bool,
+    reservation_ttl_seconds: int,
+    durable_policy_binding: dict[str, Any],
+    jit_approval_request: dict[str, Any] | None = None,
+    now_epoch_ms: int | None = None,
+    actor_id: str | None = None,
+    authority_policy_hash: str | None = None,
+    authority_route_id: str | None = None,
+    required_approver_roles: set[str] | None = None,
+    allowed_approver_ids: set[str] | None = None,
+    require_approver_webauthn: bool = False,
+) -> dict[str, Any]:
+    require_atomic_release_writer()
+    normalized_attempt_id = (
+        _release_digest(
+            "release authorization v2 attempt_id",
+            attempt_id,
+        )
+        or ""
+    )
+    normalized_policy_hash = (
+        _release_digest(
+            "release authorization policy_hash",
+            policy_hash,
+        )
+        or ""
+    )
+    normalized_request_digest = (
+        _release_digest(
+            "release authorization request_digest",
+            request_digest,
+        )
+        or ""
+    )
+    normalized_operation_digest = (
+        _release_digest(
+            "release authorization operation_digest",
+            operation_digest,
+        )
+        or ""
+    )
+    if actor_id is None:
+        raise ReleaseAuthorizationError(
+            "release authorization v2 requires a server-derived actor_id"
+        )
+    normalized_durable = _normalize_release_durable_policy_binding(
+        durable_policy_binding,
+        policy_hash=normalized_policy_hash,
+        actor_id=actor_id,
+    )
+    normalized_credential_id = (
+        _release_text(
+            "release authorization credential_id",
+            credential_id,
+        )
+        if credential_id
+        else ""
+    )
+    quotas = _prepare_release_quotas(shared_quotas)
+    normalized_approver_roles = _normalize_release_approver_roles(
+        required_approver_roles
+    )
+    reservation_id = _release_durable_reservation_id(
+        attempt_id=normalized_attempt_id,
+        policy_hash=normalized_policy_hash,
+        request_digest=normalized_request_digest,
+        operation_digest=normalized_operation_digest,
+        claim_digest=normalized_durable["claimDigest"],
+    )
+    outer_result: dict[str, Any] | None = None
+    try:
+        with connect() as conn:
+            _begin_release_transaction(conn)
+            resources = _policy_state_resources(
+                reservation_id,
+                normalized_attempt_id,
+                normalized_durable["claims"],
+            )
+            resources.update(
+                f"quota:{item['counter_key']}" for item in quotas
+            )
+            _lock_release_resources(conn, resources)
+            _lock_release_authority_resources(
+                conn,
+                lock_policy=True,
+                lock_webauthn=require_jit_grant,
+                lock_rbac=(
+                    require_jit_grant and bool(normalized_approver_roles)
+                ),
+                credential_id=normalized_credential_id,
+            )
+            existing_before = _release_attempt_row(
+                conn,
+                normalized_attempt_id,
+                for_update=True,
+            )
+            if existing_before is not None:
+                _release_attempt_protocol(
+                    conn,
+                    existing_before,
+                    require_exact_v2_bundle=True,
+                )
+            outer_result = reserve_release_authorization(
+                attempt_id=normalized_attempt_id,
+                flow_id=flow_id,
+                principal_id=principal_id,
+                route_id=route_id,
+                credential_id=normalized_credential_id,
+                credential_version=credential_version,
+                policy_hash=normalized_policy_hash,
+                request_digest=normalized_request_digest,
+                operation_digest=normalized_operation_digest,
+                operation_context=operation_context,
+                shared_quotas=quotas,
+                require_jit_grant=require_jit_grant,
+                reservation_ttl_seconds=reservation_ttl_seconds,
+                jit_approval_request=jit_approval_request,
+                now_epoch_ms=now_epoch_ms,
+                actor_id=normalized_durable["actorId"],
+                authority_policy_hash=authority_policy_hash,
+                authority_route_id=authority_route_id,
+                required_approver_roles=required_approver_roles,
+                allowed_approver_ids=allowed_approver_ids,
+                require_approver_webauthn=require_approver_webauthn,
+                durable_policy_binding=normalized_durable,
+                _connection=conn,
+                _resources_locked=True,
+                _authority_locked=True,
+                _v2_coordinator_token=(
+                    _RELEASE_AUTHORIZATION_V2_COORDINATOR
+                ),
+            )
+            if not outer_result.get("authorized"):
+                if existing_before is not None:
+                    raise ReleaseAuthorizationConflictError(
+                        "release authorization v2 reserve replay is no longer reserved"
+                    )
+                return _attach_durable_policy_v2_result(
+                    outer_result,
+                    _denied_durable_policy_v2_result(
+                        attempt_id=normalized_attempt_id,
+                        claim_digest=normalized_durable["claimDigest"],
+                        actor_id=normalized_durable["actorId"],
+                    ),
+                )
+            if outer_result.get("state") != "reserved":
+                raise ReleaseAuthorizationConflictError(
+                    "release authorization v2 reserve did not remain reserved"
+                )
+            release_row = _release_attempt_row(
+                conn,
+                normalized_attempt_id,
+                for_update=True,
+            )
+            if release_row is None:
+                raise ReleaseAuthorizationError(
+                    "release authorization v2 reservation disappeared"
+                )
+            durable_result = reserve_policy_state_bundle(
+                attempt_id=normalized_attempt_id,
+                policy_hash=normalized_policy_hash,
+                request_digest=normalized_request_digest,
+                operation_digest=normalized_operation_digest,
+                release_binding_digest=str(outer_result["binding_digest"]),
+                claims=normalized_durable["claims"],
+                claim_digest=normalized_durable["claimDigest"],
+                actor_id=normalized_durable["actorId"],
+                _connection=conn,
+                _resources_locked=True,
+            )
+            if durable_result.get("state") != "reserved":
+                raise ReleaseAuthorizationError(
+                    "release authorization v2 durable reserve returned an invalid state"
+                )
+            durable_row = conn.execute(
+                "SELECT * FROM policy_state_bundles WHERE reservation_id = ?",
+                (reservation_id,),
+            ).fetchone()
+            if durable_row is None:
+                raise ReleaseAuthorizationError(
+                    "release authorization v2 durable reservation disappeared"
+                )
+            return _attach_durable_policy_v2_result(
+                outer_result,
+                _durable_policy_v2_result(durable_row),
+            )
+    except _PolicyStateBundleDenied as denied:
+        if outer_result is None:
+            raise ReleaseAuthorizationError(
+                "release authorization v2 durable reserve denied before outer reservation"
+            ) from denied
+        outer_denied = {
+            **outer_result,
+            "authorized": False,
+            "state": "denied",
+            "reason": "durable_policy_denied",
+            "idempotent_replay": False,
+            "grant_id": None,
+            "approval_request_id": None,
+            "reservation_expires_at_epoch_ms": None,
+            "dispatch_started_at_epoch_ms": None,
+            "dispatch_expires_at_epoch_ms": None,
+            "completion_outcome": None,
+            "retry_after_seconds": max(
+                0,
+                int(denied.retry_after_seconds),
+            ),
+            "quotas": [],
+        }
+        return _attach_durable_policy_v2_result(
+            outer_denied,
+            _denied_durable_policy_v2_result(
+                attempt_id=normalized_attempt_id,
+                claim_digest=normalized_durable["claimDigest"],
+                actor_id=normalized_durable["actorId"],
+            ),
+        )
+
+
+@_release_v2_coordinator_errors
+def dispatch_release_authorization_v2(
+    *,
+    attempt_id: str,
+    binding_digest: str,
+    actor_id: str,
+    durable_policy_transition: dict[str, Any],
+    now_epoch_ms: int | None = None,
+    required_approver_roles: set[str] | None = None,
+) -> dict[str, Any]:
+    require_atomic_release_writer()
+    attempt_id = (
+        _release_digest(
+            "release authorization v2 attempt_id",
+            attempt_id,
+        )
+        or ""
+    )
+    binding_digest = (
+        _release_digest(
+            "release authorization binding_digest",
+            binding_digest,
+        )
+        or ""
+    )
+    transition = _normalize_release_durable_policy_transition(
+        durable_policy_transition,
+        phase="dispatch",
+        outcome=None,
+        actor_id=actor_id,
+        attempt_id=attempt_id,
+    )
+    dispatch_deadline = int(
+        transition["dispatch_deadline_at_epoch_ms"]
+    )
+    normalized_approver_roles = _normalize_release_approver_roles(
+        required_approver_roles
+    )
+    with connect() as conn:
+        _begin_release_transaction(conn)
+        preview = _release_attempt_row(conn, attempt_id)
+        if preview is None:
+            raise ReleaseAuthorizationError(
+                "release authorization attempt was not found"
+            )
+        if not hmac.compare_digest(
+            str(preview["binding_digest"]),
+            binding_digest,
+        ):
+            raise ReleaseAuthorizationConflictError(
+                "release authorization binding does not match the durable attempt"
+            )
+        _lock_release_authorization_v2_resources(
+            conn,
+            attempt_id=attempt_id,
+            reservation_id=transition["reservation_id"],
+            claim_digest=transition["claim_digest"],
+            actor_id=transition["actor_id"],
+        )
+        if preview["state"] == "reserved":
+            _lock_release_authority_resources(
+                conn,
+                lock_policy=True,
+                lock_webauthn=preview["grant_id"] is not None,
+                lock_rbac=(
+                    preview["grant_id"] is not None
+                    and bool(normalized_approver_roles)
+                ),
+                credential_id=str(preview["credential_id"] or ""),
+            )
+        outer = dispatch_release_authorization(
+            attempt_id=attempt_id,
+            binding_digest=binding_digest,
+            dispatch_ttl_seconds=1,
+            now_epoch_ms=now_epoch_ms,
+            actor_id=transition["actor_id"],
+            required_approver_roles=required_approver_roles,
+            _connection=conn,
+            _resources_locked=True,
+            _authority_locked=True,
+            _v2_coordinator_token=(
+                _RELEASE_AUTHORIZATION_V2_COORDINATOR
+            ),
+            _dispatch_deadline_at_epoch_ms=dispatch_deadline,
+        )
+        if (
+            outer.get("state") != "dispatching"
+            or outer.get("completion_outcome") is not None
+            or outer.get("dispatch_expires_at_epoch_ms")
+            != dispatch_deadline
+        ):
+            raise ReleaseAuthorizationConflictError(
+                "release authorization v2 dispatch did not preserve the exact lifecycle"
+            )
+        durable = dispatch_policy_state_bundle(
+            reservation_id=transition["reservation_id"],
+            attempt_id=attempt_id,
+            claim_digest=transition["claim_digest"],
+            actor_id=transition["actor_id"],
+            dispatch_deadline_at_epoch_ms=dispatch_deadline,
+            _connection=conn,
+            _resources_locked=True,
+        )
+        if durable.get("state") != "dispatched":
+            raise ReleaseAuthorizationConflictError(
+                "release authorization v2 durable dispatch did not preserve the exact lifecycle"
+            )
+        durable_row = conn.execute(
+            "SELECT * FROM policy_state_bundles WHERE reservation_id = ?",
+            (transition["reservation_id"],),
+        ).fetchone()
+        if durable_row is None:
+            raise ReleaseAuthorizationError(
+                "release authorization v2 durable dispatch disappeared"
+            )
+        return _attach_durable_policy_v2_result(
+            outer,
+            _durable_policy_v2_result(durable_row),
+        )
+
+
+@_release_v2_coordinator_errors
+def complete_release_authorization_v2(
+    *,
+    attempt_id: str,
+    binding_digest: str,
+    outcome: str,
+    actor_id: str,
+    durable_policy_transition: dict[str, Any],
+    now_epoch_ms: int | None = None,
+) -> dict[str, Any]:
+    require_atomic_release_writer()
+    if outcome not in {"forwarded", "not_forwarded", "unknown"}:
+        raise ReleaseAuthorizationError(
+            "release authorization outcome must be forwarded, not_forwarded, or unknown"
+        )
+    attempt_id = (
+        _release_digest(
+            "release authorization v2 attempt_id",
+            attempt_id,
+        )
+        or ""
+    )
+    binding_digest = (
+        _release_digest(
+            "release authorization binding_digest",
+            binding_digest,
+        )
+        or ""
+    )
+    transition = _normalize_release_durable_policy_transition(
+        durable_policy_transition,
+        phase="complete",
+        outcome=outcome,
+        actor_id=actor_id,
+        attempt_id=attempt_id,
+    )
+    with connect() as conn:
+        _begin_release_transaction(conn)
+        preview, claims = _lock_release_authorization_v2_resources(
+            conn,
+            attempt_id=attempt_id,
+            reservation_id=transition["reservation_id"],
+            claim_digest=transition["claim_digest"],
+            actor_id=transition["actor_id"],
+        )
+        stored_dispatch_deadline = (
+            int(preview["dispatch_deadline_at_epoch_ms"])
+            if preview["dispatch_deadline_at_epoch_ms"] is not None
+            else None
+        )
+        if outcome == "not_forwarded" and str(preview["state"]) not in {
+            "reserved",
+            "aborted",
+        }:
+            raise ReleaseAuthorizationConflictError(
+                "release authorization v2 cannot refund after dispatch"
+            )
+        submitted_dispatch_deadline = transition[
+            "dispatch_deadline_at_epoch_ms"
+        ]
+        if outcome == "unknown" and str(preview["state"]) == "indeterminate":
+            terminal_dispatch_deadline = preview[
+                "completion_dispatch_deadline_at_epoch_ms"
+            ]
+            if (
+                terminal_dispatch_deadline
+                == _DURABLE_COMPLETION_DEADLINE_RECONCILER_UNBOUND
+            ):
+                if submitted_dispatch_deadline not in {
+                    None,
+                    stored_dispatch_deadline,
+                }:
+                    raise ReleaseAuthorizationConflictError(
+                        "release authorization v2 uncertainty replay changed dispatch knowledge"
+                    )
+                updated = conn.execute(
+                    "UPDATE policy_state_bundles "
+                    "SET completion_dispatch_deadline_at_epoch_ms = ? "
+                    "WHERE reservation_id = ? AND state = 'indeterminate' "
+                    "AND completion_dispatch_deadline_at_epoch_ms = ?",
+                    (
+                        submitted_dispatch_deadline,
+                        transition["reservation_id"],
+                        _DURABLE_COMPLETION_DEADLINE_RECONCILER_UNBOUND,
+                    ),
+                )
+                if updated.rowcount != 1:
+                    raise ReleaseAuthorizationConflictError(
+                        "release authorization v2 uncertainty replay lost its knowledge binding"
+                    )
+            elif submitted_dispatch_deadline != (
+                int(terminal_dispatch_deadline)
+                if terminal_dispatch_deadline is not None
+                else None
+            ):
+                raise ReleaseAuthorizationConflictError(
+                    "release authorization v2 uncertainty replay changed dispatch knowledge"
+                )
+        elif (
+            outcome != "unknown"
+            or submitted_dispatch_deadline is not None
+        ) and submitted_dispatch_deadline != stored_dispatch_deadline:
+            raise ReleaseAuthorizationConflictError(
+                "release authorization v2 durable dispatch deadline was substituted"
+            )
+        if outcome in {"forwarded", "unknown"}:
+            evidence_digest = _policy_state_digest(
+                transition["response_evidence"]
+            )
+            if not hmac.compare_digest(
+                evidence_digest,
+                transition["response_evidence_digest"],
+            ):
+                raise ReleaseAuthorizationConflictError(
+                    "release authorization v2 response evidence was substituted"
+                )
+        outer = complete_release_authorization(
+            attempt_id=attempt_id,
+            binding_digest=binding_digest,
+            outcome=outcome,
+            now_epoch_ms=now_epoch_ms,
+            actor_id=transition["actor_id"],
+            _connection=conn,
+            _resources_locked=True,
+            _v2_coordinator_token=(
+                _RELEASE_AUTHORIZATION_V2_COORDINATOR
+            ),
+        )
+        expected_outer = {
+            "forwarded": ("committed", "forwarded"),
+            "not_forwarded": ("cancelled", "not_forwarded"),
+            "unknown": ("committed_indeterminate", "unknown"),
+        }[outcome]
+        outer_terminal = (
+            outer.get("state"),
+            outer.get("completion_outcome"),
+        )
+        durable_outcome = outcome
+        if outer_terminal != expected_outer:
+            replay_outcome = {
+                ("committed", "forwarded"): "forwarded",
+                ("cancelled", "not_forwarded"): "not_forwarded",
+            }.get(outer_terminal)
+            if (
+                outcome != "unknown"
+                or outer.get("idempotent_replay") is not True
+                or replay_outcome is None
+            ):
+                raise ReleaseAuthorizationConflictError(
+                    "release authorization v2 completion outcome conflicts with its replay"
+                )
+            durable_outcome = replay_outcome
+        if durable_outcome != outcome:
+            expected_replay_states = {
+                "forwarded": {"committed", "denied"},
+                "not_forwarded": {"aborted"},
+            }[durable_outcome]
+            if str(preview["state"]) not in expected_replay_states:
+                raise ReleaseAuthorizationConflictError(
+                    "release authorization v2 replay lacks an aligned durable terminal"
+                )
+        if durable_outcome == "not_forwarded":
+            durable = abort_policy_state_bundle(
+                reservation_id=transition["reservation_id"],
+                attempt_id=attempt_id,
+                claim_digest=transition["claim_digest"],
+                actor_id=transition["actor_id"],
+                _connection=conn,
+                _resources_locked=True,
+            )
+            expected_durable_state = "aborted"
+        elif durable_outcome == "forwarded":
+            traversal_claims = [
+                claim
+                for claim in claims
+                if claim["type"] == "traversalBudget"
+            ]
+            normalized_evidence = _normalize_policy_traversal_response_evidence(
+                transition["response_evidence"],
+                traversal_claims,
+            )
+            if any(
+                not hmac.compare_digest(
+                    item["response_digest"],
+                    transition["response_body_sha256"],
+                )
+                for item in normalized_evidence
+            ):
+                raise ReleaseAuthorizationConflictError(
+                    "release authorization v2 traversal response body digest was substituted"
+                )
+            durable = complete_policy_state_bundle(
+                reservation_id=transition["reservation_id"],
+                attempt_id=attempt_id,
+                claim_digest=transition["claim_digest"],
+                actor_id=transition["actor_id"],
+                response_evidence=normalized_evidence,
+                _connection=conn,
+                _resources_locked=True,
+                _response_body_sha256=transition[
+                    "response_body_sha256"
+                ],
+            )
+            expected_durable_state = str(durable.get("state"))
+            if expected_durable_state not in {"committed", "denied"}:
+                raise ReleaseAuthorizationConflictError(
+                    "release authorization v2 durable completion is invalid"
+                )
+        else:
+            durable = fail_policy_state_bundle(
+                reservation_id=transition["reservation_id"],
+                attempt_id=attempt_id,
+                claim_digest=transition["claim_digest"],
+                actor_id=transition["actor_id"],
+                failure_reason=transition["failure_reason"],
+                response_body_sha256=transition[
+                    "response_body_sha256"
+                ],
+                traversal_evidence=transition["response_evidence"],
+                _connection=conn,
+                _resources_locked=True,
+                _uncertainty=transition["uncertainty"],
+                _completion_dispatch_deadline_at_epoch_ms=(
+                    submitted_dispatch_deadline
+                ),
+            )
+            expected_durable_state = "indeterminate"
+        if durable.get("state") != expected_durable_state:
+            raise ReleaseAuthorizationConflictError(
+                "release authorization v2 durable completion state changed"
+            )
+        durable_row = conn.execute(
+            "SELECT * FROM policy_state_bundles WHERE reservation_id = ?",
+            (transition["reservation_id"],),
+        ).fetchone()
+        if durable_row is None:
+            raise ReleaseAuthorizationError(
+                "release authorization v2 durable completion disappeared"
+            )
+        durable_result = _durable_policy_v2_result(durable_row)
+        if (
+            durable_outcome in {"forwarded", "unknown"}
+            and (
+                durable_result["response_evidence_digest"]
+                != transition["response_evidence_digest"]
+                or durable_result["response_body_sha256"]
+                != transition["response_body_sha256"]
+            )
+        ):
+            raise ReleaseAuthorizationConflictError(
+                "release authorization v2 durable terminal evidence changed"
+            )
+        if (
+            durable_outcome == "unknown"
+            and (
+                durable_result[
+                    "dispatch_deadline_at_epoch_ms"
+                ]
+                != submitted_dispatch_deadline
+                or durable_result["failure_reason"]
+                != _DURABLE_POLICY_UNKNOWN_FAILURE_REASON
+                or durable_result["uncertainty"]
+                != _DURABLE_POLICY_CHARGED_UNCERTAINTY
+            )
+        ):
+            raise ReleaseAuthorizationConflictError(
+                "release authorization v2 durable uncertainty changed"
+            )
+        return _attach_durable_policy_v2_result(
+            outer,
+            durable_result,
+        )
+
+
 def reconcile_release_authorizations(
     *,
     limit: int = 100,
@@ -16620,11 +24936,6 @@ def reconcile_release_authorizations(
                 now_ms = _rate_limit_transaction_now_epoch_ms(conn, now_epoch_ms)
             except RateLimitStoreError as exc:
                 raise ReleaseAuthorizationError(str(exc)) from exc
-            suffix = (
-                " FOR UPDATE SKIP LOCKED"
-                if isinstance(conn, PostgresMetadataConnection)
-                else ""
-            )
             row = conn.execute(
                 """
                 SELECT * FROM release_authorization_attempts
@@ -16634,13 +24945,144 @@ def reconcile_release_authorizations(
                               ELSE reservation_expires_at_epoch_ms END ASC,
                          attempt_id ASC
                 LIMIT 1
-                """
-                + suffix,
+                """,
                 (now_ms, now_ms),
             ).fetchone()
             if row is None:
                 break
-            attempt_ids.append(str(row["attempt_id"]))
+            attempt_id = str(row["attempt_id"])
+            release_protocol = _release_attempt_protocol(conn, row)
+            if release_protocol == "v2":
+                bundle = conn.execute(
+                    "SELECT * FROM policy_state_bundles "
+                    "WHERE attempt_id = ?",
+                    (row["attempt_id"],),
+                ).fetchone()
+                if bundle is None:
+                    raise ReleaseAuthorizationConflictError(
+                        "release authorization v2 reconciliation lacks durable state"
+                    )
+                locked_bundle, claims = (
+                    _lock_release_authorization_v2_resources(
+                        conn,
+                        attempt_id=str(row["attempt_id"]),
+                        reservation_id=str(
+                            bundle["reservation_id"]
+                        ),
+                        claim_digest=str(bundle["claim_digest"]),
+                        actor_id=str(bundle["actor_id"]),
+                    )
+                )
+                row = _release_attempt_row(
+                    conn,
+                    attempt_id,
+                    for_update=True,
+                )
+                if row is None:
+                    continue
+                _release_attempt_protocol(
+                    conn,
+                    row,
+                    require_exact_v2_bundle=True,
+                )
+                state = str(row["state"])
+                deadline = (
+                    row["reservation_expires_at_epoch_ms"]
+                    if state == "reserved"
+                    else row["dispatch_expires_at_epoch_ms"]
+                    if state == "dispatching"
+                    else None
+                )
+                if deadline is None or int(deadline) > now_ms:
+                    continue
+                attempt_ids.append(attempt_id)
+                if row["state"] == "reserved":
+                    abort_policy_state_bundle(
+                        reservation_id=str(
+                            locked_bundle["reservation_id"]
+                        ),
+                        attempt_id=str(row["attempt_id"]),
+                        claim_digest=str(
+                            locked_bundle["claim_digest"]
+                        ),
+                        actor_id=str(locked_bundle["actor_id"]),
+                        _connection=conn,
+                        _resources_locked=True,
+                    )
+                    _cancel_release_attempt(
+                        conn,
+                        row,
+                        now_ms=now_ms,
+                        actor_id=actor_id,
+                        reason="reservation_ttl_expired",
+                        resources_locked=True,
+                    )
+                    cancelled += 1
+                else:
+                    response_body_sha256 = (
+                        _POLICY_STATE_EMPTY_RESPONSE_DIGEST
+                    )
+                    failure_evidence = (
+                        _policy_state_failure_evidence(
+                            claims,
+                            failure_reason=(
+                                _DURABLE_POLICY_UNKNOWN_FAILURE_REASON
+                            ),
+                            response_body_sha256=(
+                                response_body_sha256
+                            ),
+                        )
+                    )
+                    fail_policy_state_bundle(
+                        reservation_id=str(
+                            locked_bundle["reservation_id"]
+                        ),
+                        attempt_id=str(row["attempt_id"]),
+                        claim_digest=str(
+                            locked_bundle["claim_digest"]
+                        ),
+                        actor_id=str(locked_bundle["actor_id"]),
+                        failure_reason=(
+                            _DURABLE_POLICY_UNKNOWN_FAILURE_REASON
+                        ),
+                        response_body_sha256=response_body_sha256,
+                        traversal_evidence=failure_evidence,
+                        _connection=conn,
+                        _resources_locked=True,
+                        _uncertainty=(
+                            _DURABLE_POLICY_CHARGED_UNCERTAINTY
+                        ),
+                        _completion_dispatch_deadline_at_epoch_ms=(
+                            _DURABLE_COMPLETION_DEADLINE_RECONCILER_UNBOUND
+                        ),
+                    )
+                    _commit_release_attempt(
+                        conn,
+                        row,
+                        now_ms=now_ms,
+                        actor_id=actor_id,
+                        outcome="unknown",
+                        indeterminate=True,
+                        reason="dispatch_ttl_expired",
+                    )
+                    indeterminate += 1
+                continue
+            row = _bound_release_attempt(
+                conn,
+                attempt_id,
+                str(row["binding_digest"]),
+            )
+            state = str(row["state"])
+            deadline = (
+                row["reservation_expires_at_epoch_ms"]
+                if state == "reserved"
+                else row["dispatch_expires_at_epoch_ms"]
+                if state == "dispatching"
+                else None
+            )
+            if deadline is None or int(deadline) > now_ms:
+                continue
+            attempt_ids.append(attempt_id)
             if row["state"] == "reserved":
                 _cancel_release_attempt(
                     conn,
@@ -16648,6 +25090,7 @@ def reconcile_release_authorizations(
                     now_ms=now_ms,
                     actor_id=actor_id,
                     reason="reservation_ttl_expired",
+                    resources_locked=True,
                 )
                 cancelled += 1
             else:
@@ -19495,6 +27938,7 @@ def prune_expired() -> None:
     now_s = iso_now()
     with connect() as conn:
         conn.execute("DELETE FROM gmail_message_cache WHERE expires_at <= ?", (now_s,))
+    reconcile_policy_state_bundles(limit=32)
 
 
 def log_request(
@@ -20295,6 +28739,12 @@ def metadata_store_status() -> dict[str, Any]:
         "gmail_message_cache",
         "request_logs",
         "rate_limit_counters",
+        "durable_budget_definitions",
+        "durable_budget_events",
+        "traversal_budget_chains",
+        "traversal_budget_cursors",
+        "traversal_budget_page_reservations",
+        "policy_state_bundles",
         "release_authorization_attempts",
         "release_authorization_credential_issuances",
         "release_authorization_quota_reservations",

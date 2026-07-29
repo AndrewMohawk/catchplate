@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import binascii
 import fcntl
 import hashlib
 import hmac
@@ -21,6 +22,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
+
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -97,12 +102,70 @@ PINNED_PYTHON_SCRIPTS = {
     "verify_release_completion.py": VERIFY_RELEASE_COMPLETION_SCRIPT_SHA256_ENV,
 }
 FINAL_LAUNCHER_CONTRACT_ENV = "SERVERWARE_FINAL_LAUNCHER_CONTRACT"
-FINAL_LAUNCHER_CONTRACT = "descriptor-sealed-bootstrap-v2"
+FINAL_LAUNCHER_CONTRACT = "descriptor-sealed-bootstrap-v3"
 BOOTSTRAP_RECEIPT_FD_ENV = "SERVERWARE_BOOTSTRAP_RECEIPT_FD"
 BOOTSTRAP_RECEIPT_SHA256_ENV = "SERVERWARE_BOOTSTRAP_RECEIPT_SHA256"
 BOOTSTRAP_RECEIPT_API_VERSION_ENV = "SERVERWARE_BOOTSTRAP_RECEIPT_API_VERSION"
-BOOTSTRAP_RECEIPT_API_VERSION = "serverware.bootstrapReceipt/v2"
+BOOTSTRAP_RECEIPT_API_VERSION = "serverware.bootstrapReceipt/v3"
 BOOTSTRAP_RECEIPT_KIND = "ProductionBootstrapReceipt"
+BOOTSTRAP_RECEIPT_FIXED_FD = 198
+COMPLETION_PROOF_API_VERSION = "serverware.completionProof/v6"
+COMPLETION_PROOF_V6_ENVELOPE_FIELDS = frozenset(
+    {
+        "proof_core_sha256",
+        "independently_authenticated",
+        "aggregate_authentication",
+        "proof_path",
+        "integrity_metadata",
+    }
+)
+FINAL_COMPLETION_RESULT_API_VERSION = (
+    "serverware.releaseCompletionVerification/v1"
+)
+LAUNCH_AUTHORIZATION_REQUEST_API_VERSION = (
+    "serverware.launchAuthorizationRequest/v2"
+)
+LAUNCH_AUTHORIZATION_API_VERSION = "serverware.launchAuthorization/v2"
+NONCE_ROLLBACK_ASSURANCE_BINDING_API_VERSION = (
+    "serverware.productionNonceRollbackAssuranceBinding/v1"
+)
+NONCE_ROLLBACK_ASSURANCE_PINS_API_VERSION = (
+    "serverware.productionNonceRollbackAssurancePins/v1"
+)
+NONCE_ROLLBACK_ASSURANCE_REQUEST_DOMAIN = (
+    LAUNCH_AUTHORIZATION_REQUEST_API_VERSION.encode("ascii") + b"\0"
+)
+NONCE_ROLLBACK_ASSURANCE_AUTHORIZATION_DOMAIN = (
+    LAUNCH_AUTHORIZATION_API_VERSION.encode("ascii") + b"\0"
+)
+MAX_NONCE_ROLLBACK_ASSURANCE_PINS_BYTES = 64 * 1024
+NONCE_ROLLBACK_ASSURANCE_JSON_INTEGER_MAX = 9_007_199_254_740_991
+PRODUCTION_NONCE_ASSURANCE_PROFILES = (
+    {
+        "assuranceEvidenceType": "hardwareMonotonicCounterAttestation",
+        "backendClass": "hardwareMonotonicCounter",
+        "keyProtection": "nonExportableHsm",
+        "rollbackMechanism": "hardwareMonotonicCounter",
+        "stateCommitment": "monotonicCounterCommitment",
+        "verifierStateStoreClass": "hardwareProtectedStateStore",
+    },
+    {
+        "assuranceEvidenceType": "linearizableCasOperatorAttestation",
+        "backendClass": "independentlyAdministeredLinearizableCas",
+        "keyProtection": "nonExportableKmsHsm",
+        "rollbackMechanism": "linearizableCasWithRollbackProtectedStorage",
+        "stateCommitment": "hashChainedLinearizableCommitment",
+        "verifierStateStoreClass": "independentlyAdministeredLinearizableCas",
+    },
+    {
+        "assuranceEvidenceType": "transparencyLedgerOperatorAttestation",
+        "backendClass": "appendOnlyTransparencyLedger",
+        "keyProtection": "nonExportableKmsHsm",
+        "rollbackMechanism": "appendOnlyWitnessedLedger",
+        "stateCommitment": "appendOnlyMerkleCommitment",
+        "verifierStateStoreClass": "independentlyAdministeredLinearizableCas",
+    },
+)
 LAUNCH_AUTHORITY_ROOT_PATH = (
     ROOT
     / "data-plane"
@@ -298,7 +361,13 @@ class MeasuredScript:
 
 
 def canonical_json(value: Any) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    )
 
 
 def sha256_prefixed_bytes(value: bytes) -> str:
@@ -337,6 +406,129 @@ def load_launch_authority_spki() -> bytes:
     return load_launch_authority_identity()["spki"]
 
 
+def _validate_v2_launch_authorization_request(value: Any) -> dict[str, Any]:
+    try:
+        return launch_authorization.validate_launch_authorization_request(value)
+    except launch_authorization.LaunchAuthorizationError as exc:
+        raise ValueError(
+            f"bootstrap receipt launch authorization request is invalid: {exc}"
+        ) from exc
+
+
+def _v2_launch_authorization_request_sha256(request: Any) -> str:
+    try:
+        return launch_authorization.launch_authorization_request_sha256(request)
+    except launch_authorization.LaunchAuthorizationError as exc:
+        raise ValueError(
+            f"bootstrap receipt launch authorization request is invalid: {exc}"
+        ) from exc
+
+
+def _decode_canonical_ed25519_signature(value: Any) -> bytes:
+    if (
+        type(value) is not str
+        or "=" in value
+        or re.fullmatch(r"[A-Za-z0-9_-]+", value, re.ASCII) is None
+    ):
+        raise ValueError(
+            "bootstrap receipt launch authorization signature is not canonical base64url"
+        )
+    try:
+        decoded = base64.b64decode(
+            value + "=" * (-len(value) % 4),
+            altchars=b"-_",
+            validate=True,
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "bootstrap receipt launch authorization signature is not canonical base64url"
+        ) from exc
+    if (
+        len(decoded) != 64
+        or base64.urlsafe_b64encode(decoded).decode("ascii").rstrip("=")
+        != value
+    ):
+        raise ValueError(
+            "bootstrap receipt launch authorization signature is not exactly 64 canonical bytes"
+        )
+    return decoded
+
+
+def _validate_v2_launch_authorization(value: Any) -> dict[str, Any]:
+    envelope = _closed_object(
+        value,
+        {"apiVersion", "kind", "statement", "signature"},
+        "launch authorization",
+    )
+    if (
+        envelope["apiVersion"] != LAUNCH_AUTHORIZATION_API_VERSION
+        or envelope["kind"] != "ProductionLaunchAuthorization"
+    ):
+        raise ValueError("bootstrap receipt launch authorization is not v2")
+    try:
+        statement = launch_authorization.validate_launch_authorization_statement(
+            envelope["statement"]
+        )
+    except launch_authorization.LaunchAuthorizationError as exc:
+        raise ValueError(
+            f"bootstrap receipt launch authorization statement is invalid: {exc}"
+        ) from exc
+    _decode_canonical_ed25519_signature(envelope["signature"])
+    return {
+        "apiVersion": envelope["apiVersion"],
+        "kind": envelope["kind"],
+        "statement": statement,
+        "signature": envelope["signature"],
+    }
+
+
+def _verify_v2_launch_authorization_signature(
+    envelope: dict[str, Any],
+    *,
+    authority_spki: bytes,
+    expected_authority_key_id: str,
+    expected_request_sha256: str,
+    now_unix_seconds: int,
+) -> None:
+    try:
+        public_key = serialization.load_der_public_key(authority_spki)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("launch authority SPKI is invalid") from exc
+    if not isinstance(public_key, Ed25519PublicKey):
+        raise ValueError("launch authority SPKI is not Ed25519")
+    statement = envelope["statement"]
+    if (
+        statement["authorityKeyId"] != expected_authority_key_id
+        or statement["requestSha256"] != expected_request_sha256
+    ):
+        raise ValueError(
+            "bootstrap receipt launch authorization identity binding is invalid"
+        )
+    if (
+        statement["issuedAtUnixSeconds"]
+        > now_unix_seconds + launch_authorization.MAX_FUTURE_SKEW_SECONDS
+        or now_unix_seconds >= statement["expiresAtUnixSeconds"]
+    ):
+        raise ValueError(
+            "bootstrap receipt launch authorization is outside its validity interval"
+        )
+    unsigned = {
+        "apiVersion": envelope["apiVersion"],
+        "kind": envelope["kind"],
+        "statement": statement,
+    }
+    try:
+        public_key.verify(
+            _decode_canonical_ed25519_signature(envelope["signature"]),
+            NONCE_ROLLBACK_ASSURANCE_AUTHORIZATION_DOMAIN
+            + launch_authorization.canonical_json_bytes(unsigned),
+        )
+    except InvalidSignature as exc:
+        raise ValueError(
+            "bootstrap receipt launch authorization signature is invalid"
+        ) from exc
+
+
 def _validate_receipt_launch_authorization(
     value: Any,
     *,
@@ -350,19 +542,20 @@ def _validate_receipt_launch_authorization(
             "requestSha256",
             "envelope",
             "authorizationSha256",
+            "witnessPublicKeySpkiDerBase64url",
             "verifiedAtUnixSeconds",
         },
         "launchAuthorization",
     )
     try:
-        request = launch_authorization.validate_launch_authorization_request(
+        request = _validate_v2_launch_authorization_request(
             authorization["request"]
         )
-        request_sha256 = launch_authorization.launch_authorization_request_sha256(request)
-        envelope = launch_authorization.validate_launch_authorization(
+        request_sha256 = _v2_launch_authorization_request_sha256(request)
+        envelope = _validate_v2_launch_authorization(
             authorization["envelope"]
         )
-    except launch_authorization.LaunchAuthorizationError as exc:
+    except (ValueError, launch_authorization.LaunchAuthorizationError) as exc:
         raise ValueError(f"bootstrap receipt launch authorization is invalid: {exc}") from exc
     if not hmac.compare_digest(str(authorization["requestSha256"]), request_sha256):
         raise ValueError("bootstrap receipt launch authorization request digest mismatch")
@@ -372,6 +565,18 @@ def _validate_receipt_launch_authorization(
         str(authorization["authorizationSha256"]), authorization_sha256
     ):
         raise ValueError("bootstrap receipt launch authorization envelope digest mismatch")
+    witness_public_key_spki = _decode_canonical_ed25519_spki(
+        authorization["witnessPublicKeySpkiDerBase64url"],
+        "bootstrap receipt launch-authority witness key",
+    )
+    witness_key_id = launch_authorization.spki_key_id(witness_public_key_spki)
+    if not hmac.compare_digest(
+        witness_key_id,
+        request["launchAuthorityWitnessKeyId"],
+    ):
+        raise ValueError(
+            "bootstrap receipt launch-authority witness key does not match the signed request"
+        )
     verified_at = authorization["verifiedAtUnixSeconds"]
     if (
         type(verified_at) is not int
@@ -406,14 +611,16 @@ def _validate_receipt_launch_authorization(
         ):
             raise ValueError("launch authority trust identity is invalid")
         try:
-            launch_authorization.verify_launch_authorization(
+            launch_authorization.verify_launch_authorization_with_witness(
                 envelope_bytes,
                 authority_public_key_spki_der=authority_spki,
-                expected_request_sha256=request_sha256,
+                expected_request=request,
                 expected_authority_key_id=expected_key_id,
+                witness_public_key_spki_der=witness_public_key_spki,
+                expected_witness_key_id=witness_key_id,
                 now_unix_seconds=verified_at,
             )
-        except launch_authorization.LaunchAuthorizationError as exc:
+        except (ValueError, launch_authorization.LaunchAuthorizationError) as exc:
             raise ValueError(
                 f"bootstrap receipt launch authorization verification failed: {exc}"
             ) from exc
@@ -422,6 +629,9 @@ def _validate_receipt_launch_authorization(
         "requestSha256": request_sha256,
         "envelope": envelope,
         "authorizationSha256": authorization_sha256,
+        "witnessPublicKeySpkiDerBase64url": authorization[
+            "witnessPublicKeySpkiDerBase64url"
+        ],
         "verifiedAtUnixSeconds": verified_at,
     }
 
@@ -448,6 +658,24 @@ def _validate_bootstrap_receipt_authorization_bindings(
             "manifestSha256",
             (receipt.get("manifest") or {}).get("sha256")
             if isinstance(receipt.get("manifest"), dict)
+            else None,
+        ),
+        (
+            "nonceRollbackAssurance.contractSha256",
+            "nonceRollbackAssuranceContractSha256",
+            (receipt.get("nonceRollbackAssurance") or {}).get(
+                "contractSha256"
+            )
+            if isinstance(receipt.get("nonceRollbackAssurance"), dict)
+            else None,
+        ),
+        (
+            "nonceRollbackAssurance.retainedSnapshotSha256",
+            "nonceRollbackAssurancePinsSha256",
+            (receipt.get("nonceRollbackAssurance") or {}).get(
+                "retainedSnapshotSha256"
+            )
+            if isinstance(receipt.get("nonceRollbackAssurance"), dict)
             else None,
         ),
         ("sourceTreeDigest", "sourceTreeDigest", receipt.get("sourceTreeDigest")),
@@ -510,17 +738,50 @@ def bootstrap_launch_authorization_identity(value: dict[str, Any]) -> dict[str, 
     )
     request = authorization["request"]
     statement = authorization["envelope"]["statement"]
+    witness = statement["monotonicWitness"]
+    witness_statement = witness["statement"]
     return {
         "authorization_id": statement["authorizationId"],
         "authorization_sha256": authorization["authorizationSha256"],
         "request_sha256": authorization["requestSha256"],
         "authority_key_id": statement["authorityKeyId"],
         "authority_root_sha256": value["launchAuthorityRootSha256"],
+        "authorization_scope": statement["authorizationScope"],
+        "freshness_authority": statement["freshnessAuthority"],
+        "capability_semantics": statement["capabilitySemantics"],
+        "monotonic_witness_sha256": sha256_prefixed_bytes(
+            launch_authorization.canonical_json_bytes(witness)
+        ),
+        "monotonic_witness_key_id": witness_statement["witnessKeyId"],
+        "monotonic_witness_identity_sha256": witness_statement[
+            "witnessIdentitySha256"
+        ],
+        "monotonic_witness_administrative_domain_sha256": witness_statement[
+            "witnessAdministrativeDomainSha256"
+        ],
+        "monotonic_witness_store_assurance_sha256": witness_statement[
+            "storeAssuranceSha256"
+        ],
+        "monotonic_witness_checkpoint_sequence": witness_statement[
+            "checkpointSequence"
+        ],
+        "monotonic_witness_predecessor_state_sha256": witness_statement[
+            "predecessorStateSha256"
+        ],
+        "monotonic_witness_successor_state_sha256": witness_statement[
+            "successorStateSha256"
+        ],
         "launch_id": request["launcherNonce"],
         "boot_id_sha256": request["bootIdSha256"],
         "manifest_sha256": request["manifestSha256"],
         "deployment_audience": request["deploymentAudience"],
         "deployment_identity_sha256": request["deploymentIdentitySha256"],
+        "nonce_rollback_assurance_contract_sha256": request[
+            "nonceRollbackAssuranceContractSha256"
+        ],
+        "nonce_rollback_assurance_pins_sha256": request[
+            "nonceRollbackAssurancePinsSha256"
+        ],
         "release_sequence": request["releaseSequence"],
         "rollback_epoch": request["rollbackEpoch"],
         "release_provenance_sha256": request["releaseProvenanceSha256"],
@@ -649,6 +910,494 @@ def _validate_receipt_file(value: Any, label: str) -> dict[str, Any]:
     return record
 
 
+def _validate_receipt_nonce_rollback_assurance(value: Any) -> dict[str, Any]:
+    binding = _closed_object(
+        value,
+        {
+            "apiVersion",
+            "contractSha256",
+            "pinsFile",
+            "retainedSnapshotFd",
+            "retainedSnapshotSha256",
+            "verifierStateService",
+        },
+        "nonceRollbackAssurance",
+    )
+    if (
+        binding["apiVersion"]
+        != NONCE_ROLLBACK_ASSURANCE_BINDING_API_VERSION
+    ):
+        raise ValueError(
+            "bootstrap receipt nonce rollback assurance version is invalid"
+        )
+    for field in ("contractSha256", "retainedSnapshotSha256"):
+        if SHA256_RE.fullmatch(str(binding[field])) is None:
+            raise ValueError(
+                f"bootstrap receipt nonceRollbackAssurance.{field} is invalid"
+            )
+    pins_file = _validate_receipt_file(
+        binding["pinsFile"],
+        "nonceRollbackAssurance.pinsFile",
+    )
+    if not hmac.compare_digest(
+        pins_file["sha256"],
+        binding["retainedSnapshotSha256"],
+    ):
+        raise ValueError(
+            "bootstrap receipt retained nonce rollback snapshot digest differs from its source file"
+        )
+    descriptor = binding["retainedSnapshotFd"]
+    if (
+        type(descriptor) is not int
+        or descriptor <= 2
+        or descriptor > (1 << 31) - 1
+        or descriptor == BOOTSTRAP_RECEIPT_FIXED_FD
+    ):
+        raise ValueError(
+            "bootstrap receipt retained nonce rollback snapshot descriptor is "
+            "invalid or collides with the fixed bootstrap receipt descriptor"
+        )
+    verifier_state_service = _closed_object(
+        binding["verifierStateService"],
+        {
+            "signingPublicKeySpkiDerBase64url",
+            "storeAdministrativeDomainSha256",
+            "storeAssuranceEvidenceSha256",
+            "storeAttestationPublicKeySpkiDerBase64url",
+            "storeIdentitySha256",
+        },
+        "nonceRollbackAssurance.verifierStateService",
+    )
+    for field in (
+        "storeAdministrativeDomainSha256",
+        "storeAssuranceEvidenceSha256",
+        "storeIdentitySha256",
+    ):
+        if SHA256_RE.fullmatch(str(verifier_state_service[field])) is None:
+            raise ValueError(
+                "bootstrap receipt nonce rollback verifier-state service "
+                f"{field} is invalid"
+            )
+    _decode_canonical_ed25519_spki(
+        verifier_state_service["signingPublicKeySpkiDerBase64url"],
+        "bootstrap receipt nonce rollback verifier-state signing key",
+    )
+    _decode_canonical_ed25519_spki(
+        verifier_state_service[
+            "storeAttestationPublicKeySpkiDerBase64url"
+        ],
+        "bootstrap receipt nonce rollback verifier-state store attestation key",
+    )
+    return binding
+
+
+def _reject_duplicate_pairs(
+    pairs: list[tuple[str, Any]],
+    label: str,
+) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, child in pairs:
+        if key in value:
+            raise ValueError(f"{label} contains duplicate field {key!r}")
+        value[key] = child
+    return value
+
+
+def _reject_noninteger_json(value: str, label: str) -> None:
+    raise ValueError(f"{label} contains non-integer JSON number {value!r}")
+
+
+def _decode_canonical_ed25519_spki(value: Any, label: str) -> bytes:
+    if type(value) is not str or not value or "=" in value:
+        raise ValueError(f"{label} must be unpadded canonical base64url")
+    try:
+        decoded = base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+    except (ValueError, binascii.Error) as exc:
+        raise ValueError(f"{label} is not valid base64url") from exc
+    if (
+        base64.urlsafe_b64encode(decoded).decode("ascii").rstrip("=") != value
+        or len(decoded) != len(ED25519_SPKI_PREFIX) + 32
+        or not decoded.startswith(ED25519_SPKI_PREFIX)
+    ):
+        raise ValueError(f"{label} is not canonical Ed25519 SPKI DER")
+    return decoded
+
+
+def validate_nonce_rollback_assurance_contract(
+    value: Any,
+) -> dict[str, Any]:
+    contract = _closed_object(
+        value,
+        {"apiVersion", "independentVerifierPins", "publicConfigPins"},
+        "nonce rollback assurance pins",
+    )
+    if contract["apiVersion"] != NONCE_ROLLBACK_ASSURANCE_PINS_API_VERSION:
+        raise ValueError("nonce rollback assurance pins version is invalid")
+    independent = _closed_object(
+        contract["independentVerifierPins"],
+        {
+            "expectedNonceAuthorityAssuranceIssuerSpkiSha256",
+            "expectedNonceAuthorityAssuranceSha256",
+        },
+        "independent nonce rollback verifier pins",
+    )
+    public = _closed_object(
+        contract["publicConfigPins"],
+        {
+            "nonceAuthorityAssurance",
+            "nonceAuthorityAssuranceEvidenceSigningPublicKeySpkiDerBase64url",
+            "nonceAuthorityAssuranceSha256",
+            "nonceAuthorityVerifierStateSigningPublicKeySpkiDerBase64url",
+            "nonceAuthorityVerifierStateStoreAdministrativeDomainSha256",
+            "nonceAuthorityVerifierStateStoreAssuranceEvidenceSha256",
+            "nonceAuthorityVerifierStateStoreAttestationPublicKeySpkiDerBase64url",
+            "nonceAuthorityVerifierStateStoreIdentitySha256",
+        },
+        "public nonce rollback config pins",
+    )
+    assurance = _closed_object(
+        public["nonceAuthorityAssurance"],
+        {
+            "apiVersion",
+            "administrativeDomainSha256",
+            "assuranceEvidenceSha256",
+            "assuranceEvidenceType",
+            "assuranceLevel",
+            "authorityEpoch",
+            "authorityGeneration",
+            "authorityIdentitySha256",
+            "backendClass",
+            "productionEligible",
+            "rollbackProtection",
+        },
+        "nonce authority assurance",
+    )
+    rollback = _closed_object(
+        assurance["rollbackProtection"],
+        {
+            "administrativeRollbackResistance",
+            "backendAttestationRequired",
+            "exactSuccessorRequired",
+            "freshVerifierChallengeRequired",
+            "keyProtection",
+            "mechanism",
+            "stateCommitment",
+            "verifierStateStoreClass",
+        },
+        "nonce authority rollback protection",
+    )
+    digest_values = (
+        independent["expectedNonceAuthorityAssuranceIssuerSpkiSha256"],
+        independent["expectedNonceAuthorityAssuranceSha256"],
+        public["nonceAuthorityAssuranceSha256"],
+        public[
+            "nonceAuthorityVerifierStateStoreAdministrativeDomainSha256"
+        ],
+        public[
+            "nonceAuthorityVerifierStateStoreAssuranceEvidenceSha256"
+        ],
+        public["nonceAuthorityVerifierStateStoreIdentitySha256"],
+        assurance["administrativeDomainSha256"],
+        assurance["assuranceEvidenceSha256"],
+        assurance["authorityIdentitySha256"],
+    )
+    if any(type(item) is not str or SHA256_RE.fullmatch(item) is None for item in digest_values):
+        raise ValueError("nonce rollback assurance pins contain an invalid digest")
+    evidence_spki = _decode_canonical_ed25519_spki(
+        public[
+            "nonceAuthorityAssuranceEvidenceSigningPublicKeySpkiDerBase64url"
+        ],
+        "nonce authority assurance evidence key",
+    )
+    verifier_state_spki = _decode_canonical_ed25519_spki(
+        public[
+            "nonceAuthorityVerifierStateSigningPublicKeySpkiDerBase64url"
+        ],
+        "nonce authority verifier-state key",
+    )
+    verifier_state_store_attestation_spki = _decode_canonical_ed25519_spki(
+        public[
+            "nonceAuthorityVerifierStateStoreAttestationPublicKeySpkiDerBase64url"
+        ],
+        "nonce authority verifier-state store attestation key",
+    )
+    evidence_key_id = sha256_prefixed_bytes(evidence_spki)
+    verifier_state_key_id = sha256_prefixed_bytes(verifier_state_spki)
+    verifier_state_store_attestation_key_id = sha256_prefixed_bytes(
+        verifier_state_store_attestation_spki
+    )
+    assurance_sha256 = sha256_prefixed_bytes(
+        canonical_json(assurance).encode("ascii")
+    )
+    profile = {
+        "assuranceEvidenceType": assurance["assuranceEvidenceType"],
+        "backendClass": assurance["backendClass"],
+        "keyProtection": rollback["keyProtection"],
+        "rollbackMechanism": rollback["mechanism"],
+        "stateCommitment": rollback["stateCommitment"],
+        "verifierStateStoreClass": rollback["verifierStateStoreClass"],
+    }
+    administrative_and_service_identities = {
+        assurance["administrativeDomainSha256"],
+        assurance["authorityIdentitySha256"],
+        public[
+            "nonceAuthorityVerifierStateStoreAdministrativeDomainSha256"
+        ],
+        public["nonceAuthorityVerifierStateStoreIdentitySha256"],
+    }
+    if (
+        assurance["apiVersion"] != "serverware.nonceAuthorityAssurance/v1"
+        or assurance["productionEligible"] is not True
+        or assurance["assuranceLevel"] != "productionRollbackProtected"
+        or type(assurance["authorityEpoch"]) is not int
+        or not 1
+        <= assurance["authorityEpoch"]
+        <= NONCE_ROLLBACK_ASSURANCE_JSON_INTEGER_MAX
+        or type(assurance["authorityGeneration"]) is not int
+        or not 1
+        <= assurance["authorityGeneration"]
+        <= NONCE_ROLLBACK_ASSURANCE_JSON_INTEGER_MAX
+        or rollback["administrativeRollbackResistance"] is not True
+        or rollback["backendAttestationRequired"] is not True
+        or rollback["exactSuccessorRequired"] is not True
+        or rollback["freshVerifierChallengeRequired"] is not True
+        or profile not in PRODUCTION_NONCE_ASSURANCE_PROFILES
+        or public["nonceAuthorityAssuranceSha256"] != assurance_sha256
+        or independent["expectedNonceAuthorityAssuranceSha256"]
+        != assurance_sha256
+        or independent[
+            "expectedNonceAuthorityAssuranceIssuerSpkiSha256"
+        ]
+        != evidence_key_id
+        or len(
+            {
+                evidence_key_id,
+                verifier_state_key_id,
+                verifier_state_store_attestation_key_id,
+            }
+        )
+        != 3
+        or len(administrative_and_service_identities) != 4
+        or evidence_key_id in administrative_and_service_identities
+        or verifier_state_key_id in administrative_and_service_identities
+        or verifier_state_store_attestation_key_id
+        in administrative_and_service_identities
+        or public[
+            "nonceAuthorityVerifierStateStoreAssuranceEvidenceSha256"
+        ]
+        == assurance["assuranceEvidenceSha256"]
+    ):
+        raise ValueError(
+            "nonce rollback assurance pins do not form the closed production rollback profile"
+        )
+    return contract
+
+
+def validate_retained_nonce_rollback_assurance(
+    *,
+    retained_path: Any,
+    expected_pins_sha256: Any,
+    expected_contract_sha256: Any,
+    bootstrap_receipt: dict[str, Any] | None,
+    required: bool,
+) -> dict[str, Any]:
+    supplied = (
+        retained_path,
+        expected_pins_sha256,
+        expected_contract_sha256,
+    )
+    if bootstrap_receipt is None:
+        if any(value is not None for value in supplied):
+            raise ValueError(
+                "launcher nonce rollback assurance arguments require a sealed v3 bootstrap receipt"
+            )
+        if required:
+            raise ValueError(
+                "launcher-enforced nonce rollback assurance requires a sealed v3 bootstrap receipt"
+            )
+        return {
+            "apiVersion": NONCE_ROLLBACK_ASSURANCE_BINDING_API_VERSION,
+            "enforcement": "not-native-launcher-enforced",
+            "verified": False,
+        }
+    if any(type(value) is not str or not value for value in supplied):
+        raise ValueError(
+            "launcher nonce rollback assurance arguments must be supplied together"
+        )
+    binding = _validate_receipt_nonce_rollback_assurance(
+        bootstrap_receipt.get("nonceRollbackAssurance")
+    )
+    path_match = re.fullmatch(r"/proc/self/fd/([1-9][0-9]*)", retained_path)
+    if path_match is None:
+        raise ValueError(
+            "launcher nonce rollback assurance pins must use the retained /proc/self/fd descriptor"
+        )
+    descriptor = int(path_match.group(1))
+    if descriptor != binding["retainedSnapshotFd"]:
+        raise ValueError(
+            "launcher nonce rollback assurance descriptor differs from the bootstrap receipt"
+        )
+    for actual, receipt_value, label in (
+        (
+            expected_pins_sha256,
+            binding["retainedSnapshotSha256"],
+            "pins digest",
+        ),
+        (
+            expected_contract_sha256,
+            binding["contractSha256"],
+            "contract digest",
+        ),
+    ):
+        if (
+            SHA256_RE.fullmatch(actual) is None
+            or not hmac.compare_digest(actual, receipt_value)
+        ):
+            raise ValueError(
+                f"launcher nonce rollback assurance {label} differs from the bootstrap receipt"
+            )
+    request = bootstrap_receipt["launchAuthorization"]["request"]
+    if (
+        request["nonceRollbackAssurancePinsSha256"]
+        != expected_pins_sha256
+        or request["nonceRollbackAssuranceContractSha256"]
+        != expected_contract_sha256
+    ):
+        raise ValueError(
+            "launcher nonce rollback assurance digests differ from the signed launch request"
+        )
+    try:
+        before = os.fstat(descriptor)
+    except OSError as exc:
+        raise ValueError(
+            "launcher nonce rollback assurance descriptor is not open"
+        ) from exc
+    if (
+        not stat.S_ISREG(before.st_mode)
+        or not 1 <= before.st_size <= MAX_NONCE_ROLLBACK_ASSURANCE_PINS_BYTES
+    ):
+        raise ValueError(
+            "launcher nonce rollback assurance descriptor is not a bounded regular file"
+        )
+    try:
+        seals = fcntl.fcntl(descriptor, LINUX_F_GET_SEALS)
+    except OSError as exc:
+        raise ValueError(
+            "launcher nonce rollback assurance descriptor is not a sealable memfd"
+        ) from exc
+    if seals & REQUIRED_BOOTSTRAP_RECEIPT_SEALS != REQUIRED_BOOTSTRAP_RECEIPT_SEALS:
+        raise ValueError(
+            "launcher nonce rollback assurance descriptor is missing immutable seals"
+        )
+    chunks: list[bytes] = []
+    offset = 0
+    while offset < before.st_size:
+        chunk = os.pread(
+            descriptor,
+            min(64 * 1024, before.st_size - offset),
+            offset,
+        )
+        if not chunk:
+            raise ValueError(
+                "launcher nonce rollback assurance descriptor ended early"
+            )
+        chunks.append(chunk)
+        offset += len(chunk)
+    after = os.fstat(descriptor)
+    stable_fields = (
+        "st_dev",
+        "st_ino",
+        "st_mode",
+        "st_nlink",
+        "st_size",
+        "st_mtime_ns",
+        "st_ctime_ns",
+    )
+    if any(
+        getattr(before, field) != getattr(after, field)
+        for field in stable_fields
+    ):
+        raise ValueError(
+            "launcher nonce rollback assurance descriptor changed while it was read"
+        )
+    raw = b"".join(chunks)
+    if not hmac.compare_digest(
+        sha256_prefixed_bytes(raw),
+        expected_pins_sha256,
+    ):
+        raise ValueError(
+            "launcher nonce rollback assurance snapshot digest mismatch"
+        )
+    try:
+        contract = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=lambda pairs: _reject_duplicate_pairs(
+                pairs,
+                "nonce rollback assurance pins",
+            ),
+            parse_float=lambda value: _reject_noninteger_json(
+                value,
+                "nonce rollback assurance pins",
+            ),
+            parse_constant=lambda value: _reject_noninteger_json(
+                value,
+                "nonce rollback assurance pins",
+            ),
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(
+            "launcher nonce rollback assurance snapshot is not strict UTF-8 JSON"
+        ) from exc
+    contract = validate_nonce_rollback_assurance_contract(contract)
+    public_config = contract["publicConfigPins"]
+    expected_verifier_state_service = {
+        "signingPublicKeySpkiDerBase64url": public_config[
+            "nonceAuthorityVerifierStateSigningPublicKeySpkiDerBase64url"
+        ],
+        "storeAdministrativeDomainSha256": public_config[
+            "nonceAuthorityVerifierStateStoreAdministrativeDomainSha256"
+        ],
+        "storeAssuranceEvidenceSha256": public_config[
+            "nonceAuthorityVerifierStateStoreAssuranceEvidenceSha256"
+        ],
+        "storeAttestationPublicKeySpkiDerBase64url": public_config[
+            "nonceAuthorityVerifierStateStoreAttestationPublicKeySpkiDerBase64url"
+        ],
+        "storeIdentitySha256": public_config[
+            "nonceAuthorityVerifierStateStoreIdentitySha256"
+        ],
+    }
+    if binding["verifierStateService"] != expected_verifier_state_service:
+        raise ValueError(
+            "launcher nonce rollback verifier-state service configuration "
+            "differs from the retained contract"
+        )
+    canonical = canonical_json(contract).encode("ascii")
+    if raw != canonical + b"\n":
+        raise ValueError(
+            "launcher nonce rollback assurance snapshot is not canonical JSON plus LF"
+        )
+    if not hmac.compare_digest(
+        sha256_prefixed_bytes(canonical),
+        expected_contract_sha256,
+    ):
+        raise ValueError(
+            "launcher nonce rollback assurance canonical contract digest mismatch"
+        )
+    return {
+        "apiVersion": NONCE_ROLLBACK_ASSURANCE_BINDING_API_VERSION,
+        "contractSha256": expected_contract_sha256,
+        "enforcement": "native-launcher-measured-retained-snapshot",
+        "pinsFile": binding["pinsFile"],
+        "retainedSnapshotFd": descriptor,
+        "retainedSnapshotSha256": expected_pins_sha256,
+        "verifierStateService": expected_verifier_state_service,
+        "sealed": True,
+        "sealMask": seals,
+        "verified": True,
+    }
+
+
 def validate_bootstrap_receipt_summary(value: Any) -> dict[str, Any]:
     summary = _closed_object(
         value,
@@ -664,6 +1413,7 @@ def validate_bootstrap_receipt_summary(value: Any) -> dict[str, Any]:
             "launchAuthorityRootSha256",
             "launcher",
             "manifest",
+            "nonceRollbackAssurance",
             "argv",
             "environment",
             "sealed",
@@ -686,6 +1436,9 @@ def validate_bootstrap_receipt_summary(value: Any) -> dict[str, Any]:
     if launcher["path"] != expected_launcher_path:
         raise ValueError("bootstrap receipt launcher path is not content-addressed by its digest")
     _validate_receipt_file(summary["manifest"], "manifest")
+    _validate_receipt_nonce_rollback_assurance(
+        summary["nonceRollbackAssurance"]
+    )
     validate_bootstrap_receipt_launch_authorization(
         summary,
         verify_signature=False,
@@ -732,8 +1485,10 @@ def load_sealed_bootstrap_receipt(
     if re.fullmatch(r"[1-9][0-9]*", raw_descriptor) is None:
         raise ValueError("bootstrap receipt descriptor must be a positive decimal integer")
     descriptor = int(raw_descriptor)
-    if descriptor <= 2:
-        raise ValueError("bootstrap receipt descriptor must not use a standard stream")
+    if descriptor != BOOTSTRAP_RECEIPT_FIXED_FD:
+        raise ValueError(
+            f"bootstrap receipt descriptor must be exactly {BOOTSTRAP_RECEIPT_FIXED_FD}"
+        )
     expected_sha256 = receipt_env[BOOTSTRAP_RECEIPT_SHA256_ENV]
     if SHA256_RE.fullmatch(expected_sha256) is None:
         raise ValueError("bootstrap receipt digest must be sha256:<64 lowercase hex>")
@@ -780,6 +1535,7 @@ def load_sealed_bootstrap_receipt(
         "manifest",
         "sourceTreeDigest",
         "launchAuthorization",
+        "nonceRollbackAssurance",
         "productionEnv",
         "python",
         "scripts",
@@ -789,7 +1545,7 @@ def load_sealed_bootstrap_receipt(
         "environment",
     }
     if not isinstance(receipt, dict) or set(receipt) != required_keys:
-        raise ValueError("bootstrap receipt must use the closed v2 top-level schema")
+        raise ValueError("bootstrap receipt must use the closed v3 top-level schema")
     if receipt.get("apiVersion") != BOOTSTRAP_RECEIPT_API_VERSION:
         raise ValueError("bootstrap receipt has the wrong API version")
     if receipt.get("kind") != BOOTSTRAP_RECEIPT_KIND:
@@ -807,6 +1563,9 @@ def load_sealed_bootstrap_receipt(
         raise ValueError("bootstrap receipt launcher path is not content-addressed by its digest")
     for field in ("manifest", "productionEnv", "composeFile"):
         _validate_receipt_file(receipt[field], field)
+    _validate_receipt_nonce_rollback_assurance(
+        receipt["nonceRollbackAssurance"]
+    )
     python_record = _closed_object(
         receipt["python"],
         {"path", "sha256", "metadata", "importRoots"},
@@ -850,6 +1609,30 @@ def load_sealed_bootstrap_receipt(
         require_inputs=True,
         authority_identity=launch_authority_identity,
     )
+    current_unix_seconds = int(time.time())
+    try:
+        launch_authorization.verify_launch_authorization_with_witness(
+            launch_authorization.canonical_json_bytes(
+                launch_authorization_receipt["envelope"]
+            ),
+            authority_public_key_spki_der=launch_authority_identity["spki"],
+            expected_request=launch_authorization_receipt["request"],
+            expected_authority_key_id=launch_authority_identity["keyId"],
+            witness_public_key_spki_der=_decode_canonical_ed25519_spki(
+                launch_authorization_receipt[
+                    "witnessPublicKeySpkiDerBase64url"
+                ],
+                "bootstrap receipt launch-authority witness key",
+            ),
+            expected_witness_key_id=launch_authorization_receipt["request"][
+                "launchAuthorityWitnessKeyId"
+            ],
+            now_unix_seconds=current_unix_seconds,
+        )
+    except launch_authorization.LaunchAuthorizationError as exc:
+        raise ValueError(
+            "bootstrap receipt launch authorization is not current at consumption"
+        ) from exc
     argv = _closed_object(receipt["argv"], {"preflightSha256", "readinessSha256"}, "argv")
     for field in ("preflightSha256", "readinessSha256"):
         if SHA256_RE.fullmatch(str(argv[field])) is None:
@@ -875,12 +1658,65 @@ def load_sealed_bootstrap_receipt(
         "launchAuthorityRootSha256": launch_authority_identity["rootSha256"],
         "launcher": receipt["launcher"],
         "manifest": receipt["manifest"],
+        "nonceRollbackAssurance": receipt["nonceRollbackAssurance"],
         "argv": receipt["argv"],
         "environment": receipt["environment"],
         "sealed": True,
         "sealMask": seals,
     }
     return validate_bootstrap_receipt_summary(summary), descriptor
+
+
+def revalidate_bootstrap_launch_authorization_at_completion(
+    *,
+    expected_receipt: dict[str, Any],
+    expected_descriptor: int,
+    generated_at_unix: int,
+    now_unix_seconds: int | None = None,
+    receipt_loader: Any | None = None,
+) -> dict[str, Any]:
+    if expected_descriptor != BOOTSTRAP_RECEIPT_FIXED_FD:
+        raise ValueError(
+            f"completion must revalidate bootstrap authorization on exact FD "
+            f"{BOOTSTRAP_RECEIPT_FIXED_FD}"
+        )
+    if type(generated_at_unix) is not int or generated_at_unix <= 0:
+        raise ValueError("completion generation time is invalid")
+    load_receipt = load_sealed_bootstrap_receipt if receipt_loader is None else receipt_loader
+    current_receipt, current_descriptor = load_receipt(required=True)
+    if (
+        current_descriptor != BOOTSTRAP_RECEIPT_FIXED_FD
+        or current_receipt != expected_receipt
+    ):
+        raise ValueError(
+            "sealed FD 198 bootstrap receipt changed before completion publication"
+        )
+    validate_bootstrap_receipt_summary(current_receipt)
+    identity = bootstrap_launch_authorization_identity(current_receipt)
+    expires_at = identity["expires_at_unix_seconds"]
+    current_time = (
+        int(time.time())
+        if now_unix_seconds is None
+        else now_unix_seconds
+    )
+    if (
+        type(current_time) is not int
+        or current_time <= 0
+        or generated_at_unix >= expires_at
+        or current_time >= expires_at
+    ):
+        raise ValueError(
+            "FD 198 launch authorization expired before completion generation "
+            "or output publication"
+        )
+    return {
+        "authorizationSha256": identity["authorization_sha256"],
+        "descriptor": current_descriptor,
+        "expiresAtUnixSeconds": expires_at,
+        "generatedAtUnix": generated_at_unix,
+        "publishedAtUnix": current_time,
+        "freshAtCompletion": True,
+    }
 
 
 def normalize_command_value(value: Any, label: str) -> list[str] | None:
@@ -1766,7 +2602,8 @@ def validate_final_launcher_contract(loaded: dict[str, str]) -> dict[str, Any]:
     contract = loaded.get(FINAL_LAUNCHER_CONTRACT_ENV)
     if contract != FINAL_LAUNCHER_CONTRACT:
         raise ValueError(
-            f"{FINAL_LAUNCHER_CONTRACT_ENV} must be exactly {FINAL_LAUNCHER_CONTRACT} in final mode"
+            f"{FINAL_LAUNCHER_CONTRACT_ENV} must be exactly "
+            f"{FINAL_LAUNCHER_CONTRACT} for launcher-enforced readiness"
         )
     return {
         "name": contract,
@@ -1947,6 +2784,18 @@ def completion_proof_digest_path(path: Path, generation: str) -> Path:
     return path.with_name(f"{path.name}.sha256.{generation}")
 
 
+def completion_proof_v6_core(proof: dict[str, Any]) -> dict[str, Any]:
+    if not COMPLETION_PROOF_V6_ENVELOPE_FIELDS.issubset(proof):
+        raise ValueError(
+            "completion proof is missing persisted envelope fields"
+        )
+    return {
+        key: value
+        for key, value in proof.items()
+        if key not in COMPLETION_PROOF_V6_ENVELOPE_FIELDS
+    }
+
+
 def capture_optional_proof_state(path: Path) -> dict[str, Any]:
     try:
         data, metadata = read_regular_file_once(
@@ -1986,7 +2835,7 @@ def sha256_prefixed_base64url(value: str, label: str) -> str:
 
 
 def verify_completion_output(path: Path, expected: argparse.Namespace | None = None) -> str:
-    """Verify a runner-authenticated proof, or readiness structure when expected is absent."""
+    """Verify a trusted-host readiness completionProof/v6 artifact."""
     proof_bytes, proof_metadata = read_regular_file_once(
         path,
         "completion proof",
@@ -1999,11 +2848,43 @@ def verify_completion_output(path: Path, expected: argparse.Namespace | None = N
         raise ValueError("completion proof is not valid UTF-8 JSON") from exc
     if not isinstance(proof, dict):
         raise ValueError("completion proof must be a JSON object")
+    if proof_bytes != canonical_json(proof).encode("utf-8") + b"\n":
+        raise ValueError(
+            "completion proof must use exact canonical JSON bytes plus LF"
+        )
+    if proof.get("apiVersion") == FINAL_COMPLETION_RESULT_API_VERSION:
+        raise ValueError(
+            "releaseCompletionVerification/v1 is final-verifier output and "
+            "cannot be consumed by the trusted-host readiness runner"
+        )
 
+    if proof.get("apiVersion") != COMPLETION_PROOF_API_VERSION:
+        raise ValueError(
+            "completion output is not the current readiness envelope"
+        )
+    if "ok" in proof or "final_completion" in proof:
+        raise ValueError(
+            "completion proof contains an obsolete top-level authority field"
+        )
+    persisted_mode = proof.get("verification_mode")
+    if persisted_mode != "readiness":
+        raise ValueError(
+            "completionProof/v6 is a readiness envelope; final mode requires releaseCompletionVerification/v1"
+        )
+    if (
+        expected is not None
+        and getattr(expected, "verification_mode", None) != "readiness"
+    ):
+        raise ValueError(
+            "completionProof/v6 cannot satisfy a final-mode readiness runner"
+        )
     required_fields = {
         "apiVersion",
         "kind",
-        "ok",
+        "verificationOk",
+        "finalCompletionVerified",
+        "actionAuthorization",
+        "okForAction",
         "verification_passed",
         "verification_mode",
         "result_scope",
@@ -2011,7 +2892,6 @@ def verify_completion_output(path: Path, expected: argparse.Namespace | None = N
         "readiness_ok",
         "completion_status",
         "release_completion",
-        "final_completion",
         "hardware_proof",
         "assurance_ceiling",
         "generated_at_unix",
@@ -2023,6 +2903,7 @@ def verify_completion_output(path: Path, expected: argparse.Namespace | None = N
         "running_production_containers",
         "production_host_preflight",
         "bootstrap_launcher",
+        "nonce_rollback_assurance",
         "nitro_kms_evidence",
         "nitro_evidence_binding",
         "hardware_assurance_evidence",
@@ -2034,106 +2915,265 @@ def verify_completion_output(path: Path, expected: argparse.Namespace | None = N
         "benchmark",
         "release_security_evidence",
         "production_proxy_response_proof",
+        "production_continuity",
+        "proof_core_sha256",
+        "independently_authenticated",
+        "aggregate_authentication",
         "proof_path",
         "integrity_metadata",
     }
     if set(proof) != required_fields:
-        raise ValueError("completion proof persisted field set does not match the v5 contract")
-    persisted_mode = proof.get("verification_mode")
-    if persisted_mode not in {"readiness", "final"}:
+        raise ValueError("completion proof persisted field set does not match the v6 contract")
+    runner_mode = expected.verification_mode if expected is not None else persisted_mode
+    if runner_mode != "readiness":
         raise ValueError(
-            "completion proof verification mode must be exactly readiness or final"
+            "trusted-host completion verification mode must be exactly readiness"
         )
-    if expected is None and persisted_mode == "final":
+    if persisted_mode != runner_mode:
         raise ValueError(
-            "final completion proof verification requires caller-authenticated expected context"
+            "completion proof verification mode does not match the current runner"
         )
-    verification_mode = (
-        expected.verification_mode if expected is not None else persisted_mode
+    verification_mode = "readiness"
+    launcher_enforced = (
+        expected is not None
+        and getattr(expected, "bootstrap_receipt", None) is not None
     )
-    if verification_mode not in {"readiness", "final"}:
-        raise ValueError(
-            "expected completion verification mode must be exactly readiness or final"
+    generated_at_unix = proof.get("generated_at_unix")
+    if type(generated_at_unix) is not int or generated_at_unix <= 0:
+        raise ValueError("completion proof generated_at_unix is invalid")
+    if expected is not None:
+        runner_started_at = getattr(
+            expected,
+            "runner_started_at_unix",
+            None,
         )
-    is_final = verification_mode == "final"
+        if (
+            type(runner_started_at) is not int
+            or generated_at_unix < runner_started_at
+        ):
+            raise ValueError(
+                "completion proof predates the current readiness runner invocation"
+            )
+        if (
+            generated_at_unix
+            > int(time.time()) + COMPLETION_PROOF_FUTURE_SKEW_SECONDS
+        ):
+            raise ValueError(
+                "completion proof generated_at_unix is in the future"
+            )
+    current_freshness_verified = False
+    if launcher_enforced:
+        revalidate_bootstrap_launch_authorization_at_completion(
+            expected_receipt=expected.bootstrap_receipt,
+            expected_descriptor=expected.bootstrap_receipt_fd,
+            generated_at_unix=generated_at_unix,
+        )
+        current_freshness_verified = True
     expected_contract = {
-        "apiVersion": "serverware.completionProof/v5",
-        "kind": "ServerwareCompletionProof" if is_final else "ServerwarePreEnclaveReadiness",
-        "ok": True,
+        "apiVersion": COMPLETION_PROOF_API_VERSION,
+        "kind": "ServerwarePreEnclaveReadiness",
+        "verificationOk": True,
+        "finalCompletionVerified": False,
+        "actionAuthorization": None,
+        "okForAction": False,
         "verification_passed": True,
         "verification_mode": verification_mode,
-        "result_scope": "final-completion" if is_final else "readiness-only",
-        "readiness_only": not is_final,
+        "result_scope": "readiness-only",
+        "readiness_only": True,
         "readiness_ok": True,
-        "completion_status": "hardware-backed-release-completion" if is_final else "pre-enclave-readiness",
-        "release_completion": "pass" if is_final else "not-final",
-        "final_completion": is_final,
-        "hardware_proof": is_final,
+        "completion_status": "pre-enclave-readiness",
+        "release_completion": "not-final",
+        "hardware_proof": False,
         "proof_path": str(path),
     }
     for field, value in expected_contract.items():
         if proof.get(field) != value:
             raise ValueError(f"completion proof persisted {field} does not match the expected contract")
     bootstrap_launcher = proof.get("bootstrap_launcher")
-    if is_final:
+    if launcher_enforced:
         expected_receipt = getattr(expected, "bootstrap_receipt", None) if expected is not None else None
         if not isinstance(bootstrap_launcher, dict) or bootstrap_launcher.get("sealed") is not True:
-            raise ValueError("final completion proof is missing its sealed bootstrap launcher binding")
+            raise ValueError("launcher-enforced readiness proof is missing its sealed bootstrap launcher binding")
         validate_bootstrap_receipt_summary(bootstrap_launcher)
         if expected_receipt is not None and bootstrap_launcher != expected_receipt:
-            raise ValueError("final completion proof bootstrap launcher binding changed during execution")
+            raise ValueError("readiness proof bootstrap launcher binding changed during execution")
     elif bootstrap_launcher != {"required": False, "verified": False}:
-        raise ValueError("readiness-only proof must not claim a verified bootstrap launcher")
-    if not isinstance(proof.get("generated_at_unix"), int) or proof["generated_at_unix"] <= 0:
-        raise ValueError("completion proof generated_at_unix is invalid")
-    if expected is not None:
-        runner_started_at = getattr(expected, "runner_started_at_unix", None)
-        if not isinstance(runner_started_at, int) or proof["generated_at_unix"] < runner_started_at:
-            raise ValueError("completion proof predates the current readiness runner invocation")
-        if proof["generated_at_unix"] > int(time.time()) + COMPLETION_PROOF_FUTURE_SKEW_SECONDS:
-            raise ValueError("completion proof generated_at_unix is in the future")
+        raise ValueError("manual readiness proof must not claim a verified bootstrap launcher")
+    nonce_assurance = proof.get("nonce_rollback_assurance")
+    if not isinstance(nonce_assurance, dict):
+        raise ValueError("completion proof nonce rollback assurance binding is invalid")
+    if launcher_enforced:
+        expected_nonce = getattr(expected, "nonce_rollback_assurance", None)
+        launch_manifest = nonce_assurance.get("launchManifest")
+        if (
+            not isinstance(expected_nonce, dict)
+            or expected_nonce.get("verified") is not True
+            or any(
+                nonce_assurance.get(field) != expected_nonce.get(field)
+                for field in expected_nonce
+            )
+            or nonce_assurance.get("purpose") != "readiness-only"
+            or not isinstance(launch_manifest, dict)
+            or launch_manifest.get("apiVersion")
+            != "serverware.productionReadinessLaunch/v3"
+            or launch_manifest.get("purpose") != "readiness-only"
+            or launch_manifest.get("verified") is not True
+            or launch_manifest.get("manifestSha256")
+            != bootstrap_launcher["manifest"]["sha256"]
+            or launch_manifest.get("contractSha256")
+            != expected_nonce["contractSha256"]
+            or launch_manifest.get("verifierStateService")
+            != expected_nonce.get("verifierStateService")
+            or (
+                launch_manifest.get("pinsFile")
+                if isinstance(launch_manifest.get("pinsFile"), dict)
+                else {}
+            ).get("sha256")
+            != expected_nonce["retainedSnapshotSha256"]
+        ):
+            raise ValueError(
+                "completion proof changed its launcher-enforced nonce rollback assurance identity"
+            )
+    elif nonce_assurance != {
+        "apiVersion": NONCE_ROLLBACK_ASSURANCE_BINDING_API_VERSION,
+        "enforcement": "not-native-launcher-enforced",
+        "verified": False,
+        "launchManifest": {
+            "apiVersion": "serverware.productionReadinessLaunch/v3",
+            "purpose": "readiness-only",
+            "verified": False,
+        },
+        "purpose": "readiness-only",
+    }:
+        raise ValueError(
+            "manual readiness proof must not claim launcher-enforced nonce rollback assurance"
+        )
+    preflight_nonce = (
+        proof.get("production_host_preflight", {}).get(
+            "nonce_rollback_assurance"
+        )
+        if isinstance(proof.get("production_host_preflight"), dict)
+        else None
+    )
+    expected_preflight_nonce = {
+        key: value
+        for key, value in nonce_assurance.items()
+        if key not in {"launchManifest", "purpose"}
+    }
+    preflight_summary = proof.get("production_host_preflight")
+    expected_preflight_boundary = {
+        "apiVersion": "serverware.productionHostReadinessBoundary/v1",
+        "verificationMode": "readiness",
+        "launchManifestApiVersion": "serverware.productionReadinessLaunch/v3",
+        "launchAuthorizationRequestApiVersion": (
+            "serverware.launchAuthorizationRequest/v2"
+        ),
+        "launchAuthorizationApiVersion": "serverware.launchAuthorization/v2",
+        "bootstrapReceiptApiVersion": "serverware.bootstrapReceipt/v3",
+        "authorizationScope": "trusted-host-readiness",
+        "freshnessAuthority": "trusted-host-wall-clock",
+        "launcherEvidenceVerified": launcher_enforced,
+        "currentFreshnessVerifiedUsingTrustedHostWallClock": (
+            current_freshness_verified
+        ),
+        "secureTimeProven": False,
+        "finalNitroExecutionProven": False,
+        "actionAuthority": False,
+        "hostBootstrapEvidenceClassification": (
+            "non-authoritative-readiness-context-only"
+        ),
+        "finalAuthority": (
+            "independent-manifest-v6-public-nitro-verifier-and-protected-state"
+        ),
+    }
+    if (
+        not isinstance(preflight_summary, dict)
+        or preflight_summary.get("verification_mode") != "readiness"
+        or preflight_summary.get("readiness_only") is not True
+        or preflight_summary.get("final_nitro_execution_proven") is not False
+        or preflight_summary.get("ok_for_action") is not False
+        or preflight_summary.get("authority_boundary")
+        != expected_preflight_boundary
+    ):
+        raise ValueError(
+            "completion proof production host preflight crossed its "
+            "readiness-only authority boundary"
+        )
+    if preflight_nonce != expected_preflight_nonce:
+        raise ValueError(
+            "completion proof nonce rollback assurance differs from production preflight"
+        )
     assurance = proof.get("assurance_ceiling")
-    if not isinstance(assurance, dict) or assurance.get("final_completion") is not is_final:
+    if (
+        not isinstance(assurance, dict)
+        or assurance.get("final_completion") is not False
+        or assurance.get("hardware_proof") is not False
+        or assurance.get("level") != "pre-enclave-readiness"
+    ):
         raise ValueError("completion proof assurance ceiling is inconsistent")
+    proof_core_sha256 = proof.get("proof_core_sha256")
+    if SHA256_RE.fullmatch(str(proof_core_sha256)) is None:
+        raise ValueError("completion proof core digest is invalid")
+    expected_proof_core_sha256 = sha256_prefixed_bytes(
+        canonical_json(completion_proof_v6_core(proof)).encode("utf-8")
+    )
+    if not hmac.compare_digest(
+        proof_core_sha256,
+        expected_proof_core_sha256,
+    ):
+        raise ValueError(
+            "completion proof core digest does not match its canonical "
+            "nested readiness core"
+        )
     challenge = proof.get("final_challenge_consumption")
     if not isinstance(challenge, dict):
         raise ValueError("completion proof final challenge contract is invalid")
-    if is_final and (challenge.get("consumed") is not True or challenge.get("completion_identity") is None):
-        raise ValueError("final completion proof did not persist consumed off-host challenge evidence")
-    if is_final:
-        completion_identity = challenge["completion_identity"]
-        expected_launch_identity = bootstrap_launch_authorization_identity(
-            bootstrap_launcher
+    aggregate = proof.get("aggregate_authentication")
+    if challenge != {"required": False, "consumed": False}:
+        raise ValueError(
+            "readiness proof persisted an invalid final challenge contract"
         )
-        if (
-            not isinstance(completion_identity, dict)
-            or completion_identity.get("launch_authorization")
-            != expected_launch_identity
-        ):
-            raise ValueError(
-                "final completion identity does not match the sealed launch authorization"
-            )
-    if not is_final and challenge != {"required": False, "consumed": False}:
-        raise ValueError("readiness proof persisted an invalid final challenge contract")
+    if (
+        proof.get("independently_authenticated") is not False
+        or aggregate
+        != {
+            "required": False,
+            "independently_authenticated": False,
+            "scope": "readiness-only",
+        }
+    ):
+        raise ValueError(
+            "readiness proof must not claim independent final authentication"
+        )
 
     integrity = proof.get("integrity_metadata")
-    if not isinstance(integrity, dict) or set(integrity) != {
+    readiness_integrity_fields = {
         "generation",
         "detached_sha256_path",
         "scope",
         "independently_authenticated",
         "authenticity_requires_external_signature_or_checkpoint",
-    }:
+    }
+    if (
+        not isinstance(integrity, dict)
+        or set(integrity) != readiness_integrity_fields
+    ):
         raise ValueError("completion proof detached integrity metadata is invalid")
     generation = integrity.get("generation")
-    if not isinstance(generation, str):
+    if not isinstance(generation, str) or re.fullmatch(
+        r"[0-9a-f]{32}", generation
+    ) is None:
         raise ValueError("completion proof checksum generation is invalid")
     digest_path = completion_proof_digest_path(path, generation)
+    if integrity.get("detached_sha256_path") != str(digest_path):
+        raise ValueError("completion proof detached integrity metadata is invalid")
     if (
-        integrity.get("detached_sha256_path") != str(digest_path)
-        or integrity.get("scope") != "checksum-only"
+        integrity.get("scope") != "checksum-only"
         or integrity.get("independently_authenticated") is not False
-        or integrity.get("authenticity_requires_external_signature_or_checkpoint") is not True
+        or integrity.get(
+            "authenticity_requires_external_signature_or_checkpoint"
+        )
+        is not True
     ):
         raise ValueError("completion proof detached integrity metadata is invalid")
     digest_bytes, digest_metadata = read_regular_file_once(
@@ -2319,6 +3359,7 @@ def verify_completion_output(path: Path, expected: argparse.Namespace | None = N
                 "terminal_runtime_proof_bound",
                 "strict_collector_capture_bound",
                 "signed_policy_route_bound",
+                "compiled_route_authority_verified",
                 "release_artifacts_bound",
             )
             if expected_proof_contract == OBSERVATION_PROXY_PROOF_CONTRACT
@@ -2329,6 +3370,7 @@ def verify_completion_output(path: Path, expected: argparse.Namespace | None = N
                 "fresh_client_nonce_bound",
                 "authenticated_external_client_capture_bound",
                 "release_authority_bound",
+                "compiled_route_authority_verified",
                 "embedded_control_plane_authorization_receipt_bound",
                 "signed_policy_route_bound",
                 "signed_policy_response_headers_bound",
@@ -2339,6 +3381,27 @@ def verify_completion_output(path: Path, expected: argparse.Namespace | None = N
         for field in required_proxy_bindings:
             if proxy.get(field) is not True:
                 raise ValueError(f"completion proof proxy contract omitted {field}")
+        control_plane_receipt = proxy.get(
+            "control_plane_authorization_receipt"
+        )
+        if (
+            expected_proof_contract
+            in {
+                BUFFERED_PROXY_PROOF_CONTRACT,
+                OBSERVATION_PROXY_PROOF_CONTRACT,
+            }
+            and (
+                not isinstance(control_plane_receipt, dict)
+                or control_plane_receipt.get(
+                    "custody_authorization_envelope_verified"
+                )
+                is not True
+            )
+        ):
+            raise ValueError(
+                "completion proof control-plane receipt omitted internally "
+                "verified custody authorization"
+            )
         if binding.get("verification_mode") != verification_mode:
             raise ValueError("completion proof production env binding mode mismatch")
         if binding.get("expected_server_instance_id") != expected.proxy_server_instance_id:
@@ -2347,9 +3410,6 @@ def verify_completion_output(path: Path, expected: argparse.Namespace | None = N
             raise ValueError("completion proof production env binding principal mismatch")
         if binding.get("production_readiness_env_sha256") != expected.production_readiness_env_sha256:
             raise ValueError("completion proof production env digest mismatch")
-        if is_final and binding.get("final_trust_roots_env_bound") is not True:
-            raise ValueError("final completion proof did not bind final trust roots")
-
         expected_artifact_paths = {
             "production_readiness": expected.readiness_out,
             "production_readiness_config": expected.config_out,
@@ -2390,18 +3450,9 @@ def verify_completion_output(path: Path, expected: argparse.Namespace | None = N
             expected_artifact_paths["proxy_observation_body"] = (
                 expected.proxy_observation_body
             )
-        if expected.hardware_assurance:
-            expected_artifact_paths["hardware_assurance"] = expected.hardware_assurance
-            expected_artifact_paths["hardware_assurance_trusted_public_key"] = (
-                expected.hardware_assurance_trusted_public_key
-            )
-        if is_final:
+        if launcher_enforced:
             expected_artifact_paths["production_host_preflight_signing_public_key"] = (
                 expected.production_host_preflight_signing_public_key
-            )
-            expected_artifact_paths["final_challenge_receipt"] = expected.final_challenge_receipt
-            expected_artifact_paths["final_challenge_authority_public_key"] = (
-                expected.final_challenge_authority_public_key
             )
         for label, expected_path in expected_artifact_paths.items():
             artifact = artifacts.get(label)
@@ -2441,156 +3492,6 @@ def verify_completion_output(path: Path, expected: argparse.Namespace | None = N
                 "production_readiness_env_sha256"
             ) != expected.production_readiness_env_sha256:
                 raise ValueError(f"completion proof {field} is not bound to the hashed production env")
-        if is_final:
-            hardware = proof["hardware_assurance_evidence"]
-            if hardware.get("verified") is not True or assurance.get("hardware_evidence_verified") is not True:
-                raise ValueError("final completion proof hardware assurance contract is incomplete")
-            completion_identity = challenge.get("completion_identity")
-            completion_identity_fields = {
-                "apiVersion",
-                "release_identity_sha256",
-                "current_host_identity_sha256",
-                "launch_authorization",
-                "hardware_verifier_key_id",
-                "hardware_assurance_document_sha256",
-                "hardware_assurance_signed_statement_sha256",
-                "challenge_nonce_sha256",
-                "proxy_server_statement_sha256",
-                "security_role_map_sha256",
-            }
-            if not isinstance(completion_identity, dict) or set(completion_identity) != completion_identity_fields:
-                raise ValueError("final completion identity does not match its schema")
-            if completion_identity.get("apiVersion") != "serverware.finalCompletionIdentity/v1":
-                raise ValueError("final completion identity apiVersion is invalid")
-            for field in completion_identity_fields - {
-                "apiVersion",
-                "launch_authorization",
-            }:
-                if SHA256_RE.fullmatch(str(completion_identity.get(field))) is None:
-                    raise ValueError(f"final completion identity {field} is invalid")
-            security_role_map = proof["release_provenance"].get(
-                "security_role_map"
-            )
-            if (
-                not isinstance(security_role_map, dict)
-                or set(security_role_map)
-                != {"apiVersion", "verified", "roles", "sha256"}
-                or security_role_map.get("apiVersion")
-                != "serverware.securityRoleMap/v1"
-                or security_role_map.get("verified") is not True
-            ):
-                raise ValueError("final completion security role map is invalid")
-            security_roles = security_role_map.get("roles")
-            if (
-                not isinstance(security_roles, dict)
-                or set(security_roles) != set(FINAL_SECURITY_ROLE_NAMES)
-                or any(
-                    SHA256_RE.fullmatch(str(key_id)) is None
-                    for key_id in security_roles.values()
-                )
-                or len(set(security_roles.values())) != len(security_roles)
-            ):
-                raise ValueError(
-                    "final completion security role map is not closed and pairwise distinct"
-                )
-            canonical_role_digest = "sha256:" + hashlib.sha256(
-                canonical_json(
-                    {
-                        "apiVersion": "serverware.securityRoleMap/v1",
-                        "roles": {
-                            role: security_roles[role]
-                            for role in sorted(security_roles)
-                        },
-                    }
-                ).encode("utf-8")
-            ).hexdigest()
-            if (
-                security_role_map.get("sha256") != canonical_role_digest
-                or completion_identity.get("security_role_map_sha256")
-                != canonical_role_digest
-            ):
-                raise ValueError(
-                    "final completion identity does not bind the canonical security role map"
-                )
-            if not isinstance(binding.get("executing_interpreter"), dict) or binding[
-                "executing_interpreter"
-            ].get("matches_pinned_path_inode") is not True:
-                raise ValueError("final completion proof omitted executing-interpreter identity")
-            if not isinstance(binding.get("executing_script"), dict) or binding[
-                "executing_script"
-            ].get("matches_pinned_path_inode") is not True:
-                raise ValueError("final completion proof omitted executing verifier-script identity")
-            expected_script_digests = {
-                setting: digest
-                for setting, digest in getattr(expected, "script_digest_pins", {}).values()
-            }
-            if (
-                set(expected_script_digests) != set(PINNED_PYTHON_SCRIPTS.values())
-                or binding.get("current_python_script_digests") != expected_script_digests
-            ):
-                raise ValueError("final completion proof did not bind every pinned Python script digest")
-            preflight_scripts = (
-                proof["production_host_preflight"]
-                .get("runtime_trust_materials", {})
-                .get("python_script_digests")
-            )
-            if preflight_scripts != expected_script_digests:
-                raise ValueError("final completion proof host preflight script digest binding mismatch")
-            preflight_executing_script = proof["production_host_preflight"].get(
-                "executing_script"
-            )
-            if (
-                not isinstance(preflight_executing_script, dict)
-                or preflight_executing_script.get("sha256")
-                != expected_script_digests[PRODUCTION_HOST_PREFLIGHT_SCRIPT_SHA256_ENV]
-                or preflight_executing_script.get("matches_pinned_path_inode") is not True
-            ):
-                raise ValueError(
-                    "final completion proof omitted the descriptor-bound host preflight script identity"
-                )
-            preflight_authenticity = proof["production_host_preflight"].get("authenticity")
-            if (
-                not isinstance(preflight_authenticity, dict)
-                or preflight_authenticity.get("verified") is not True
-                or preflight_authenticity.get("key_id")
-                != expected.production_host_preflight_signing_key_id
-                or preflight_authenticity.get("max_age_seconds")
-                != expected.production_host_preflight_max_age_seconds
-            ):
-                raise ValueError("final completion proof omitted authenticated fresh host preflight evidence")
-            completion_policy_roots = proof["release_security_evidence"].get(
-                "trust_roots"
-            )
-            preflight_policy_roots = (
-                proof["production_host_preflight"]
-                .get("release_security_evidence", {})
-                .get("trust_roots")
-            )
-            if (
-                not isinstance(completion_policy_roots, dict)
-                or set(completion_policy_roots)
-                != {"policy_identity", "policy_activation", "reproducible_build"}
-                or completion_policy_roots != preflight_policy_roots
-            ):
-                raise ValueError(
-                    "final completion proof policy-role trust roots differ from authenticated preflight"
-                )
-            for role, expected_id in (
-                ("policy_identity", expected.policy_trusted_public_key_id),
-                (
-                    "policy_activation",
-                    expected.policy_activation_trusted_public_key_id,
-                ),
-                (
-                    "reproducible_build",
-                    expected.reproducible_build_trusted_public_key_id,
-                ),
-            ):
-                if completion_policy_roots[role].get("spki_sha256") != expected_id:
-                    raise ValueError(
-                        f"final completion proof {role} trust-root identity mismatch"
-                    )
-
         launcher_binding = binding.get("launcher_trust")
         expected_launcher_binding = getattr(expected, "launcher_env_binding", None)
         if expected_launcher_binding is not None and launcher_binding != expected_launcher_binding:
@@ -2601,7 +3502,7 @@ def verify_completion_output(path: Path, expected: argparse.Namespace | None = N
             raise ValueError("completion proof p99 policy mismatch")
         if binding.get("docker_executable") != expected.docker_executable:
             raise ValueError("completion proof Docker executable mismatch")
-        if is_final:
+        if launcher_enforced:
             for field, attribute in (
                 ("docker_compose_plugin_executable", "docker_compose_plugin_executable"),
                 ("docker_compose_plugin_sha256", "docker_compose_plugin_sha256"),
@@ -2845,41 +3746,6 @@ def verify_completion_output(path: Path, expected: argparse.Namespace | None = N
                 raise ValueError(
                     "completion proof does not bind the exact collected observation body"
                 )
-        collector_contract = getattr(expected, "collector_proof_contract", None)
-        if is_final:
-            if not isinstance(collector_contract, dict):
-                raise ValueError("runner did not retain the current collector proof contract")
-            for field in (
-                "proof_contract",
-                "server_statement_sha256",
-                "captured_at_unix",
-                "issued_at_unix",
-                "client_nonce_sha256",
-                "tls_channel_binding_sha256",
-            ):
-                if proxy.get(field) != collector_contract.get(field):
-                    raise ValueError(f"completion proof {field} differs from the current collector proof")
-            if expected_proof_contract == STREAMING_PROXY_PROOF_CONTRACT:
-                for field in (
-                    "streamed_body_artifact_sha256",
-                    "emitted_body_digest",
-                    "emitted_body_bytes",
-                ):
-                    if proxy.get(field) != collector_contract.get(field):
-                        raise ValueError(
-                            f"completion proof {field} differs from the current collector proof"
-                        )
-            elif expected_proof_contract == OBSERVATION_PROXY_PROOF_CONTRACT:
-                for field in (
-                    "observed_body_artifact_sha256",
-                    "observed_body_artifact_bytes",
-                    "emitted_body_digest",
-                    "emitted_body_bytes",
-                ):
-                    if proxy.get(field) != collector_contract.get(field):
-                        raise ValueError(
-                            f"completion proof {field} differs from the current collector proof"
-                        )
         maximum_age = expected.proxy_proof_max_age_seconds
         now = int(time.time())
         for timestamp_field in ("captured_at_unix", "issued_at_unix"):
@@ -2888,6 +3754,12 @@ def verify_completion_output(path: Path, expected: argparse.Namespace | None = N
                 raise ValueError(f"completion proof proxy {timestamp_field} is invalid")
             if now - timestamp > maximum_age or timestamp < expected.runner_started_at_unix - maximum_age:
                 raise ValueError(f"completion proof proxy {timestamp_field} is stale")
+    if launcher_enforced:
+        revalidate_bootstrap_launch_authorization_at_completion(
+            expected_receipt=expected.bootstrap_receipt,
+            expected_descriptor=expected.bootstrap_receipt_fd,
+            generated_at_unix=generated_at_unix,
+        )
     return actual_digest
 
 
@@ -3090,7 +3962,7 @@ def completion_command(args: argparse.Namespace) -> dict[str, Any]:
             args.python,
             "scripts/verify_release_completion.py",
             "--verification-mode",
-            args.verification_mode,
+            "readiness",
             "--production-readiness",
             str(Path(args.readiness_out)),
             "--production-readiness-config",
@@ -3225,39 +4097,21 @@ def completion_command(args: argparse.Namespace) -> dict[str, Any]:
                 str(args.proxy_max_observation_body_bytes),
             ]
         )
-    if args.verification_mode == "final":
+    if (
+        getattr(args, "launcher_enforced", False)
+        and isinstance(getattr(args, "nonce_rollback_assurance", None), dict)
+        and args.nonce_rollback_assurance.get("verified") is True
+    ):
         command["argv"].extend(
             [
-                "--hardware-assurance",
-                args.hardware_assurance,
-                "--hardware-assurance-trusted-public-key",
-                args.hardware_assurance_trusted_public_key,
-                "--hardware-assurance-trusted-public-key-id",
-                args.hardware_assurance_trusted_public_key_id,
-                "--final-challenge-receipt",
-                args.final_challenge_receipt,
-                "--final-challenge-authority-public-key",
-                args.final_challenge_authority_public_key,
-                "--final-challenge-authority-public-key-id",
-                args.final_challenge_authority_public_key_id,
-                "--final-challenge-authority-provider",
-                args.final_challenge_authority_provider,
+                "--launcher-nonce-rollback-assurance-pins",
+                args.launcher_nonce_rollback_assurance_pins,
+                "--launcher-nonce-rollback-assurance-pins-sha256",
+                args.launcher_nonce_rollback_assurance_pins_sha256,
+                "--launcher-nonce-rollback-assurance-contract-sha256",
+                args.launcher_nonce_rollback_assurance_contract_sha256,
             ]
         )
-        if args.hardware_assurance_expected_challenge_nonce:
-            command["argv"].extend(
-                [
-                    "--hardware-assurance-expected-challenge-nonce",
-                    args.hardware_assurance_expected_challenge_nonce,
-                ]
-            )
-        else:
-            command["argv"].extend(
-                [
-                    "--hardware-assurance-expected-challenge-nonce-sha256",
-                    args.hardware_assurance_expected_challenge_nonce_sha256,
-                ]
-            )
     return command
 
 
@@ -3417,7 +4271,7 @@ def run_commands(
 def write_private_json(path: Path, value: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    payload = (json.dumps(value, indent=2, sort_keys=True, ensure_ascii=True) + "\n").encode("utf-8")
+    payload = canonical_json(value).encode("utf-8") + b"\n"
     try:
         descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(descriptor, "wb") as handle:
@@ -3577,7 +4431,7 @@ def run_collector(command: dict[str, Any], args: argparse.Namespace, env: dict[s
         command["argv"],
         getattr(args, "pre_use_executable_pins", None),
         script_digest_pins=getattr(args, "script_digest_pins", None),
-        isolated_python=getattr(args, "verification_mode", None) == "final",
+        isolated_python=False,
         cwd=ROOT,
         env=env,
         stdout=subprocess.PIPE,
@@ -3707,68 +4561,6 @@ def run_collector(command: dict[str, Any], args: argparse.Namespace, env: dict[s
             args.collected_proxy_observation_body_sha256 = actual_body_digest
             args.collected_proxy_observation_body_bytes = actual_body_bytes
     summary["proof_contract"] = proof_contract
-    if getattr(args, "verification_mode", None) == "final":
-        try:
-            if proof_contract == OBSERVATION_PROXY_PROOF_CONTRACT:
-                proof_document = observation_artifact["document"]
-                server_statement = observation_artifact["statement"]
-                captured_at_unix = proof_document["captured_at_unix"]
-                tls_channel_binding = observation_artifact["tls_exporter"]
-                nonce = observation_artifact["nonce"]
-                tls_channel_binding_sha256 = "sha256:" + hashlib.sha256(
-                    tls_channel_binding.encode("utf-8")
-                ).hexdigest()
-            else:
-                proof_document = json.loads(proof_bytes.decode("utf-8"))
-                external_capture = proof_document["external_capture"]
-                statement_field = (
-                    "streaming_response_statement"
-                    if proof_contract == STREAMING_PROXY_PROOF_CONTRACT
-                    else "server_statement"
-                )
-                server_statement = proof_document[statement_field]
-                captured_at_unix = external_capture["captured_at_unix"]
-                tls_channel_binding = external_capture["tls_channel_binding"]
-                nonce = external_capture["client_nonce"]
-                tls_channel_binding_sha256 = "sha256:" + hashlib.sha256(
-                    canonical_json(tls_channel_binding).encode("utf-8")
-                ).hexdigest()
-            args.collector_proof_contract = {
-                "proof_contract": proof_contract,
-                "server_statement_sha256": "sha256:"
-                + hashlib.sha256(canonical_json(server_statement).encode("utf-8")).hexdigest(),
-                "captured_at_unix": captured_at_unix,
-                "issued_at_unix": server_statement["issued_at_unix"],
-                "client_nonce_sha256": sha256_prefixed_base64url(nonce, "collector proof client nonce"),
-                "tls_channel_binding_sha256": tls_channel_binding_sha256,
-            }
-            if proof_contract == STREAMING_PROXY_PROOF_CONTRACT:
-                args.collector_proof_contract.update(
-                    {
-                        "streamed_body_artifact_sha256": args.collected_proxy_stream_body_sha256,
-                        "emitted_body_digest": args.collected_proxy_stream_body_sha256,
-                        "emitted_body_bytes": args.collected_proxy_stream_body_bytes,
-                    }
-                )
-            elif proof_contract == OBSERVATION_PROXY_PROOF_CONTRACT:
-                args.collector_proof_contract.update(
-                    {
-                        "observed_body_artifact_sha256": (
-                            args.collected_proxy_observation_body_sha256
-                        ),
-                        "observed_body_artifact_bytes": (
-                            args.collected_proxy_observation_body_bytes
-                        ),
-                        "emitted_body_digest": (
-                            args.collected_proxy_observation_body_sha256
-                        ),
-                        "emitted_body_bytes": (
-                            args.collected_proxy_observation_body_bytes
-                        ),
-                    }
-                )
-        except (KeyError, TypeError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise ValueError("production proxy response proof does not contain the final collector contract") from exc
     args.collector_summary = summary
     write_private_json(Path(args.proxy_proof_summary_out), summary)
     return summary
@@ -3790,6 +4582,18 @@ def main() -> None:
     parser.add_argument(
         "--launcher-trusted-production-env-sha256",
         default=os.getenv(LAUNCHER_TRUSTED_ENV_SHA256_INPUT),
+    )
+    parser.add_argument(
+        "--launcher-nonce-rollback-assurance-pins",
+        default=None,
+    )
+    parser.add_argument(
+        "--launcher-nonce-rollback-assurance-pins-sha256",
+        default=None,
+    )
+    parser.add_argument(
+        "--launcher-nonce-rollback-assurance-contract-sha256",
+        default=None,
     )
     parser.add_argument("--expected-control-plane-uid", type=int, default=65532)
     parser.add_argument("--expected-control-plane-gid", type=int, default=65532)
@@ -3815,15 +4619,6 @@ def main() -> None:
     parser.add_argument("--external-checkpoint-provider", default=None)
     parser.add_argument("--external-checkpoint-trusted-public-key", default=None)
     parser.add_argument("--verification-mode", choices=("readiness", "final"), default="readiness")
-    parser.add_argument("--hardware-assurance", default=None)
-    parser.add_argument("--hardware-assurance-trusted-public-key", default=None)
-    parser.add_argument("--hardware-assurance-trusted-public-key-id", default=None)
-    parser.add_argument("--hardware-assurance-expected-challenge-nonce", default=None)
-    parser.add_argument("--hardware-assurance-expected-challenge-nonce-sha256", default=None)
-    parser.add_argument("--final-challenge-receipt", default=None)
-    parser.add_argument("--final-challenge-authority-public-key", default=None)
-    parser.add_argument("--final-challenge-authority-public-key-id", default=None)
-    parser.add_argument("--final-challenge-authority-provider", default=None)
     parser.add_argument("--bench", default=".tmp/decision-gate-rs-bench.json")
     parser.add_argument("--policy-bundle", required=True)
     parser.add_argument("--policy-trusted-public-key", required=True)
@@ -3882,10 +4677,13 @@ def main() -> None:
         help="extra argument to pass through to generate_production_readiness_claims.py; repeat as needed",
     )
     args = parser.parse_args()
+    if args.verification_mode == "final":
+        parser.error(
+            "this runner is trusted-host readiness only; final verification requires "
+            "scripts/verify_release_completion.py --verification-mode final with the "
+            "complete public Nitro/Manifest-v6 evidence and protected-state arguments"
+        )
     args.runner_started_at_unix = int(time.time())
-    if args.verification_mode == "final" and not args.dry_run and not sys.platform.startswith("linux"):
-        print("production readiness env error: final descriptor execution requires Linux", file=sys.stderr)
-        raise SystemExit(1)
 
     env_file = Path(args.env_file)
     try:
@@ -3894,7 +4692,16 @@ def main() -> None:
             "production readiness env",
             max_bytes=MAX_PRODUCTION_ENV_BYTES,
         )
-        if args.verification_mode == "final":
+        launcher_trust_inputs = (
+            args.launcher_trusted_production_env_path,
+            args.launcher_trusted_production_env_sha256,
+        )
+        if any(value is not None for value in launcher_trust_inputs):
+            if not all(value is not None for value in launcher_trust_inputs):
+                raise ValueError(
+                    "launcher-enforced readiness requires both the trusted "
+                    "production env path and digest"
+                )
             args.launcher_env_binding = validate_launcher_trusted_env(
                 env_file,
                 production_env_bytes,
@@ -3908,6 +4715,7 @@ def main() -> None:
             args.launcher_trusted_production_env_sha256 = (
                 "sha256:" + hashlib.sha256(production_env_bytes).hexdigest()
             )
+        args.launcher_enforced = args.launcher_env_binding is not None
         loaded = load_env_bytes(production_env_bytes, env_file)
         if LAUNCHER_TRUST_INPUT_NAMES & set(loaded):
             raise ValueError("out-of-band launcher trust inputs must not be defined inside the production env")
@@ -3916,16 +4724,11 @@ def main() -> None:
         raise SystemExit(1) from exc
 
     env_verification_mode = loaded.get("SERVERWARE_COMPLETION_VERIFICATION_MODE")
-    if env_verification_mode and env_verification_mode not in {"readiness", "final"}:
+    if env_verification_mode and env_verification_mode != "readiness":
         print(
-            "production readiness env error: SERVERWARE_COMPLETION_VERIFICATION_MODE must be readiness or final",
-            file=sys.stderr,
-        )
-        raise SystemExit(1)
-    if args.verification_mode == "final" and env_verification_mode is None:
-        print(
-            "production readiness env error: final verification mode must be pinned as "
-            "SERVERWARE_COMPLETION_VERIFICATION_MODE=final in the production readiness env file",
+            "production readiness env error: SERVERWARE_COMPLETION_VERIFICATION_MODE "
+            "must be readiness; final verification belongs to the independent "
+            "Manifest-v6 public Nitro verifier",
             file=sys.stderr,
         )
         raise SystemExit(1)
@@ -3936,7 +4739,7 @@ def main() -> None:
             file=sys.stderr,
         )
         raise SystemExit(1)
-    if args.verification_mode == "final":
+    if args.launcher_enforced:
         try:
             args.launcher_env_binding["startup_environment_contract"] = (
                 validate_final_launcher_contract(loaded)
@@ -3950,6 +4753,24 @@ def main() -> None:
                     args.bootstrap_receipt_fd,
                 ) = load_sealed_bootstrap_receipt(required=True)
                 args.launcher_env_binding["bootstrap_receipt"] = args.bootstrap_receipt
+            args.nonce_rollback_assurance = (
+                validate_retained_nonce_rollback_assurance(
+                    retained_path=(
+                        args.launcher_nonce_rollback_assurance_pins
+                    ),
+                    expected_pins_sha256=(
+                        args.launcher_nonce_rollback_assurance_pins_sha256
+                    ),
+                    expected_contract_sha256=(
+                        args.launcher_nonce_rollback_assurance_contract_sha256
+                    ),
+                    bootstrap_receipt=args.bootstrap_receipt,
+                    required=not args.dry_run,
+                )
+            )
+            args.launcher_env_binding["nonce_rollback_assurance"] = (
+                args.nonce_rollback_assurance
+            )
         except ValueError as exc:
             print(f"production readiness env error: {exc}", file=sys.stderr)
             raise SystemExit(1) from exc
@@ -3958,25 +4779,45 @@ def main() -> None:
             or args.expected_control_plane_gid != FINAL_CONTROL_PLANE_GID
         ):
             print(
-                "production readiness env error: final control-plane UID/GID are fixed at "
+                "production readiness env error: launcher-enforced control-plane UID/GID are fixed at "
                 f"{FINAL_CONTROL_PLANE_UID}:{FINAL_CONTROL_PLANE_GID}",
                 file=sys.stderr,
             )
             raise SystemExit(1)
+    else:
+        try:
+            args.nonce_rollback_assurance = (
+                validate_retained_nonce_rollback_assurance(
+                    retained_path=(
+                        args.launcher_nonce_rollback_assurance_pins
+                    ),
+                    expected_pins_sha256=(
+                        args.launcher_nonce_rollback_assurance_pins_sha256
+                    ),
+                    expected_contract_sha256=(
+                        args.launcher_nonce_rollback_assurance_contract_sha256
+                    ),
+                    bootstrap_receipt=None,
+                    required=False,
+                )
+            )
+        except ValueError as exc:
+            print(f"production readiness env error: {exc}", file=sys.stderr)
+            raise SystemExit(1) from exc
 
     supplied_python = args.python
     env_python = loaded.get(PRODUCTION_PYTHON_EXECUTABLE_ENV)
-    if args.verification_mode == "final":
+    if args.launcher_enforced:
         if not env_python:
             print(
-                f"production readiness env error: {PRODUCTION_PYTHON_EXECUTABLE_ENV} must be pinned in final mode",
+                f"production readiness env error: {PRODUCTION_PYTHON_EXECUTABLE_ENV} must be pinned for launcher-enforced readiness",
                 file=sys.stderr,
             )
             raise SystemExit(1)
         if supplied_python is not None and supplied_python != env_python:
             print(
                 f"production readiness env error: --python must match {PRODUCTION_PYTHON_EXECUTABLE_ENV} "
-                "in final verification mode",
+                "for launcher-enforced readiness",
                 file=sys.stderr,
             )
             raise SystemExit(1)
@@ -3989,17 +4830,17 @@ def main() -> None:
 
     supplied_docker = args.docker_executable
     env_docker = loaded.get(PRODUCTION_DOCKER_EXECUTABLE_ENV)
-    if args.verification_mode == "final":
+    if args.launcher_enforced:
         if not env_docker:
             print(
-                f"production readiness env error: {PRODUCTION_DOCKER_EXECUTABLE_ENV} must be pinned in final mode",
+                f"production readiness env error: {PRODUCTION_DOCKER_EXECUTABLE_ENV} must be pinned for launcher-enforced readiness",
                 file=sys.stderr,
             )
             raise SystemExit(1)
         if supplied_docker is not None and supplied_docker != env_docker:
             print(
                 f"production readiness env error: --docker-executable must match {PRODUCTION_DOCKER_EXECUTABLE_ENV} "
-                "in final verification mode",
+                "for launcher-enforced readiness",
                 file=sys.stderr,
             )
             raise SystemExit(1)
@@ -4010,7 +4851,7 @@ def main() -> None:
         print("production readiness env error: Docker executable must be absolute", file=sys.stderr)
         raise SystemExit(1)
 
-    if args.verification_mode == "final":
+    if args.launcher_enforced:
         try:
             docker_toolchain = validate_docker_toolchain_settings(loaded)
         except ValueError as exc:
@@ -4026,7 +4867,7 @@ def main() -> None:
             if supplied is not None and supplied != expected_value:
                 print(
                     f"production readiness env error: --{attribute.replace('_', '-')} must match {setting} "
-                    "in final verification mode",
+                    "for launcher-enforced readiness",
                     file=sys.stderr,
                 )
                 raise SystemExit(1)
@@ -4039,7 +4880,7 @@ def main() -> None:
         ]
         if args.docker_unix_socket != "/run/docker.sock":
             print(
-                f"production readiness env error: {DOCKER_UNIX_SOCKET_ENV} must be exactly /run/docker.sock in final mode",
+                f"production readiness env error: {DOCKER_UNIX_SOCKET_ENV} must be exactly /run/docker.sock for launcher-enforced readiness",
                 file=sys.stderr,
             )
             raise SystemExit(1)
@@ -4061,9 +4902,9 @@ def main() -> None:
         )
 
     env_p99_limit = loaded.get(COMPLETION_P99_LIMIT_ENV)
-    if args.verification_mode == "final" and env_p99_limit is None:
+    if args.launcher_enforced and env_p99_limit is None:
         print(
-            f"production readiness env error: {COMPLETION_P99_LIMIT_ENV} must be pinned in final mode",
+            f"production readiness env error: {COMPLETION_P99_LIMIT_ENV} must be pinned for launcher-enforced readiness",
             file=sys.stderr,
         )
         raise SystemExit(1)
@@ -4073,25 +4914,25 @@ def main() -> None:
         print(f"production readiness env error: {COMPLETION_P99_LIMIT_ENV} must be numeric", file=sys.stderr)
         raise SystemExit(1) from exc
     if (
-        args.verification_mode == "final"
+        args.launcher_enforced
         and args.p99_limit_ms is not None
         and args.p99_limit_ms != parsed_env_p99_limit
     ):
         print(
-            f"production readiness env error: --p99-limit-ms must match {COMPLETION_P99_LIMIT_ENV} in final mode",
+            f"production readiness env error: --p99-limit-ms must match {COMPLETION_P99_LIMIT_ENV} for launcher-enforced readiness",
             file=sys.stderr,
         )
         raise SystemExit(1)
     args.p99_limit_ms = (
         parsed_env_p99_limit
-        if args.verification_mode == "final" or args.p99_limit_ms is None
+        if args.launcher_enforced or args.p99_limit_ms is None
         else args.p99_limit_ms
     )
     if not math.isfinite(args.p99_limit_ms) or args.p99_limit_ms <= 0:
         print("production readiness env error: completion p99 limit must be finite and positive", file=sys.stderr)
         raise SystemExit(1)
 
-    if args.verification_mode == "final":
+    if args.launcher_enforced:
         for attribute, setting in (
             (
                 "production_host_preflight_signing_public_key",
@@ -4105,12 +4946,15 @@ def main() -> None:
             supplied = getattr(args, attribute)
             pinned = loaded.get(setting)
             if not pinned:
-                print(f"production readiness env error: {setting} must be pinned in final mode", file=sys.stderr)
+                print(
+                    f"production readiness env error: {setting} must be pinned for launcher-enforced readiness",
+                    file=sys.stderr,
+                )
                 raise SystemExit(1)
             if supplied is not None and supplied != pinned:
                 print(
                     f"production readiness env error: --{attribute.replace('_', '-')} must match {setting} "
-                    "in final verification mode",
+                    "for launcher-enforced readiness",
                     file=sys.stderr,
                 )
                 raise SystemExit(1)
@@ -4139,7 +4983,7 @@ def main() -> None:
         ):
             print(
                 "production readiness env error: --production-host-preflight-max-age-seconds must match "
-                f"{PRODUCTION_HOST_PREFLIGHT_MAX_AGE_ENV} in final verification mode",
+                f"{PRODUCTION_HOST_PREFLIGHT_MAX_AGE_ENV} for launcher-enforced readiness",
                 file=sys.stderr,
             )
             raise SystemExit(1)
@@ -4160,7 +5004,7 @@ def main() -> None:
             args.production_host_preflight_max_age_seconds or 300
         )
 
-    if args.verification_mode == "final":
+    if args.launcher_enforced:
         try:
             env = build_final_child_environment(
                 loaded,
@@ -4192,11 +5036,11 @@ def main() -> None:
     for attribute, env_name in trust_settings.items():
         argument_value = getattr(args, attribute)
         env_value = loaded.get(env_name)
-        if args.verification_mode == "final":
+        if args.launcher_enforced:
             if argument_value and env_value and argument_value != env_value:
                 print(
                     f"production readiness env error: --{attribute.replace('_', '-')} must match {env_name} "
-                    "in final verification mode",
+                    "for launcher-enforced readiness",
                     file=sys.stderr,
                 )
                 raise SystemExit(1)
@@ -4204,7 +5048,7 @@ def main() -> None:
         else:
             value = argument_value or env_value
         if not value:
-            if args.verification_mode == "final":
+            if args.launcher_enforced:
                 missing_trust.append(f"{env_name} (must be pinned in the production readiness env file)")
             else:
                 missing_trust.append(f"--{attribute.replace('_', '-')} or {env_name}")
@@ -4221,7 +5065,7 @@ def main() -> None:
             file=sys.stderr,
         )
         raise SystemExit(1)
-    if args.verification_mode == "final":
+    if args.launcher_enforced:
         for attribute, env_name in (
             ("policy_trusted_public_key_id", POLICY_TRUST_ROOT_ID_ENV),
             (
@@ -4238,7 +5082,7 @@ def main() -> None:
             if selected is not None and selected != pinned:
                 print(
                     f"production readiness env error: --{attribute.replace('_', '-')} must match "
-                    f"{env_name} in final verification mode",
+                    f"{env_name} for launcher-enforced readiness",
                     file=sys.stderr,
                 )
                 raise SystemExit(1)
@@ -4276,154 +5120,28 @@ def main() -> None:
             file=sys.stderr,
         )
         raise SystemExit(1)
-    final_challenge_settings = {
-        "final_challenge_receipt": "SERVERWARE_FINAL_CHALLENGE_RECEIPT",
-        "final_challenge_authority_public_key": "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY",
-        "final_challenge_authority_public_key_id": "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY_ID",
-        "final_challenge_authority_provider": "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PROVIDER",
-    }
-    hardware_assurance_settings = {
-        "hardware_assurance": "SERVERWARE_HARDWARE_ASSURANCE",
-        "hardware_assurance_trusted_public_key": "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY",
-        "hardware_assurance_trusted_public_key_id": "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY_ID",
-        "hardware_assurance_expected_challenge_nonce": "SERVERWARE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE",
-        "hardware_assurance_expected_challenge_nonce_sha256": (
-            "SERVERWARE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE_SHA256"
-        ),
-    }
-    for env_name in final_challenge_settings.values():
+    legacy_final_env_names = (
+        "SERVERWARE_FINAL_CHALLENGE_RECEIPT",
+        "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY",
+        "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY_ID",
+        "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PROVIDER",
+        "SERVERWARE_HARDWARE_ASSURANCE",
+        "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY",
+        "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY_ID",
+        "SERVERWARE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE",
+        "SERVERWARE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE_SHA256",
+    )
+    for env_name in legacy_final_env_names:
         env.pop(env_name, None)
-    for env_name in hardware_assurance_settings.values():
-        env.pop(env_name, None)
-    resolved_final_challenge = {
-        attribute: loaded.get(env_name) for attribute, env_name in final_challenge_settings.items()
-    }
-    resolved_hardware_assurance = {
-        attribute: loaded.get(env_name) for attribute, env_name in hardware_assurance_settings.items()
-    }
-    supplied_final_challenge = {
-        attribute: getattr(args, attribute) for attribute in final_challenge_settings
-    }
-    supplied_hardware_assurance = {
-        attribute: getattr(args, attribute) for attribute in hardware_assurance_settings
-    }
-    if args.verification_mode == "readiness" and (
-        any(resolved_final_challenge.values())
-        or any(resolved_hardware_assurance.values())
-        or any(supplied_final_challenge.values())
-        or any(supplied_hardware_assurance.values())
-    ):
+    if any(loaded.get(env_name) for env_name in legacy_final_env_names):
         print(
-            "production readiness env error: final hardware and challenge-authority inputs are only valid with "
-            "--verification-mode final",
+            "production readiness env error: final hardware and challenge-authority "
+            "inputs are not accepted by the readiness runner; use "
+            "scripts/verify_release_completion.py --verification-mode final",
             file=sys.stderr,
         )
         raise SystemExit(1)
-    if args.verification_mode == "final":
-        missing_final_challenge = []
-        for attribute, env_name in final_challenge_settings.items():
-            value = resolved_final_challenge[attribute]
-            argument_value = supplied_final_challenge[attribute]
-            if argument_value and value and argument_value != value:
-                print(
-                    f"production readiness env error: --{attribute.replace('_', '-')} must match {env_name} "
-                    "in final verification mode",
-                    file=sys.stderr,
-                )
-                raise SystemExit(1)
-            if not value:
-                missing_final_challenge.append(
-                    f"{env_name} (must be pinned in the production readiness env file)"
-                )
-                continue
-            if PLACEHOLDER_RE.search(value) or EXAMPLE_DOMAIN_RE.search(value):
-                print(f"production readiness env error: {env_name} contains a placeholder value", file=sys.stderr)
-                raise SystemExit(1)
-            setattr(args, attribute, value)
-            env[env_name] = value
-        if missing_final_challenge:
-            print(
-                "production readiness env error: final verification mode requires off-host challenge authority "
-                "inputs: " + ", ".join(missing_final_challenge),
-                file=sys.stderr,
-            )
-            raise SystemExit(1)
-        if len(args.final_challenge_authority_provider) > 256:
-            print(
-                "production readiness env error: final challenge authority provider must not exceed 256 characters",
-                file=sys.stderr,
-            )
-            raise SystemExit(1)
-        missing_hardware_assurance = []
-        for attribute, env_name in hardware_assurance_settings.items():
-            value = resolved_hardware_assurance[attribute]
-            argument_value = supplied_hardware_assurance[attribute]
-            if argument_value and value and argument_value != value:
-                print(
-                    f"production readiness env error: --{attribute.replace('_', '-')} must match {env_name} "
-                    "in final verification mode",
-                    file=sys.stderr,
-                )
-                raise SystemExit(1)
-            if value:
-                if PLACEHOLDER_RE.search(value) or EXAMPLE_DOMAIN_RE.search(value):
-                    print(f"production readiness env error: {env_name} contains a placeholder value", file=sys.stderr)
-                    raise SystemExit(1)
-                setattr(args, attribute, value)
-                env[env_name] = value
-            elif attribute in {
-                "hardware_assurance",
-                "hardware_assurance_trusted_public_key",
-                "hardware_assurance_trusted_public_key_id",
-            }:
-                missing_hardware_assurance.append(
-                    f"{env_name} (must be pinned in the production readiness env file)"
-                )
-        if missing_hardware_assurance:
-            print(
-                "production readiness env error: final verification mode requires hardware assurance inputs: "
-                + ", ".join(missing_hardware_assurance),
-                file=sys.stderr,
-            )
-            raise SystemExit(1)
-        expected_challenges = sum(
-            bool(resolved_hardware_assurance[name])
-            for name in (
-                "hardware_assurance_expected_challenge_nonce",
-                "hardware_assurance_expected_challenge_nonce_sha256",
-            )
-        )
-        if expected_challenges != 1:
-            print(
-                "production readiness env error: final verification mode requires exactly one hardware assurance "
-                "expected challenge nonce or digest",
-                file=sys.stderr,
-            )
-            raise SystemExit(1)
-        hardware_key_id = args.hardware_assurance_trusted_public_key_id
-        authority_key_id = args.final_challenge_authority_public_key_id
-        if SHA256_RE.fullmatch(hardware_key_id) is None:
-            print(
-                "production readiness env error: hardware assurance trusted public key ID must be "
-                "sha256:<64 lowercase hex>",
-                file=sys.stderr,
-            )
-            raise SystemExit(1)
-        if SHA256_RE.fullmatch(authority_key_id) is None:
-            print(
-                "production readiness env error: final challenge authority public key ID must be "
-                "sha256:<64 lowercase hex>",
-                file=sys.stderr,
-            )
-            raise SystemExit(1)
-        if hardware_key_id == authority_key_id:
-            print(
-                "production readiness env error: hardware assurance verifier and final challenge authority "
-                "must use different public keys",
-                file=sys.stderr,
-            )
-            raise SystemExit(1)
-    env["SERVERWARE_COMPLETION_VERIFICATION_MODE"] = args.verification_mode
+    env["SERVERWARE_COMPLETION_VERIFICATION_MODE"] = "readiness"
     if not args.config_only:
         missing = []
         env_proof_contract = loaded.get(PROXY_PROOF_CONTRACT_ENV)
@@ -4474,20 +5192,20 @@ def main() -> None:
                 PROXY_EXPECTED_OPERATION_CONTEXT_DIGEST_ENV
             )
             if (
-                args.verification_mode == "final"
+                args.launcher_enforced
                 and args.proxy_operation_context_digest is not None
                 and args.proxy_operation_context_digest
                 != env_operation_context_digest
             ):
                 print(
                     "production readiness env error: --proxy-operation-context-digest must match "
-                    f"{PROXY_EXPECTED_OPERATION_CONTEXT_DIGEST_ENV} in final verification mode",
+                    f"{PROXY_EXPECTED_OPERATION_CONTEXT_DIGEST_ENV} for launcher-enforced readiness",
                     file=sys.stderr,
                 )
                 raise SystemExit(1)
             operation_context_digest = (
                 env_operation_context_digest
-                if args.verification_mode == "final"
+                if args.launcher_enforced
                 else args.proxy_operation_context_digest
                 or env_operation_context_digest
             )
@@ -4495,7 +5213,7 @@ def main() -> None:
                 missing.append(
                     f"{PROXY_EXPECTED_OPERATION_CONTEXT_DIGEST_ENV} "
                     "(must be pinned in the production readiness env file)"
-                    if args.verification_mode == "final"
+                    if args.launcher_enforced
                     else "--proxy-operation-context-digest or "
                     f"{PROXY_EXPECTED_OPERATION_CONTEXT_DIGEST_ENV}"
                 )
@@ -4511,25 +5229,25 @@ def main() -> None:
 
             env_stream_body = loaded.get(PROXY_STREAM_BODY_FILE_ENV)
             if (
-                args.verification_mode == "final"
+                args.launcher_enforced
                 and args.proxy_stream_body is not None
                 and args.proxy_stream_body != env_stream_body
             ):
                 print(
                     f"production readiness env error: --proxy-stream-body must match {PROXY_STREAM_BODY_FILE_ENV} "
-                    "in final verification mode",
+                    "for launcher-enforced readiness",
                     file=sys.stderr,
                 )
                 raise SystemExit(1)
             stream_body = (
                 env_stream_body
-                if args.verification_mode == "final"
+                if args.launcher_enforced
                 else args.proxy_stream_body or env_stream_body
             )
             if not stream_body:
                 missing.append(
                     f"{PROXY_STREAM_BODY_FILE_ENV} (must be pinned in the production readiness env file)"
-                    if args.verification_mode == "final"
+                    if args.launcher_enforced
                     else f"--proxy-stream-body or {PROXY_STREAM_BODY_FILE_ENV}"
                 )
             elif not Path(stream_body).is_absolute():
@@ -4553,19 +5271,19 @@ def main() -> None:
                     )
                     raise SystemExit(1) from exc
             if (
-                args.verification_mode == "final"
+                args.launcher_enforced
                 and args.proxy_max_stream_bytes is not None
                 and args.proxy_max_stream_bytes != parsed_env_max_stream_bytes
             ):
                 print(
                     f"production readiness env error: --proxy-max-stream-bytes must match "
-                    f"{PROXY_PROOF_MAX_STREAM_BYTES_ENV} in final verification mode",
+                    f"{PROXY_PROOF_MAX_STREAM_BYTES_ENV} for launcher-enforced readiness",
                     file=sys.stderr,
                 )
                 raise SystemExit(1)
             max_stream_bytes = (
                 parsed_env_max_stream_bytes
-                if args.verification_mode == "final"
+                if args.launcher_enforced
                 else args.proxy_max_stream_bytes
                 if args.proxy_max_stream_bytes is not None
                 else parsed_env_max_stream_bytes
@@ -4573,7 +5291,7 @@ def main() -> None:
             if max_stream_bytes is None:
                 missing.append(
                     f"{PROXY_PROOF_MAX_STREAM_BYTES_ENV} (must be pinned in the production readiness env file)"
-                    if args.verification_mode == "final"
+                    if args.launcher_enforced
                     else f"--proxy-max-stream-bytes or {PROXY_PROOF_MAX_STREAM_BYTES_ENV}"
                 )
             elif not 1 <= max_stream_bytes <= MAX_PROXY_STREAM_BODY_BYTES:
@@ -4606,25 +5324,25 @@ def main() -> None:
 
             env_observation_body = loaded.get(PROXY_OBSERVATION_BODY_FILE_ENV)
             if (
-                args.verification_mode == "final"
+                args.launcher_enforced
                 and args.proxy_observation_body is not None
                 and args.proxy_observation_body != env_observation_body
             ):
                 print(
                     "production readiness env error: --proxy-observation-body must match "
-                    f"{PROXY_OBSERVATION_BODY_FILE_ENV} in final verification mode",
+                    f"{PROXY_OBSERVATION_BODY_FILE_ENV} for launcher-enforced readiness",
                     file=sys.stderr,
                 )
                 raise SystemExit(1)
             observation_body = (
                 env_observation_body
-                if args.verification_mode == "final"
+                if args.launcher_enforced
                 else args.proxy_observation_body or env_observation_body
             )
             if not observation_body:
                 missing.append(
                     f"{PROXY_OBSERVATION_BODY_FILE_ENV} (must be pinned in the production readiness env file)"
-                    if args.verification_mode == "final"
+                    if args.launcher_enforced
                     else f"--proxy-observation-body or {PROXY_OBSERVATION_BODY_FILE_ENV}"
                 )
             elif not Path(observation_body).is_absolute():
@@ -4651,20 +5369,20 @@ def main() -> None:
                     )
                     raise SystemExit(1) from exc
             if (
-                args.verification_mode == "final"
+                args.launcher_enforced
                 and args.proxy_max_observation_body_bytes is not None
                 and args.proxy_max_observation_body_bytes
                 != parsed_env_max_observation_bytes
             ):
                 print(
                     "production readiness env error: --proxy-max-observation-body-bytes must match "
-                    f"{PROXY_PROOF_MAX_OBSERVATION_BODY_BYTES_ENV} in final verification mode",
+                    f"{PROXY_PROOF_MAX_OBSERVATION_BODY_BYTES_ENV} for launcher-enforced readiness",
                     file=sys.stderr,
                 )
                 raise SystemExit(1)
             max_observation_bytes = (
                 parsed_env_max_observation_bytes
-                if args.verification_mode == "final"
+                if args.launcher_enforced
                 else args.proxy_max_observation_body_bytes
                 if args.proxy_max_observation_body_bytes is not None
                 else parsed_env_max_observation_bytes
@@ -4673,7 +5391,7 @@ def main() -> None:
                 missing.append(
                     f"{PROXY_PROOF_MAX_OBSERVATION_BODY_BYTES_ENV} "
                     "(must be pinned in the production readiness env file)"
-                    if args.verification_mode == "final"
+                    if args.launcher_enforced
                     else "--proxy-max-observation-body-bytes or "
                     f"{PROXY_PROOF_MAX_OBSERVATION_BODY_BYTES_ENV}"
                 )
@@ -4721,18 +5439,18 @@ def main() -> None:
         for attribute, env_name in proof_settings.items():
             argument_value = getattr(args, attribute)
             env_value = loaded.get(env_name)
-            if args.verification_mode == "final" and argument_value is not None and argument_value != env_value:
+            if args.launcher_enforced and argument_value is not None and argument_value != env_value:
                 print(
                     f"production readiness env error: --{attribute.replace('_', '-')} must match {env_name} "
-                    "in final verification mode",
+                    "for launcher-enforced readiness",
                     file=sys.stderr,
                 )
                 raise SystemExit(1)
-            value = env_value if args.verification_mode == "final" else argument_value or env_value
+            value = env_value if args.launcher_enforced else argument_value or env_value
             if not value:
                 missing.append(
                     f"{env_name} (must be pinned in the production readiness env file)"
-                    if args.verification_mode == "final"
+                    if args.launcher_enforced
                     else f"--{attribute.replace('_', '-')} or {env_name}"
                 )
             else:
@@ -4781,25 +5499,25 @@ def main() -> None:
             raise SystemExit(1)
         env_server_instance = explicit_server_instance or data_plane_instance
         if (
-            args.verification_mode == "final"
+            args.launcher_enforced
             and args.proxy_server_instance_id is not None
             and args.proxy_server_instance_id != env_server_instance
         ):
             print(
                 "production readiness env error: --proxy-server-instance-id must match the production env "
-                "server instance in final verification mode",
+                "server instance for launcher-enforced readiness",
                 file=sys.stderr,
             )
             raise SystemExit(1)
         args.proxy_server_instance_id = (
             env_server_instance
-            if args.verification_mode == "final"
+            if args.launcher_enforced
             else args.proxy_server_instance_id or env_server_instance
         )
         if not args.proxy_server_instance_id:
             missing.append(
                 "SERVERWARE_PROXY_SERVER_INSTANCE_ID or SERVERWARE_DATA_PLANE_INSTANCE_ID"
-                if args.verification_mode == "final"
+                if args.launcher_enforced
                 else "--proxy-server-instance-id or SERVERWARE_PROXY_SERVER_INSTANCE_ID or "
                 "SERVERWARE_DATA_PLANE_INSTANCE_ID"
             )
@@ -4809,38 +5527,38 @@ def main() -> None:
         ):
             argument_value = getattr(args, attribute)
             env_value = loaded.get(env_name)
-            if args.verification_mode == "final" and argument_value is not None and argument_value != env_value:
+            if args.launcher_enforced and argument_value is not None and argument_value != env_value:
                 print(
                     f"production readiness env error: --{attribute.replace('_', '-')} must match {env_name} "
-                    "in final verification mode",
+                    "for launcher-enforced readiness",
                     file=sys.stderr,
                 )
                 raise SystemExit(1)
             setattr(
                 args,
                 attribute,
-                env_value if args.verification_mode == "final" else argument_value or env_value,
+                env_value if args.launcher_enforced else argument_value or env_value,
             )
         if not args.proxy_agent_id:
             missing.append(
                 "SERVERWARE_PROXY_PROOF_AGENT_ID (must be pinned in the production readiness env file)"
-                if args.verification_mode == "final"
+                if args.launcher_enforced
                 else "--proxy-agent-id or SERVERWARE_PROXY_PROOF_AGENT_ID"
             )
         if not args.proxy_principal_id:
             missing.append(
                 "SERVERWARE_PROXY_PROOF_PRINCIPAL_ID (must be pinned in the production readiness env file)"
-                if args.verification_mode == "final"
+                if args.launcher_enforced
                 else "--proxy-principal-id or SERVERWARE_PROXY_PROOF_PRINCIPAL_ID"
             )
         for attribute, env_name in PROXY_DIGEST_ENV_SETTINGS.items():
             argument_value = getattr(args, attribute)
             env_value = loaded.get(env_name)
-            if args.verification_mode == "final":
+            if args.launcher_enforced:
                 if argument_value and env_value and argument_value != env_value:
                     print(
                         f"production readiness env error: --{attribute.replace('_', '-')} must match {env_name} "
-                        "in final verification mode",
+                        "for launcher-enforced readiness",
                         file=sys.stderr,
                     )
                     raise SystemExit(1)
@@ -4862,7 +5580,7 @@ def main() -> None:
                 raise SystemExit(1)
             setattr(args, attribute, value)
         env_max_age = loaded.get("SERVERWARE_PROXY_PROOF_MAX_AGE_SECONDS")
-        if args.verification_mode == "final" and env_max_age is None:
+        if args.launcher_enforced and env_max_age is None:
             missing.append(
                 "SERVERWARE_PROXY_PROOF_MAX_AGE_SECONDS (must be pinned in the production readiness env file)"
             )
@@ -4878,19 +5596,19 @@ def main() -> None:
                 )
                 raise SystemExit(1) from exc
             if (
-                args.verification_mode == "final"
+                args.launcher_enforced
                 and args.proxy_proof_max_age_seconds is not None
                 and args.proxy_proof_max_age_seconds != parsed_env_max_age
             ):
                 print(
                     "production readiness env error: --proxy-proof-max-age-seconds must match "
-                    "SERVERWARE_PROXY_PROOF_MAX_AGE_SECONDS in final verification mode",
+                    "SERVERWARE_PROXY_PROOF_MAX_AGE_SECONDS for launcher-enforced readiness",
                     file=sys.stderr,
                 )
                 raise SystemExit(1)
             max_age = (
                 parsed_env_max_age
-                if args.verification_mode == "final" or args.proxy_proof_max_age_seconds is None
+                if args.launcher_enforced or args.proxy_proof_max_age_seconds is None
                 else args.proxy_proof_max_age_seconds
             )
         if max_age is not None and not 1 <= max_age <= 900:
@@ -4907,7 +5625,7 @@ def main() -> None:
                 file=sys.stderr,
             )
             raise SystemExit(1)
-        if args.verification_mode == "final":
+        if args.launcher_enforced:
             try:
                 collector_words = shlex.split(args.proxy_proof_collector_command)
             except ValueError as exc:
@@ -4916,7 +5634,7 @@ def main() -> None:
             if len(collector_words) != 1 or not Path(collector_words[0]).is_absolute():
                 print(
                     "production readiness env error: SERVERWARE_PROXY_PROOF_COLLECTOR_COMMAND must be one "
-                    "absolute executable in final mode",
+                    "absolute executable for launcher-enforced readiness",
                     file=sys.stderr,
                 )
                 raise SystemExit(1)
@@ -4935,7 +5653,7 @@ def main() -> None:
             raise SystemExit(1) from exc
         args.proxy_client_nonce = generated_client_nonce(args.proxy_proof_contract)
         args.proxy_tls_channel_binding = "$COLLECTOR_SUMMARY.tls_channel_binding"
-    if args.verification_mode == "final":
+    if args.launcher_enforced:
         try:
             executable_manifest = parse_executable_digest_manifest(
                 loaded,
@@ -5006,10 +5724,30 @@ def main() -> None:
     if images_env.exists():
         env["SERVERWARE_PRODUCTION_IMAGES_ENV_SHA256"] = sha256_prefixed_file(images_env)
     commands = command_plan(args)
-    bootstrap_pass_fds = (
-        (args.bootstrap_receipt_fd,)
-        if getattr(args, "bootstrap_receipt_fd", None) is not None
-        else ()
+    bootstrap_pass_fds = tuple(
+        sorted(
+            {
+                descriptor
+                for descriptor in (
+                    getattr(args, "bootstrap_receipt_fd", None),
+                    (
+                        args.nonce_rollback_assurance.get(
+                            "retainedSnapshotFd"
+                        )
+                        if isinstance(
+                            getattr(
+                                args,
+                                "nonce_rollback_assurance",
+                                None,
+                            ),
+                            dict,
+                        )
+                        else None
+                    ),
+                )
+                if type(descriptor) is int and descriptor > 2
+            }
+        )
     )
     if args.dry_run:
         print(
@@ -5029,7 +5767,7 @@ def main() -> None:
             env,
             executable_pins=getattr(args, "pre_use_executable_pins", None),
             script_digest_pins=getattr(args, "script_digest_pins", None),
-            isolated_python=args.verification_mode == "final",
+            isolated_python=args.launcher_enforced,
             pass_fds=bootstrap_pass_fds,
         )
         return
@@ -5038,7 +5776,7 @@ def main() -> None:
         env,
         executable_pins=getattr(args, "pre_use_executable_pins", None),
         script_digest_pins=getattr(args, "script_digest_pins", None),
-        isolated_python=args.verification_mode == "final",
+        isolated_python=args.launcher_enforced,
         pass_fds=bootstrap_pass_fds,
     )
     run_collector(commands[-2], args, env)
@@ -5048,7 +5786,7 @@ def main() -> None:
         env,
         executable_pins=getattr(args, "pre_use_executable_pins", None),
         script_digest_pins=getattr(args, "script_digest_pins", None),
-        isolated_python=args.verification_mode == "final",
+        isolated_python=args.launcher_enforced,
         pass_fds=bootstrap_pass_fds,
     )
     try:

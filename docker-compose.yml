@@ -1,5 +1,6 @@
 services:
   serverware:
+    platform: linux/amd64
     build:
       context: .
     command: ["python", "-m", "serverware.control_plane_runner"]
@@ -101,7 +102,7 @@ services:
       SERVERWARE_RELEASE_CHANNEL: dev
       SERVERWARE_KEY_RELEASE_MIN_ROLLBACK_EPOCH: "1"
       SERVERWARE_KEY_RELEASE_REQUIRE_DATA_PLANE_DIGEST: "1"
-      SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST: ${SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST:-sha256:c35935b538692817edb33362dffc1bff22580edc6546079af6801b08f58bab83}
+      SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST: ${SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST:-}
       SERVERWARE_RESPONSE_SIGNING_KEY: /run/serverware/response-signing-private/response-signing-ed25519.pem
       SERVERWARE_RESPONSE_SIGNING_PUBLIC_KEY: /custody-trust/control-plane-response-signing.pub.pem
       SERVERWARE_RESPONSE_SIGNING_PUBLIC_KEY_ID_PATH: /custody-trust/control-plane-response-signing.key-id
@@ -125,12 +126,13 @@ services:
       grant-store:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:3000/healthz"]
+      test: ["CMD", "python", "-c", "import urllib.request; opener=urllib.request.build_opener(urllib.request.ProxyHandler({})); response=opener.open('http://localhost:3000/healthz', timeout=2); response.read(65537); raise SystemExit(0 if response.status == 200 else 1)"]
       interval: 5s
       timeout: 3s
       retries: 20
 
   audit-anchor:
+    platform: linux/amd64
     build: .
     init: true
     read_only: true
@@ -161,13 +163,14 @@ services:
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=32m
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:9100/healthz"]
+      test: ["CMD", "python", "-c", "import urllib.request; opener=urllib.request.build_opener(urllib.request.ProxyHandler({})); response=opener.open('http://localhost:9100/healthz', timeout=2); response.read(65537); raise SystemExit(0 if response.status == 200 else 1)"]
       interval: 5s
       timeout: 3s
       retries: 20
 
   grant-store:
-    image: postgres:16-alpine
+    platform: linux/amd64
+    image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
     init: true
     user: postgres
     read_only: true
@@ -201,6 +204,7 @@ services:
       retries: 20
 
   demo-upstream:
+    platform: linux/amd64
     build: .
     init: true
     read_only: true
@@ -225,6 +229,7 @@ services:
 
   custody-runtime:
     profiles: ["custody"]
+    platform: linux/amd64
     image: ${SERVERWARE_DECISION_GATE_DEV_IMAGE:-serverware-decision-gate:dev}
     pull_policy: never
     init: true
@@ -260,6 +265,7 @@ services:
         condition: service_healthy
 
   decision-gate-rs:
+    platform: linux/amd64
     image: ${SERVERWARE_DECISION_GATE_DEV_IMAGE:-serverware-decision-gate:dev}
     build:
       context: .

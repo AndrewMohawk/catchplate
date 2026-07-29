@@ -569,8 +569,22 @@ mod tests {
         .expect("dispatch response body");
         let response_nonce = general_purpose::URL_SAFE_NO_PAD.encode([13u8; 32]);
         let response_signing_key_id = control_plane_response_signing_key_id();
+        let control_plane_response_headers = json!([
+            {
+                "name":"content-type",
+                "value_b64":general_purpose::URL_SAFE_NO_PAD
+                    .encode(b"application/json"),
+            },
+        ]);
+        let control_plane_response_headers_sha256 = format!(
+            "sha256:{}",
+            hex::encode(Sha256::digest(
+                canonical_json_bytes(&control_plane_response_headers)
+                    .expect("control-plane response headers")
+            ))
+        );
         let signed_response_statement = canonical_json_bytes(&json!({
-            "version":"serverware.responseSignature/v2",
+            "version":"serverware.responseSignature/v3",
             "issued_at_ms":dispatch_started_at_epoch_ms,
             "request":{
                 "method":"POST",
@@ -582,6 +596,8 @@ mod tests {
                 "sha256:{}",
                 hex::encode(Sha256::digest(&dispatch_response_body))
             ),
+            "response_headers_sha256":control_plane_response_headers_sha256,
+            "response_header_count":1,
             "nonce":response_nonce,
             "response_signing_key_id":response_signing_key_id,
             "context":{
@@ -669,6 +685,7 @@ mod tests {
                     "status":200,
                     "body_b64":general_purpose::URL_SAFE_NO_PAD.encode(&dispatch_response_body),
                     "body_sha256":dispatch_response_body_digest,
+                    "response_headers":control_plane_response_headers,
                     "response_signing_key_id":response_signing_key_id,
                     "statement_b64":general_purpose::URL_SAFE_NO_PAD.encode(&signed_response_statement),
                     "statement_sha256":format!(

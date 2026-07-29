@@ -1,0 +1,5839 @@
+{
+  "$id": "https://serverware.invalid/schemas/attestation-verifier-state-service.v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Serverware attestation verifier-state service v3",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/serviceConfiguration"
+    },
+    {
+      "$ref": "#/$defs/readRequest"
+    },
+    {
+      "$ref": "#/$defs/readResponse"
+    },
+    {
+      "$ref": "#/$defs/issueChallengeRequest"
+    },
+    {
+      "$ref": "#/$defs/issueChallengeResponse"
+    },
+    {
+      "$ref": "#/$defs/recoverChallengeRequest"
+    },
+    {
+      "$ref": "#/$defs/recoverChallengeResponse"
+    },
+    {
+      "$ref": "#/$defs/prepareRequest"
+    },
+    {
+      "$ref": "#/$defs/prepareResponse"
+    },
+    {
+      "$ref": "#/$defs/recoveryLookupRequest"
+    },
+    {
+      "$ref": "#/$defs/recoveryLookupResponse"
+    },
+    {
+      "$ref": "#/$defs/markConsumptionRequest"
+    },
+    {
+      "$ref": "#/$defs/markConsumptionResponse"
+    },
+    {
+      "$ref": "#/$defs/attachNonceStatusRequest"
+    },
+    {
+      "$ref": "#/$defs/attachNonceStatusResponse"
+    },
+    {
+      "$ref": "#/$defs/abortRequest"
+    },
+    {
+      "$ref": "#/$defs/abortResponse"
+    },
+    {
+      "$ref": "#/$defs/signedAuthorization"
+    },
+    {
+      "$ref": "#/$defs/commitRequest"
+    },
+    {
+      "$ref": "#/$defs/signedCommitReceipt"
+    },
+    {
+      "$ref": "#/$defs/recoveryRequest"
+    },
+    {
+      "$ref": "#/$defs/recoveryResponse"
+    },
+    {
+      "$ref": "#/$defs/storeCommitProof"
+    },
+    {
+      "$ref": "#/$defs/signedStoreCommitProof"
+    },
+    {
+      "$ref": "#/$defs/errorResponse"
+    },
+    {
+      "$ref": "#/$defs/externalStoreRequestV3"
+    },
+    {
+      "$ref": "#/$defs/externalStoreResponseV3"
+    },
+    {
+      "$ref": "#/$defs/remoteSignRequest"
+    },
+    {
+      "$ref": "#/$defs/remoteSignResponse"
+    }
+  ],
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "operationId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$"
+    },
+    "base64url32": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$"
+    },
+    "base64url44": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{58}[AEIMQUYcgkosw048]$"
+    },
+    "base64url64": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{85}[AQgw]$"
+    },
+    "absolutePath": {
+      "type": "string",
+      "pattern": "^/(?!.*//)(?!.*(?:^|/)\\.{1,2}(?:/|$))[A-Za-z0-9_+@=-]+(?:/[A-Za-z0-9._+@=-]+)*$",
+      "maxLength": 4096
+    },
+    "positiveInteger": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 18446744073709551615
+    },
+    "unsignedInteger": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 18446744073709551615
+    },
+    "signedEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "payload",
+        "payloadSha256",
+        "signatureAlgorithm",
+        "signatureBase64url",
+        "signingKeyId",
+        "signingKeySpkiSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "type": "string",
+          "pattern": "^serverware\\.[A-Za-z0-9]+/v[0-9]+$"
+        },
+        "payload": {"type": "object"},
+        "payloadSha256": {"$ref": "#/$defs/digest"},
+        "signatureAlgorithm": {"const": "Ed25519"},
+        "signatureBase64url": {"$ref": "#/$defs/base64url64"},
+        "signingKeyId": {"$ref": "#/$defs/digest"},
+        "signingKeySpkiSha256": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "storeCommitProof": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "authorizationSha256",
+        "casCommitted",
+        "commitCandidateSha256",
+        "commitClockMonotonic",
+        "commitRequestSha256",
+        "committedAtUnix",
+        "operationIdBase64url",
+        "previousCommittedAtUnix",
+        "previousVerifierStateSha256",
+        "productionEligible",
+        "stateStoreAdministrativeDomainSha256",
+        "stateStoreAssuranceEvidenceSha256",
+        "stateStoreAttestationKeySpkiSha256",
+        "stateStoreCommitIndex",
+        "stateStoreConfigurationSha256",
+        "stateStoreGeneration",
+        "stateStoreIdentitySha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.verifierStateStoreCommitProof/v3"
+        },
+        "authorizationSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "casCommitted": {
+          "const": true
+        },
+        "commitCandidateSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "commitClockMonotonic": {
+          "const": true
+        },
+        "commitRequestSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "committedAtUnix": {
+          "$ref": "#/$defs/positiveInteger"
+        },
+        "operationIdBase64url": {
+          "$ref": "#/$defs/operationId"
+        },
+        "previousCommittedAtUnix": {
+          "$ref": "#/$defs/positiveInteger"
+        },
+        "previousVerifierStateSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "productionEligible": {
+          "const": true
+        },
+        "stateStoreAdministrativeDomainSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "stateStoreAssuranceEvidenceSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "stateStoreAttestationKeySpkiSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "stateStoreCommitIndex": {
+          "$ref": "#/$defs/positiveInteger"
+        },
+        "stateStoreConfigurationSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "stateStoreGeneration": {
+          "$ref": "#/$defs/positiveInteger"
+        },
+        "stateStoreIdentitySha256": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "signedStoreCommitProof": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "payload",
+        "payloadSha256",
+        "signatureAlgorithm",
+        "signatureBase64url",
+        "signingKeyId",
+        "signingKeySpkiSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.signedVerifierStateStoreCommitProof/v3"
+        },
+        "payload": {
+          "$ref": "#/$defs/storeCommitProof"
+        },
+        "payloadSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "signatureAlgorithm": {
+          "const": "Ed25519"
+        },
+        "signatureBase64url": {
+          "$ref": "#/$defs/base64url64"
+        },
+        "signingKeyId": {
+          "$ref": "#/$defs/digest"
+        },
+        "signingKeySpkiSha256": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "commitCandidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "assuranceSha256",
+        "authorizationSha256",
+        "commitRequestSha256",
+        "expectedVerifierStateSha256",
+        "nonceAuthorityStateSha256",
+        "nonceConsumptionReceiptSha256",
+        "nonceConsumptionSha256",
+        "operationIdBase64url",
+        "previousCommittedAtUnix",
+        "previousStateStoreGeneration",
+        "previousStateStoreHeadSha256",
+        "proposedStateStoreGeneration",
+        "proposedStateStoreHeadSha256",
+        "verifierChallengeSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.verifierStateStoreCommitCandidate/v2"
+        },
+        "assuranceSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "authorizationSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "commitRequestSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "expectedVerifierStateSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "nonceAuthorityStateSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "nonceConsumptionReceiptSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "nonceConsumptionSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "operationIdBase64url": {
+          "$ref": "#/$defs/operationId"
+        },
+        "previousCommittedAtUnix": {
+          "$ref": "#/$defs/positiveInteger"
+        },
+        "previousStateStoreGeneration": {
+          "$ref": "#/$defs/positiveInteger"
+        },
+        "previousStateStoreHeadSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "proposedStateStoreGeneration": {
+          "$ref": "#/$defs/positiveInteger"
+        },
+        "proposedStateStoreHeadSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "verifierChallengeSha256": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "errorResponse": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "error",
+            "message",
+            "nonActionable"
+          ],
+          "properties": {
+            "error": {
+              "enum": [
+                "conflict",
+                "httpRejected",
+                "internalFailure",
+                "invalidRequest"
+              ]
+            },
+            "message": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024
+            },
+            "nonActionable": {
+              "const": true
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "commitRequestSha256",
+            "error",
+            "message",
+            "nonActionable",
+            "operationIdBase64url",
+            "recoveryRequired",
+            "replacementForbidden",
+            "sameOperationOnly"
+          ],
+          "properties": {
+            "commitRequestSha256": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/digest"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "error": {
+              "const": "unknownOutcome"
+            },
+            "message": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024
+            },
+            "nonActionable": {
+              "const": true
+            },
+            "operationIdBase64url": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/operationId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "recoveryRequired": {
+              "const": true
+            },
+            "replacementForbidden": {
+              "const": true
+            },
+            "sameOperationOnly": {
+              "const": true
+            }
+          }
+        }
+      ]
+    },
+    "assurance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "administrativeDomainSha256",
+        "assuranceEvidenceSha256",
+        "assuranceEvidenceType",
+        "assuranceLevel",
+        "authorityEpoch",
+        "authorityGeneration",
+        "authorityIdentitySha256",
+        "backendClass",
+        "productionEligible",
+        "rollbackProtection"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nonceAuthorityAssurance/v1"
+        },
+        "administrativeDomainSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "assuranceEvidenceSha256": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/digest"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "assuranceEvidenceType": {
+          "enum": [
+            "hardwareMonotonicCounterAttestation",
+            "linearizableCasOperatorAttestation",
+            "transparencyLedgerOperatorAttestation",
+            "none"
+          ]
+        },
+        "assuranceLevel": {
+          "enum": [
+            "productionRollbackProtected",
+            "nonProductionFixture",
+            "nonProductionDurableReference"
+          ]
+        },
+        "authorityEpoch": {
+          "$ref": "#/$defs/positiveInteger"
+        },
+        "authorityGeneration": {
+          "$ref": "#/$defs/positiveInteger"
+        },
+        "authorityIdentitySha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "backendClass": {
+          "enum": [
+            "hardwareMonotonicCounter",
+            "independentlyAdministeredLinearizableCas",
+            "appendOnlyTransparencyLedger",
+            "nonProductionSqlite"
+          ]
+        },
+        "productionEligible": {
+          "type": "boolean"
+        },
+        "rollbackProtection": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "administrativeRollbackResistance",
+            "backendAttestationRequired",
+            "exactSuccessorRequired",
+            "freshVerifierChallengeRequired",
+            "keyProtection",
+            "mechanism",
+            "stateCommitment",
+            "verifierStateStoreClass"
+          ],
+          "properties": {
+            "administrativeRollbackResistance": {
+              "type": "boolean"
+            },
+            "backendAttestationRequired": {
+              "type": "boolean"
+            },
+            "exactSuccessorRequired": {
+              "const": true
+            },
+            "freshVerifierChallengeRequired": {
+              "const": true
+            },
+            "keyProtection": {
+              "enum": [
+                "nonExportableHsm",
+                "nonExportableKmsHsm",
+                "retainedFdReference"
+              ]
+            },
+            "mechanism": {
+              "enum": [
+                "hardwareMonotonicCounter",
+                "linearizableCasWithRollbackProtectedStorage",
+                "appendOnlyWitnessedLedger",
+                "none"
+              ]
+            },
+            "stateCommitment": {
+              "enum": [
+                "monotonicCounterCommitment",
+                "hashChainedLinearizableCommitment",
+                "appendOnlyMerkleCommitment",
+                "localHashChain"
+              ]
+            },
+            "verifierStateStoreClass": {
+              "enum": [
+                "hardwareProtectedStateStore",
+                "independentlyAdministeredLinearizableCas",
+                "nonProductionCallerFile"
+              ]
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "productionEligible": {
+                "const": true
+              }
+            },
+            "required": [
+              "productionEligible"
+            ]
+          },
+          "then": {
+            "properties": {
+              "assuranceEvidenceSha256": {
+                "$ref": "#/$defs/digest"
+              },
+              "assuranceLevel": {
+                "const": "productionRollbackProtected"
+              },
+              "rollbackProtection": {
+                "properties": {
+                  "administrativeRollbackResistance": {
+                    "const": true
+                  },
+                  "backendAttestationRequired": {
+                    "const": true
+                  }
+                }
+              }
+            },
+            "oneOf": [
+              {
+                "properties": {
+                  "assuranceEvidenceType": {
+                    "const": "hardwareMonotonicCounterAttestation"
+                  },
+                  "backendClass": {
+                    "const": "hardwareMonotonicCounter"
+                  },
+                  "rollbackProtection": {
+                    "properties": {
+                      "keyProtection": {
+                        "const": "nonExportableHsm"
+                      },
+                      "mechanism": {
+                        "const": "hardwareMonotonicCounter"
+                      },
+                      "stateCommitment": {
+                        "const": "monotonicCounterCommitment"
+                      },
+                      "verifierStateStoreClass": {
+                        "const": "hardwareProtectedStateStore"
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "assuranceEvidenceType": {
+                    "const": "linearizableCasOperatorAttestation"
+                  },
+                  "backendClass": {
+                    "const": "independentlyAdministeredLinearizableCas"
+                  },
+                  "rollbackProtection": {
+                    "properties": {
+                      "keyProtection": {
+                        "const": "nonExportableKmsHsm"
+                      },
+                      "mechanism": {
+                        "const": "linearizableCasWithRollbackProtectedStorage"
+                      },
+                      "stateCommitment": {
+                        "const": "hashChainedLinearizableCommitment"
+                      },
+                      "verifierStateStoreClass": {
+                        "const": "independentlyAdministeredLinearizableCas"
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "assuranceEvidenceType": {
+                    "const": "transparencyLedgerOperatorAttestation"
+                  },
+                  "backendClass": {
+                    "const": "appendOnlyTransparencyLedger"
+                  },
+                  "rollbackProtection": {
+                    "properties": {
+                      "keyProtection": {
+                        "const": "nonExportableKmsHsm"
+                      },
+                      "mechanism": {
+                        "const": "appendOnlyWitnessedLedger"
+                      },
+                      "stateCommitment": {
+                        "const": "appendOnlyMerkleCommitment"
+                      },
+                      "verifierStateStoreClass": {
+                        "const": "independentlyAdministeredLinearizableCas"
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          "else": {
+            "properties": {
+              "assuranceEvidenceSha256": {
+                "type": "null"
+              },
+              "assuranceEvidenceType": {
+                "const": "none"
+              },
+              "assuranceLevel": {
+                "enum": [
+                  "nonProductionFixture",
+                  "nonProductionDurableReference"
+                ]
+              },
+              "backendClass": {
+                "const": "nonProductionSqlite"
+              },
+              "rollbackProtection": {
+                "properties": {
+                  "administrativeRollbackResistance": {
+                    "const": false
+                  },
+                  "backendAttestationRequired": {
+                    "const": false
+                  },
+                  "keyProtection": {
+                    "const": "retainedFdReference"
+                  },
+                  "mechanism": {
+                    "const": "none"
+                  },
+                  "stateCommitment": {
+                    "const": "localHashChain"
+                  },
+                  "verifierStateStoreClass": {
+                    "const": "nonProductionCallerFile"
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "statePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "assuranceSha256",
+        "authorityEpoch",
+        "authorityGeneration",
+        "commitOperationIdBase64url",
+        "committedAtUnix",
+        "highWaterCommitmentSha256",
+        "highWaterReceiptSha256",
+        "highWaterSequence",
+        "priorVerifierStateSha256",
+        "stateStoreGeneration",
+        "stateStoreHeadSha256",
+        "stateStoreIdentitySha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nonceAuthorityVerifierState/v1"
+        },
+        "assuranceSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "authorityEpoch": {
+          "$ref": "#/$defs/positiveInteger"
+        },
+        "authorityGeneration": {
+          "$ref": "#/$defs/positiveInteger"
+        },
+        "commitOperationIdBase64url": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/operationId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "committedAtUnix": {
+          "$ref": "#/$defs/positiveInteger"
+        },
+        "highWaterCommitmentSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "highWaterReceiptSha256": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/digest"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "highWaterSequence": {
+          "$ref": "#/$defs/unsignedInteger"
+        },
+        "priorVerifierStateSha256": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/digest"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stateStoreGeneration": {
+          "$ref": "#/$defs/positiveInteger"
+        },
+        "stateStoreHeadSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "stateStoreIdentitySha256": {
+          "$ref": "#/$defs/digest"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "highWaterSequence": {
+                "const": 0
+              }
+            },
+            "required": [
+              "highWaterSequence"
+            ]
+          },
+          "then": {
+            "properties": {
+              "commitOperationIdBase64url": {
+                "type": "null"
+              },
+              "highWaterReceiptSha256": {
+                "type": "null"
+              },
+              "priorVerifierStateSha256": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "commitOperationIdBase64url": {
+                "$ref": "#/$defs/operationId"
+              },
+              "highWaterReceiptSha256": {
+                "$ref": "#/$defs/digest"
+              },
+              "priorVerifierStateSha256": {
+                "$ref": "#/$defs/digest"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "authorizationPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "assuranceSha256",
+        "authorityEpoch",
+        "authorityGeneration",
+        "expiresAtUnix",
+        "highWaterCommitmentSha256",
+        "highWaterReceiptSha256",
+        "highWaterSequence",
+        "issuedAtUnix",
+        "nonceReceiptSigningKeySpkiSha256",
+        "nonceTransactionIdBase64url",
+        "oneUse",
+        "operationIdBase64url",
+        "prepareRequestSha256",
+        "priorCommittedAtUnix",
+        "priorVerifierStateSha256",
+        "recoveryIdentitySha256",
+        "recoveryKeySha256",
+        "requestBindingSha256",
+        "stateStoreGeneration",
+        "stateStoreHeadSha256",
+        "stateStoreAssuranceEvidenceSha256",
+        "stateStoreAttestationKeySpkiSha256",
+        "stateStoreConfigurationSha256",
+        "stateStoreIdentitySha256",
+        "verifierChallengeSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nonceAuthorityVerifierStatePreparedAuthorization/v3"
+        },
+        "assuranceSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "authorityEpoch": {
+          "$ref": "#/$defs/positiveInteger"
+        },
+        "authorityGeneration": {
+          "$ref": "#/$defs/positiveInteger"
+        },
+        "expiresAtUnix": {
+          "$ref": "#/$defs/positiveInteger"
+        },
+        "highWaterCommitmentSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "highWaterReceiptSha256": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/digest"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "highWaterSequence": {
+          "$ref": "#/$defs/unsignedInteger"
+        },
+        "issuedAtUnix": {
+          "$ref": "#/$defs/positiveInteger"
+        },
+        "nonceReceiptSigningKeySpkiSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "nonceTransactionIdBase64url": {
+          "$ref": "#/$defs/operationId"
+        },
+        "oneUse": {
+          "const": true
+        },
+        "operationIdBase64url": {
+          "$ref": "#/$defs/operationId"
+        },
+        "prepareRequestSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "priorCommittedAtUnix": {
+          "$ref": "#/$defs/positiveInteger"
+        },
+        "priorVerifierStateSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "recoveryIdentitySha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "recoveryKeySha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "requestBindingSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "stateStoreGeneration": {
+          "$ref": "#/$defs/positiveInteger"
+        },
+        "stateStoreHeadSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "stateStoreAssuranceEvidenceSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "stateStoreAttestationKeySpkiSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "stateStoreConfigurationSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "stateStoreIdentitySha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "verifierChallengeSha256": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "nonceAuthorityState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "assuranceSha256",
+        "authorityEpoch",
+        "authorityGeneration",
+        "highWaterCommitmentSha256",
+        "highWaterSequence",
+        "previousHighWaterCommitmentSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nonceAuthorityState/v1"
+        },
+        "assuranceSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "authorityEpoch": {
+          "$ref": "#/$defs/positiveInteger"
+        },
+        "authorityGeneration": {
+          "$ref": "#/$defs/positiveInteger"
+        },
+        "highWaterCommitmentSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "highWaterSequence": {
+          "$ref": "#/$defs/positiveInteger"
+        },
+        "previousHighWaterCommitmentSha256": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "highWaterPreimage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "assuranceSha256",
+        "authorityEpoch",
+        "authorityGeneration",
+        "nonceConsumptionSha256",
+        "nonceVerifierStateAuthorizationSha256",
+        "previousHighWaterCommitmentSha256",
+        "previousReceiptSha256",
+        "sequence",
+        "transactionIdBase64url"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nonceAuthorityHighWaterCommitment/v1"
+        },
+        "assuranceSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "authorityEpoch": {
+          "$ref": "#/$defs/positiveInteger"
+        },
+        "authorityGeneration": {
+          "$ref": "#/$defs/positiveInteger"
+        },
+        "nonceConsumptionSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "nonceVerifierStateAuthorizationSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "previousHighWaterCommitmentSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "previousReceiptSha256": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/digest"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sequence": {
+          "$ref": "#/$defs/positiveInteger"
+        },
+        "transactionIdBase64url": {
+          "$ref": "#/$defs/operationId"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "sequence": {
+                "const": 1
+              }
+            },
+            "required": [
+              "sequence"
+            ]
+          },
+          "then": {
+            "properties": {
+              "previousReceiptSha256": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "previousReceiptSha256": {
+                "$ref": "#/$defs/digest"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "nonceConsumption": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "consumedAtUnix",
+        "nonceSha256",
+        "oneUse",
+        "requestBodySha256",
+        "sequence",
+        "storeIdentitySha256",
+        "tlsBindingSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.publicAttestationNonceConsumption/v1"
+        },
+        "consumedAtUnix": {
+          "$ref": "#/$defs/positiveInteger"
+        },
+        "nonceSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "oneUse": {
+          "const": true
+        },
+        "requestBodySha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "sequence": {
+          "$ref": "#/$defs/positiveInteger"
+        },
+        "storeIdentitySha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "tlsBindingSha256": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "nonceConsumptionReceiptPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "consumeRequestSha256",
+        "consumedAtUnix",
+        "expiresAtUnix",
+        "finalExternalVerifierChallengeConsumed",
+        "finalExternalVerifierChallengeConsumptionRequired",
+        "nonceAuthorityAssuranceSha256",
+        "nonceAuthorityState",
+        "nonceAuthorityStateSha256",
+        "nonceAuthorityVerifierStateAuthorizationSha256",
+        "nonceConsumption",
+        "nonceConsumptionSha256",
+        "nonceSha256",
+        "previousReceiptSha256",
+        "producerChannelChallengeBase64url",
+        "producerEphemeralKeySha256",
+        "producerInvocationSha256",
+        "receiptIssuedAtUnix",
+        "requestBodySha256",
+        "sequence",
+        "signerChannelBindingSha256",
+        "storeIdentitySha256",
+        "tlsBindingSha256",
+        "transactionIdBase64url"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.attestationNonceConsumptionReceiptPayload/v2"
+        },
+        "consumeRequestSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "consumedAtUnix": {
+          "$ref": "#/$defs/positiveInteger"
+        },
+        "expiresAtUnix": {
+          "$ref": "#/$defs/positiveInteger"
+        },
+        "finalExternalVerifierChallengeConsumed": {
+          "const": false
+        },
+        "finalExternalVerifierChallengeConsumptionRequired": {
+          "const": true
+        },
+        "nonceAuthorityAssuranceSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "nonceAuthorityState": {
+          "$ref": "#/$defs/nonceAuthorityState"
+        },
+        "nonceAuthorityStateSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "nonceAuthorityVerifierStateAuthorizationSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "nonceConsumption": {
+          "$ref": "#/$defs/nonceConsumption"
+        },
+        "nonceConsumptionSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "nonceSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "previousReceiptSha256": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/digest"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "producerChannelChallengeBase64url": {
+          "$ref": "#/$defs/base64url32"
+        },
+        "producerEphemeralKeySha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "producerInvocationSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "receiptIssuedAtUnix": {
+          "$ref": "#/$defs/positiveInteger"
+        },
+        "requestBodySha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "sequence": {
+          "$ref": "#/$defs/positiveInteger"
+        },
+        "signerChannelBindingSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "storeIdentitySha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "tlsBindingSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "transactionIdBase64url": {
+          "$ref": "#/$defs/operationId"
+        }
+      }
+    },
+    "signedNonceConsumptionReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "payload",
+        "payloadSha256",
+        "signatureAlgorithm",
+        "signatureBase64url",
+        "signingKeyId",
+        "signingKeySpkiSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.signedAttestationNonceConsumptionReceipt/v2"
+        },
+        "payload": {
+          "$ref": "#/$defs/nonceConsumptionReceiptPayload"
+        },
+        "payloadSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "signatureAlgorithm": {
+          "const": "Ed25519"
+        },
+        "signatureBase64url": {
+          "$ref": "#/$defs/base64url64"
+        },
+        "signingKeyId": {
+          "$ref": "#/$defs/digest"
+        },
+        "signingKeySpkiSha256": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "commitReceiptPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "assuranceSha256",
+        "authorizationSha256",
+        "casCommitted",
+        "commitOperationIdBase64url",
+        "commitRequestSha256",
+        "committedAtUnix",
+        "committedVerifierState",
+        "committedVerifierStateSha256",
+        "nonceAuthorityStateSha256",
+        "nonceConsumptionReceiptSha256",
+        "nonceConsumptionSha256",
+        "nonceReceiptSigningKeySpkiSha256",
+        "oneUseAuthorizationConsumed",
+        "preparedOperationSha256",
+        "previousStateStoreGeneration",
+        "previousStateStoreHeadSha256",
+        "priorVerifierStateSha256",
+        "recoveryIdentitySha256",
+        "recoveryKeySha256",
+        "requestBindingSha256",
+        "signedStoreCommitProof",
+        "signedStoreCommitProofSha256",
+        "stateStoreAdministrativeDomainSha256",
+        "stateStoreAssuranceEvidenceSha256",
+        "stateStoreAttestationKeySpkiSha256",
+        "stateStoreCommitIndex",
+        "stateStoreConfigurationSha256",
+        "stateStoreGeneration",
+        "stateStoreIdentitySha256",
+        "verifierChallengeSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nonceAuthorityVerifierStateCommitReceipt/v3"
+        },
+        "assuranceSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "authorizationSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "casCommitted": {
+          "const": true
+        },
+        "commitOperationIdBase64url": {
+          "$ref": "#/$defs/operationId"
+        },
+        "commitRequestSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "committedAtUnix": {
+          "$ref": "#/$defs/positiveInteger"
+        },
+        "committedVerifierState": {
+          "$ref": "#/$defs/statePayload"
+        },
+        "committedVerifierStateSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "nonceAuthorityStateSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "nonceConsumptionReceiptSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "nonceConsumptionSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "nonceReceiptSigningKeySpkiSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "oneUseAuthorizationConsumed": {
+          "const": true
+        },
+        "preparedOperationSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "previousStateStoreGeneration": {
+          "$ref": "#/$defs/positiveInteger"
+        },
+        "previousStateStoreHeadSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "priorVerifierStateSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "recoveryIdentitySha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "recoveryKeySha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "requestBindingSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "signedStoreCommitProof": {
+          "$ref": "#/$defs/signedStoreCommitProof"
+        },
+        "signedStoreCommitProofSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "stateStoreAdministrativeDomainSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "stateStoreAssuranceEvidenceSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "stateStoreAttestationKeySpkiSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "stateStoreCommitIndex": {
+          "$ref": "#/$defs/positiveInteger"
+        },
+        "stateStoreConfigurationSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "stateStoreGeneration": {
+          "$ref": "#/$defs/positiveInteger"
+        },
+        "stateStoreIdentitySha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "verifierChallengeSha256": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "signedState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "payload",
+        "payloadSha256",
+        "signatureAlgorithm",
+        "signatureBase64url",
+        "signingKeyId",
+        "signingKeySpkiSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.signedNonceAuthorityVerifierState/v1"
+        },
+        "payload": {
+          "$ref": "#/$defs/statePayload"
+        },
+        "payloadSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "signatureAlgorithm": {
+          "const": "Ed25519"
+        },
+        "signatureBase64url": {
+          "$ref": "#/$defs/base64url64"
+        },
+        "signingKeyId": {
+          "$ref": "#/$defs/digest"
+        },
+        "signingKeySpkiSha256": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "signedAuthorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "payload",
+        "payloadSha256",
+        "signatureAlgorithm",
+        "signatureBase64url",
+        "signingKeyId",
+        "signingKeySpkiSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nonceAuthorityVerifierStatePreparedAuthorization/v3"
+        },
+        "payload": {
+          "$ref": "#/$defs/authorizationPayload"
+        },
+        "payloadSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "signatureAlgorithm": {
+          "const": "Ed25519"
+        },
+        "signatureBase64url": {
+          "$ref": "#/$defs/base64url64"
+        },
+        "signingKeyId": {
+          "$ref": "#/$defs/digest"
+        },
+        "signingKeySpkiSha256": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "signedCommitReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "payload",
+        "payloadSha256",
+        "signatureAlgorithm",
+        "signatureBase64url",
+        "signingKeyId",
+        "signingKeySpkiSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nonceAuthorityVerifierStateCommitReceipt/v3"
+        },
+        "payload": {
+          "$ref": "#/$defs/commitReceiptPayload"
+        },
+        "payloadSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "signatureAlgorithm": {
+          "const": "Ed25519"
+        },
+        "signatureBase64url": {
+          "$ref": "#/$defs/base64url64"
+        },
+        "signingKeyId": {
+          "$ref": "#/$defs/digest"
+        },
+        "signingKeySpkiSha256": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "readRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "assuranceSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nonceAuthorityVerifierStateReadRequest/v2"
+        },
+        "assuranceSha256": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "readResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "nonActionable",
+        "state",
+        "stateSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nonceAuthorityVerifierStateReadResponse/v3"
+        },
+        "nonActionable": {
+          "const": true
+        },
+        "state": {
+          "$ref": "#/$defs/signedState"
+        },
+        "stateSha256": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "challengeIssue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "challengeBase64url",
+        "challengeExpiresAtUnix",
+        "challengeIssuedAtUnix",
+        "challengeSha256",
+        "expectedVerifierStateSha256",
+        "issueRequestSha256",
+        "nonActionable",
+        "operationIdBase64url",
+        "producerInvocationBaseSha256",
+        "recoveryKeySha256",
+        "replacementForbidden",
+        "status"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.attestationVerifierStateIssueChallengeResponse/v1"
+        },
+        "challengeBase64url": {"$ref": "#/$defs/base64url32"},
+        "challengeExpiresAtUnix": {"$ref": "#/$defs/positiveInteger"},
+        "challengeIssuedAtUnix": {"$ref": "#/$defs/positiveInteger"},
+        "challengeSha256": {"$ref": "#/$defs/digest"},
+        "expectedVerifierStateSha256": {"$ref": "#/$defs/digest"},
+        "issueRequestSha256": {"$ref": "#/$defs/digest"},
+        "nonActionable": {"const": true},
+        "operationIdBase64url": {"$ref": "#/$defs/operationId"},
+        "producerInvocationBaseSha256": {"$ref": "#/$defs/digest"},
+        "recoveryKeySha256": {"$ref": "#/$defs/digest"},
+        "replacementForbidden": {"const": true},
+        "status": {"enum": ["issued", "bound"]}
+      }
+    },
+    "issueChallengeRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "assuranceSha256",
+        "expectedVerifierStateSha256",
+        "operationIdBase64url",
+        "producerInvocationBaseSha256",
+        "recoveryIdentity",
+        "recoveryIdentitySha256",
+        "recoveryKeySha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.attestationVerifierStateIssueChallengeRequest/v1"
+        },
+        "assuranceSha256": {"$ref": "#/$defs/digest"},
+        "expectedVerifierStateSha256": {"$ref": "#/$defs/digest"},
+        "operationIdBase64url": {"$ref": "#/$defs/operationId"},
+        "producerInvocationBaseSha256": {"$ref": "#/$defs/digest"},
+        "recoveryIdentity": {"$ref": "#/$defs/recoveryIdentity"},
+        "recoveryIdentitySha256": {"$ref": "#/$defs/digest"},
+        "recoveryKeySha256": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "issueChallengeResponse": {
+      "$ref": "#/$defs/challengeIssue"
+    },
+    "recoverChallengeRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "assuranceSha256",
+        "issueRequestSha256",
+        "operationIdBase64url",
+        "recoveryIdentity",
+        "recoveryIdentitySha256",
+        "recoveryKeySha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.attestationVerifierStateRecoverChallengeRequest/v1"
+        },
+        "assuranceSha256": {"$ref": "#/$defs/digest"},
+        "issueRequestSha256": {"$ref": "#/$defs/digest"},
+        "operationIdBase64url": {"$ref": "#/$defs/operationId"},
+        "recoveryIdentity": {"$ref": "#/$defs/recoveryIdentity"},
+        "recoveryIdentitySha256": {"$ref": "#/$defs/digest"},
+        "recoveryKeySha256": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "recoverChallengeResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "challenge",
+        "nonActionable",
+        "replacementForbidden",
+        "status"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.attestationVerifierStateRecoverChallengeResponse/v1"
+        },
+        "challenge": {
+          "oneOf": [
+            {"$ref": "#/$defs/recoveredChallenge"},
+            {"type": "null"}
+          ]
+        },
+        "nonActionable": {"const": true},
+        "replacementForbidden": {"const": true},
+        "status": {
+          "enum": ["notFound", "issued", "bound", "expired"]
+        }
+      }
+    },
+    "recoveredChallenge": {
+      "allOf": [
+        {"$ref": "#/$defs/challengeIssue"},
+        {
+          "type": "object",
+          "properties": {
+            "status": {"enum": ["issued", "bound", "expired"]}
+          }
+        }
+      ]
+    },
+    "recoveryIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "assuranceSha256",
+        "callerNonceSha256",
+        "immutableConfigSha256",
+        "releaseIdentitySha256",
+        "requestBodySha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.attestationVerifierStateRecoveryIdentity/v1"
+        },
+        "assuranceSha256": {"$ref": "#/$defs/digest"},
+        "callerNonceSha256": {"$ref": "#/$defs/digest"},
+        "immutableConfigSha256": {"$ref": "#/$defs/digest"},
+        "releaseIdentitySha256": {"$ref": "#/$defs/digest"},
+        "requestBodySha256": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "requestBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "expiresAtUnix",
+        "nonceSha256",
+        "producerChannelChallengeBase64url",
+        "producerEphemeralKeySha256",
+        "producerInvocationSha256",
+        "requestBodySha256",
+        "tlsBindingSha256",
+        "transactionIdBase64url"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.attestationVerifierStateRequestBinding/v1"
+        },
+        "expiresAtUnix": {"$ref": "#/$defs/positiveInteger"},
+        "nonceSha256": {"$ref": "#/$defs/digest"},
+        "producerChannelChallengeBase64url": {"$ref": "#/$defs/base64url32"},
+        "producerEphemeralKeySha256": {"$ref": "#/$defs/digest"},
+        "producerInvocationSha256": {"$ref": "#/$defs/digest"},
+        "requestBodySha256": {"$ref": "#/$defs/digest"},
+        "tlsBindingSha256": {"$ref": "#/$defs/digest"},
+        "transactionIdBase64url": {"$ref": "#/$defs/operationId"}
+      }
+    },
+    "recoveryBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "assuranceSha256",
+        "expectedVerifierStateSha256",
+        "operationIdBase64url",
+        "requestBindingSha256",
+        "verifierChallengeSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.attestationVerifierStateRecoveryBinding/v1"
+        },
+        "assuranceSha256": {"$ref": "#/$defs/digest"},
+        "expectedVerifierStateSha256": {"$ref": "#/$defs/digest"},
+        "operationIdBase64url": {"$ref": "#/$defs/operationId"},
+        "requestBindingSha256": {"$ref": "#/$defs/digest"},
+        "verifierChallengeSha256": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "nonceConsumeRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "expiresAtUnix",
+        "nonceAuthorityVerifierStateAuthorizationSha256",
+        "nonceSha256",
+        "producerChannelChallengeBase64url",
+        "producerEphemeralKeySha256",
+        "producerInvocationSha256",
+        "requestBodySha256",
+        "tlsBindingSha256",
+        "transactionIdBase64url"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.attestationNonceConsumeOnceRequest/v3"
+        },
+        "expiresAtUnix": {"$ref": "#/$defs/positiveInteger"},
+        "nonceAuthorityVerifierStateAuthorizationSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "nonceSha256": {"$ref": "#/$defs/digest"},
+        "producerChannelChallengeBase64url": {"$ref": "#/$defs/base64url32"},
+        "producerEphemeralKeySha256": {"$ref": "#/$defs/digest"},
+        "producerInvocationSha256": {"$ref": "#/$defs/digest"},
+        "requestBodySha256": {"$ref": "#/$defs/digest"},
+        "tlsBindingSha256": {"$ref": "#/$defs/digest"},
+        "transactionIdBase64url": {"$ref": "#/$defs/operationId"}
+      }
+    },
+    "successorIntent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "authorizationSha256",
+        "expectedHighWaterSequence",
+        "expectedStateStoreGeneration",
+        "expectedVerifierStateSha256",
+        "nonceConsumeRequestSha256",
+        "operationIdBase64url",
+        "previousStateStoreHeadSha256",
+        "requestBindingSha256",
+        "transactionIdBase64url",
+        "verifierChallengeSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.attestationVerifierStateSuccessorIntent/v1"
+        },
+        "authorizationSha256": {"$ref": "#/$defs/digest"},
+        "expectedHighWaterSequence": {"$ref": "#/$defs/positiveInteger"},
+        "expectedStateStoreGeneration": {"$ref": "#/$defs/positiveInteger"},
+        "expectedVerifierStateSha256": {"$ref": "#/$defs/digest"},
+        "nonceConsumeRequestSha256": {"$ref": "#/$defs/digest"},
+        "operationIdBase64url": {"$ref": "#/$defs/operationId"},
+        "previousStateStoreHeadSha256": {"$ref": "#/$defs/digest"},
+        "requestBindingSha256": {"$ref": "#/$defs/digest"},
+        "transactionIdBase64url": {"$ref": "#/$defs/operationId"},
+        "verifierChallengeSha256": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "producerInvocation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "callerNonceSha256",
+        "expiresAtUnix",
+        "issuedAtUnix",
+        "minimumReleaseIdentitySha256",
+        "minimumRollbackContinuityCommitmentSha256",
+        "nonceAuthorityVerifierChallengeBase64url",
+        "nonceAuthorityVerifierStateOperationIdBase64url",
+        "producerChannelChallengeBase64url",
+        "producerEphemeralKeySpkiDerBase64url",
+        "producerEphemeralKeySpkiSha256",
+        "releaseIdentitySha256",
+        "requestBodySha256",
+        "staticPins",
+        "tlsBindingSha256",
+        "witnessVerifierChallengeBase64url"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.publicAttestationProducerInvocation/v1"
+        },
+        "callerNonceSha256": {"$ref": "#/$defs/digest"},
+        "expiresAtUnix": {"$ref": "#/$defs/positiveInteger"},
+        "issuedAtUnix": {"$ref": "#/$defs/positiveInteger"},
+        "minimumReleaseIdentitySha256": {"$ref": "#/$defs/digest"},
+        "minimumRollbackContinuityCommitmentSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "nonceAuthorityVerifierChallengeBase64url": {
+          "$ref": "#/$defs/base64url32"
+        },
+        "nonceAuthorityVerifierStateOperationIdBase64url": {
+          "$ref": "#/$defs/operationId"
+        },
+        "producerChannelChallengeBase64url": {
+          "$ref": "#/$defs/base64url32"
+        },
+        "producerEphemeralKeySpkiDerBase64url": {
+          "$ref": "#/$defs/base64url44"
+        },
+        "producerEphemeralKeySpkiSha256": {"$ref": "#/$defs/digest"},
+        "releaseIdentitySha256": {"$ref": "#/$defs/digest"},
+        "requestBodySha256": {"$ref": "#/$defs/digest"},
+        "staticPins": {"$ref": "#/$defs/staticPins"},
+        "tlsBindingSha256": {"$ref": "#/$defs/digest"},
+        "witnessVerifierChallengeBase64url": {
+          "$ref": "#/$defs/base64url32"
+        }
+      }
+    },
+    "staticPins": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "descriptorSha256",
+        "executableSha256",
+        "immutableConfigSha256",
+        "nonceStoreIdentitySha256",
+        "nonceStoreKeySpkiSha256",
+        "producerRequestSchemaSha256",
+        "sandboxDescriptorSha256",
+        "sandboxLauncherSha256",
+        "trustRootsSha256",
+        "witnessStoreIdentitySha256",
+        "witnessStoreKeySpkiSha256"
+      ],
+      "properties": {
+        "descriptorSha256": {"$ref": "#/$defs/digest"},
+        "executableSha256": {"$ref": "#/$defs/digest"},
+        "immutableConfigSha256": {"$ref": "#/$defs/digest"},
+        "nonceStoreIdentitySha256": {"$ref": "#/$defs/digest"},
+        "nonceStoreKeySpkiSha256": {"$ref": "#/$defs/digest"},
+        "producerRequestSchemaSha256": {"$ref": "#/$defs/digest"},
+        "sandboxDescriptorSha256": {"$ref": "#/$defs/digest"},
+        "sandboxLauncherSha256": {"$ref": "#/$defs/digest"},
+        "trustRootsSha256": {"$ref": "#/$defs/digest"},
+        "witnessStoreIdentitySha256": {"$ref": "#/$defs/digest"},
+        "witnessStoreKeySpkiSha256": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "prepareRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "assuranceSha256",
+        "challengeIssue",
+        "challengeIssueSha256",
+        "expectedVerifierStateSha256",
+        "operationIdBase64url",
+        "priorStateRead",
+        "priorStateReadSha256",
+        "producerInvocation",
+        "producerInvocationBaseSha256",
+        "producerInvocationSha256",
+        "recoveryIdentity",
+        "recoveryIdentitySha256",
+        "recoveryKeySha256",
+        "requestBinding",
+        "requestBindingSha256",
+        "verifierChallengeBase64url"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.attestationVerifierStatePrepareRequest/v4"
+        },
+        "assuranceSha256": {"$ref": "#/$defs/digest"},
+        "challengeIssue": {"$ref": "#/$defs/challengeIssue"},
+        "challengeIssueSha256": {"$ref": "#/$defs/digest"},
+        "expectedVerifierStateSha256": {"$ref": "#/$defs/digest"},
+        "operationIdBase64url": {"$ref": "#/$defs/operationId"},
+        "priorStateRead": {"$ref": "#/$defs/readResponse"},
+        "priorStateReadSha256": {"$ref": "#/$defs/digest"},
+        "producerInvocation": {"$ref": "#/$defs/producerInvocation"},
+        "producerInvocationBaseSha256": {"$ref": "#/$defs/digest"},
+        "producerInvocationSha256": {"$ref": "#/$defs/digest"},
+        "recoveryIdentity": {"$ref": "#/$defs/recoveryIdentity"},
+        "recoveryIdentitySha256": {"$ref": "#/$defs/digest"},
+        "recoveryKeySha256": {"$ref": "#/$defs/digest"},
+        "requestBinding": {"$ref": "#/$defs/requestBinding"},
+        "requestBindingSha256": {"$ref": "#/$defs/digest"},
+        "verifierChallengeBase64url": {"$ref": "#/$defs/base64url32"}
+      }
+    },
+    "preparedOperation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "authorization",
+        "authorizationSha256",
+        "nonceConsumeRequest",
+        "nonceConsumeRequestSha256",
+        "prepareRequest",
+        "prepareRequestSha256",
+        "recoveryBinding",
+        "recoveryIdentity",
+        "recoveryIdentitySha256",
+        "recoveryKeySha256",
+        "requestBinding",
+        "requestBindingSha256",
+        "successorIntent",
+        "successorIntentSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.attestationVerifierStatePreparedOperation/v1"
+        },
+        "authorization": {"$ref": "#/$defs/signedAuthorization"},
+        "authorizationSha256": {"$ref": "#/$defs/digest"},
+        "nonceConsumeRequest": {"$ref": "#/$defs/nonceConsumeRequest"},
+        "nonceConsumeRequestSha256": {"$ref": "#/$defs/digest"},
+        "prepareRequest": {"$ref": "#/$defs/prepareRequest"},
+        "prepareRequestSha256": {"$ref": "#/$defs/digest"},
+        "recoveryBinding": {"$ref": "#/$defs/recoveryBinding"},
+        "recoveryIdentity": {"$ref": "#/$defs/recoveryIdentity"},
+        "recoveryIdentitySha256": {"$ref": "#/$defs/digest"},
+        "recoveryKeySha256": {"$ref": "#/$defs/digest"},
+        "requestBinding": {"$ref": "#/$defs/requestBinding"},
+        "requestBindingSha256": {"$ref": "#/$defs/digest"},
+        "successorIntent": {"$ref": "#/$defs/successorIntent"},
+        "successorIntentSha256": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "prepareResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "nonActionable",
+        "preparedOperation",
+        "preparedOperationSha256",
+        "recoveryKeySha256",
+        "replacementForbidden",
+        "status"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.attestationVerifierStatePrepareResponse/v4"
+        },
+        "nonActionable": {"const": true},
+        "preparedOperation": {"$ref": "#/$defs/preparedOperation"},
+        "preparedOperationSha256": {"$ref": "#/$defs/digest"},
+        "recoveryKeySha256": {"$ref": "#/$defs/digest"},
+        "replacementForbidden": {"const": true},
+        "status": {
+          "enum": [
+            "prepared",
+            "consumptionPending",
+            "nonceConsumed",
+            "casCommitted",
+            "committed"
+          ]
+        }
+      }
+    },
+    "nonceStatusEvidencePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "consumeRequestSha256",
+        "evidenceIssuedAtUnix",
+        "neverConsumable",
+        "nonceAuthorityVerifierStateAuthorizationSha256",
+        "nonceConsumptionReceiptSha256",
+        "nonceSha256",
+        "preparedOperationSha256",
+        "recoveryKeySha256",
+        "requestBindingSha256",
+        "requestOperation",
+        "status",
+        "transactionIdBase64url"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.attestationNonceTransactionStatusEvidence/v1"
+        },
+        "consumeRequestSha256": {"$ref": "#/$defs/digest"},
+        "evidenceIssuedAtUnix": {"$ref": "#/$defs/positiveInteger"},
+        "neverConsumable": {"type": "boolean"},
+        "nonceAuthorityVerifierStateAuthorizationSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "nonceConsumptionReceiptSha256": {
+          "oneOf": [
+            {"$ref": "#/$defs/digest"},
+            {"type": "null"}
+          ]
+        },
+        "nonceSha256": {"$ref": "#/$defs/digest"},
+        "preparedOperationSha256": {"$ref": "#/$defs/digest"},
+        "recoveryKeySha256": {"$ref": "#/$defs/digest"},
+        "requestBindingSha256": {"$ref": "#/$defs/digest"},
+        "requestOperation": {
+          "enum": ["recoverExact", "proveNeverConsumedAndBlock"]
+        },
+        "status": {
+          "enum": ["consumed", "neverConsumed", "notObserved"]
+        },
+        "transactionIdBase64url": {"$ref": "#/$defs/operationId"}
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "status": {"const": "consumed"},
+            "neverConsumable": {"const": false},
+            "nonceConsumptionReceiptSha256": {
+              "$ref": "#/$defs/digest"
+            },
+            "requestOperation": {"const": "recoverExact"}
+          }
+        },
+        {
+          "properties": {
+            "status": {"const": "neverConsumed"},
+            "neverConsumable": {"const": true},
+            "nonceConsumptionReceiptSha256": {"type": "null"},
+            "requestOperation": {
+              "enum": [
+                "recoverExact",
+                "proveNeverConsumedAndBlock"
+              ]
+            }
+          }
+        },
+        {
+          "properties": {
+            "status": {"const": "notObserved"},
+            "neverConsumable": {"const": false},
+            "nonceConsumptionReceiptSha256": {"type": "null"},
+            "requestOperation": {"const": "recoverExact"}
+          }
+        }
+      ]
+    },
+    "signedNonceStatusEvidence": {
+      "allOf": [
+        {"$ref": "#/$defs/signedEnvelope"},
+        {
+          "properties": {
+            "apiVersion": {
+              "const": "serverware.signedAttestationNonceTransactionStatusEvidence/v1"
+            },
+            "payload": {"$ref": "#/$defs/nonceStatusEvidencePayload"}
+          }
+        }
+      ]
+    },
+    "signedConsumedNonceStatusEvidence": {
+      "allOf": [
+        {"$ref": "#/$defs/signedNonceStatusEvidence"},
+        {
+          "properties": {
+            "payload": {
+              "properties": {
+                "status": {"const": "consumed"}
+              }
+            }
+          }
+        }
+      ]
+    },
+    "signedPendingNonceStatusEvidence": {
+      "allOf": [
+        {"$ref": "#/$defs/signedNonceStatusEvidence"},
+        {
+          "properties": {
+            "payload": {
+              "properties": {
+                "status": {"const": "notObserved"}
+              }
+            }
+          }
+        }
+      ]
+    },
+    "signedNeverConsumedNonceStatusEvidence": {
+      "allOf": [
+        {"$ref": "#/$defs/signedNonceStatusEvidence"},
+        {
+          "properties": {
+            "payload": {
+              "properties": {
+                "status": {"const": "neverConsumed"}
+              }
+            }
+          }
+        }
+      ]
+    },
+    "recoveryLookupRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "recoveryIdentity",
+        "recoveryIdentitySha256",
+        "recoveryKeySha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.attestationVerifierStateRecoveryLookupRequest/v1"
+        },
+        "recoveryIdentity": {"$ref": "#/$defs/recoveryIdentity"},
+        "recoveryIdentitySha256": {"$ref": "#/$defs/digest"},
+        "recoveryKeySha256": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "recoveryLookupResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "commitReceipt",
+        "nonActionable",
+        "nonceConsumptionReceipt",
+        "nonceRecoveryRequired",
+        "nonceStatusEvidence",
+        "preparedOperation",
+        "preparedOperationSha256",
+        "recoveryIdentity",
+        "recoveryIdentitySha256",
+        "recoveryKeySha256",
+        "replacementForbidden",
+        "requestBindingSha256",
+        "status"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.attestationVerifierStateRecoveryLookupResponse/v1"
+        },
+        "commitReceipt": {
+          "oneOf": [
+            {"$ref": "#/$defs/signedCommitReceipt"},
+            {"type": "null"}
+          ]
+        },
+        "nonActionable": {"const": true},
+        "nonceConsumptionReceipt": {
+          "oneOf": [
+            {"$ref": "#/$defs/signedNonceConsumptionReceipt"},
+            {"type": "null"}
+          ]
+        },
+        "nonceRecoveryRequired": {"type": "boolean"},
+        "nonceStatusEvidence": {
+          "oneOf": [
+            {"$ref": "#/$defs/signedNonceStatusEvidence"},
+            {"type": "null"}
+          ]
+        },
+        "preparedOperation": {
+          "oneOf": [
+            {"$ref": "#/$defs/preparedOperation"},
+            {"type": "null"}
+          ]
+        },
+        "preparedOperationSha256": {
+          "oneOf": [
+            {"$ref": "#/$defs/digest"},
+            {"type": "null"}
+          ]
+        },
+        "recoveryIdentity": {"$ref": "#/$defs/recoveryIdentity"},
+        "recoveryIdentitySha256": {"$ref": "#/$defs/digest"},
+        "recoveryKeySha256": {"$ref": "#/$defs/digest"},
+        "replacementForbidden": {"type": "boolean"},
+        "requestBindingSha256": {
+          "oneOf": [
+            {"$ref": "#/$defs/digest"},
+            {"type": "null"}
+          ]
+        },
+        "status": {
+          "enum": [
+            "notFound",
+            "prepared",
+            "consumptionPending",
+            "nonceConsumed",
+            "casCommitted",
+            "committed",
+            "aborted"
+          ]
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "status": {"const": "notFound"},
+            "commitReceipt": {"type": "null"},
+            "nonceConsumptionReceipt": {"type": "null"},
+            "nonceRecoveryRequired": {"const": false},
+            "nonceStatusEvidence": {"type": "null"},
+            "preparedOperation": {"type": "null"},
+            "preparedOperationSha256": {"type": "null"},
+            "replacementForbidden": {"const": false},
+            "requestBindingSha256": {"type": "null"}
+          }
+        },
+        {
+          "properties": {
+            "status": {"const": "prepared"},
+            "commitReceipt": {"type": "null"},
+            "nonceConsumptionReceipt": {"type": "null"},
+            "nonceRecoveryRequired": {"const": true},
+            "nonceStatusEvidence": {"type": "null"},
+            "preparedOperation": {"$ref": "#/$defs/preparedOperation"},
+            "preparedOperationSha256": {"$ref": "#/$defs/digest"},
+            "replacementForbidden": {"const": true},
+            "requestBindingSha256": {"$ref": "#/$defs/digest"}
+          }
+        },
+        {
+          "properties": {
+            "status": {"const": "consumptionPending"},
+            "commitReceipt": {"type": "null"},
+            "nonceConsumptionReceipt": {"type": "null"},
+            "nonceRecoveryRequired": {"const": true},
+            "nonceStatusEvidence": {
+              "oneOf": [
+                {"$ref": "#/$defs/signedPendingNonceStatusEvidence"},
+                {"type": "null"}
+              ]
+            },
+            "preparedOperation": {"$ref": "#/$defs/preparedOperation"},
+            "preparedOperationSha256": {"$ref": "#/$defs/digest"},
+            "replacementForbidden": {"const": true},
+            "requestBindingSha256": {"$ref": "#/$defs/digest"}
+          }
+        },
+        {
+          "properties": {
+            "status": {
+              "enum": ["nonceConsumed", "casCommitted"]
+            },
+            "commitReceipt": {"type": "null"},
+            "nonceConsumptionReceipt": {
+              "$ref": "#/$defs/signedNonceConsumptionReceipt"
+            },
+            "nonceRecoveryRequired": {"const": false},
+            "nonceStatusEvidence": {
+              "$ref": "#/$defs/signedConsumedNonceStatusEvidence"
+            },
+            "preparedOperation": {"$ref": "#/$defs/preparedOperation"},
+            "preparedOperationSha256": {"$ref": "#/$defs/digest"},
+            "replacementForbidden": {"const": true},
+            "requestBindingSha256": {"$ref": "#/$defs/digest"}
+          }
+        },
+        {
+          "properties": {
+            "status": {"const": "committed"},
+            "commitReceipt": {"$ref": "#/$defs/signedCommitReceipt"},
+            "nonceConsumptionReceipt": {
+              "$ref": "#/$defs/signedNonceConsumptionReceipt"
+            },
+            "nonceRecoveryRequired": {"const": false},
+            "nonceStatusEvidence": {
+              "$ref": "#/$defs/signedConsumedNonceStatusEvidence"
+            },
+            "preparedOperation": {"$ref": "#/$defs/preparedOperation"},
+            "preparedOperationSha256": {"$ref": "#/$defs/digest"},
+            "replacementForbidden": {"const": true},
+            "requestBindingSha256": {"$ref": "#/$defs/digest"}
+          }
+        },
+        {
+          "properties": {
+            "status": {"const": "aborted"},
+            "commitReceipt": {"type": "null"},
+            "nonceConsumptionReceipt": {"type": "null"},
+            "nonceRecoveryRequired": {"const": false},
+            "nonceStatusEvidence": {
+              "$ref": "#/$defs/signedNeverConsumedNonceStatusEvidence"
+            },
+            "preparedOperation": {"$ref": "#/$defs/preparedOperation"},
+            "preparedOperationSha256": {"$ref": "#/$defs/digest"},
+            "replacementForbidden": {"const": false},
+            "requestBindingSha256": {"$ref": "#/$defs/digest"}
+          }
+        }
+      ]
+    },
+    "markConsumptionRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "preparedOperationSha256",
+        "recoveryKeySha256",
+        "requestBindingSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.attestationVerifierStateMarkConsumptionRequest/v1"
+        },
+        "preparedOperationSha256": {"$ref": "#/$defs/digest"},
+        "recoveryKeySha256": {"$ref": "#/$defs/digest"},
+        "requestBindingSha256": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "markConsumptionResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "nonActionable",
+        "nonceConsumeRequestSha256",
+        "operationIdBase64url",
+        "preparedOperationSha256",
+        "recoveryKeySha256",
+        "requestBindingSha256",
+        "status"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.attestationVerifierStateMarkConsumptionResponse/v1"
+        },
+        "nonActionable": {"const": true},
+        "nonceConsumeRequestSha256": {"$ref": "#/$defs/digest"},
+        "operationIdBase64url": {"$ref": "#/$defs/operationId"},
+        "preparedOperationSha256": {"$ref": "#/$defs/digest"},
+        "recoveryKeySha256": {"$ref": "#/$defs/digest"},
+        "requestBindingSha256": {"$ref": "#/$defs/digest"},
+        "status": {
+          "enum": [
+            "consumptionPending",
+            "nonceConsumed",
+            "casCommitted",
+            "committed"
+          ]
+        }
+      }
+    },
+    "attachNonceStatusRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "nonceConsumptionReceipt",
+        "nonceStatusEvidence",
+        "preparedOperationSha256",
+        "recoveryKeySha256",
+        "requestBindingSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.attestationVerifierStateAttachNonceStatusRequest/v1"
+        },
+        "nonceConsumptionReceipt": {
+          "oneOf": [
+            {"$ref": "#/$defs/signedNonceConsumptionReceipt"},
+            {"type": "null"}
+          ]
+        },
+        "nonceStatusEvidence": {
+          "$ref": "#/$defs/signedNonceStatusEvidence"
+        },
+        "preparedOperationSha256": {"$ref": "#/$defs/digest"},
+        "recoveryKeySha256": {"$ref": "#/$defs/digest"},
+        "requestBindingSha256": {"$ref": "#/$defs/digest"}
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "nonceConsumptionReceipt": {
+              "$ref": "#/$defs/signedNonceConsumptionReceipt"
+            },
+            "nonceStatusEvidence": {
+              "$ref": "#/$defs/signedConsumedNonceStatusEvidence"
+            }
+          }
+        },
+        {
+          "properties": {
+            "nonceConsumptionReceipt": {"type": "null"},
+            "nonceStatusEvidence": {
+              "$ref": "#/$defs/signedPendingNonceStatusEvidence"
+            }
+          }
+        }
+      ]
+    },
+    "attachNonceStatusResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "nonActionable",
+        "nonceConsumptionReceipt",
+        "nonceStatusEvidence",
+        "preparedOperationSha256",
+        "recoveryKeySha256",
+        "requestBindingSha256",
+        "status"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.attestationVerifierStateAttachNonceStatusResponse/v1"
+        },
+        "nonActionable": {"const": true},
+        "nonceConsumptionReceipt": {
+          "oneOf": [
+            {"$ref": "#/$defs/signedNonceConsumptionReceipt"},
+            {"type": "null"}
+          ]
+        },
+        "nonceStatusEvidence": {
+          "$ref": "#/$defs/signedNonceStatusEvidence"
+        },
+        "preparedOperationSha256": {"$ref": "#/$defs/digest"},
+        "recoveryKeySha256": {"$ref": "#/$defs/digest"},
+        "requestBindingSha256": {"$ref": "#/$defs/digest"},
+        "status": {
+          "enum": ["consumptionPending", "nonceConsumed"]
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "status": {"const": "nonceConsumed"},
+            "nonceConsumptionReceipt": {
+              "$ref": "#/$defs/signedNonceConsumptionReceipt"
+            },
+            "nonceStatusEvidence": {
+              "$ref": "#/$defs/signedConsumedNonceStatusEvidence"
+            }
+          }
+        },
+        {
+          "properties": {
+            "status": {"const": "consumptionPending"},
+            "nonceConsumptionReceipt": {"type": "null"},
+            "nonceStatusEvidence": {
+              "$ref": "#/$defs/signedPendingNonceStatusEvidence"
+            }
+          }
+        }
+      ]
+    },
+    "abortRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "nonceStatusEvidence",
+        "preparedOperationSha256",
+        "recoveryKeySha256",
+        "requestBindingSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.attestationVerifierStateAbortRequest/v1"
+        },
+        "nonceStatusEvidence": {
+          "$ref": "#/$defs/signedNeverConsumedNonceStatusEvidence"
+        },
+        "preparedOperationSha256": {"$ref": "#/$defs/digest"},
+        "recoveryKeySha256": {"$ref": "#/$defs/digest"},
+        "requestBindingSha256": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "abortResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "nonceStatusEvidence",
+        "nonActionable",
+        "operationIdBase64url",
+        "preparedOperationSha256",
+        "recoveryKeySha256",
+        "replacementForbidden",
+        "requestBindingSha256",
+        "status"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.attestationVerifierStateAbortResponse/v1"
+        },
+        "nonceStatusEvidence": {
+          "$ref": "#/$defs/signedNeverConsumedNonceStatusEvidence"
+        },
+        "nonActionable": {"const": true},
+        "operationIdBase64url": {"$ref": "#/$defs/operationId"},
+        "preparedOperationSha256": {"$ref": "#/$defs/digest"},
+        "recoveryKeySha256": {"$ref": "#/$defs/digest"},
+        "replacementForbidden": {"const": false},
+        "requestBindingSha256": {"$ref": "#/$defs/digest"},
+        "status": {"const": "aborted"}
+      }
+    },
+    "commitRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "authorization",
+        "nonceConsumptionReceipt",
+        "preparedOperationSha256",
+        "recoveryKeySha256",
+        "requestBindingSha256",
+        "verifierChallengeBase64url"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.attestationVerifierStateCommitRequest/v3"
+        },
+        "authorization": {
+          "$ref": "#/$defs/signedAuthorization"
+        },
+        "nonceConsumptionReceipt": {
+          "$ref": "#/$defs/signedNonceConsumptionReceipt"
+        },
+        "preparedOperationSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "recoveryKeySha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "requestBindingSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "verifierChallengeBase64url": {
+          "$ref": "#/$defs/base64url32"
+        }
+      }
+    },
+    "recoveryRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "recoveryIdentity",
+        "recoveryIdentitySha256",
+        "recoveryKeySha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.attestationVerifierStateRecoveryRequest/v3"
+        },
+        "recoveryIdentity": {"$ref": "#/$defs/recoveryIdentity"},
+        "recoveryIdentitySha256": {"$ref": "#/$defs/digest"},
+        "recoveryKeySha256": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "recoveryResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "commitReceipt",
+        "commitRequestSha256",
+        "nonActionable",
+        "nonceConsumptionReceipt",
+        "nonceRecoveryRequired",
+        "nonceStatusEvidence",
+        "operationIdBase64url",
+        "preparedOperation",
+        "preparedOperationSha256",
+        "recoveryIdentity",
+        "recoveryIdentitySha256",
+        "recoveryKeySha256",
+        "replacementForbidden",
+        "requestBindingSha256",
+        "sameOperationOnly",
+        "status"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.attestationVerifierStateRecoveryResponse/v3"
+        },
+        "commitReceipt": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/signedCommitReceipt"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "commitRequestSha256": {
+          "oneOf": [
+            {"$ref": "#/$defs/digest"},
+            {"type": "null"}
+          ]
+        },
+        "nonActionable": {
+          "const": true
+        },
+        "nonceConsumptionReceipt": {
+          "oneOf": [
+            {"$ref": "#/$defs/signedNonceConsumptionReceipt"},
+            {"type": "null"}
+          ]
+        },
+        "nonceRecoveryRequired": {
+          "type": "boolean"
+        },
+        "nonceStatusEvidence": {
+          "oneOf": [
+            {"$ref": "#/$defs/signedNonceStatusEvidence"},
+            {"type": "null"}
+          ]
+        },
+        "operationIdBase64url": {
+          "$ref": "#/$defs/operationId"
+        },
+        "preparedOperation": {"$ref": "#/$defs/preparedOperation"},
+        "preparedOperationSha256": {"$ref": "#/$defs/digest"},
+        "recoveryIdentity": {"$ref": "#/$defs/recoveryIdentity"},
+        "recoveryIdentitySha256": {"$ref": "#/$defs/digest"},
+        "recoveryKeySha256": {"$ref": "#/$defs/digest"},
+        "replacementForbidden": {
+          "type": "boolean"
+        },
+        "requestBindingSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "sameOperationOnly": {
+          "type": "boolean"
+        },
+        "status": {
+          "enum": [
+            "prepared",
+            "consumptionPending",
+            "committed",
+            "aborted"
+          ]
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "status": {"const": "prepared"},
+            "commitReceipt": {"type": "null"},
+            "commitRequestSha256": {"type": "null"},
+            "nonceConsumptionReceipt": {"type": "null"},
+            "nonceRecoveryRequired": {"const": true},
+            "nonceStatusEvidence": {"type": "null"},
+            "replacementForbidden": {"const": true},
+            "sameOperationOnly": {"const": true}
+          }
+        },
+        {
+          "properties": {
+            "status": {"const": "consumptionPending"},
+            "commitReceipt": {"type": "null"},
+            "commitRequestSha256": {"type": "null"},
+            "nonceConsumptionReceipt": {"type": "null"},
+            "nonceRecoveryRequired": {"const": true},
+            "nonceStatusEvidence": {
+              "oneOf": [
+                {"$ref": "#/$defs/signedPendingNonceStatusEvidence"},
+                {"type": "null"}
+              ]
+            },
+            "replacementForbidden": {"const": true},
+            "sameOperationOnly": {"const": true}
+          }
+        },
+        {
+          "properties": {
+            "status": {"const": "committed"},
+            "commitReceipt": {"$ref": "#/$defs/signedCommitReceipt"},
+            "commitRequestSha256": {"$ref": "#/$defs/digest"},
+            "nonceConsumptionReceipt": {
+              "$ref": "#/$defs/signedNonceConsumptionReceipt"
+            },
+            "nonceRecoveryRequired": {"const": false},
+            "nonceStatusEvidence": {
+              "$ref": "#/$defs/signedConsumedNonceStatusEvidence"
+            },
+            "replacementForbidden": {"const": true},
+            "sameOperationOnly": {"const": true}
+          }
+        },
+        {
+          "properties": {
+            "status": {"const": "aborted"},
+            "commitReceipt": {"type": "null"},
+            "commitRequestSha256": {"type": "null"},
+            "nonceConsumptionReceipt": {"type": "null"},
+            "nonceRecoveryRequired": {"const": false},
+            "nonceStatusEvidence": {
+              "$ref": "#/$defs/signedNeverConsumedNonceStatusEvidence"
+            },
+            "replacementForbidden": {"const": false},
+            "sameOperationOnly": {"const": false}
+          }
+        }
+      ]
+    },
+    "externalReadPayloadV3": {
+      "type": "object",
+      "additionalProperties": false,
+      "maxProperties": 0
+    },
+    "externalChallengePayloadV3": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "challenge_base64url",
+        "challenge_sha256",
+        "expected_state_sha256",
+        "expires_at_unix",
+        "issue_request_sha256",
+        "issued_at_unix",
+        "operation_id",
+        "producer_invocation_base_sha256",
+        "recovery_key_sha256"
+      ],
+      "properties": {
+        "challenge_base64url": {"$ref": "#/$defs/base64url32"},
+        "challenge_sha256": {"$ref": "#/$defs/digest"},
+        "expected_state_sha256": {"$ref": "#/$defs/digest"},
+        "expires_at_unix": {"$ref": "#/$defs/positiveInteger"},
+        "issue_request_sha256": {"$ref": "#/$defs/digest"},
+        "issued_at_unix": {"$ref": "#/$defs/positiveInteger"},
+        "operation_id": {"$ref": "#/$defs/operationId"},
+        "producer_invocation_base_sha256": {"$ref": "#/$defs/digest"},
+        "recovery_key_sha256": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "externalRecoverChallengePayloadV3": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "issue_request_sha256",
+        "operation_id",
+        "recovery_key_sha256"
+      ],
+      "properties": {
+        "issue_request_sha256": {"$ref": "#/$defs/digest"},
+        "operation_id": {"$ref": "#/$defs/operationId"},
+        "recovery_key_sha256": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "externalPreparePayloadV3": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authorization",
+        "challenge_sha256",
+        "expected_state_sha256",
+        "operation_id",
+        "prepare_request_sha256",
+        "prepared_operation",
+        "recovery_key_sha256",
+        "request_binding_sha256"
+      ],
+      "properties": {
+        "authorization": {"$ref": "#/$defs/signedAuthorization"},
+        "challenge_sha256": {"$ref": "#/$defs/digest"},
+        "expected_state_sha256": {"$ref": "#/$defs/digest"},
+        "operation_id": {"$ref": "#/$defs/operationId"},
+        "prepare_request_sha256": {"$ref": "#/$defs/digest"},
+        "prepared_operation": {"$ref": "#/$defs/preparedOperation"},
+        "recovery_key_sha256": {"$ref": "#/$defs/digest"},
+        "request_binding_sha256": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "externalMarkPayloadV3": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "nonce_consume_request_sha256",
+        "operation_id",
+        "prepared_operation_sha256",
+        "recovery_key_sha256"
+      ],
+      "properties": {
+        "nonce_consume_request_sha256": {"$ref": "#/$defs/digest"},
+        "operation_id": {"$ref": "#/$defs/operationId"},
+        "prepared_operation_sha256": {"$ref": "#/$defs/digest"},
+        "recovery_key_sha256": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "externalAttachPayloadV3": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "nonce_consumption_receipt",
+        "nonce_status_evidence",
+        "operation_id",
+        "prepared_operation_sha256",
+        "recovery_key_sha256"
+      ],
+      "properties": {
+        "nonce_consumption_receipt": {
+          "oneOf": [
+            {"$ref": "#/$defs/signedNonceConsumptionReceipt"},
+            {"type": "null"}
+          ]
+        },
+        "nonce_status_evidence": {"$ref": "#/$defs/signedNonceStatusEvidence"},
+        "operation_id": {"$ref": "#/$defs/operationId"},
+        "prepared_operation_sha256": {"$ref": "#/$defs/digest"},
+        "recovery_key_sha256": {"$ref": "#/$defs/digest"}
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "nonce_consumption_receipt": {
+              "$ref": "#/$defs/signedNonceConsumptionReceipt"
+            },
+            "nonce_status_evidence": {
+              "$ref": "#/$defs/signedConsumedNonceStatusEvidence"
+            }
+          }
+        },
+        {
+          "properties": {
+            "nonce_consumption_receipt": {"type": "null"},
+            "nonce_status_evidence": {
+              "$ref": "#/$defs/signedPendingNonceStatusEvidence"
+            }
+          }
+        }
+      ]
+    },
+    "externalAbortPayloadV3": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "nonce_status_evidence",
+        "operation_id",
+        "prepared_operation_sha256",
+        "recovery_key_sha256"
+      ],
+      "properties": {
+        "nonce_status_evidence": {
+          "$ref": "#/$defs/signedNeverConsumedNonceStatusEvidence"
+        },
+        "operation_id": {"$ref": "#/$defs/operationId"},
+        "prepared_operation_sha256": {"$ref": "#/$defs/digest"},
+        "recovery_key_sha256": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "externalCommitPayloadV3": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authorization",
+        "commit_candidate",
+        "commit_request_sha256",
+        "expected_state_sha256",
+        "operation_id"
+      ],
+      "properties": {
+        "authorization": {"$ref": "#/$defs/signedAuthorization"},
+        "commit_candidate": {"$ref": "#/$defs/commitCandidate"},
+        "commit_request_sha256": {"$ref": "#/$defs/digest"},
+        "expected_state_sha256": {"$ref": "#/$defs/digest"},
+        "operation_id": {"$ref": "#/$defs/operationId"}
+      }
+    },
+    "externalFinalizePayloadV3": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "commit_proof_sha256",
+        "commit_receipt",
+        "commit_request_sha256",
+        "next_state",
+        "operation_id"
+      ],
+      "properties": {
+        "commit_proof_sha256": {"$ref": "#/$defs/digest"},
+        "commit_receipt": {"$ref": "#/$defs/signedCommitReceipt"},
+        "commit_request_sha256": {"$ref": "#/$defs/digest"},
+        "next_state": {"$ref": "#/$defs/signedState"},
+        "operation_id": {"$ref": "#/$defs/operationId"}
+      }
+    },
+    "externalRecoverPayloadV3": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["recovery_key_sha256"],
+      "properties": {
+        "commit_request_sha256": {"$ref": "#/$defs/digest"},
+        "operation_id": {"$ref": "#/$defs/operationId"},
+        "prepare_request_sha256": {"$ref": "#/$defs/digest"},
+        "recovery_key_sha256": {"$ref": "#/$defs/digest"},
+        "request_binding_sha256": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "externalStoreRequestV3": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "operation",
+        "payload",
+        "storeIdentitySha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.externalVerifierStateStoreRequest/v3"
+        },
+        "operation": {
+          "enum": [
+            "abortPreparedOperation",
+            "attachNonceStatus",
+            "commitCasCandidate",
+            "finalizeCommitArtifacts",
+            "issueChallenge",
+            "markConsumptionAttempted",
+            "prepareOperation",
+            "read",
+            "recoverChallenge",
+            "recoverOperation"
+          ]
+        },
+        "payload": {"type": "object"},
+        "storeIdentitySha256": {"$ref": "#/$defs/digest"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"operation": {"const": "read"}}},
+          "then": {"properties": {"payload": {"$ref": "#/$defs/externalReadPayloadV3"}}}
+        },
+        {
+          "if": {"properties": {"operation": {"const": "issueChallenge"}}},
+          "then": {"properties": {"payload": {"$ref": "#/$defs/externalChallengePayloadV3"}}}
+        },
+        {
+          "if": {"properties": {"operation": {"const": "recoverChallenge"}}},
+          "then": {"properties": {"payload": {"$ref": "#/$defs/externalRecoverChallengePayloadV3"}}}
+        },
+        {
+          "if": {"properties": {"operation": {"const": "prepareOperation"}}},
+          "then": {"properties": {"payload": {"$ref": "#/$defs/externalPreparePayloadV3"}}}
+        },
+        {
+          "if": {"properties": {"operation": {"const": "markConsumptionAttempted"}}},
+          "then": {"properties": {"payload": {"$ref": "#/$defs/externalMarkPayloadV3"}}}
+        },
+        {
+          "if": {"properties": {"operation": {"const": "attachNonceStatus"}}},
+          "then": {"properties": {"payload": {"$ref": "#/$defs/externalAttachPayloadV3"}}}
+        },
+        {
+          "if": {"properties": {"operation": {"const": "abortPreparedOperation"}}},
+          "then": {"properties": {"payload": {"$ref": "#/$defs/externalAbortPayloadV3"}}}
+        },
+        {
+          "if": {"properties": {"operation": {"const": "commitCasCandidate"}}},
+          "then": {"properties": {"payload": {"$ref": "#/$defs/externalCommitPayloadV3"}}}
+        },
+        {
+          "if": {"properties": {"operation": {"const": "finalizeCommitArtifacts"}}},
+          "then": {"properties": {"payload": {"$ref": "#/$defs/externalFinalizePayloadV3"}}}
+        },
+        {
+          "if": {"properties": {"operation": {"const": "recoverOperation"}}},
+          "then": {"properties": {"payload": {"$ref": "#/$defs/externalRecoverPayloadV3"}}}
+        }
+      ]
+    },
+    "externalRecoveredOperationV3": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "commitProof",
+        "commitReceipt",
+        "nonceConsumptionReceipt",
+        "nonceStatusEvidence",
+        "preparedOperation"
+      ],
+      "properties": {
+        "commitProof": {
+          "oneOf": [
+            {"$ref": "#/$defs/signedStoreCommitProof"},
+            {"type": "null"}
+          ]
+        },
+        "commitReceipt": {
+          "oneOf": [
+            {"$ref": "#/$defs/signedCommitReceipt"},
+            {"type": "null"}
+          ]
+        },
+        "nonceConsumptionReceipt": {
+          "oneOf": [
+            {"$ref": "#/$defs/signedNonceConsumptionReceipt"},
+            {"type": "null"}
+          ]
+        },
+        "nonceStatusEvidence": {
+          "oneOf": [
+            {"$ref": "#/$defs/signedNonceStatusEvidence"},
+            {"type": "null"}
+          ]
+        },
+        "preparedOperation": {"$ref": "#/$defs/preparedOperation"}
+      }
+    },
+    "externalMarkValueV3": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "nonceConsumeRequestSha256",
+        "operationIdBase64url",
+        "preparedOperationSha256",
+        "recoveryKeySha256",
+        "status"
+      ],
+      "properties": {
+        "nonceConsumeRequestSha256": {"$ref": "#/$defs/digest"},
+        "operationIdBase64url": {"$ref": "#/$defs/operationId"},
+        "preparedOperationSha256": {"$ref": "#/$defs/digest"},
+        "recoveryKeySha256": {"$ref": "#/$defs/digest"},
+        "status": {
+          "enum": [
+            "consumptionPending",
+            "nonceConsumed",
+            "casCommitted",
+            "committed"
+          ]
+        }
+      }
+    },
+    "externalAttachValueV3": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "nonceConsumptionReceipt",
+        "nonceStatusEvidence",
+        "status"
+      ],
+      "properties": {
+        "nonceConsumptionReceipt": {
+          "oneOf": [
+            {"$ref": "#/$defs/signedNonceConsumptionReceipt"},
+            {"type": "null"}
+          ]
+        },
+        "nonceStatusEvidence": {"$ref": "#/$defs/signedNonceStatusEvidence"},
+        "status": {
+          "enum": ["consumptionPending", "nonceConsumed"]
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "status": {"const": "consumptionPending"},
+            "nonceConsumptionReceipt": {"type": "null"},
+            "nonceStatusEvidence": {
+              "$ref": "#/$defs/signedPendingNonceStatusEvidence"
+            }
+          }
+        },
+        {
+          "properties": {
+            "status": {"const": "nonceConsumed"},
+            "nonceConsumptionReceipt": {
+              "$ref": "#/$defs/signedNonceConsumptionReceipt"
+            },
+            "nonceStatusEvidence": {
+              "$ref": "#/$defs/signedConsumedNonceStatusEvidence"
+            }
+          }
+        }
+      ]
+    },
+    "externalAbortValueV3": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "nonceStatusEvidence",
+        "operationIdBase64url",
+        "preparedOperationSha256",
+        "recoveryKeySha256"
+      ],
+      "properties": {
+        "nonceStatusEvidence": {
+          "$ref": "#/$defs/signedNeverConsumedNonceStatusEvidence"
+        },
+        "operationIdBase64url": {"$ref": "#/$defs/operationId"},
+        "preparedOperationSha256": {"$ref": "#/$defs/digest"},
+        "recoveryKeySha256": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "externalEmptyOperationResultV3": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "value"],
+      "properties": {
+        "status": {
+          "enum": ["conflict", "unknown"]
+        },
+        "value": {"type": "null"}
+      }
+    },
+    "externalReadOperationResultV3": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "value"],
+      "properties": {
+        "status": {"const": "current"},
+        "value": {"$ref": "#/$defs/signedState"}
+      }
+    },
+    "externalChallengeOperationResultV3": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "value"],
+      "properties": {
+        "status": {"const": "challengeIssued"},
+        "value": {"$ref": "#/$defs/challengeBinding"}
+      }
+    },
+    "externalRecoverChallengeOperationResultV3": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "value"],
+          "properties": {
+            "status": {"const": "challengeRecovered"},
+            "value": {"$ref": "#/$defs/challengeBinding"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "value"],
+          "properties": {
+            "status": {"const": "notFound"},
+            "value": {"type": "null"}
+          }
+        }
+      ]
+    },
+    "externalPrepareOperationResultV3": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "value"],
+      "properties": {
+        "status": {"const": "prepared"},
+        "value": {"$ref": "#/$defs/preparedOperation"}
+      }
+    },
+    "externalMarkOperationResultV3": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "value"],
+      "properties": {
+        "status": {
+          "enum": [
+            "consumptionPending",
+            "nonceConsumed",
+            "casCommitted",
+            "committed"
+          ]
+        },
+        "value": {"$ref": "#/$defs/externalMarkValueV3"}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"status": {"const": "consumptionPending"}}
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "properties": {
+                  "status": {"const": "consumptionPending"}
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"status": {"const": "nonceConsumed"}}
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "properties": {
+                  "status": {"const": "nonceConsumed"}
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"status": {"const": "casCommitted"}}
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "properties": {
+                  "status": {"const": "casCommitted"}
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"status": {"const": "committed"}}
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "properties": {
+                  "status": {"const": "committed"}
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "externalAttachOperationResultV3": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "value"],
+      "properties": {
+        "status": {
+          "enum": ["consumptionPending", "nonceConsumed"]
+        },
+        "value": {"$ref": "#/$defs/externalAttachValueV3"}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"status": {"const": "consumptionPending"}}
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "properties": {
+                  "status": {"const": "consumptionPending"}
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"status": {"const": "nonceConsumed"}}
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "properties": {
+                  "status": {"const": "nonceConsumed"}
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "externalAbortOperationResultV3": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "value"],
+      "properties": {
+        "status": {"const": "aborted"},
+        "value": {"$ref": "#/$defs/externalAbortValueV3"}
+      }
+    },
+    "externalCommitOperationResultV3": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "value"],
+      "properties": {
+        "status": {"const": "casCommitted"},
+        "value": {"$ref": "#/$defs/signedStoreCommitProof"}
+      }
+    },
+    "externalFinalizeOperationResultV3": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "value"],
+      "properties": {
+        "status": {"const": "committed"},
+        "value": {"$ref": "#/$defs/signedCommitReceipt"}
+      }
+    },
+    "externalRecoveryOperationResultV3": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "value"],
+          "properties": {
+            "status": {"const": "notFound"},
+            "value": {"type": "null"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "value"],
+          "properties": {
+            "status": {"const": "prepared"},
+            "value": {
+              "allOf": [
+                {"$ref": "#/$defs/externalRecoveredOperationV3"},
+                {
+                  "properties": {
+                    "commitProof": {"type": "null"},
+                    "commitReceipt": {"type": "null"},
+                    "nonceConsumptionReceipt": {"type": "null"},
+                    "nonceStatusEvidence": {"type": "null"}
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "value"],
+          "properties": {
+            "status": {"const": "consumptionPending"},
+            "value": {
+              "allOf": [
+                {"$ref": "#/$defs/externalRecoveredOperationV3"},
+                {
+                  "properties": {
+                    "commitProof": {"type": "null"},
+                    "commitReceipt": {"type": "null"},
+                    "nonceConsumptionReceipt": {"type": "null"},
+                    "nonceStatusEvidence": {
+                      "oneOf": [
+                        {
+                          "$ref": "#/$defs/signedPendingNonceStatusEvidence"
+                        },
+                        {"type": "null"}
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "value"],
+          "properties": {
+            "status": {"const": "nonceConsumed"},
+            "value": {
+              "allOf": [
+                {"$ref": "#/$defs/externalRecoveredOperationV3"},
+                {
+                  "properties": {
+                    "commitProof": {"type": "null"},
+                    "commitReceipt": {"type": "null"},
+                    "nonceConsumptionReceipt": {
+                      "$ref": "#/$defs/signedNonceConsumptionReceipt"
+                    },
+                    "nonceStatusEvidence": {
+                      "$ref": "#/$defs/signedConsumedNonceStatusEvidence"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "value"],
+          "properties": {
+            "status": {"const": "casCommitted"},
+            "value": {
+              "allOf": [
+                {"$ref": "#/$defs/externalRecoveredOperationV3"},
+                {
+                  "properties": {
+                    "commitProof": {
+                      "$ref": "#/$defs/signedStoreCommitProof"
+                    },
+                    "commitReceipt": {"type": "null"},
+                    "nonceConsumptionReceipt": {
+                      "$ref": "#/$defs/signedNonceConsumptionReceipt"
+                    },
+                    "nonceStatusEvidence": {
+                      "$ref": "#/$defs/signedConsumedNonceStatusEvidence"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "value"],
+          "properties": {
+            "status": {"const": "committed"},
+            "value": {
+              "allOf": [
+                {"$ref": "#/$defs/externalRecoveredOperationV3"},
+                {
+                  "properties": {
+                    "commitProof": {
+                      "$ref": "#/$defs/signedStoreCommitProof"
+                    },
+                    "commitReceipt": {
+                      "$ref": "#/$defs/signedCommitReceipt"
+                    },
+                    "nonceConsumptionReceipt": {
+                      "$ref": "#/$defs/signedNonceConsumptionReceipt"
+                    },
+                    "nonceStatusEvidence": {
+                      "$ref": "#/$defs/signedConsumedNonceStatusEvidence"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "value"],
+          "properties": {
+            "status": {"const": "aborted"},
+            "value": {
+              "allOf": [
+                {"$ref": "#/$defs/externalRecoveredOperationV3"},
+                {
+                  "properties": {
+                    "commitProof": {"type": "null"},
+                    "commitReceipt": {"type": "null"},
+                    "nonceConsumptionReceipt": {"type": "null"},
+                    "nonceStatusEvidence": {
+                      "$ref": "#/$defs/signedNeverConsumedNonceStatusEvidence"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {"$ref": "#/$defs/externalEmptyOperationResultV3"}
+      ]
+    },
+    "externalOperationResultV3": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "value"],
+      "properties": {
+        "status": {
+          "enum": [
+            "aborted",
+            "casCommitted",
+            "challengeIssued",
+            "challengeRecovered",
+            "committed",
+            "conflict",
+            "consumptionPending",
+            "current",
+            "nonceConsumed",
+            "notFound",
+            "prepared",
+            "unknown"
+          ]
+        },
+        "value": {
+          "oneOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/signedState"},
+            {"$ref": "#/$defs/challengeBinding"},
+            {"$ref": "#/$defs/preparedOperation"},
+            {"$ref": "#/$defs/externalMarkValueV3"},
+            {"$ref": "#/$defs/externalAttachValueV3"},
+            {"$ref": "#/$defs/externalAbortValueV3"},
+            {"$ref": "#/$defs/signedStoreCommitProof"},
+            {"$ref": "#/$defs/signedCommitReceipt"},
+            {"$ref": "#/$defs/externalRecoveredOperationV3"}
+          ]
+        }
+      }
+    },
+    "externalStoreResponseV3": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "operation",
+        "requestSha256",
+        "result"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.externalVerifierStateStoreResponse/v3"
+        },
+        "operation": {
+          "$ref": "#/$defs/externalStoreRequestV3/properties/operation"
+        },
+        "requestSha256": {"$ref": "#/$defs/digest"},
+        "result": {"$ref": "#/$defs/externalOperationResultV3"}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"operation": {"const": "read"}}
+          },
+          "then": {
+            "properties": {
+              "result": {
+                "$ref": "#/$defs/externalReadOperationResultV3"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"operation": {"const": "issueChallenge"}}
+          },
+          "then": {
+            "properties": {
+              "result": {
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/externalChallengeOperationResultV3"
+                  },
+                  {
+                    "$ref": "#/$defs/externalEmptyOperationResultV3"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"operation": {"const": "recoverChallenge"}}
+          },
+          "then": {
+            "properties": {
+              "result": {
+                "$ref": "#/$defs/externalRecoverChallengeOperationResultV3"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"operation": {"const": "prepareOperation"}}
+          },
+          "then": {
+            "properties": {
+              "result": {
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/externalPrepareOperationResultV3"
+                  },
+                  {
+                    "$ref": "#/$defs/externalEmptyOperationResultV3"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "operation": {"const": "markConsumptionAttempted"}
+            }
+          },
+          "then": {
+            "properties": {
+              "result": {
+                "oneOf": [
+                  {"$ref": "#/$defs/externalMarkOperationResultV3"},
+                  {"$ref": "#/$defs/externalEmptyOperationResultV3"}
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"operation": {"const": "attachNonceStatus"}}
+          },
+          "then": {
+            "properties": {
+              "result": {
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/externalAttachOperationResultV3"
+                  },
+                  {
+                    "$ref": "#/$defs/externalEmptyOperationResultV3"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "operation": {"const": "abortPreparedOperation"}
+            }
+          },
+          "then": {
+            "properties": {
+              "result": {
+                "oneOf": [
+                  {"$ref": "#/$defs/externalAbortOperationResultV3"},
+                  {"$ref": "#/$defs/externalEmptyOperationResultV3"}
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"operation": {"const": "commitCasCandidate"}}
+          },
+          "then": {
+            "properties": {
+              "result": {
+                "oneOf": [
+                  {"$ref": "#/$defs/externalCommitOperationResultV3"},
+                  {"$ref": "#/$defs/externalEmptyOperationResultV3"}
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "operation": {"const": "finalizeCommitArtifacts"}
+            }
+          },
+          "then": {
+            "properties": {
+              "result": {
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/externalFinalizeOperationResultV3"
+                  },
+                  {
+                    "$ref": "#/$defs/externalEmptyOperationResultV3"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"operation": {"const": "recoverOperation"}}
+          },
+          "then": {
+            "properties": {
+              "result": {
+                "$ref": "#/$defs/externalRecoveryOperationResultV3"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "externalStoreRequestLegacy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "operation",
+        "payload",
+        "storeIdentitySha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.externalVerifierStateStoreRequest/v2"
+        },
+        "operation": {
+          "enum": [
+            "commitCasCandidate",
+            "finalizeCommitArtifacts",
+            "read",
+            "recoverOperation",
+            "reserveAuthorization"
+          ]
+        },
+        "payload": {
+          "type": "object"
+        },
+        "storeIdentitySha256": {
+          "$ref": "#/$defs/digest"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "operation": {
+                "const": "read"
+              }
+            },
+            "required": [
+              "operation"
+            ]
+          },
+          "then": {
+            "properties": {
+              "payload": {
+                "type": "object",
+                "additionalProperties": false,
+                "maxProperties": 0
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "operation": {
+                "const": "reserveAuthorization"
+              }
+            },
+            "required": [
+              "operation"
+            ]
+          },
+          "then": {
+            "properties": {
+              "payload": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "authorization",
+                  "expected_state_sha256",
+                  "operation_id",
+                  "request_sha256"
+                ],
+                "properties": {
+                  "authorization": {
+                    "$ref": "#/$defs/signedAuthorization"
+                  },
+                  "expected_state_sha256": {
+                    "$ref": "#/$defs/digest"
+                  },
+                  "operation_id": {
+                    "$ref": "#/$defs/operationId"
+                  },
+                  "request_sha256": {
+                    "$ref": "#/$defs/digest"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "operation": {
+                "const": "commitCasCandidate"
+              }
+            },
+            "required": [
+              "operation"
+            ]
+          },
+          "then": {
+            "properties": {
+              "payload": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "authorization_sha256",
+                  "commit_request_sha256",
+                  "committed_state",
+                  "expected_state_sha256",
+                  "operation_id"
+                ],
+                "properties": {
+                  "authorization_sha256": {
+                    "$ref": "#/$defs/digest"
+                  },
+                  "commit_request_sha256": {
+                    "$ref": "#/$defs/digest"
+                  },
+                  "committed_state": {
+                    "$ref": "#/$defs/statePayload"
+                  },
+                  "expected_state_sha256": {
+                    "$ref": "#/$defs/digest"
+                  },
+                  "operation_id": {
+                    "$ref": "#/$defs/operationId"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "operation": {
+                "const": "finalizeCommitArtifacts"
+              }
+            },
+            "required": [
+              "operation"
+            ]
+          },
+          "then": {
+            "properties": {
+              "payload": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "commit_proof_sha256",
+                  "commit_receipt",
+                  "commit_request_sha256",
+                  "next_state",
+                  "operation_id"
+                ],
+                "properties": {
+                  "commit_proof_sha256": {
+                    "$ref": "#/$defs/digest"
+                  },
+                  "commit_receipt": {
+                    "$ref": "#/$defs/signedCommitReceipt"
+                  },
+                  "commit_request_sha256": {
+                    "$ref": "#/$defs/digest"
+                  },
+                  "next_state": {
+                    "$ref": "#/$defs/signedState"
+                  },
+                  "operation_id": {
+                    "$ref": "#/$defs/operationId"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "operation": {
+                "const": "recoverOperation"
+              }
+            },
+            "required": [
+              "operation"
+            ]
+          },
+          "then": {
+            "properties": {
+              "payload": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "authorization_request_sha256",
+                      "operation_id"
+                    ],
+                    "properties": {
+                      "authorization_request_sha256": {
+                        "$ref": "#/$defs/digest"
+                      },
+                      "operation_id": {
+                        "$ref": "#/$defs/operationId"
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "commit_request_sha256",
+                      "operation_id"
+                    ],
+                    "properties": {
+                      "commit_request_sha256": {
+                        "$ref": "#/$defs/digest"
+                      },
+                      "operation_id": {
+                        "$ref": "#/$defs/operationId"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    "externalStoreResponseLegacy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "operation",
+        "requestSha256",
+        "result"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.externalVerifierStateStoreResponse/v2"
+        },
+        "operation": {
+          "enum": [
+            "commitCasCandidate",
+            "finalizeCommitArtifacts",
+            "read",
+            "recoverOperation",
+            "reserveAuthorization"
+          ]
+        },
+        "requestSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "value"
+          ],
+          "properties": {
+            "status": {
+              "enum": [
+                "casCommitted",
+                "committed",
+                "conflict",
+                "current",
+                "notFound",
+                "reserved",
+                "unknown"
+              ]
+            },
+            "value": {
+              "oneOf": [
+                {
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "status": {
+                    "enum": [
+                      "conflict",
+                      "notFound",
+                      "unknown"
+                    ]
+                  }
+                },
+                "required": [
+                  "status"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "type": "null"
+                  }
+                }
+              },
+              "else": {
+                "properties": {
+                  "value": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "operation": {
+                "const": "read"
+              }
+            },
+            "required": [
+              "operation"
+            ]
+          },
+          "then": {
+            "properties": {
+              "result": {
+                "properties": {
+                  "status": {
+                    "const": "current"
+                  },
+                  "value": {
+                    "$ref": "#/$defs/signedState"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "operation": {
+                "const": "reserveAuthorization"
+              }
+            },
+            "required": [
+              "operation"
+            ]
+          },
+          "then": {
+            "properties": {
+              "result": {
+                "properties": {
+                  "status": {
+                    "enum": [
+                      "conflict",
+                      "reserved",
+                      "unknown"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "operation": {
+                "const": "commitCasCandidate"
+              }
+            },
+            "required": [
+              "operation"
+            ]
+          },
+          "then": {
+            "properties": {
+              "result": {
+                "properties": {
+                  "status": {
+                    "enum": [
+                      "casCommitted",
+                      "conflict",
+                      "unknown"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "operation": {
+                "const": "finalizeCommitArtifacts"
+              }
+            },
+            "required": [
+              "operation"
+            ]
+          },
+          "then": {
+            "properties": {
+              "result": {
+                "properties": {
+                  "status": {
+                    "enum": [
+                      "committed",
+                      "conflict",
+                      "unknown"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "operation": {
+                "const": "recoverOperation"
+              }
+            },
+            "required": [
+              "operation"
+            ]
+          },
+          "then": {
+            "properties": {
+              "result": {
+                "properties": {
+                  "status": {
+                    "enum": [
+                      "casCommitted",
+                      "committed",
+                      "notFound",
+                      "reserved"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "challengeBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "challengeBase64url",
+        "challengeExpiresAtUnix",
+        "challengeIssuedAtUnix",
+        "challengeSha256",
+        "expectedVerifierStateSha256",
+        "issueRequestSha256",
+        "operationIdBase64url",
+        "producerInvocationBaseSha256",
+        "recoveryKeySha256",
+        "replacementForbidden",
+        "status"
+      ],
+      "properties": {
+        "challengeBase64url": {
+          "$ref": "#/$defs/base64url32"
+        },
+        "challengeExpiresAtUnix": {
+          "$ref": "#/$defs/positiveInteger"
+        },
+        "challengeIssuedAtUnix": {
+          "$ref": "#/$defs/positiveInteger"
+        },
+        "challengeSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "expectedVerifierStateSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "issueRequestSha256": {"$ref": "#/$defs/digest"},
+        "operationIdBase64url": {"$ref": "#/$defs/operationId"},
+        "producerInvocationBaseSha256": {"$ref": "#/$defs/digest"},
+        "recoveryKeySha256": {"$ref": "#/$defs/digest"},
+        "replacementForbidden": {"const": true},
+        "status": {"enum": ["issued", "bound", "expired"]}
+      }
+    },
+    "recoveredReservedOperation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authorization",
+        "commitProof",
+        "commitReceipt"
+      ],
+      "properties": {
+        "authorization": {
+          "$ref": "#/$defs/signedAuthorization"
+        },
+        "commitProof": {
+          "type": "null"
+        },
+        "commitReceipt": {
+          "type": "null"
+        }
+      }
+    },
+    "recoveredCasCommittedOperation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authorization",
+        "commitProof",
+        "commitReceipt"
+      ],
+      "properties": {
+        "authorization": {
+          "$ref": "#/$defs/signedAuthorization"
+        },
+        "commitProof": {
+          "$ref": "#/$defs/signedStoreCommitProof"
+        },
+        "commitReceipt": {
+          "type": "null"
+        }
+      }
+    },
+    "recoveredCommittedOperation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authorization",
+        "commitProof",
+        "commitReceipt"
+      ],
+      "properties": {
+        "authorization": {
+          "$ref": "#/$defs/signedAuthorization"
+        },
+        "commitProof": {
+          "$ref": "#/$defs/signedStoreCommitProof"
+        },
+        "commitReceipt": {
+          "$ref": "#/$defs/signedCommitReceipt"
+        }
+      }
+    },
+    "externalStoreRequestV2Legacy": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "apiVersion",
+            "operation",
+            "payload",
+            "storeIdentitySha256"
+          ],
+          "properties": {
+            "apiVersion": {
+              "const": "serverware.externalVerifierStateStoreRequest/v2"
+            },
+            "operation": {
+              "const": "read"
+            },
+            "payload": {
+              "type": "object",
+              "additionalProperties": false,
+              "maxProperties": 0
+            },
+            "storeIdentitySha256": {
+              "$ref": "#/$defs/digest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "apiVersion",
+            "operation",
+            "payload",
+            "storeIdentitySha256"
+          ],
+          "properties": {
+            "apiVersion": {
+              "const": "serverware.externalVerifierStateStoreRequest/v2"
+            },
+            "operation": {
+              "const": "issueChallenge"
+            },
+            "payload": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "challenge_base64url",
+                "challenge_sha256",
+                "expected_state_sha256",
+                "expires_at_unix",
+                "issued_at_unix"
+              ],
+              "properties": {
+                "challenge_base64url": {
+                  "$ref": "#/$defs/base64url32"
+                },
+                "challenge_sha256": {
+                  "$ref": "#/$defs/digest"
+                },
+                "expected_state_sha256": {
+                  "$ref": "#/$defs/digest"
+                },
+                "expires_at_unix": {
+                  "$ref": "#/$defs/positiveInteger"
+                },
+                "issued_at_unix": {
+                  "$ref": "#/$defs/positiveInteger"
+                }
+              }
+            },
+            "storeIdentitySha256": {
+              "$ref": "#/$defs/digest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "apiVersion",
+            "operation",
+            "payload",
+            "storeIdentitySha256"
+          ],
+          "properties": {
+            "apiVersion": {
+              "const": "serverware.externalVerifierStateStoreRequest/v2"
+            },
+            "operation": {
+              "const": "reserveAuthorization"
+            },
+            "payload": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "authorization",
+                "challenge_sha256",
+                "expected_state_sha256",
+                "operation_id",
+                "request_sha256"
+              ],
+              "properties": {
+                "authorization": {
+                  "$ref": "#/$defs/signedAuthorization"
+                },
+                "challenge_sha256": {
+                  "$ref": "#/$defs/digest"
+                },
+                "expected_state_sha256": {
+                  "$ref": "#/$defs/digest"
+                },
+                "operation_id": {
+                  "$ref": "#/$defs/operationId"
+                },
+                "request_sha256": {
+                  "$ref": "#/$defs/digest"
+                }
+              }
+            },
+            "storeIdentitySha256": {
+              "$ref": "#/$defs/digest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "apiVersion",
+            "operation",
+            "payload",
+            "storeIdentitySha256"
+          ],
+          "properties": {
+            "apiVersion": {
+              "const": "serverware.externalVerifierStateStoreRequest/v2"
+            },
+            "operation": {
+              "const": "commitCasCandidate"
+            },
+            "payload": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "authorization",
+                "commit_candidate",
+                "commit_request_sha256",
+                "expected_state_sha256",
+                "operation_id"
+              ],
+              "properties": {
+                "authorization": {
+                  "$ref": "#/$defs/signedAuthorization"
+                },
+                "commit_candidate": {
+                  "$ref": "#/$defs/commitCandidate"
+                },
+                "commit_request_sha256": {
+                  "$ref": "#/$defs/digest"
+                },
+                "expected_state_sha256": {
+                  "$ref": "#/$defs/digest"
+                },
+                "operation_id": {
+                  "$ref": "#/$defs/operationId"
+                }
+              }
+            },
+            "storeIdentitySha256": {
+              "$ref": "#/$defs/digest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "apiVersion",
+            "operation",
+            "payload",
+            "storeIdentitySha256"
+          ],
+          "properties": {
+            "apiVersion": {
+              "const": "serverware.externalVerifierStateStoreRequest/v2"
+            },
+            "operation": {
+              "const": "finalizeCommitArtifacts"
+            },
+            "payload": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "commit_proof_sha256",
+                "commit_receipt",
+                "commit_request_sha256",
+                "next_state",
+                "operation_id"
+              ],
+              "properties": {
+                "commit_proof_sha256": {
+                  "$ref": "#/$defs/digest"
+                },
+                "commit_receipt": {
+                  "$ref": "#/$defs/signedCommitReceipt"
+                },
+                "commit_request_sha256": {
+                  "$ref": "#/$defs/digest"
+                },
+                "next_state": {
+                  "$ref": "#/$defs/signedState"
+                },
+                "operation_id": {
+                  "$ref": "#/$defs/operationId"
+                }
+              }
+            },
+            "storeIdentitySha256": {
+              "$ref": "#/$defs/digest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "apiVersion",
+            "operation",
+            "payload",
+            "storeIdentitySha256"
+          ],
+          "properties": {
+            "apiVersion": {
+              "const": "serverware.externalVerifierStateStoreRequest/v2"
+            },
+            "operation": {
+              "const": "recoverOperation"
+            },
+            "payload": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "authorization_request_sha256",
+                    "operation_id"
+                  ],
+                  "properties": {
+                    "authorization_request_sha256": {
+                      "$ref": "#/$defs/digest"
+                    },
+                    "operation_id": {
+                      "$ref": "#/$defs/operationId"
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "commit_request_sha256",
+                    "operation_id"
+                  ],
+                  "properties": {
+                    "commit_request_sha256": {
+                      "$ref": "#/$defs/digest"
+                    },
+                    "operation_id": {
+                      "$ref": "#/$defs/operationId"
+                    }
+                  }
+                }
+              ]
+            },
+            "storeIdentitySha256": {
+              "$ref": "#/$defs/digest"
+            }
+          }
+        }
+      ]
+    },
+    "externalStoreResponseV2Legacy": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/externalReadResponse"
+        },
+        {
+          "$ref": "#/$defs/externalChallengeResponse"
+        },
+        {
+          "$ref": "#/$defs/externalReserveResponse"
+        },
+        {
+          "$ref": "#/$defs/externalCommitResponse"
+        },
+        {
+          "$ref": "#/$defs/externalFinalizeResponse"
+        },
+        {
+          "$ref": "#/$defs/externalRecoveryResponse"
+        }
+      ]
+    },
+    "externalReadResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "operation",
+        "requestSha256",
+        "result"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.externalVerifierStateStoreResponse/v2"
+        },
+        "operation": {
+          "const": "read"
+        },
+        "requestSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "value"
+          ],
+          "properties": {
+            "status": {
+              "const": "current"
+            },
+            "value": {
+              "$ref": "#/$defs/signedState"
+            }
+          }
+        }
+      }
+    },
+    "externalChallengeResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "operation",
+        "requestSha256",
+        "result"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.externalVerifierStateStoreResponse/v2"
+        },
+        "operation": {
+          "const": "issueChallenge"
+        },
+        "requestSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "result": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "status",
+                "value"
+              ],
+              "properties": {
+                "status": {
+                  "const": "challengeIssued"
+                },
+                "value": {
+                  "$ref": "#/$defs/challengeBinding"
+                }
+              }
+            },
+            {
+              "$ref": "#/$defs/externalEmptyResult"
+            }
+          ]
+        }
+      }
+    },
+    "externalReserveResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "operation",
+        "requestSha256",
+        "result"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.externalVerifierStateStoreResponse/v2"
+        },
+        "operation": {
+          "const": "reserveAuthorization"
+        },
+        "requestSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "result": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "status",
+                "value"
+              ],
+              "properties": {
+                "status": {
+                  "const": "reserved"
+                },
+                "value": {
+                  "$ref": "#/$defs/signedAuthorization"
+                }
+              }
+            },
+            {
+              "$ref": "#/$defs/externalEmptyResult"
+            }
+          ]
+        }
+      }
+    },
+    "externalCommitResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "operation",
+        "requestSha256",
+        "result"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.externalVerifierStateStoreResponse/v2"
+        },
+        "operation": {
+          "const": "commitCasCandidate"
+        },
+        "requestSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "result": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "status",
+                "value"
+              ],
+              "properties": {
+                "status": {
+                  "const": "casCommitted"
+                },
+                "value": {
+                  "$ref": "#/$defs/signedStoreCommitProof"
+                }
+              }
+            },
+            {
+              "$ref": "#/$defs/externalEmptyResult"
+            }
+          ]
+        }
+      }
+    },
+    "externalFinalizeResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "operation",
+        "requestSha256",
+        "result"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.externalVerifierStateStoreResponse/v2"
+        },
+        "operation": {
+          "const": "finalizeCommitArtifacts"
+        },
+        "requestSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "result": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "status",
+                "value"
+              ],
+              "properties": {
+                "status": {
+                  "const": "committed"
+                },
+                "value": {
+                  "$ref": "#/$defs/signedCommitReceipt"
+                }
+              }
+            },
+            {
+              "$ref": "#/$defs/externalEmptyResult"
+            }
+          ]
+        }
+      }
+    },
+    "externalRecoveryResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "operation",
+        "requestSha256",
+        "result"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.externalVerifierStateStoreResponse/v2"
+        },
+        "operation": {
+          "const": "recoverOperation"
+        },
+        "requestSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "result": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "status",
+                "value"
+              ],
+              "properties": {
+                "status": {
+                  "const": "notFound"
+                },
+                "value": {
+                  "type": "null"
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "status",
+                "value"
+              ],
+              "properties": {
+                "status": {
+                  "const": "reserved"
+                },
+                "value": {
+                  "$ref": "#/$defs/recoveredReservedOperation"
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "status",
+                "value"
+              ],
+              "properties": {
+                "status": {
+                  "const": "casCommitted"
+                },
+                "value": {
+                  "$ref": "#/$defs/recoveredCasCommittedOperation"
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "status",
+                "value"
+              ],
+              "properties": {
+                "status": {
+                  "const": "committed"
+                },
+                "value": {
+                  "$ref": "#/$defs/recoveredCommittedOperation"
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "status",
+                "value"
+              ],
+              "properties": {
+                "status": {
+                  "const": "unknown"
+                },
+                "value": {
+                  "type": "null"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "externalEmptyResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "value"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "conflict",
+            "unknown"
+          ]
+        },
+        "value": {
+          "type": "null"
+        }
+      }
+    },
+    "remoteSignRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "messageBase64url",
+        "messageSha256",
+        "signingKeySpkiSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.remoteEd25519SignRequest/v1"
+        },
+        "messageBase64url": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]+$",
+          "maxLength": 349526
+        },
+        "messageSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "signingKeySpkiSha256": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "remoteSignResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "operation",
+        "requestSha256",
+        "result"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.externalVerifierStateStoreResponse/v2"
+        },
+        "operation": {
+          "const": "sign"
+        },
+        "requestSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "apiVersion",
+            "messageSha256",
+            "signatureAlgorithm",
+            "signatureBase64url",
+            "signingKeySpkiSha256"
+          ],
+          "properties": {
+            "apiVersion": {
+              "const": "serverware.remoteEd25519SignResponse/v1"
+            },
+            "messageSha256": {
+              "$ref": "#/$defs/digest"
+            },
+            "signatureAlgorithm": {
+              "const": "Ed25519"
+            },
+            "signatureBase64url": {
+              "$ref": "#/$defs/base64url64"
+            },
+            "signingKeySpkiSha256": {
+              "$ref": "#/$defs/digest"
+            }
+          }
+        }
+      }
+    },
+    "nonceAuthorityConfiguration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "administrativeDomainSha256",
+        "assuranceEvidence",
+        "assuranceEvidenceSha256",
+        "assuranceEvidenceSigningPublicKeySpkiDerBase64url",
+        "credentialIdentitySha256",
+        "endpointIdentitySha256",
+        "signingPublicKeySpkiDerBase64url",
+        "storeIdentitySha256"
+      ],
+      "properties": {
+        "administrativeDomainSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "assuranceEvidence": {
+          "oneOf": [
+            {
+              "$ref": "public-attestation-config.v2.schema.json#/$defs/signedNonceAssuranceEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "assuranceEvidenceSha256": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/digest"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "assuranceEvidenceSigningPublicKeySpkiDerBase64url": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/base64url44"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "credentialIdentitySha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "endpointIdentitySha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "signingPublicKeySpkiDerBase64url": {
+          "$ref": "#/$defs/base64url44"
+        },
+        "storeIdentitySha256": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "roleProjection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "administrativeDomainSha256",
+        "assuranceEvidenceSha256",
+        "credentialIdentitySha256",
+        "endpointIdentitySha256",
+        "keySpkiSha256",
+        "roleIdentitySha256"
+      ],
+      "properties": {
+        "administrativeDomainSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "assuranceEvidenceSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "credentialIdentitySha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "endpointIdentitySha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "keySpkiSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "roleIdentitySha256": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "roleSeparationEvidencePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "assuranceSha256",
+        "evidenceExpiresAtUnix",
+        "evidenceIssuedAtUnix",
+        "nonceAuthority",
+        "nonceAuthorityAssuranceEvidenceIssuer",
+        "publicAttestationClientTls",
+        "productionEligible",
+        "roleSeparationEvidenceIssuer",
+        "storeAssuranceEvidenceIssuer",
+        "verifierStateServiceListenerTls",
+        "verifierStateSigner",
+        "verifierStateSignerClientTls",
+        "verifierStateSignerServerTls",
+        "verifierStateStore",
+        "verifierStateStoreClientTls",
+        "verifierStateStoreServerTls"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.verifierStateRoleSeparationEvidence/v1"
+        },
+        "assuranceSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "evidenceExpiresAtUnix": {
+          "$ref": "#/$defs/positiveInteger"
+        },
+        "evidenceIssuedAtUnix": {
+          "$ref": "#/$defs/positiveInteger"
+        },
+        "nonceAuthority": {
+          "$ref": "#/$defs/roleProjection"
+        },
+        "nonceAuthorityAssuranceEvidenceIssuer": {
+          "$ref": "#/$defs/roleProjection"
+        },
+        "publicAttestationClientTls": {
+          "$ref": "#/$defs/roleProjection"
+        },
+        "productionEligible": {
+          "const": true
+        },
+        "roleSeparationEvidenceIssuer": {
+          "$ref": "#/$defs/roleProjection"
+        },
+        "storeAssuranceEvidenceIssuer": {
+          "$ref": "#/$defs/roleProjection"
+        },
+        "verifierStateServiceListenerTls": {
+          "$ref": "#/$defs/roleProjection"
+        },
+        "verifierStateSigner": {
+          "$ref": "#/$defs/roleProjection"
+        },
+        "verifierStateSignerClientTls": {
+          "$ref": "#/$defs/roleProjection"
+        },
+        "verifierStateSignerServerTls": {
+          "$ref": "#/$defs/roleProjection"
+        },
+        "verifierStateStore": {
+          "$ref": "#/$defs/roleProjection"
+        },
+        "verifierStateStoreClientTls": {
+          "$ref": "#/$defs/roleProjection"
+        },
+        "verifierStateStoreServerTls": {
+          "$ref": "#/$defs/roleProjection"
+        }
+      }
+    },
+    "signedRoleSeparationEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "payload",
+        "payloadSha256",
+        "signatureAlgorithm",
+        "signatureBase64url",
+        "signingKeyId",
+        "signingKeySpkiSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.signedVerifierStateRoleSeparationEvidence/v1"
+        },
+        "payload": {
+          "$ref": "#/$defs/roleSeparationEvidencePayload"
+        },
+        "payloadSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "signatureAlgorithm": {
+          "const": "Ed25519"
+        },
+        "signatureBase64url": {
+          "$ref": "#/$defs/base64url64"
+        },
+        "signingKeyId": {
+          "$ref": "#/$defs/digest"
+        },
+        "signingKeySpkiSha256": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "serviceConfiguration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "assurance",
+        "assuranceSha256",
+        "authorizationLifetimeSeconds",
+        "listen",
+        "listenerTls",
+        "maxConcurrentRequests",
+        "mode",
+        "nonceAuthority",
+        "nonceAuthorityAssuranceEvidenceIssuer",
+        "roleSeparationEvidence",
+        "roleSeparationEvidenceIssuer",
+        "roleSeparationEvidenceSigningPublicKeySpkiDerBase64url",
+        "signer",
+        "stateStore"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.attestationVerifierStateServiceConfiguration/v3"
+        },
+        "assurance": {
+          "$ref": "#/$defs/assurance"
+        },
+        "assuranceSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "authorizationLifetimeSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 30
+        },
+        "listen": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "expectedHostAuthority",
+            "host",
+            "port"
+          ],
+          "properties": {
+            "expectedHostAuthority": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512,
+              "pattern": "^[^/@]+$"
+            },
+            "host": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 253
+            },
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            }
+          }
+        },
+        "listenerTls": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/listenerTlsConfiguration"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "maxConcurrentRequests": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 256
+        },
+        "mode": {
+          "enum": [
+            "production",
+            "nonProductionReference"
+          ]
+        },
+        "nonceAuthority": {
+          "$ref": "#/$defs/nonceAuthorityConfiguration"
+        },
+        "nonceAuthorityAssuranceEvidenceIssuer": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/roleProjection"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "roleSeparationEvidence": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/signedRoleSeparationEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "roleSeparationEvidenceIssuer": {
+          "oneOf": [
+            {"$ref": "#/$defs/roleProjection"},
+            {"type": "null"}
+          ]
+        },
+        "roleSeparationEvidenceSigningPublicKeySpkiDerBase64url": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/base64url44"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "signer": {
+          "type": "object"
+        },
+        "stateStore": {
+          "type": "object"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "production"
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "then": {
+            "properties": {
+              "assurance": {
+                "properties": {
+                  "productionEligible": {
+                    "const": true
+                  }
+                }
+              },
+              "signer": {
+                "$ref": "#/$defs/externalSignerConfiguration"
+              },
+              "listenerTls": {
+                "$ref": "#/$defs/listenerTlsConfiguration"
+              },
+              "nonceAuthority": {
+                "properties": {
+                  "assuranceEvidence": {
+                    "$ref": "public-attestation-config.v2.schema.json#/$defs/signedNonceAssuranceEvidence"
+                  },
+                  "assuranceEvidenceSha256": {
+                    "$ref": "#/$defs/digest"
+                  },
+                  "assuranceEvidenceSigningPublicKeySpkiDerBase64url": {
+                    "$ref": "#/$defs/base64url44"
+                  }
+                }
+              },
+              "nonceAuthorityAssuranceEvidenceIssuer": {
+                "$ref": "#/$defs/roleProjection"
+              },
+              "roleSeparationEvidence": {
+                "$ref": "#/$defs/signedRoleSeparationEvidence"
+              },
+              "roleSeparationEvidenceIssuer": {
+                "$ref": "#/$defs/roleProjection"
+              },
+              "roleSeparationEvidenceSigningPublicKeySpkiDerBase64url": {
+                "$ref": "#/$defs/base64url44"
+              },
+              "stateStore": {
+                "$ref": "#/$defs/externalStoreConfiguration"
+              }
+            },
+            "oneOf": [
+              {
+                "properties": {
+                  "assurance": {
+                    "properties": {
+                      "rollbackProtection": {
+                        "properties": {
+                          "mechanism": {
+                            "const": "hardwareMonotonicCounter"
+                          },
+                          "verifierStateStoreClass": {
+                            "const": "hardwareProtectedStateStore"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "stateStore": {
+                    "properties": {
+                      "rollbackMechanism": {
+                        "const": "hardwareMonotonicCounter"
+                      },
+                      "storeClass": {
+                        "const": "hardwareProtectedStateStore"
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "assurance": {
+                    "properties": {
+                      "rollbackProtection": {
+                        "properties": {
+                          "mechanism": {
+                            "const": "linearizableCasWithRollbackProtectedStorage"
+                          },
+                          "verifierStateStoreClass": {
+                            "const": "independentlyAdministeredLinearizableCas"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "stateStore": {
+                    "properties": {
+                      "rollbackMechanism": {
+                        "const": "linearizableCasWithRollbackProtectedStorage"
+                      },
+                      "storeClass": {
+                        "const": "independentlyAdministeredLinearizableCas"
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "assurance": {
+                    "properties": {
+                      "rollbackProtection": {
+                        "properties": {
+                          "mechanism": {
+                            "const": "appendOnlyWitnessedLedger"
+                          },
+                          "verifierStateStoreClass": {
+                            "const": "independentlyAdministeredLinearizableCas"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "stateStore": {
+                    "properties": {
+                      "rollbackMechanism": {
+                        "const": "appendOnlyWitnessedLedger"
+                      },
+                      "storeClass": {
+                        "const": "independentlyAdministeredLinearizableCas"
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          "else": {
+            "properties": {
+              "assurance": {
+                "properties": {
+                  "productionEligible": {
+                    "const": false
+                  }
+                }
+              },
+              "signer": {
+                "$ref": "#/$defs/referenceSignerConfiguration"
+              },
+              "listenerTls": {
+                "type": "null"
+              },
+              "nonceAuthority": {
+                "properties": {
+                  "assuranceEvidence": {
+                    "type": "null"
+                  },
+                  "assuranceEvidenceSha256": {
+                    "type": "null"
+                  },
+                  "assuranceEvidenceSigningPublicKeySpkiDerBase64url": {
+                    "type": "null"
+                  }
+                }
+              },
+              "nonceAuthorityAssuranceEvidenceIssuer": {
+                "type": "null"
+              },
+              "roleSeparationEvidence": {
+                "type": "null"
+              },
+              "roleSeparationEvidenceIssuer": {
+                "type": "null"
+              },
+              "roleSeparationEvidenceSigningPublicKeySpkiDerBase64url": {
+                "type": "null"
+              },
+              "stateStore": {
+                "$ref": "#/$defs/referenceStoreConfiguration"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "listenerTlsConfiguration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "clientCaFile",
+        "clientRole",
+        "expectedClientCertificateSpkiSha256",
+        "expectedClientSpiffeUri",
+        "kind",
+        "serverCertificateFile",
+        "serverKeyFile",
+        "serverRole"
+      ],
+      "properties": {
+        "clientCaFile": {
+          "$ref": "#/$defs/absolutePath"
+        },
+        "clientRole": {
+          "$ref": "#/$defs/roleProjection"
+        },
+        "expectedClientCertificateSpkiSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "expectedClientSpiffeUri": {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^spiffe://",
+              "minLength": 10,
+              "maxLength": 512
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kind": {
+          "const": "mutualTls"
+        },
+        "serverCertificateFile": {
+          "$ref": "#/$defs/absolutePath"
+        },
+        "serverKeyFile": {
+          "$ref": "#/$defs/absolutePath"
+        },
+        "serverRole": {
+          "$ref": "#/$defs/roleProjection"
+        }
+      }
+    },
+    "externalSignerConfiguration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "administrativeDomainSha256",
+        "assuranceEvidenceSha256",
+        "caFile",
+        "clientCertificateFile",
+        "clientCertificateSpkiSha256",
+        "clientKeyFile",
+        "clientTlsRole",
+        "credentialIdentitySha256",
+        "endpoint",
+        "endpointIdentitySha256",
+        "expectedServerCertificateSpkiSha256",
+        "expectedServerSpiffeUri",
+        "kind",
+        "publicKeySpkiDerBase64url",
+        "serverTlsRole",
+        "timeoutMilliseconds"
+      ],
+      "properties": {
+        "administrativeDomainSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "assuranceEvidenceSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "caFile": {
+          "$ref": "#/$defs/absolutePath"
+        },
+        "clientCertificateFile": {
+          "$ref": "#/$defs/absolutePath"
+        },
+        "clientCertificateSpkiSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "clientKeyFile": {
+          "$ref": "#/$defs/absolutePath"
+        },
+        "clientTlsRole": {
+          "$ref": "#/$defs/roleProjection"
+        },
+        "credentialIdentitySha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "endpoint": {
+          "type": "string",
+          "pattern": "^https://[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*(?::(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?/?$",
+          "maxLength": 512
+        },
+        "endpointIdentitySha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "expectedServerCertificateSpkiSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "expectedServerSpiffeUri": {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^spiffe://",
+              "minLength": 10,
+              "maxLength": 512
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kind": {
+          "const": "externalNonExportableEd25519"
+        },
+        "publicKeySpkiDerBase64url": {
+          "$ref": "#/$defs/base64url44"
+        },
+        "serverTlsRole": {
+          "$ref": "#/$defs/roleProjection"
+        },
+        "timeoutMilliseconds": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 10000
+        }
+      }
+    },
+    "externalStoreConfiguration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "administrativeDomainSha256",
+        "assuranceEvidence",
+        "assuranceEvidenceSha256",
+        "assuranceEvidenceIssuerAdministrativeDomainSha256",
+        "assuranceEvidenceIssuerCredentialIdentitySha256",
+        "assuranceEvidenceIssuerEndpointIdentitySha256",
+        "assuranceEvidenceIssuerIdentitySha256",
+        "assuranceEvidenceSigningPublicKeySpkiDerBase64url",
+        "attestationPublicKeySpkiDerBase64url",
+        "caFile",
+        "clientCertificateFile",
+        "clientCertificateSpkiSha256",
+        "clientKeyFile",
+        "clientTlsRole",
+        "credentialIdentitySha256",
+        "endpoint",
+        "endpointIdentitySha256",
+        "expectedServerCertificateSpkiSha256",
+        "expectedServerSpiffeUri",
+        "kind",
+        "minimumCommitIndex",
+        "minimumGeneration",
+        "rollbackMechanism",
+        "serverTlsRole",
+        "storeClass",
+        "storeConfigurationSha256",
+        "storeIdentitySha256",
+        "timeoutMilliseconds"
+      ],
+      "properties": {
+        "administrativeDomainSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "assuranceEvidence": {
+          "$ref": "public-attestation-config.v2.schema.json#/$defs/signedStoreAssuranceEvidence"
+        },
+        "assuranceEvidenceSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "assuranceEvidenceIssuerAdministrativeDomainSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "assuranceEvidenceIssuerCredentialIdentitySha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "assuranceEvidenceIssuerEndpointIdentitySha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "assuranceEvidenceIssuerIdentitySha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "assuranceEvidenceSigningPublicKeySpkiDerBase64url": {
+          "$ref": "#/$defs/base64url44"
+        },
+        "attestationPublicKeySpkiDerBase64url": {
+          "$ref": "#/$defs/base64url44"
+        },
+        "caFile": {
+          "$ref": "#/$defs/absolutePath"
+        },
+        "clientCertificateFile": {
+          "$ref": "#/$defs/absolutePath"
+        },
+        "clientCertificateSpkiSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "clientKeyFile": {
+          "$ref": "#/$defs/absolutePath"
+        },
+        "clientTlsRole": {
+          "$ref": "#/$defs/roleProjection"
+        },
+        "credentialIdentitySha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "endpoint": {
+          "type": "string",
+          "pattern": "^https://[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*(?::(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?/?$",
+          "maxLength": 512
+        },
+        "endpointIdentitySha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "expectedServerCertificateSpkiSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "expectedServerSpiffeUri": {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^spiffe://",
+              "minLength": 10,
+              "maxLength": 512
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kind": {
+          "const": "externalLinearizableRollbackProtected"
+        },
+        "minimumCommitIndex": {
+          "$ref": "#/$defs/positiveInteger"
+        },
+        "minimumGeneration": {
+          "$ref": "#/$defs/positiveInteger"
+        },
+        "rollbackMechanism": {
+          "enum": [
+            "hardwareMonotonicCounter",
+            "linearizableCasWithRollbackProtectedStorage",
+            "appendOnlyWitnessedLedger"
+          ]
+        },
+        "serverTlsRole": {
+          "$ref": "#/$defs/roleProjection"
+        },
+        "storeClass": {
+          "enum": [
+            "hardwareProtectedStateStore",
+            "independentlyAdministeredLinearizableCas"
+          ]
+        },
+        "storeConfigurationSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "storeIdentitySha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "timeoutMilliseconds": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 10000
+        }
+      }
+    },
+    "referenceSignerConfiguration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "privateKeyFile"
+      ],
+      "properties": {
+        "kind": {
+          "const": "nonProductionFileEd25519"
+        },
+        "privateKeyFile": {
+          "$ref": "#/$defs/absolutePath"
+        }
+      }
+    },
+    "referenceStoreConfiguration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "administrativeDomainSha256",
+        "kind",
+        "path",
+        "storeIdentitySha256"
+      ],
+      "properties": {
+        "administrativeDomainSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "kind": {
+          "const": "nonProductionSqlite"
+        },
+        "path": {
+          "$ref": "#/$defs/absolutePath"
+        },
+        "storeIdentitySha256": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    }
+  }
+}

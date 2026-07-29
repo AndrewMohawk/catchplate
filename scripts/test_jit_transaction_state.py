@@ -6,9 +6,11 @@ import base64
 from contextlib import ExitStack
 import hashlib
 import hmac
+import http.client
 import json
 import os
 import re
+import socket
 import sqlite3
 import sys
 import tempfile
@@ -1233,6 +1235,1021 @@ def advance_active_policy_hash(db: Any, policy_hash: str) -> dict[str, Any]:
         rollback_epoch=int(current["rollback_epoch"]),
         policy_hash=policy_hash,
     )
+
+
+def _release_lock_digest(value: str) -> str:
+    return "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _record_release_lock_order(db: Any, call: Any) -> tuple[Any, list[Any]]:
+    events: list[tuple[str, tuple[str, ...]]] = []
+    lock_resources = db._lock_release_resources
+    lock_authority = db._lock_release_authority_resources
+    release_attempt_row = db._release_attempt_row
+
+    def record_resources(conn: Any, resources: Any) -> None:
+        events.append(("resources", tuple(sorted(set(resources)))))
+        lock_resources(conn, resources)
+
+    def record_authority(conn: Any, **kwargs: Any) -> None:
+        events.append(("authority", ()))
+        lock_authority(conn, **kwargs)
+
+    def record_attempt_row(
+        conn: Any,
+        attempt_id: str,
+        *,
+        for_update: bool = False,
+    ) -> Any:
+        if for_update:
+            events.append(("row", (f"attempt:{attempt_id}",)))
+        return release_attempt_row(
+            conn,
+            attempt_id,
+            for_update=for_update,
+        )
+
+    with (
+        patch.object(
+            db,
+            "_lock_release_resources",
+            side_effect=record_resources,
+        ),
+        patch.object(
+            db,
+            "_lock_release_authority_resources",
+            side_effect=record_authority,
+        ),
+        patch.object(
+            db,
+            "_release_attempt_row",
+            side_effect=record_attempt_row,
+        ),
+    ):
+        result = call()
+    return result, events
+
+
+def _assert_release_lock_order(
+    events: list[Any],
+    expected_resources: set[str],
+    *,
+    label: str,
+) -> None:
+    phases = [phase for phase, _ in events]
+    if phases.count("authority") != 1:
+        raise AssertionError(
+            f"{label} did not acquire one authority phase: {events}"
+        )
+    authority_index = phases.index("authority")
+    if (
+        authority_index < 1
+        or any(
+            phase != "resources"
+            for phase in phases[:authority_index]
+        )
+        or "resources" in phases[authority_index + 1 :]
+        or "row" not in phases[authority_index + 1 :]
+    ):
+        raise AssertionError(
+            f"{label} violated resources-authority-row order: {events}"
+        )
+    locked_resources = {
+        resource
+        for phase, resources in events[:authority_index]
+        if phase == "resources"
+        for resource in resources
+    }
+    if locked_resources != expected_resources:
+        raise AssertionError(
+            f"{label} acquired the wrong release resource set: "
+            f"{locked_resources} != {expected_resources}"
+        )
+
+
+def exercise_v1_route_protocol_authority(db: Any) -> None:
+    policy_hash = _release_lock_digest("release-v1-route-authority")
+    legacy_route = SimpleNamespace(
+        id="route.release-v1.legacy",
+        constraints=(
+            {
+                "id": "legacy-fixed-window",
+                "type": "rateLimit",
+                "store": "shared",
+                "windowSeconds": 60,
+                "max": 2,
+            },
+        ),
+    )
+    traversal_route = SimpleNamespace(
+        id="route.release-v1.operation-scoped",
+        constraints=(
+            {
+                "id": "operation-scoped-traversal",
+                "type": "traversalBudget",
+                "operations": ["search.read"],
+            },
+        ),
+    )
+    durable_route = SimpleNamespace(
+        id="route.release-v1.durable",
+        constraints=(
+            {
+                "id": "durable-sliding-window",
+                "type": "slidingWindowLimit",
+            },
+        ),
+    )
+    snapshot = SimpleNamespace(
+        hash=policy_hash,
+        routes=(legacy_route, traversal_route, durable_route),
+    )
+
+    def require_v1(route_id: str, operation: str) -> None:
+        db._require_v1_route_protocol_authority(
+            policy_hash=policy_hash,
+            route_id=route_id,
+            operation_context={"operation": operation},
+            authority_policy_hash=policy_hash,
+            authority_route_id=route_id,
+        )
+
+    with (
+        patch.object(db, "RELEASE_CHANNEL", "production"),
+        patch.object(
+            db,
+            "_load_release_policy_snapshot",
+            return_value=snapshot,
+        ),
+    ):
+        require_v1(legacy_route.id, "legacy.read")
+        require_v1(traversal_route.id, "profile.read")
+        assert_raises(
+            db.ReleaseAuthorizationConflictError,
+            lambda: require_v1(
+                traversal_route.id,
+                "search.read",
+            ),
+            "v1 accepted an operation-scoped traversal route operation",
+        )
+        assert_raises(
+            db.ReleaseAuthorizationConflictError,
+            lambda: require_v1(
+                durable_route.id,
+                "durable.write",
+            ),
+            "v1 accepted a durable route",
+        )
+        assert_raises(
+            db.ReleaseAuthorizationError,
+            lambda: db._require_v1_route_protocol_authority(
+                policy_hash=policy_hash,
+                route_id=legacy_route.id,
+                operation_context={"operation": "legacy.read"},
+                authority_policy_hash=None,
+                authority_route_id=None,
+            ),
+            "v1 accepted missing route-derived protocol authority",
+        )
+        assert_raises(
+            db.ReleaseAuthorizationError,
+            lambda: db._require_v1_route_protocol_authority(
+                policy_hash=policy_hash,
+                route_id=legacy_route.id,
+                operation_context={"operation": "legacy.read"},
+                authority_policy_hash=policy_hash,
+                authority_route_id=durable_route.id,
+            ),
+            "v1 accepted substituted route-derived protocol authority",
+        )
+        substituted_policy_hash = _release_lock_digest(
+            "release-v1-substituted-policy"
+        )
+        assert_raises(
+            db.ReleaseAuthorizationError,
+            lambda: db._require_v1_route_protocol_authority(
+                policy_hash=substituted_policy_hash,
+                route_id=legacy_route.id,
+                operation_context={"operation": "legacy.read"},
+                authority_policy_hash=substituted_policy_hash,
+                authority_route_id=legacy_route.id,
+            ),
+            "v1 accepted protocol authority outside the signed snapshot",
+        )
+        durable_attempt_id = _release_lock_digest(
+            "release-v1-durable-attempt"
+        )
+        assert_raises(
+            db.ReleaseAuthorizationConflictError,
+            lambda: db.reserve_release_authorization(
+                attempt_id=durable_attempt_id,
+                flow_id=durable_attempt_id,
+                principal_id="agent:release-v1",
+                route_id=durable_route.id,
+                credential_id="",
+                credential_version=0,
+                policy_hash=policy_hash,
+                request_digest=_release_lock_digest(
+                    "release-v1-durable-request"
+                ),
+                operation_digest=_release_lock_digest(
+                    "release-v1-durable-operation"
+                ),
+                operation_context={"operation": "durable.write"},
+                shared_quotas=[],
+                require_jit_grant=False,
+                reservation_ttl_seconds=60,
+                authority_policy_hash=policy_hash,
+                authority_route_id=durable_route.id,
+            ),
+            "the public v1 reserve primitive accepted a durable route",
+        )
+
+    with (
+        patch.object(db, "RELEASE_CHANNEL", "test"),
+        patch.object(
+            db,
+            "_load_release_policy_snapshot",
+            side_effect=AssertionError(
+                "development v1 loaded a production policy snapshot"
+            ),
+        ),
+    ):
+        db._require_v1_route_protocol_authority(
+            policy_hash=policy_hash,
+            route_id=legacy_route.id,
+            operation_context={"operation": "legacy.read"},
+            authority_policy_hash=None,
+            authority_route_id=None,
+        )
+
+
+def exercise_durable_traversal_cursor_sources(db: Any) -> None:
+    policy_hash = _release_lock_digest("durable-traversal-cursor-sources")
+    claim = {
+        "type": "traversalBudget",
+        "constraint_id": "durable-traversal-cursor-source",
+        "chain_key": _release_lock_digest(
+            "durable-traversal-cursor-source:chain"
+        ),
+        "lineage_digest": _release_lock_digest(
+            "durable-traversal-cursor-source:lineage"
+        ),
+        "principal_id": "agent:durable-traversal-cursor-source",
+        "route_id": "route.durable-traversal-cursor-source",
+        "credential_id": "",
+        "credential_version": 0,
+        "policy_hash": policy_hash,
+        "operation": "search.read",
+        "store": "shared",
+        "phases": ["request", "response"],
+        "on_replay": "deny",
+        "on_cross_lineage": "deny",
+        "on_missing_evidence": "deny",
+        "request_cursor_digest": None,
+        "request_cursor_source": "query",
+        "request_cursor_field": "pageToken",
+        "response_cursor_field": "nextPageToken",
+        "record_count_field": "messages",
+        "byte_source": "validatedDecodedResponseBytes",
+        "commit_mode": "atomicAfterResponseValidation",
+        "max_pages": 4,
+        "max_records": 100,
+        "max_bytes": 1_048_576,
+        "lifetime_seconds": 300,
+    }
+    for source in ("query", "header"):
+        candidate = {**claim, "request_cursor_source": source}
+        normalized = db._normalize_policy_state_claims(
+            [candidate],
+            policy_hash=policy_hash,
+        )
+        if normalized != [candidate]:
+            raise AssertionError(
+                f"durable traversal rejected canonical {source} cursor source"
+            )
+    assert_raises(
+        db.PolicyStateBundleStoreError,
+        lambda: db._normalize_policy_state_claims(
+            [{**claim, "request_cursor_source": "jsonBody"}],
+            policy_hash=policy_hash,
+        ),
+        "durable traversal accepted jsonBody request cursor source",
+    )
+
+
+def exercise_release_lock_order(db: Any, backend: str) -> None:
+    policy_hash = _release_lock_digest(
+        f"{backend}:release-lock-order-policy"
+    )
+    actor_id = "spiffe://test.serverware/decision-gate/release-lock-order"
+    advance_active_policy_hash(db, policy_hash)
+
+    def material(
+        suffix: str,
+        *,
+        durable: bool,
+        quota_key: str | None = None,
+        identity_suffix: str | None = None,
+        quota_maximum: int = 4,
+    ) -> dict[str, Any]:
+        identity = identity_suffix or suffix
+        attempt_id = _release_lock_digest(
+            f"{backend}:release-lock:{suffix}:attempt"
+        )
+        principal_id = f"agent:{backend}:release-lock:{identity}"
+        route_id = f"route:{backend}:release-lock:{identity}"
+        quota = {
+            "counter_key": quota_key
+            or _release_lock_digest(
+                f"{backend}:release-lock:{suffix}:quota"
+            ),
+            "constraint_id": f"quota:{backend}:release-lock:{identity}",
+            "operation": "test.forward",
+            "window_seconds": 60,
+            "max_count": quota_maximum,
+        }
+        reserve = {
+            "attempt_id": attempt_id,
+            "flow_id": attempt_id,
+            "principal_id": principal_id,
+            "route_id": route_id,
+            "credential_id": "",
+            "credential_version": 0,
+            "policy_hash": policy_hash,
+            "request_digest": _release_lock_digest(
+                f"{backend}:release-lock:{suffix}:request"
+            ),
+            "operation_digest": _release_lock_digest(
+                f"{backend}:release-lock:{suffix}:operation"
+            ),
+            "operation_context": {"operation": "test.forward"},
+            "shared_quotas": [quota],
+            "require_jit_grant": False,
+            "reservation_ttl_seconds": 60,
+            "actor_id": actor_id,
+            "authority_policy_hash": policy_hash,
+            "authority_route_id": route_id,
+        }
+        claims: list[dict[str, Any]] = []
+        claim_digest = None
+        if durable:
+            claims = [
+                {
+                    "type": "slidingWindowLimit",
+                    "constraint_id": (
+                        f"durable:{backend}:release-lock:{suffix}"
+                    ),
+                    "budget_key": _release_lock_digest(
+                        f"{backend}:release-lock:{suffix}:budget"
+                    ),
+                    "principal_id": principal_id,
+                    "route_id": route_id,
+                    "credential_id": "",
+                    "credential_version": 0,
+                    "policy_hash": policy_hash,
+                    "operation": "test.forward",
+                    "window_semantics": "sliding",
+                    "measure": "operationCount",
+                    "reservation_mode": "atomicReserveCommitRelease",
+                    "on_overflow": "deny",
+                    "unit_field": "operations",
+                    "units": 1,
+                    "window_seconds": 60,
+                    "max_units": quota_maximum,
+                }
+            ]
+            claim_digest = db._policy_state_digest(claims)
+            reserve["durable_policy_binding"] = {
+                "actorId": actor_id,
+                "claimDigest": claim_digest,
+                "claims": claims,
+            }
+        return {
+            "reserve": reserve,
+            "quota": quota,
+            "claims": claims,
+            "claim_digest": claim_digest,
+        }
+
+    v1 = material("v1-order", durable=False)
+    v1_reserved, v1_reserve_events = _record_release_lock_order(
+        db,
+        lambda: db.reserve_release_authorization(**v1["reserve"]),
+    )
+    v1_resources = {
+        f"attempt:{v1['reserve']['attempt_id']}",
+        f"quota:{v1['quota']['counter_key']}",
+    }
+    _assert_release_lock_order(
+        v1_reserve_events,
+        v1_resources,
+        label=f"{backend} v1 reserve",
+    )
+    v1_dispatched, v1_dispatch_events = _record_release_lock_order(
+        db,
+        lambda: db.dispatch_release_authorization(
+            attempt_id=v1["reserve"]["attempt_id"],
+            binding_digest=v1_reserved["binding_digest"],
+            dispatch_ttl_seconds=30,
+            actor_id=actor_id,
+        ),
+    )
+    if v1_dispatched.get("state") != "dispatching":
+        raise AssertionError(
+            f"{backend} v1 lock-order dispatch failed: {v1_dispatched}"
+        )
+    _assert_release_lock_order(
+        v1_dispatch_events,
+        v1_resources,
+        label=f"{backend} v1 dispatch",
+    )
+    v1_terminal = db.complete_release_authorization(
+        attempt_id=v1["reserve"]["attempt_id"],
+        binding_digest=v1_reserved["binding_digest"],
+        outcome="unknown",
+        actor_id=actor_id,
+    )
+    if v1_terminal.get("state") != "committed_indeterminate":
+        raise AssertionError(
+            f"{backend} v1 lock-order fixture did not terminate: {v1_terminal}"
+        )
+
+    v2 = material("v2-order", durable=True)
+    v2_reserved, v2_reserve_events = _record_release_lock_order(
+        db,
+        lambda: db.reserve_release_authorization_v2(**v2["reserve"]),
+    )
+    v2_resources = db._policy_state_resources(
+        v2_reserved["durable_policy"]["reservation_id"],
+        v2["reserve"]["attempt_id"],
+        v2["claims"],
+    )
+    v2_resources.add(f"quota:{v2['quota']['counter_key']}")
+    _assert_release_lock_order(
+        v2_reserve_events,
+        v2_resources,
+        label=f"{backend} v2 reserve",
+    )
+    dispatch_deadline = int(time.time() * 1000) + 30_000
+    v2_dispatch_transition = {
+        "actorId": actor_id,
+        "attemptId": v2["reserve"]["attempt_id"],
+        "claimDigest": v2["claim_digest"],
+        "reservationId": v2_reserved["durable_policy"][
+            "reservation_id"
+        ],
+        "dispatchDeadlineAtEpochMs": dispatch_deadline,
+    }
+    v2_dispatched, v2_dispatch_events = _record_release_lock_order(
+        db,
+        lambda: db.dispatch_release_authorization_v2(
+            attempt_id=v2["reserve"]["attempt_id"],
+            binding_digest=v2_reserved["binding_digest"],
+            actor_id=actor_id,
+            durable_policy_transition=v2_dispatch_transition,
+        ),
+    )
+    if v2_dispatched.get("state") != "dispatching":
+        raise AssertionError(
+            f"{backend} v2 lock-order dispatch failed: {v2_dispatched}"
+        )
+    _assert_release_lock_order(
+        v2_dispatch_events,
+        v2_resources,
+        label=f"{backend} v2 dispatch",
+    )
+    v2_unknown_transition = {
+        "actorId": actor_id,
+        "attemptId": v2["reserve"]["attempt_id"],
+        "claimDigest": v2["claim_digest"],
+        "reservationId": v2_reserved["durable_policy"][
+            "reservation_id"
+        ],
+        "responseEvidence": [],
+        "responseEvidenceDigest": db._policy_state_digest([]),
+        "failureReason": (
+            db._DURABLE_POLICY_UNKNOWN_FAILURE_REASON
+        ),
+        "responseBodySha256": db._POLICY_STATE_EMPTY_RESPONSE_DIGEST,
+        "uncertainty": db._DURABLE_POLICY_CHARGED_UNCERTAINTY,
+    }
+    v2_terminal = db.complete_release_authorization_v2(
+        attempt_id=v2["reserve"]["attempt_id"],
+        binding_digest=v2_reserved["binding_digest"],
+        outcome="unknown",
+        actor_id=actor_id,
+        durable_policy_transition=v2_unknown_transition,
+    )
+    if (
+        v2_terminal.get("state") != "committed_indeterminate"
+        or v2_terminal.get("completion_outcome") != "unknown"
+        or v2_terminal.get("durable_policy", {}).get("state")
+        != "indeterminate"
+        or v2_terminal.get("durable_policy", {}).get("failure_reason")
+        != db._DURABLE_POLICY_UNKNOWN_FAILURE_REASON
+        or v2_terminal.get("durable_policy", {}).get("uncertainty")
+        != db._DURABLE_POLICY_CHARGED_UNCERTAINTY
+        or not v2_terminal.get("quotas")
+        or any(
+            quota.get("reservation_state") != "committed"
+            for quota in v2_terminal["quotas"]
+        )
+    ):
+        raise AssertionError(
+            f"{backend} v2 lock-order fixture did not terminate: {v2_terminal}"
+        )
+    with db.connect() as conn:
+        durable_charge = conn.execute(
+            "SELECT state FROM durable_budget_events "
+            "WHERE bundle_reservation_id = ?",
+            (v2_reserved["durable_policy"]["reservation_id"],),
+        ).fetchone()
+    if durable_charge is None or durable_charge["state"] != "committed":
+        raise AssertionError(
+            f"{backend} v2 indeterminate replay was not conservatively "
+            f"charged: {durable_charge}"
+        )
+
+    def reserve_terminal_fixture(
+        suffix: str,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        fixture = material(suffix, durable=True)
+        fixture["reserve"]["shared_quotas"] = []
+        reserved = db.reserve_release_authorization_v2(**fixture["reserve"])
+        if (
+            reserved.get("state") != "reserved"
+            or reserved.get("durable_policy", {}).get("state") != "reserved"
+        ):
+            raise AssertionError(
+                f"{backend} v2 terminal replay fixture was not reserved: "
+                f"{reserved}"
+            )
+        return fixture, reserved
+
+    def dispatch_terminal_fixture(
+        fixture: dict[str, Any],
+        reserved: dict[str, Any],
+    ) -> int:
+        deadline = int(time.time() * 1000) + 30_000
+        dispatched = db.dispatch_release_authorization_v2(
+            attempt_id=fixture["reserve"]["attempt_id"],
+            binding_digest=reserved["binding_digest"],
+            actor_id=actor_id,
+            durable_policy_transition={
+                "actorId": actor_id,
+                "attemptId": fixture["reserve"]["attempt_id"],
+                "claimDigest": fixture["claim_digest"],
+                "reservationId": reserved["durable_policy"][
+                    "reservation_id"
+                ],
+                "dispatchDeadlineAtEpochMs": deadline,
+            },
+        )
+        if (
+            dispatched.get("state") != "dispatching"
+            or dispatched.get("durable_policy", {}).get("state")
+            != "dispatched"
+        ):
+            raise AssertionError(
+                f"{backend} v2 terminal replay fixture was not dispatched: "
+                f"{dispatched}"
+            )
+        return deadline
+
+    def unknown_terminal_transition(
+        fixture: dict[str, Any],
+        reserved: dict[str, Any],
+    ) -> dict[str, Any]:
+        return {
+            "actorId": actor_id,
+            "attemptId": fixture["reserve"]["attempt_id"],
+            "claimDigest": fixture["claim_digest"],
+            "reservationId": reserved["durable_policy"]["reservation_id"],
+            "responseEvidence": [],
+            "responseEvidenceDigest": db._policy_state_digest([]),
+            "failureReason": db._DURABLE_POLICY_UNKNOWN_FAILURE_REASON,
+            "responseBodySha256": db._POLICY_STATE_EMPTY_RESPONSE_DIGEST,
+            "uncertainty": db._DURABLE_POLICY_CHARGED_UNCERTAINTY,
+        }
+
+    def replace_outer_terminal(
+        fixture: dict[str, Any],
+        *,
+        state: str,
+        completion_outcome: str,
+    ) -> None:
+        with db.connect() as conn:
+            db._begin_release_transaction(conn)
+            updated = conn.execute(
+                "UPDATE release_authorization_attempts "
+                "SET state = ?, completion_outcome = ? "
+                "WHERE attempt_id = ?",
+                (
+                    state,
+                    completion_outcome,
+                    fixture["reserve"]["attempt_id"],
+                ),
+            )
+            if updated.rowcount != 1:
+                raise AssertionError(
+                    f"{backend} could not construct crossed v2 terminal"
+                )
+
+    def assert_stored_durable_state(
+        reserved: dict[str, Any],
+        expected_state: str,
+    ) -> None:
+        with db.connect() as conn:
+            row = conn.execute(
+                "SELECT state FROM policy_state_bundles "
+                "WHERE reservation_id = ?",
+                (reserved["durable_policy"]["reservation_id"],),
+            ).fetchone()
+        if row is None or row["state"] != expected_state:
+            raise AssertionError(
+                f"{backend} crossed replay changed durable state: {row}"
+            )
+
+    forwarded, forwarded_reserved = reserve_terminal_fixture(
+        "v2-unknown-replay-forwarded"
+    )
+    forwarded_deadline = dispatch_terminal_fixture(
+        forwarded,
+        forwarded_reserved,
+    )
+    forwarded_terminal = db.complete_release_authorization_v2(
+        attempt_id=forwarded["reserve"]["attempt_id"],
+        binding_digest=forwarded_reserved["binding_digest"],
+        outcome="forwarded",
+        actor_id=actor_id,
+        durable_policy_transition={
+            "actorId": actor_id,
+            "attemptId": forwarded["reserve"]["attempt_id"],
+            "claimDigest": forwarded["claim_digest"],
+            "reservationId": forwarded_reserved["durable_policy"][
+                "reservation_id"
+            ],
+            "dispatchDeadlineAtEpochMs": forwarded_deadline,
+            "responseEvidence": [],
+            "responseEvidenceDigest": db._policy_state_digest([]),
+            "responseBodySha256": db._POLICY_STATE_EMPTY_RESPONSE_DIGEST,
+        },
+    )
+    if (
+        (
+            forwarded_terminal.get("state"),
+            forwarded_terminal.get("completion_outcome"),
+            forwarded_terminal.get("durable_policy", {}).get("state"),
+        )
+        != ("committed", "forwarded", "committed")
+    ):
+        raise AssertionError(
+            f"{backend} v2 forwarded fixture did not commit: "
+            f"{forwarded_terminal}"
+        )
+    forwarded_unknown = unknown_terminal_transition(
+        forwarded,
+        forwarded_reserved,
+    )
+    forwarded_replay = db.complete_release_authorization_v2(
+        attempt_id=forwarded["reserve"]["attempt_id"],
+        binding_digest=forwarded_reserved["binding_digest"],
+        outcome="unknown",
+        actor_id=actor_id,
+        durable_policy_transition=forwarded_unknown,
+    )
+    if (
+        forwarded_replay.get("authorized") is not True
+        or forwarded_replay.get("idempotent_replay") is not True
+        or (
+            forwarded_replay.get("state"),
+            forwarded_replay.get("completion_outcome"),
+            forwarded_replay.get("durable_policy", {}).get("state"),
+        )
+        != ("committed", "forwarded", "committed")
+    ):
+        raise AssertionError(
+            f"{backend} unknown replay did not observe aligned forwarded "
+            f"terminal: {forwarded_replay}"
+        )
+
+    cancelled, cancelled_reserved = reserve_terminal_fixture(
+        "v2-unknown-replay-cancelled"
+    )
+    cancelled_terminal = db.complete_release_authorization_v2(
+        attempt_id=cancelled["reserve"]["attempt_id"],
+        binding_digest=cancelled_reserved["binding_digest"],
+        outcome="not_forwarded",
+        actor_id=actor_id,
+        durable_policy_transition={
+            "actorId": actor_id,
+            "attemptId": cancelled["reserve"]["attempt_id"],
+            "claimDigest": cancelled["claim_digest"],
+            "reservationId": cancelled_reserved["durable_policy"][
+                "reservation_id"
+            ],
+        },
+    )
+    if (
+        (
+            cancelled_terminal.get("state"),
+            cancelled_terminal.get("completion_outcome"),
+            cancelled_terminal.get("durable_policy", {}).get("state"),
+        )
+        != ("cancelled", "not_forwarded", "aborted")
+    ):
+        raise AssertionError(
+            f"{backend} v2 not-forwarded fixture did not abort: "
+            f"{cancelled_terminal}"
+        )
+    cancelled_unknown = unknown_terminal_transition(
+        cancelled,
+        cancelled_reserved,
+    )
+    cancelled_replay = db.complete_release_authorization_v2(
+        attempt_id=cancelled["reserve"]["attempt_id"],
+        binding_digest=cancelled_reserved["binding_digest"],
+        outcome="unknown",
+        actor_id=actor_id,
+        durable_policy_transition=cancelled_unknown,
+    )
+    if (
+        cancelled_replay.get("authorized") is not False
+        or cancelled_replay.get("idempotent_replay") is not True
+        or (
+            cancelled_replay.get("state"),
+            cancelled_replay.get("completion_outcome"),
+            cancelled_replay.get("durable_policy", {}).get("state"),
+        )
+        != ("cancelled", "not_forwarded", "aborted")
+        or cancelled_replay["durable_policy"][
+            "response_evidence_digest"
+        ]
+        is not None
+        or cancelled_replay["durable_policy"]["response_body_sha256"]
+        is not None
+        or cancelled_replay["durable_policy"]["uncertainty"] is not None
+    ):
+        raise AssertionError(
+            f"{backend} unknown replay did not observe aligned cancelled "
+            f"terminal: {cancelled_replay}"
+        )
+
+    split_forwarded, split_forwarded_reserved = reserve_terminal_fixture(
+        "v2-unknown-replay-split-forwarded"
+    )
+    dispatch_terminal_fixture(split_forwarded, split_forwarded_reserved)
+    split_forwarded_unknown = unknown_terminal_transition(
+        split_forwarded,
+        split_forwarded_reserved,
+    )
+    replace_outer_terminal(
+        split_forwarded,
+        state="committed",
+        completion_outcome="forwarded",
+    )
+    assert_raises(
+        db.ReleaseAuthorizationConflictError,
+        lambda: db.complete_release_authorization_v2(
+            attempt_id=split_forwarded["reserve"]["attempt_id"],
+            binding_digest=split_forwarded_reserved["binding_digest"],
+            outcome="unknown",
+            actor_id=actor_id,
+            durable_policy_transition=split_forwarded_unknown,
+        ),
+        "unknown replay repaired committed outer with dispatched durable state",
+    )
+    assert_stored_durable_state(split_forwarded_reserved, "dispatched")
+
+    split_cancelled, split_cancelled_reserved = reserve_terminal_fixture(
+        "v2-unknown-replay-split-cancelled"
+    )
+    split_cancelled_unknown = unknown_terminal_transition(
+        split_cancelled,
+        split_cancelled_reserved,
+    )
+    replace_outer_terminal(
+        split_cancelled,
+        state="cancelled",
+        completion_outcome="not_forwarded",
+    )
+    assert_raises(
+        db.ReleaseAuthorizationConflictError,
+        lambda: db.complete_release_authorization_v2(
+            attempt_id=split_cancelled["reserve"]["attempt_id"],
+            binding_digest=split_cancelled_reserved["binding_digest"],
+            outcome="unknown",
+            actor_id=actor_id,
+            durable_policy_transition=split_cancelled_unknown,
+        ),
+        "unknown replay repaired cancelled outer with reserved durable state",
+    )
+    assert_stored_durable_state(split_cancelled_reserved, "reserved")
+
+    replace_outer_terminal(
+        forwarded,
+        state="cancelled",
+        completion_outcome="not_forwarded",
+    )
+    assert_raises(
+        db.ReleaseAuthorizationError,
+        lambda: db.complete_release_authorization_v2(
+            attempt_id=forwarded["reserve"]["attempt_id"],
+            binding_digest=forwarded_reserved["binding_digest"],
+            outcome="unknown",
+            actor_id=actor_id,
+            durable_policy_transition=forwarded_unknown,
+        ),
+        "unknown replay accepted cancelled outer with committed durable state",
+    )
+    replace_outer_terminal(
+        cancelled,
+        state="committed",
+        completion_outcome="forwarded",
+    )
+    assert_raises(
+        db.ReleaseAuthorizationError,
+        lambda: db.complete_release_authorization_v2(
+            attempt_id=cancelled["reserve"]["attempt_id"],
+            binding_digest=cancelled_reserved["binding_digest"],
+            outcome="unknown",
+            actor_id=actor_id,
+            durable_policy_transition=cancelled_unknown,
+        ),
+        "unknown replay accepted committed outer with aborted durable state",
+    )
+    for crossed_state, crossed_outcome in (
+        ("committed", "forwarded"),
+        ("cancelled", "not_forwarded"),
+    ):
+        replace_outer_terminal(
+            v2,
+            state=crossed_state,
+            completion_outcome=crossed_outcome,
+        )
+        assert_raises(
+            db.ReleaseAuthorizationError,
+            lambda: db.complete_release_authorization_v2(
+                attempt_id=v2["reserve"]["attempt_id"],
+                binding_digest=v2_reserved["binding_digest"],
+                outcome="unknown",
+                actor_id=actor_id,
+                durable_policy_transition=v2_unknown_transition,
+            ),
+            "unknown replay accepted terminal outer with indeterminate "
+            "durable state",
+        )
+
+    if backend != "postgres":
+        return
+
+    shared_quota_key = _release_lock_digest(
+        "postgres:release-lock-order-race:shared-quota"
+    )
+    race_v1 = material(
+        "race-v1",
+        durable=False,
+        quota_key=shared_quota_key,
+        identity_suffix="race",
+        quota_maximum=2,
+    )
+    race_v2 = material(
+        "race-v2",
+        durable=True,
+        quota_key=shared_quota_key,
+        identity_suffix="race",
+        quota_maximum=2,
+    )
+    quota_resource = f"quota:{shared_quota_key}"
+    v2_resources_held = threading.Event()
+    release_v2_resources = threading.Event()
+    v1_resource_entered = threading.Event()
+    v1_authority_entered = threading.Event()
+    v2_authority_entered = threading.Event()
+    original_resource_lock = db._lock_release_resources
+    original_authority_lock = db._lock_release_authority_resources
+    results: dict[str, Any] = {}
+
+    def observed_resource_lock(conn: Any, resources: Any) -> None:
+        resource_set = set(resources)
+        thread_name = threading.current_thread().name
+        if thread_name == "release-lock-order-v1" and quota_resource in resource_set:
+            v1_resource_entered.set()
+        original_resource_lock(conn, resources)
+        if thread_name == "release-lock-order-v2" and quota_resource in resource_set:
+            v2_resources_held.set()
+            if not release_v2_resources.wait(timeout=5):
+                raise AssertionError(
+                    "v2 release lock-order race was not released"
+                )
+
+    def observed_authority_lock(conn: Any, **kwargs: Any) -> None:
+        thread_name = threading.current_thread().name
+        if thread_name == "release-lock-order-v1":
+            v1_authority_entered.set()
+        elif thread_name == "release-lock-order-v2":
+            v2_authority_entered.set()
+        original_authority_lock(conn, **kwargs)
+
+    def reserve_race(label: str, request: dict[str, Any]) -> None:
+        try:
+            if "durable_policy_binding" in request:
+                results[label] = db.reserve_release_authorization_v2(
+                    **request
+                )
+            else:
+                results[label] = db.reserve_release_authorization(
+                    **request
+                )
+        except BaseException as exc:
+            results[f"{label}_error"] = exc
+
+    v2_worker = threading.Thread(
+        target=reserve_race,
+        args=("v2", race_v2["reserve"]),
+        name="release-lock-order-v2",
+    )
+    v1_worker = threading.Thread(
+        target=reserve_race,
+        args=("v1", race_v1["reserve"]),
+        name="release-lock-order-v1",
+    )
+    with (
+        patch.object(
+            db,
+            "_lock_release_resources",
+            side_effect=observed_resource_lock,
+        ),
+        patch.object(
+            db,
+            "_lock_release_authority_resources",
+            side_effect=observed_authority_lock,
+        ),
+    ):
+        try:
+            v2_worker.start()
+            if not v2_resources_held.wait(timeout=5):
+                raise AssertionError(
+                    "v2 did not acquire the shared PostgreSQL quota lock"
+                )
+            v1_worker.start()
+            if not v1_resource_entered.wait(timeout=5):
+                raise AssertionError(
+                    "v1 did not attempt the shared PostgreSQL quota lock"
+                )
+            if v1_authority_entered.wait(timeout=0.1):
+                raise AssertionError(
+                    "v1 acquired policy authority before the shared quota"
+                )
+        finally:
+            release_v2_resources.set()
+            v2_worker.join(timeout=10)
+            v1_worker.join(timeout=10)
+    if v2_worker.is_alive() or v1_worker.is_alive():
+        raise AssertionError(
+            "PostgreSQL release lock-order race did not terminate"
+        )
+    if (
+        results.get("v1_error") is not None
+        or results.get("v2_error") is not None
+        or results.get("v1", {}).get("state") != "reserved"
+        or results.get("v2", {}).get("state") != "reserved"
+        or not v1_authority_entered.is_set()
+        or not v2_authority_entered.is_set()
+    ):
+        raise AssertionError(
+            f"PostgreSQL release lock-order race failed closed incorrectly: {results}"
+        )
+
+    race_v1_terminal = db.complete_release_authorization(
+        attempt_id=race_v1["reserve"]["attempt_id"],
+        binding_digest=results["v1"]["binding_digest"],
+        outcome="not_forwarded",
+        actor_id=actor_id,
+    )
+    race_v2_terminal = db.complete_release_authorization_v2(
+        attempt_id=race_v2["reserve"]["attempt_id"],
+        binding_digest=results["v2"]["binding_digest"],
+        outcome="not_forwarded",
+        actor_id=actor_id,
+        durable_policy_transition={
+            "actorId": actor_id,
+            "attemptId": race_v2["reserve"]["attempt_id"],
+            "claimDigest": race_v2["claim_digest"],
+            "reservationId": results["v2"]["durable_policy"][
+                "reservation_id"
+            ],
+        },
+    )
+    if (
+        race_v1_terminal.get("state") != "cancelled"
+        or race_v2_terminal.get("state") != "cancelled"
+    ):
+        raise AssertionError(
+            "PostgreSQL release lock-order race cleanup failed: "
+            f"{race_v1_terminal} {race_v2_terminal}"
+        )
 
 
 def exercise_release_policy_authority_race(db: Any, backend: str) -> None:
@@ -2636,7 +3653,9 @@ def _provision_release_authority_fixture(
     reserve_kwargs = {
         **release_reserve_kwargs(
             binding,
-            attempt_id=f"attempt:{suffix}",
+            attempt_id=_jit_authority_policy_hash(
+                f"credential-issuance-attempt:{suffix}"
+            ),
             quotas=[quota],
         ),
         "reservation_ttl_seconds": 60,
@@ -4292,6 +5311,32 @@ def exercise_transactional_bound_storage_rewrap(
 
 
 def exercise_release_credential_issuance_claim(db: Any, backend: str) -> None:
+    def request_authority_sha256(claim: dict[str, Any]) -> str:
+        authority = {
+            "apiVersion": (
+                "serverware.credentialLeaseRequestAuthority/v1"
+            ),
+            "attemptId": claim["attempt_id"],
+            "reservationId": claim["reservation_id"],
+            "bindingDigest": claim["binding_digest"],
+            "requestDigest": claim["request_digest"],
+            "operationDigest": claim["operation_digest"],
+            "operationContext": claim["operation_context"],
+            "reservationExpiresAtEpochMs": claim[
+                "reservation_expires_at_epoch_ms"
+            ],
+        }
+        return (
+            "sha256:"
+            + hashlib.sha256(
+                json.dumps(
+                    authority,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+        )
+
     fixture = _provision_release_authority_fixture(
         db,
         backend,
@@ -4299,7 +5344,11 @@ def exercise_release_credential_issuance_claim(db: Any, backend: str) -> None:
         reserve=True,
     )
     reservation = fixture["reservation"]
-    binding = fixture["binding"]
+    binding = {
+        **fixture["binding"],
+        "authority_policy_hash": fixture["policy_hash"],
+        "authority_route_id": fixture["binding"]["route_id"],
+    }
     request_binding_sha256 = _jit_authority_policy_hash(
         f"{backend}:credential-issuance:request"
     )
@@ -4309,9 +5358,25 @@ def exercise_release_credential_issuance_claim(db: Any, backend: str) -> None:
     recipient_nonce_sha256 = _jit_authority_policy_hash(
         f"{backend}:credential-issuance:nonce"
     )
+    operation_context = {
+        "operation": "test.forward",
+        "account": "acct:test",
+    }
+    with db.connect() as conn:
+        quota_claims = db._release_credential_quota_claims(
+            conn, reservation["attempt_id"]
+        )
     claim_kwargs = {
+        "release_kind": "jitGrant",
         "attempt_id": reservation["attempt_id"],
+        "reservation_id": db.release_reservation_id(
+            reservation["attempt_id"], reservation["binding_digest"]
+        ),
         "binding_digest": reservation["binding_digest"],
+        "request_digest": binding["request_digest"],
+        "operation_digest": binding["operation_digest"],
+        "operation_context": operation_context,
+        "quota_claims": quota_claims,
         "request_binding_sha256": request_binding_sha256,
         "recipient_key_id": recipient_key_id,
         "recipient_nonce_sha256": recipient_nonce_sha256,
@@ -4329,10 +5394,36 @@ def exercise_release_credential_issuance_claim(db: Any, backend: str) -> None:
         "allowed_approver_ids": {fixture["actor_id"]},
         "require_approver_webauthn": True,
     }
-    claimed = db.claim_release_credential_issuance(**claim_kwargs)
+    claim_kwargs["request_authority_sha256"] = (
+        request_authority_sha256(claim_kwargs)
+    )
+    jit_authority_lock_calls = {"webauthn": 0, "rbac": 0}
+    original_webauthn_lock = db._lock_webauthn_authority
+    original_rbac_lock = db._lock_rbac_authority
+
+    def record_webauthn_lock(conn: Any) -> None:
+        jit_authority_lock_calls["webauthn"] += 1
+        original_webauthn_lock(conn)
+
+    def record_rbac_lock(conn: Any) -> None:
+        jit_authority_lock_calls["rbac"] += 1
+        original_rbac_lock(conn)
+
+    with (
+        patch.object(db, "_lock_webauthn_authority", record_webauthn_lock),
+        patch.object(db, "_lock_rbac_authority", record_rbac_lock),
+    ):
+        claimed = db.claim_release_credential_issuance(**claim_kwargs)
+    if jit_authority_lock_calls != {"webauthn": 1, "rbac": 1}:
+        raise AssertionError(
+            f"{backend} JIT credential issuance did not lock WebAuthn and RBAC "
+            f"authority exactly once: {jit_authority_lock_calls}"
+        )
     if (
         claimed.get("attempt_id") != reservation["attempt_id"]
         or claimed.get("request_binding_sha256") != request_binding_sha256
+        or claimed.get("request_authority_sha256")
+        != claim_kwargs["request_authority_sha256"]
         or claimed.get("recipient_key_id") != recipient_key_id
         or claimed.get("recipient_nonce_sha256") != recipient_nonce_sha256
     ):
@@ -4371,6 +5462,465 @@ def exercise_release_credential_issuance_claim(db: Any, backend: str) -> None:
         raise AssertionError(
             f"{backend} credential issuance claim count is not exactly one: {row}"
         )
+
+    def atomic_claim_fixture(label: str) -> tuple[dict[str, Any], dict[str, Any]]:
+        attempt_id = _jit_authority_policy_hash(
+            f"{backend}:atomic-credential:{label}"
+        )
+        reservation = db.reserve_release_authorization(
+            **release_reserve_kwargs(
+                binding,
+                attempt_id=attempt_id,
+                quotas=[
+                    quota_claim(
+                        f"{backend}-atomic-credential-{label}",
+                        maximum=1,
+                    )
+                ],
+                require_jit_grant=False,
+            )
+        )
+        if reservation.get("state") != "reserved":
+            raise AssertionError(
+                f"{backend} non-JIT credential reservation failed: {reservation}"
+            )
+        with db.connect() as conn:
+            claims = db._release_credential_quota_claims(conn, attempt_id)
+        claim = {
+            "release_kind": "atomicReservation",
+            "attempt_id": attempt_id,
+            "reservation_id": db.release_reservation_id(
+                attempt_id, reservation["binding_digest"]
+            ),
+            "binding_digest": reservation["binding_digest"],
+            "request_digest": binding["request_digest"],
+            "operation_digest": binding["operation_digest"],
+            "operation_context": operation_context,
+            "quota_claims": claims,
+            "request_binding_sha256": _jit_authority_policy_hash(
+                f"{backend}:atomic:{label}:request"
+            ),
+            "recipient_key_id": _jit_authority_policy_hash(
+                f"{backend}:atomic:{label}:recipient"
+            ),
+            "recipient_nonce_sha256": _jit_authority_policy_hash(
+                f"{backend}:atomic:{label}:nonce"
+            ),
+            "principal_id": binding["principal_id"],
+            "route_id": binding["route_id"],
+            "credential_id": binding["credential_id"],
+            "credential_version": binding["credential_version"],
+            "policy_hash": binding["policy_hash"],
+            "grant_id": None,
+            "approval_request_id": None,
+            "reservation_expires_at_epoch_ms": reservation[
+                "reservation_expires_at_epoch_ms"
+            ],
+        }
+        claim["request_authority_sha256"] = request_authority_sha256(
+            claim
+        )
+        return reservation, claim
+
+    def claim_atomic(claim: dict[str, Any]) -> dict[str, Any]:
+        def reject_webauthn_lock(_conn: Any) -> None:
+            raise AssertionError(
+                f"{backend} atomic credential issuance called the WebAuthn lock"
+            )
+
+        def reject_rbac_lock(_conn: Any) -> None:
+            raise AssertionError(
+                f"{backend} atomic credential issuance called the RBAC lock"
+            )
+
+        with (
+            patch.object(
+                db,
+                "_lock_webauthn_authority",
+                reject_webauthn_lock,
+            ),
+            patch.object(db, "_lock_rbac_authority", reject_rbac_lock),
+        ):
+            return db.claim_release_credential_issuance(**claim)
+
+    def assert_exact_atomic_claim(
+        claimed: dict[str, Any],
+        claim: dict[str, Any],
+        *,
+        label: str,
+    ) -> None:
+        quota_claims_digest = "sha256:" + hashlib.sha256(
+            json.dumps(
+                claim["quota_claims"],
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        expected = {
+            "release_kind": "atomicReservation",
+            "attempt_id": claim["attempt_id"],
+            "reservation_id": claim["reservation_id"],
+            "binding_digest": claim["binding_digest"],
+            "request_digest": claim["request_digest"],
+            "operation_digest": claim["operation_digest"],
+            "quota_claims_digest": quota_claims_digest,
+            "request_binding_sha256": claim["request_binding_sha256"],
+            "request_authority_sha256": claim[
+                "request_authority_sha256"
+            ],
+            "recipient_key_id": claim["recipient_key_id"],
+            "recipient_nonce_sha256": claim["recipient_nonce_sha256"],
+            "reservation_expires_at_epoch_ms": claim[
+                "reservation_expires_at_epoch_ms"
+            ],
+        }
+        if any(claimed.get(field) != value for field, value in expected.items()):
+            raise AssertionError(
+                f"{backend} {label} atomic claim lost exact authority: "
+                f"expected={expected} claimed={claimed}"
+            )
+        with db.connect() as conn:
+            row = conn.execute(
+                "SELECT release_kind, reservation_id, binding_digest, "
+                "request_digest, operation_digest, quota_claims_digest, "
+                "request_binding_sha256, request_authority_sha256, "
+                "recipient_key_id, "
+                "recipient_nonce_sha256, reservation_expires_at_epoch_ms "
+                "FROM release_authorization_credential_issuances "
+                "WHERE attempt_id = ?",
+                (claim["attempt_id"],),
+            ).fetchone()
+        durable = dict(row) if row is not None else {}
+        if any(
+            durable.get(field) != value
+            for field, value in expected.items()
+            if field != "attempt_id"
+        ):
+            raise AssertionError(
+                f"{backend} {label} atomic claim was not stored exactly: "
+                f"expected={expected} durable={durable}"
+            )
+
+    _, atomic_claim = atomic_claim_fixture("success")
+    claimed_atomic = claim_atomic(atomic_claim)
+    assert_exact_atomic_claim(claimed_atomic, atomic_claim, label="successful")
+    assert_raises(
+        db.ReleaseAuthorizationConflictError,
+        lambda: claim_atomic(atomic_claim),
+        "non-JIT atomic credential authority replay minted a second lease",
+    )
+
+    _, wrong_binding_claim = atomic_claim_fixture("wrong-binding")
+    assert_raises(
+        db.ReleaseAuthorizationConflictError,
+        lambda: claim_atomic(
+            {
+                **wrong_binding_claim,
+                "reservation_id": _jit_authority_policy_hash(
+                    f"{backend}:wrong-reservation"
+                ),
+            }
+        ),
+        "non-JIT atomic credential authority accepted a wrong reservation ID",
+    )
+    assert_raises(
+        db.ReleaseAuthorizationConflictError,
+        lambda: db.claim_release_credential_issuance(
+            **{
+                **wrong_binding_claim,
+                "release_kind": "jitGrant",
+                "grant_id": "grant:wrong-kind",
+                "approval_request_id": "approval:wrong-kind",
+            }
+        ),
+        "non-JIT atomic credential authority accepted JIT fields",
+    )
+    claimed_after_wrong_binding = claim_atomic(wrong_binding_claim)
+    assert_exact_atomic_claim(
+        claimed_after_wrong_binding,
+        wrong_binding_claim,
+        label="post-reservation-mismatch",
+    )
+
+    durable_binding_mutations = (
+        (
+            "principal",
+            "principal_id",
+            f"agent:{backend}:atomic-mutated",
+        ),
+        (
+            "route",
+            "route_id",
+            f"route:{backend}:atomic-mutated",
+        ),
+        (
+            "credential",
+            "credential_id",
+            f"credential:{backend}:atomic-mutated",
+        ),
+        (
+            "credential-version",
+            "credential_version",
+            int(binding["credential_version"]) + 1,
+        ),
+        (
+            "policy",
+            "policy_hash",
+            _jit_authority_policy_hash(f"{backend}:atomic-mutated-policy"),
+        ),
+        (
+            "request",
+            "request_digest",
+            _jit_authority_policy_hash(f"{backend}:atomic-mutated-request"),
+        ),
+        (
+            "operation",
+            "operation_digest",
+            _jit_authority_policy_hash(f"{backend}:atomic-mutated-operation"),
+        ),
+        (
+            "operation-context",
+            "operation_context",
+            {"operation": "test.substituted", "account": "acct:test"},
+        ),
+        (
+            "request-authority",
+            "request_authority_sha256",
+            _jit_authority_policy_hash(
+                f"{backend}:atomic-mutated-request-authority"
+            ),
+        ),
+        ("quota", "quota_claims", []),
+    )
+    for label, field, mutated_value in durable_binding_mutations:
+        _, exact_claim = atomic_claim_fixture(f"binding-{label}")
+        mutated_claim = {**exact_claim, field: mutated_value}
+        assert_raises(
+            db.ReleaseAuthorizationConflictError,
+            lambda claim=mutated_claim: claim_atomic(claim),
+            f"non-JIT atomic credential authority accepted a mutated {label}",
+        )
+        exact_result = claim_atomic(exact_claim)
+        assert_exact_atomic_claim(
+            exact_result,
+            exact_claim,
+            label=f"{label}-binding",
+        )
+        assert_raises(
+            db.ReleaseAuthorizationConflictError,
+            lambda claim=exact_claim: claim_atomic(claim),
+            f"non-JIT atomic {label} fixture remained usable after issuance",
+        )
+
+    issuance_binding_fields = (
+        ("request-binding", "request_binding_sha256"),
+        ("request-authority", "request_authority_sha256"),
+        ("recipient-key", "recipient_key_id"),
+        ("recipient-nonce", "recipient_nonce_sha256"),
+    )
+    for label, field in issuance_binding_fields:
+        _, exact_claim = atomic_claim_fixture(f"issuance-{label}")
+        exact_result = claim_atomic(exact_claim)
+        assert_exact_atomic_claim(
+            exact_result,
+            exact_claim,
+            label=f"{label}-issuance",
+        )
+        mutated_claim = {
+            **exact_claim,
+            field: _jit_authority_policy_hash(
+                f"{backend}:atomic-mutated-{label}"
+            ),
+        }
+        assert_raises(
+            db.ReleaseAuthorizationConflictError,
+            lambda claim=mutated_claim: claim_atomic(claim),
+            f"non-JIT atomic issuance allowed a second {label} binding",
+        )
+
+    def decision_bound_claim_fixture(
+        label: str,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        attempt_id = _jit_authority_policy_hash(
+            f"{backend}:decision-bound:{label}:attempt"
+        )
+        reservation = db.reserve_release_authorization(
+            **release_reserve_kwargs(
+                binding,
+                attempt_id=attempt_id,
+                quotas=[],
+                require_jit_grant=False,
+            )
+        )
+        if reservation.get("state") != "reserved":
+            raise AssertionError(
+                f"{backend} decision-bound reservation failed: {reservation}"
+            )
+        claim = {
+            "release_kind": "decisionBound",
+            "attempt_id": attempt_id,
+            "reservation_id": db.release_reservation_id(
+                attempt_id,
+                reservation["binding_digest"],
+            ),
+            "binding_digest": reservation["binding_digest"],
+            "request_digest": binding["request_digest"],
+            "operation_digest": binding["operation_digest"],
+            "operation_context": operation_context,
+            "quota_claims": [],
+            "request_binding_sha256": _jit_authority_policy_hash(
+                f"{backend}:decision-bound:{label}:request"
+            ),
+            "recipient_key_id": _jit_authority_policy_hash(
+                f"{backend}:decision-bound:{label}:recipient"
+            ),
+            "recipient_nonce_sha256": _jit_authority_policy_hash(
+                f"{backend}:decision-bound:{label}:nonce"
+            ),
+            "principal_id": binding["principal_id"],
+            "route_id": binding["route_id"],
+            "credential_id": binding["credential_id"],
+            "credential_version": binding["credential_version"],
+            "policy_hash": binding["policy_hash"],
+            "grant_id": None,
+            "approval_request_id": None,
+            "reservation_expires_at_epoch_ms": reservation[
+                "reservation_expires_at_epoch_ms"
+            ],
+        }
+        claim["request_authority_sha256"] = request_authority_sha256(
+            claim
+        )
+        return reservation, claim
+
+    _, concurrent_decision_claim = decision_bound_claim_fixture(
+        "concurrent"
+    )
+    concurrent_barrier = threading.Barrier(2)
+
+    def claim_decision_bound(recipient_marker: str) -> str:
+        concurrent_barrier.wait(timeout=10)
+        try:
+            db.claim_release_credential_issuance(
+                **{
+                    **concurrent_decision_claim,
+                    "request_binding_sha256": _jit_authority_policy_hash(
+                        f"{backend}:decision-bound:concurrent:"
+                        f"{recipient_marker}:request"
+                    ),
+                    "recipient_key_id": _jit_authority_policy_hash(
+                        f"{backend}:decision-bound:concurrent:"
+                        f"{recipient_marker}:recipient"
+                    ),
+                    "recipient_nonce_sha256": _jit_authority_policy_hash(
+                        f"{backend}:decision-bound:concurrent:"
+                        f"{recipient_marker}:nonce"
+                    ),
+                }
+            )
+        except (
+            db.ReleaseAuthorizationConflictError,
+            db.ReleaseAuthorizationError,
+        ):
+            return "conflict"
+        return "issued"
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        decision_futures = [
+            executor.submit(
+                claim_decision_bound,
+                recipient_marker,
+            )
+            for recipient_marker in ("first", "second")
+        ]
+        decision_outcomes = sorted(
+            future.result(timeout=20)
+            for future in decision_futures
+        )
+    if decision_outcomes != ["conflict", "issued"]:
+        raise AssertionError(
+            f"{backend} concurrent decision-bound issuance was not "
+            f"exactly-once: {decision_outcomes}"
+        )
+    with db.connect() as conn:
+        decision_row = conn.execute(
+            "SELECT release_kind, request_authority_sha256, COUNT(*) "
+            "AS count FROM release_authorization_credential_issuances "
+            "WHERE attempt_id = ? GROUP BY release_kind, "
+            "request_authority_sha256",
+            (concurrent_decision_claim["attempt_id"],),
+        ).fetchone()
+    if (
+        decision_row is None
+        or decision_row["release_kind"] != "decisionBound"
+        or int(decision_row["count"]) != 1
+        or decision_row["request_authority_sha256"]
+        != concurrent_decision_claim["request_authority_sha256"]
+    ):
+        raise AssertionError(
+            f"{backend} decision-bound issuance was not stored exactly: "
+            f"{dict(decision_row) if decision_row is not None else None}"
+        )
+
+    legacy_reservation, legacy_claim = decision_bound_claim_fixture(
+        "legacy-operation-context"
+    )
+    operation_context_json = json.dumps(
+        legacy_claim["operation_context"],
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    operation_context_digest = (
+        "sha256:"
+        + hashlib.sha256(operation_context_json.encode("utf-8")).hexdigest()
+    )
+    with db.connect() as conn:
+        conn.execute(
+            "UPDATE release_authorization_attempts SET "
+            "operation_context_json = ? WHERE attempt_id = ?",
+            (
+                json.dumps(
+                    {"digest": operation_context_digest},
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                legacy_claim["attempt_id"],
+            ),
+        )
+    assert_raises(
+        db.ReleaseAuthorizationError,
+        lambda: db.release_credential_request_authority_snapshot(
+            attempt_id=legacy_claim["attempt_id"],
+            reservation_id=legacy_claim["reservation_id"],
+            binding_digest=legacy_claim["binding_digest"],
+            request_digest=legacy_claim["request_digest"],
+            operation_digest=legacy_claim["operation_digest"],
+            operation_context=legacy_claim["operation_context"],
+            reservation_expires_at_epoch_ms=legacy_reservation[
+                "reservation_expires_at_epoch_ms"
+            ],
+            principal_id=legacy_claim["principal_id"],
+            route_id=legacy_claim["route_id"],
+            credential_id=legacy_claim["credential_id"],
+            credential_version=legacy_claim["credential_version"],
+            policy_hash=legacy_claim["policy_hash"],
+        ),
+        "digest-only legacy operation context authorized credential lease v4",
+    )
+
+    expired_reservation, expired_claim = atomic_claim_fixture("expired")
+    assert_raises(
+        db.ReleaseAuthorizationError,
+        lambda: claim_atomic(
+            {
+                **expired_claim,
+                "now_epoch_ms": expired_reservation[
+                    "reservation_expires_at_epoch_ms"
+                ],
+            }
+        ),
+        "expired non-JIT atomic credential authority remained usable",
+    )
 
 
 def exercise_atomic_release_authorization(db: Any, backend: str) -> None:
@@ -4528,6 +6078,76 @@ def exercise_atomic_release_authorization(db: Any, backend: str) -> None:
         raise AssertionError(f"reservation replay was not durable: {reserved} {replayed}")
     if reserved.get("binding_digest") != replayed.get("binding_digest"):
         raise AssertionError("reservation replay returned a different binding digest")
+    absent_attempt = f"attempt:{backend}:reserve-transport-failed"
+    with db.connect() as conn:
+        lifecycle_events_before_failed_completion = conn.execute(
+            "SELECT COUNT(*) AS count FROM release_authorization_events "
+            "WHERE attempt_id = ?",
+            (cancel_kwargs["attempt_id"],),
+        ).fetchone()
+    absent_cleanup = db.cancel_release_authorization_if_present(
+        attempt_id=absent_attempt,
+        binding_digest="sha256:" + "e" * 64,
+    )
+    wrong_binding_cleanup = db.cancel_release_authorization_if_present(
+        attempt_id=cancel_kwargs["attempt_id"],
+        binding_digest="sha256:" + "e" * 64,
+    )
+    if (
+        absent_cleanup.get("state") != "absent"
+        or wrong_binding_cleanup.get("state") != "absent"
+        or absent_cleanup.get("binding_digest") != "sha256:" + "e" * 64
+        or wrong_binding_cleanup.get("binding_digest") != "sha256:" + "e" * 64
+    ):
+        raise AssertionError(
+            "expected cancellation did not return an exact no-op for absent "
+            f"or mismatched state: {absent_cleanup} {wrong_binding_cleanup}"
+        )
+    with db.connect() as conn:
+        absent_attempt_row = conn.execute(
+            "SELECT COUNT(*) AS count FROM release_authorization_attempts "
+            "WHERE attempt_id = ?",
+            (absent_attempt,),
+        ).fetchone()
+        preserved_attempt = conn.execute(
+            "SELECT state, binding_digest FROM release_authorization_attempts "
+            "WHERE attempt_id = ?",
+            (cancel_kwargs["attempt_id"],),
+        ).fetchone()
+        preserved_grant = conn.execute(
+            "SELECT state, uses_remaining, reserved_attempt_id FROM approval_grants "
+            "WHERE id = ?",
+            (reserved["grant_id"],),
+        ).fetchone()
+        preserved_quotas = conn.execute(
+            "SELECT counter_key, reservation_state "
+            "FROM release_authorization_quota_reservations "
+            "WHERE attempt_id = ? ORDER BY counter_key",
+            (cancel_kwargs["attempt_id"],),
+        ).fetchall()
+        lifecycle_events_after_failed_completion = conn.execute(
+            "SELECT COUNT(*) AS count FROM release_authorization_events "
+            "WHERE attempt_id = ?",
+            (cancel_kwargs["attempt_id"],),
+        ).fetchone()
+    if (
+        int(absent_attempt_row["count"]) != 0
+        or preserved_attempt["state"] != "reserved"
+        or preserved_attempt["binding_digest"] != reserved["binding_digest"]
+        or preserved_grant["state"] != "active"
+        or int(preserved_grant["uses_remaining"]) != 1
+        or preserved_grant["reserved_attempt_id"] != cancel_kwargs["attempt_id"]
+        or len(preserved_quotas) != len(cancel_quotas)
+        or any(row["reservation_state"] != "reserved" for row in preserved_quotas)
+        or any(counter_count(db, item["counter_key"]) != 1 for item in cancel_quotas)
+        or int(lifecycle_events_after_failed_completion["count"])
+        != int(lifecycle_events_before_failed_completion["count"])
+    ):
+        raise AssertionError(
+            "absent or incorrectly bound cancellation mutated unrelated "
+            f"reservation state: {preserved_attempt} {preserved_grant} "
+            f"{preserved_quotas}"
+        )
     try:
         db.reserve_release_authorization(
             **{
@@ -4557,10 +6177,9 @@ def exercise_atomic_release_authorization(db: Any, backend: str) -> None:
         or int(consumption["count"]) != 0
     ):
         raise AssertionError("tentative reserve created final grant consumption")
-    cancelled = db.complete_release_authorization(
+    cancelled = db.cancel_release_authorization_if_present(
         attempt_id=cancel_kwargs["attempt_id"],
         binding_digest=reserved["binding_digest"],
-        outcome="not_forwarded",
         actor_id="spiffe://test.serverware/decision-gate/atomic",
     )
     if cancelled.get("state") != "cancelled":
@@ -5099,10 +6718,29 @@ def exercise_atomic_release_authorization(db: Any, backend: str) -> None:
     if durable is None or durable["state"] != "committed":
         raise AssertionError("release state did not survive connection close and reopen")
     retained_operation_context = json.loads(durable["operation_context_json"])
-    if set(retained_operation_context) != {"digest"} or not re.fullmatch(
-        r"sha256:[0-9a-f]{64}", str(retained_operation_context.get("digest") or "")
+    recovered_operation_context_json, recovered_operation_context_digest = (
+        db._recover_release_operation_context_json(
+            durable["operation_context_json"]
+        )
+    )
+    expected_operation_context_json = json.dumps(
+        {"operation": "test.forward", "account": "acct:test"},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    if (
+        set(retained_operation_context)
+        != {"apiVersion", "ciphertext", "digest"}
+        or recovered_operation_context_json
+        != expected_operation_context_json
+        or recovered_operation_context_digest
+        != retained_operation_context["digest"]
+        or "test.forward" in durable["operation_context_json"]
+        or "acct:test" in durable["operation_context_json"]
     ):
-        raise AssertionError("release state persisted raw operation context")
+        raise AssertionError(
+            "release state did not persist a protected recoverable operation context"
+        )
     retained_binding = json.loads(durable["binding_json"])
     if retained_binding != {"digest": durable["binding_digest"]}:
         raise AssertionError("release state persisted raw authorization binding")
@@ -5213,9 +6851,24 @@ def exercise_atomic_release_authorization(db: Any, backend: str) -> None:
             "FROM release_authorization_attempts WHERE attempt_id = ?",
             (commit_attempt,),
         ).fetchone()
-    if json.loads(migrated["binding_json"]) != {
-        "digest": migrated["binding_digest"]
-    } or set(json.loads(migrated["operation_context_json"])) != {"digest"}:
+    migrated_operation_storage = json.loads(
+        migrated["operation_context_json"]
+    )
+    migrated_operation_json, migrated_operation_digest = (
+        db._recover_release_operation_context_json(
+            migrated["operation_context_json"]
+        )
+    )
+    if (
+        json.loads(migrated["binding_json"])
+        != {"digest": migrated["binding_digest"]}
+        or set(migrated_operation_storage)
+        != {"apiVersion", "ciphertext", "digest"}
+        or json.loads(migrated_operation_json)
+        != {"reset_token": "legacy-secret"}
+        or migrated_operation_digest
+        != migrated_operation_storage["digest"]
+    ):
         raise AssertionError("legacy release authorization material was not migrated")
     if "legacy-secret" in migrated["binding_json"] + migrated["operation_context_json"]:
         raise AssertionError("legacy release authorization migration retained plaintext")
@@ -5288,11 +6941,11 @@ def exercise_control_plane_jit_approval(app_module: Any, db: Any, backend: str) 
     def reserve_payload(
         attempt_id: str,
         *,
-        canonical_request: dict[str, Any] | None = canonical,
+        canonical_request: dict[str, Any] = canonical,
         request_digest: str | None = None,
         submitted_operation_digest: str | None = None,
     ) -> dict[str, Any]:
-        payload = {
+        return {
             "apiVersion": "serverware.releaseAuthorizationReserve/v1",
             "attemptId": attempt_id,
             "flowId": attempt_id,
@@ -5301,14 +6954,12 @@ def exercise_control_plane_jit_approval(app_module: Any, db: Any, backend: str) 
             "credentialRef": credential_id,
             "credentialVersion": credential_version,
             "policyHash": policy_hash,
-            "requestDigest": request_digest or digest(canonical_request or canonical),
+            "requestDigest": request_digest or digest(canonical_request),
             "operationDigest": submitted_operation_digest
-            or operation_digest(canonical_request or canonical),
+            or operation_digest(canonical_request),
             "operationContext": operation,
+            "canonicalRequest": canonical_request,
         }
-        if canonical_request is not None:
-            payload["canonicalRequest"] = canonical_request
-        return payload
 
     quota = {
         "id": f"quota:{backend}:reserve-approval",
@@ -5329,6 +6980,17 @@ def exercise_control_plane_jit_approval(app_module: Any, db: Any, backend: str) 
         methods=frozenset({"POST"}),
         match_path=lambda path: {} if path == "/actual/request" else None,
         credential_ref=credential_id,
+        adapter_config={
+            "request": {
+                "allowedHeaders": ["accept"],
+                "allowedMediaTypes": [],
+                "allowedQueryKeys": [],
+                "bodyMode": "none",
+                "maxBodyBytes": 0,
+                "discardHeaders": [],
+                "requiredHeaders": {},
+            }
+        },
         constraints=(quota,),
         jit={
             "required": True,
@@ -5339,7 +7001,16 @@ def exercise_control_plane_jit_approval(app_module: Any, db: Any, backend: str) 
             "binding": {"type": "operationDigest"},
         },
     )
-    snapshot = SimpleNamespace(hash=policy_hash, routes=(route,))
+    snapshot = SimpleNamespace(
+        hash=policy_hash,
+        principals={
+            principal_id: SimpleNamespace(required_headers={}),
+        },
+        credentials={
+            credential_id: SimpleNamespace(injection={"type": "bearer"}),
+        },
+        routes=(route,),
+    )
 
     def reserve(payload: dict[str, Any]) -> dict[str, Any]:
         return app_module.data_plane_release_authorization_reserve(
@@ -5370,7 +7041,9 @@ def exercise_control_plane_jit_approval(app_module: Any, db: Any, backend: str) 
         patch.object(
             app_module.db,
             "get_credential",
-            return_value={"credential_version": credential_version},
+            side_effect=AssertionError(
+                "control-plane reserve read a dispatch-secret credential"
+            ),
         ),
         patch.object(app_module, "_release_authorization_maintenance"),
     ):
@@ -5524,13 +7197,20 @@ def exercise_control_plane_jit_approval(app_module: Any, db: Any, backend: str) 
             ),
             413,
         )
-        expect_http_status(
-            reserve_payload(
-                f"attempt:{backend}:missing-canonical",
-                canonical_request=None,
-            ),
-            409,
+        missing_canonical = reserve_payload(
+            f"attempt:{backend}:missing-canonical"
         )
+        missing_canonical.pop("canonicalRequest")
+        try:
+            app_module.DataPlaneReleaseAuthorizationReserve.model_validate(
+                missing_canonical
+            )
+        except app_module.ValidationError:
+            pass
+        else:
+            raise AssertionError(
+                "reserve request model accepted a missing canonicalRequest"
+            )
         mismatched_flow = reserve_payload(f"attempt:{backend}:mismatched-flow")
         mismatched_flow["flowId"] = f"flow:{mismatched_flow['attemptId']}"
         try:
@@ -5776,6 +7456,7 @@ def exercise_internal_header_boundary(
             "request": {
                 "allowedHeaders": ["accept"],
                 "requiredHeaders": {},
+                "allowedMediaTypes": [],
                 "allowedQueryKeys": [],
                 "bodyMode": "none",
                 "maxBodyBytes": 0,
@@ -5813,6 +7494,138 @@ def exercise_internal_header_boundary(
         raise AssertionError("generic allowedHeaders accepted an internal Serverware header")
 
 
+def exercise_physical_header_preflight(policy_engine: Any) -> None:
+    from mitmproxy import http as mitm_http
+
+    headers = mitm_http.Headers(
+        fields=[
+            (b"Host", b"upstream.invalid"),
+            (b"Npm-Session", b"first-physical-value"),
+            (b"npm-session", b"second-physical-value"),
+        ]
+    )
+    flow = SimpleNamespace(
+        request=SimpleNamespace(
+            method="PUT",
+            pretty_url=(
+                "https://upstream.invalid/integration"
+                "?caller-chosen-secret-key=caller-secret-must-not-enter-audit"
+            ),
+            headers=headers,
+            raw_content=b"",
+        ),
+        client_conn=SimpleNamespace(peername=("127.0.0.1", 43125)),
+        metadata={},
+    )
+    audit_records: list[dict[str, Any]] = []
+
+    def capture_audit(*args: Any, **kwargs: Any) -> None:
+        audit_records.append({"args": args, "kwargs": kwargs})
+
+    with (
+        patch.object(
+            policy_engine.runtime,
+            "prune_expired_caches",
+            side_effect=AssertionError(
+                "duplicate physical headers reached runtime maintenance"
+            ),
+        ),
+        patch.object(
+            policy_engine.runtime,
+            "log_request",
+            side_effect=capture_audit,
+        ),
+        patch.object(
+            policy_engine,
+            "get_policy_snapshot",
+            side_effect=AssertionError(
+                "duplicate physical headers reached policy authorization"
+            ),
+        ),
+    ):
+        result = policy_engine.evaluate_request(flow)
+    if (
+        result.decision.allowed
+        or result.decision.status_code != 400
+        or result.decision.payload.get("error") != "invalid_forwarding_headers"
+        or "repeats header npm-session"
+        not in result.decision.payload.get("detail", "")
+    ):
+        raise AssertionError(
+            f"duplicate physical headers did not fail at preflight: {result.decision}"
+        )
+    if len(audit_records) != 1:
+        raise AssertionError(
+            f"physical-header preflight emitted unexpected audit work: {audit_records}"
+        )
+    audit_url = audit_records[0]["args"][2]
+    if "?" in audit_url or "caller-chosen-secret-key" in audit_url or "caller-secret" in audit_url:
+        raise AssertionError(
+            f"pre-policy duplicate-header audit retained caller query material: {audit_records}"
+        )
+
+    for invalid_target in (
+        "HTTPS://upstream.invalid/resource?value=ok",
+        "https://UPSTREAM.invalid/resource?value=ok",
+        "https://upstream.invalid:0443/resource?value=ok",
+        "https://upstream.invalid/resource?value=raw+plus",
+        "https://upstream.invalid/resource?value=%zz",
+        "https://upstream.invalid/resource?value=%252B",
+        "https://upstream.invalid/resource?value=%C0%AF",
+        "https://user@upstream.invalid/resource",
+        "https://upstream.invalid/resource#fragment",
+        "https://upstream.invalid\\attacker/resource",
+        "https://upstream.invalid/résumé",
+        "https://upstream.invalid/resource?value="
+        + "x" * (64 * 1024),
+    ):
+        invalid_flow = SimpleNamespace(
+            request=SimpleNamespace(
+                method="GET",
+                pretty_url=invalid_target,
+                headers={},
+                raw_content=b"",
+            ),
+            client_conn=SimpleNamespace(peername=("127.0.0.1", 43125)),
+            metadata={},
+        )
+        with (
+            patch.object(
+                policy_engine,
+                "get_policy_snapshot",
+                side_effect=AssertionError(
+                    "invalid raw target reached policy snapshot acquisition"
+                ),
+            ),
+            patch.object(
+                policy_engine.runtime,
+                "log_request",
+                side_effect=AssertionError(
+                    "invalid raw target reached audit emission"
+                ),
+            ),
+            patch.object(
+                policy_engine.runtime,
+                "get_credential_generation",
+                side_effect=AssertionError(
+                    "invalid raw target reached credential metadata"
+                ),
+            ),
+        ):
+            invalid_result = policy_engine.evaluate_request(invalid_flow)
+        if (
+            invalid_result.decision.allowed
+            or invalid_result.decision.status_code != 400
+            or invalid_result.decision.payload
+            != {"error": "invalid_request_target"}
+            or invalid_flow.metadata
+        ):
+            raise AssertionError(
+                "invalid raw target was not rejected with a fixed pre-policy "
+                f"error: {invalid_target!r} {invalid_result.decision}"
+            )
+
+
 def _run_proxy_transaction(
     policy_engine: Any,
     credential_policy_type: Any,
@@ -5820,12 +7633,22 @@ def _run_proxy_transaction(
     credential_policy: Any = None,
     credential: dict[str, Any] | None = None,
     jit_required: bool = True,
-    reserve_result: dict[str, Any] | BaseException | None = None,
+    reserve_result: Any = None,
+    replace_reserve_result: bool = False,
+    credential_read_error: BaseException | None = None,
+    audit_error: BaseException | None = None,
     rewrite_allowed: bool = True,
     rewrite_error: BaseException | None = None,
+    rewrite_mutation: Any = None,
     dispatch_result: dict[str, Any] | BaseException | None = None,
     complete_result: dict[str, Any] | BaseException | None = None,
     followup: str | None = None,
+    request_url: str = "https://upstream.invalid/resource",
+    allowed_query_keys: tuple[str, ...] = (),
+    rate_store: str = "shared",
+    atomic_enabled: bool = True,
+    route_constraints: tuple[dict[str, Any], ...] | None = None,
+    operation_fields: dict[str, str] | None = None,
 ) -> tuple[Any, list[str], Any, Any]:
     events: list[str] = []
     credential_policy = credential_policy or credential_policy_type(
@@ -5845,22 +7668,58 @@ def _run_proxy_transaction(
     principal = SimpleNamespace(id="agent:test", required_headers={})
     route = SimpleNamespace(
         id="route:test",
+        principals=(principal.id,),
+        scheme="https",
+        host="upstream.invalid",
+        port=443,
+        methods=frozenset({"POST"}),
+        match_path=lambda path: {} if path == "/resource" else None,
         credential_ref=credential_policy.id,
         adapter_type="generic.rest",
+        adapter_config={
+            "request": {
+                "allowedHeaders": ["accept"],
+                "allowedMediaTypes": [],
+                "allowedQueryKeys": list(allowed_query_keys),
+                "bodyMode": "none",
+                "maxBodyBytes": 0,
+                "discardHeaders": [],
+                "requiredHeaders": {},
+            }
+        },
         constraints=(
-            {
-                "id": "shared-quota",
-                "type": "rateLimit",
-                "store": "shared",
-                "max": 1,
-                "windowSeconds": 60,
-                "key": {"scope": ["principal", "credential", "route", "operation"]},
-            },
+            route_constraints
+            if route_constraints is not None
+            else (
+                {
+                    "id": "shared-quota",
+                    "type": "rateLimit",
+                    "store": rate_store,
+                    "max": 1,
+                    "windowSeconds": 60,
+                    "key": {
+                        "scope": [
+                            "principal",
+                            "credential",
+                            "route",
+                            "operation",
+                        ]
+                    },
+                },
+            )
         ),
         jit={"required": jit_required},
     )
 
     class Adapter:
+        def validate_credential_metadata(
+            self,
+            _route: Any,
+            _metadata: Any,
+        ) -> Any:
+            events.append("validate_credential_metadata")
+            return policy_engine.PolicyDecision(True)
+
         def validate_credential(self, _route: Any, _credential: Any) -> Any:
             events.append("validate_credential")
             return policy_engine.PolicyDecision(True)
@@ -5871,12 +7730,18 @@ def _run_proxy_transaction(
 
         def operation_fields(self, _flow: Any, _route: Any, _params: Any) -> dict[str, str]:
             events.append("operation_fields")
-            return {"operation": "test.forward"}
+            return dict(
+                operation_fields
+                if operation_fields is not None
+                else {"operation": "test.forward"}
+            )
 
         def rewrite_request(self, _flow: Any, _route: Any, _params: Any) -> Any:
             events.append("rewrite")
             if rewrite_error is not None:
                 raise rewrite_error
+            if rewrite_mutation is not None:
+                rewrite_mutation(_flow)
             return policy_engine.PolicyDecision(
                 rewrite_allowed,
                 "rewrite denied" if not rewrite_allowed else None,
@@ -5889,18 +7754,39 @@ def _run_proxy_transaction(
             return policy_engine.PolicyDecision(True)
 
     adapter = Adapter()
+
+    def match_route(
+        scheme: str,
+        host: str,
+        port: int,
+        method: str,
+        path: str,
+        principal_id: str,
+    ) -> Any:
+        if (
+            scheme == route.scheme
+            and host == route.host
+            and port == route.port
+            and method in route.methods
+            and principal_id in route.principals
+            and route.match_path(path) is not None
+        ):
+            return SimpleNamespace(route=route, params={})
+        return None
+
     snapshot = SimpleNamespace(
         hash="sha256:" + "f" * 64,
         credentials={credential_policy.id: credential_policy},
         identify_principal=lambda _ip, _headers: principal,
-        match_route=lambda *_args: SimpleNamespace(route=route, params={}),
+        match_route=match_route,
     )
     request = SimpleNamespace(
         method="POST",
-        pretty_url="https://upstream.invalid/resource",
+        pretty_url=request_url,
         headers={"accept": "application/json", "X-Serverware-Debug-Only": "strip-me"},
         raw_content=b"",
     )
+    request.get_content = lambda strict=True: request.raw_content
 
     class MutableQuery(dict[str, str]):
         def __setitem__(self, key: str, value: str) -> None:
@@ -5925,7 +7811,12 @@ def _run_proxy_transaction(
                 )
             )
 
-    request.query = MutableQuery()
+    request.query = MutableQuery(
+        parse_qsl(
+            urlsplit(request.pretty_url).query,
+            keep_blank_values=True,
+        )
+    )
     audit_records: list[dict[str, Any]] = []
     flow = SimpleNamespace(
         request=request,
@@ -5938,28 +7829,55 @@ def _run_proxy_transaction(
     def constraints(*_args: Any, **kwargs: Any) -> Any:
         if kwargs.get("skip_rate_limits"):
             events.append("policy_validate")
-        elif kwargs.get("rate_limits_only") and kwargs.get("skip_shared_rate_limits"):
+        elif (
+            rate_store == "shared"
+            and kwargs.get("rate_limits_only")
+            and kwargs.get("skip_shared_rate_limits")
+        ):
             events.append(
                 "shared_commit_bypassed"
                 if kwargs.get("consume_rate_limits")
                 else "shared_preview_bypassed"
             )
+        elif rate_store == "local" and kwargs.get("rate_limits_only"):
+            events.append(
+                "local_commit_non_refundable"
+                if kwargs.get("consume_rate_limits")
+                else "local_preview"
+            )
         else:
             events.append("legacy_quota_call")
         return policy_engine.PolicyDecision(True)
 
-    def credential_version(_credential_id: str | None) -> int:
-        events.append("credential_version")
-        return 1
+    def credential_generation(_credential_id: str | None) -> dict[str, Any]:
+        events.append("credential_generation")
+        return {
+            key: value
+            for key, value in credential.items()
+            if key != "secret"
+        }
 
-    def credential_read(_credential_id: str | None) -> dict[str, Any]:
+    def credential_read(
+        _credential_id: str | None,
+        **authority: Any,
+    ) -> dict[str, Any]:
         events.append("credential_read")
+        flow.metadata["observed_credential_authority"] = authority
+        if credential_read_error is not None:
+            raise credential_read_error
         return credential
 
     def reserve(**kwargs: Any) -> dict[str, Any]:
         events.append("reserve")
+        guard = kwargs["guard"]
+        expected = guard.expected
+        flow.metadata["observed_reserve_canonical_request"] = json.loads(
+            json.dumps(kwargs["canonical_request"])
+        )
         if isinstance(reserve_result, BaseException):
             raise reserve_result
+        if replace_reserve_result:
+            return reserve_result
         now_ms = int(time.time() * 1000)
         quotas = []
         for claim in kwargs["shared_quotas"]:
@@ -5988,21 +7906,8 @@ def _run_proxy_transaction(
             "authorized": True,
             "state": "reserved",
             "reason": "reserved",
-            "attempt_id": kwargs["attempt_id"],
-            "binding_digest": policy_engine.runtime.release_authorization_binding_digest(
-                attempt_id=kwargs["attempt_id"],
-                flow_id=kwargs["flow_id"],
-                principal_id=kwargs["principal_id"],
-                route_id=kwargs["route_id"],
-                credential_ref=kwargs["credential_ref"],
-                credential_version=kwargs["credential_version"],
-                policy_hash=kwargs["policy_hash"],
-                request_digest=kwargs["request_digest"],
-                operation_digest=kwargs["operation_digest"],
-                operation_context=kwargs["operation_context"],
-                shared_quotas=kwargs["shared_quotas"],
-                require_jit_grant=kwargs["require_jit_grant"],
-            ),
+            "attempt_id": expected.attempt_id,
+            "binding_digest": expected.binding_digest,
             "idempotent_replay": False,
             "grant_id": "grant:exact:test" if jit_required else None,
             "approval_request_id": "approval:exact:test" if jit_required else None,
@@ -6016,11 +7921,114 @@ def _run_proxy_transaction(
             "retry_after_seconds": 0,
             "quotas": quotas,
         }
+        durable_binding = guard.durable_policy
+        if durable_binding is not None:
+            flow.metadata["observed_durable_policy_claims"] = copy.deepcopy(
+                kwargs.get("durable_policy_claims")
+            )
+            result.update(
+                {
+                    "api_version": "serverware.releaseAuthorization/v2",
+                    "durable_policy": {
+                        "state": "reserved",
+                        "attempt_id": expected.attempt_id,
+                        "claim_digest": durable_binding["claimDigest"],
+                        "reservation_id": durable_binding["reservationId"],
+                        "actor_id": durable_binding["actorId"],
+                        "reservation_deadline_at_epoch_ms": result[
+                            "reservation_expires_at_epoch_ms"
+                        ],
+                        "dispatch_deadline_at_epoch_ms": None,
+                        "response_evidence_digest": None,
+                        "failure_reason": None,
+                        "response_body_sha256": None,
+                        "uncertainty": None,
+                    },
+                }
+            )
         if isinstance(reserve_result, dict):
             result.update(reserve_result)
-            result["attempt_id"] = kwargs["attempt_id"]
             if result.get("authorized") is False and "quotas" not in reserve_result:
                 result["quotas"] = []
+        if result.get("state") == "denied":
+            guard.disarm_denial()
+        elif result.get("state") == "reserved":
+            guard.promote_reserved()
+        return result
+
+    def cancel_expected(
+        expected: Any,
+        *,
+        durable_policy: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        events.append("complete:not_forwarded")
+        flow.metadata["observed_cleanup_identity"] = expected
+        lifecycle = flow.metadata.get("serverware_release_authorization")
+        if not isinstance(lifecycle, dict):
+            return {
+                "authorized": False,
+                "state": "absent",
+                "reason": "reservation_absent",
+                "attempt_id": expected.attempt_id,
+                "binding_digest": expected.binding_digest,
+                "idempotent_replay": True,
+                "grant_id": None,
+                "approval_request_id": None,
+                "approval_status": None,
+                "approval_expires_at": None,
+                "approval_created": None,
+                "reservation_expires_at_epoch_ms": None,
+                "dispatch_started_at_epoch_ms": None,
+                "dispatch_expires_at_epoch_ms": None,
+                "completion_outcome": None,
+                "retry_after_seconds": 0,
+                "quotas": [],
+            }
+        result = {
+            "authorized": False,
+            "state": "cancelled",
+            "reason": "cancelled",
+            "attempt_id": expected.attempt_id,
+            "binding_digest": expected.binding_digest,
+            "idempotent_replay": False,
+            "grant_id": lifecycle.get("grant_id"),
+            "approval_request_id": lifecycle.get("approval_request_id"),
+            "approval_status": None,
+            "approval_expires_at": None,
+            "approval_created": None,
+            "reservation_expires_at_epoch_ms": lifecycle[
+                "reservation_expires_at_epoch_ms"
+            ],
+            "dispatch_started_at_epoch_ms": None,
+            "dispatch_expires_at_epoch_ms": None,
+            "completion_outcome": "not_forwarded",
+            "retry_after_seconds": 0,
+            "quotas": [
+                {**item, "reservation_state": "refunded"}
+                for item in lifecycle["quotas"]
+            ],
+        }
+        if durable_policy is not None:
+            result.update(
+                {
+                    "api_version": "serverware.releaseAuthorization/v2",
+                    "durable_policy": {
+                        "state": "aborted",
+                        "attempt_id": expected.attempt_id,
+                        "claim_digest": durable_policy["claimDigest"],
+                        "reservation_id": durable_policy["reservationId"],
+                        "actor_id": durable_policy["actorId"],
+                        "reservation_deadline_at_epoch_ms": result[
+                            "reservation_expires_at_epoch_ms"
+                        ],
+                        "dispatch_deadline_at_epoch_ms": None,
+                        "response_evidence_digest": None,
+                        "failure_reason": None,
+                        "response_body_sha256": None,
+                        "uncertainty": None,
+                    },
+                }
+            )
         return result
 
     def dispatch(**kwargs: Any) -> dict[str, Any]:
@@ -6113,6 +8121,8 @@ def _run_proxy_transaction(
         reason: str | None,
         event: dict[str, Any] | None = None,
     ) -> None:
+        if audit_error is not None and action == "allowed":
+            raise audit_error
         audit_records.append(
             {
                 "route_id": route_id,
@@ -6134,10 +8144,17 @@ def _run_proxy_transaction(
         stack.enter_context(patch.object(policy_engine, "get_adapter", return_value=adapter))
         stack.enter_context(patch.object(policy_engine.runtime, "prune_expired_caches", return_value=None))
         stack.enter_context(patch.object(policy_engine.runtime, "log_request", side_effect=log_request))
-        stack.enter_context(patch.object(policy_engine.runtime, "atomic_release_authorization_enabled", return_value=True))
-        stack.enter_context(patch.object(policy_engine.runtime, "get_credential_version", side_effect=credential_version))
+        stack.enter_context(
+            patch.object(
+                policy_engine.runtime,
+                "atomic_release_authorization_enabled",
+                return_value=atomic_enabled,
+            )
+        )
+        stack.enter_context(patch.object(policy_engine.runtime, "get_credential_generation", side_effect=credential_generation))
         stack.enter_context(patch.object(policy_engine.runtime, "get_credential", side_effect=credential_read))
-        stack.enter_context(patch.object(policy_engine.runtime, "reserve_release_authorization", side_effect=reserve))
+        stack.enter_context(patch.object(policy_engine.runtime, "reserve_expected_release_authorization", side_effect=reserve))
+        stack.enter_context(patch.object(policy_engine.runtime, "cancel_expected_release_authorization", side_effect=cancel_expected))
         stack.enter_context(patch.object(policy_engine.runtime, "dispatch_release_authorization", side_effect=dispatch))
         stack.enter_context(patch.object(policy_engine.runtime, "complete_release_authorization", side_effect=complete))
         stack.enter_context(patch.object(policy_engine, "evaluate_request_constraints", side_effect=constraints))
@@ -6154,6 +8171,8 @@ def _run_proxy_transaction(
         followup_decision = None
         if followup in {"dispatch", "response", "error", "audit_response"} and result.decision.allowed:
             followup_decision = policy_engine.dispatch_release_authorization(flow)
+            if followup_decision.allowed:
+                policy_engine.mark_provider_dispatch_uncertain(flow)
         if followup == "response" and followup_decision and followup_decision.allowed:
             events.append("response_policy_pending")
             completion = policy_engine.complete_release_authorization(flow, "forwarded")
@@ -6180,6 +8199,108 @@ def _run_proxy_transaction(
 
 
 def exercise_proxy_forward_start_ordering(policy_engine: Any, credential_policy_type: Any) -> None:
+    for label, jit_required, rate_store in (
+        ("non-JIT shared quota", False, "shared"),
+        ("JIT local quota", True, "local"),
+    ):
+        non_atomic, non_atomic_events, _, _ = _run_proxy_transaction(
+            policy_engine,
+            credential_policy_type,
+            jit_required=jit_required,
+            rate_store=rate_store,
+            atomic_enabled=False,
+        )
+        if (
+            non_atomic.decision.allowed
+            or non_atomic.decision.payload.get("error")
+            != "atomic_release_authorization_required"
+            or "credential_read" in non_atomic_events
+            or "reserve" in non_atomic_events
+        ):
+            raise AssertionError(
+                f"{label} did not fail before secret access without atomic authority: "
+                f"{non_atomic_events} {non_atomic.decision}"
+            )
+
+    local_compatibility, local_compatibility_events, local_compatibility_flow, _ = (
+        _run_proxy_transaction(
+            policy_engine,
+            credential_policy_type,
+            jit_required=False,
+            rate_store="local",
+            atomic_enabled=False,
+        )
+    )
+    if (
+        not local_compatibility.decision.allowed
+        or "reserve" in local_compatibility_events
+        or local_compatibility_events.count("local_commit_non_refundable") != 1
+        or local_compatibility_flow.metadata.get(
+            "serverware_local_rate_limit_mode"
+        )
+        != "conservative_non_refundable"
+    ):
+        raise AssertionError(
+            "local-only compatibility rate limiting lost its explicit "
+            "non-refundable contract: "
+            f"{local_compatibility_events} {local_compatibility_flow.metadata}"
+        )
+
+    raw_plus, raw_plus_events, _, _ = _run_proxy_transaction(
+        policy_engine,
+        credential_policy_type,
+        request_url="https://upstream.invalid/resource?value=customer+name",
+        allowed_query_keys=("value",),
+    )
+    if (
+        raw_plus.decision.allowed
+        or raw_plus.decision.payload.get("error") != "invalid_request_target"
+        or "reserve" in raw_plus_events
+        or "credential_read" in raw_plus_events
+        or "credential_generation" in raw_plus_events
+    ):
+        raise AssertionError(
+            "raw query plus reached credential or reservation processing: "
+            f"{raw_plus_events} {raw_plus.decision}"
+        )
+
+    encoded_query, encoded_query_events, encoded_query_flow, _ = (
+        _run_proxy_transaction(
+            policy_engine,
+            credential_policy_type,
+            request_url=(
+                "https://upstream.invalid/resource?"
+                "space=a%20b&literal=%2B&data=a%26b%3Dc"
+            ),
+            allowed_query_keys=("data", "literal", "space"),
+        )
+    )
+    encoded_query_canonical = encoded_query_flow.metadata.get(
+        "observed_reserve_canonical_request"
+    )
+    expected_query_pairs = [["data", "a&b=c"], ["literal", "+"], ["space", "a b"]]
+    policy_bound_query_wire = (
+        policy_engine._canonical_query_wire(
+            [tuple(pair) for pair in expected_query_pairs]
+        )
+    )
+    if (
+        not encoded_query.decision.allowed
+        or "reserve" not in encoded_query_events
+        or not isinstance(encoded_query_canonical, dict)
+        or encoded_query_canonical["request"]["query"]
+        != expected_query_pairs
+        or policy_bound_query_wire
+        != "data=a%26b%3Dc&literal=%2B&space=a%20b"
+        or encoded_query_flow.request.pretty_url
+        != f"https://upstream.invalid/resource?{policy_bound_query_wire}"
+    ):
+        raise AssertionError(
+            "provider-visible query bytes diverged from the reserved canonical query: "
+            f"{encoded_query_events} {encoded_query_canonical} "
+            f"{encoded_query_flow.request.pretty_url}"
+        )
+
     allowed, events, flow, dispatched = _run_proxy_transaction(
         policy_engine,
         credential_policy_type,
@@ -6192,14 +8313,15 @@ def exercise_proxy_forward_start_ordering(policy_engine: Any, credential_policy_
     ordered = [
         events.index(name)
         for name in (
+            "rewrite",
+            "credential_generation",
+            "validate_credential_metadata",
             "validate_request",
             "operation_fields",
             "policy_validate",
-            "credential_version",
             "reserve",
             "credential_read",
             "validate_credential",
-            "rewrite",
             "dispatch",
         )
     ]
@@ -6214,6 +8336,58 @@ def exercise_proxy_forward_start_ordering(policy_engine: Any, credential_policy_
         raise AssertionError(f"atomic mode used a legacy authorization path: {events}")
     if any(str(name).lower().startswith("x-serverware-") for name in flow.request.headers):
         raise AssertionError(f"proxy forwarded an internal Serverware header: {flow.request.headers}")
+
+    rewritten, rewritten_events, rewritten_flow, _ = _run_proxy_transaction(
+        policy_engine,
+        credential_policy_type,
+        rewrite_mutation=lambda rewritten_flow: (
+            setattr(rewritten_flow.request, "raw_content", b'{"provider":"visible"}'),
+            rewritten_flow.request.query.__setitem__("mode", "rewritten"),
+        ),
+    )
+    rewritten_canonical = rewritten_flow.metadata.get(
+        "observed_reserve_canonical_request"
+    )
+    if (
+        not rewritten.decision.allowed
+        or not isinstance(rewritten_canonical, dict)
+        or rewritten_canonical["request"]["query"] != [["mode", "rewritten"]]
+        or rewritten_canonical["request"]["body_sha256"]
+        != "sha256:" + hashlib.sha256(b'{"provider":"visible"}').hexdigest()
+        or rewritten_events.index("rewrite") > rewritten_events.index("reserve")
+    ):
+        raise AssertionError(
+            "reservation did not bind the exact provider-visible rewritten request: "
+            f"{rewritten_events} {rewritten_canonical}"
+        )
+
+    rewritten_outside_route, outside_events, _, _ = _run_proxy_transaction(
+        policy_engine,
+        credential_policy_type,
+        rewrite_mutation=lambda rewritten_flow: setattr(
+            rewritten_flow.request,
+            "method",
+            "DELETE",
+        ),
+    )
+    if (
+        rewritten_outside_route.decision.allowed
+        or rewritten_outside_route.decision.payload.get("error")
+        != "rewritten_request_route_mismatch"
+        or any(
+            name in outside_events
+            for name in (
+                "validate_request",
+                "credential_generation",
+                "reserve",
+                "credential_read",
+            )
+        )
+    ):
+        raise AssertionError(
+            "unauthorized rewritten target reached authorization state: "
+            f"{outside_events} {rewritten_outside_route.decision}"
+        )
 
     quota_denied, quota_events, _, _ = _run_proxy_transaction(
         policy_engine,
@@ -6238,7 +8412,10 @@ def exercise_proxy_forward_start_ordering(policy_engine: Any, credential_policy_
     if quota_denied.decision.allowed or quota_denied.decision.status_code != 429:
         raise AssertionError(f"quota denial did not fail closed: {quota_denied.decision}")
     if "credential_read" in quota_events:
-        raise AssertionError(f"quota denial read the credential secret: {quota_events}")
+        raise AssertionError(
+            "quota denial acquired dispatch-secret credential material: "
+            f"{quota_events}"
+        )
 
     uncertain, uncertain_events, _, _ = _run_proxy_transaction(
         policy_engine,
@@ -6251,8 +8428,199 @@ def exercise_proxy_forward_start_ordering(policy_engine: Any, credential_policy_
         or uncertain.decision.payload.get("error") != "release_authorization_reserve_uncertain"
     ):
         raise AssertionError(f"uncertain reserve did not fail closed: {uncertain.decision}")
-    if any(name in uncertain_events for name in ("credential_read", "rewrite", "dispatch")):
-        raise AssertionError(f"uncertain reserve reached credential or upstream preparation: {uncertain_events}")
+    if "dispatch" in uncertain_events:
+        raise AssertionError(
+            f"uncertain reserve reached upstream dispatch: {uncertain_events}"
+        )
+    if "credential_read" in uncertain_events:
+        raise AssertionError(
+            "uncertain reserve acquired dispatch-secret credential material: "
+            f"{uncertain_events}"
+        )
+    if uncertain_events.count("complete:not_forwarded") != 1:
+        raise AssertionError(
+            f"uncertain reserve did not emit exactly one expected cleanup: {uncertain_events}"
+        )
+
+    for transport_label in (
+        "declared oversized reserve response",
+        "streamed oversized reserve response",
+        "reserve response timeout",
+        "post-commit reserve response loss",
+        "pre-create reserve transport loss",
+    ):
+        transport_failure, transport_events, transport_flow, _ = (
+            _run_proxy_transaction(
+                policy_engine,
+                credential_policy_type,
+                reserve_result=policy_engine.runtime.ReleaseAuthorizationClientError(
+                    transport_label
+                ),
+            )
+        )
+        cleanup_identity = transport_flow.metadata.get(
+            "observed_cleanup_identity"
+        )
+        expected_guard = transport_flow.metadata.get(
+            "serverware_release_authorization_guard"
+        )
+        if (
+            transport_failure.decision.allowed
+            or transport_failure.decision.payload.get("error")
+            != "release_authorization_reserve_uncertain"
+            or transport_events.count("complete:not_forwarded") != 1
+            or "credential_read" in transport_events
+            or expected_guard is None
+            or cleanup_identity is not expected_guard.expected
+            or cleanup_identity.attempt_id
+            != transport_flow.metadata.get("serverware_release_attempt_id")
+            and transport_flow.metadata.get("serverware_release_attempt_id")
+            is not None
+            or cleanup_identity.binding_digest
+            != expected_guard.expected.binding_digest
+        ):
+            raise AssertionError(
+                f"{transport_label} did not use one expected outbound cleanup: "
+                f"{transport_events} {transport_flow.metadata}"
+            )
+
+    for label, malformed_reserve in (
+        ("non-object", ["reserved"]),
+        (
+            "contradictory",
+            {
+                "authorized": False,
+                "state": "reserved",
+                "reason": "reserved",
+            },
+        ),
+        (
+            "binding-mismatch",
+            {"binding_digest": "sha256:" + "0" * 64},
+        ),
+    ):
+        malformed, malformed_events, _, _ = _run_proxy_transaction(
+            policy_engine,
+            credential_policy_type,
+            reserve_result=malformed_reserve,
+            replace_reserve_result=label == "non-object",
+        )
+        if (
+            malformed.decision.allowed
+            or malformed.decision.payload.get("error")
+            != "release_authorization_reserve_invalid"
+            or malformed_events.count("complete:not_forwarded") != 1
+            or "credential_read" in malformed_events
+        ):
+            raise AssertionError(
+                f"{label} reserve response escaped expected cleanup: "
+                f"{malformed.decision} {malformed_events}"
+            )
+
+    for jit_mode in (False, True):
+        secret_failure, secret_events, _, _ = _run_proxy_transaction(
+            policy_engine,
+            credential_policy_type,
+            jit_required=jit_mode,
+            credential_read_error=RuntimeError("forced secret acquisition failure"),
+        )
+        if (
+            secret_failure.decision.allowed
+            or secret_failure.decision.payload.get("error")
+            != "credential_unavailable"
+            or secret_events.index("reserve") > secret_events.index(
+                "credential_read"
+            )
+            or secret_events.count("complete:not_forwarded") != 1
+        ):
+            raise AssertionError(
+                "secret acquisition failure did not refund its shared reserve: "
+                f"{jit_mode} {secret_events} {secret_failure.decision}"
+            )
+
+        audit_failure, audit_events, audit_flow, audit_dispatch = (
+            _run_proxy_transaction(
+                policy_engine,
+                credential_policy_type,
+                jit_required=jit_mode,
+                audit_error=RuntimeError("forced audit delivery failure"),
+                followup="dispatch",
+            )
+        )
+        if (
+            audit_failure.decision.allowed
+            or audit_failure.decision.payload.get("error")
+            != "request_audit_delivery_failed"
+            or audit_dispatch is not None
+            or audit_events.count("complete:not_forwarded") != 1
+            or "dispatch" in audit_events
+            or audit_flow.metadata.get(
+                "serverware_audit_delivery_uncertain"
+            )
+            is not True
+            or audit_events.index("reserve") > audit_events.index(
+                "credential_read"
+            )
+        ):
+            raise AssertionError(
+                "audit delivery failure did not refund its shared reserve: "
+                f"{jit_mode} {audit_events} {audit_failure.decision}"
+            )
+
+        malformed_secret_policy = credential_policy_type(
+            id="credential:test",
+            provider="generic",
+            provider_subject=None,
+            scopes=(),
+            injection={"type": "bearer", "field": "access_token"},
+        )
+        injection_failure, injection_events, _, _ = _run_proxy_transaction(
+            policy_engine,
+            credential_policy_type,
+            credential_policy=malformed_secret_policy,
+            credential={
+                "id": "credential:test",
+                "kind": "bearer",
+                "secret": "not-json",
+                "credential_version": 1,
+                "metadata": {},
+            },
+            jit_required=jit_mode,
+        )
+        if (
+            injection_failure.decision.allowed
+            or injection_failure.decision.payload.get("error")
+            != "credential_injection_failed"
+            or injection_events.count("complete:not_forwarded") != 1
+            or injection_events.index("reserve") > injection_events.index(
+                "credential_read"
+            )
+        ):
+            raise AssertionError(
+                "injection failure did not refund its shared reserve: "
+                f"{jit_mode} {injection_events} {injection_failure.decision}"
+            )
+
+    local_failure, local_events, local_flow, _ = _run_proxy_transaction(
+        policy_engine,
+        credential_policy_type,
+        jit_required=False,
+        rate_store="local",
+        audit_error=RuntimeError("forced audit failure after local quota use"),
+    )
+    if (
+        local_failure.decision.allowed
+        or local_failure.decision.payload.get("error")
+        != "request_audit_delivery_failed"
+        or local_events.count("complete:not_forwarded") != 1
+        or local_events.count("local_commit_non_refundable") != 1
+        or local_flow.metadata.get("serverware_local_rate_limit_mode")
+        != "conservative_non_refundable"
+    ):
+        raise AssertionError(
+            "local-only counter behavior was not distinguished from refundable "
+            f"shared authority: {local_events} {local_flow.metadata}"
+        )
 
     expired, expired_events, _, expired_dispatch = _run_proxy_transaction(
         policy_engine,
@@ -6279,10 +8647,16 @@ def exercise_proxy_forward_start_ordering(policy_engine: Any, credential_policy_
         credential_policy_type,
         rewrite_allowed=False,
     )
-    if cancelled.decision.allowed or "complete:not_forwarded" not in cancel_events:
-        raise AssertionError(f"post-reserve preparation failure did not cancel: {cancel_events}")
-    if cancel_flow.metadata.get("serverware_release_state") != "cancelled":
-        raise AssertionError(f"cancelled release state was not retained: {cancel_flow.metadata}")
+    if (
+        cancelled.decision.allowed
+        or "reserve" in cancel_events
+        or "credential_read" in cancel_events
+        or any(event.startswith("complete:") for event in cancel_events)
+        or cancel_flow.metadata.get("serverware_release_state") is not None
+    ):
+        raise AssertionError(
+            f"rewrite denial mutated release state before final request validity: {cancel_events}"
+        )
 
     exception_cancelled, exception_events, _, _ = _run_proxy_transaction(
         policy_engine,
@@ -6292,29 +8666,52 @@ def exercise_proxy_forward_start_ordering(policy_engine: Any, credential_policy_
     if (
         exception_cancelled.decision.allowed
         or exception_cancelled.decision.payload.get("error") != "request_rewrite_failed"
-        or "complete:not_forwarded" not in exception_events
+        or "reserve" in exception_events
+        or "credential_read" in exception_events
+        or any(event.startswith("complete:") for event in exception_events)
     ):
         raise AssertionError(
-            f"post-reserve preparation exception was not cancelled: {exception_events}"
+            f"rewrite exception mutated release state before final request validity: {exception_events}"
         )
 
-    ambiguous, ambiguity_events, ambiguity_flow, ambiguity_decision = _run_proxy_transaction(
-        policy_engine,
-        credential_policy_type,
-        dispatch_result=policy_engine.runtime.ReleaseAuthorizationClientError("lost response"),
-        followup="dispatch",
-    )
-    if (
-        not ambiguous.decision.allowed
-        or not ambiguity_decision
-        or ambiguity_decision.allowed
-        or ambiguity_decision.payload.get("error") != "release_authorization_dispatch_uncertain"
-    ):
-        raise AssertionError(f"dispatch ambiguity did not fail closed: {ambiguity_decision}")
-    if ambiguity_events[-2:] != ["dispatch", "complete:unknown"]:
-        raise AssertionError(f"dispatch ambiguity was not committed unknown: {ambiguity_events}")
-    if ambiguity_flow.metadata.get("serverware_release_state") != "committed_indeterminate":
-        raise AssertionError("dispatch ambiguity lifecycle was not retained")
+    for jit_mode in (False, True):
+        ambiguous, ambiguity_events, ambiguity_flow, ambiguity_decision = (
+            _run_proxy_transaction(
+                policy_engine,
+                credential_policy_type,
+                jit_required=jit_mode,
+                dispatch_result=policy_engine.runtime.ReleaseAuthorizationClientError(
+                    "lost response"
+                ),
+                followup="dispatch",
+            )
+        )
+        if (
+            not ambiguous.decision.allowed
+            or not ambiguity_decision
+            or ambiguity_decision.allowed
+            or ambiguity_decision.payload.get("error")
+            != "release_authorization_dispatch_uncertain"
+            or ambiguity_events.index("reserve") > ambiguity_events.index(
+                "credential_read"
+            )
+        ):
+            raise AssertionError(
+                f"dispatch ambiguity did not fail closed: {jit_mode} "
+                f"{ambiguity_decision}"
+            )
+        if ambiguity_events[-2:] != ["dispatch", "complete:unknown"]:
+            raise AssertionError(
+                "dispatch ambiguity was not committed unknown: "
+                f"{jit_mode} {ambiguity_events}"
+            )
+        if (
+            ambiguity_flow.metadata.get("serverware_release_state")
+            != "committed_indeterminate"
+        ):
+            raise AssertionError(
+                f"dispatch ambiguity lifecycle was not retained: {jit_mode}"
+            )
 
     for label, dispatch_response in (
         (
@@ -6426,12 +8823,24 @@ def exercise_proxy_forward_start_ordering(policy_engine: Any, credential_policy_
     )
     if mismatched.decision.allowed or mismatched.decision.status_code != 409:
         raise AssertionError(f"stored identity mismatch did not block the proxy: {mismatched.decision}")
-    if mismatch_events.index("reserve") > mismatch_events.index("credential_read"):
-        raise AssertionError(f"credential binding validation happened before reserve: {mismatch_events}")
-    if "complete:not_forwarded" not in mismatch_events:
-        raise AssertionError(f"credential mismatch did not cancel its reservation: {mismatch_events}")
-    if mismatch_flow.metadata.get("serverware_release_state") != "cancelled":
-        raise AssertionError("credential mismatch cancellation state was not retained")
+    if "reserve" in mismatch_events or any(
+        event.startswith("complete:") for event in mismatch_events
+    ):
+        raise AssertionError(
+            "credential mismatch reached release authorization state: "
+            f"{mismatch_events}"
+        )
+    if (
+        mismatch_flow.metadata.get("serverware_release_state") is not None
+        or "authorization"
+        in {
+            str(name).lower()
+            for name in mismatch_flow.request.headers
+        }
+    ):
+        raise AssertionError(
+            "credential mismatch retained release or injected request state"
+        )
 
 
 def exercise_query_credential_audit_redaction(
@@ -6480,9 +8889,41 @@ def exercise_query_credential_audit_redaction(
         )
 
 
-def exercise_release_client_idempotent_retry(runtime: Any) -> None:
+def exercise_release_client_single_attempt_guard_contract(runtime: Any) -> None:
     attempt_id = "attempt:idempotent-retry"
     binding_digest = "sha256:" + "3" * 64
+    operation_context = {"operation": "test.forward"}
+    canonical_request = {
+        "v": 1,
+        "principal": "agent:test",
+        "client_ip": None,
+        "route_id": "route:test",
+        "credential_ref": "credential:test",
+        "credential_version": "1",
+        "policy_hash": "sha256:" + "4" * 64,
+        "request": {
+            "method": "POST",
+            "scheme": "https",
+            "authority": "upstream.invalid",
+            "path": "/resource",
+            "query": [],
+            "headers": {"host": "upstream.invalid"},
+            "body_sha256": "sha256:" + hashlib.sha256(b"").hexdigest(),
+        },
+        "operation": operation_context,
+    }
+
+    def canonical_digest(value: dict[str, Any]) -> str:
+        return "sha256:" + hashlib.sha256(
+            json.dumps(
+                value,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+                allow_nan=False,
+            ).encode("utf-8")
+        ).hexdigest()
+
     reserve_payload = {
         "apiVersion": "serverware.releaseAuthorizationReserve/v1",
         "attemptId": attempt_id,
@@ -6492,9 +8933,23 @@ def exercise_release_client_idempotent_retry(runtime: Any) -> None:
         "credentialRef": "credential:test",
         "credentialVersion": 1,
         "policyHash": "sha256:" + "4" * 64,
-        "requestDigest": "sha256:" + "5" * 64,
-        "operationDigest": "sha256:" + "6" * 64,
-        "operationContext": {"operation": "test.forward"},
+        "requestDigest": canonical_digest(canonical_request),
+        "operationDigest": canonical_digest(
+            {
+                key: canonical_request[key]
+                for key in (
+                    "principal",
+                    "route_id",
+                    "credential_ref",
+                    "credential_version",
+                    "policy_hash",
+                    "request",
+                    "operation",
+                )
+            }
+        ),
+        "operationContext": operation_context,
+        "canonicalRequest": canonical_request,
     }
     requests: list[dict[str, Any]] = []
 
@@ -6503,22 +8958,20 @@ def exercise_release_client_idempotent_retry(runtime: Any) -> None:
         if len(requests) == 1:
             raise urllib.error.URLError("response lost")
         return SimpleNamespace(
-            body=json.dumps(
-                {
-                    "apiVersion": "serverware.releaseAuthorization/v1",
-                    "ok": True,
-                    "authorized": True,
-                    "state": "reserved",
-                    "reason": "reserved",
-                    "attemptId": attempt_id,
-                    "bindingDigest": binding_digest,
-                    "idempotentReplay": True,
-                    "reservationExpiresAtEpochMs": int(time.time() * 1000) + 60_000,
-                    "retryAfterSeconds": 0,
-                    "quotas": [],
-                    "store": {"backend": "postgres", "ha": True},
-                }
-            ).encode("utf-8")
+            value={
+                "apiVersion": "serverware.releaseAuthorization/v1",
+                "ok": True,
+                "authorized": True,
+                "state": "reserved",
+                "reason": "reserved",
+                "attemptId": attempt_id,
+                "bindingDigest": binding_digest,
+                "idempotentReplay": True,
+                "reservationExpiresAtEpochMs": int(time.time() * 1000) + 60_000,
+                "retryAfterSeconds": 0,
+                "quotas": [],
+                "store": {"backend": "postgres", "ha": True},
+            }
         )
 
     with ExitStack() as stack:
@@ -6535,18 +8988,25 @@ def exercise_release_client_idempotent_retry(runtime: Any) -> None:
         stack.enter_context(
             patch.object(runtime, "_release_authorization_ssl_context", return_value=None)
         )
-        stack.enter_context(patch.object(runtime, "request_bytes", side_effect=flaky_request))
-        stack.enter_context(patch.object(runtime.time, "sleep", return_value=None))
-        result = runtime._release_authorization_http_post(
-            "reserve",
-            reserve_payload,
-            expected_binding_digest=binding_digest,
-            expected_shared_quotas=[],
+        stack.enter_context(
+            patch.object(runtime, "request_json_bytes", side_effect=flaky_request)
         )
-    if result.get("state") != "reserved" or not result.get("idempotent_replay"):
-        raise AssertionError(f"idempotent reserve retry did not recover: {result}")
-    if len(requests) != 2 or requests[0] != requests[1]:
-        raise AssertionError(f"reserve retry changed the durable attempt binding: {requests}")
+        stack.enter_context(patch.object(runtime.time, "sleep", return_value=None))
+        try:
+            runtime._release_authorization_http_post(
+                "reserve",
+                reserve_payload,
+                expected_binding_digest=binding_digest,
+                expected_shared_quotas=[],
+            )
+        except runtime.ReleaseAuthorizationClientError:
+            pass
+        else:
+            raise AssertionError("uncertain reserve response was retried into success")
+    if requests != [reserve_payload]:
+        raise AssertionError(
+            f"reserve response loss emitted more than one reserve request: {requests}"
+        )
 
     calendar_start_ms = int(
         datetime(2025, 1, 1, tzinfo=timezone.utc).timestamp() * 1000
@@ -6641,8 +9101,1413 @@ def exercise_release_client_idempotent_retry(runtime: Any) -> None:
                 f"release client accepted {label}: {malformed_normalized}"
             )
 
+    expected = runtime.expected_release_authorization_identity(
+        attempt_id=attempt_id,
+        flow_id=attempt_id,
+        principal_id=reserve_payload["principalId"],
+        route_id=reserve_payload["routeId"],
+        credential_ref=reserve_payload["credentialRef"],
+        credential_version=reserve_payload["credentialVersion"],
+        policy_hash=reserve_payload["policyHash"],
+        request_digest=reserve_payload["requestDigest"],
+        operation_digest=reserve_payload["operationDigest"],
+        operation_context=operation_context,
+        shared_quotas=[],
+        require_jit_grant=False,
+    )
+    for failure_label in (
+        "declared oversized",
+        "streamed oversized",
+        "malformed JSON",
+        "response timeout",
+        "post-commit response loss",
+        "pre-create transport loss",
+    ):
+        cleanup_identities: list[Any] = []
 
-def exercise_proxy_atomic_backend_integration(
+        def cancel_once(identity: Any) -> dict[str, Any]:
+            cleanup_identities.append(identity)
+            return {
+                "authorized": False,
+                "state": "absent",
+                "reason": "reservation_absent",
+                "attempt_id": identity.attempt_id,
+                "binding_digest": identity.binding_digest,
+                "idempotent_replay": True,
+                "grant_id": None,
+                "approval_request_id": None,
+                "reservation_expires_at_epoch_ms": None,
+                "dispatch_started_at_epoch_ms": None,
+                "dispatch_expires_at_epoch_ms": None,
+                "completion_outcome": None,
+                "retry_after_seconds": 0,
+                "quotas": [],
+            }
+
+        guard = runtime.ReleaseAuthorizationGuard(expected)
+        with (
+            patch.object(
+                runtime,
+                "_release_authorization_base_url",
+                return_value=(
+                    "https://control.test/api/data-plane/"
+                    "release-authorizations"
+                ),
+            ),
+            patch.object(
+                runtime,
+                "_release_authorization_token",
+                return_value="test-token",
+            ),
+            patch.object(
+                runtime,
+                "_release_authorization_ssl_context",
+                return_value=None,
+            ),
+            patch.object(
+                runtime,
+                "request_json_bytes",
+                side_effect=runtime.HttpClientError(failure_label),
+            ),
+            patch.object(runtime.time, "sleep", return_value=None),
+            patch.object(
+                runtime,
+                "cancel_expected_release_authorization",
+                side_effect=cancel_once,
+            ),
+        ):
+            try:
+                runtime.reserve_expected_release_authorization(
+                    guard=guard,
+                    operation_context=operation_context,
+                    canonical_request=canonical_request,
+                    shared_quotas=[],
+                )
+            except runtime.ReleaseAuthorizationClientError:
+                guard.cancel_not_forwarded_once()
+                guard.cancel_not_forwarded_once()
+            else:
+                raise AssertionError(
+                    f"{failure_label} reserve unexpectedly succeeded"
+                )
+        if cleanup_identities != [expected] or not guard.cleanup_emitted:
+            raise AssertionError(
+                f"{failure_label} did not emit one expected cleanup: "
+                f"{cleanup_identities}"
+            )
+
+    failed_cleanup_identities: list[Any] = []
+
+    def fail_cleanup(identity: Any) -> dict[str, Any]:
+        failed_cleanup_identities.append(identity)
+        raise runtime.ReleaseAuthorizationClientError(
+            "fixture cleanup transport loss"
+        )
+
+    failed_cleanup_guard = runtime.ReleaseAuthorizationGuard(expected)
+    failed_cleanup_guard.promote_reserved()
+    with patch.object(
+        runtime,
+        "cancel_expected_release_authorization",
+        side_effect=fail_cleanup,
+    ):
+        assert failed_cleanup_guard.cancel_not_forwarded_once() is None
+        assert failed_cleanup_guard.cancel_not_forwarded_once() is None
+    if (
+        failed_cleanup_identities != [expected]
+        or not failed_cleanup_guard.cleanup_emitted
+        or not failed_cleanup_guard.cleanup_error
+        or failed_cleanup_guard.phase != "cleanup_unknown"
+        or failed_cleanup_guard.requires_not_forwarded
+        or failed_cleanup_guard.cleanup_error_detail
+        != "fixture cleanup transport loss"
+    ):
+        raise AssertionError(
+            "cleanup transport loss did not latch one terminal unknown cleanup: "
+            f"{failed_cleanup_identities} {failed_cleanup_guard.phase} "
+            f"{failed_cleanup_guard.cleanup_error_detail}"
+        )
+
+    valid_raw_reserve_response = {
+        "apiVersion": "serverware.releaseAuthorization/v1",
+        "ok": True,
+        "authorized": True,
+        "state": "reserved",
+        "reason": "reserved",
+        "attemptId": expected.attempt_id,
+        "bindingDigest": expected.binding_digest,
+        "idempotentReplay": False,
+        "grantId": None,
+        "approvalRequestId": None,
+        "approvalStatus": None,
+        "approvalExpiresAt": None,
+        "approvalCreated": None,
+        "reservationExpiresAtEpochMs": int(time.time() * 1000) + 60_000,
+        "dispatchStartedAtEpochMs": None,
+        "dispatchExpiresAtEpochMs": None,
+        "completionOutcome": None,
+        "retryAfterSeconds": 0,
+        "quotas": [],
+        "store": {"backend": "postgres", "ha": True},
+    }
+    contradictory_raw_reserve = dict(valid_raw_reserve_response)
+    contradictory_raw_reserve["authorized"] = False
+    mismatched_raw_reserve = dict(valid_raw_reserve_response)
+    mismatched_raw_reserve["bindingDigest"] = "sha256:" + "0" * 64
+    for failure_label, raw_response in (
+        ("malformed reserve object", ["reserved"]),
+        ("contradictory reserved response", contradictory_raw_reserve),
+        ("reserve binding mismatch", mismatched_raw_reserve),
+    ):
+        cleanup_identities = []
+
+        def cancel_malformed(identity: Any) -> dict[str, Any]:
+            cleanup_identities.append(identity)
+            return {
+                "authorized": False,
+                "state": "absent",
+                "reason": "reservation_absent",
+                "attempt_id": identity.attempt_id,
+                "binding_digest": identity.binding_digest,
+                "idempotent_replay": True,
+                "grant_id": None,
+                "approval_request_id": None,
+                "approval_status": None,
+                "approval_expires_at": None,
+                "approval_created": None,
+                "reservation_expires_at_epoch_ms": None,
+                "dispatch_started_at_epoch_ms": None,
+                "dispatch_expires_at_epoch_ms": None,
+                "completion_outcome": None,
+                "retry_after_seconds": 0,
+                "quotas": [],
+            }
+
+        guard = runtime.ReleaseAuthorizationGuard(expected)
+        with (
+            patch.object(
+                runtime,
+                "_release_authorization_base_url",
+                return_value=(
+                    "https://control.test/api/data-plane/"
+                    "release-authorizations"
+                ),
+            ),
+            patch.object(
+                runtime,
+                "_release_authorization_token",
+                return_value="test-token",
+            ),
+            patch.object(
+                runtime,
+                "_release_authorization_ssl_context",
+                return_value=None,
+            ),
+            patch.object(
+                runtime,
+                "request_json_bytes",
+                return_value=SimpleNamespace(value=raw_response),
+            ),
+            patch.object(
+                runtime,
+                "cancel_expected_release_authorization",
+                side_effect=cancel_malformed,
+            ),
+        ):
+            try:
+                runtime.reserve_expected_release_authorization(
+                    guard=guard,
+                    operation_context=operation_context,
+                    canonical_request=canonical_request,
+                    shared_quotas=[],
+                )
+            except runtime.ReleaseAuthorizationClientError:
+                guard.cancel_not_forwarded_once()
+            else:
+                raise AssertionError(
+                    f"{failure_label} unexpectedly passed reserve validation"
+                )
+        if cleanup_identities != [expected] or not guard.cleanup_emitted:
+            raise AssertionError(
+                f"{failure_label} did not emit one expected cleanup: "
+                f"{cleanup_identities}"
+            )
+
+
+def exercise_python_v2_release_coordinator(
+    policy_engine: Any,
+    runtime: Any,
+    credential_policy_type: Any,
+) -> None:
+    actor_id = runtime.DATA_PLANE_INSTANCE_ID or "serverware-python-mitm"
+    policy_hash = _release_lock_digest("python-v2-release-policy")
+    credential_id = "credential:python-v2-release"
+    operation_context = {
+        "operation": "test.forward",
+        "requestCost": "3",
+    }
+    coordinator_events: list[tuple[str, str]] = []
+    reservations: dict[str, dict[str, Any]] = {}
+    completion_modes: dict[str, str] = {}
+    issuance_claims: list[dict[str, Any]] = []
+
+    def exact_outer(
+        *,
+        attempt_id: str,
+        state: str,
+        reason: str,
+        authorized: bool,
+        completion_outcome: str | None,
+        durable_policy: dict[str, Any],
+    ) -> dict[str, Any]:
+        retained = reservations[attempt_id]
+        return {
+            "authorized": authorized,
+            "state": state,
+            "reason": reason,
+            "attempt_id": attempt_id,
+            "binding_digest": retained["binding_digest"],
+            "idempotent_replay": False,
+            "grant_id": None,
+            "approval_request_id": None,
+            "reservation_expires_at_epoch_ms": retained[
+                "reservation_expires_at_epoch_ms"
+            ],
+            "dispatch_started_at_epoch_ms": retained.get(
+                "dispatch_started_at_epoch_ms"
+            ),
+            "dispatch_expires_at_epoch_ms": retained.get(
+                "dispatch_expires_at_epoch_ms"
+            ),
+            "completion_outcome": completion_outcome,
+            "retry_after_seconds": 0,
+            "quotas": [],
+            "durable_policy": durable_policy,
+        }
+
+    def durable_route_constraints(
+        *,
+        traversal_operations: list[str],
+        include_sliding_budgets: bool,
+    ) -> tuple[dict[str, Any], ...]:
+        budgets: list[dict[str, Any]] = []
+        if include_sliding_budgets:
+            budgets = [
+                {
+                    "id": "python-v2-sliding",
+                    "type": "slidingWindowLimit",
+                    "store": "shared",
+                    "windowSemantics": "sliding",
+                    "measure": "operationCount",
+                    "reservationMode": "atomicReserveCommitRelease",
+                    "onOverflow": "deny",
+                    "windowSeconds": 60,
+                    "max": 10,
+                    "key": {
+                        "scope": [
+                            "principal",
+                            "credential",
+                            "credentialVersion",
+                            "route",
+                            "operation",
+                        ]
+                    },
+                },
+                {
+                    "id": "python-v2-weighted",
+                    "type": "weightedBudget",
+                    "store": "shared",
+                    "windowSemantics": "sliding",
+                    "measure": "weightedCanonicalInteger",
+                    "reservationMode": "atomicReserveCommitRelease",
+                    "onOverflow": "deny",
+                    "windowSeconds": 60,
+                    "max": 30,
+                    "key": {
+                        "scope": [
+                            "principal",
+                            "credential",
+                            "credentialVersion",
+                            "route",
+                            "operation",
+                        ],
+                        "operationFields": ["requestCost"],
+                    },
+                    "weight": {
+                        "source": "operationField",
+                        "field": "requestCost",
+                        "representation": "canonicalNonNegativeInteger",
+                        "unit": "requests",
+                        "minimumPerOperation": 1,
+                        "maximumPerOperation": 10,
+                    },
+                },
+            ]
+        return tuple(
+            [
+                *budgets,
+                {
+                    "id": "python-v2-traversal",
+                    "type": "traversalBudget",
+                    "operations": traversal_operations,
+                    "traversal": {
+                        "store": "shared",
+                        "phases": ["request", "response"],
+                        "cursor": {
+                            "requestSource": "query",
+                            "requestField": "cursor",
+                            "responseField": "nextCursor",
+                            "digest": "sha256",
+                            "firstPageMayOmit": True,
+                        },
+                        "lineage": {
+                            "scope": [
+                                "principal",
+                                "route",
+                                "credential",
+                                "credentialVersion",
+                            ],
+                            "queryFields": ["query"],
+                            "queryDigest": "sha256",
+                        },
+                        "limits": {
+                            "maxPages": 3,
+                            "maxLifetimeSeconds": 300,
+                            "maxRecords": 20,
+                            "maxDecodedBytes": 64 * 1024,
+                        },
+                        "accounting": {
+                            "recordCountField": "items",
+                            "byteSource": "validatedDecodedResponseBytes",
+                            "commit": "atomicAfterResponseValidation",
+                        },
+                        "onReplay": "deny",
+                        "onCrossLineage": "deny",
+                        "onMissingEvidence": "deny",
+                    },
+                },
+            ]
+        )
+
+    def durable_claims(
+        expected: Any,
+        *,
+        traversal_operations: list[str] | None = None,
+        include_sliding_budgets: bool = True,
+    ) -> list[dict[str, Any]]:
+        route = SimpleNamespace(
+            id=expected.route_id,
+            credential_ref=expected.credential_ref,
+            adapter_type="generic.rest",
+            adapter_config={
+                "request": {
+                    "allowedQueryKeys": ["query", "cursor"],
+                }
+            },
+            constraints=durable_route_constraints(
+                traversal_operations=(
+                    traversal_operations
+                    if traversal_operations is not None
+                    else ["test.forward"]
+                ),
+                include_sliding_budgets=include_sliding_budgets,
+            ),
+        )
+        flow = SimpleNamespace(
+            request=SimpleNamespace(
+                pretty_url=(
+                    "https://upstream.invalid/resource?query=bounded"
+                ),
+                raw_content=b"",
+                headers={},
+            )
+        )
+        return policy_engine._durable_policy_claims(
+            flow,
+            snapshot=SimpleNamespace(hash=expected.policy_hash),
+            principal=SimpleNamespace(id=expected.principal_id),
+            route=route,
+            credential_version=expected.credential_version,
+            operation_fields=operation_context,
+        )
+
+    applicable_admission, _, applicable_flow, _ = _run_proxy_transaction(
+        policy_engine,
+        credential_policy_type,
+        jit_required=False,
+        request_url=(
+            "https://upstream.invalid/resource?query=bounded"
+        ),
+        allowed_query_keys=("query", "cursor"),
+        route_constraints=durable_route_constraints(
+            traversal_operations=["test.forward"],
+            include_sliding_budgets=True,
+        ),
+        operation_fields=operation_context,
+    )
+    applicable_claims = applicable_flow.metadata.get(
+        "observed_durable_policy_claims"
+    )
+    applicable_authority = applicable_flow.metadata.get(
+        "observed_credential_authority"
+    )
+    applicable_release = (
+        applicable_authority.get("release_authorization")
+        if isinstance(applicable_authority, dict)
+        else None
+    )
+    if (
+        not applicable_admission.decision.allowed
+        or [
+            claim.get("type")
+            for claim in (
+                applicable_claims
+                if isinstance(applicable_claims, list)
+                else []
+            )
+        ]
+        != [
+            "slidingWindowLimit",
+            "weightedBudget",
+            "traversalBudget",
+        ]
+        or not isinstance(applicable_release, dict)
+        or applicable_release.get("apiVersion")
+        != "serverware.credentialLeaseReleaseAuthorization/v2"
+    ):
+        raise AssertionError(
+            "applicable durable route did not enter the atomic v2 lifecycle"
+        )
+
+    nonapplicable_admission, _, nonapplicable_flow, _ = (
+        _run_proxy_transaction(
+            policy_engine,
+            credential_policy_type,
+            jit_required=False,
+            request_url=(
+                "https://upstream.invalid/resource?query=bounded"
+            ),
+            allowed_query_keys=("query", "cursor"),
+            route_constraints=durable_route_constraints(
+                traversal_operations=["test.other"],
+                include_sliding_budgets=False,
+            ),
+            operation_fields=operation_context,
+        )
+    )
+    nonapplicable_authority = nonapplicable_flow.metadata.get(
+        "observed_credential_authority"
+    )
+    if (
+        not nonapplicable_admission.decision.allowed
+        or nonapplicable_flow.metadata.get(
+            "observed_durable_policy_claims"
+        )
+        is not None
+        or not isinstance(nonapplicable_authority, dict)
+        or nonapplicable_authority.get("request_authority") is None
+        or nonapplicable_authority.get("release_authorization") is not None
+    ):
+        raise AssertionError(
+            "nonapplicable traversal did not preserve decision-bound authority"
+        )
+
+    nonapplicable_without_authority, nonapplicable_events, _, _ = (
+        _run_proxy_transaction(
+            policy_engine,
+            credential_policy_type,
+            jit_required=False,
+            atomic_enabled=False,
+            request_url=(
+                "https://upstream.invalid/resource?query=bounded"
+            ),
+            allowed_query_keys=("query", "cursor"),
+            route_constraints=durable_route_constraints(
+                traversal_operations=["test.other"],
+                include_sliding_budgets=False,
+            ),
+            operation_fields=operation_context,
+        )
+    )
+    if (
+        nonapplicable_without_authority.decision.allowed
+        or nonapplicable_without_authority.decision.payload.get(
+            "error"
+        )
+        != "atomic_release_authorization_required"
+        or "credential_read" in nonapplicable_events
+    ):
+        raise AssertionError(
+            "controlled nonapplicable traversal fell back to authority-free loading"
+        )
+
+    uncontrolled_admission, _, uncontrolled_flow, _ = (
+        _run_proxy_transaction(
+            policy_engine,
+            credential_policy_type,
+            jit_required=False,
+            route_constraints=(),
+            operation_fields=operation_context,
+        )
+    )
+    if (
+        not uncontrolled_admission.decision.allowed
+        or uncontrolled_flow.metadata.get(
+            "observed_credential_authority"
+        )
+        != {}
+    ):
+        raise AssertionError(
+            "uncontrolled route unexpectedly carried credential authority"
+        )
+
+    legacy_bound_calls: list[str | None] = []
+
+    def legacy_credential_reader(
+        requested_id: str | None,
+    ) -> None:
+        legacy_bound_calls.append(requested_id)
+        return None
+
+    with patch.object(
+        runtime,
+        "get_credential",
+        side_effect=legacy_credential_reader,
+    ):
+        if runtime.get_bound_credential_lease(credential_id) is not None:
+            raise AssertionError(
+                "legacy authority-free bound lease unexpectedly resolved"
+            )
+    if legacy_bound_calls != [credential_id]:
+        raise AssertionError(
+            "authority-free bound lease passed v4 keyword arguments"
+        )
+
+    partial_authority_cases = (
+        ("identity-only", {"expected_release_identity": object()}),
+        ("jit-only", {"jit_policy": {}}),
+        ("release-only", {"release_authorization": {}}),
+        ("request-without-identity", {"request_authority": {}}),
+    )
+    for reader in (
+        runtime.get_credential,
+        runtime.get_bound_credential_lease,
+    ):
+        with patch.object(
+            db,
+            "get_credential",
+            side_effect=AssertionError(
+                "partial authority reached credential storage"
+            ),
+        ):
+            for label, partial_kwargs in partial_authority_cases:
+                try:
+                    reader(credential_id, **partial_kwargs)
+                except runtime.ReleaseAuthorizationClientError:
+                    pass
+                else:
+                    raise AssertionError(
+                        f"{reader.__name__} accepted partial authority {label}"
+                    )
+
+    def expected_case(
+        label: str,
+    ) -> tuple[Any, dict[str, Any]]:
+        attempt_id = _release_lock_digest(
+            f"python-v2-release:{label}:attempt"
+        )
+        canonical_request = {
+            "apiVersion": "serverware.pythonV2Fixture/v1",
+            "label": label,
+            "operation": operation_context,
+        }
+        request_digest = runtime._durable_policy_digest(canonical_request)
+        operation_digest = runtime._durable_policy_digest(
+            {
+                "label": label,
+                "operation": operation_context,
+            },
+        )
+        return (
+            runtime.expected_release_authorization_identity(
+                attempt_id=attempt_id,
+                flow_id=attempt_id,
+                principal_id="agent:python-v2-release",
+                route_id="route:python-v2-release",
+                credential_ref=credential_id,
+                credential_version=1,
+                policy_hash=policy_hash,
+                request_digest=request_digest,
+                operation_digest=operation_digest,
+                operation_context=operation_context,
+                shared_quotas=[],
+                require_jit_grant=False,
+            ),
+            canonical_request,
+        )
+
+    def reserve_v2(**kwargs: Any) -> dict[str, Any]:
+        attempt_id = kwargs["attempt_id"]
+        coordinator_events.append(("reserve:v2", attempt_id))
+        durable_binding = kwargs["durable_policy_binding"]
+        if (
+            set(durable_binding) != {"actorId", "claimDigest", "claims"}
+            or durable_binding["actorId"] != actor_id
+            or durable_binding["claimDigest"]
+            != runtime._durable_policy_digest(durable_binding["claims"])
+        ):
+            raise AssertionError(
+                f"Python v2 reserve lost its exact durable binding: {kwargs}"
+            )
+        binding_digest = runtime.release_authorization_binding_digest(
+            attempt_id=attempt_id,
+            flow_id=kwargs["flow_id"],
+            principal_id=kwargs["principal_id"],
+            route_id=kwargs["route_id"],
+            credential_ref=kwargs["credential_id"],
+            credential_version=kwargs["credential_version"],
+            policy_hash=kwargs["policy_hash"],
+            request_digest=kwargs["request_digest"],
+            operation_digest=kwargs["operation_digest"],
+            operation_context=kwargs["operation_context"],
+            shared_quotas=kwargs["shared_quotas"],
+            require_jit_grant=kwargs["require_jit_grant"],
+        )
+        claim_digest = durable_binding["claimDigest"]
+        reservation_id = runtime._durable_policy_digest(
+            {
+                "attemptId": attempt_id,
+                "policyHash": kwargs["policy_hash"],
+                "requestDigest": kwargs["request_digest"],
+                "operationDigest": kwargs["operation_digest"],
+                "claimDigest": claim_digest,
+            }
+        )
+        expires_at = int(time.time() * 1000) + 60_000
+        durable = {
+            "state": "reserved",
+            "attempt_id": attempt_id,
+            "claim_digest": claim_digest,
+            "reservation_id": reservation_id,
+            "actor_id": actor_id,
+            "reservation_deadline_at_epoch_ms": expires_at,
+            "dispatch_deadline_at_epoch_ms": None,
+            "response_evidence_digest": None,
+            "failure_reason": None,
+            "response_body_sha256": None,
+            "uncertainty": None,
+        }
+        reservations[attempt_id] = {
+            "binding_digest": binding_digest,
+            "reservation_expires_at_epoch_ms": expires_at,
+            "durable_policy": durable,
+            "claims": durable_binding["claims"],
+        }
+        return exact_outer(
+            attempt_id=attempt_id,
+            state="reserved",
+            reason="reserved",
+            authorized=True,
+            completion_outcome=None,
+            durable_policy=durable,
+        )
+
+    def dispatch_v2(**kwargs: Any) -> dict[str, Any]:
+        attempt_id = kwargs["attempt_id"]
+        coordinator_events.append(("dispatch:v2", attempt_id))
+        retained = reservations[attempt_id]
+        transition = kwargs["durable_policy_transition"]
+        expected_identity = retained["durable_policy"]
+        if (
+            transition
+            != {
+                "actorId": expected_identity["actor_id"],
+                "attemptId": attempt_id,
+                "claimDigest": expected_identity["claim_digest"],
+                "reservationId": expected_identity["reservation_id"],
+                "dispatchDeadlineAtEpochMs": transition.get(
+                    "dispatchDeadlineAtEpochMs"
+                ),
+            }
+            or type(transition["dispatchDeadlineAtEpochMs"]) is not int
+        ):
+            raise AssertionError(
+                f"Python v2 dispatch lost its exact transition: {transition}"
+            )
+        started_at = int(time.time() * 1000)
+        deadline = transition["dispatchDeadlineAtEpochMs"]
+        retained["dispatch_started_at_epoch_ms"] = started_at
+        retained["dispatch_expires_at_epoch_ms"] = deadline
+        durable = {
+            **expected_identity,
+            "state": "dispatched",
+            "dispatch_deadline_at_epoch_ms": deadline,
+        }
+        retained["durable_policy"] = durable
+        return exact_outer(
+            attempt_id=attempt_id,
+            state="dispatching",
+            reason="dispatching",
+            authorized=True,
+            completion_outcome=None,
+            durable_policy=durable,
+        )
+
+    def complete_v2(**kwargs: Any) -> dict[str, Any]:
+        attempt_id = kwargs["attempt_id"]
+        outcome = kwargs["outcome"]
+        coordinator_events.append((f"complete:v2:{outcome}", attempt_id))
+        retained = reservations[attempt_id]
+        transition = kwargs["durable_policy_transition"]
+        durable_before = retained["durable_policy"]
+        identity = {
+            "actorId": durable_before["actor_id"],
+            "attemptId": attempt_id,
+            "claimDigest": durable_before["claim_digest"],
+            "reservationId": durable_before["reservation_id"],
+        }
+        if any(transition.get(key) != value for key, value in identity.items()):
+            raise AssertionError(
+                f"Python v2 completion changed durable identity: {transition}"
+            )
+        if outcome == "not_forwarded":
+            if set(transition) != set(identity):
+                raise AssertionError(
+                    f"Python v2 refund carried completion evidence: {transition}"
+                )
+            durable = {
+                **durable_before,
+                "state": "aborted",
+                "dispatch_deadline_at_epoch_ms": None,
+            }
+            return exact_outer(
+                attempt_id=attempt_id,
+                state="cancelled",
+                reason="cancelled",
+                authorized=False,
+                completion_outcome="not_forwarded",
+                durable_policy=durable,
+            )
+        if (
+            transition.get("responseEvidenceDigest")
+            != runtime._durable_policy_digest(
+                transition.get("responseEvidence")
+            )
+            or not re.fullmatch(
+                r"sha256:[0-9a-f]{64}",
+                str(transition.get("responseBodySha256") or ""),
+            )
+        ):
+            raise AssertionError(
+                f"Python v2 completion evidence is not exact: {transition}"
+            )
+        mode = completion_modes.get(attempt_id, "committed")
+        if outcome == "unknown":
+            if (
+                transition.get("failureReason")
+                != "provider_outcome_or_response_validation_uncertain"
+                or transition.get("uncertainty") != "charged_fail_closed"
+            ):
+                raise AssertionError(
+                    f"Python v2 unknown was not charged fail closed: {transition}"
+                )
+            durable_state = "indeterminate"
+            outer_state = "committed_indeterminate"
+            reason = "forward_outcome_indeterminate"
+            authorized = True
+        else:
+            durable_state = "denied" if mode == "denied" else "committed"
+            outer_state = "committed"
+            reason = "forwarded"
+            authorized = True
+        durable = {
+            **durable_before,
+            "state": durable_state,
+            "dispatch_deadline_at_epoch_ms": transition.get(
+                "dispatchDeadlineAtEpochMs"
+            ),
+            "response_evidence_digest": transition[
+                "responseEvidenceDigest"
+            ],
+            "response_body_sha256": (
+                "sha256:" + "0" * 64
+                if mode == "mismatched_evidence"
+                else transition["responseBodySha256"]
+            ),
+            "failure_reason": (
+                "traversal_record_budget_exceeded"
+                if durable_state == "denied"
+                else transition.get("failureReason")
+            ),
+            "uncertainty": transition.get("uncertainty"),
+        }
+        return exact_outer(
+            attempt_id=attempt_id,
+            state=outer_state,
+            reason=reason,
+            authorized=authorized,
+            completion_outcome=outcome,
+            durable_policy=durable,
+        )
+
+    def reject_v1(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("Python durable lifecycle downgraded to v1")
+
+    credential = {
+        "id": credential_id,
+        "kind": "bearer",
+        "secret": "python-v2-secret",
+        "credential_version": 1,
+        "metadata": {},
+        "lifecycle_status": "active",
+    }
+
+    def get_credential(
+        requested_id: str,
+        include_secret: bool = False,
+    ) -> dict[str, Any]:
+        if requested_id != credential_id:
+            raise AssertionError(
+                f"Python v2 fixture requested another credential: {requested_id}"
+            )
+        return dict(credential)
+
+    def claim_credential(**kwargs: Any) -> dict[str, Any]:
+        issuance_claims.append(kwargs)
+        return {"claimed": True, **kwargs}
+
+    def reserve_case(
+        label: str,
+    ) -> tuple[Any, Any, dict[str, Any], dict[str, Any]]:
+        expected, canonical_request = expected_case(label)
+        claims = durable_claims(expected)
+        if [claim.get("type") for claim in claims] != [
+            "slidingWindowLimit",
+            "weightedBudget",
+            "traversalBudget",
+        ]:
+            raise AssertionError(
+                f"applicable durable route lost policy claims: {claims}"
+            )
+        durable_binding = runtime.durable_policy_reserve_binding(
+            expected,
+            claims,
+        )
+        guard = runtime.ReleaseAuthorizationGuard(
+            expected,
+            durable_policy=durable_binding,
+        )
+        reserved = runtime.reserve_expected_release_authorization(
+            guard=guard,
+            operation_context=operation_context,
+            canonical_request=canonical_request,
+            shared_quotas=[],
+            durable_policy_claims=claims,
+        )
+        request_authority = runtime.credential_lease_request_authority(
+            expected,
+            reserved,
+            operation_context=operation_context,
+            controlled=True,
+        )
+        release_authorization = (
+            runtime.credential_lease_release_authorization(
+                expected,
+                reserved,
+            )
+        )
+        if (
+            request_authority is None
+            or release_authorization is None
+            or release_authorization.get("apiVersion")
+            != "serverware.credentialLeaseReleaseAuthorization/v2"
+            or release_authorization.get("durablePolicy")
+            != {
+                "reservationId": reserved["durable_policy"][
+                    "reservation_id"
+                ],
+                "actorId": actor_id,
+                "claimDigest": reserved["durable_policy"]["claim_digest"],
+                "reservationDeadlineAtEpochMs": reserved[
+                    "reservation_expires_at_epoch_ms"
+                ],
+                "releaseBindingDigest": expected.binding_digest,
+            }
+        ):
+            raise AssertionError(
+                "Python v2 credential authority did not bind the durable reserve"
+            )
+        loaded = runtime.get_credential(
+            credential_id,
+            request_authority=request_authority,
+            release_authorization=release_authorization,
+            expected_release_identity=expected,
+            jit_policy={},
+        )
+        claim = issuance_claims[-1]
+        request_authority_sha256 = runtime._durable_policy_digest(
+            request_authority
+        )
+        if (
+            loaded is None
+            or claim.get("release_kind") != "atomicReservation"
+            or claim.get("operation_context") != operation_context
+            or claim.get("request_authority_sha256")
+            != request_authority_sha256
+            or claim.get("durable_policy")
+            != release_authorization["durablePolicy"]
+        ):
+            raise AssertionError(
+                f"Python v2 credential claim lost exact authority: {claim}"
+            )
+        lifecycle = {
+            "attempt_id": expected.attempt_id,
+            "binding_digest": expected.binding_digest,
+            "state": "reserved",
+            "dispatch_attempted": False,
+            "grant_id": None,
+            "approval_request_id": None,
+            "reservation_expires_at_epoch_ms": reserved[
+                "reservation_expires_at_epoch_ms"
+            ],
+            "dispatch_started_at_epoch_ms": None,
+            "dispatch_expires_at_epoch_ms": None,
+            "quotas": [],
+            "durable_policy": reserved["durable_policy"],
+        }
+        return expected, guard, reserved, lifecycle
+
+    def dispatch_case(lifecycle: dict[str, Any]) -> dict[str, Any]:
+        deadline = runtime.release_authorization_dispatch_deadline(lifecycle)
+        dispatched = runtime.dispatch_release_authorization(
+            attempt_id=lifecycle["attempt_id"],
+            binding_digest=lifecycle["binding_digest"],
+            previous_lifecycle=lifecycle,
+            dispatch_deadline_at_epoch_ms=deadline,
+        )
+        lifecycle.update(
+            {
+                "state": "dispatching",
+                "dispatch_attempted": True,
+                "dispatch_started_at_epoch_ms": dispatched[
+                    "dispatch_started_at_epoch_ms"
+                ],
+                "dispatch_expires_at_epoch_ms": dispatched[
+                    "dispatch_expires_at_epoch_ms"
+                ],
+                "durable_policy": dispatched["durable_policy"],
+            }
+        )
+        return dispatched
+
+    response_body = b'{"items":[{"id":"one"}],"nextCursor":"cursor:next"}'
+    response_body_sha256 = (
+        "sha256:" + hashlib.sha256(response_body).hexdigest()
+    )
+
+    with ExitStack() as stack:
+        stack.enter_context(
+            patch.object(
+                runtime,
+                "atomic_release_authorization_enabled",
+                return_value=True,
+            )
+        )
+        stack.enter_context(
+            patch.object(
+                runtime,
+                "_release_authorization_base_url",
+                return_value="",
+            )
+        )
+        stack.enter_context(
+            patch.object(
+                runtime,
+                "_require_development_release_authorization_fallback",
+                return_value=None,
+            )
+        )
+        stack.enter_context(
+            patch.object(
+                runtime,
+                "start_runtime_workers",
+                return_value=None,
+            )
+        )
+        stack.enter_context(
+            patch.object(
+                runtime.db,
+                "reserve_release_authorization_v2",
+                side_effect=reserve_v2,
+            )
+        )
+        stack.enter_context(
+            patch.object(
+                runtime.db,
+                "dispatch_release_authorization_v2",
+                side_effect=dispatch_v2,
+            )
+        )
+        stack.enter_context(
+            patch.object(
+                runtime.db,
+                "complete_release_authorization_v2",
+                side_effect=complete_v2,
+            )
+        )
+        stack.enter_context(
+            patch.object(
+                runtime.db,
+                "claim_release_credential_issuance",
+                side_effect=claim_credential,
+            )
+        )
+        stack.enter_context(
+            patch.object(
+                runtime.db,
+                "get_credential",
+                side_effect=get_credential,
+            )
+        )
+        for legacy_name in (
+            "reserve_release_authorization",
+            "dispatch_release_authorization",
+            "complete_release_authorization",
+            "cancel_release_authorization_if_present",
+        ):
+            stack.enter_context(
+                patch.object(
+                    runtime.db,
+                    legacy_name,
+                    side_effect=reject_v1,
+                )
+            )
+
+        uncertain_expected, uncertain_request = expected_case(
+            "uncertain-reserve"
+        )
+        uncertain_claims = durable_claims(uncertain_expected)
+        uncertain_binding = runtime.durable_policy_reserve_binding(
+            uncertain_expected,
+            uncertain_claims,
+        )
+        uncertain_guard = runtime.ReleaseAuthorizationGuard(
+            uncertain_expected,
+            durable_policy=uncertain_binding,
+        )
+
+        def reserve_then_lose_response(**kwargs: Any) -> dict[str, Any]:
+            reserve_v2(**kwargs)
+            raise RuntimeError("v2 reserve response lost")
+
+        with patch.object(
+            runtime.db,
+            "reserve_release_authorization_v2",
+            side_effect=reserve_then_lose_response,
+        ):
+            assert_raises(
+                runtime.ReleaseAuthorizationClientError,
+                lambda: runtime.reserve_expected_release_authorization(
+                    guard=uncertain_guard,
+                    operation_context=operation_context,
+                    canonical_request=uncertain_request,
+                    shared_quotas=[],
+                    durable_policy_claims=uncertain_claims,
+                ),
+                "uncertain Python v2 reserve did not fail closed",
+            )
+        if (
+            uncertain_guard.cleanup_error
+            or uncertain_guard.cleanup_result is None
+            or uncertain_guard.cleanup_result.get(
+                "durable_policy", {}
+            ).get("state")
+            != "aborted"
+            or (
+                "complete:v2:not_forwarded",
+                uncertain_expected.attempt_id,
+            )
+            not in coordinator_events
+        ):
+            raise AssertionError(
+                "uncertain Python v2 reserve did not cancel through v2"
+            )
+
+        _, forwarded_guard, _, forwarded = reserve_case("forwarded")
+        dispatch_case(forwarded)
+        traversal_claim = next(
+            claim
+            for claim in reservations[forwarded["attempt_id"]]["claims"]
+            if claim["type"] == "traversalBudget"
+        )
+        forwarded_evidence = [
+            {
+                "constraint_id": "python-v2-traversal",
+                "lineage_digest": traversal_claim["lineage_digest"],
+                "request_cursor_digest": traversal_claim[
+                    "request_cursor_digest"
+                ],
+                "response_digest": response_body_sha256,
+                "next_cursor_digest": _release_lock_digest("cursor:next"),
+                "record_count": 1,
+                "decoded_bytes": len(response_body),
+                "validation": "passed",
+            }
+        ]
+        committed = runtime.complete_release_authorization(
+            attempt_id=forwarded["attempt_id"],
+            binding_digest=forwarded["binding_digest"],
+            outcome="forwarded",
+            previous_lifecycle=forwarded,
+            durable_completion={
+                "response_evidence": forwarded_evidence,
+                "response_body_sha256": response_body_sha256,
+                "dispatch_deadline_at_epoch_ms": forwarded[
+                    "dispatch_expires_at_epoch_ms"
+                ],
+            },
+        )
+        forwarded_guard.mark_terminal()
+        if (
+            committed.get("state") != "committed"
+            or committed.get("durable_policy", {}).get("state")
+            != "committed"
+            or committed["durable_policy"]["response_body_sha256"]
+            != response_body_sha256
+        ):
+            raise AssertionError(
+                f"Python v2 forwarded completion was not retained: {committed}"
+            )
+
+        denied_expected, denied_guard, _, denied = reserve_case("denied")
+        completion_modes[denied_expected.attempt_id] = "denied"
+        dispatch_case(denied)
+        denied_terminal = runtime.complete_release_authorization(
+            attempt_id=denied["attempt_id"],
+            binding_digest=denied["binding_digest"],
+            outcome="forwarded",
+            previous_lifecycle=denied,
+            durable_completion={
+                "response_evidence": forwarded_evidence,
+                "response_body_sha256": response_body_sha256,
+                "dispatch_deadline_at_epoch_ms": denied[
+                    "dispatch_expires_at_epoch_ms"
+                ],
+            },
+        )
+        denied_guard.mark_terminal()
+        if denied_terminal.get("durable_policy", {}).get("state") != "denied":
+            raise AssertionError(
+                f"Python v2 response denial was not closed: {denied_terminal}"
+            )
+
+        mismatched_expected, _, _, mismatched = reserve_case(
+            "mismatched-terminal-evidence"
+        )
+        completion_modes[
+            mismatched_expected.attempt_id
+        ] = "mismatched_evidence"
+        dispatch_case(mismatched)
+        assert_raises(
+            runtime.ReleaseAuthorizationClientError,
+            lambda: runtime.complete_release_authorization(
+                attempt_id=mismatched["attempt_id"],
+                binding_digest=mismatched["binding_digest"],
+                outcome="forwarded",
+                previous_lifecycle=mismatched,
+                durable_completion={
+                    "response_evidence": forwarded_evidence,
+                    "response_body_sha256": response_body_sha256,
+                    "dispatch_deadline_at_epoch_ms": mismatched[
+                        "dispatch_expires_at_epoch_ms"
+                    ],
+                },
+            ),
+            "Python v2 completion accepted changed durable evidence",
+        )
+
+        _, unknown_guard, _, unknown = reserve_case("unknown")
+        dispatch_case(unknown)
+        unknown_terminal = runtime.complete_release_authorization(
+            attempt_id=unknown["attempt_id"],
+            binding_digest=unknown["binding_digest"],
+            outcome="unknown",
+            previous_lifecycle=unknown,
+            durable_completion={
+                "response_evidence": [],
+                "response_body_sha256": response_body_sha256,
+                "dispatch_deadline_at_epoch_ms": unknown[
+                    "dispatch_expires_at_epoch_ms"
+                ],
+                "failure_reason": (
+                    "provider_outcome_or_response_validation_uncertain"
+                ),
+                "uncertainty": "charged_fail_closed",
+            },
+        )
+        unknown_guard.mark_terminal()
+        if (
+            unknown_terminal.get("state") != "committed_indeterminate"
+            or unknown_terminal.get("durable_policy", {}).get("state")
+            != "indeterminate"
+            or unknown_terminal["durable_policy"].get("uncertainty")
+            != "charged_fail_closed"
+        ):
+            raise AssertionError(
+                f"Python v2 unknown completion was not charged: {unknown_terminal}"
+            )
+        mismatched_unknown_terminal = copy.deepcopy(unknown_terminal)
+        mismatched_unknown_terminal["durable_policy"]["state"] = "committed"
+        assert_raises(
+            runtime.ReleaseAuthorizationClientError,
+            lambda: runtime.validate_complete_release_authorization_response(
+                mismatched_unknown_terminal,
+                attempt_id=unknown["attempt_id"],
+                binding_digest=unknown["binding_digest"],
+                outcome="unknown",
+                grant_id=None,
+                approval_request_id=None,
+                previous_lifecycle=unknown,
+            ),
+            "Python v2 unknown accepted a committed durable terminal",
+        )
+
+        _, refund_guard, _, refund = reserve_case("refund")
+        refunded = refund_guard.cancel_not_forwarded_once()
+        if (
+            refunded is None
+            or refunded.get("state") != "cancelled"
+            or refunded.get("durable_policy", {}).get("state") != "aborted"
+            or refund_guard.cancel_not_forwarded_once() is not refunded
+        ):
+            raise AssertionError(
+                f"Python v2 pre-dispatch refund was not exactly once: {refunded}"
+            )
+
+        dispatch_calls_before_downgrade = coordinator_events.count(
+            ("dispatch:v2", refund["attempt_id"])
+        )
+        assert_raises(
+            runtime.ReleaseAuthorizationClientError,
+            lambda: runtime.dispatch_release_authorization(
+                attempt_id=refund["attempt_id"],
+                binding_digest=refund["binding_digest"],
+                previous_lifecycle=refund,
+            ),
+            "Python v2 lifecycle accepted a v1-shaped dispatch",
+        )
+        if (
+            coordinator_events.count(("dispatch:v2", refund["attempt_id"]))
+            != dispatch_calls_before_downgrade
+        ):
+            raise AssertionError(
+                "Python v2 downgrade reached the durable dispatch backend"
+            )
+
+        decision_expected, _ = expected_case(
+            "nonapplicable-traversal"
+        )
+        nonapplicable_claims = durable_claims(
+            decision_expected,
+            traversal_operations=["test.other"],
+            include_sliding_budgets=False,
+        )
+        if nonapplicable_claims:
+            raise AssertionError(
+                "nonapplicable traversal emitted a durable policy claim"
+            )
+        decision_v1_reserved = {
+            "authorized": True,
+            "state": "reserved",
+            "reason": "reserved",
+            "attempt_id": decision_expected.attempt_id,
+            "binding_digest": decision_expected.binding_digest,
+            "idempotent_replay": False,
+            "grant_id": None,
+            "approval_request_id": None,
+            "reservation_expires_at_epoch_ms": (
+                int(time.time() * 1000) + 60_000
+            ),
+            "dispatch_started_at_epoch_ms": None,
+            "dispatch_expires_at_epoch_ms": None,
+            "completion_outcome": None,
+            "retry_after_seconds": 0,
+            "quotas": [],
+            "api_version": "serverware.releaseAuthorization/v1",
+        }
+        decision_authority = runtime.credential_lease_request_authority(
+            decision_expected,
+            decision_v1_reserved,
+            operation_context=operation_context,
+            controlled=True,
+        )
+        if (
+            decision_authority is None
+            or runtime.credential_lease_release_authorization(
+                decision_expected,
+                decision_v1_reserved,
+            )
+            is not None
+        ):
+            raise AssertionError(
+                "nonapplicable traversal did not retain v1 request authority"
+            )
+        claims_before_decision_bound = len(issuance_claims)
+        runtime.get_credential(
+            credential_id,
+            request_authority=decision_authority,
+            release_authorization=None,
+            expected_release_identity=decision_expected,
+            jit_policy={},
+        )
+        decision_claim = issuance_claims[-1]
+        if (
+            len(issuance_claims) != claims_before_decision_bound + 1
+            or decision_claim.get("release_kind") != "decisionBound"
+            or decision_claim.get("operation_context") != operation_context
+            or decision_claim.get("durable_policy") is not None
+        ):
+            raise AssertionError(
+                "nonapplicable traversal did not preserve decision-bound authority"
+            )
+        claims_before_uncontrolled = len(issuance_claims)
+        runtime.get_credential(credential_id)
+        if len(issuance_claims) != claims_before_uncontrolled:
+            raise AssertionError(
+                "truly uncontrolled credential lookup minted request authority"
+            )
+
+        downgrade_expected, _, downgrade_reserved, _ = reserve_case(
+            "credential-downgrade"
+        )
+        downgraded_release = runtime.credential_lease_release_authorization(
+            downgrade_expected,
+            downgrade_reserved,
+        )
+        if downgraded_release is None:
+            raise AssertionError("v2 downgrade fixture lacked release authority")
+        downgraded_release["apiVersion"] = (
+            "serverware.credentialLeaseReleaseAuthorization/v1"
+        )
+        assert_raises(
+            runtime.ReleaseAuthorizationClientError,
+            lambda: runtime.get_credential(
+                credential_id,
+                request_authority=runtime.credential_lease_request_authority(
+                    downgrade_expected,
+                    downgrade_reserved,
+                    operation_context=operation_context,
+                    controlled=True,
+                ),
+                release_authorization=downgraded_release,
+                expected_release_identity=downgrade_expected,
+                jit_policy={},
+            ),
+            "credential release v2 accepted an authority downgrade",
+        )
+
+
+def exercise_proxy_discard_header_jit_transaction(
     app_module: Any,
     policy_engine: Any,
     credential_policy_type: Any,
@@ -6662,17 +10527,40 @@ def exercise_proxy_atomic_backend_integration(
         scopes=(),
         injection={"type": "bearer"},
     )
-    principal = SimpleNamespace(id=f"agent:{backend}:proxy-integration", required_headers={})
+    principal = SimpleNamespace(
+        id=f"agent:{backend}:proxy-integration",
+        required_headers={"x-agent-selector": "bound-agent"},
+    )
     route = SimpleNamespace(
         id=f"route:{backend}:proxy-integration",
         principals=(principal.id,),
         scheme="https",
         host="upstream.invalid",
         port=443,
-        methods=frozenset({"POST"}),
+        methods=frozenset({"PUT"}),
         match_path=lambda path: {} if path == "/integration" else None,
         credential_ref=credential_policy.id,
-        adapter_type="generic.rest",
+        adapter_type="npm.registry",
+        adapter_config={
+            "request": {
+                "allowedHeaders": [
+                    "accept",
+                    "content-type",
+                    "x-required-provider",
+                ],
+                "allowedMediaTypes": ["application/json"],
+                "allowedQueryKeys": [],
+                "maxBodyBytes": 1024,
+                "discardHeaders": ["npm-session"],
+                "requiredHeaders": {
+                    "x-required-provider": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 64,
+                    }
+                },
+            }
+        },
         constraints=(
             {
                 "id": f"quota:{backend}:proxy-integration",
@@ -6698,23 +10586,50 @@ def exercise_proxy_atomic_backend_integration(
             "maxUses": 1,
         },
     )
+    adapter_state = {"reintroduce_discarded_header": False}
+    adapter_events: list[str] = []
 
     class Adapter:
-        def validate_request(self, *_args: Any) -> Any:
+        def validate_credential_metadata(self, *_args: Any) -> Any:
+            adapter_events.append("validate_credential_metadata")
             return policy_engine.PolicyDecision(True)
 
-        def operation_fields(self, *_args: Any) -> dict[str, str]:
-            return {"operation": "test.forward"}
+        def validate_request(self, *_args: Any) -> Any:
+            flow = _args[0]
+            normalized_headers = {
+                str(name).lower() for name in flow.request.headers
+            }
+            if "npm-session" in normalized_headers:
+                raise AssertionError("discarded npm-session reached adapter validation")
+            if "x-agent-selector" in normalized_headers:
+                raise AssertionError("principal selector reached provider admission")
+            if flow.request.headers.get("x-required-provider") != "provider-bound":
+                raise AssertionError("provider required header was not preserved")
+            adapter_events.append("validate_request")
+            return policy_engine.PolicyDecision(True)
+
+        def operation_fields(self, *args: Any) -> dict[str, str]:
+            adapter_events.append("operation_fields")
+            return {
+                "operation": "npm.publish",
+                "bodySha256": "sha256:"
+                + hashlib.sha256(args[0].request.raw_content).hexdigest(),
+            }
 
         def validate_credential(self, *_args: Any) -> Any:
+            adapter_events.append("validate_credential")
             return policy_engine.PolicyDecision(True)
 
-        def rewrite_request(self, *_args: Any) -> Any:
+        def rewrite_request(self, *args: Any) -> Any:
+            adapter_events.append("rewrite_request")
+            if adapter_state["reintroduce_discarded_header"]:
+                args[0].request.headers["npm-session"] = "rewrite-reintroduced"
             return policy_engine.PolicyDecision(True)
 
     snapshot = SimpleNamespace(
         hash="sha256:" + "d" * 64,
         routes=(route,),
+        principals={principal.id: principal},
         credentials={credential_policy.id: credential_policy},
         identify_principal=lambda *_args: principal,
         match_route=lambda *_args: SimpleNamespace(route=route, params={}),
@@ -6728,50 +10643,273 @@ def exercise_proxy_atomic_backend_integration(
         "metadata": {},
     }
 
-    def request_flow() -> Any:
+    use_buffered_body = object()
+
+    def request_flow(
+        session_value: str,
+        body: bytes,
+        *,
+        url: str = "https://upstream.invalid/integration",
+        content_type: str | None = "application/json",
+        extra_headers: dict[str, str] | None = None,
+        raw_content: Any = use_buffered_body,
+        get_content_result: Any = use_buffered_body,
+        get_content_error: Exception | None = None,
+    ) -> Any:
+        headers = {
+            "accept": "application/json",
+            "npm-session": session_value,
+            "x-agent-selector": "bound-agent",
+            "x-required-provider": "provider-bound",
+        }
+        if content_type is not None:
+            headers["content-type"] = content_type
+        headers.update(extra_headers or {})
+        request = SimpleNamespace(
+            method="PUT",
+            pretty_url=url,
+            headers=headers,
+            raw_content=body if raw_content is use_buffered_body else raw_content,
+            query={},
+        )
+        content_access = {"calls": 0}
+
+        def get_content(strict: bool = True) -> Any:
+            del strict
+            content_access["calls"] += 1
+            if get_content_error is not None:
+                raise get_content_error
+            if get_content_result is use_buffered_body:
+                if not isinstance(request.raw_content, bytes):
+                    raise ValueError("request body is not buffered bytes")
+                return request.raw_content
+            return get_content_result
+
+        request.get_content = get_content
+        request.test_content_access = content_access
         return SimpleNamespace(
-            request=SimpleNamespace(
-                method="POST",
-                pretty_url="https://upstream.invalid/integration",
-                headers={"accept": "application/json"},
-                raw_content=b"",
-                query={},
-            ),
+            request=request,
             client_conn=SimpleNamespace(peername=("127.0.0.1", 43124)),
             metadata={},
         )
 
+    audit_records: list[dict[str, Any]] = []
+
+    def capture_audit(
+        route_id: str | None,
+        method: str,
+        url: str,
+        action: str,
+        status_code: int | None,
+        reason: str | None,
+        event: dict[str, Any] | None = None,
+    ) -> None:
+        audit_records.append(
+            {
+                "route_id": route_id,
+                "method": method,
+                "url": url,
+                "action": action,
+                "status_code": status_code,
+                "reason": reason,
+                "event": event,
+            }
+        )
+
+    reserve_payload_mutation: Any = None
+
+    def canonical_digest(value: dict[str, Any]) -> str:
+        encoded = json.dumps(
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        ).encode("utf-8")
+        return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+    def canonical_operation_digest(value: dict[str, Any]) -> str:
+        return canonical_digest(
+            {
+                "principal": value["principal"],
+                "route_id": value["route_id"],
+                "credential_ref": value["credential_ref"],
+                "credential_version": value["credential_version"],
+                "policy_hash": value["policy_hash"],
+                "request": value["request"],
+                "operation": value["operation"],
+            }
+        )
+
     def reserve_via_control_plane(**kwargs: Any) -> dict[str, Any]:
-        response = app_module.data_plane_release_authorization_reserve(
-            app_module.DataPlaneReleaseAuthorizationReserve.model_validate(
-                {
-                    "apiVersion": "serverware.releaseAuthorizationReserve/v1",
-                    "attemptId": kwargs["attempt_id"],
-                    "flowId": kwargs["flow_id"],
-                    "principalId": kwargs["principal_id"],
-                    "routeId": kwargs["route_id"],
-                    "credentialRef": kwargs["credential_ref"],
-                    "credentialVersion": kwargs["credential_version"],
-                    "policyHash": kwargs["policy_hash"],
-                    "requestDigest": kwargs["request_digest"],
-                    "operationDigest": kwargs["operation_digest"],
-                    "operationContext": kwargs["operation_context"],
-                    "canonicalRequest": kwargs["canonical_request"],
-                }
+        expected = kwargs["guard"].expected
+        payload = {
+            "apiVersion": "serverware.releaseAuthorizationReserve/v1",
+            "attemptId": expected.attempt_id,
+            "flowId": expected.flow_id,
+            "principalId": expected.principal_id,
+            "routeId": expected.route_id,
+            "credentialRef": expected.credential_ref,
+            "credentialVersion": expected.credential_version,
+            "policyHash": expected.policy_hash,
+            "requestDigest": expected.request_digest,
+            "operationDigest": expected.operation_digest,
+            "operationContext": kwargs["operation_context"],
+            "canonicalRequest": json.loads(
+                json.dumps(kwargs["canonical_request"])
             ),
-            app_module.DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN,
-        )
-        return policy_engine.runtime._normalized_release_authorization_response(
+        }
+        if reserve_payload_mutation is not None:
+            reserve_payload_mutation(payload)
+        try:
+            request = app_module.DataPlaneReleaseAuthorizationReserve.model_validate(
+                payload
+            )
+            response = app_module.data_plane_release_authorization_reserve(
+                request,
+                app_module.DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN,
+            )
+        except (app_module.HTTPException, app_module.ValidationError) as exc:
+            raise policy_engine.runtime.ReleaseAuthorizationClientError(
+                "control-plane release authorization rejected the reserve payload"
+            ) from exc
+        result = policy_engine.runtime._normalized_release_authorization_response(
             response,
-            attempt_id=kwargs["attempt_id"],
+            attempt_id=expected.attempt_id,
         )
+        policy_engine.runtime.validate_reserve_release_authorization_response(
+            result,
+            attempt_id=expected.attempt_id,
+            require_jit_grant=expected.require_jit_grant,
+            expected_binding_digest=expected.binding_digest,
+            expected_shared_quotas=kwargs["shared_quotas"],
+        )
+        if result.get("state") == "denied":
+            kwargs["guard"].disarm_denial()
+        else:
+            kwargs["guard"].promote_reserved()
+        return result
+
+    class ProviderSocketBoundary:
+        def __init__(self) -> None:
+            self._listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self._listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self._listener.bind(("127.0.0.1", 0))
+            self._listener.listen(4)
+            self._listener.settimeout(0.05)
+            self.port = int(self._listener.getsockname()[1])
+            self._stop = threading.Event()
+            self._lock = threading.Lock()
+            self.contact_count = 0
+            self.effect_count = 0
+            self.last_request: dict[str, Any] | None = None
+            self._thread = threading.Thread(target=self._serve, daemon=True)
+            self._thread.start()
+
+        def _serve(self) -> None:
+            while not self._stop.is_set():
+                try:
+                    connection, _ = self._listener.accept()
+                except TimeoutError:
+                    continue
+                except OSError:
+                    return
+                with connection:
+                    connection.settimeout(2)
+                    reader = connection.makefile("rb")
+                    request_line = reader.readline(8193)
+                    headers: dict[str, str] = {}
+                    while True:
+                        line = reader.readline(8193)
+                        if line in {b"\r\n", b""}:
+                            break
+                        name, value = line.decode("latin-1").split(":", 1)
+                        headers[name.strip().lower()] = value.strip()
+                    content_length = int(headers.get("content-length", "0"))
+                    body = reader.read(content_length)
+                    with self._lock:
+                        self.contact_count += 1
+                        self.last_request = {
+                            "request_line": request_line.decode("ascii").strip(),
+                            "headers": headers,
+                            "body": body,
+                        }
+                        valid = (
+                            request_line.startswith(b"PUT /integration HTTP/1.1")
+                            and headers.get("authorization")
+                            == f"Bearer secret-{backend}"
+                            and "npm-session" not in headers
+                            and body == provider_body
+                        )
+                        if valid:
+                            self.effect_count += 1
+                    status = b"204 No Content" if valid else b"400 Bad Request"
+                    connection.sendall(
+                        b"HTTP/1.1 "
+                        + status
+                        + b"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    )
+
+        def forward(self, provider_flow: Any) -> None:
+            if (
+                provider_flow.metadata.get("serverware_release_state")
+                != "dispatching"
+            ):
+                raise AssertionError(
+                    "provider socket observed a request outside dispatching state"
+                )
+            parts = urlsplit(provider_flow.request.pretty_url)
+            connection = http.client.HTTPConnection(
+                "127.0.0.1",
+                self.port,
+                timeout=2,
+            )
+            connection.putrequest(
+                provider_flow.request.method,
+                urlunsplit(("", "", parts.path or "/", parts.query, "")),
+                skip_host=True,
+                skip_accept_encoding=True,
+            )
+            normalized_headers = {
+                str(name).lower(): str(value)
+                for name, value in provider_flow.request.headers.items()
+            }
+            normalized_headers["host"] = parts.netloc
+            normalized_headers["content-length"] = str(
+                len(provider_flow.request.raw_content)
+            )
+            for name, value in normalized_headers.items():
+                connection.putheader(name, value)
+            connection.endheaders(provider_flow.request.raw_content)
+            response = connection.getresponse()
+            response.read()
+            connection.close()
+            if response.status != 204:
+                raise AssertionError(
+                    f"provider socket rejected forwarded request: {response.status}"
+                )
+
+        def snapshot(self) -> tuple[int, int, dict[str, Any] | None]:
+            with self._lock:
+                return self.contact_count, self.effect_count, self.last_request
+
+        def close(self) -> None:
+            self._stop.set()
+            self._thread.join(timeout=2)
+            self._listener.close()
 
     with ExitStack() as stack:
         stack.enter_context(patch.object(policy_engine, "get_policy_snapshot", return_value=snapshot))
         stack.enter_context(patch.object(app_module, "get_policy_snapshot", return_value=snapshot))
         stack.enter_context(patch.object(policy_engine, "get_adapter", return_value=Adapter()))
         stack.enter_context(patch.object(policy_engine.runtime, "prune_expired_caches", return_value=None))
-        stack.enter_context(patch.object(policy_engine.runtime, "log_request", return_value=None))
+        stack.enter_context(
+            patch.object(
+                policy_engine.runtime,
+                "log_request",
+                side_effect=capture_audit,
+            )
+        )
         stack.enter_context(
             patch.object(
                 policy_engine.runtime,
@@ -6786,26 +10924,36 @@ def exercise_proxy_atomic_backend_integration(
                 return_value="",
             )
         )
-        stack.enter_context(
+        credential_generation_read = stack.enter_context(
             patch.object(
                 policy_engine.runtime,
-                "get_credential_version",
-                return_value=int(stored_credential["credential_version"]),
+                "get_credential_generation",
+                return_value={
+                    key: value
+                    for key, value in credential.items()
+                    if key != "secret"
+                },
             )
         )
-        stack.enter_context(
+        credential_read = stack.enter_context(
             patch.object(policy_engine.runtime, "get_credential", return_value=credential)
         )
-        stack.enter_context(
-            patch.object(app_module.db, "get_credential", return_value=credential)
+        control_plane_secret_read = stack.enter_context(
+            patch.object(
+                app_module.db,
+                "get_credential",
+                side_effect=AssertionError(
+                    "control-plane reserve read a dispatch-secret credential"
+                ),
+            )
         )
         stack.enter_context(
             patch.object(app_module, "_release_authorization_maintenance")
         )
-        stack.enter_context(
+        reserve_call = stack.enter_context(
             patch.object(
                 policy_engine.runtime,
-                "reserve_release_authorization",
+                "reserve_expected_release_authorization",
                 side_effect=reserve_via_control_plane,
             )
         )
@@ -6824,7 +10972,347 @@ def exercise_proxy_atomic_backend_integration(
             )
         )
 
-        pending = policy_engine.evaluate_request(request_flow())
+        provider_body = b'{"name":"package","version":"1.2.3"}'
+        provider_boundary = ProviderSocketBoundary()
+        stack.callback(provider_boundary.close)
+
+        def release_state_counts() -> dict[str, int]:
+            with db.connect() as conn:
+                attempts = conn.execute(
+                    "SELECT COUNT(*) AS count FROM release_authorization_attempts "
+                    "WHERE route_id = ?",
+                    (route.id,),
+                ).fetchone()
+                approvals = conn.execute(
+                    "SELECT COUNT(*) AS count FROM approval_requests "
+                    "WHERE route_id = ?",
+                    (route.id,),
+                ).fetchone()
+                grants = conn.execute(
+                    "SELECT COUNT(*) AS count FROM approval_grants "
+                    "WHERE route_id = ?",
+                    (route.id,),
+                ).fetchone()
+                quota_uses = conn.execute(
+                    "SELECT COALESCE(SUM(count), 0) AS count "
+                    "FROM rate_limit_counters WHERE route_id = ?",
+                    (route.id,),
+                ).fetchone()
+            return {
+                "attempts": int(attempts["count"]),
+                "approvals": int(approvals["count"]),
+                "grants": int(grants["count"]),
+                "quota_uses": int(quota_uses["count"]),
+            }
+
+        def preflight_effect_snapshot() -> dict[str, Any]:
+            return {
+                "adapter_rewrites": adapter_events.count("rewrite_request"),
+                "reserve_calls": reserve_call.call_count,
+                "credential_generation_reads": (
+                    credential_generation_read.call_count
+                ),
+                "credential_reads": credential_read.call_count,
+                "control_plane_secret_reads": (
+                    control_plane_secret_read.call_count
+                ),
+                "release_state": release_state_counts(),
+                "provider": provider_boundary.snapshot()[:2],
+            }
+
+        def request_wire_snapshot(candidate_flow: Any) -> dict[str, Any]:
+            return {
+                "url": candidate_flow.request.pretty_url,
+                "headers": tuple(
+                    policy_engine._physical_request_header_entries(
+                        candidate_flow
+                    )
+                ),
+                "body": candidate_flow.request.raw_content,
+            }
+
+        def assert_preflight_denied(
+            label: str,
+            denied_flow: Any,
+            *,
+            status_code: int,
+            error: str,
+            content_access_calls: int = 0,
+        ) -> None:
+            before = preflight_effect_snapshot()
+            before_request = request_wire_snapshot(denied_flow)
+            denied = policy_engine.evaluate_request(denied_flow)
+            after = preflight_effect_snapshot()
+            after_request = request_wire_snapshot(denied_flow)
+            if (
+                denied.decision.allowed
+                or denied.decision.status_code != status_code
+                or denied.decision.payload.get("error") != error
+                or denied_flow.metadata.get("serverware_release_state") is not None
+                or "authorization"
+                in {
+                    str(name).lower()
+                    for name in denied_flow.request.headers
+                }
+            ):
+                raise AssertionError(
+                    f"{label} did not fail closed during request preflight: "
+                    f"{denied.decision} {denied_flow.metadata}"
+                )
+            if (
+                denied_flow.request.test_content_access["calls"]
+                != content_access_calls
+            ):
+                raise AssertionError(
+                    f"{label} performed unexpected decoded body access: "
+                    f"{denied_flow.request.test_content_access}"
+                )
+            if after != before:
+                raise AssertionError(
+                    f"{label} mutated adapter, reserve, approval, quota, "
+                    "credential, or provider state: "
+                    f"before={before} after={after}"
+                )
+            if after_request != before_request:
+                raise AssertionError(
+                    f"{label} changed denied request URL, physical headers, "
+                    f"or body: before={before_request} after={after_request}"
+                )
+
+        for label, path in (
+            ("raw dot segment", "/public/../admin"),
+            ("encoded dot segment", "/public/%2E%2E/admin"),
+            ("encoded backslash", "/public/%5Cadmin"),
+            ("raw backslash", "/public\\admin"),
+            ("invalid percent escape", "/public/%zz/admin"),
+            ("double encoding", "/public/%252e%252e/admin"),
+            ("empty path segment", "/public//admin"),
+            ("non-npm encoded slash", "/public/value%2fadmin"),
+        ):
+            assert_preflight_denied(
+                label,
+                request_flow(
+                    f"npm-session-path-{label.replace(' ', '-')}",
+                    provider_body,
+                    url="https://upstream.invalid" + path,
+                ),
+                status_code=400,
+                error="invalid_request_target",
+            )
+
+        assert_preflight_denied(
+            "unavailable raw body",
+            request_flow(
+                "npm-session-raw-unavailable",
+                provider_body,
+                raw_content=None,
+            ),
+            status_code=400,
+            error="request_body_not_buffered",
+        )
+        assert_preflight_denied(
+            "oversized raw body",
+            request_flow(
+                "npm-session-oversized",
+                b"x" * 1025,
+            ),
+            status_code=413,
+            error="request_body_too_large",
+        )
+        assert_preflight_denied(
+            "transfer encoding",
+            request_flow(
+                "npm-session-transfer-encoding",
+                provider_body,
+                extra_headers={"transfer-encoding": "chunked"},
+            ),
+            status_code=400,
+            error="request_transfer_encoding_denied",
+        )
+        assert_preflight_denied(
+            "malformed content length",
+            request_flow(
+                "npm-session-malformed-content-length",
+                provider_body,
+                extra_headers={"content-length": "12x"},
+            ),
+            status_code=400,
+            error="request_content_length_invalid",
+        )
+        assert_preflight_denied(
+            "mismatched content length",
+            request_flow(
+                "npm-session-mismatched-content-length",
+                provider_body,
+                extra_headers={"content-length": str(len(provider_body) + 1)},
+            ),
+            status_code=400,
+            error="request_content_length_mismatch",
+        )
+        for label, encoding in (
+            ("non-identity content encoding", "gzip"),
+            ("noncanonical identity content encoding", "Identity"),
+        ):
+            assert_preflight_denied(
+                label,
+                request_flow(
+                    f"npm-session-{label.replace(' ', '-')}",
+                    provider_body,
+                    extra_headers={"content-encoding": encoding},
+                ),
+                status_code=415,
+                error="request_content_encoding_denied",
+            )
+        identity_flow = request_flow(
+            "npm-session-identity-content-encoding",
+            provider_body,
+            extra_headers={"content-encoding": "identity"},
+        )
+        identity_before = preflight_effect_snapshot()
+        identity_decision = policy_engine.preflight_request_admission(
+            identity_flow,
+            route,
+            policy_engine._normalized_request_headers(identity_flow),
+        )
+        if (
+            not identity_decision.allowed
+            or identity_flow.request.test_content_access["calls"] != 1
+            or "content-encoding"
+            not in {
+                str(name).lower()
+                for name in identity_flow.request.headers
+            }
+            or preflight_effect_snapshot() != identity_before
+        ):
+            raise AssertionError(
+                "raw preflight did not preserve exact identity content encoding "
+                f"through semantic admission: {identity_decision}"
+            )
+        policy_engine._strip_identity_content_encoding(identity_flow, "identity")
+        if "content-encoding" in {
+            str(name).lower()
+            for name in identity_flow.request.headers
+        }:
+            raise AssertionError(
+                "exact identity content encoding was not removed after semantic admission"
+            )
+        assert_preflight_denied(
+            "wrong media type",
+            request_flow(
+                "npm-session-wrong-media",
+                provider_body,
+                content_type="text/plain",
+            ),
+            status_code=415,
+            error="request_content_type_denied",
+        )
+        assert_preflight_denied(
+            "duplicate content type parameter",
+            request_flow(
+                "npm-session-duplicate-content-type-parameter",
+                provider_body,
+                content_type=(
+                    "application/json; charset=utf-8; CHARSET=utf-8"
+                ),
+            ),
+            status_code=415,
+            error="request_content_type_denied",
+        )
+        assert_preflight_denied(
+            "missing media type",
+            request_flow(
+                "npm-session-missing-media",
+                provider_body,
+                content_type=None,
+            ),
+            status_code=415,
+            error="request_content_type_required",
+        )
+        assert_preflight_denied(
+            "throwing decoded body access",
+            request_flow(
+                "npm-session-get-content-error",
+                provider_body,
+                get_content_error=ValueError("fixture decoded access failure"),
+            ),
+            status_code=400,
+            error="request_body_unavailable",
+            content_access_calls=1,
+        )
+        assert_preflight_denied(
+            "non-byte decoded body access",
+            request_flow(
+                "npm-session-get-content-non-byte",
+                provider_body,
+                get_content_result="not bytes",
+            ),
+            status_code=400,
+            error="request_body_unavailable",
+            content_access_calls=1,
+        )
+        assert_preflight_denied(
+            "changed decoded body access",
+            request_flow(
+                "npm-session-get-content-changed",
+                provider_body,
+                get_content_result=b'{"different":true}',
+            ),
+            status_code=400,
+            error="request_body_unavailable",
+            content_access_calls=1,
+        )
+        original_body_mode = route.adapter_config["request"].get("bodyMode")
+        route.adapter_config["request"]["bodyMode"] = "none"
+        try:
+            assert_preflight_denied(
+                "forbidden request body",
+                request_flow(
+                    "npm-session-body-forbidden",
+                    provider_body,
+                ),
+                status_code=403,
+                error="request_body_not_allowed",
+            )
+        finally:
+            if original_body_mode is None:
+                route.adapter_config["request"].pop("bodyMode", None)
+            else:
+                route.adapter_config["request"]["bodyMode"] = original_body_mode
+
+        def remove_payload_field(field: str) -> Any:
+            return lambda payload: payload.pop(field, None)
+
+        def replace_payload_field(field: str, value: Any) -> Any:
+            return lambda payload: payload.__setitem__(field, value)
+
+        def mismatch_digest_field(field: str) -> Any:
+            def mutate(payload: dict[str, Any]) -> None:
+                current = str(payload[field])
+                replacement = "0" if current[7] != "0" else "1"
+                payload[field] = current[:7] + replacement + current[8:]
+
+            return mutate
+
+        def make_canonical_malformed(payload: dict[str, Any]) -> None:
+            payload["canonicalRequest"]["request"]["query"] = {
+                "not": "a canonical query pair list"
+            }
+
+        def make_canonical_mismatched(payload: dict[str, Any]) -> None:
+            canonical_request = payload["canonicalRequest"]
+            canonical_request["principal"] = "agent:canonical-substitution"
+            payload["requestDigest"] = canonical_digest(canonical_request)
+            payload["operationDigest"] = canonical_operation_digest(
+                canonical_request
+            )
+
+
+
+        jit_provider_baseline = provider_boundary.snapshot()[:2]
+        jit_rewrite_baseline = adapter_events.count("rewrite_request")
+
+        pending_flow = request_flow("npm-session-first-process", provider_body)
+        pending = policy_engine.evaluate_request(pending_flow)
         if (
             pending.decision.allowed
             or pending.decision.status_code != 428
@@ -6837,6 +11325,29 @@ def exercise_proxy_atomic_backend_integration(
             raise AssertionError(
                 f"atomic proxy did not return an exact operator approval link: {pending.decision}"
             )
+        pending_approval = db.get_approval_request(
+            pending.decision.payload["approval_id"]
+        )
+        if (
+            not pending_approval
+            or pending_approval["canonical_request"].get("v") != 2
+            or pending_approval["canonical_request"]["request"].get(
+                "discard_headers"
+            )
+            != ["npm-session"]
+            or "npm-session"
+            in pending_approval["canonical_request"]["request"]["headers"]
+            or "x-agent-selector"
+            in pending_approval["canonical_request"]["request"]["headers"]
+            or pending_approval["canonical_request"]["request"]["headers"].get(
+                "x-required-provider"
+            )
+            != "provider-bound"
+        ):
+            raise AssertionError(
+                "discard-header approval did not persist the exact v2 canonical request: "
+                f"{pending_approval}"
+            )
         approved = db.approve_request(
             pending.decision.payload["approval_id"],
             ttl_seconds=60,
@@ -6844,22 +11355,611 @@ def exercise_proxy_atomic_backend_integration(
         if not approved or approved.get("status") != "approved":
             raise AssertionError(f"atomic proxy approval did not activate: {approved}")
 
-        forwarded_flow = request_flow()
+        def reserve_then_lose_response(**kwargs: Any) -> dict[str, Any]:
+            reserved = reserve_via_control_plane(**kwargs)
+            if reserved.get("state") != "reserved":
+                raise AssertionError(
+                    "post-commit response-loss fixture did not create a reservation"
+                )
+            raise policy_engine.runtime.ReleaseAuthorizationClientError(
+                "post-commit reserve response lost"
+            )
+
+        reserve_call.side_effect = reserve_then_lose_response
+        pre_loss_secret_reads = credential_read.call_count
+        post_commit_loss_flow = request_flow(
+            "npm-session-post-commit-response-loss",
+            provider_body,
+        )
+        post_commit_loss = policy_engine.evaluate_request(post_commit_loss_flow)
+        reserve_call.side_effect = reserve_via_control_plane
+        post_commit_guard = post_commit_loss_flow.metadata.get(
+            "serverware_release_authorization_guard"
+        )
+        post_commit_attempt_id = (
+            post_commit_guard.expected.attempt_id
+            if isinstance(
+                post_commit_guard,
+                policy_engine.runtime.ReleaseAuthorizationGuard,
+            )
+            else None
+        )
+        with db.connect() as conn:
+            post_commit_attempt = conn.execute(
+                "SELECT state FROM release_authorization_attempts "
+                "WHERE attempt_id = ?",
+                (post_commit_attempt_id,),
+            ).fetchone()
+            post_commit_cancellations = conn.execute(
+                "SELECT COUNT(*) AS count FROM release_authorization_events "
+                "WHERE attempt_id = ? AND state = 'cancelled'",
+                (post_commit_attempt_id,),
+            ).fetchone()
+        if (
+            post_commit_loss.decision.allowed
+            or post_commit_loss.decision.payload.get("error")
+            != "release_authorization_reserve_uncertain"
+            or credential_read.call_count != pre_loss_secret_reads
+            or post_commit_guard is None
+            or not post_commit_guard.cleanup_emitted
+            or post_commit_guard.cleanup_error
+            or post_commit_guard.phase != "terminal"
+            or post_commit_attempt is None
+            or post_commit_attempt["state"] != "cancelled"
+            or int(post_commit_cancellations["count"]) != 1
+            or provider_boundary.snapshot()[:2] != jit_provider_baseline
+        ):
+            raise AssertionError(
+                "post-commit reserve response loss did not exactly cancel before "
+                f"secret acquisition or provider dispatch: {post_commit_loss.decision} "
+                f"{post_commit_loss_flow.metadata}"
+            )
+
+        forwarded_flow = request_flow(
+            "npm-session-approved-retry",
+            provider_body,
+        )
         prepared = policy_engine.evaluate_request(forwarded_flow)
         if not prepared.decision.allowed or prepared.release_state != "reserved":
             raise AssertionError(f"atomic proxy did not reserve after approval: {prepared}")
+        if (
+            prepared.request_digest != pending.request_digest
+            or prepared.operation_digest != pending.operation_digest
+        ):
+            raise AssertionError(
+                "discarded npm-session changed the exact retry binding: "
+                f"{pending.request_digest} {prepared.request_digest} "
+                f"{pending.operation_digest} {prepared.operation_digest}"
+            )
+        if (
+            "npm-session"
+            in {str(name).lower() for name in forwarded_flow.request.headers}
+            or forwarded_flow.request.headers.get("Authorization")
+            != f"Bearer secret-{backend}"
+        ):
+            raise AssertionError(
+                "approved retry was not discarded and credential-injected exactly: "
+                f"{forwarded_flow.request.headers}"
+            )
         lifecycle = forwarded_flow.metadata.get("serverware_release_authorization") or {}
-        if lifecycle.get("attempt_id") != lifecycle.get("flow_id"):
-            raise AssertionError(f"atomic proxy split attempt and flow IDs: {lifecycle}")
+        if (
+            lifecycle.get("attempt_id") != lifecycle.get("flow_id")
+            or lifecycle.get("approval_request_id")
+            != pending.decision.payload["approval_id"]
+            or not lifecycle.get("grant_id")
+        ):
+            raise AssertionError(
+                f"atomic proxy did not reserve and consume the exact approved grant: {lifecycle}"
+            )
         dispatched = policy_engine.dispatch_release_authorization(forwarded_flow)
-        if not dispatched.allowed or forwarded_flow.metadata.get("serverware_release_state") != "dispatching":
+        if (
+            not dispatched.allowed
+            or forwarded_flow.metadata.get("serverware_release_state")
+            != "dispatch_authorized"
+        ):
             raise AssertionError(f"atomic proxy dispatch failed: {dispatched}")
+        policy_engine.mark_provider_dispatch_uncertain(forwarded_flow)
+        provider_boundary.forward(forwarded_flow)
         completed = policy_engine.complete_release_authorization(
             forwarded_flow,
             "forwarded",
         )
         if not completed.allowed or forwarded_flow.metadata.get("serverware_release_state") != "committed":
             raise AssertionError(f"atomic proxy completion failed: {completed}")
+
+        rejected_body = b'{"name":"package","version":"1.2.4"}'
+        rejected_pending_flow = request_flow(
+            "npm-session-reintroduced-pending",
+            rejected_body,
+        )
+        rejected_pending = policy_engine.evaluate_request(rejected_pending_flow)
+        if (
+            rejected_pending.decision.allowed
+            or rejected_pending.decision.status_code != 428
+        ):
+            raise AssertionError(
+                f"reintroduction fixture did not require its own approval: {rejected_pending}"
+            )
+        rejected_approved = db.approve_request(
+            rejected_pending.decision.payload["approval_id"],
+            ttl_seconds=60,
+        )
+        if not rejected_approved or rejected_approved.get("status") != "approved":
+            raise AssertionError(
+                f"reintroduction fixture approval failed: {rejected_approved}"
+            )
+        adapter_state["reintroduce_discarded_header"] = True
+        rejected_retry_flow = request_flow(
+            "npm-session-reintroduced-retry",
+            rejected_body,
+        )
+        rejected_retry = policy_engine.evaluate_request(rejected_retry_flow)
+        adapter_state["reintroduce_discarded_header"] = False
+        if (
+            rejected_retry.decision.allowed
+            or rejected_retry.decision.status_code != 500
+            or rejected_retry.decision.payload.get("error")
+            != "discarded_header_reintroduced"
+        ):
+            raise AssertionError(
+                "rewritten discarded header did not fail closed before forwarding: "
+                f"{rejected_retry.decision}"
+            )
+        contacts, effects, observed_request = provider_boundary.snapshot()
+        if (
+            contacts != jit_provider_baseline[0] + 1
+            or effects != jit_provider_baseline[1] + 1
+        ):
+            raise AssertionError(
+                "discard-header JIT transaction did not produce exactly one "
+                "additional socket-observed provider effect: "
+                f"{(contacts, effects, observed_request)}"
+            )
+        if adapter_events.count("rewrite_request") != jit_rewrite_baseline + 5:
+            raise AssertionError(
+                f"pending or denied requests crossed rewrite unexpectedly: {adapter_events}"
+            )
+        audit_json = json.dumps(audit_records, sort_keys=True)
+        for secret_session_value in (
+            "npm-session-first-process",
+            "npm-session-post-commit-response-loss",
+            "npm-session-approved-retry",
+            "npm-session-reintroduced-pending",
+            "npm-session-reintroduced-retry",
+            "rewrite-reintroduced",
+        ):
+            if secret_session_value in audit_json:
+                raise AssertionError(
+                    "audit evidence retained a discarded low-entropy header value"
+                )
+        discarded_audit_events = [
+            record["event"]["discarded_request_headers"]
+            for record in audit_records
+            if isinstance(record.get("event"), dict)
+            and isinstance(
+                record["event"].get("discarded_request_headers"),
+                dict,
+            )
+            and record["event"]["discarded_request_headers"].get(
+                "present_names"
+            )
+            == ["npm-session"]
+        ]
+        if not discarded_audit_events or any(
+            item.get("present_count") != 1
+            or item.get("raw_values_logged") is not False
+            or item.get("value_commitment") is not None
+            or item.get("value_commitment_reason")
+            != "no_dedicated_audit_hmac_key"
+            for item in discarded_audit_events
+        ):
+            raise AssertionError(
+                f"discarded input audit metadata was not closed and privacy-preserving: {audit_records}"
+            )
+
+
+def exercise_compiled_v2_reserve_fixtures(
+    app_module: Any,
+    policy_engine: Any,
+    compile_policy_bundle: Any,
+    demo_policy_bundle: Any,
+    db: Any,
+    backend: str,
+) -> None:
+    stored_credential = db.create_credential(
+        name=f"{backend} compiled v2 fixture credential",
+        kind="bearer",
+        secret=f"secret-{backend}-compiled-v2",
+        metadata={"test_fixture": f"{backend}-compiled-v2"},
+    )
+    credential_version = int(stored_credential["credential_version"])
+
+    def request_flow(
+        method: str,
+        url: str,
+        headers: dict[str, str],
+        body: bytes,
+    ) -> Any:
+        request = SimpleNamespace(
+            method=method,
+            pretty_url=url,
+            headers=dict(headers),
+            raw_content=body,
+            query=dict(parse_qsl(urlsplit(url).query, keep_blank_values=True)),
+        )
+        request.get_content = lambda strict=True: request.raw_content
+        return SimpleNamespace(
+            request=request,
+            client_conn=SimpleNamespace(peername=("192.0.2.44", 43127)),
+            metadata={},
+        )
+
+    def reserve(
+        snapshot: Any,
+        route: Any,
+        principal: Any,
+        canonical_request: dict[str, Any],
+        *,
+        numeric_credential_version: int,
+    ) -> dict[str, Any]:
+        attempt_id = f"attempt:{backend}:{route.id}:{uuid.uuid4()}"
+        payload = {
+            "apiVersion": "serverware.releaseAuthorizationReserve/v1",
+            "attemptId": attempt_id,
+            "flowId": attempt_id,
+            "principalId": principal.id,
+            "routeId": route.id,
+            "credentialRef": route.credential_ref,
+            "credentialVersion": numeric_credential_version,
+            "policyHash": snapshot.hash,
+            "requestDigest": policy_engine._digest(canonical_request),
+            "operationDigest": policy_engine._operation_digest(
+                canonical_request
+            ),
+            "operationContext": dict(canonical_request["operation"]),
+            "canonicalRequest": canonical_request,
+        }
+        with (
+            patch.object(
+                app_module,
+                "get_policy_snapshot",
+                return_value=snapshot,
+            ),
+            patch.object(app_module, "_release_authorization_maintenance"),
+        ):
+            response = app_module.data_plane_release_authorization_reserve(
+                app_module.DataPlaneReleaseAuthorizationReserve.model_validate(
+                    payload
+                ),
+                app_module.DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN,
+            )
+        return response
+
+    npm_snapshot = compile_policy_bundle(
+        demo_policy_bundle(stored_credential["id"]),
+        validate_schema=False,
+    )
+    npm_route = next(
+        item
+        for item in npm_snapshot.routes
+        if item.adapter_type == "npm.registry"
+    )
+    npm_principal = npm_snapshot.principals["agent:demo"]
+    tarball = b"compiled v2 npm tarball bytes"
+    npm_document = {
+        "_id": "@scope/compiled-v2",
+        "name": "@scope/compiled-v2",
+        "dist-tags": {"latest": "1.2.3"},
+        "versions": {
+            "1.2.3": {
+                "name": "@scope/compiled-v2",
+                "version": "1.2.3",
+                "dist": {},
+            }
+        },
+        "_attachments": {
+            "compiled-v2-1.2.3.tgz": {
+                "content_type": "application/octet-stream",
+                "data": base64.b64encode(tarball).decode("ascii"),
+                "length": len(tarball),
+            }
+        },
+    }
+    npm_body = json.dumps(
+        npm_document,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    npm_flow = request_flow(
+        "PUT",
+        "https://registry.npmjs.org/@scope%2fcompiled-v2",
+        {
+            "content-type": "application/json",
+            "npm-command": "publish",
+            "npm-session": "compiled-v2-session",
+            "user-agent": "npm/11.8.0 node/v24.4.1",
+            "x-serverware-agent": "demo-agent",
+        },
+        npm_body,
+    )
+    npm_preflight = policy_engine.preflight_request_admission(
+        npm_flow,
+        npm_route,
+        policy_engine._normalized_request_headers(npm_flow),
+    )
+    if not npm_preflight.allowed:
+        raise AssertionError(
+            f"compiled npm v2 request failed preflight: {npm_preflight}"
+        )
+    npm_discard = policy_engine._discard_declared_request_headers(
+        npm_flow,
+        npm_route,
+        npm_principal,
+        npm_snapshot.credentials[npm_route.credential_ref],
+    )
+    policy_engine._strip_identity_headers(npm_flow, npm_principal)
+    npm_adapter = policy_engine.get_adapter(npm_route.adapter_type)
+    npm_params = {"package": "@scope%2fcompiled-v2"}
+    npm_admission = npm_adapter.validate_request(
+        npm_flow,
+        npm_route,
+        npm_params,
+    )
+    if not npm_admission.allowed:
+        raise AssertionError(
+            f"compiled npm v2 request was denied: {npm_admission}"
+        )
+    npm_operation = npm_adapter.operation_fields(
+        npm_flow,
+        npm_route,
+        npm_params,
+    )
+    expected_integrity = "sha512-" + base64.b64encode(
+        hashlib.sha512(tarball).digest()
+    ).decode("ascii")
+    if npm_operation.get("tarballIntegrity") != expected_integrity:
+        raise AssertionError(
+            f"compiled npm integrity binding is wrong: {npm_operation}"
+        )
+    npm_canonical = policy_engine._canonical_request(
+        npm_flow,
+        principal=npm_principal,
+        route=npm_route,
+        credential_version=policy_engine._canonical_credential_version(
+            credential_version
+        ),
+        policy_hash=npm_snapshot.hash,
+        operation_fields=npm_operation,
+        forwarded_headers=policy_engine._canonical_forwarded_request_headers(
+            npm_flow,
+            npm_snapshot.credentials[npm_route.credential_ref],
+        ),
+        discard_headers=npm_discard,
+    )
+    if (
+        npm_canonical["v"] != 2
+        or npm_canonical["credential_version"]
+        != policy_engine._canonical_credential_version(credential_version)
+        or npm_canonical["request"]["discard_headers"] != ["npm-session"]
+        or npm_route.jit.get("required") is not True
+        or npm_route.jit.get("maxUses") != 1
+        or "tarballIntegrity"
+        not in set((npm_route.jit.get("binding") or {}).get("fields") or [])
+    ):
+        raise AssertionError(
+            f"compiled npm v2 JIT binding is incomplete: {npm_canonical}"
+        )
+    advance_active_policy_hash(db, npm_snapshot.hash)
+    npm_reserve = reserve(
+        npm_snapshot,
+        npm_route,
+        npm_principal,
+        npm_canonical,
+        numeric_credential_version=credential_version,
+    )
+    if (
+        npm_reserve.get("authorized")
+        or npm_reserve.get("state") != "denied"
+        or npm_reserve.get("reason") != "jit_grant_unavailable"
+        or not npm_reserve.get("approvalRequestId")
+    ):
+        raise AssertionError(
+            f"compiled npm v2 reserve did not preserve hardware JIT: {npm_reserve}"
+        )
+
+    generic_bundle = demo_policy_bundle(stored_credential["id"])
+    generic_route_raw = next(
+        item
+        for item in generic_bundle["routes"]
+        if item["id"] == "demo.stream"
+    )
+    generic_route_raw["adapter"]["config"]["request"][
+        "discardHeaders"
+    ] = ["x-client-retry"]
+    generic_snapshot = compile_policy_bundle(
+        generic_bundle,
+        validate_schema=False,
+    )
+    generic_route = next(
+        item
+        for item in generic_snapshot.routes
+        if item.id == "demo.stream"
+    )
+    generic_principal = generic_snapshot.principals["agent:demo"]
+    generic_flow = request_flow(
+        "GET",
+        "https://demo-upstream:8443/stream-bytes",
+        {
+            "accept": "application/json",
+            "x-client-retry": "attempt-1",
+            "x-serverware-agent": "demo-agent",
+        },
+        b"",
+    )
+    generic_preflight = policy_engine.preflight_request_admission(
+        generic_flow,
+        generic_route,
+        policy_engine._normalized_request_headers(generic_flow),
+    )
+    if not generic_preflight.allowed:
+        raise AssertionError(
+            f"compiled generic v2 request failed preflight: {generic_preflight}"
+        )
+    generic_discard = policy_engine._discard_declared_request_headers(
+        generic_flow,
+        generic_route,
+        generic_principal,
+        None,
+    )
+    policy_engine._strip_identity_headers(generic_flow, generic_principal)
+    generic_adapter = policy_engine.get_adapter(generic_route.adapter_type)
+    generic_admission = generic_adapter.validate_request(
+        generic_flow,
+        generic_route,
+        {},
+    )
+    if not generic_admission.allowed:
+        raise AssertionError(
+            f"compiled generic v2 request was denied: {generic_admission}"
+        )
+    generic_operation = generic_adapter.operation_fields(
+        generic_flow,
+        generic_route,
+        {},
+    )
+    generic_canonical = policy_engine._canonical_request(
+        generic_flow,
+        principal=generic_principal,
+        route=generic_route,
+        credential_version=policy_engine._canonical_credential_version(0),
+        policy_hash=generic_snapshot.hash,
+        operation_fields=generic_operation,
+        forwarded_headers=policy_engine._canonical_forwarded_request_headers(
+            generic_flow,
+            None,
+        ),
+        discard_headers=generic_discard,
+    )
+    if (
+        generic_canonical["v"] != 2
+        or generic_canonical["credential_ref"] is not None
+        or generic_canonical["credential_version"]
+        != policy_engine._canonical_credential_version(0)
+        or generic_route.jit.get("required") is True
+    ):
+        raise AssertionError(
+            f"compiled generic non-JIT canonical is invalid: {generic_canonical}"
+        )
+    advance_active_policy_hash(db, generic_snapshot.hash)
+    generic_reserve = reserve(
+        generic_snapshot,
+        generic_route,
+        generic_principal,
+        generic_canonical,
+        numeric_credential_version=0,
+    )
+    if (
+        not generic_reserve.get("authorized")
+        or generic_reserve.get("state") != "reserved"
+        or generic_reserve.get("grantId") is not None
+        or generic_reserve.get("approvalRequestId") is not None
+    ):
+        raise AssertionError(
+            f"compiled generic non-JIT reserve is invalid: {generic_reserve}"
+        )
+    with patch.object(app_module, "_release_authorization_maintenance"):
+        dispatched = app_module.data_plane_release_authorization_dispatch(
+            app_module.DataPlaneReleaseAuthorizationDispatch.model_validate(
+                {
+                    "apiVersion": "serverware.releaseAuthorizationDispatch/v1",
+                    "attemptId": generic_reserve["attemptId"],
+                    "bindingDigest": generic_reserve["bindingDigest"],
+                }
+            ),
+            app_module.DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN,
+        )
+        completed = app_module.data_plane_release_authorization_complete(
+            app_module.DataPlaneReleaseAuthorizationComplete.model_validate(
+                {
+                    "apiVersion": "serverware.releaseAuthorizationComplete/v1",
+                    "attemptId": generic_reserve["attemptId"],
+                    "bindingDigest": generic_reserve["bindingDigest"],
+                    "outcome": "forwarded",
+                }
+            ),
+            app_module.DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN,
+        )
+    if (
+        dispatched.get("state") != "dispatching"
+        or dispatched.get("grantId") is not None
+        or completed.get("state") != "committed"
+        or completed.get("grantId") is not None
+        or completed.get("approvalRequestId") is not None
+    ):
+        raise AssertionError(
+            "compiled generic non-JIT lifecycle acquired approval identity: "
+            f"{dispatched} {completed}"
+        )
+
+    absent_attempt = "attempt:compiled-v2:pre-create-transport-loss"
+    absent_binding = "sha256:" + "e" * 64
+    with patch.object(
+        app_module,
+        "_release_authorization_maintenance",
+        side_effect=AssertionError(
+            "bound not_forwarded cleanup ran unrelated global maintenance"
+        ),
+    ):
+        absent_cleanup = app_module.data_plane_release_authorization_complete(
+            app_module.DataPlaneReleaseAuthorizationComplete.model_validate(
+                {
+                    "apiVersion": "serverware.releaseAuthorizationComplete/v1",
+                    "attemptId": absent_attempt,
+                    "bindingDigest": absent_binding,
+                    "outcome": "not_forwarded",
+                }
+            ),
+            app_module.DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN,
+        )
+        mismatched_cleanup = (
+            app_module.data_plane_release_authorization_complete(
+                app_module.DataPlaneReleaseAuthorizationComplete.model_validate(
+                    {
+                        "apiVersion": (
+                            "serverware.releaseAuthorizationComplete/v1"
+                        ),
+                        "attemptId": generic_reserve["attemptId"],
+                        "bindingDigest": absent_binding,
+                        "outcome": "not_forwarded",
+                    }
+                ),
+                app_module.DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN,
+            )
+        )
+    with db.connect() as conn:
+        absent_rows = conn.execute(
+            "SELECT COUNT(*) AS count FROM release_authorization_attempts "
+            "WHERE attempt_id = ?",
+            (absent_attempt,),
+        ).fetchone()
+        preserved_generic = conn.execute(
+            "SELECT state, binding_digest FROM release_authorization_attempts "
+            "WHERE attempt_id = ?",
+            (generic_reserve["attemptId"],),
+        ).fetchone()
+    if (
+        absent_cleanup.get("state") != "absent"
+        or mismatched_cleanup.get("state") != "absent"
+        or int(absent_rows["count"]) != 0
+        or preserved_generic["state"] != "committed"
+        or preserved_generic["binding_digest"]
+        != generic_reserve["bindingDigest"]
+    ):
+        raise AssertionError(
+            "control-plane expected cleanup affected absent or unrelated "
+            f"state: {absent_cleanup} {mismatched_cleanup} "
+            f"{preserved_generic}"
+        )
 
 
 def exercise_webauthn_state(db: Any, backend: str) -> None:
@@ -6998,6 +12098,9 @@ def main() -> None:
                 db.init_db()
                 load_master_key()
                 exercise_policy_high_water(db, backend)
+                exercise_v1_route_protocol_authority(db)
+                exercise_durable_traversal_cursor_sources(db)
+                exercise_release_lock_order(db, backend)
                 exercise_release_policy_authority_race(db, backend)
                 exercise_approval_authority_revalidation(db, backend)
                 exercise_jit_approval_route_authority(db, backend)
@@ -7034,6 +12137,9 @@ def main() -> None:
                 )
                 exercise_postgres_audit_migration_faults(db, args.postgres_dsn)
             exercise_policy_high_water(db, backend)
+            exercise_v1_route_protocol_authority(db)
+            exercise_durable_traversal_cursor_sources(db)
+            exercise_release_lock_order(db, backend)
             exercise_release_policy_authority_race(db, backend)
             state = exercise_atomic_approval(db, grants, backend)
             exercise_google_grant_family_quarantine(db, backend)
@@ -7066,13 +12172,29 @@ def main() -> None:
                 demo_policy_bundle,
                 PolicyBundleError,
             )
+            exercise_physical_header_preflight(policy_engine)
             exercise_proxy_forward_start_ordering(policy_engine, CredentialPolicy)
             exercise_query_credential_audit_redaction(
                 policy_engine,
                 CredentialPolicy,
             )
-            exercise_release_client_idempotent_retry(policy_engine.runtime)
-            exercise_proxy_atomic_backend_integration(
+            exercise_release_client_single_attempt_guard_contract(
+                policy_engine.runtime
+            )
+            exercise_python_v2_release_coordinator(
+                policy_engine,
+                policy_engine.runtime,
+                CredentialPolicy,
+            )
+            exercise_compiled_v2_reserve_fixtures(
+                app_module,
+                policy_engine,
+                compile_policy_bundle,
+                demo_policy_bundle,
+                db,
+                backend,
+            )
+            exercise_proxy_discard_header_jit_transaction(
                 app_module,
                 policy_engine,
                 CredentialPolicy,

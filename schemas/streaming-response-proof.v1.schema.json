@@ -37,7 +37,7 @@
       "type": "string",
       "minLength": 43,
       "maxLength": 43,
-      "pattern": "^[A-Za-z0-9_-]{43}$"
+      "pattern": "^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$"
     },
     "boundedString": {
       "type": "string",
@@ -74,7 +74,7 @@
     },
     "ed25519SignatureText": {
       "type": "string",
-      "pattern": "^ed25519:[A-Za-z0-9_-]{86}$"
+      "pattern": "^ed25519:[A-Za-z0-9_-]{85}[AQgw]$"
     },
     "ed25519Signature": {
       "type": "object",
@@ -264,6 +264,7 @@
         "status",
         "body_b64",
         "body_sha256",
+        "response_headers",
         "response_signing_key_id",
         "statement_b64",
         "statement_sha256",
@@ -273,6 +274,31 @@
         "status": {"const": 200},
         "body_b64": {"$ref": "#/$defs/base64url"},
         "body_sha256": {"$ref": "#/$defs/sha256"},
+        "response_headers": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 128,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "value_b64"],
+            "properties": {
+              "name": {
+                "type": "string",
+                "pattern": "^[!#$%&'*+.^_`|~0-9a-z-]+$",
+                "not": {
+                  "pattern": "(?:^x-serverware-response-|^connection$|^keep-alive$|^proxy-authenticate$|^proxy-authorization$|^te$|^trailer$|^transfer-encoding$|^upgrade$|authorization|cookie|secret|token|password|passwd|api-key|apikey|private-key)"
+                },
+                "maxLength": 256
+              },
+              "value_b64": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_-]*$",
+                "maxLength": 87382
+              }
+            }
+          }
+        },
         "response_signing_key_id": {"$ref": "#/$defs/sha256"},
         "statement_b64": {"$ref": "#/$defs/base64url"},
         "statement_sha256": {"$ref": "#/$defs/sha256"},
@@ -730,7 +756,7 @@
         "apiVersion": {"const": "serverware.streamingProxyResponseCapture/v1"},
         "environment": {"enum": ["development", "production"]},
         "collection_mode": {"const": "strict-incremental-stream-capture"},
-        "classification": {"const": "verified-complete-stream"},
+        "classification": {"const": "runtime-verified-complete-stream"},
         "captured_at_unix": {"$ref": "#/$defs/positiveUint64"},
         "client_nonce": {"$ref": "#/$defs/nonce"},
         "client_request_digest": {"$ref": "#/$defs/sha256"},

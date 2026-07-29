@@ -8,7 +8,6 @@
   "required": [
     "apiVersion",
     "kind",
-    "ok",
     "verification_passed",
     "verification_mode",
     "result_scope",
@@ -45,7 +44,6 @@
   "properties": {
     "apiVersion": {"const": "serverware.completionProof/v5"},
     "kind": {"enum": ["ServerwareCompletionProof", "ServerwarePreEnclaveReadiness"]},
-    "ok": {"const": true},
     "verification_passed": {"const": true},
     "verification_mode": {"enum": ["readiness", "final"]},
     "result_scope": {"enum": ["readiness-only", "final-completion"]},

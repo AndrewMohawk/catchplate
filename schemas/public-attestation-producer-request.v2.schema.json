@@ -1,0 +1,582 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/public-attestation-producer-request.v2.schema.json",
+  "title": "Serverware public attestation producer request v2 with verifier-state saga v3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "liveSessionRequest",
+    "releaseIdentitySha256",
+    "staticPins"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "serverware.publicAttestationProducerRequest/v2"
+    },
+    "liveSessionRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "callerNonceBase64url",
+        "callerNonceSha256",
+        "expiresAtUnix",
+        "httpRequest",
+        "issuedAtUnix",
+        "nonceConsumption",
+        "nonceConsumptionReceipt",
+        "nonceConsumptionReceiptSha256",
+        "nonceAuthorityVerifierStateTransition",
+        "oneUse",
+        "producerInvocation",
+        "producerInvocationSha256",
+        "tlsBinding",
+        "tlsBindingSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.publicAttestationLiveRequest/v1"
+        },
+        "callerNonceBase64url": {"$ref": "#/$defs/base64url32"},
+        "callerNonceSha256": {"$ref": "#/$defs/sha256"},
+        "expiresAtUnix": {"$ref": "#/$defs/positiveU64"},
+        "httpRequest": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["bodySha256", "method", "path"],
+          "properties": {
+            "bodySha256": {"$ref": "#/$defs/sha256"},
+            "method": {"const": "POST"},
+            "path": {"const": "/attestation/public-evidence"}
+          }
+        },
+        "issuedAtUnix": {"$ref": "#/$defs/positiveU64"},
+        "nonceConsumption": {"$ref": "#/$defs/nonceConsumption"},
+        "nonceConsumptionReceipt": {
+          "$ref": "signed-attestation-nonce-consumption-receipt.v2.schema.json"
+        },
+        "nonceConsumptionReceiptSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "nonceAuthorityVerifierStateTransition": {
+          "$ref": "#/$defs/verifierStateTransition"
+        },
+        "oneUse": {"const": true},
+        "producerInvocation": {"$ref": "#/$defs/producerInvocation"},
+        "producerInvocationSha256": {"$ref": "#/$defs/sha256"},
+        "tlsBinding": {"$ref": "#/$defs/tlsBinding"},
+        "tlsBindingSha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "releaseIdentitySha256": {"$ref": "#/$defs/sha256"},
+    "staticPins": {"$ref": "#/$defs/staticPins"}
+  },
+  "$defs": {
+    "base64url32": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$"
+    },
+    "base64urlEd25519Spki": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{58}[AEIMQUYcgkosw048]$"
+    },
+    "identifier": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,255}$"
+    },
+    "nonceConsumption": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "consumedAtUnix",
+        "nonceSha256",
+        "oneUse",
+        "requestBodySha256",
+        "sequence",
+        "storeIdentitySha256",
+        "tlsBindingSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.publicAttestationNonceConsumption/v1"
+        },
+        "consumedAtUnix": {"$ref": "#/$defs/positiveU64"},
+        "nonceSha256": {"$ref": "#/$defs/sha256"},
+        "oneUse": {"const": true},
+        "requestBodySha256": {"$ref": "#/$defs/sha256"},
+        "sequence": {"$ref": "#/$defs/positiveU64"},
+        "storeIdentitySha256": {"$ref": "#/$defs/sha256"},
+        "tlsBindingSha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "positiveU64": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 18446744073709551615
+    },
+    "producerInvocation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "callerNonceSha256",
+        "expiresAtUnix",
+        "issuedAtUnix",
+        "minimumReleaseIdentitySha256",
+        "minimumRollbackContinuityCommitmentSha256",
+        "nonceAuthorityVerifierChallengeBase64url",
+        "nonceAuthorityVerifierStateOperationIdBase64url",
+        "producerChannelChallengeBase64url",
+        "producerEphemeralKeySpkiDerBase64url",
+        "producerEphemeralKeySpkiSha256",
+        "releaseIdentitySha256",
+        "requestBodySha256",
+        "staticPins",
+        "tlsBindingSha256",
+        "witnessVerifierChallengeBase64url"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.publicAttestationProducerInvocation/v1"
+        },
+        "callerNonceSha256": {"$ref": "#/$defs/sha256"},
+        "expiresAtUnix": {"$ref": "#/$defs/positiveU64"},
+        "issuedAtUnix": {"$ref": "#/$defs/positiveU64"},
+        "minimumReleaseIdentitySha256": {"$ref": "#/$defs/sha256"},
+        "minimumRollbackContinuityCommitmentSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "nonceAuthorityVerifierChallengeBase64url": {
+          "$ref": "#/$defs/base64url32"
+        },
+        "nonceAuthorityVerifierStateOperationIdBase64url": {
+          "$ref": "#/$defs/base64url32"
+        },
+        "producerChannelChallengeBase64url": {
+          "$ref": "#/$defs/base64url32"
+        },
+        "producerEphemeralKeySpkiDerBase64url": {
+          "$ref": "#/$defs/base64urlEd25519Spki"
+        },
+        "producerEphemeralKeySpkiSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "releaseIdentitySha256": {"$ref": "#/$defs/sha256"},
+        "requestBodySha256": {"$ref": "#/$defs/sha256"},
+        "staticPins": {"$ref": "#/$defs/staticPins"},
+        "tlsBindingSha256": {"$ref": "#/$defs/sha256"},
+        "witnessVerifierChallengeBase64url": {
+          "$ref": "#/$defs/base64url32"
+        }
+      }
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "staticPins": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "descriptorSha256",
+        "executableSha256",
+        "immutableConfigSha256",
+        "nonceStoreIdentitySha256",
+        "nonceStoreKeySpkiSha256",
+        "producerRequestSchemaSha256",
+        "sandboxDescriptorSha256",
+        "sandboxLauncherSha256",
+        "trustRootsSha256",
+        "witnessStoreIdentitySha256",
+        "witnessStoreKeySpkiSha256"
+      ],
+      "properties": {
+        "descriptorSha256": {"$ref": "#/$defs/sha256"},
+        "executableSha256": {"$ref": "#/$defs/sha256"},
+        "immutableConfigSha256": {"$ref": "#/$defs/sha256"},
+        "nonceStoreIdentitySha256": {"$ref": "#/$defs/sha256"},
+        "nonceStoreKeySpkiSha256": {"$ref": "#/$defs/sha256"},
+        "producerRequestSchemaSha256": {"$ref": "#/$defs/sha256"},
+        "sandboxDescriptorSha256": {"$ref": "#/$defs/sha256"},
+        "sandboxLauncherSha256": {"$ref": "#/$defs/sha256"},
+        "trustRootsSha256": {"$ref": "#/$defs/sha256"},
+        "witnessStoreIdentitySha256": {"$ref": "#/$defs/sha256"},
+        "witnessStoreKeySpkiSha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "tlsBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "bindingSha256",
+        "connectionId",
+        "connectionNonceSha256",
+        "enclaveBootId",
+        "enclaveInstanceId",
+        "expiresAtUnix",
+        "exporterLabel",
+        "exporterSha256",
+        "issuedAtUnix",
+        "leafCertificateSha256",
+        "leafSpkiSha256",
+        "peerCertificateSha256",
+        "peerIdentity",
+        "peerSpkiSha256",
+        "provider",
+        "tlsKeyGeneration",
+        "tlsScopeEnvelopeSha256",
+        "tlsScopeKeyGeneration",
+        "tlsScopeKeySpkiSha256",
+        "tlsStackMeasurementSha256"
+      ],
+      "properties": {
+        "apiVersion": {"const": "serverware.enclaveTlsScope/v2"},
+        "bindingSha256": {"$ref": "#/$defs/sha256"},
+        "connectionId": {"$ref": "#/$defs/identifier"},
+        "connectionNonceSha256": {"$ref": "#/$defs/sha256"},
+        "enclaveBootId": {"$ref": "#/$defs/identifier"},
+        "enclaveInstanceId": {"$ref": "#/$defs/identifier"},
+        "expiresAtUnix": {"$ref": "#/$defs/positiveU64"},
+        "exporterLabel": {
+          "const": "EXPORTER-Serverware-Attestation-v1"
+        },
+        "exporterSha256": {"$ref": "#/$defs/sha256"},
+        "issuedAtUnix": {"$ref": "#/$defs/positiveU64"},
+        "leafCertificateSha256": {"$ref": "#/$defs/sha256"},
+        "leafSpkiSha256": {"$ref": "#/$defs/sha256"},
+        "peerCertificateSha256": {"$ref": "#/$defs/sha256"},
+        "peerIdentity": {"$ref": "#/$defs/identifier"},
+        "peerSpkiSha256": {"$ref": "#/$defs/sha256"},
+        "provider": {
+          "type": "string",
+          "pattern": "^enclave-[A-Za-z0-9._:@+-]{1,120}$"
+        },
+        "tlsKeyGeneration": {"$ref": "#/$defs/positiveU64"},
+        "tlsScopeEnvelopeSha256": {"$ref": "#/$defs/sha256"},
+        "tlsScopeKeyGeneration": {"$ref": "#/$defs/positiveU64"},
+        "tlsScopeKeySpkiSha256": {"$ref": "#/$defs/sha256"},
+        "tlsStackMeasurementSha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "signedServiceEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "payload",
+        "payloadSha256",
+        "signatureAlgorithm",
+        "signatureBase64url",
+        "signingKeyId",
+        "signingKeySpkiSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "type": "string",
+          "pattern": "^serverware\\.[A-Za-z0-9]+/v[0-9]+$"
+        },
+        "payload": {"type": "object"},
+        "payloadSha256": {"$ref": "#/$defs/sha256"},
+        "signatureAlgorithm": {"const": "Ed25519"},
+        "signatureBase64url": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{85}[AQgw]$"
+        },
+        "signingKeyId": {"$ref": "#/$defs/sha256"},
+        "signingKeySpkiSha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "signedAssuranceEvidence": {
+      "allOf": [
+        {"$ref": "#/$defs/signedServiceEnvelope"},
+        {
+          "properties": {
+            "apiVersion": {
+              "const": "serverware.signedNonceAuthorityAssuranceEvidence/v1"
+            },
+            "payload": {
+              "$ref": "public-attestation-config.v2.schema.json#/$defs/signedNonceAssuranceEvidence/properties/payload"
+            }
+          }
+        }
+      ]
+    },
+    "signedVerifierState": {
+      "allOf": [
+        {"$ref": "#/$defs/signedServiceEnvelope"},
+        {
+          "properties": {
+            "apiVersion": {
+              "const": "serverware.signedNonceAuthorityVerifierState/v1"
+            },
+            "payload": {
+              "$ref": "attestation-verifier-state-service.v1.schema.json#/$defs/statePayload"
+            }
+          }
+        }
+      ]
+    },
+    "signedVerifierStateAuthorization": {
+      "allOf": [
+        {"$ref": "#/$defs/signedServiceEnvelope"},
+        {
+          "properties": {
+            "apiVersion": {
+              "const": "serverware.nonceAuthorityVerifierStatePreparedAuthorization/v3"
+            },
+            "payload": {
+              "$ref": "attestation-verifier-state-service.v1.schema.json#/$defs/authorizationPayload"
+            }
+          }
+        }
+      ]
+    },
+    "signedVerifierStateCommitReceipt": {
+      "allOf": [
+        {"$ref": "#/$defs/signedServiceEnvelope"},
+        {
+          "properties": {
+            "apiVersion": {
+              "const": "serverware.nonceAuthorityVerifierStateCommitReceipt/v3"
+            },
+            "payload": {
+              "$ref": "attestation-verifier-state-service.v1.schema.json#/$defs/commitReceiptPayload"
+            }
+          }
+        }
+      ]
+    },
+    "signedVerifierStateStoreCommitProof": {
+      "allOf": [
+        {"$ref": "#/$defs/signedServiceEnvelope"},
+        {
+          "properties": {
+            "apiVersion": {
+              "const": "serverware.signedVerifierStateStoreCommitProof/v3"
+            },
+            "payload": {
+              "$ref": "attestation-verifier-state-service.v1.schema.json#/$defs/storeCommitProof"
+            }
+          }
+        }
+      ]
+    },
+    "verifierStateRead": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "nonActionable",
+        "state",
+        "stateSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nonceAuthorityVerifierStateReadResponse/v3"
+        },
+        "nonActionable": {"const": true},
+        "state": {"$ref": "#/$defs/signedVerifierState"},
+        "stateSha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "verifierStateServiceBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "clientCertificateSpkiSha256",
+        "endpoint",
+        "serverLeafSpkiSha256",
+        "serviceConfigurationSha256",
+        "signingKeySpkiSha256",
+        "roleSeparationEvidenceSha256",
+        "stateStoreAdministrativeDomainSha256",
+        "stateStoreAssuranceEvidenceSha256",
+        "stateStoreAttestationKeySpkiSha256",
+        "stateStoreConfigurationSha256",
+        "stateStoreIdentitySha256",
+        "stateStoreMinimumCommitIndex",
+        "stateStoreMinimumGeneration"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.attestationVerifierStateClient/v2"
+        },
+        "clientCertificateSpkiSha256": {"$ref": "#/$defs/sha256"},
+        "endpoint": {
+          "type": "string",
+          "pattern": "^https://(?:(?:0|[1-9][0-9]?|1[0-9]{2}|2[0-4][0-9]|25[0-5])\\.){3}(?:0|[1-9][0-9]?|1[0-9]{2}|2[0-4][0-9]|25[0-5]):(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$"
+        },
+        "serverLeafSpkiSha256": {"$ref": "#/$defs/sha256"},
+        "serviceConfigurationSha256": {"$ref": "#/$defs/sha256"},
+        "signingKeySpkiSha256": {"$ref": "#/$defs/sha256"},
+        "roleSeparationEvidenceSha256": {"$ref": "#/$defs/sha256"},
+        "stateStoreAdministrativeDomainSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "stateStoreAssuranceEvidenceSha256": {"$ref": "#/$defs/sha256"},
+        "stateStoreAttestationKeySpkiSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "stateStoreConfigurationSha256": {"$ref": "#/$defs/sha256"},
+        "stateStoreIdentitySha256": {"$ref": "#/$defs/sha256"},
+        "stateStoreMinimumCommitIndex": {"$ref": "#/$defs/positiveU64"},
+        "stateStoreMinimumGeneration": {"$ref": "#/$defs/positiveU64"}
+      }
+    },
+    "verifierStateTransition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "assurance",
+        "assuranceEvidence",
+        "assuranceEvidenceSha256",
+        "assuranceSha256",
+        "authorization",
+        "authorizationSha256",
+        "commitRequest",
+        "commitRequestSha256",
+        "commitReceipt",
+        "commitReceiptSha256",
+        "committedState",
+        "committedStateRead",
+        "committedStateReadSha256",
+        "committedStateSha256",
+        "nonActionable",
+        "nonceAuthorityState",
+        "nonceAuthorityStateSha256",
+        "nonceConsumptionReceipt",
+        "nonceConsumptionReceiptSha256",
+        "nonceConsumptionSha256",
+        "operationIdBase64url",
+        "preparedOperation",
+        "preparedOperationSha256",
+        "priorState",
+        "priorStateRead",
+        "priorStateReadSha256",
+        "priorStateSha256",
+        "recoveryIdentity",
+        "recoveryIdentitySha256",
+        "recoveryKeySha256",
+        "requestBindingSha256",
+        "roleSeparationEvidence",
+        "roleSeparationEvidenceSha256",
+        "serviceBinding",
+        "signedStoreCommitProof",
+        "signedStoreCommitProofSha256",
+        "storeAssuranceEvidence",
+        "storeAssuranceEvidenceSha256",
+        "transactionIdBase64url",
+        "verifierChallengeBase64url",
+        "verifierChallengeSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nonceAuthorityVerifierStateTransition/v3"
+        },
+        "assurance": {
+          "$ref": "public-attestation-config.v2.schema.json#/$defs/nonceAuthorityAssurance"
+        },
+        "assuranceEvidence": {
+          "$ref": "#/$defs/signedAssuranceEvidence"
+        },
+        "assuranceEvidenceSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "assuranceSha256": {"$ref": "#/$defs/sha256"},
+        "authorization": {
+          "$ref": "#/$defs/signedVerifierStateAuthorization"
+        },
+        "authorizationSha256": {"$ref": "#/$defs/sha256"},
+        "commitRequest": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "apiVersion",
+            "authorization",
+            "nonceConsumptionReceipt",
+            "preparedOperationSha256",
+            "recoveryKeySha256",
+            "requestBindingSha256",
+            "verifierChallengeBase64url"
+          ],
+          "properties": {
+            "apiVersion": {
+              "const": "serverware.attestationVerifierStateCommitRequest/v3"
+            },
+            "authorization": {
+              "$ref": "#/$defs/signedVerifierStateAuthorization"
+            },
+            "nonceConsumptionReceipt": {
+              "$ref": "signed-attestation-nonce-consumption-receipt.v2.schema.json"
+            },
+            "preparedOperationSha256": {"$ref": "#/$defs/sha256"},
+            "recoveryKeySha256": {"$ref": "#/$defs/sha256"},
+            "requestBindingSha256": {"$ref": "#/$defs/sha256"},
+            "verifierChallengeBase64url": {
+              "$ref": "#/$defs/base64url32"
+            }
+          }
+        },
+        "commitRequestSha256": {"$ref": "#/$defs/sha256"},
+        "commitReceipt": {
+          "$ref": "#/$defs/signedVerifierStateCommitReceipt"
+        },
+        "commitReceiptSha256": {"$ref": "#/$defs/sha256"},
+        "committedState": {"$ref": "#/$defs/signedVerifierState"},
+        "committedStateRead": {"$ref": "#/$defs/verifierStateRead"},
+        "committedStateReadSha256": {"$ref": "#/$defs/sha256"},
+        "committedStateSha256": {"$ref": "#/$defs/sha256"},
+        "nonActionable": {"const": true},
+        "nonceAuthorityState": {
+          "$ref": "attestation-verifier-state-service.v1.schema.json#/$defs/nonceAuthorityState"
+        },
+        "nonceAuthorityStateSha256": {"$ref": "#/$defs/sha256"},
+        "nonceConsumptionReceipt": {
+          "$ref": "signed-attestation-nonce-consumption-receipt.v2.schema.json"
+        },
+        "nonceConsumptionReceiptSha256": {"$ref": "#/$defs/sha256"},
+        "nonceConsumptionSha256": {"$ref": "#/$defs/sha256"},
+        "operationIdBase64url": {"$ref": "#/$defs/base64url32"},
+        "preparedOperation": {
+          "$ref": "attestation-verifier-state-service.v1.schema.json#/$defs/preparedOperation"
+        },
+        "preparedOperationSha256": {"$ref": "#/$defs/sha256"},
+        "priorState": {"$ref": "#/$defs/signedVerifierState"},
+        "priorStateRead": {"$ref": "#/$defs/verifierStateRead"},
+        "priorStateReadSha256": {"$ref": "#/$defs/sha256"},
+        "priorStateSha256": {"$ref": "#/$defs/sha256"},
+        "recoveryIdentity": {
+          "$ref": "attestation-verifier-state-service.v1.schema.json#/$defs/recoveryIdentity"
+        },
+        "recoveryIdentitySha256": {"$ref": "#/$defs/sha256"},
+        "recoveryKeySha256": {"$ref": "#/$defs/sha256"},
+        "requestBindingSha256": {"$ref": "#/$defs/sha256"},
+        "roleSeparationEvidence": {
+          "$ref": "public-attestation-config.v2.schema.json#/$defs/signedRoleSeparationEvidence"
+        },
+        "roleSeparationEvidenceSha256": {"$ref": "#/$defs/sha256"},
+        "serviceBinding": {
+          "$ref": "#/$defs/verifierStateServiceBinding"
+        },
+        "signedStoreCommitProof": {
+          "$ref": "#/$defs/signedVerifierStateStoreCommitProof"
+        },
+        "signedStoreCommitProofSha256": {"$ref": "#/$defs/sha256"},
+        "storeAssuranceEvidence": {
+          "$ref": "public-attestation-config.v2.schema.json#/$defs/signedStoreAssuranceEvidence"
+        },
+        "storeAssuranceEvidenceSha256": {"$ref": "#/$defs/sha256"},
+        "transactionIdBase64url": {"$ref": "#/$defs/base64url32"},
+        "verifierChallengeBase64url": {
+          "$ref": "#/$defs/base64url32"
+        },
+        "verifierChallengeSha256": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  }
+}

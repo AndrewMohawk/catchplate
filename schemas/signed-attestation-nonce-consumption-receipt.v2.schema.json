@@ -1,0 +1,276 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/signed-attestation-nonce-consumption-receipt.v2.schema.json",
+  "title": "Serverware signed attestation nonce consumption receipt v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "payload",
+    "payloadSha256",
+    "signatureAlgorithm",
+    "signatureBase64url",
+    "signingKeyId",
+    "signingKeySpkiSha256"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "serverware.signedAttestationNonceConsumptionReceipt/v2"
+    },
+    "payload": {
+      "$ref": "#/$defs/payload"
+    },
+    "payloadSha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "signatureAlgorithm": {
+      "const": "Ed25519"
+    },
+    "signatureBase64url": {
+      "$ref": "#/$defs/base64url64"
+    },
+    "signingKeyId": {
+      "$ref": "#/$defs/sha256"
+    },
+    "signingKeySpkiSha256": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "base64url32": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$"
+    },
+    "base64url64": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{85}[AQgw]$"
+    },
+    "nonceConsumption": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "consumedAtUnix",
+        "nonceSha256",
+        "oneUse",
+        "requestBodySha256",
+        "sequence",
+        "storeIdentitySha256",
+        "tlsBindingSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.publicAttestationNonceConsumption/v1"
+        },
+        "consumedAtUnix": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "nonceSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "oneUse": {
+          "const": true
+        },
+        "requestBodySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "sequence": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "storeIdentitySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "tlsBindingSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "nullableSha256": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/sha256"
+        }
+      ]
+    },
+    "nonceAuthorityState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "assuranceSha256",
+        "authorityEpoch",
+        "authorityGeneration",
+        "highWaterCommitmentSha256",
+        "highWaterSequence",
+        "previousHighWaterCommitmentSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nonceAuthorityState/v1"
+        },
+        "assuranceSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "authorityEpoch": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "authorityGeneration": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "highWaterCommitmentSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "highWaterSequence": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "previousHighWaterCommitmentSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "consumeRequestSha256",
+        "consumedAtUnix",
+        "expiresAtUnix",
+        "finalExternalVerifierChallengeConsumed",
+        "finalExternalVerifierChallengeConsumptionRequired",
+        "nonceAuthorityAssuranceSha256",
+        "nonceAuthorityState",
+        "nonceAuthorityStateSha256",
+        "nonceAuthorityVerifierStateAuthorizationSha256",
+        "nonceConsumption",
+        "nonceConsumptionSha256",
+        "nonceSha256",
+        "previousReceiptSha256",
+        "producerChannelChallengeBase64url",
+        "producerEphemeralKeySha256",
+        "producerInvocationSha256",
+        "receiptIssuedAtUnix",
+        "requestBodySha256",
+        "sequence",
+        "signerChannelBindingSha256",
+        "storeIdentitySha256",
+        "tlsBindingSha256",
+        "transactionIdBase64url"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.attestationNonceConsumptionReceiptPayload/v2"
+        },
+        "consumeRequestSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "consumedAtUnix": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "expiresAtUnix": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "finalExternalVerifierChallengeConsumed": {
+          "const": false
+        },
+        "finalExternalVerifierChallengeConsumptionRequired": {
+          "const": true
+        },
+        "nonceAuthorityAssuranceSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "nonceAuthorityState": {
+          "$ref": "#/$defs/nonceAuthorityState"
+        },
+        "nonceAuthorityStateSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "nonceAuthorityVerifierStateAuthorizationSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "nonceConsumption": {
+          "$ref": "#/$defs/nonceConsumption"
+        },
+        "nonceConsumptionSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "nonceSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "previousReceiptSha256": {
+          "$ref": "#/$defs/nullableSha256"
+        },
+        "producerChannelChallengeBase64url": {
+          "$ref": "#/$defs/base64url32"
+        },
+        "producerEphemeralKeySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "producerInvocationSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "receiptIssuedAtUnix": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "requestBodySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "sequence": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "signerChannelBindingSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "storeIdentitySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "tlsBindingSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "transactionIdBase64url": {
+          "$ref": "#/$defs/base64url32"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "sequence": {
+                "const": 1
+              }
+            },
+            "required": [
+              "sequence"
+            ]
+          },
+          "then": {
+            "properties": {
+              "previousReceiptSha256": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "previousReceiptSha256": {
+                "$ref": "#/$defs/sha256"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "positiveU64": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 18446744073709551615
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  }
+}

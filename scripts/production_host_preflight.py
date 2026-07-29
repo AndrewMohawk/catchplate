@@ -22,7 +22,106 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT / "scripts"))
+EXECUTING_SCRIPT_FD_ENV = "SERVERWARE_EXECUTING_SCRIPT_FD"
+
+
+def _is_retained_import_root(value: object) -> bool:
+    if not isinstance(value, str) or not value.startswith("/proc/self/fd/"):
+        return False
+    descriptor = value.removeprefix("/proc/self/fd/")
+    return descriptor.isdigit() and int(descriptor) >= 3
+
+
+def _is_retained_import_origin(
+    value: object,
+    retained_roots: tuple[str, ...],
+) -> bool:
+    if (
+        not isinstance(value, str)
+        or not retained_roots
+        or any(not _is_retained_import_root(root) for root in retained_roots)
+    ):
+        return False
+    for root in retained_roots:
+        prefix = root + "/"
+        if value.startswith(prefix):
+            suffix = value.removeprefix(prefix)
+            return bool(suffix) and all(
+                component not in {"", ".", ".."}
+                for component in suffix.split("/")
+            )
+    return False
+
+
+class _RetainedImportPath(list[str]):
+    def __init__(self, values: Any) -> None:
+        initial_roots = tuple(values)
+        if (
+            not initial_roots
+            or any(not _is_retained_import_root(value) for value in initial_roots)
+        ):
+            raise ValueError(
+                "launcher retained import roots must be exact /proc/self/fd roots"
+            )
+        super().__init__(initial_roots)
+        self._allowed_roots = initial_roots
+        self._allowed_root_set = frozenset(initial_roots)
+
+    @property
+    def allowed_roots(self) -> tuple[str, ...]:
+        return self._allowed_roots
+
+    def _retained(self, values: Any) -> list[str]:
+        return [
+            value
+            for value in values
+            if value in self._allowed_root_set
+        ]
+
+    def insert(self, index: int, value: str) -> None:
+        if value in self._allowed_root_set and value not in self:
+            super().insert(index, value)
+
+    def append(self, value: str) -> None:
+        if value in self._allowed_root_set and value not in self:
+            super().append(value)
+
+    def extend(self, values: Any) -> None:
+        for value in self._retained(values):
+            self.append(value)
+
+    def __iadd__(self, values: Any) -> "_RetainedImportPath":
+        self.extend(values)
+        return self
+
+    def __setitem__(self, key: Any, value: Any) -> None:
+        if isinstance(key, slice):
+            super().__setitem__(key, self._retained(value))
+            return
+        if value in self._allowed_root_set:
+            super().__setitem__(key, value)
+
+
+def _configure_project_imports() -> str:
+    if os.environ.get(EXECUTING_SCRIPT_FD_ENV) is not None:
+        if not sys.path or any(
+            not _is_retained_import_root(value) for value in sys.path
+        ):
+            raise RuntimeError(
+                "launcher-mode project imports must resolve exclusively through "
+                "retained /proc/self/fd roots"
+            )
+        sys.path = _RetainedImportPath(sys.path)
+        return "launcher-retained-descriptor-roots"
+
+    # Direct execution is for local fixtures and manual readiness only. The
+    # native launcher replaces this path with measured retained descriptors.
+    direct_roots = (str(ROOT / "scripts"), str(ROOT))
+    sys.path[:0] = [path for path in direct_roots if path not in sys.path]
+    return "direct-fixture-paths"
+
+
+PROJECT_IMPORT_MODE = _configure_project_imports()
 
 import generate_production_handoff as handoff  # noqa: E402
 import generate_release_provenance  # noqa: E402
@@ -31,6 +130,34 @@ import prepare_aws_kms_materials  # noqa: E402
 import production_release_input_preflight  # noqa: E402
 import run_production_readiness  # noqa: E402
 import verify_production_policy_identity  # noqa: E402
+
+if PROJECT_IMPORT_MODE == "launcher-retained-descriptor-roots":
+    if not isinstance(sys.path, _RetainedImportPath):
+        raise RuntimeError("launcher-mode project import guard was replaced")
+    retained_import_roots = sys.path.allowed_roots
+    if (
+        not sys.path
+        or any(value not in retained_import_roots for value in sys.path)
+        or any(
+            not _is_retained_import_origin(
+                module.__file__,
+                retained_import_roots,
+            )
+            for module in (
+                handoff,
+                generate_release_provenance,
+                merge_production_images_env,
+                prepare_aws_kms_materials,
+                production_release_input_preflight,
+                run_production_readiness,
+                verify_production_policy_identity,
+            )
+        )
+    ):
+        raise RuntimeError(
+            "launcher-mode project imports escaped their exact retained "
+            "/proc/self/fd roots"
+        )
 
 REQUIRED_MATERIALS = {"broker-kek", "decision-gate-ca"}
 TEST_ONLY_BYPASS_ENV = "SERVERWARE_TEST_ONLY_ALLOW_PREFLIGHT_BYPASS"
@@ -63,6 +190,445 @@ PINNED_EXECUTABLE_COMMAND_SETTINGS = frozenset(
         PRODUCTION_DOCKER_EXECUTABLE_SETTING,
     )
 )
+READINESS_MODE = "readiness"
+READINESS_AUTHORIZATION_SCOPE = "trusted-host-readiness"
+READINESS_FRESHNESS_AUTHORITY = "trusted-host-wall-clock"
+READINESS_LAUNCH_MANIFEST_API_VERSION = "serverware.productionReadinessLaunch/v3"
+READINESS_LAUNCH_AUTHORIZATION_REQUEST_API_VERSION = (
+    "serverware.launchAuthorizationRequest/v2"
+)
+READINESS_LAUNCH_AUTHORIZATION_API_VERSION = "serverware.launchAuthorization/v2"
+READINESS_BOOTSTRAP_RECEIPT_API_VERSION = "serverware.bootstrapReceipt/v3"
+READINESS_BOUNDARY_API_VERSION = "serverware.productionHostReadinessBoundary/v1"
+READINESS_CAPABILITY_SEMANTICS = (
+    "time-bounded-idempotent-readiness-authorization"
+)
+FINAL_AUTHORITY = (
+    "independent-manifest-v6-public-nitro-verifier-and-protected-state"
+)
+GLOBAL_ROLE_REGISTRY_API_VERSION = (
+    "serverware.productionLaunchGlobalRoleRegistry/v1"
+)
+GLOBAL_ROLE_REGISTRY_CLAIM_SCOPE = (
+    "roles-present-in-native-launch-contract"
+)
+GLOBAL_ROLE_NAMES = frozenset(
+    {
+        "launchAuthority",
+        "launchAuthorityWitness",
+        "launchAuthorityWitnessStoreAssurance",
+        "launchAuthorityWitnessTls",
+        "nonceAuthorityAssuranceEvidence",
+        "nonceAuthorityVerifierState",
+        "nonceAuthorityVerifierStateStoreAttestation",
+        "policyActivation",
+        "policyIdentity",
+        "reproducibleBuild",
+    }
+)
+GLOBAL_ROLES_OUTSIDE_CLAIM = (
+    "actionGate",
+    "publicAttestationNonceStore",
+    "publicAttestationProducer",
+    "publicAttestationWitnessStore",
+    "finalVerifier",
+    "nonceAuthorityVerifierStateStoreAssurance",
+    "release",
+    "response",
+    "verifierStateTlsClient",
+    "verifierStateTlsServer",
+)
+LAUNCH_ATTEMPT_JOURNAL_API_VERSION = (
+    "serverware.launchAuthorizationAttemptJournal/v1"
+)
+LAUNCH_ATTEMPT_JOURNAL_DOMAIN = LAUNCH_ATTEMPT_JOURNAL_API_VERSION
+LAUNCH_ATTEMPT_RECOVERY_IDENTITY_DOMAIN = (
+    b"serverware.launchAuthorizationAttemptRecoveryIdentity/v1\0"
+)
+
+
+def launcher_bound_readiness(env: dict[str, str]) -> bool:
+    return (
+        env.get(run_production_readiness.FINAL_LAUNCHER_CONTRACT_ENV)
+        == run_production_readiness.FINAL_LAUNCHER_CONTRACT
+    )
+
+
+def readiness_authority_boundary(
+    *, launcher_evidence_verified: bool
+) -> dict[str, Any]:
+    return {
+        "apiVersion": READINESS_BOUNDARY_API_VERSION,
+        "verificationMode": READINESS_MODE,
+        "launchManifestApiVersion": READINESS_LAUNCH_MANIFEST_API_VERSION,
+        "launchAuthorizationRequestApiVersion": (
+            READINESS_LAUNCH_AUTHORIZATION_REQUEST_API_VERSION
+        ),
+        "launchAuthorizationApiVersion": (
+            READINESS_LAUNCH_AUTHORIZATION_API_VERSION
+        ),
+        "bootstrapReceiptApiVersion": READINESS_BOOTSTRAP_RECEIPT_API_VERSION,
+        "authorizationScope": READINESS_AUTHORIZATION_SCOPE,
+        "freshnessAuthority": READINESS_FRESHNESS_AUTHORITY,
+        "launcherEvidenceVerified": launcher_evidence_verified,
+        "currentFreshnessVerifiedUsingTrustedHostWallClock": (
+            launcher_evidence_verified
+        ),
+        "secureTimeProven": False,
+        "finalNitroExecutionProven": False,
+        "actionAuthority": False,
+        "hostBootstrapEvidenceClassification": (
+            "non-authoritative-readiness-context-only"
+        ),
+        "finalAuthority": FINAL_AUTHORITY,
+    }
+
+
+def validate_readiness_authority_boundary(value: Any) -> dict[str, Any]:
+    expected_fields = set(readiness_authority_boundary(
+        launcher_evidence_verified=False
+    ))
+    if not isinstance(value, dict) or set(value) != expected_fields:
+        raise ValueError("production host readiness boundary is not a closed object")
+    launcher_verified = value.get("launcherEvidenceVerified")
+    if type(launcher_verified) is not bool:
+        raise ValueError("launcher readiness evidence verification flag is invalid")
+    expected = readiness_authority_boundary(
+        launcher_evidence_verified=launcher_verified
+    )
+    if value != expected:
+        raise ValueError(
+            "production host evidence cannot claim secure time, final Nitro "
+            "execution, action authority, or authoritative TEE provenance"
+        )
+    return value
+
+
+def validate_launcher_readiness_evidence(
+    bootstrap_receipt: Any,
+    nonce_rollback_assurance: Any,
+    *,
+    now_unix_seconds: int | None = None,
+) -> dict[str, Any]:
+    if _object_key_present(bootstrap_receipt, "useLimit"):
+        raise ValueError(
+            "launcher-bound readiness rejects obsolete useLimit semantics"
+        )
+    if (
+        not isinstance(bootstrap_receipt, dict)
+        or bootstrap_receipt.get("apiVersion")
+        != READINESS_BOOTSTRAP_RECEIPT_API_VERSION
+        or bootstrap_receipt.get("kind") != "ProductionBootstrapReceipt"
+        or bootstrap_receipt.get("sealed") is not True
+    ):
+        raise ValueError(
+            "launcher-bound readiness requires a sealed bootstrap receipt v3"
+        )
+    authorization = bootstrap_receipt.get("launchAuthorization")
+    if not isinstance(authorization, dict):
+        raise ValueError(
+            "launcher-bound readiness bootstrap receipt has no launch authorization"
+        )
+    request = authorization.get("request")
+    envelope = authorization.get("envelope")
+    statement = envelope.get("statement") if isinstance(envelope, dict) else None
+    witness = (
+        statement.get("monotonicWitness")
+        if isinstance(statement, dict)
+        else None
+    )
+    witness_statement = (
+        witness.get("statement") if isinstance(witness, dict) else None
+    )
+    now = int(time.time()) if now_unix_seconds is None else now_unix_seconds
+    issued_at = (
+        statement.get("issuedAtUnixSeconds")
+        if isinstance(statement, dict)
+        else None
+    )
+    expires_at = (
+        statement.get("expiresAtUnixSeconds")
+        if isinstance(statement, dict)
+        else None
+    )
+    verified_at = authorization.get("verifiedAtUnixSeconds")
+    if (
+        not isinstance(request, dict)
+        or request.get("apiVersion")
+        != READINESS_LAUNCH_AUTHORIZATION_REQUEST_API_VERSION
+        or request.get("authorizationScope") != READINESS_AUTHORIZATION_SCOPE
+        or request.get("freshnessAuthority") != READINESS_FRESHNESS_AUTHORITY
+        or not isinstance(envelope, dict)
+        or envelope.get("apiVersion")
+        != READINESS_LAUNCH_AUTHORIZATION_API_VERSION
+        or not isinstance(statement, dict)
+        or statement.get("authorizationScope") != READINESS_AUTHORIZATION_SCOPE
+        or statement.get("freshnessAuthority") != READINESS_FRESHNESS_AUTHORITY
+        or statement.get("capabilitySemantics")
+        != READINESS_CAPABILITY_SEMANTICS
+        or type(now) is not int
+        or now < 0
+        or type(issued_at) is not int
+        or issued_at < 1
+        or type(expires_at) is not int
+        or expires_at <= issued_at
+        or type(verified_at) is not int
+        or verified_at < issued_at
+        or verified_at > now
+        or now >= expires_at
+        or not isinstance(witness_statement, dict)
+        or witness_statement.get("operation")
+        != "authorize-trusted-host-readiness"
+        or witness_statement.get("issuedAtUnixSeconds") != issued_at
+        or witness_statement.get("expiresAtUnixSeconds") != expires_at
+        or witness_statement.get("witnessKeyId")
+        != request.get("launchAuthorityWitnessKeyId")
+        or witness_statement.get("witnessIdentitySha256")
+        != request.get("launchAuthorityWitnessIdentitySha256")
+        or witness_statement.get("witnessAdministrativeDomainSha256")
+        != request.get("launchAuthorityWitnessAdministrativeDomainSha256")
+        or witness_statement.get("storeAssuranceSha256")
+        != request.get("launchAuthorityWitnessStoreAssuranceSha256")
+        or witness_statement.get("stateTransitionCommitted") is not True
+    ):
+        raise ValueError(
+            "launcher-bound readiness crossed or omitted its signed request, "
+            "authorization, monotonic witness, or store-assurance binding"
+        )
+    verifier_state_service = (
+        nonce_rollback_assurance.get("verifierStateService")
+        if isinstance(nonce_rollback_assurance, dict)
+        else None
+    )
+    required_verifier_state_fields = {
+        "signingPublicKeySpkiDerBase64url",
+        "storeAdministrativeDomainSha256",
+        "storeAssuranceEvidenceSha256",
+        "storeAttestationPublicKeySpkiDerBase64url",
+        "storeIdentitySha256",
+    }
+    if (
+        not isinstance(nonce_rollback_assurance, dict)
+        or nonce_rollback_assurance.get("apiVersion")
+        != run_production_readiness.NONCE_ROLLBACK_ASSURANCE_BINDING_API_VERSION
+        or nonce_rollback_assurance.get("verified") is not True
+        or not isinstance(verifier_state_service, dict)
+        or set(verifier_state_service) != required_verifier_state_fields
+        or any(
+            not isinstance(item, str) or not item
+            for item in verifier_state_service.values()
+        )
+    ):
+        raise ValueError(
+            "launcher-bound readiness lacks verified nonce verifier-state "
+            "store assurance"
+        )
+    request_global_role_registry = _validate_global_role_registry_core(
+        request.get("globalRoleRegistry")
+    )
+    global_role_registry_sha256 = _global_role_registry_sha256(
+        request_global_role_registry
+    )
+    manifest = bootstrap_receipt.get("manifest")
+    if (
+        request.get("globalRoleRegistrySha256")
+        != global_role_registry_sha256
+        or run_production_readiness.SHA256_RE.fullmatch(
+            str(request.get("globalRoleRegistryPinsSha256", ""))
+        )
+        is None
+        or statement.get("globalRoleRegistrySha256")
+        != global_role_registry_sha256
+        or not isinstance(manifest, dict)
+        or manifest.get("sha256") != request.get("manifestSha256")
+    ):
+        raise ValueError(
+            "launcher-bound readiness registry or retained manifest binding "
+            "is absent from the signed request and authorization"
+        )
+    if (
+        request.get("launchAttemptJournalDomain")
+        != LAUNCH_ATTEMPT_JOURNAL_DOMAIN
+        or request.get("launchAttemptRecoveryIdentitySha256")
+        != _launch_attempt_recovery_identity_sha256(request)
+    ):
+        raise ValueError(
+            "launcher-bound readiness launch-attempt recovery is not bound "
+            "to the signed request and retained manifest"
+        )
+    roles = request_global_role_registry["roles"]
+    supplied_role_bindings = {
+        "launchAuthority": statement.get("authorityKeyId"),
+        "launchAuthorityWitness": request.get("launchAuthorityWitnessKeyId"),
+        "launchAuthorityWitnessReceipt": _spki_sha256_from_base64url(
+            authorization.get("witnessPublicKeySpkiDerBase64url"),
+            "launch-authority witness receipt key",
+        ),
+        "nonceAuthorityVerifierState": _spki_sha256_from_base64url(
+            verifier_state_service["signingPublicKeySpkiDerBase64url"],
+            "verifier-state authority key",
+        ),
+        "nonceAuthorityVerifierStateStoreAttestation": (
+            _spki_sha256_from_base64url(
+                verifier_state_service[
+                    "storeAttestationPublicKeySpkiDerBase64url"
+                ],
+                "verifier-state store-assurance key",
+            )
+        ),
+    }
+    if (
+        supplied_role_bindings["launchAuthority"]
+        != roles["launchAuthority"]
+        or supplied_role_bindings["launchAuthorityWitness"]
+        != roles["launchAuthorityWitness"]
+        or supplied_role_bindings["launchAuthorityWitnessReceipt"]
+        != roles["launchAuthorityWitness"]
+        or supplied_role_bindings["nonceAuthorityVerifierState"]
+        != roles["nonceAuthorityVerifierState"]
+        or supplied_role_bindings[
+            "nonceAuthorityVerifierStateStoreAttestation"
+        ]
+        != roles["nonceAuthorityVerifierStateStoreAttestation"]
+    ):
+        raise ValueError(
+            "launcher-bound readiness global role registry is cross-wired "
+            "against supplied launch-path keys"
+        )
+    for field in (
+        "storeAdministrativeDomainSha256",
+        "storeAssuranceEvidenceSha256",
+        "storeIdentitySha256",
+    ):
+        if (
+            run_production_readiness.SHA256_RE.fullmatch(
+                verifier_state_service[field]
+            )
+            is None
+        ):
+            raise ValueError(
+                "launcher-bound readiness verifier-state store assurance "
+                f"{field} is invalid"
+            )
+    return validate_readiness_authority_boundary(
+        readiness_authority_boundary(launcher_evidence_verified=True)
+    )
+
+
+def _spki_sha256_from_base64url(value: Any, label: str) -> str:
+    if not isinstance(value, str) or not value or "=" in value:
+        raise ValueError(f"{label} is not canonical unpadded base64url")
+    try:
+        decoded = base64.b64decode(
+            value + "=" * (-len(value) % 4),
+            altchars=b"-_",
+            validate=True,
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"{label} is not canonical unpadded base64url"
+        ) from exc
+    canonical = base64.urlsafe_b64encode(decoded).decode("ascii").rstrip("=")
+    if not decoded or not hmac.compare_digest(canonical, value):
+        raise ValueError(f"{label} is not canonical unpadded base64url")
+    return "sha256:" + hashlib.sha256(decoded).hexdigest()
+
+
+def _validate_global_role_registry_core(value: Any) -> dict[str, Any]:
+    expected_fields = {
+        "apiVersion",
+        "claimScope",
+        "roles",
+        "rolesOutsideClaim",
+    }
+    if not isinstance(value, dict) or set(value) != expected_fields:
+        raise ValueError(
+            "launcher-bound readiness global role registry core is not closed"
+        )
+    roles = value.get("roles")
+    if (
+        value.get("apiVersion") != GLOBAL_ROLE_REGISTRY_API_VERSION
+        or value.get("claimScope") != GLOBAL_ROLE_REGISTRY_CLAIM_SCOPE
+        or not isinstance(roles, dict)
+        or set(roles) != GLOBAL_ROLE_NAMES
+        or not all(
+            isinstance(role, str)
+            and run_production_readiness.SHA256_RE.fullmatch(role) is not None
+            for role in roles.values()
+        )
+        or len(set(roles.values())) != len(roles)
+        or value.get("rolesOutsideClaim") != list(GLOBAL_ROLES_OUTSIDE_CLAIM)
+    ):
+        raise ValueError(
+            "launcher-bound readiness global role registry core is malformed, "
+            "colliding, or exceeds its explicit claim scope"
+        )
+    return value
+
+
+def _global_role_registry_sha256(value: dict[str, Any]) -> str:
+    return "sha256:" + hashlib.sha256(
+        canonical_json(value).encode("ascii")
+    ).hexdigest()
+
+
+def _launch_attempt_recovery_identity_sha256(
+    request: dict[str, Any],
+) -> str:
+    launcher_nonce = request.get("launcherNonce")
+    witness_challenge = request.get("launchAuthorityWitnessChallenge")
+    if (
+        not isinstance(launcher_nonce, str)
+        or len(launcher_nonce) != 64
+        or any(character not in "0123456789abcdef" for character in launcher_nonce)
+        or not isinstance(witness_challenge, str)
+        or len(witness_challenge) != 64
+        or any(
+            character not in "0123456789abcdef"
+            for character in witness_challenge
+        )
+    ):
+        raise ValueError(
+            "launcher-bound readiness recovery nonce or challenge is invalid"
+        )
+    for field in (
+        "bootIdSha256",
+        "manifestSha256",
+        "globalRoleRegistrySha256",
+    ):
+        if (
+            run_production_readiness.SHA256_RE.fullmatch(
+                str(request.get(field, ""))
+            )
+            is None
+        ):
+            raise ValueError(
+                f"launcher-bound readiness recovery {field} is invalid"
+            )
+    identity = {
+        "domain": LAUNCH_ATTEMPT_JOURNAL_DOMAIN,
+        "launcherNonce": launcher_nonce,
+        "witnessChallenge": witness_challenge,
+        "bootIdSha256": request["bootIdSha256"],
+        "manifestSha256": request["manifestSha256"],
+        "globalRoleRegistrySha256": request[
+            "globalRoleRegistrySha256"
+        ],
+    }
+    return "sha256:" + hashlib.sha256(
+        LAUNCH_ATTEMPT_RECOVERY_IDENTITY_DOMAIN
+        + canonical_json(identity).encode("ascii")
+    ).hexdigest()
+
+
+def _object_key_present(value: Any, key: str) -> bool:
+    if isinstance(value, dict):
+        return key in value or any(
+            _object_key_present(item, key) for item in value.values()
+        )
+    if isinstance(value, list):
+        return any(_object_key_present(item, key) for item in value)
+    return False
 
 
 def secure_directory_failures(path: Path, label: str) -> list[str]:
@@ -235,7 +801,8 @@ def verify_current_preflight_script_binding(env: dict[str, str]) -> dict[str, An
     raw_descriptor = os.environ.get("SERVERWARE_EXECUTING_SCRIPT_FD")
     if not isinstance(raw_descriptor, str) or not raw_descriptor.isdigit():
         raise ValueError(
-            "final production host preflight was not launched from a retained measured script descriptor"
+            "launcher-bound production host readiness preflight was not "
+            "launched from a retained measured script descriptor"
         )
     descriptor = int(raw_descriptor)
     try:
@@ -280,7 +847,7 @@ def verify_current_preflight_script_binding(env: dict[str, str]) -> dict[str, An
     }
 
 
-def reexec_final_preflight_from_measured_descriptors(args: argparse.Namespace) -> None:
+def enforce_readiness_only_preflight_boundary(args: argparse.Namespace) -> None:
     expected_path = args.launcher_trusted_production_env_path
     expected_digest = args.launcher_trusted_production_env_sha256
     if expected_path is None or expected_digest is None:
@@ -303,45 +870,19 @@ def reexec_final_preflight_from_measured_descriptors(args: argparse.Namespace) -
         expected_sha256=expected_digest,
     )
     loaded = run_production_readiness.load_env_bytes(env_bytes, env_path)
-    if loaded.get("SERVERWARE_COMPLETION_VERIFICATION_MODE") != "final":
-        return
-    run_production_readiness.validate_final_launcher_contract(loaded)
-    if os.environ.get("SERVERWARE_EXECUTING_SCRIPT_FD") is not None:
-        return
-    if not sys.platform.startswith("linux"):
-        raise ValueError("final production host preflight descriptor execution requires Linux")
-    executable_manifest = run_production_readiness.parse_executable_digest_manifest(
-        loaded,
-        expected_settings=set(PINNED_EXECUTABLE_COMMAND_SETTINGS),
-    )
-    script_pins = run_production_readiness.parse_python_script_digest_pins(loaded)
-    script_path = str((ROOT / "scripts" / "production_host_preflight.py").resolve())
-    script_setting, script_digest = script_pins[script_path]
-    python_executable = loaded.get(PRODUCTION_PYTHON_EXECUTABLE_SETTING, "")
-    if not Path(python_executable).is_absolute():
-        raise ValueError(f"{PRODUCTION_PYTHON_EXECUTABLE_SETTING} must be absolute")
-    child_env = run_production_readiness.build_final_child_environment(
-        loaded,
-        additions={
-            run_production_readiness.LAUNCHER_TRUSTED_ENV_PATH_INPUT: str(
-                args.launcher_trusted_production_env_path
-            ),
-            run_production_readiness.LAUNCHER_TRUSTED_ENV_SHA256_INPUT: str(
-                args.launcher_trusted_production_env_sha256
-            ),
-        },
-    )
-    result = run_production_readiness.run_measured_python_script(
-        [python_executable, script_path, *sys.argv[1:]],
-        python_setting=PRODUCTION_PYTHON_EXECUTABLE_SETTING,
-        python_expected_digest=executable_manifest[PRODUCTION_PYTHON_EXECUTABLE_SETTING],
-        script_setting=script_setting,
-        script_expected_digest=script_digest,
-        cwd=ROOT,
-        env=child_env,
-        check=False,
-    )
-    raise SystemExit(result.returncode)
+    mode = loaded.get("SERVERWARE_COMPLETION_VERIFICATION_MODE")
+    if mode != READINESS_MODE:
+        raise ValueError(
+            "native production_host_preflight.py requires "
+            "SERVERWARE_COMPLETION_VERIFICATION_MODE=readiness; final "
+            "authority belongs only to the independent Manifest-v6 public "
+            "Nitro verifier"
+        )
+    if not launcher_bound_readiness(loaded):
+        raise ValueError(
+            "launcher-bound production host readiness requires the exact "
+            "descriptor-sealed bootstrap v3 contract"
+        )
 
 
 def snapshot_docker_toolchain(
@@ -392,7 +933,23 @@ def canonical_json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 
 
-def sign_final_preflight(result: dict[str, Any], env: dict[str, str]) -> dict[str, Any]:
+def sign_readiness_preflight(
+    result: dict[str, Any],
+    env: dict[str, str],
+    *,
+    signed_at_unix: int | None = None,
+) -> dict[str, Any]:
+    if (
+        result.get("verification_mode") != READINESS_MODE
+        or result.get("readiness_only") is not True
+        or result.get("final_nitro_execution_proven") is not False
+        or result.get("ok_for_action") is not False
+    ):
+        raise ValueError(
+            "production host preflight signatures are restricted to "
+            "non-actionable readiness evidence"
+        )
+    validate_readiness_authority_boundary(result.get("authority_boundary"))
     private_path = Path(
         env.get(run_production_readiness.PRODUCTION_HOST_PREFLIGHT_SIGNING_PRIVATE_KEY_ENV, "")
     )
@@ -427,6 +984,11 @@ def sign_final_preflight(result: dict[str, Any], env: dict[str, str]) -> dict[st
     key_id = "sha256:" + hashlib.sha256(public_der).hexdigest()
     if key_id != env.get(run_production_readiness.PRODUCTION_HOST_PREFLIGHT_SIGNING_KEY_ID_ENV):
         raise ValueError("production host preflight signing key does not match the hashed env key ID")
+    signing_time = (
+        int(time.time()) if signed_at_unix is None else signed_at_unix
+    )
+    if type(signing_time) is not int or signing_time <= 0:
+        raise ValueError("production host preflight signing time is invalid")
     payload = canonical_json(result).encode("utf-8")
     signature = "ed25519:" + base64.urlsafe_b64encode(private_key.sign(payload)).rstrip(b"=").decode("ascii")
     return {
@@ -434,9 +996,34 @@ def sign_final_preflight(result: dict[str, Any], env: dict[str, str]) -> dict[st
         "algorithm": "ed25519",
         "key_id": key_id,
         "payload_sha256": "sha256:" + hashlib.sha256(payload).hexdigest(),
-        "signed_at_unix": int(time.time()),
+        "signed_at_unix": signing_time,
         "signature": signature,
     }
+
+
+def revalidate_launcher_readiness_at_publication(
+    *,
+    initial_receipt: Any,
+    nonce_rollback_assurance: Any,
+    now_unix_seconds: int,
+) -> None:
+    current_receipt, current_fd = (
+        run_production_readiness.load_sealed_bootstrap_receipt(required=True)
+    )
+    if (
+        current_fd != run_production_readiness.BOOTSTRAP_RECEIPT_FIXED_FD
+        or current_fd != 198
+        or current_receipt != initial_receipt
+    ):
+        raise ValueError(
+            "launcher-bound readiness publication requires the unchanged "
+            "sealed bootstrap receipt on exact descriptor 198"
+        )
+    validate_launcher_readiness_evidence(
+        current_receipt,
+        nonce_rollback_assurance,
+        now_unix_seconds=now_unix_seconds,
+    )
 
 
 def write_result(path: Path, result: dict[str, Any]) -> None:
@@ -818,7 +1405,7 @@ def runtime_trust_materials_check(
         for item in executable_reports
         if item["setting"] == PROOF_COLLECTOR_COMMAND_SETTING
     )
-    if env.get("SERVERWARE_COMPLETION_VERIFICATION_MODE") == "final":
+    if launcher_bound_readiness(env):
         script_reports, script_failures = snapshot_pinned_python_scripts(env)
         status["python_script_digests"] = script_reports
         failures.extend(script_failures)
@@ -891,7 +1478,7 @@ def runtime_trust_materials_check(
         except Exception as exc:
             failures.append(f"response-proof signing material is invalid: {exc}")
 
-    if env.get("SERVERWARE_COMPLETION_VERIFICATION_MODE") == "final":
+    if launcher_bound_readiness(env):
         capture(
             "preflight_signing_public_key",
             Path(
@@ -900,7 +1487,7 @@ def runtime_trust_materials_check(
                     "",
                 )
             ),
-            "production host preflight signing public key",
+            "production host readiness preflight signing public key",
         )
 
     for key in ("tls_files", "anchor_tls_files", "helper_files", "proof_files", "proof_collector_files"):
@@ -933,6 +1520,9 @@ def env_check(
     expected_control_plane_gid: int = CONTROL_PLANE_RUNTIME_UID,
     launcher_trusted_env_path: str | None = None,
     launcher_trusted_env_sha256: str | None = None,
+    launcher_nonce_rollback_assurance_pins: str | None = None,
+    launcher_nonce_rollback_assurance_pins_sha256: str | None = None,
+    launcher_nonce_rollback_assurance_contract_sha256: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, str], list[str]]:
     status: dict[str, Any] = {
         "ok": False,
@@ -967,19 +1557,85 @@ def env_check(
         loaded = run_production_readiness.load_env_bytes(env_bytes, path)
         if run_production_readiness.LAUNCHER_TRUST_INPUT_NAMES & set(loaded):
             raise ValueError("out-of-band launcher trust inputs must not be defined inside the production env")
-        if loaded.get("SERVERWARE_COMPLETION_VERIFICATION_MODE") == "final":
+        if loaded.get("SERVERWARE_COMPLETION_VERIFICATION_MODE") != READINESS_MODE:
+            raise ValueError(
+                "production host preflight accepts only "
+                "SERVERWARE_COMPLETION_VERIFICATION_MODE=readiness; host "
+                "evidence cannot request or satisfy final Nitro verification"
+            )
+        launcher_enforced = launcher_bound_readiness(loaded)
+        if launcher_enforced:
             if "launcher_trust" not in status:
                 raise ValueError(
-                    "final production env requires out-of-band launcher trust path and digest inputs"
+                    "launcher-bound readiness requires out-of-band launcher "
+                    "trust path and digest inputs"
                 )
             status["launcher_trust"]["startup_environment_contract"] = (
                 run_production_readiness.validate_final_launcher_contract(loaded)
             )
-            bootstrap_receipt, _ = run_production_readiness.load_sealed_bootstrap_receipt(
-                required=True
+            bootstrap_receipt, bootstrap_receipt_fd = (
+                run_production_readiness.load_sealed_bootstrap_receipt(
+                    required=True
+                )
             )
+            if (
+                bootstrap_receipt_fd
+                != run_production_readiness.BOOTSTRAP_RECEIPT_FIXED_FD
+                or bootstrap_receipt_fd != 198
+            ):
+                raise ValueError(
+                    "launcher-bound readiness bootstrap receipt must remain "
+                    "on exact sealed descriptor 198"
+                )
             status["launcher_trust"]["bootstrap_receipt"] = bootstrap_receipt
+            status["nonce_rollback_assurance"] = (
+                run_production_readiness.validate_retained_nonce_rollback_assurance(
+                    retained_path=launcher_nonce_rollback_assurance_pins,
+                    expected_pins_sha256=(
+                        launcher_nonce_rollback_assurance_pins_sha256
+                    ),
+                    expected_contract_sha256=(
+                        launcher_nonce_rollback_assurance_contract_sha256
+                    ),
+                    bootstrap_receipt=bootstrap_receipt,
+                    required=True,
+                )
+            )
+            status["launcher_trust"]["nonce_rollback_assurance"] = status[
+                "nonce_rollback_assurance"
+            ]
+            status["authority_boundary"] = validate_launcher_readiness_evidence(
+                bootstrap_receipt,
+                status["nonce_rollback_assurance"],
+            )
+            status["launcher_trust"]["current_freshness_verified"] = True
+            status["launcher_trust"]["freshness_authority"] = (
+                READINESS_FRESHNESS_AUTHORITY
+            )
+            status["launcher_trust"]["secure_time_proven"] = False
             status["executing_script"] = verify_current_preflight_script_binding(loaded)
+        else:
+            if "launcher_trust" in status:
+                raise ValueError(
+                    "out-of-band launcher trust inputs cannot be combined with "
+                    "a manual readiness env"
+                )
+            status["nonce_rollback_assurance"] = (
+                run_production_readiness.validate_retained_nonce_rollback_assurance(
+                    retained_path=launcher_nonce_rollback_assurance_pins,
+                    expected_pins_sha256=(
+                        launcher_nonce_rollback_assurance_pins_sha256
+                    ),
+                    expected_contract_sha256=(
+                        launcher_nonce_rollback_assurance_contract_sha256
+                    ),
+                    bootstrap_receipt=None,
+                    required=False,
+                )
+            )
+            status["authority_boundary"] = validate_readiness_authority_boundary(
+                readiness_authority_boundary(launcher_evidence_verified=False)
+            )
     except Exception as exc:
         status["error"] = str(exc)
         return status, {}, [f"production readiness env is invalid: {exc}"]
@@ -987,17 +1643,20 @@ def env_check(
     if skip_config_gate:
         status["ok"] = True
         return status, loaded, failures
-    final_mode = loaded.get("SERVERWARE_COMPLETION_VERIFICATION_MODE") == "final"
-    if final_mode and (
+    launcher_enforced = launcher_bound_readiness(loaded)
+    if launcher_enforced and (
         expected_control_plane_uid != run_production_readiness.FINAL_CONTROL_PLANE_UID
         or expected_control_plane_gid != run_production_readiness.FINAL_CONTROL_PLANE_GID
     ):
-        status["error"] = "final control-plane UID/GID must be fixed at 65532:65532"
+        status["error"] = (
+            "launcher-bound readiness control-plane UID/GID must be fixed at "
+            "65532:65532"
+        )
         return status, loaded, [status["error"]]
     try:
         env = (
             run_production_readiness.build_final_child_environment(loaded)
-            if final_mode
+            if launcher_enforced
             else {**os.environ, **loaded}
         )
     except ValueError as exc:
@@ -1018,7 +1677,11 @@ def env_check(
         python_executable = loaded.get(PRODUCTION_PYTHON_EXECUTABLE_SETTING, "")
         if not Path(python_executable).is_absolute():
             raise ValueError(f"{PRODUCTION_PYTHON_EXECUTABLE_SETTING} must be absolute")
-        script_pins = run_production_readiness.parse_python_script_digest_pins(loaded) if final_mode else {}
+        script_pins = (
+            run_production_readiness.parse_python_script_digest_pins(loaded)
+            if launcher_enforced
+            else {}
+        )
     except Exception as exc:
         status["error"] = str(exc)
         return status, loaded, [f"production readiness config gate executable pin is invalid: {exc}"]
@@ -1042,7 +1705,7 @@ def env_check(
         "check": False,
         "text": True,
     }
-    if final_mode:
+    if launcher_enforced:
         script_path = str((ROOT / "scripts" / "verify_production_readiness.py").resolve())
         script_setting, script_digest = script_pins[script_path]
         result = run_production_readiness.run_measured_python_script(
@@ -1319,9 +1982,9 @@ def release_security_evidence_check(
     status: dict[str, Any] = {"ok": False, "secret_values_redacted": True}
     failures: list[str] = []
     try:
-        final_mode = production_env.get("SERVERWARE_COMPLETION_VERIFICATION_MODE") == "final"
+        launcher_enforced = launcher_bound_readiness(production_env)
         trust_roots: dict[str, dict[str, Any]] = {}
-        if final_mode:
+        if launcher_enforced:
             trust_roles = {
                 "policy_identity": (
                     args.policy_trusted_public_key,
@@ -1391,7 +2054,7 @@ def release_security_evidence_check(
         bench = release_artifacts.get("bench") or {}
         if bench.get("policy_hash") != identity["policyHash"]:
             raise ValueError("decision-gate benchmark policy hash does not match the identity-verified policy")
-        if final_mode and identity.get("trustedPublicKeySha256") != trust_roots[
+        if launcher_enforced and identity.get("trustedPublicKeySha256") != trust_roots[
             "policy_identity"
         ]["sha256"]:
             raise ValueError("policy identity verifier did not use the snapshotted trust-root bytes")
@@ -1408,7 +2071,7 @@ def release_security_evidence_check(
             raise ValueError("policy activation verification is not production evidence")
         if activation["report"].get("candidate_policy_hash") != identity["policyHash"]:
             raise ValueError("policy activation candidate hash does not match the identity-verified policy")
-        if final_mode and activation.get("trustedPublicKeySha256") != trust_roots[
+        if launcher_enforced and activation.get("trustedPublicKeySha256") != trust_roots[
             "policy_activation"
         ]["sha256"]:
             raise ValueError("policy activation verifier did not use the snapshotted trust-root bytes")
@@ -1452,7 +2115,7 @@ def release_security_evidence_check(
         )
         if reproduced_gate.get("rust_binary_sha256") != production_gate.get("binary_digest"):
             raise ValueError("reproducible-build Rust binary digest does not match the production build")
-        if final_mode and reproducibility.get("trustedPublicKeySha256") != trust_roots[
+        if launcher_enforced and reproducibility.get("trustedPublicKeySha256") != trust_roots[
             "reproducible_build"
         ]["sha256"]:
             raise ValueError("reproducible-build verifier did not use the snapshotted trust-root bytes")
@@ -1568,7 +2231,7 @@ def production_compose_check(
         ]
         docker_env = run_production_readiness.docker_subprocess_environment(
             run_production_readiness.build_final_child_environment(production_env)
-            if production_env.get("SERVERWARE_COMPLETION_VERIFICATION_MODE") == "final"
+            if launcher_bound_readiness(production_env)
             else dict(os.environ),
             Path(docker_toolchain[run_production_readiness.DOCKER_UNIX_SOCKET_ENV]),
         )
@@ -1576,9 +2239,9 @@ def production_compose_check(
             docker_toolchain[run_production_readiness.DOCKER_UNIX_SOCKET_ENV]
         )
         docker_endpoint = f"unix://{docker_socket_path}"
-        final_mode = production_env.get("SERVERWARE_COMPLETION_VERIFICATION_MODE") == "final"
+        launcher_enforced = launcher_bound_readiness(production_env)
         daemon_before = None
-        if final_mode:
+        if launcher_enforced:
             daemon_before = run_production_readiness.verify_docker_daemon_identity(
                 docker_executable=Path(docker_executable),
                 docker_sha256=executable_manifest[PRODUCTION_DOCKER_EXECUTABLE_SETTING],
@@ -1640,7 +2303,7 @@ def production_compose_check(
         )
         status["runtime_model"] = runtime_model
         status["runtime_model_sha256"] = runtime_model["sha256"]
-        if final_mode:
+        if launcher_enforced:
             daemon_after = run_production_readiness.verify_docker_daemon_identity(
                 docker_executable=Path(docker_executable),
                 docker_sha256=executable_manifest[PRODUCTION_DOCKER_EXECUTABLE_SETTING],
@@ -1755,7 +2418,12 @@ def kms_materials_check(path: Path) -> tuple[dict[str, Any], list[str]]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Preflight the production host before running Serverware's final readiness proof.")
+    parser = argparse.ArgumentParser(
+        description=(
+            "Preflight trusted-host readiness inputs without claiming final "
+            "Nitro execution or action authority."
+        )
+    )
     parser.add_argument("--env-file", default="ops/production-readiness.env")
     parser.add_argument(
         "--launcher-trusted-production-env-path",
@@ -1764,6 +2432,18 @@ def main() -> None:
     parser.add_argument(
         "--launcher-trusted-production-env-sha256",
         default=os.getenv(run_production_readiness.LAUNCHER_TRUSTED_ENV_SHA256_INPUT),
+    )
+    parser.add_argument(
+        "--launcher-nonce-rollback-assurance-pins",
+        default=None,
+    )
+    parser.add_argument(
+        "--launcher-nonce-rollback-assurance-pins-sha256",
+        default=None,
+    )
+    parser.add_argument(
+        "--launcher-nonce-rollback-assurance-contract-sha256",
+        default=None,
     )
     parser.add_argument("--compose-file", default="docker-compose.production.yml")
     parser.add_argument("--production-images-env", default=".tmp/production-images.env")
@@ -1791,12 +2471,16 @@ def main() -> None:
     parser.add_argument("--expected-control-plane-gid", type=int, default=CONTROL_PLANE_RUNTIME_UID)
     parser.add_argument("--config-out", default=".tmp/production-host-preflight-config.json")
     parser.add_argument("--out", default=".tmp/production-host-preflight.json")
-    parser.add_argument("--skip-host-check", action="store_true", help="Test-only bypass for non-Nitro local fixture checks.")
+    parser.add_argument(
+        "--skip-host-check",
+        action="store_true",
+        help="Test-only bypass for local trusted-host readiness fixture checks.",
+    )
     parser.add_argument("--skip-config-gate", action="store_true", help="Only validate env parsing, not the production config gate.")
     args = parser.parse_args()
     enforce_test_only_bypass(args)
     try:
-        reexec_final_preflight_from_measured_descriptors(args)
+        enforce_readiness_only_preflight_boundary(args)
     except Exception as exc:
         print(f"production host preflight launcher error: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
@@ -1812,6 +2496,15 @@ def main() -> None:
         expected_control_plane_gid=args.expected_control_plane_gid,
         launcher_trusted_env_path=args.launcher_trusted_production_env_path,
         launcher_trusted_env_sha256=args.launcher_trusted_production_env_sha256,
+        launcher_nonce_rollback_assurance_pins=(
+            args.launcher_nonce_rollback_assurance_pins
+        ),
+        launcher_nonce_rollback_assurance_pins_sha256=(
+            args.launcher_nonce_rollback_assurance_pins_sha256
+        ),
+        launcher_nonce_rollback_assurance_contract_sha256=(
+            args.launcher_nonce_rollback_assurance_contract_sha256
+        ),
     )
     failures.extend(env_failures)
     runtime_trust, runtime_trust_failures = runtime_trust_materials_check(
@@ -1875,10 +2568,30 @@ def main() -> None:
         "apiVersion": "serverware.productionHostPreflight/v1",
         "kind": "ProductionHostPreflight",
         "ok": not failures,
+        "verification_mode": READINESS_MODE,
+        "readiness_only": True,
+        "final_nitro_execution_proven": False,
+        "ok_for_action": False,
         "generated_at_unix": int(time.time()),
+        "authority_boundary": env.get(
+            "authority_boundary",
+            validate_readiness_authority_boundary(
+                readiness_authority_boundary(launcher_evidence_verified=False)
+            ),
+        ),
         "checks": {
             "host": host,
             "production_env": env,
+            "nonce_rollback_assurance": env.get(
+                "nonce_rollback_assurance",
+                {
+                    "apiVersion": (
+                        run_production_readiness.NONCE_ROLLBACK_ASSURANCE_BINDING_API_VERSION
+                    ),
+                    "enforcement": "not-native-launcher-enforced",
+                    "verified": False,
+                },
+            ),
             "runtime_trust_materials": runtime_trust,
             "oauth_secret_mounts": oauth_secret_mounts,
             "response_signing_key_custody": response_signing_key_custody,
@@ -1894,12 +2607,27 @@ def main() -> None:
         "next_command": "make run-production-readiness PRODUCTION_READINESS_ENV=ops/production-readiness.env" if not failures else None,
         "secret_values_redacted": True,
     }
-    if loaded_env.get("SERVERWARE_COMPLETION_VERIFICATION_MODE") == "final":
+    if launcher_bound_readiness(loaded_env):
         try:
-            result["authenticity"] = sign_final_preflight(result, loaded_env)
+            publication_time = int(time.time())
+            revalidate_launcher_readiness_at_publication(
+                initial_receipt=env.get("launcher_trust", {}).get(
+                    "bootstrap_receipt"
+                ),
+                nonce_rollback_assurance=env.get("nonce_rollback_assurance"),
+                now_unix_seconds=publication_time,
+            )
+            result["authenticity"] = sign_readiness_preflight(
+                result,
+                loaded_env,
+                signed_at_unix=publication_time,
+            )
         except Exception as exc:
             result["ok"] = False
-            result["failures"].append(f"production host preflight authenticity signing failed: {exc}")
+            result["failures"].append(
+                "production host readiness preflight authenticity signing "
+                f"failed: {exc}"
+            )
             result["next_command"] = None
     write_result(Path(args.out), result)
     print(canonical_json(result))

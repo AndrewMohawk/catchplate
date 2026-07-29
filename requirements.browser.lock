@@ -1,0 +1,27 @@
+# Hash-locked browser-only preparation closure for CPython 3.11.
+# Do not install this dependency set into the production runtime.
+greenlet==3.2.2 \
+    --hash=sha256:3091bc45e6b0c73f225374fefa1536cd91b1e987377b12ef5b19129b07d93ebe \
+    --hash=sha256:71566302219b17ca354eb274dfd29b8da3c268e41b646f330e324e3967546a74 \
+    --hash=sha256:dcb9cebbf3f62cb1e5afacae90761ccce0effb3adaa32339a0670fe7805d8068
+    # via playwright
+packaging==26.0 \
+    --hash=sha256:b36f1fef9334a5588b4166f8bcd26a14e521f2b55e6b9de3aaa80d3ff7a37529
+    # via Serverware browser preparation
+playwright==1.61.0 \
+    --hash=sha256:009588c2a7e499bc5a8b425b61fa65490968bbda9cd69e0cf2cff10f8304659a \
+    --hash=sha256:35c6cc4589a5d00964a59d7b3e59641e0aac0c02f15479a7af77d20f6bc79597 \
+    --hash=sha256:372d55a6f1248fa1dd47599686980cb8fb5bbe6fcda59eab793eb657c11d8a9b \
+    --hash=sha256:54f3b39f6eab832e33458c1dd7da0b5682aedab3b09ae731b5c59fa12fd2024e \
+    --hash=sha256:93454322ade8c11d5d6c211bfd91bdfb9ffb4810e3e026371bcbc4bec1b7ee4c \
+    --hash=sha256:9f7de4536088d12037c13a52b7ea34b59270b78926bb56935070597ffac6b1af \
+    --hash=sha256:e9fcbffcf557a8620fdedd92491eb59a32d18e23d6f3b4f6214b952be324fe51 \
+    --hash=sha256:ff138c3a604f69911e9d42fd036e55c2a171e5616edf04c1e7f60a2a285540b0
+    # via Serverware browser preparation
+pyee==13.0.1 \
+    --hash=sha256:af2f8fede4171ef667dfded53f96e2ed0d6e6bd7ee3bb46437f77e3b57689228
+    # via playwright
+typing-extensions==4.16.0 \
+    --hash=sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8 \
+    --hash=sha256:dc983d19a509c94dba722ee6abd33940f7c05a89e243c47e907eb4db6f1a43e5
+    # via pyee

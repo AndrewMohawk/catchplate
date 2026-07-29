@@ -1,0 +1,247 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/production-stable-release-issuer-request.v1.schema.json",
+  "title": "Serverware stable release issuer request v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "attestationPins",
+    "containmentBoundary",
+    "deploymentMode",
+    "fixtureMode",
+    "limits",
+    "releaseIdentity",
+    "releaseIdentitySha256",
+    "signerBoundary"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "serverware.productionStableReleaseIssuerRequest/v1"
+    },
+    "attestationPins": {
+      "$ref": "#/$defs/attestationPins"
+    },
+    "containmentBoundary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "producerMakesContainmentClaim",
+        "requiredLauncherContract"
+      ],
+      "properties": {
+        "producerMakesContainmentClaim": {
+          "const": false
+        },
+        "requiredLauncherContract": {
+          "const": "serverware.publicAttestationExecutionSandbox/v2"
+        }
+      }
+    },
+    "deploymentMode": {
+      "enum": [
+        "fixture-non-production-retained-fd",
+        "production-retained-fd"
+      ]
+    },
+    "fixtureMode": {
+      "type": "boolean"
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "maxSignerRequestBytes",
+        "maxSignerResponseBytes",
+        "signerTimeoutMilliseconds"
+      ],
+      "properties": {
+        "maxSignerRequestBytes": {
+          "type": "integer",
+          "minimum": 4096,
+          "maximum": 2097152
+        },
+        "maxSignerResponseBytes": {
+          "type": "integer",
+          "minimum": 256,
+          "maximum": 4096
+        },
+        "signerTimeoutMilliseconds": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 30000
+        }
+      }
+    },
+    "releaseIdentity": {
+      "$ref": "release-identity.v1.schema.json"
+    },
+    "releaseIdentitySha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "signerBoundary": {
+      "type": "object",
+      "description": "Retained-FD transport requires a trusted measured launcher. The issuer validates close-on-exec pipe object types and directions immediately before use and requires the authorization nonce on an exact sealed read-only 32-byte memfd, but integer FD values cannot authenticate the signer peer or prevent a malicious launcher from substituting open-file descriptions.",
+      "additionalProperties": false,
+      "required": [
+        "algorithm",
+        "keyId",
+        "preauthorization",
+        "requestFd",
+        "responseFd",
+        "signatureDomain",
+        "transport"
+      ],
+      "properties": {
+        "algorithm": {
+          "const": "Ed25519"
+        },
+        "keyId": {
+          "$ref": "#/$defs/sha256"
+        },
+        "preauthorization": {
+          "$ref": "#/$defs/signerPreauthorization"
+        },
+        "requestFd": {
+          "$ref": "#/$defs/retainedFd",
+          "description": "Issuer-side writable endpoint of a close-on-exec pipe created and retained by the trusted measured launcher."
+        },
+        "responseFd": {
+          "$ref": "#/$defs/retainedFd",
+          "description": "Issuer-side readable endpoint of a close-on-exec pipe created and retained by the trusted measured launcher."
+        },
+        "signatureDomain": {
+          "const": "serverware.stableReleaseStatement/v1"
+        },
+        "transport": {
+          "const": "canonical-json-lines-over-retained-fd/v1"
+        }
+      }
+    }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "deploymentMode": {"const": "production-retained-fd"},
+        "fixtureMode": {"const": false}
+      }
+    },
+    {
+      "properties": {
+        "deploymentMode": {
+          "const": "fixture-non-production-retained-fd"
+        },
+        "fixtureMode": {"const": true}
+      }
+    }
+  ],
+  "$defs": {
+    "attestationPins": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "descriptorSha256",
+        "executableSha256",
+        "immutableConfigSha256",
+        "nonceStoreIdentitySha256",
+        "nonceStoreKeySpkiSha256",
+        "producerRequestSchemaSha256",
+        "sandboxDescriptorSha256",
+        "sandboxLauncherSha256",
+        "trustRootsSha256",
+        "witnessStoreIdentitySha256",
+        "witnessStoreKeySpkiSha256"
+      ],
+      "properties": {
+        "descriptorSha256": {"$ref": "#/$defs/sha256"},
+        "executableSha256": {"$ref": "#/$defs/sha256"},
+        "immutableConfigSha256": {"$ref": "#/$defs/sha256"},
+        "nonceStoreIdentitySha256": {"$ref": "#/$defs/sha256"},
+        "nonceStoreKeySpkiSha256": {"$ref": "#/$defs/sha256"},
+        "producerRequestSchemaSha256": {"$ref": "#/$defs/sha256"},
+        "sandboxDescriptorSha256": {"$ref": "#/$defs/sha256"},
+        "sandboxLauncherSha256": {"$ref": "#/$defs/sha256"},
+        "trustRootsSha256": {"$ref": "#/$defs/sha256"},
+        "witnessStoreIdentitySha256": {"$ref": "#/$defs/sha256"},
+        "witnessStoreKeySpkiSha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "retainedFd": {
+      "type": "integer",
+      "description": "A launcher-assigned descriptor number only. Schema validation cannot establish object type, direction, open-file identity, or peer identity; runtime validation and a trusted measured launcher are mandatory.",
+      "minimum": 3,
+      "maximum": 1048575
+    },
+    "signerPreauthorization": {
+      "type": "object",
+      "description": "Immutable one-use signing target approved before invocation. The independently provisioned signer record additionally binds the canonical digest of this complete issuer request. A production signer requires an external rollback-resistant signer-owned backend for authorization, consumption, authorization-sequence high water, and the rollbackEpoch/releaseGeneration/policySequence high-water tuple. Process-local fixtures cannot prove restart or rollback resistance.",
+      "additionalProperties": false,
+      "required": [
+        "authorizationExpiresAtUnix",
+        "authorizationIdBase64url",
+        "authorizationIssuedAtUnix",
+        "authorizationNonceSha256",
+        "authorizationSequence",
+        "minimumPolicySequence",
+        "minimumReleaseGeneration",
+        "minimumRollbackEpoch",
+        "releaseIdentitySha256",
+        "statementPayloadSha256",
+        "useLimit"
+      ],
+      "properties": {
+        "authorizationExpiresAtUnix": {
+          "$ref": "#/$defs/u64Positive"
+        },
+        "authorizationIdBase64url": {
+          "$ref": "#/$defs/base64url32"
+        },
+        "authorizationIssuedAtUnix": {
+          "$ref": "#/$defs/u64Positive"
+        },
+        "authorizationNonceSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "authorizationSequence": {
+          "$ref": "#/$defs/u64Positive"
+        },
+        "minimumPolicySequence": {
+          "$ref": "#/$defs/u64Positive"
+        },
+        "minimumReleaseGeneration": {
+          "$ref": "#/$defs/u64Positive"
+        },
+        "minimumRollbackEpoch": {
+          "$ref": "#/$defs/u64"
+        },
+        "releaseIdentitySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "statementPayloadSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "useLimit": {
+          "const": 1
+        }
+      }
+    },
+    "base64url32": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "u64": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 18446744073709551615
+    },
+    "u64Positive": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 18446744073709551615
+    }
+  }
+}

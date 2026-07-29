@@ -72,8 +72,9 @@ COPY policies /runtime/app/policies
 COPY security /runtime/app/security
 COPY docker-compose.apparmor.yml /runtime/app/docker-compose.apparmor.yml
 RUN --network=none printf 'serverware.productionImage/v1\n' > /runtime/app/.serverware-production-image \
-    && mkdir -p /runtime/custody-trust \
+    && mkdir -p /runtime/custody-trust /runtime/gate-materials \
     && chmod 0755 /runtime/custody-trust \
+    && chmod 0750 /runtime/gate-materials \
     && chmod 0444 /runtime/app/.serverware-production-image \
     && find /runtime -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +
 
@@ -99,6 +100,7 @@ ENV PYTHONUNBUFFERED=1 \
 COPY --from=runtime-tree --chown=nonroot:nonroot /runtime/deps /deps
 COPY --from=runtime-tree --chown=nonroot:nonroot /runtime/app /app
 COPY --from=runtime-tree --chown=65532:65532 --chmod=0755 /runtime/custody-trust /run/serverware/custody-trust
+COPY --from=runtime-tree --chown=65532:65532 --chmod=0750 /runtime/gate-materials /run/serverware/gate
 WORKDIR /app
 
 EXPOSE 3000

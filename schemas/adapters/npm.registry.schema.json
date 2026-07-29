@@ -31,6 +31,43 @@
         ]
       }
     },
+    "contentTypes": {
+      "type": "array",
+      "maxItems": 4,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 3,
+        "maxLength": 127,
+        "pattern": "^[a-z0-9!#$&^_.+-]+/[a-z0-9!#$&^_.+-]+$"
+      }
+    },
+    "valueRules": {
+      "type": "array",
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "https://serverware.local/schemas/policy-bundle.v1.schema.json#/$defs/requestValueRule"
+      }
+    },
+    "credentialBinding": {
+      "type": "object",
+      "required": ["credentialType", "provider", "subjects", "secretClass"],
+      "additionalProperties": false,
+      "properties": {
+        "credentialType": {"const": "static"},
+        "provider": {"const": "npm"},
+        "subjects": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "maxLength": 512}
+        },
+        "secretClass": {"enum": ["automationToken", "granularAccessToken", "legacyToken"]}
+      },
+      "$comment": "Admission must exactly match provider, npm account subject, and token class against the referenced non-OAuth credential."
+    },
     "errorResponse": {
       "type": "object",
       "additionalProperties": false,
@@ -46,38 +83,52 @@
     "request": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["allowedHeaders", "allowedQueryKeys", "allowedMediaTypes", "maxBodyBytes"],
+      "required": ["allowedHeaders", "allowedQueryKeys", "allowedMediaTypes", "maxBodyBytes", "valueRules"],
       "properties": {
         "allowedHeaders": {
           "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "https://serverware.local/schemas/policy-bundle.v1.schema.json#/$defs/adapterRequestHeaderName"
+          }
+        },
+        "discardHeaders": {
+          "type": "array",
+          "default": [],
+          "maxItems": 16,
           "uniqueItems": true,
           "items": {
             "type": "string",
             "minLength": 1,
             "maxLength": 128,
-            "pattern": "^[a-z0-9!#$%&'*+.^_`|~-]+$"
+            "pattern": "^[a-z0-9!#$%&'*+.^`|~-]+$"
           }
         },
         "allowedQueryKeys": {
           "type": "array",
+          "maxItems": 64,
           "uniqueItems": true,
           "items": {"type": "string", "minLength": 1, "maxLength": 256}
         },
         "allowedMediaTypes": {
           "type": "array",
+          "maxItems": 16,
           "uniqueItems": true,
           "items": {
             "type": "string",
             "pattern": "^[a-z0-9!#$%&'*+.^_`|~-]+/[a-z0-9!#$%&'*+.^_`|~-]+$"
           }
         },
-        "maxBodyBytes": {"type": "integer", "minimum": 0, "maximum": 16777216}
+        "maxBodyBytes": {"type": "integer", "minimum": 0, "maximum": 16777216},
+        "valueRules": {"$ref": "#/$defs/valueRules"}
       }
     }
   },
-  "required": ["request", "operations", "response"],
+  "required": ["credentialBinding", "request", "operations", "response"],
   "additionalProperties": false,
   "properties": {
+    "credentialBinding": {"$ref": "#/$defs/credentialBinding"},
     "request": {"$ref": "#/$defs/request"},
     "operations": {
       "type": "array",
@@ -91,11 +142,31 @@
     },
     "response": {
       "type": "object",
-      "required": ["mode", "maxBodyBytes", "allowedFields", "allowedHeaders", "error"],
+      "required": ["mode", "maxBodyBytes", "contentTypes", "allowedHeaders", "error"],
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {"properties": {"mode": {"const": "json"}}, "required": ["mode"]},
+          "then": {
+            "required": ["allowedFields"],
+            "properties": {"contentTypes": {"const": ["application/json"]}}
+          }
+        },
+        {
+          "if": {"properties": {"mode": {"const": "headersOnly"}}, "required": ["mode"]},
+          "then": {
+            "properties": {
+              "maxBodyBytes": {"const": 0},
+              "contentTypes": {"const": []}
+            },
+            "not": {"required": ["allowedFields"]}
+          }
+        }
+      ],
       "properties": {
-        "mode": {"enum": ["headersOnly", "json", "any", "stream"]},
-        "maxBodyBytes": {"type": "integer", "minimum": 1, "maximum": 1048576},
+        "mode": {"enum": ["headersOnly", "json"]},
+        "maxBodyBytes": {"type": "integer", "minimum": 0, "maximum": 1048576},
+        "contentTypes": {"$ref": "#/$defs/contentTypes"},
         "allowedFields": {"$ref": "#/$defs/allowedFields"},
         "allowedHeaders": {"$ref": "#/$defs/allowedHeaders"},
         "error": {"$ref": "#/$defs/errorResponse"}
@@ -103,6 +174,18 @@
     }
   },
   "allOf": [
+    {
+      "properties": {
+        "request": {
+          "required": ["discardHeaders"],
+          "properties": {
+            "discardHeaders": {
+              "contains": {"const": "npm-session"}
+            }
+          }
+        }
+      }
+    },
     {
       "if": {
         "properties": {

@@ -1,327 +1,139 @@
 #!/usr/bin/env python3
-"""Validate the agent-trust wheelhouse in a networkless Docker clean room.
-
-This is checksum-closed local validation. It does not establish source
-provenance, image provenance, independent execution, or TEE attestation.
-"""
+"""Exercise the sealed clean-room payload already present in its OCI image."""
 
 from __future__ import annotations
 
 import argparse
+import base64
+import configparser
+import csv
+import email.parser
+import email.policy
 import hashlib
+import io
 import json
 import os
 import re
-import secrets
-import shutil
+import selectors
+import signal
 import stat
 import subprocess
 import sys
-import tempfile
-from pathlib import Path
+import time
+import zipfile
+from pathlib import Path, PurePosixPath
 from typing import Any
 
+from packaging.requirements import InvalidRequirement, Requirement
+from packaging.utils import (
+    InvalidName,
+    InvalidWheelFilename,
+    canonicalize_name,
+    parse_wheel_filename,
+)
+from packaging.version import InvalidVersion, Version
 
-ROOT = Path(__file__).resolve().parent.parent
-VERIFIER = ROOT / "scripts" / "verify_offline_artifact_manifest.py"
-DEFAULT_IMAGE = "docker.io/library/python:3.11.15-slim-bookworm"
-MANIFEST_NAME = "wheelhouse-manifest.json"
-CHECKSUMS_NAME = "SHA256SUMS"
-REQUIREMENTS_NAME = "requirements.lock"
-EXPECTED_LABEL = "serverware-enrollment-cpython311-linux-amd64"
-EXPECTED_TARGET = {
-    "implementation": "cp",
-    "python_tag": "cp311",
-    "platform_tag": "manylinux2014_x86_64",
-    "architecture": "amd64",
-}
+
+SEALED_ROOT = Path("/opt/serverware/clean-room")
+WHEELHOUSE = SEALED_ROOT / "wheelhouse"
+INSTALLED = SEALED_ROOT / "installed"
+PAYLOAD_MANIFEST = SEALED_ROOT / "payload-manifest.json"
+WHEELHOUSE_MANIFEST = WHEELHOUSE / "wheelhouse-manifest.json"
+CHECKSUMS = WHEELHOUSE / "SHA256SUMS"
+PACKAGE_CONTRACT = SEALED_ROOT / "package-install-contract.json"
+RESULT_PREFIX = "SERVERWARE_CLEAN_ROOM_RESULT="
+PAYLOAD_VERSION = "serverware.cleanRoomPayloadManifest/v1"
+WHEELHOUSE_VERSION = "serverware.cleanRoomWheelhouseManifest/v3"
+CONTRACT_VERSION = "serverware.cleanRoomInstallContract/v5"
+RESULT_VERSION = "serverware.agentTrustCleanRoomResult/v5"
 EXPECTED_UID = 65532
 EXPECTED_GID = 65532
-TMPFS_BYTES = 256 * 1024 * 1024
-RESULT_PREFIX = "SERVERWARE_CLEAN_ROOM_RESULT="
-ASSURANCE_CLASSIFICATION = "checksum-closed-local-clean-room-validation"
-PACKAGE_WHEEL_RE = re.compile(
-    r"^serverware_enrollment-[A-Za-z0-9][A-Za-z0-9._+]*-py3-none-any\.whl$"
-)
-LOCK_REQUIREMENT_RE = re.compile(
-    r"^([A-Za-z0-9][A-Za-z0-9._-]*)==([A-Za-z0-9][A-Za-z0-9._+!-]*)"
-)
-OFFICIAL_IMAGE_RE = re.compile(
-    r"^docker\.io/library/python:"
-    r"3\.11\.[0-9]+-slim-(?:bookworm|bullseye)"
-    r"(?:@sha256:[0-9a-f]{64})?$"
-)
+MAX_JSON_BYTES = 16 * 1024 * 1024
+MAX_FILE_BYTES = 256 * 1024 * 1024
+MAX_FILES = 20_000
+MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
+MAX_OUTPUT_BYTES = 4 * 1024 * 1024
 SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
-
-
-CONTAINER_SCRIPT = r"""
-set -eu
-
-fail() {
-    printf '%s\n' "$1" >&2
-    exit 1
-}
-
-run_logged() {
-    label="$1"
-    shift
-    if ! "$@" >"/work/${label}.log" 2>&1; then
-        printf '%s\n' "${label} failed:" >&2
-        cat "/work/${label}.log" >&2
-        exit 1
-    fi
-}
-
-[ "$(id -u)" = "${EXPECTED_UID}" ] || fail "clean-room process is not the required non-root UID"
-[ "$(id -g)" = "${EXPECTED_GID}" ] || fail "clean-room process is not the required non-root GID"
-
-if (umask 077; : > /wheelhouse/.serverware-write-probe) 2>/work/mount-write-probe.log; then
-    rm -f /wheelhouse/.serverware-write-probe
-    fail "wheelhouse bind mount is writable"
-fi
-
-mkdir -p /work/home /work/tmp
-
-python3 -I - <<'PY'
-from __future__ import annotations
-
-import json
-import os
-import platform
-import re
-import sys
-from pathlib import Path
-
-
-def mount_record(target: str) -> dict[str, object]:
-    for raw in Path("/proc/self/mountinfo").read_text(encoding="ascii").splitlines():
-        before, separator, after = raw.partition(" - ")
-        if not separator:
-            continue
-        fields = before.split()
-        if len(fields) < 6 or fields[4] != target:
-            continue
-        trailing = after.split()
-        if len(trailing) < 3:
-            raise SystemExit(f"mountinfo record for {target} is incomplete")
-        return {
-            "filesystem": trailing[0],
-            "options": sorted(set(fields[5].split(","))),
-            "superOptions": sorted(set(trailing[2].split(","))),
-        }
-    raise SystemExit(f"required mount is missing: {target}")
-
-
-def tmpfs_size(record: dict[str, object]) -> int:
-    for option in record["superOptions"]:
-        if not option.startswith("size="):
-            continue
-        value = option.removeprefix("size=")
-        match = re.fullmatch(r"([0-9]+)([kKmMgG]?)", value)
-        if match is None:
-            raise SystemExit(f"tmpfs size is not parseable: {value}")
-        scale = {"": 1, "k": 1024, "m": 1024**2, "g": 1024**3}
-        return int(match.group(1)) * scale[match.group(2).lower()]
-    raise SystemExit("tmpfs mount does not expose a size limit")
-
-
-if os.getuid() == 0:
-    raise SystemExit("clean-room process is running as root")
-if platform.python_implementation() != "CPython" or sys.version_info[:2] != (3, 11):
-    raise SystemExit("clean-room image is not CPython 3.11")
-if platform.system() != "Linux" or platform.machine().lower() not in {"x86_64", "amd64"}:
-    raise SystemExit("clean-room image is not Linux amd64")
-
-mounts = {
-    "/": mount_record("/"),
-    "/wheelhouse": mount_record("/wheelhouse"),
-    "/work": mount_record("/work"),
-}
-if "ro" not in mounts["/"]["options"]:
-    raise SystemExit("container root filesystem is not read-only")
-if "ro" not in mounts["/wheelhouse"]["options"]:
-    raise SystemExit("wheelhouse bind mount is not read-only")
-if mounts["/work"]["filesystem"] != "tmpfs" or "rw" not in mounts["/work"]["options"]:
-    raise SystemExit("clean-room work directory is not a writable tmpfs")
-if not {"nosuid", "nodev"}.issubset(set(mounts["/work"]["options"])):
-    raise SystemExit("clean-room tmpfs is missing nosuid or nodev")
-size = tmpfs_size(mounts["/work"])
-expected_size = int(os.environ["EXPECTED_TMPFS_BYTES"])
-if size <= 0 or size > expected_size:
-    raise SystemExit(f"clean-room tmpfs exceeds its bound: {size} > {expected_size}")
-
-status = {}
-for line in Path("/proc/self/status").read_text(encoding="ascii").splitlines():
-    key, separator, value = line.partition(":")
-    if separator:
-        status[key] = value.strip()
-for field in ("CapInh", "CapPrm", "CapEff", "CapBnd", "CapAmb"):
-    if int(status.get(field, "-1"), 16) != 0:
-        raise SystemExit(f"container retained Linux capabilities: {field}")
-if status.get("NoNewPrivs") != "1":
-    raise SystemExit("no-new-privileges is not active")
-if status.get("Seccomp") != "2":
-    raise SystemExit("the Docker seccomp filter is not active")
-
-interfaces = sorted(
-    line.split(":", 1)[0].strip()
-    for line in Path("/proc/net/dev").read_text(encoding="ascii").splitlines()
-    if ":" in line
+SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,254}$")
+WHEEL_RE = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9._+]*-[A-Za-z0-9][A-Za-z0-9._+]*-"
+    r"[A-Za-z0-9._]+-[A-Za-z0-9._]+-[A-Za-z0-9._]+\.whl$"
 )
-if "lo" not in interfaces:
-    raise SystemExit("network-none container has no loopback interface")
-interface_states = {
-    name: Path(f"/sys/class/net/{name}/operstate")
-    .read_text(encoding="ascii")
-    .strip()
-    for name in interfaces
-}
-active_non_loopback = {
-    name: state
-    for name, state in interface_states.items()
-    if name != "lo" and state != "down"
-}
-if active_non_loopback:
-    raise SystemExit(
-        "network-none container exposed active non-loopback interfaces: "
-        f"{active_non_loopback}"
-    )
-ipv4_route_interfaces = {
-    line.split()[0]
-    for line in Path("/proc/net/route").read_text(encoding="ascii").splitlines()[1:]
-    if line.split()
-}
-ipv6_route_interfaces = {
-    fields[-1]
-    for line in Path("/proc/net/ipv6_route").read_text(encoding="ascii").splitlines()
-    if len(fields := line.split()) >= 10
-}
-non_loopback_routes = sorted(
-    (ipv4_route_interfaces | ipv6_route_interfaces) - {"lo"}
+EXPECTED_COMMANDS = (
+    "/opt/serverware/clean-room/installed/bin/serverware-attestation",
+    "/opt/serverware/clean-room/installed/bin/serverware-enrollment",
+    "/opt/serverware/clean-room/installed/bin/serverware-evidence",
 )
-if non_loopback_routes:
-    raise SystemExit(
-        "network-none container exposed non-loopback routes: "
-        f"{non_loopback_routes}"
-    )
-
-Path("/work/preflight.json").write_text(
-    json.dumps(
-        {
-            "capabilities": "none",
-            "gid": os.getgid(),
-            "interfaceStates": interface_states,
-            "machine": platform.machine(),
-            "mounts": mounts,
-            "nonLoopbackRoutes": non_loopback_routes,
-            "noNewPrivileges": True,
-            "python": platform.python_version(),
-            "seccomp": "filter",
-            "system": platform.system(),
-            "tmpfsBytes": size,
-            "uid": os.getuid(),
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-    ),
-    encoding="ascii",
+PYTHON_SITE = "lib/python3.11/site-packages"
+PYTHON_EXECUTABLE = "/opt/serverware/clean-room/python/bin/python3"
+WHEELHOUSE_SCHEMA = {
+    "apiVersion": WHEELHOUSE_VERSION,
+    "fileFields": ["path", "sha256", "size"],
+    "packageFields": [
+        "name",
+        "normalizedName",
+        "providesExtras",
+        "requires",
+        "sha256",
+        "version",
+        "wheel",
+    ],
+    "payloadDigestField": "payloadSha256",
+}
+MARKER_ENVIRONMENT = {
+    "implementation_name": "cpython",
+    "implementation_version": "3.11.11",
+    "os_name": "posix",
+    "platform_machine": "x86_64",
+    "platform_python_implementation": "CPython",
+    "platform_release": "",
+    "platform_system": "Linux",
+    "platform_version": "",
+    "python_full_version": "3.11.11",
+    "python_version": "3.11",
+    "sys_platform": "linux",
+}
+FIXED_SCENARIOS = (
+    {
+        "argv": [
+            EXPECTED_COMMANDS[0],
+            "--base",
+            "http://127.0.0.1:1",
+            "--enrollment-packet",
+            str(SEALED_ROOT / "fixtures/rejected-enrollment-packet.json"),
+            "--ca-out",
+            "/work/attestation-verify-offline/verified-ca.pem",
+        ],
+        "expectedExitCode": 1,
+        "expectedState": [],
+        "scenario": "attestation-verify-offline",
+    },
+    {
+        "argv": [
+            EXPECTED_COMMANDS[1],
+            "--base",
+            "http://127.0.0.1:1",
+            "--verify-packet",
+            str(SEALED_ROOT / "fixtures/rejected-enrollment-packet.json"),
+        ],
+        "expectedExitCode": 1,
+        "expectedState": [],
+        "scenario": "enrollment-install-offline",
+    },
+    {
+        "argv": [
+            EXPECTED_COMMANDS[2],
+            "--root",
+            str(SEALED_ROOT / "fixtures"),
+            "verify",
+            "--manifest",
+            "onboarding-evidence.json",
+        ],
+        "expectedExitCode": 0,
+        "expectedState": [],
+        "scenario": "evidence-verify-offline",
+    },
 )
-PY
-
-run_logged venv python3 -I -m venv --copies /work/venv
-run_logged dependencies \
-    /work/venv/bin/python -I -m pip --isolated install \
-    --no-index \
-    --no-cache-dir \
-    --no-compile \
-    --require-hashes \
-    --only-binary=:all: \
-    --find-links=/wheelhouse \
-    --requirement=/wheelhouse/requirements.lock
-run_logged package \
-    /work/venv/bin/python -I -m pip --isolated install \
-    --no-index \
-    --no-cache-dir \
-    --no-compile \
-    --no-deps \
-    "/wheelhouse/${PACKAGE_WHEEL}"
-
-run_logged enrollment-help /work/venv/bin/serverware-enrollment --help
-run_logged attestation-help /work/venv/bin/serverware-attestation --help
-run_logged evidence-help /work/venv/bin/serverware-evidence --help
-
-[ -s /work/enrollment-help.log ] || fail "serverware-enrollment --help returned no output"
-[ -s /work/attestation-help.log ] || fail "serverware-attestation --help returned no output"
-[ -s /work/evidence-help.log ] || fail "serverware-evidence --help returned no output"
-grep -F "local-integrity-only" /work/evidence-help.log >/dev/null ||
-    fail "serverware-evidence no longer discloses local-integrity-only assurance"
-grep -F "execution, server, provenance, or TEE attestation" /work/evidence-help.log >/dev/null ||
-    fail "serverware-evidence no longer discloses its assurance exclusions"
-
-/work/venv/bin/python -I - <<'PY'
-from __future__ import annotations
-
-import importlib.metadata
-import json
-from pathlib import Path
-
-import cryptography
-import serverware_agent_trust
-
-
-preflight = json.loads(Path("/work/preflight.json").read_text(encoding="ascii"))
-distribution = importlib.metadata.distribution("serverware-enrollment")
-if distribution.version != serverware_agent_trust.__version__:
-    raise SystemExit("imported package version differs from installed distribution")
-if serverware_agent_trust.DISTRIBUTION_NAME != "serverware-enrollment":
-    raise SystemExit("imported distribution name is unexpected")
-
-entry_points = sorted(
-    entry.name
-    for entry in distribution.entry_points
-    if entry.group == "console_scripts"
-)
-expected_entry_points = [
-    "serverware-attestation",
-    "serverware-enrollment",
-    "serverware-evidence",
-]
-if entry_points != expected_entry_points:
-    raise SystemExit(f"installed console entry points are incomplete: {entry_points}")
-
-print(
-    "SERVERWARE_CLEAN_ROOM_RESULT="
-    + json.dumps(
-        {
-            "assurance": {
-                "classification": "checksum-closed-local-clean-room-validation",
-                "notEstablished": [
-                    "image-provenance",
-                    "independent-execution",
-                    "source-provenance",
-                    "tee-attestation",
-                ],
-            },
-            "commands": {
-                "serverware-attestation --help": "pass",
-                "serverware-enrollment --help": "pass",
-                "serverware-evidence --help": "pass",
-            },
-            "cryptographyVersion": cryptography.__version__,
-            "entryPoints": entry_points,
-            "package": {
-                "distribution": serverware_agent_trust.DISTRIBUTION_NAME,
-                "import": "pass",
-                "version": serverware_agent_trust.__version__,
-            },
-            "runtime": preflight,
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-)
-PY
-"""
 
 
 class ValidationError(RuntimeError):
@@ -332,616 +144,1489 @@ def _strict_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in pairs:
         if key in result:
-            raise ValidationError(f"JSON document contains duplicate key: {key}")
+            raise ValidationError(f"JSON contains duplicate key: {key}")
         result[key] = value
     return result
 
 
-def _reject_json_constant(value: str) -> Any:
-    raise ValidationError(f"JSON document contains non-standard constant: {value}")
+def _reject_number(value: str) -> None:
+    raise ValidationError(f"JSON contains an unsupported number: {value}")
 
 
-def _load_json_text(value: str, label: str) -> Any:
+def _canonical_json(value: Any) -> bytes:
+    try:
+        return json.dumps(
+            value,
+            allow_nan=False,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("ascii")
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise ValidationError("value is not canonical JSON") from exc
+
+
+def _load_json(raw: bytes, *, label: str) -> Any:
+    if len(raw) > MAX_JSON_BYTES:
+        raise ValidationError(f"{label} exceeds its byte limit")
     try:
         return json.loads(
-            value,
+            raw.decode("ascii"),
             object_pairs_hook=_strict_object,
-            parse_constant=_reject_json_constant,
+            parse_constant=_reject_number,
+            parse_float=_reject_number,
         )
-    except (json.JSONDecodeError, UnicodeError) as exc:
-        raise ValidationError(f"{label} is not strict JSON: {exc}") from exc
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise ValidationError(f"{label} is not strict ASCII JSON") from exc
 
 
-def _file_identity(metadata: os.stat_result) -> tuple[int, ...]:
-    return (
-        metadata.st_dev,
-        metadata.st_ino,
-        metadata.st_mode,
-        metadata.st_size,
-        metadata.st_mtime_ns,
-        metadata.st_ctime_ns,
+def _sha256(raw: bytes) -> str:
+    return "sha256:" + hashlib.sha256(raw).hexdigest()
+
+
+def _safe_relative(value: str, *, label: str) -> PurePosixPath:
+    if not isinstance(value, str) or not value or "\x00" in value:
+        raise ValidationError(f"{label} is invalid")
+    path = PurePosixPath(value)
+    if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+        raise ValidationError(f"{label} contains an unsafe path")
+    return path
+
+
+def _open_directory(path: Path, *, label: str) -> int:
+    if not path.is_absolute():
+        raise ValidationError(f"{label} is not absolute")
+    descriptor = os.open(
+        "/",
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NONBLOCK", 0),
     )
-
-
-def _stable_sha256(path: Path) -> tuple[int, str]:
-    if not hasattr(os, "O_NOFOLLOW"):
-        raise ValidationError("this platform cannot reject symlinks while hashing")
     try:
+        for component in path.parts[1:]:
+            next_descriptor = os.open(
+                component,
+                os.O_RDONLY
+                | getattr(os, "O_DIRECTORY", 0)
+                | getattr(os, "O_CLOEXEC", 0)
+                | getattr(os, "O_NONBLOCK", 0)
+                | os.O_NOFOLLOW,
+                dir_fd=descriptor,
+            )
+            os.close(descriptor)
+            descriptor = next_descriptor
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _read_regular_at(
+    root_fd: int,
+    relative: str,
+    *,
+    label: str,
+    max_bytes: int = MAX_FILE_BYTES,
+) -> tuple[bytes, os.stat_result]:
+    parts = _safe_relative(relative, label=label).parts
+    parent = os.dup(root_fd)
+    try:
+        for component in parts[:-1]:
+            child = os.open(
+                component,
+                os.O_RDONLY
+                | getattr(os, "O_DIRECTORY", 0)
+                | getattr(os, "O_CLOEXEC", 0)
+                | getattr(os, "O_NONBLOCK", 0)
+                | os.O_NOFOLLOW,
+                dir_fd=parent,
+            )
+            os.close(parent)
+            parent = child
         descriptor = os.open(
-            path,
-            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | os.O_NOFOLLOW,
+            parts[-1],
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NONBLOCK", 0)
+            | os.O_NOFOLLOW,
+            dir_fd=parent,
         )
-    except OSError as exc:
-        raise ValidationError(f"cannot open regular file without following links: {path}") from exc
-    digest = hashlib.sha256()
+    finally:
+        os.close(parent)
     try:
         before = os.fstat(descriptor)
-        if not stat.S_ISREG(before.st_mode):
-            raise ValidationError(f"required path is not a regular file: {path}")
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_nlink != 1
+            or before.st_size < 0
+            or before.st_size > max_bytes
+        ):
+            raise ValidationError(f"{label} is not a bounded regular file")
+        chunks: list[bytes] = []
+        total = 0
         while True:
-            chunk = os.read(descriptor, 1024 * 1024)
-            if not chunk:
+            raw = os.read(descriptor, min(1024 * 1024, max_bytes + 1 - total))
+            if not raw:
                 break
-            digest.update(chunk)
+            chunks.append(raw)
+            total += len(raw)
+            if total > max_bytes:
+                raise ValidationError(f"{label} exceeds its byte limit")
         after = os.fstat(descriptor)
-        if _file_identity(before) != _file_identity(after):
-            raise ValidationError(f"file changed while it was hashed: {path}")
-        return before.st_size, digest.hexdigest()
+        identity = lambda item: (
+            item.st_dev,
+            item.st_ino,
+            item.st_mode,
+            item.st_uid,
+            item.st_gid,
+            item.st_nlink,
+            item.st_size,
+            item.st_mtime_ns,
+            item.st_ctime_ns,
+        )
+        if identity(before) != identity(after):
+            raise ValidationError(f"{label} changed while read")
+        return b"".join(chunks), after
     finally:
         os.close(descriptor)
 
 
-def _run_checked(
-    command: list[str],
+def _scan_tree(
+    root: Path,
     *,
-    label: str,
-    timeout: int,
-    cwd: Path | None = None,
-) -> subprocess.CompletedProcess[str]:
-    try:
-        result = subprocess.run(
-            command,
-            cwd=cwd,
-            text=True,
-            capture_output=True,
-            check=False,
-            timeout=timeout,
-        )
-    except FileNotFoundError as exc:
-        raise ValidationError(f"{label} executable is unavailable: {command[0]}") from exc
-    except subprocess.TimeoutExpired as exc:
-        raise ValidationError(f"{label} timed out after {timeout} seconds") from exc
-    if result.returncode != 0:
-        details = "\n".join(
-            section
-            for section in (
-                result.stdout.strip(),
-                result.stderr.strip(),
+    exclude: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    root_fd = _open_directory(root, label="sealed tree")
+    records: list[dict[str, Any]] = []
+    aggregate = 0
+
+    def walk(descriptor: int, relative: PurePosixPath) -> None:
+        nonlocal aggregate
+        for name in sorted(os.listdir(descriptor)):
+            if (
+                name in {"", ".", ".."}
+                or "/" in name
+                or "\x00" in name
+                or (not relative.parts and exclude and name in exclude)
+            ):
+                if not relative.parts and exclude and name in exclude:
+                    continue
+                raise ValidationError("sealed tree contains an unsafe name")
+            path = relative / name
+            metadata = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+            common = {
+                "gid": metadata.st_gid,
+                "mode": stat.S_IMODE(metadata.st_mode),
+                "path": path.as_posix(),
+                "uid": metadata.st_uid,
+            }
+            if stat.S_ISDIR(metadata.st_mode):
+                records.append({**common, "type": "directory"})
+                child = os.open(
+                    name,
+                    os.O_RDONLY
+                    | getattr(os, "O_DIRECTORY", 0)
+                    | getattr(os, "O_CLOEXEC", 0)
+                    | getattr(os, "O_NONBLOCK", 0)
+                    | os.O_NOFOLLOW,
+                    dir_fd=descriptor,
+                )
+                try:
+                    walk(child, path)
+                finally:
+                    os.close(child)
+                continue
+            if stat.S_ISLNK(metadata.st_mode):
+                target = os.readlink(name, dir_fd=descriptor)
+                if not target or "\x00" in target:
+                    raise ValidationError("sealed tree contains an invalid symlink")
+                records.append({**common, "target": target, "type": "symlink"})
+                continue
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+                raise ValidationError("sealed tree contains a special or hard-linked file")
+            raw, stable = _read_regular_at(
+                root_fd,
+                path.as_posix(),
+                label="sealed payload file",
             )
-            if section
+            aggregate += len(raw)
+            if aggregate > MAX_TOTAL_BYTES or len(records) >= MAX_FILES:
+                raise ValidationError("sealed payload exceeds its closure bound")
+            records.append(
+                {
+                    **common,
+                    "mode": stat.S_IMODE(stable.st_mode),
+                    "sha256": _sha256(raw),
+                    "size": len(raw),
+                    "type": "file",
+                }
+            )
+
+    try:
+        walk(root_fd, PurePosixPath())
+    finally:
+        os.close(root_fd)
+    return records
+
+
+def _verify_payload_manifest() -> dict[str, Any]:
+    root_fd = _open_directory(SEALED_ROOT, label="sealed clean-room root")
+    try:
+        raw, _ = _read_regular_at(
+            root_fd,
+            PAYLOAD_MANIFEST.name,
+            label="clean-room payload manifest",
+            max_bytes=MAX_JSON_BYTES,
         )
-        suffix = f"\n{details}" if details else ""
-        raise ValidationError(f"{label} failed with exit code {result.returncode}{suffix}")
-    return result
-
-
-def _validate_wheelhouse_root(value: Path) -> Path:
-    candidate = value.expanduser().absolute()
-    if candidate.is_symlink() or not candidate.is_dir():
-        raise ValidationError(f"wheelhouse must be a real directory: {candidate}")
-    root = candidate.resolve()
-    if "," in str(root) or "\n" in str(root) or "\r" in str(root):
-        raise ValidationError("wheelhouse path cannot be represented safely as a Docker bind mount")
-    return root
-
-
-def _invoke_repository_verifier(root: Path, *, timeout: int) -> dict[str, Any]:
-    result = _run_checked(
-        [
-            sys.executable,
-            "-I",
-            str(VERIFIER),
-            "--root",
-            str(root),
-            "--manifest",
-            str(root / MANIFEST_NAME),
-            "--checksums",
-            str(root / CHECKSUMS_NAME),
-            "--label",
-            EXPECTED_LABEL,
-            "--python-tag",
-            EXPECTED_TARGET["python_tag"],
-            "--platform-tag",
-            EXPECTED_TARGET["platform_tag"],
-            "--architecture",
-            EXPECTED_TARGET["architecture"],
-        ],
-        label="strict wheelhouse verification",
-        timeout=timeout,
-        cwd=ROOT,
-    )
-    document = _load_json_text(result.stdout, "strict verifier output")
-    expected_fields = {
-        "checksums_sha256",
-        "files",
-        "manifest_sha256",
-        "ok",
-        "target",
+    finally:
+        os.close(root_fd)
+    document = _load_json(raw, label="clean-room payload manifest")
+    if (
+        raw != _canonical_json(document) + b"\n"
+        or not isinstance(document, dict)
+        or set(document)
+        != {
+            "apiVersion",
+            "closureSha256",
+            "entries",
+            "excluded",
+        }
+        or document.get("apiVersion") != PAYLOAD_VERSION
+        or document.get("excluded") != [PAYLOAD_MANIFEST.name]
+    ):
+        raise ValidationError("clean-room payload manifest fields are invalid")
+    entries = _scan_tree(SEALED_ROOT, exclude={PAYLOAD_MANIFEST.name})
+    if document["entries"] != entries:
+        raise ValidationError("sealed clean-room payload differs from its manifest")
+    payload = {
+        "apiVersion": PAYLOAD_VERSION,
+        "entries": entries,
+        "excluded": [PAYLOAD_MANIFEST.name],
     }
-    if not isinstance(document, dict) or set(document) != expected_fields:
-        raise ValidationError("strict verifier output fields are incomplete or unknown")
-    if document["ok"] is not True or document["target"] != EXPECTED_TARGET:
-        raise ValidationError("strict verifier did not confirm the required Linux amd64 target")
+    if document["closureSha256"] != _sha256(_canonical_json(payload)):
+        raise ValidationError("clean-room payload closure digest is invalid")
     return document
 
 
-def _read_manifest(root: Path) -> dict[str, Any]:
-    size, _ = _stable_sha256(root / MANIFEST_NAME)
-    if size > 1024 * 1024:
-        raise ValidationError("wheelhouse manifest exceeds the 1 MiB limit")
+def _verify_checksums() -> dict[str, str]:
+    root_fd = _open_directory(WHEELHOUSE, label="sealed wheelhouse")
     try:
-        raw = (root / MANIFEST_NAME).read_bytes()
-        document = _load_json_text(raw.decode("ascii"), "wheelhouse manifest")
-    except (OSError, UnicodeError) as exc:
-        raise ValidationError(f"cannot read wheelhouse manifest: {exc}") from exc
-    if not isinstance(document, dict):
-        raise ValidationError("wheelhouse manifest root is not an object")
-    if document.get("label") != EXPECTED_LABEL or document.get("target") != EXPECTED_TARGET:
-        raise ValidationError("wheelhouse manifest is not the required Linux amd64 closure")
-    return document
-
-
-def _locked_dependencies(root: Path) -> list[str]:
-    try:
-        text = (root / REQUIREMENTS_NAME).read_text(encoding="ascii")
-    except (OSError, UnicodeError) as exc:
-        raise ValidationError(f"cannot read {REQUIREMENTS_NAME}: {exc}") from exc
-    names = [
-        re.sub(r"[-_.]+", "_", match.group(1)).lower()
-        for line in text.splitlines()
-        if (match := LOCK_REQUIREMENT_RE.match(line)) is not None
-    ]
-    if not names or len(names) != len(set(names)):
-        raise ValidationError("requirements.lock has no unique, pinned dependency set")
-    return sorted(names)
-
-
-def _select_package_wheel(root: Path, manifest: dict[str, Any]) -> tuple[str, str]:
-    files = manifest.get("files")
-    if not isinstance(files, list):
-        raise ValidationError("wheelhouse manifest has no file closure")
-    names = [
-        entry.get("path")
-        for entry in files
-        if isinstance(entry, dict) and isinstance(entry.get("path"), str)
-    ]
-    if len(names) != len(files):
-        raise ValidationError("wheelhouse manifest contains malformed file entries")
-    package_wheels = [name for name in names if PACKAGE_WHEEL_RE.fullmatch(name)]
-    if len(package_wheels) != 1:
-        raise ValidationError(
-            f"wheelhouse must contain exactly one Serverware package wheel: {package_wheels}"
+        raw, _ = _read_regular_at(
+            root_fd,
+            CHECKSUMS.name,
+            label="wheelhouse checksums",
+            max_bytes=MAX_JSON_BYTES,
         )
-    if names.count(REQUIREMENTS_NAME) != 1:
-        raise ValidationError("wheelhouse must contain exactly one requirements.lock")
-
-    dependency_wheels = [
-        name for name in names if name.endswith(".whl") and name not in package_wheels
-    ]
-    expected_dependencies = _locked_dependencies(root)
-    matched: set[str] = set()
-    for dependency in expected_dependencies:
-        matches = [
-            wheel
-            for wheel in dependency_wheels
-            if wheel.lower().startswith(dependency + "-")
-        ]
-        if len(matches) != 1:
+        entries = _scan_tree(WHEELHOUSE)
+        file_names = {
+            item["path"]
+            for item in entries
+            if item["type"] == "file" and item["path"] != CHECKSUMS.name
+        }
+        checksums: dict[str, str] = {}
+        text = raw.decode("ascii")
+        if not text or not text.endswith("\n") or "\r" in text:
             raise ValidationError(
-                f"locked dependency must map to exactly one wheel: {dependency} -> {matches}"
+                "wheelhouse checksums are not canonical LF text"
             )
-        matched.update(matches)
-    expected_names = {
-        REQUIREMENTS_NAME,
-        package_wheels[0],
-        *matched,
-    }
-    if set(names) != expected_names:
-        raise ValidationError(
-            "wheelhouse contains artifacts outside the exact package and dependency closure: "
-            f"{sorted(set(names) - expected_names)}"
-        )
+        for line in text[:-1].split("\n"):
+            match = re.fullmatch(r"([0-9a-f]{64})  ([A-Za-z0-9][A-Za-z0-9._+/-]*)", line)
+            if match is None:
+                raise ValidationError("wheelhouse checksum line is malformed")
+            relative = _safe_relative(match.group(2), label="wheelhouse checksum path")
+            name = relative.as_posix()
+            if name in checksums:
+                raise ValidationError("wheelhouse checksum path is duplicated")
+            content, _ = _read_regular_at(
+                root_fd,
+                name,
+                label="checksummed wheelhouse file",
+            )
+            if hashlib.sha256(content).hexdigest() != match.group(1):
+                raise ValidationError("wheelhouse checksum mismatch")
+            checksums[name] = "sha256:" + match.group(1)
+    finally:
+        os.close(root_fd)
+    if set(checksums) != file_names:
+        raise ValidationError("wheelhouse checksum inventory is not complete")
+    if list(checksums) != sorted(checksums):
+        raise ValidationError("wheelhouse checksums are not sorted")
+    return checksums
 
-    manifest_entry = next(entry for entry in files if entry["path"] == package_wheels[0])
-    digest = manifest_entry.get("sha256")
-    if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
-        raise ValidationError("Serverware package wheel has no valid manifest digest")
-    return package_wheels[0], digest
 
-
-def _copy_stable(source: Path, destination: Path) -> None:
-    if not hasattr(os, "O_NOFOLLOW"):
-        raise ValidationError("this platform cannot snapshot without following symlinks")
-    source_fd = os.open(
-        source,
-        os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | os.O_NOFOLLOW,
-    )
-    destination_fd = -1
+def _verify_wheelhouse_manifest(checksums: dict[str, str]) -> dict[str, Any]:
+    root_fd = _open_directory(WHEELHOUSE, label="sealed wheelhouse")
     try:
-        before = os.fstat(source_fd)
-        if not stat.S_ISREG(before.st_mode):
-            raise ValidationError(f"snapshot source is not a regular file: {source}")
-        destination_fd = os.open(
-            destination,
+        raw, _ = _read_regular_at(
+            root_fd,
+            WHEELHOUSE_MANIFEST.name,
+            label="wheelhouse manifest",
+            max_bytes=MAX_JSON_BYTES,
+        )
+    finally:
+        os.close(root_fd)
+    document = _load_json(raw, label="wheelhouse manifest")
+    if (
+        raw != _canonical_json(document) + b"\n"
+        or not isinstance(document, dict)
+        or set(document)
+        != {
+            "apiVersion",
+            "files",
+            "packages",
+            "payloadSha256",
+            "schemaSha256",
+        }
+        or document.get("apiVersion") != WHEELHOUSE_VERSION
+        or document.get("schemaSha256")
+        != _sha256(_canonical_json(WHEELHOUSE_SCHEMA))
+        or not isinstance(document.get("files"), list)
+        or not isinstance(document.get("packages"), list)
+    ):
+        raise ValidationError("wheelhouse manifest fields are not closed")
+    payload = dict(document)
+    supplied_payload_sha256 = payload.pop("payloadSha256")
+    if supplied_payload_sha256 != _sha256(_canonical_json(payload)):
+        raise ValidationError("wheelhouse manifest payload digest is invalid")
+    observed: dict[str, tuple[str, int]] = {}
+    for item in document["files"]:
+        if (
+            not isinstance(item, dict)
+            or set(item) != {"path", "sha256", "size"}
+            or not isinstance(item.get("path"), str)
+            or SHA256_RE.fullmatch(str(item.get("sha256") or "")) is None
+            or type(item.get("size")) is not int
+            or item["size"] < 0
+            or item["path"] in observed
+        ):
+            raise ValidationError("wheelhouse manifest file record is invalid")
+        observed[item["path"]] = (item["sha256"], item["size"])
+    expected = {
+        key: (value, (WHEELHOUSE / key).stat().st_size)
+        for key, value in checksums.items()
+        if key != WHEELHOUSE_MANIFEST.name
+    }
+    if (
+        observed != expected
+        or document["files"]
+        != sorted(document["files"], key=lambda item: item["path"])
+    ):
+        raise ValidationError("wheelhouse manifest and checksums differ")
+    package_wheels: set[str] = set()
+    package_names: set[str] = set()
+    for package in document["packages"]:
+        if not isinstance(package, dict):
+            raise ValidationError("wheelhouse package record is invalid")
+        try:
+            normalized_name = canonicalize_name(
+                package.get("name", ""),
+                validate=True,
+            )
+            normalized_version = str(Version(package.get("version", "")))
+        except (InvalidName, InvalidVersion, TypeError, ValueError) as exc:
+            raise ValidationError(
+                "wheelhouse package name or version is invalid"
+            ) from exc
+        if (
+            set(package)
+            != {
+                "name",
+                "normalizedName",
+                "providesExtras",
+                "requires",
+                "sha256",
+                "version",
+                "wheel",
+            }
+            or not isinstance(package.get("name"), str)
+            or SAFE_NAME_RE.fullmatch(package["name"]) is None
+            or package.get("normalizedName") != normalized_name
+            or not isinstance(package.get("version"), str)
+            or package["version"] != normalized_version
+            or not isinstance(package.get("wheel"), str)
+            or WHEEL_RE.fullmatch(package["wheel"]) is None
+            or package.get("sha256") != checksums.get(package["wheel"])
+            or not isinstance(package.get("requires"), list)
+            or any(
+                not isinstance(item, str) or not item
+                for item in package["requires"]
+            )
+            or package["requires"] != sorted(set(package["requires"]))
+            or not isinstance(package.get("providesExtras"), list)
+            or package["providesExtras"]
+            != sorted(set(package["providesExtras"]))
+            or any(
+                not isinstance(item, str)
+                or canonicalize_name(item) != item
+                for item in package["providesExtras"]
+            )
+            or package["wheel"] in package_wheels
+            or normalized_name in package_names
+        ):
+            raise ValidationError("wheelhouse package record is invalid")
+        package_wheels.add(package["wheel"])
+        package_names.add(normalized_name)
+    if (
+        document["packages"]
+        != sorted(
+            document["packages"],
+            key=lambda item: item["normalizedName"],
+        )
+        or package_wheels
+        != {name for name in observed if name.endswith(".whl")}
+    ):
+        raise ValidationError("wheelhouse package inventory is incomplete")
+    return document
+
+
+def _wheel_install_path(member_name: str) -> str:
+    parts = _safe_relative(member_name, label="wheel install member").parts
+    if parts[0].endswith(".data"):
+        if len(parts) < 3:
+            raise ValidationError("wheel .data member is incomplete")
+        category = parts[1]
+        remainder = PurePosixPath(*parts[2:]).as_posix()
+        if category in {"purelib", "platlib"}:
+            return f"{PYTHON_SITE}/{remainder}"
+        if category == "scripts":
+            return f"bin/{remainder}"
+        if category == "data":
+            return remainder
+        raise ValidationError("wheel uses an unsupported .data installation class")
+    return f"{PYTHON_SITE}/{member_name}"
+
+
+def _console_script_bytes(target: str) -> bytes:
+    match = re.fullmatch(
+        r"([A-Za-z_][A-Za-z0-9_.]*):([A-Za-z_][A-Za-z0-9_]*)",
+        target,
+    )
+    if match is None:
+        raise ValidationError("console-script target is not a closed callable")
+    module, callable_name = match.groups()
+    return (
+        f"#!{PYTHON_EXECUTABLE}\n"
+        "import re\n"
+        "import sys\n"
+        f"from {module} import {callable_name}\n"
+        "if __name__ == '__main__':\n"
+        "    sys.argv[0] = re.sub(r'(-script\\.pyw|\\.exe)?$', '', sys.argv[0])\n"
+        f"    sys.exit({callable_name}())\n"
+    ).encode("ascii")
+
+
+def _verify_wheel_record(
+    wheel_name: str,
+    expected_sha256: str,
+) -> tuple[dict[str, Any], dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+    if WHEEL_RE.fullmatch(wheel_name) is None:
+        raise ValidationError("package wheel name is invalid")
+    try:
+        (
+            filename_name,
+            filename_version,
+            _filename_build,
+            filename_tags,
+        ) = parse_wheel_filename(wheel_name)
+    except InvalidWheelFilename as exc:
+        raise ValidationError("package wheel filename is invalid") from exc
+    filename_parts = wheel_name.removesuffix(".whl").split("-")
+    expected_dist_info = (
+        f"{filename_parts[0]}-{filename_parts[1]}.dist-info"
+    )
+    root_fd = _open_directory(WHEELHOUSE, label="sealed wheelhouse")
+    try:
+        raw, _ = _read_regular_at(
+            root_fd,
+            wheel_name,
+            label="serverware package wheel",
+        )
+    finally:
+        os.close(root_fd)
+    if _sha256(raw) != expected_sha256:
+        raise ValidationError("package wheel digest differs from its contract")
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(raw), mode="r")
+    except zipfile.BadZipFile as exc:
+        raise ValidationError("package wheel is not a valid ZIP") from exc
+    with archive:
+        members = archive.infolist()
+        names = [item.filename for item in members]
+        if (
+            not members
+            or len(members) > MAX_FILES
+            or names != sorted(names)
+            or len(names) != len(set(names))
+        ):
+            raise ValidationError("package wheel members are not canonical")
+        contents: dict[str, bytes] = {}
+        aggregate = 0
+        for member in members:
+            relative = _safe_relative(member.filename, label="package wheel member")
+            canonical_name = relative.as_posix()
+            unix_mode = member.external_attr >> 16
+            if (
+                canonical_name != member.filename
+                or member.is_dir()
+                or member.flag_bits & 0x1
+                or member.file_size < 0
+                or member.file_size > MAX_FILE_BYTES
+                or (
+                    stat.S_IFMT(unix_mode)
+                    and not stat.S_ISREG(unix_mode)
+                )
+                or (
+                    relative.parts[0].endswith(".data")
+                    and relative.parts[0]
+                    != (
+                        f"{filename_parts[0]}-"
+                        f"{filename_parts[1]}.data"
+                    )
+                )
+            ):
+                raise ValidationError("package wheel member metadata is unsafe")
+            content = archive.read(member)
+            if len(content) != member.file_size:
+                raise ValidationError("package wheel member size is invalid")
+            aggregate += len(content)
+            if aggregate > MAX_TOTAL_BYTES:
+                raise ValidationError("package wheel content exceeds its bound")
+            contents[canonical_name] = content
+        record_names = [name for name in names if name.endswith(".dist-info/RECORD")]
+        expected_record_name = f"{expected_dist_info}/RECORD"
+        if record_names != [expected_record_name]:
+            raise ValidationError("package wheel RECORD is ambiguous")
+        try:
+            rows = list(
+                csv.reader(
+                    io.StringIO(contents[record_names[0]].decode("utf-8"))
+                )
+            )
+        except UnicodeError as exc:
+            raise ValidationError("package wheel RECORD is not UTF-8") from exc
+        record_entries: dict[str, tuple[str, str]] = {}
+        for row in rows:
+            if len(row) != 3:
+                raise ValidationError("package wheel RECORD row is malformed")
+            record_path = _safe_relative(
+                row[0],
+                label="package wheel RECORD path",
+            ).as_posix()
+            if record_path != row[0] or record_path in record_entries:
+                raise ValidationError("package wheel RECORD path is not canonical")
+            record_entries[record_path] = (row[1], row[2])
+        if set(record_entries) != set(contents):
+            raise ValidationError("package wheel RECORD inventory is incomplete")
+        for name, content in contents.items():
+            encoded_hash, encoded_size = record_entries[name]
+            if name == record_names[0]:
+                if encoded_hash or encoded_size:
+                    raise ValidationError(
+                        "package wheel RECORD must leave its own digest empty"
+                    )
+                continue
+            if (
+                re.fullmatch(r"sha256=[A-Za-z0-9_-]{43}", encoded_hash)
+                is None
+                or encoded_size != str(len(content))
+            ):
+                raise ValidationError("package wheel RECORD metadata is invalid")
+            recorded_digest = base64.urlsafe_b64decode(
+                encoded_hash.removeprefix("sha256=") + "="
+            )
+            if recorded_digest != hashlib.sha256(content).digest():
+                raise ValidationError("package wheel RECORD digest is invalid")
+        if not rows:
+            raise ValidationError("package wheel RECORD is empty")
+        metadata_names = [
+            name for name in names if name.endswith(".dist-info/METADATA")
+        ]
+        wheel_metadata_names = [
+            name for name in names if name.endswith(".dist-info/WHEEL")
+        ]
+        if (
+            metadata_names != [f"{expected_dist_info}/METADATA"]
+            or wheel_metadata_names != [f"{expected_dist_info}/WHEEL"]
+        ):
+            raise ValidationError("package wheel METADATA is ambiguous")
+        metadata = email.parser.BytesParser(
+            policy=email.policy.default
+        ).parsebytes(contents[metadata_names[0]])
+        package_name = metadata.get("Name")
+        package_version = metadata.get("Version")
+        requires = sorted(metadata.get_all("Requires-Dist", []))
+        provides_extras_raw = metadata.get_all("Provides-Extra", [])
+        try:
+            normalized_name = canonicalize_name(
+                package_name or "",
+                validate=True,
+            )
+            normalized_version = str(Version(package_version or ""))
+            provides_extras = sorted(
+                {
+                    canonicalize_name(item, validate=True)
+                    for item in provides_extras_raw
+                }
+            )
+            parsed_requirements = [Requirement(item) for item in requires]
+        except (
+            InvalidName,
+            InvalidRequirement,
+            InvalidVersion,
+            TypeError,
+            ValueError,
+        ) as exc:
+            raise ValidationError("package wheel metadata is invalid") from exc
+        if (
+            not isinstance(package_name, str)
+            or SAFE_NAME_RE.fullmatch(package_name) is None
+            or not isinstance(package_version, str)
+            or package_version != normalized_version
+            or normalized_name != str(filename_name)
+            or normalized_version != str(filename_version)
+            or any(not isinstance(item, str) or not item for item in requires)
+            or any(item.url is not None for item in parsed_requirements)
+        ):
+            raise ValidationError("package wheel metadata is invalid")
+        wheel_metadata = email.parser.BytesParser(
+            policy=email.policy.default
+        ).parsebytes(contents[wheel_metadata_names[0]])
+        wheel_versions = wheel_metadata.get_all("Wheel-Version", [])
+        purelib_values = wheel_metadata.get_all("Root-Is-Purelib", [])
+        declared_tags = sorted(wheel_metadata.get_all("Tag", []))
+        expected_tags = sorted(str(item) for item in filename_tags)
+        if (
+            wheel_versions != ["1.0"]
+            or purelib_values != ["true"]
+            or declared_tags != expected_tags
+            or len(declared_tags) != len(set(declared_tags))
+        ):
+            raise ValidationError(
+                "package wheel WHEEL metadata differs from its filename"
+            )
+        installed: dict[str, dict[str, Any]] = {}
+        for name, content in contents.items():
+            destination = _wheel_install_path(name)
+            wheel_mode = archive.getinfo(name).external_attr >> 16
+            mode = 0o555 if wheel_mode & 0o111 else 0o444
+            if destination in installed:
+                raise ValidationError("wheel installation path is duplicated")
+            installed[destination] = {
+                "gid": 0,
+                "mode": mode,
+                "path": destination,
+                "sha256": _sha256(content),
+                "size": len(content),
+                "source": {"member": name, "wheel": wheel_name},
+                "type": "file",
+            }
+        generated: dict[str, dict[str, Any]] = {}
+        entry_point_names = [
+            name for name in names if name.endswith(".dist-info/entry_points.txt")
+        ]
+        if len(entry_point_names) > 1:
+            raise ValidationError("package wheel entry points are ambiguous")
+        if entry_point_names:
+            if entry_point_names != [
+                f"{expected_dist_info}/entry_points.txt"
+            ]:
+                raise ValidationError(
+                    "package wheel entry points use the wrong dist-info root"
+                )
+            parser = configparser.ConfigParser(
+                interpolation=None,
+                strict=True,
+            )
+            parser.optionxform = str
+            try:
+                parser.read_string(
+                    contents[entry_point_names[0]].decode("ascii")
+                )
+            except (UnicodeError, configparser.Error) as exc:
+                raise ValidationError(
+                    "package wheel entry points are invalid"
+                ) from exc
+            if set(parser.sections()) - {"console_scripts"}:
+                raise ValidationError("wheel contains unsupported entry points")
+            console_scripts = (
+                parser.items("console_scripts")
+                if parser.has_section("console_scripts")
+                else []
+            )
+            for script_name, target in sorted(console_scripts):
+                if SAFE_NAME_RE.fullmatch(script_name) is None:
+                    raise ValidationError("console-script name is unsafe")
+                script = _console_script_bytes(target.strip())
+                destination = f"bin/{script_name}"
+                if destination in installed or destination in generated:
+                    raise ValidationError(
+                        "console-script installation path is duplicated"
+                    )
+                generated[destination] = {
+                    "gid": 0,
+                    "mode": 0o555,
+                    "path": destination,
+                    "sha256": _sha256(script),
+                    "size": len(script),
+                    "source": {
+                        "entryPoint": f"{script_name}={target.strip()}",
+                        "wheel": wheel_name,
+                    },
+                    "type": "file",
+                }
+    record = {
+        "memberCount": len(names),
+        "name": package_name,
+        "normalizedName": normalized_name,
+        "providesExtras": provides_extras,
+        "recordSha256": _sha256(contents[record_names[0]]),
+        "recordPath": record_names[0],
+        "requires": requires,
+        "sha256": expected_sha256,
+        "version": package_version,
+        "wheel": wheel_name,
+    }
+    return record, installed, generated
+
+
+def _with_directories(
+    files: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    directories: set[str] = set()
+    for path in files:
+        parent = PurePosixPath(path).parent
+        while parent.parts:
+            directories.add(parent.as_posix())
+            parent = parent.parent
+    records = [
+        {
+            "gid": 0,
+            "mode": 0o555,
+            "path": path,
+            "type": "directory",
+            "uid": 0,
+        }
+        for path in sorted(directories)
+    ]
+    records.extend(
+        {
+            **{
+                key: value
+                for key, value in record.items()
+                if key != "source"
+            },
+            "uid": 0,
+        }
+        for _, record in sorted(files.items())
+    )
+    return sorted(records, key=lambda item: item["path"])
+
+
+def _resolve_requirements(
+    wheel_records: list[dict[str, Any]],
+    requested_extras: Any,
+) -> tuple[list[dict[str, str]], list[dict[str, Any]]]:
+    selected: dict[str, dict[str, Any]] = {}
+    for record in wheel_records:
+        normalized = record["normalizedName"]
+        try:
+            expected_name = canonicalize_name(
+                record["name"],
+                validate=True,
+            )
+            expected_version = str(Version(record["version"]))
+        except (
+            InvalidName,
+            InvalidVersion,
+            KeyError,
+            TypeError,
+            ValueError,
+        ) as exc:
+            raise ValidationError(
+                "selected wheel identity is invalid"
+            ) from exc
+        if (
+            normalized != expected_name
+            or record["version"] != expected_version
+            or normalized in selected
+        ):
+            raise ValidationError(
+                "selected wheels have a noncanonical or duplicate identity"
+            )
+        selected[normalized] = record
+    if (
+        not isinstance(requested_extras, dict)
+        or list(requested_extras) != sorted(requested_extras)
+    ):
+        raise ValidationError("requested extras are not canonical")
+    normalized_extras: dict[str, list[str]] = {}
+    for package_name, extras in requested_extras.items():
+        if (
+            package_name not in selected
+            or not isinstance(extras, list)
+            or not extras
+            or extras != sorted(set(extras))
+            or any(
+                not isinstance(extra, str)
+                or canonicalize_name(extra) != extra
+                or extra not in selected[package_name]["providesExtras"]
+                for extra in extras
+            )
+        ):
+            raise ValidationError("requested extras are unsupported")
+        normalized_extras[package_name] = extras
+    dependencies: list[dict[str, str]] = []
+    resolution: list[dict[str, Any]] = []
+    active_targets: set[str] = set()
+    active_edges: dict[str, set[str]] = {
+        name: set() for name in selected
+    }
+    allowed_marker_variables = {*MARKER_ENVIRONMENT, "extra"}
+    for source_name in sorted(selected):
+        source = selected[source_name]
+        contexts = ["", *normalized_extras.get(source_name, [])]
+        for raw_requirement in source["requires"]:
+            try:
+                requirement = Requirement(raw_requirement)
+            except InvalidRequirement as exc:
+                raise ValidationError("Requires-Dist is invalid") from exc
+            if requirement.url is not None:
+                raise ValidationError("direct-URL Requires-Dist is unsupported")
+            target_name = canonicalize_name(requirement.name)
+            requested_target_extras = sorted(
+                canonicalize_name(extra) for extra in requirement.extras
+            )
+            marker = str(requirement.marker) if requirement.marker else None
+            if marker is not None:
+                unquoted = re.sub(r"'[^']*'|\"[^\"]*\"", "", marker)
+                marker_words = set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", unquoted))
+                if marker_words - allowed_marker_variables - {
+                    "and",
+                    "in",
+                    "not",
+                    "or",
+                }:
+                    raise ValidationError("Requires-Dist marker uses an unsupported variable")
+            matched_contexts = []
+            for extra in contexts:
+                environment = {**MARKER_ENVIRONMENT, "extra": extra}
+                if requirement.marker is None or requirement.marker.evaluate(
+                    environment=environment,
+                ):
+                    matched_contexts.append(extra)
+            applies = bool(matched_contexts)
+            target = selected.get(target_name)
+            selected_version = target["version"] if target is not None else None
+            version_satisfied = (
+                target is not None
+                and (
+                    not requirement.specifier
+                    or Version(target["version"]) in requirement.specifier
+                )
+            )
+            extras_satisfied = (
+                target is not None
+                and set(requested_target_extras).issubset(
+                    target["providesExtras"]
+                )
+                and set(requested_target_extras).issubset(
+                    normalized_extras.get(target_name, [])
+                )
+            )
+            satisfied = not applies or (
+                version_satisfied and extras_satisfied
+            )
+            if not satisfied:
+                raise ValidationError(
+                    "selected wheels do not satisfy an active Requires-Dist"
+                )
+            if applies:
+                active_targets.add(target_name)
+                active_edges[source_name].add(target_name)
+            dependencies.append(
+                {
+                    "from": source_name,
+                    "requirement": raw_requirement,
+                }
+            )
+            resolution.append(
+                {
+                    "applies": applies,
+                    "from": source_name,
+                    "marker": marker,
+                    "matchedExtraContexts": matched_contexts,
+                    "normalizedName": target_name,
+                    "requestedExtras": requested_target_extras,
+                    "requirement": raw_requirement,
+                    "satisfied": satisfied,
+                    "selectedVersion": selected_version,
+                    "specifier": str(requirement.specifier),
+                }
+            )
+    dependencies.sort(key=lambda item: (item["from"], item["requirement"]))
+    resolution.sort(key=lambda item: (item["from"], item["requirement"]))
+    roots = {"serverware-enrollment"}
+    reachable = set(roots)
+    frontier = list(roots)
+    while frontier:
+        source_name = frontier.pop()
+        for target_name in active_edges.get(source_name, set()):
+            if target_name not in reachable:
+                reachable.add(target_name)
+                frontier.append(target_name)
+    if (
+        not roots.issubset(selected)
+        or set(selected) - roots != active_targets - roots
+        or any(target not in selected for target in active_targets)
+        or reachable != set(selected)
+    ):
+        raise ValidationError("selected wheel dependency graph is not closed")
+    return dependencies, resolution
+
+
+def _verify_install_contract(
+    checksums: dict[str, str],
+    wheelhouse: dict[str, Any],
+) -> dict[str, Any]:
+    root_fd = _open_directory(SEALED_ROOT, label="sealed clean-room root")
+    try:
+        raw, _ = _read_regular_at(
+            root_fd,
+            PACKAGE_CONTRACT.name,
+            label="package install contract",
+            max_bytes=MAX_JSON_BYTES,
+        )
+    finally:
+        os.close(root_fd)
+    document = _load_json(raw, label="package install contract")
+    if (
+        raw != _canonical_json(document) + b"\n"
+        or not isinstance(document, dict)
+        or set(document)
+        != {
+            "apiVersion",
+            "contractSha256",
+            "dependencies",
+            "exerciseScenarios",
+            "generatedArtifacts",
+            "markerEnvironment",
+            "requestedExtras",
+            "requirementsResolution",
+            "wheels",
+        }
+        or document.get("apiVersion") != CONTRACT_VERSION
+        or not isinstance(document.get("wheels"), list)
+        or not isinstance(document.get("dependencies"), list)
+        or not isinstance(document.get("requirementsResolution"), list)
+        or not isinstance(document.get("generatedArtifacts"), list)
+        or not isinstance(document.get("exerciseScenarios"), list)
+        or document.get("markerEnvironment") != MARKER_ENVIRONMENT
+    ):
+        raise ValidationError("package install contract fields are invalid")
+    payload = dict(document)
+    supplied = payload.pop("contractSha256")
+    if supplied != _sha256(_canonical_json(payload)):
+        raise ValidationError("package install contract digest is invalid")
+    expected_wheels = [
+        {"path": item["wheel"], "sha256": item["sha256"]}
+        for item in wheelhouse["packages"]
+    ]
+    if document["wheels"] != expected_wheels:
+        raise ValidationError("install contract does not select every sealed wheel")
+    installed_files: dict[str, dict[str, Any]] = {}
+    generated_files: dict[str, dict[str, Any]] = {}
+    wheel_records: list[dict[str, Any]] = []
+    for wheel in document["wheels"]:
+        if (
+            not isinstance(wheel, dict)
+            or set(wheel) != {"path", "sha256"}
+            or wheel.get("sha256") != checksums.get(wheel.get("path"))
+        ):
+            raise ValidationError("install contract wheel record is invalid")
+        record, wheel_files, wheel_generated = _verify_wheel_record(
+            wheel["path"],
+            wheel["sha256"],
+        )
+        package = next(
+            item
+            for item in wheelhouse["packages"]
+            if item["wheel"] == wheel["path"]
+        )
+        if (
+            record["name"] != package["name"]
+            or record["normalizedName"] != package["normalizedName"]
+            or record["version"] != package["version"]
+            or record["providesExtras"] != package["providesExtras"]
+            or record["requires"] != package["requires"]
+        ):
+            raise ValidationError("wheel metadata differs from its manifest")
+        for path, item in wheel_files.items():
+            if path in installed_files or path in generated_files:
+                raise ValidationError("selected wheels collide when installed")
+            installed_files[path] = item
+        for path, item in wheel_generated.items():
+            if path in installed_files or path in generated_files:
+                raise ValidationError("selected wheels collide when installed")
+            generated_files[path] = item
+        wheel_records.append(record)
+    dependencies, requirements_resolution = _resolve_requirements(
+        wheel_records,
+        document["requestedExtras"],
+    )
+    if (
+        document["dependencies"] != dependencies
+        or document["requirementsResolution"] != requirements_resolution
+    ):
+        raise ValidationError("install dependency resolution is not exact")
+    expected_generated = [
+        {
+            "mode": item["mode"],
+            "path": item["path"],
+            "sha256": item["sha256"],
+            "size": item["size"],
+            "source": item["source"],
+        }
+        for _, item in sorted(generated_files.items())
+    ]
+    if document["generatedArtifacts"] != expected_generated:
+        raise ValidationError("generated console-script bytes are not exact")
+    expected_installation = _with_directories(
+        {**installed_files, **generated_files}
+    )
+    installed_entries = _scan_tree(INSTALLED)
+    if expected_installation != installed_entries:
+        raise ValidationError(
+            "installed tree is not byte-identical to selected wheel members "
+            "and deterministic generated artifacts"
+        )
+    installed_paths = {item["path"]: item for item in expected_installation}
+    for command in EXPECTED_COMMANDS:
+        relative = str(Path(command).relative_to(INSTALLED))
+        record = installed_paths.get(relative)
+        if (
+            record is None
+            or record["type"] != "file"
+            or not record["mode"] & 0o111
+        ):
+            raise ValidationError(f"installed command is missing: {command}")
+    scenario_bindings = [
+        {
+            "argv": item.get("argv"),
+            "expectedExitCode": item.get("expectedExitCode"),
+            "expectedState": item.get("expectedState"),
+            "scenario": item.get("scenario"),
+        }
+        for item in document["exerciseScenarios"]
+    ]
+    if (
+        scenario_bindings != list(FIXED_SCENARIOS)
+        or any(
+            not isinstance(item, dict)
+            or set(item)
+            != {
+                "argv",
+                "expectedExitCode",
+                "expectedState",
+                "scenario",
+                "stderrSha256",
+                "stdoutSha256",
+            }
+            or SHA256_RE.fullmatch(str(item.get("stdoutSha256") or "")) is None
+            or SHA256_RE.fullmatch(str(item.get("stderrSha256") or "")) is None
+            for item in document["exerciseScenarios"]
+        )
+    ):
+        raise ValidationError("clean-room exercise contract is not fixed")
+    return {
+        "contractSha256": supplied,
+        "derivedEntries": expected_installation,
+        "derivedInstallationSha256": _sha256(
+            _canonical_json(expected_installation)
+        ),
+        "exerciseScenarios": document["exerciseScenarios"],
+        "requirementsResolution": requirements_resolution,
+        "requirementsResolutionSha256": _sha256(
+            _canonical_json(requirements_resolution)
+        ),
+        "wheels": wheel_records,
+        "wheelRecordsSha256": _sha256(_canonical_json(wheel_records)),
+    }
+
+
+def _mountinfo_unescape(value: str) -> str:
+    return re.sub(
+        r"\\([0-7]{3})",
+        lambda match: chr(int(match.group(1), 8)),
+        value,
+    )
+
+
+def _verify_sandbox() -> dict[str, Any]:
+    if os.getuid() != EXPECTED_UID or os.getgid() != EXPECTED_GID:
+        raise ValidationError("clean-room lane is not running as the fixed nonroot user")
+    if not os.statvfs("/").f_flag & getattr(os, "ST_RDONLY", 1):
+        raise ValidationError("clean-room root filesystem is writable")
+    try:
+        mount_lines = Path("/proc/self/mountinfo").read_text(
+            encoding="ascii"
+        ).splitlines()
+        status_lines = Path("/proc/self/status").read_text(
+            encoding="ascii"
+        ).splitlines()
+        apparmor = Path("/proc/self/attr/current").read_text(
+            encoding="ascii"
+        ).strip()
+    except (OSError, UnicodeError) as exc:
+        raise ValidationError("clean-room sandbox evidence is unavailable") from exc
+    allowed_mounts = {
+        "/",
+        "/dev",
+        "/proc",
+        "/run/serverware-runtime",
+        "/tmp",
+        "/work",
+    }
+    expected_filesystems = {
+        "/dev": "tmpfs",
+        "/proc": "proc",
+        "/run/serverware-runtime": "tmpfs",
+        "/tmp": "tmpfs",
+        "/work": "tmpfs",
+    }
+    expected_tmpfs = {
+        "/dev": {
+            "gid": 0,
+            "mode": 0o755,
+            "options": {"nosuid", "rw", "strictatime"},
+            "sizeBytes": 16 * 1024 * 1024,
+            "uid": 0,
+        },
+        "/run/serverware-runtime": {
+            "gid": EXPECTED_GID,
+            "mode": 0o700,
+            "options": {"nodev", "noexec", "nosuid", "rw", "strictatime"},
+            "sizeBytes": 16 * 1024 * 1024,
+            "uid": EXPECTED_UID,
+        },
+        "/tmp": {
+            "gid": EXPECTED_GID,
+            "mode": 0o700,
+            "options": {"nodev", "noexec", "nosuid", "rw", "strictatime"},
+            "sizeBytes": 256 * 1024 * 1024,
+            "uid": EXPECTED_UID,
+        },
+        "/work": {
+            "gid": EXPECTED_GID,
+            "mode": 0o700,
+            "options": {"nodev", "nosuid", "rw", "strictatime"},
+            "sizeBytes": 256 * 1024 * 1024,
+            "uid": EXPECTED_UID,
+        },
+    }
+    unexpected_mounts: list[str] = []
+    observed_mounts: list[str] = []
+    mount_evidence: dict[str, dict[str, Any]] = {}
+    for line in mount_lines:
+        before, separator, after = line.partition(" - ")
+        fields = before.split()
+        trailing = after.split()
+        if not separator or len(fields) < 6 or len(trailing) < 3:
+            raise ValidationError("clean-room mount table is malformed")
+        mountpoint = _mountinfo_unescape(fields[4])
+        observed_mounts.append(mountpoint)
+        raw_options = set(fields[5].split(",")) | set(trailing[2].split(","))
+        options = raw_options.intersection(
+            {
+                "nodev",
+                "noexec",
+                "nosuid",
+                "ro",
+                "rw",
+                "strictatime",
+            }
+        )
+        metadata = os.stat(mountpoint, follow_symlinks=False)
+        filesystem = os.statvfs(mountpoint)
+        mount_evidence[mountpoint] = {
+            "filesystem": trailing[0],
+            "gid": metadata.st_gid,
+            "mode": stat.S_IMODE(metadata.st_mode),
+            "options": sorted(options),
+            "rawOptions": sorted(raw_options),
+            "sizeBytes": filesystem.f_blocks * filesystem.f_frsize,
+            "uid": metadata.st_uid,
+        }
+        if (
+            mountpoint not in allowed_mounts
+            or (
+                mountpoint in expected_filesystems
+                and trailing[0] != expected_filesystems[mountpoint]
+            )
+        ):
+            unexpected_mounts.append(mountpoint)
+    if (
+        unexpected_mounts
+        or set(observed_mounts) != allowed_mounts
+        or len(observed_mounts) != len(allowed_mounts)
+    ):
+        raise ValidationError(
+            "clean-room contains a mount outside its exact OCI contract: "
+            + ", ".join(sorted(unexpected_mounts or observed_mounts))
+        )
+    for mountpoint, expected in expected_tmpfs.items():
+        actual = mount_evidence[mountpoint]
+        if (
+            actual["uid"] != expected["uid"]
+            or actual["gid"] != expected["gid"]
+            or actual["mode"] != expected["mode"]
+            or actual["sizeBytes"] != expected["sizeBytes"]
+            or set(actual["options"]) != expected["options"]
+        ):
+            raise ValidationError(
+                f"clean-room tmpfs contract differs at {mountpoint}"
+            )
+    status: dict[str, str] = {}
+    for line in status_lines:
+        key, separator, value = line.partition(":")
+        if separator:
+            status[key] = value.strip()
+    if (
+        status.get("NoNewPrivs") != "1"
+        or status.get("Seccomp") != "2"
+        or any(
+            int(status.get(name, "1"), 16) != 0
+            for name in ("CapAmb", "CapBnd", "CapEff", "CapInh", "CapPrm")
+        )
+        or not apparmor
+        or apparmor == "unconfined"
+    ):
+        raise ValidationError("clean-room security profile is not active")
+    namespaces: dict[str, str] = {}
+    for name in ("cgroup", "ipc", "mnt", "net", "pid", "user", "uts"):
+        try:
+            identity = os.readlink(f"/proc/self/ns/{name}")
+        except OSError as exc:
+            raise ValidationError("clean-room namespace evidence is missing") from exc
+        if re.fullmatch(rf"{name}:\[[0-9]+\]", identity) is None:
+            raise ValidationError("clean-room namespace identity is malformed")
+        namespaces[name] = identity
+    try:
+        route_lines = Path("/proc/net/route").read_text(
+            encoding="ascii"
+        ).splitlines()
+        interface_lines = Path("/proc/net/dev").read_text(
+            encoding="ascii"
+        ).splitlines()[2:]
+    except (OSError, UnicodeError) as exc:
+        raise ValidationError("clean-room network evidence is missing") from exc
+    if len(route_lines) != 1:
+        raise ValidationError("clean-room network namespace has an IPv4 route")
+    interfaces = sorted(
+        line.split(":", 1)[0].strip()
+        for line in interface_lines
+        if ":" in line
+    )
+    if interfaces != ["lo"]:
+        raise ValidationError("clean-room network namespace is not loopback-only")
+    work_fd = _open_directory(Path("/work"), label="clean-room work root")
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            ".serverware-cwd-probe",
             os.O_WRONLY
             | os.O_CREAT
             | os.O_EXCL
             | getattr(os, "O_CLOEXEC", 0)
             | os.O_NOFOLLOW,
-            0o400,
+            0o600,
+            dir_fd=work_fd,
         )
-        while True:
-            chunk = os.read(source_fd, 1024 * 1024)
-            if not chunk:
-                break
-            view = memoryview(chunk)
-            while view:
-                written = os.write(destination_fd, view)
-                view = view[written:]
-        os.fsync(destination_fd)
-        after = os.fstat(source_fd)
-        if _file_identity(before) != _file_identity(after):
-            raise ValidationError(f"wheelhouse changed while it was snapshotted: {source.name}")
+        created = os.fstat(descriptor)
+        os.close(descriptor)
+        descriptor = -1
+        current = os.stat(
+            ".serverware-cwd-probe",
+            dir_fd=work_fd,
+            follow_symlinks=False,
+        )
+        if (
+            not stat.S_ISREG(current.st_mode)
+            or current.st_nlink != 1
+            or (current.st_dev, current.st_ino)
+            != (created.st_dev, created.st_ino)
+        ):
+            raise ValidationError("clean-room writability probe was replaced")
+        os.unlink(".serverware-cwd-probe", dir_fd=work_fd)
     finally:
-        os.close(source_fd)
-        if destination_fd >= 0:
-            os.close(destination_fd)
-
-
-def _snapshot_wheelhouse(source: Path) -> Path:
-    snapshot = Path(
-        tempfile.mkdtemp(prefix=".agent-trust-clean-room-", dir=source.parent)
-    ).resolve()
-    try:
-        for path in sorted(source.iterdir(), key=lambda item: item.name):
-            _copy_stable(path, snapshot / path.name)
-        for path in snapshot.iterdir():
-            path.chmod(0o444)
-        snapshot.chmod(0o555)
-        return snapshot
-    except BaseException:
-        _remove_snapshot(snapshot)
-        raise
-
-
-def _remove_snapshot(snapshot: Path) -> None:
-    if not snapshot.exists():
-        return
-    try:
-        snapshot.chmod(0o700)
-        for path in snapshot.iterdir():
-            try:
-                path.chmod(0o600)
-            except OSError:
-                pass
-    finally:
-        shutil.rmtree(snapshot, ignore_errors=False)
-
-
-def _validate_image_reference(image: str) -> None:
-    if not OFFICIAL_IMAGE_RE.fullmatch(image):
-        raise ValidationError(
-            "image must use the official docker.io/library/python namespace and an "
-            "exact CPython 3.11 patch-level slim Bookworm or Bullseye tag"
-        )
-
-
-def _inspect_image(
-    docker: str,
-    image: str,
-    *,
-    timeout: int,
-) -> tuple[str, dict[str, Any]]:
-    _validate_image_reference(image)
-    result = _run_checked(
-        [docker, "image", "inspect", image],
-        label=(
-            "clean-room image inspection; the image must be preloaded because this "
-            "validator never pulls"
-        ),
-        timeout=min(timeout, 60),
-    )
-    documents = _load_json_text(result.stdout, "Docker image inspection")
-    if not isinstance(documents, list) or len(documents) != 1:
-        raise ValidationError("Docker image inspection did not return exactly one image")
-    document = documents[0]
-    if not isinstance(document, dict):
-        raise ValidationError("Docker image inspection returned an invalid object")
-    image_id = document.get("Id")
-    if not isinstance(image_id, str) or SHA256_RE.fullmatch(image_id) is None:
-        raise ValidationError("Docker image has no immutable local image ID")
-    if document.get("Os") != "linux" or document.get("Architecture") != "amd64":
-        raise ValidationError(
-            "clean-room image must be preloaded for linux/amd64; "
-            f"found {document.get('Os')}/{document.get('Architecture')}"
-        )
-    repo_digests = document.get("RepoDigests")
-    if repo_digests is None:
-        repo_digests = []
-    if (
-        not isinstance(repo_digests, list)
-        or any(not isinstance(value, str) for value in repo_digests)
-    ):
-        raise ValidationError("Docker image RepoDigests are malformed")
-    facts = {
-        "architecture": document["Architecture"],
-        "id": image_id,
-        "os": document["Os"],
-        "reference": image,
-        "repoDigests": sorted(repo_digests),
+        if descriptor >= 0:
+            os.close(descriptor)
+        os.close(work_fd)
+    return {
+        "apparmor": apparmor,
+        "capabilitySets": {
+            name: status[name]
+            for name in ("CapAmb", "CapBnd", "CapEff", "CapInh", "CapPrm")
+        },
+        "interfaces": interfaces,
+        "mounts": mount_evidence,
+        "namespaces": namespaces,
+        "noNewPrivs": status["NoNewPrivs"],
+        "routes": [],
+        "seccomp": status["Seccomp"],
+        "uid": os.getuid(),
+        "gid": os.getgid(),
     }
-    return image_id, facts
 
 
-def _container_name() -> str:
-    return f"serverware-agent-trust-{os.getpid()}-{secrets.token_hex(6)}"
+def _terminate(process: subprocess.Popen[bytes]) -> None:
+    for sent_signal, timeout in ((signal.SIGTERM, 1), (signal.SIGKILL, 5)):
+        try:
+            os.killpg(process.pid, sent_signal)
+        except ProcessLookupError:
+            pass
+        try:
+            process.wait(timeout=timeout)
+            return
+        except subprocess.TimeoutExpired:
+            continue
+    raise ValidationError("fixed clean-room exercise process did not terminate")
 
 
-def _cleanup_container(docker: str, name: str) -> None:
-    try:
-        subprocess.run(
-            [docker, "rm", "--force", name],
-            text=True,
-            capture_output=True,
-            check=False,
-            timeout=30,
-        )
-        inspection = subprocess.run(
-            [docker, "container", "inspect", name],
-            text=True,
-            capture_output=True,
-            check=False,
-            timeout=30,
-        )
-    except FileNotFoundError as exc:
-        raise ValidationError("Docker CLI disappeared during container cleanup") from exc
-    except subprocess.TimeoutExpired as exc:
-        raise ValidationError("Docker container cleanup timed out") from exc
-    if inspection.returncode == 0:
-        raise ValidationError(f"clean-room container remained after cleanup: {name}")
-
-
-def _run_container(
-    docker: str,
-    *,
-    image_id: str,
-    snapshot: Path,
-    package_wheel: str,
-    timeout: int,
-) -> dict[str, Any]:
-    name = _container_name()
-    command = [
-        docker,
-        "run",
-        "--name",
-        name,
-        "--rm",
-        "--pull=never",
-        "--platform=linux/amd64",
-        "--network=none",
-        "--read-only",
-        "--user",
-        f"{EXPECTED_UID}:{EXPECTED_GID}",
-        "--cap-drop=ALL",
-        "--security-opt",
-        "no-new-privileges=true",
-        "--pids-limit=128",
-        "--memory=512m",
-        "--memory-swap=512m",
-        "--cpus=1.0",
-        "--tmpfs",
-        (
-            "/work:rw,nosuid,nodev,exec,"
-            f"size={TMPFS_BYTES},mode=0700,uid={EXPECTED_UID},gid={EXPECTED_GID}"
-        ),
-        "--mount",
-        f"type=bind,source={snapshot},target=/wheelhouse,readonly",
-        "--workdir",
-        "/work",
-        "--hostname",
-        "serverware-clean-room",
-        "--env",
-        f"EXPECTED_UID={EXPECTED_UID}",
-        "--env",
-        f"EXPECTED_GID={EXPECTED_GID}",
-        "--env",
-        f"EXPECTED_TMPFS_BYTES={TMPFS_BYTES}",
-        "--env",
-        f"PACKAGE_WHEEL={package_wheel}",
-        "--env",
-        "HOME=/work/home",
-        "--env",
-        "TMPDIR=/work/tmp",
-        "--env",
-        "PIP_CONFIG_FILE=/dev/null",
-        "--env",
-        "PIP_DISABLE_PIP_VERSION_CHECK=1",
-        "--env",
-        "PIP_NO_CACHE_DIR=1",
-        "--env",
-        "PIP_NO_INDEX=1",
-        "--env",
-        "PIP_ONLY_BINARY=:all:",
-        "--env",
-        "PIP_RETRIES=0",
-        "--env",
-        "PYTHONDONTWRITEBYTECODE=1",
-        "--env",
-        "PYTHONNOUSERSITE=1",
-        "--entrypoint",
-        "/bin/sh",
-        image_id,
-        "-c",
-        CONTAINER_SCRIPT,
-    ]
-    try:
-        result = _run_checked(
-            command,
-            label="Docker clean-room validation",
-            timeout=timeout,
-            cwd=ROOT,
-        )
-    finally:
-        _cleanup_container(docker, name)
-
-    lines = [line for line in result.stdout.splitlines() if line.strip()]
-    result_lines = [line for line in lines if line.startswith(RESULT_PREFIX)]
-    if len(result_lines) != 1 or len(lines) != 1:
-        raise ValidationError(
-            "clean-room output must contain exactly one bounded result record"
-        )
-    facts = _load_json_text(
-        result_lines[0].removeprefix(RESULT_PREFIX),
-        "clean-room result",
+def _run_fixed(scenario: dict[str, Any]) -> dict[str, Any]:
+    scenario_name = scenario["scenario"]
+    work_dir = Path("/work") / scenario_name
+    work_dir.mkdir(mode=0o700)
+    argv = scenario["argv"]
+    process = subprocess.Popen(
+        argv,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env={
+            "HOME": "/work/home",
+            "LANG": "C",
+            "LC_ALL": "C",
+            "PATH": "/opt/serverware/clean-room/installed/bin",
+            "PYTHONPATH": (
+                "/opt/serverware/clean-room/installed/"
+                "lib/python3.11/site-packages"
+            ),
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "PYTHONHASHSEED": "0",
+            "PYTHONNOUSERSITE": "1",
+            "TMPDIR": "/work/tmp",
+            "XDG_RUNTIME_DIR": "/run/serverware-runtime",
+        },
+        cwd=work_dir,
+        close_fds=True,
+        start_new_session=True,
     )
-    if not isinstance(facts, dict):
-        raise ValidationError("clean-room result is not an object")
-    assurance = facts.get("assurance")
+    if process.stdout is None or process.stderr is None:
+        _terminate(process)
+        raise ValidationError("fixed clean-room exercise pipes are unavailable")
+    selector = selectors.DefaultSelector()
+    output = {"stdout": bytearray(), "stderr": bytearray()}
+    for stream, label in ((process.stdout, "stdout"), (process.stderr, "stderr")):
+        os.set_blocking(stream.fileno(), False)
+        selector.register(stream, selectors.EVENT_READ, label)
+    deadline = time.monotonic() + 30
+    try:
+        while selector.get_map() or process.poll() is None:
+            if time.monotonic() >= deadline:
+                raise ValidationError("fixed clean-room exercise timed out")
+            for key, _ in selector.select(timeout=0.05):
+                try:
+                    raw = os.read(key.fd, 64 * 1024)
+                except BlockingIOError:
+                    continue
+                if not raw:
+                    selector.unregister(key.fileobj)
+                    continue
+                output[key.data].extend(raw)
+                if len(output[key.data]) > MAX_OUTPUT_BYTES:
+                    raise ValidationError("fixed clean-room exercise output is oversized")
+        return_code = process.wait()
+        if return_code != scenario["expectedExitCode"]:
+            raise ValidationError(
+                "fixed clean-room exercise returned an unexpected exit code"
+            )
+    except BaseException:
+        _terminate(process)
+        raise
+    finally:
+        selector.close()
+    stdout_sha256 = _sha256(bytes(output["stdout"]))
+    stderr_sha256 = _sha256(bytes(output["stderr"]))
+    state = _scan_tree(work_dir)
     if (
-        not isinstance(assurance, dict)
-        or assurance.get("classification") != ASSURANCE_CLASSIFICATION
+        stdout_sha256 != scenario["stdoutSha256"]
+        or stderr_sha256 != scenario["stderrSha256"]
+        or state != scenario["expectedState"]
     ):
-        raise ValidationError("clean-room result changed its assurance classification")
-    return facts
+        raise ValidationError(
+            f"{scenario_name} behavior differs from its promoted fixture"
+        )
+    return {
+        "argv": argv,
+        "exitCode": return_code,
+        "scenario": scenario_name,
+        "stateSha256": _sha256(_canonical_json(state)),
+        "stderrSha256": stderr_sha256,
+        "stdoutSha256": stdout_sha256,
+    }
 
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description=(
-            "Strictly verify an enrollment/evidence wheelhouse and install it in a "
-            "networkless, non-root, read-only Docker clean room."
-        ),
-        epilog=(
-            "Assurance: checksum-closed local clean-room validation only; this does "
-            "not establish source provenance, image provenance, independent "
-            "execution, or TEE attestation. The image must already exist locally."
-        ),
-    )
-    parser.add_argument(
-        "--wheelhouse",
-        required=True,
-        type=Path,
-        help="path containing wheelhouse-manifest.json, SHA256SUMS, and the wheel closure",
-    )
-    parser.add_argument(
-        "--image",
-        default=DEFAULT_IMAGE,
-        help=f"preloaded official CPython 3.11 slim image (default: {DEFAULT_IMAGE})",
-    )
-    parser.add_argument(
-        "--timeout",
-        type=int,
-        default=300,
-        help="maximum Docker clean-room runtime in seconds (default: 300)",
+        description="Exercise the fixed sealed clean-room OCI payload.",
+        allow_abbrev=False,
     )
     args = parser.parse_args()
-    if args.timeout < 30 or args.timeout > 1800:
-        parser.error("--timeout must be between 30 and 1800 seconds")
+    if sys.argv[1:]:
+        parser.error("the sealed clean-room exercise accepts no arguments")
     return args
 
 
 def main() -> None:
-    args = _parse_args()
-    snapshot: Path | None = None
+    _parse_args()
     try:
-        wheelhouse = _validate_wheelhouse_root(args.wheelhouse)
-        verifier_size, verifier_digest = _stable_sha256(VERIFIER)
-        source_verification = _invoke_repository_verifier(
-            wheelhouse,
-            timeout=min(args.timeout, 120),
-        )
-        manifest = _read_manifest(wheelhouse)
-        package_wheel, package_digest = _select_package_wheel(wheelhouse, manifest)
-
-        snapshot = _snapshot_wheelhouse(wheelhouse)
-        snapshot_verification = _invoke_repository_verifier(
-            snapshot,
-            timeout=min(args.timeout, 120),
-        )
-        if snapshot_verification != source_verification:
-            raise ValidationError("private wheelhouse snapshot differs from verified source")
-
-        docker = shutil.which("docker")
-        if docker is None:
-            raise ValidationError("Docker CLI is unavailable")
-        image_id, image_facts = _inspect_image(
-            docker,
-            args.image,
-            timeout=args.timeout,
-        )
-        container_facts = _run_container(
-            docker,
-            image_id=image_id,
-            snapshot=snapshot,
-            package_wheel=package_wheel,
-            timeout=args.timeout,
-        )
-
-        final_snapshot_verification = _invoke_repository_verifier(
-            snapshot,
-            timeout=min(args.timeout, 120),
-        )
-        final_source_verification = _invoke_repository_verifier(
-            wheelhouse,
-            timeout=min(args.timeout, 120),
-        )
-        if (
-            final_snapshot_verification != source_verification
-            or final_source_verification != source_verification
-        ):
-            raise ValidationError("wheelhouse changed during clean-room validation")
-        final_verifier_size, final_verifier_digest = _stable_sha256(VERIFIER)
-        if (final_verifier_size, final_verifier_digest) != (
-            verifier_size,
-            verifier_digest,
-        ):
-            raise ValidationError("repository verifier changed during clean-room validation")
-
+        sandbox = _verify_sandbox()
+        payload = _verify_payload_manifest()
+        checksums = _verify_checksums()
+        wheelhouse = _verify_wheelhouse_manifest(checksums)
+        installation = _verify_install_contract(checksums, wheelhouse)
+        exercises = [
+            _run_fixed(scenario)
+            for scenario in installation["exerciseScenarios"]
+        ]
+        result_payload = {
+            "apiVersion": RESULT_VERSION,
+            "derivedInstallationSha256": installation[
+                "derivedInstallationSha256"
+            ],
+            "exerciseScenarios": exercises,
+            "installContractSha256": installation["contractSha256"],
+            "payloadClosureSha256": payload["closureSha256"],
+            "requirementsResolutionSha256": installation[
+                "requirementsResolutionSha256"
+            ],
+            "sandboxEvidenceSha256": _sha256(_canonical_json(sandbox)),
+            "wheelRecordsSha256": installation["wheelRecordsSha256"],
+            "wheelhouseManifestPayloadSha256": wheelhouse[
+                "payloadSha256"
+            ],
+        }
+        result = {
+            **result_payload,
+            "resultSha256": _sha256(_canonical_json(result_payload)),
+        }
         print(
-            json.dumps(
-                {
-                    "assurance": {
-                        "classification": ASSURANCE_CLASSIFICATION,
-                        "notEstablished": [
-                            "image-provenance",
-                            "independent-execution",
-                            "source-provenance",
-                            "tee-attestation",
-                        ],
-                    },
-                    "container": container_facts,
-                    "image": image_facts,
-                    "ok": True,
-                    "packageWheel": {
-                        "path": package_wheel,
-                        "sha256": "sha256:" + package_digest,
-                    },
-                    "repositoryVerifier": {
-                        "path": VERIFIER.relative_to(ROOT).as_posix(),
-                        "sha256": "sha256:" + verifier_digest,
-                        "size": verifier_size,
-                    },
-                    "wheelhouse": source_verification,
-                },
-                sort_keys=True,
-                separators=(",", ":"),
-            )
+            RESULT_PREFIX + _canonical_json(result).decode("ascii"),
+            flush=True,
         )
-    except ValidationError as exc:
+    except (OSError, TypeError, UnicodeError, ValidationError, ValueError) as exc:
         raise SystemExit(str(exc)) from exc
-    finally:
-        if snapshot is not None:
-            _remove_snapshot(snapshot)
 
 
 if __name__ == "__main__":

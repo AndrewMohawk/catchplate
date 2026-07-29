@@ -10,7 +10,6 @@ import hmac
 import importlib
 import io
 import json
-import math
 import os
 import platform
 import re
@@ -22,9 +21,10 @@ import tempfile
 import tarfile
 import time
 import types
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from cryptography.exceptions import InvalidSignature
@@ -32,12 +32,36 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
-import build_production_images
-import merge_production_images_env
-import production_release_input_preflight
-import run_production_readiness
-import verify_production_policy_identity
-from serverware.policy_bundle import PolicySnapshot, compile_policy_bundle
+import verify_nitro_tee
+
+
+def load_readiness_dependencies() -> None:
+    """Load the legacy Docker/readiness implementation only after mode dispatch."""
+    global build_production_images
+    global merge_production_images_env
+    global production_release_input_preflight
+    global run_production_readiness
+    global verify_production_policy_identity
+    global PolicySnapshot
+    global compile_policy_bundle
+
+    import build_production_images as build_images_module
+    import merge_production_images_env as merge_images_module
+    import production_release_input_preflight as release_input_module
+    import run_production_readiness as readiness_module
+    import verify_production_policy_identity as policy_identity_module
+    from serverware.policy_bundle import (
+        PolicySnapshot as PolicySnapshotType,
+        compile_policy_bundle as compile_bundle,
+    )
+
+    build_production_images = build_images_module
+    merge_production_images_env = merge_images_module
+    production_release_input_preflight = release_input_module
+    run_production_readiness = readiness_module
+    verify_production_policy_identity = policy_identity_module
+    PolicySnapshot = PolicySnapshotType
+    compile_policy_bundle = compile_bundle
 
 
 _MEASURED_PREFLIGHT_MODULE: types.ModuleType | None = None
@@ -132,8 +156,13 @@ RESPONSE_OBSERVATION_NONCE_EXPIRY_BYTES = 4
 RESPONSE_OBSERVATION_NONCE_MAX_LIFETIME_SECONDS = 330
 STREAMING_TLS_EXPORTER_LABEL = "EXPORTER-Serverware-Proxy-Stream-v1"
 CONTROL_PLANE_AUTHORIZATION_RECEIPT_API_VERSION = "serverware.controlPlaneAuthorizationReceipt/v1"
-CONTROL_PLANE_RESPONSE_SIGNATURE_API_VERSION = "serverware.responseSignature/v2"
+CONTROL_PLANE_RESPONSE_SIGNATURE_API_VERSION = "serverware.responseSignature/v3"
 CONTROL_PLANE_DISPATCH_PATH = "/api/data-plane/release-authorizations/dispatch"
+RELEASE_AUTHORIZATION_BINDING_V2 = "serverware.releaseAuthorizationBinding/v2"
+RELEASE_AUTHORIZATION_DISPATCH_V1 = "serverware.releaseAuthorizationDispatch/v1"
+RELEASE_AUTHORIZATION_DISPATCH_V2 = "serverware.releaseAuthorizationDispatch/v2"
+RELEASE_AUTHORIZATION_RESPONSE_V1 = "serverware.releaseAuthorization/v1"
+RELEASE_AUTHORIZATION_RESPONSE_V2 = "serverware.releaseAuthorization/v2"
 HARDWARE_PROOF_API_VERSION = "serverware.hardwareAssurance/v1"
 HARDWARE_PROOF_MAX_AGE_SECONDS = 900
 HARDWARE_PROOF_FUTURE_SKEW_SECONDS = 30
@@ -142,7 +171,436 @@ FINAL_CHALLENGE_LEDGER_API_VERSION = "serverware.finalChallengeLedger/v1"
 FINAL_CHALLENGE_LEDGER_MAX_ENTRIES = 4096
 FINAL_CHALLENGE_RECEIPT_API_VERSION = "serverware.finalChallengeReceipt/v1"
 FINAL_CHALLENGE_RECEIPT_MAX_AGE_SECONDS = 900
-FINAL_COMPLETION_IDENTITY_API_VERSION = "serverware.finalCompletionIdentity/v1"
+FINAL_COMPLETION_IDENTITY_API_VERSION = "serverware.finalCompletionIdentity/v3"
+PRODUCTION_RELEASE_IDENTITY_API_VERSION = "serverware.productionReleaseIdentity/v2"
+PRODUCTION_CONTINUITY_SUMMARY_API_VERSION = "serverware.productionContinuitySummary/v1"
+SOURCE_INPUT_MANIFEST_API_VERSION = "serverware.sourceInputManifest/v2"
+GIT_SOURCE_INVENTORY_API_VERSION = "serverware.gitSourceInventory/v1"
+UNTRACKED_SOURCE_APPROVAL_API_VERSION = "serverware.untrackedSourceApproval/v1"
+CANDIDATE_MANIFEST_V6_API_VERSION = "serverware.consolidatedCandidateArtifacts/v6"
+BUILD_WATCHDOG_RECEIPT_API_VERSION = "serverware.ociBuildWatchdogReceipt/v3"
+PROMOTION_RECEIPT_API_VERSION = "serverware.verificationPromotionReceipt/v3"
+DEPENDENCY_BUNDLE_API_VERSION = "serverware.ociDependencyBundle/v3"
+RAW_BUILDER_STATEMENT_API_VERSION = "serverware.rawBuilderStatement/v1"
+RAW_BUILDER_TRANSCRIPT_API_VERSION = "serverware.rawBuilderTranscript/v1"
+MANIFEST_V6_EIF_BUILD_API_VERSION = "serverware.manifestV6EifBuildStatement/v1"
+KEY_CUSTODY_EVIDENCE_API_VERSION = "serverware.enclaveKeyCustodyEvidence/v1"
+MONOTONIC_WITNESS_API_VERSION = "serverware.monotonicReleaseWitness/v1"
+MONOTONIC_WITNESS_STATE_API_VERSION = "serverware.monotonicReleaseWitnessState/v1"
+COMPLETION_AUTHENTICATION_API_VERSION = "serverware.completionProofAuthentication/v1"
+COMPLETION_CHECKPOINT_API_VERSION = "serverware.completionProofCheckpoint/v1"
+COMPLETION_PROOF_API_VERSION = "serverware.completionProof/v6"
+CANONICAL_JSON_PROFILE = (
+    "serverware.canonicalJson/integer-string-bool-null-array-object-nfc-v1"
+)
+PROTECTED_CLIENT_STATE_API_VERSION = "serverware.protectedNitroClientState/v1"
+PROTECTED_CLIENT_STATE_CHECKPOINT_API_VERSION = (
+    "serverware.protectedNitroClientStateCheckpoint/v1"
+)
+PROTECTED_CLIENT_STATE_SIGNATURE_DOMAIN = (
+    b"serverware.protectedNitroClientState/v1\x00Ed25519\x00"
+)
+PROTECTED_CLIENT_STATE_CHECKPOINT_SIGNATURE_DOMAIN = (
+    b"serverware.protectedNitroClientStateCheckpoint/v1\x00Ed25519\x00"
+)
+PROTECTED_CLIENT_STATE_PROVENANCE_BOUNDARY = (
+    "client-or-out-of-band-pinned-protected-state/v1"
+)
+FINAL_V6_STATE_COMMIT_API_VERSION = "serverware.publicNitroStateCommit/v1"
+FINAL_V6_STATE_COMMIT_SIGNATURE_DOMAIN = (
+    b"serverware.publicNitroStateCommit/v1\x00Ed25519\x00"
+)
+FINAL_V6_RESULT_API_VERSION = "serverware.releaseCompletionVerification/v1"
+PUBLIC_NITRO_LIVE_RESULT_ENVELOPE_API_VERSION = (
+    "serverware.publicNitroLiveVerificationResultEnvelope/v1"
+)
+PUBLIC_NITRO_LIVE_RESULT_SIGNATURE_DOMAIN = (
+    verify_nitro_tee.PUBLIC_NITRO_LIVE_RESULT_ENVELOPE_DOMAIN
+)
+FINAL_RESULT_AUTHENTICITY_API_VERSION = (
+    "serverware.releaseCompletionResultSignature/v1"
+)
+FINAL_RESULT_SIGNATURE_DOMAIN = (
+    b"serverware.releaseCompletionResultSignature/v1\x00Ed25519\x00"
+)
+FINAL_RESULT_SIGNING_REQUEST_API_VERSION = (
+    "serverware.releaseCompletionResultSigningRequest/v1"
+)
+FINAL_RESULT_SIGNING_REQUEST_KIND = "ReleaseCompletionResultSigningRequest"
+FINAL_RESULT_SIGNING_RESPONSE_API_VERSION = (
+    "serverware.releaseCompletionResultSigningResponse/v1"
+)
+FINAL_RESULT_SIGNING_RESPONSE_KIND = "ReleaseCompletionResultSigningResponse"
+FINAL_RESULT_SIGNING_OPERATION = "sign-release-completion-result"
+FINAL_RESULT_SIGNING_RETRY_SEMANTICS = (
+    "same-idempotency-key-requires-byte-identical-request-and-response"
+)
+FINAL_RESULT_SIGNING_LOST_RESPONSE_RECOVERY = (
+    "resubmit-byte-identical-request-and-recover-identical-signed-response"
+)
+FINAL_RESULT_SIGNING_CONFLICT_SEMANTICS = (
+    "same-idempotency-key-with-different-request-fails-closed"
+)
+FINAL_V1_IDENTIFIER_RE = re.compile(
+    r"[A-Za-z0-9][A-Za-z0-9_.:@+-]{0,255}\Z",
+    re.ASCII,
+)
+FINAL_V1_DIGEST_MAP_KEY_RE = re.compile(
+    r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z",
+    re.ASCII,
+)
+FINAL_V1_NON_EMPTY_STRING_RE = re.compile(
+    r"[^\r\n\u2028\u2029]{1,4096}\Z",
+)
+FINAL_ROLE_REGISTRY_API_VERSION = "serverware.finalRoleRegistry/v1"
+PUBLIC_NITRO_ROLE_REGISTRY_API_VERSION = (
+    "serverware.publicNitroRoleRegistry/v1"
+)
+HOST_READINESS_CONTEXT_API_VERSION = "serverware.hostReadinessContext/v1"
+CANONICAL_JSON_SIGNED_MAX = (1 << 63) - 1
+MILLISECONDS_TO_NANOSECONDS = 1_000_000
+EXACT_MILLISECONDS_RE = re.compile(
+    r"(?:0|[1-9][0-9]*)(?:\.[0-9]{1,6})?\Z",
+    re.ASCII,
+)
+BENCHMARK_MILLISECOND_FIELDS = frozenset(
+    {"p50_ms", "p95_ms", "p99_ms", "min_ms", "max_ms", "mean_ms"}
+)
+PREFLIGHT_BENCHMARK_MILLISECOND_FIELDS = (
+    BENCHMARK_MILLISECOND_FIELDS | {"target_p99_ms"}
+)
+PUBLIC_NITRO_CANONICAL_INTEGER_MAX = (
+    verify_nitro_tee.PUBLIC_NITRO_CANONICAL_INTEGER_MAX
+)
+HOST_READINESS_V6_ENVELOPE_FIELDS = frozenset(
+    {
+        "proof_core_sha256",
+        "independently_authenticated",
+        "aggregate_authentication",
+        "proof_path",
+        "integrity_metadata",
+    }
+)
+_HOST_READINESS_V6_SCHEMA_VALIDATOR: Any | None = None
+FINAL_PUBLIC_RESULT_ROLE_NAMES = (
+    verify_nitro_tee.PUBLIC_NITRO_RESULT_ROLE_NAMES
+)
+FINAL_REQUIRED_ROLE_NAMES = FINAL_PUBLIC_RESULT_ROLE_NAMES | {
+    "releaseCompletionResult"
+}
+FINAL_V6_IDENTITY_API_VERSION = "serverware.productionReleaseCompletionBridge/v1"
+FINAL_V6_ARTIFACT_BINDINGS_API_VERSION = (
+    "serverware.manifestV6CompletionArtifactBindings/v1"
+)
+FINAL_V6_HOST_BOOTSTRAP_BOUNDARY_API_VERSION = (
+    "serverware.hostBootstrapBoundary/v1"
+)
+FINAL_V6_HOST_BOOTSTRAP_BOUNDARY_FIELDS = frozenset(
+    {
+        "apiVersion",
+        "launchManifestApiVersion",
+        "launchAuthorizationRequestApiVersion",
+        "launchAuthorizationApiVersion",
+        "bootstrapReceiptApiVersion",
+        "nonceRollbackAssuranceBindingApiVersion",
+        "authorizationScope",
+        "freshnessAuthority",
+        "evidenceProvidedToFinalVerifier",
+        "hostReadinessContextSha256",
+        "hostReadinessCompletionProofFileSha256",
+        "launchAuthorityKeyId",
+        "authoritativeForFinalCompletion",
+        "requiredForFinalCompletion",
+        "relationship",
+        "finalAuthority",
+        "completionIdentitySha256",
+        "bindingMechanism",
+        "boundarySha256",
+    }
+)
+FINAL_V6_PRODUCTION_IDENTITY_FIELDS = frozenset(
+    {
+        "apiVersion",
+        "canonicalProfile",
+        "pipeline",
+        "legacyDockerNsmAccepted",
+        "completionIdentity",
+        "completionIdentitySha256",
+        "releaseArtifactBindings",
+        "publicNitroEvidenceBundleFileSha256",
+        "publicNitroExpectationsFileSha256",
+        "publicVerifierResultSha256",
+        "productionIdentitySha256",
+        "candidateManifestFileSha256",
+        "candidateManifestPayloadSha256",
+        "sourceInputManifestFileSha256",
+        "sourceClosureSha256",
+        "buildWatchdogReceiptFileSha256",
+        "promotionReceiptFileSha256",
+        "promotedManifestFileSha256",
+        "promotedManifestPayloadSha256",
+        "promotedManifestMeasuredFileSha256",
+        "candidateToEif",
+        "runtimeStateFileSha256",
+        "runtimeKeyCustodyFileSha256",
+        "enclaveInstanceId",
+        "enclaveBootId",
+        "runtimeKeyGenerations",
+        "releaseGeneration",
+        "rollbackEpoch",
+        "policyHash",
+        "policySequence",
+        "caSpkiSha256",
+        "eifSha384",
+        "pcrs",
+        "rawNitroAttestationDocumentSha256",
+        "tlsExporterSha256",
+        "tlsSpkiSha256",
+        "tlsPeerSpkiSha256",
+        "tlsStackMeasurementSha256",
+        "attestationRequestSha256",
+        "requestSha256",
+        "responseBytesSha256",
+        "releaseKeyCustodyEvidenceSha256",
+        "kmsAuditProofSha256s",
+        "completionProofFileSha256",
+        "completionAuthenticationKeyId",
+        "completionCheckpointKeyId",
+        "hostBootstrapBoundarySha256",
+        "witnessCheckpointSha256",
+        "witnessChallengeConsumptionSha256",
+        "witnessLeafIndex",
+        "challengeSha256",
+        "candidateExecutionContract",
+        "watchdogAndBuilderGrammar",
+        "promotionAcceptance",
+        "publicHandoff",
+        "protectedPriorClientState",
+        "stateCommit",
+        "trustRootPin",
+        "identitySha256",
+    }
+)
+FINAL_V6_EXTERNAL_PIN_PROVENANCE_BOUNDARY = (
+    "The verifier proves equality to supplied pins. It cannot prove that an "
+    "on-host argument was independently sourced; the client or another "
+    "out-of-band trust channel must pin the bundle digest and protected-state "
+    "key IDs."
+)
+FINAL_V6_EXTERNAL_PROVISIONING_BOUNDARY = (
+    "Actual AWS Nitro EIF construction and PCR policy, AWS KMS "
+    "CiphertextForRecipient releases, enclave-owned TLS exporter support, "
+    "independent builders/promoter, off-host monotonic witness storage, "
+    "CAS/current-head reservation and atomic authorization redemption, and a "
+    "stateful action gate that re-checks the live final head and consumes the "
+    "redemption receipt identity while performing the action must still be "
+    "provisioned. This persisted completion is never an action capability."
+)
+FINAL_V6_COMPLETION_CORE_FIELDS = frozenset(
+    {
+        "builderA",
+        "builderB",
+        "continuity",
+        "custody",
+        "eif",
+        "hardware",
+        "promotion",
+        "release",
+        "response",
+        "runtime",
+        "source",
+        "trust",
+        "witness",
+    }
+)
+PROTECTED_CLIENT_STATE_LEAF_API_VERSION = (
+    "serverware.protectedNitroClientStateLeaf/v1"
+)
+FINAL_V6_MAX_VALIDITY_SECONDS = 24 * 60 * 60
+MANIFEST_V6_PIPELINE = "manifest-v6-promoted-oci-nitro-eif"
+LEGACY_DOCKER_NSM_PIPELINES = {
+    "legacy-docker-dev-nsm-readiness",
+    "serverware.productionReadinessLaunch/v2",
+    "serverware.legacyDockerNsmProductionReadinessLaunch/v1",
+}
+FINAL_V6_TLS_SCOPE_API_VERSION = "serverware.enclaveTlsScope/v2"
+FINAL_V6_RUNTIME_CUSTODY_API_VERSION = "serverware.enclaveKeyCustody/v3"
+FINAL_V6_RESPONSE_STATEMENT_API_VERSION = "serverware.attestationResponse/v2"
+FINAL_V6_HTTP_RESPONSE_API_VERSION = "serverware.attestationHttpResponse/v1"
+FINAL_V6_PYTHON_ENTRYPOINT_SOURCE = "scripts/oci_lane_entrypoint.py"
+FINAL_V6_PYTHON_ENTRYPOINT_IMAGE = (
+    "/opt/serverware/src/scripts/oci_lane_entrypoint.py"
+)
+FINAL_V6_NPM_ENTRYPOINT_SOURCE = "scripts/npm_publish_companion.js"
+FINAL_V6_NPM_ENTRYPOINT_IMAGE = (
+    "/opt/serverware/src/scripts/npm_publish_companion.js"
+)
+FINAL_V6_BASE_ENVIRONMENT = {
+    "HOME": "/work/home",
+    "LANG": "C",
+    "LC_ALL": "C",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "PYTHONHASHSEED": "0",
+    "PYTHONNOUSERSITE": "1",
+    "TMPDIR": "/work/tmp",
+    "TZ": "UTC",
+    "XDG_RUNTIME_DIR": "/run/serverware-runtime",
+}
+FINAL_V6_PORTAL_DYNAMIC_ENVIRONMENT = [
+    "SERVERWARE_ATTEMPT",
+    "SERVERWARE_LANE",
+    "SERVERWARE_LEASE_ID",
+    "SERVERWARE_MANIFEST_SHA256",
+    "SERVERWARE_NPM_COMPANION_IMAGE_ID",
+    "SERVERWARE_NPM_ENTRYPOINT_SHA256",
+    "SERVERWARE_NPM_NODE_SHA256",
+    "SERVERWARE_NPM_PACKAGE_SHA256",
+    "SERVERWARE_ONE_USE_NONCE",
+    "SERVERWARE_PROMOTION_RECEIPT_SHA256",
+    "SERVERWARE_WATCHDOG_ENDPOINT",
+    "SERVERWARE_WATCHDOG_TLS_SPKI_SHA256",
+]
+FINAL_V6_SOURCE_CONTRACTS = {
+    "approval-review": {
+        "exact": ["scripts/test_approval_review.py"],
+        "prefixes": ["serverware/", "serverware_agent_trust/"],
+    },
+    "browser-python-compatibility": {"exact": [], "prefixes": []},
+    "chromium-compatibility": {"exact": [], "prefixes": []},
+    "clean-room": {
+        "exact": [
+            "scripts/test_agent_trust_clean_room.py",
+            "scripts/verify_offline_artifact_manifest.py",
+        ],
+        "prefixes": ["serverware_agent_trust/"],
+    },
+    "credential-constraints": {
+        "exact": ["scripts/test_credential_constraints.py"],
+        "prefixes": ["serverware/", "serverware_agent_trust/"],
+    },
+    "credential-constraints-proxy": {
+        "exact": ["scripts/test_credential_constraints.py"],
+        "prefixes": ["serverware/", "serverware_agent_trust/"],
+    },
+    "host-python-compatibility": {"exact": [], "prefixes": []},
+    "internal-service-auth": {
+        "exact": ["scripts/test_internal_service_auth.py"],
+        "prefixes": ["serverware/", "serverware_agent_trust/"],
+    },
+    "jit-transaction-sqlite-full": {
+        "exact": ["scripts/test_jit_transaction_state.py"],
+        "prefixes": ["serverware/", "serverware_agent_trust/"],
+    },
+    "onboarding-evidence": {
+        "exact": [
+            "scripts/test_onboarding_evidence.py",
+            "scripts/verify_onboarding_evidence.py",
+        ],
+        "prefixes": ["serverware/", "serverware_agent_trust/"],
+    },
+    "portal-browser-oauth": {
+        "exact": [
+            "scripts/oauth_provider_simulator.py",
+            "scripts/test_portal_browser_oauth.py",
+        ],
+        "prefixes": [
+            "data-plane/decision-gate-rs/",
+            "serverware/",
+            "serverware_agent_trust/",
+        ],
+    },
+    "proxy-python-compatibility": {"exact": [], "prefixes": []},
+    "rust-decision-gate-tests": {
+        "exact": [],
+        "prefixes": ["data-plane/decision-gate-rs/"],
+    },
+    "webauthn-attestation": {
+        "exact": ["scripts/test_webauthn_attestation.py"],
+        "prefixes": ["serverware/", "serverware_agent_trust/"],
+    },
+}
+FINAL_V6_DEPENDENCY_CAPABILITIES = {
+    "browser-runtime": ["chromium", "python"],
+    "clean-room-runtime": [
+        "packaging-25.0",
+        "python",
+        "sealed-wheelhouse",
+    ],
+    "npm-11.8-runtime": ["node", "npm-11.8"],
+    "python-runtime": ["python"],
+    "rust-runtime": ["rust-test-binary"],
+}
+FINAL_V6_PYTHON_CAPABILITY_PROBES = [
+    "dns-nss-local-bounded",
+    "multiprocessing-spawn-bounded",
+    "openssl-provider-load",
+    "sqlite-memory-and-file",
+]
+GIT_SOURCE_INVENTORY_SIGNATURE_DOMAIN = (
+    b"serverware.gitSourceInventory/v1\x00Ed25519\x00"
+)
+UNTRACKED_SOURCE_APPROVAL_SIGNATURE_DOMAIN = (
+    b"serverware.untrackedSourceApproval/v1\x00Ed25519\x00"
+)
+BUILD_WATCHDOG_SIGNATURE_DOMAIN = (
+    b"serverware.ociBuildWatchdogReceipt/v3\x00Ed25519\x00"
+)
+PROMOTION_RECEIPT_SIGNATURE_DOMAIN = (
+    b"serverware.verificationPromotionReceipt/v3\x00Ed25519\x00"
+)
+RAW_BUILDER_STATEMENT_SIGNATURE_DOMAIN = (
+    b"serverware.rawBuilderStatement/v1\x00Ed25519\x00"
+)
+MANIFEST_V6_EIF_BUILD_SIGNATURE_DOMAIN = (
+    b"serverware.manifestV6EifBuildStatement/v1\x00Ed25519\x00"
+)
+KEY_CUSTODY_SIGNATURE_DOMAIN = (
+    b"serverware.enclaveKeyCustodyEvidence/v1\x00Ed25519\x00"
+)
+MONOTONIC_WITNESS_SIGNATURE_DOMAIN = (
+    b"serverware.monotonicReleaseWitness/v1\x00Ed25519\x00"
+)
+COMPLETION_AUTHENTICATION_SIGNATURE_DOMAIN = (
+    b"serverware.completionProofAuthentication/v1\x00Ed25519\x00"
+)
+COMPLETION_CHECKPOINT_SIGNATURE_DOMAIN = (
+    b"serverware.completionProofCheckpoint/v1\x00Ed25519\x00"
+)
+PRODUCTION_LANE_ORDER = (
+    "approval-review",
+    "browser-python-compatibility",
+    "chromium-compatibility",
+    "clean-room",
+    "credential-constraints",
+    "credential-constraints-proxy",
+    "host-python-compatibility",
+    "internal-service-auth",
+    "jit-transaction-sqlite-full",
+    "onboarding-evidence",
+    "portal-browser-oauth",
+    "proxy-python-compatibility",
+    "rust-decision-gate-tests",
+    "webauthn-attestation",
+)
+PRODUCTION_IMAGE_ROLE_ORDER = tuple(
+    f"lane-{lane}" for lane in PRODUCTION_LANE_ORDER
+) + ("npm-publish-companion",)
+DEPENDENCY_ROLE_ORDER = (
+    "browser-runtime",
+    "clean-room-runtime",
+    "npm-11.8-runtime",
+    "python-runtime",
+    "rust-runtime",
+)
+KEY_CUSTODY_ROLE_ORDER = (
+    "broker-kek",
+    "credentials",
+    "ca",
+    "tls",
+    "response",
+    "release",
+)
+CONTINUITY_MAX_VALIDITY_SECONDS = 900
 PRODUCTION_IMAGES_BUILD_API_VERSION = "serverware.productionImagesBuild/v2"
 PRODUCTION_IMAGES_PUBLISHED_API_VERSION = "serverware.productionImagesPublished/v2"
 REPRODUCIBLE_BUILD_MANIFEST_API_VERSION = "serverware.reproducibleBuildManifest/v3"
@@ -172,6 +630,41 @@ SECURITY_ROLE_NAMES = (
     "proxy_vendor_tee_verifier",
     "hardware_assurance_verifier",
     "final_challenge_authority",
+    "source_git_inventory_authority",
+    "source_untracked_approval_authority",
+    "build_watchdog_signer",
+    "promotion_receipt_signer",
+    "manifest_v6_eif_builder",
+    "key_custody_verifier",
+    "monotonic_release_witness",
+    "completion_proof_authenticator",
+    "completion_proof_checkpoint",
+)
+LAUNCH_GLOBAL_ROLE_NAMES = frozenset(
+    {
+        "launchAuthority",
+        "launchAuthorityWitness",
+        "launchAuthorityWitnessStoreAssurance",
+        "launchAuthorityWitnessTls",
+        "nonceAuthorityAssuranceEvidence",
+        "nonceAuthorityVerifierState",
+        "nonceAuthorityVerifierStateStoreAttestation",
+        "policyActivation",
+        "policyIdentity",
+        "reproducibleBuild",
+    }
+)
+LAUNCH_GLOBAL_ROLES_OUTSIDE_CLAIM = (
+    "actionGate",
+    "publicAttestationNonceStore",
+    "publicAttestationProducer",
+    "publicAttestationWitnessStore",
+    "finalVerifier",
+    "nonceAuthorityVerifierStateStoreAssurance",
+    "release",
+    "response",
+    "verifierStateTlsClient",
+    "verifierStateTlsServer",
 )
 FINAL_MODE_ENV_KEY = "SERVERWARE_COMPLETION_VERIFICATION_MODE"
 FINAL_HARDWARE_ASSURANCE_ENV_KEY = "SERVERWARE_HARDWARE_ASSURANCE"
@@ -247,19 +740,23 @@ PROXY_EXPECTED_DIGEST_ENV_KEYS = {
 }
 PROXY_PROOF_MAX_AGE_ENV_KEY = "SERVERWARE_PROXY_PROOF_MAX_AGE_SECONDS"
 COMPLETION_P99_LIMIT_ENV_KEY = "SERVERWARE_COMPLETION_P99_LIMIT_MS"
-DOCKER_EXECUTABLE_ENV_KEY = run_production_readiness.PRODUCTION_DOCKER_EXECUTABLE_ENV
+DOCKER_EXECUTABLE_ENV_KEY = "SERVERWARE_DOCKER_EXECUTABLE"
 DOCKER_COMPOSE_PLUGIN_EXECUTABLE_ENV_KEY = (
-    run_production_readiness.DOCKER_COMPOSE_PLUGIN_EXECUTABLE_ENV
+    "SERVERWARE_DOCKER_COMPOSE_PLUGIN_EXECUTABLE"
 )
-DOCKER_COMPOSE_PLUGIN_SHA256_ENV_KEY = run_production_readiness.DOCKER_COMPOSE_PLUGIN_SHA256_ENV
-DOCKER_UNIX_SOCKET_ENV_KEY = run_production_readiness.DOCKER_UNIX_SOCKET_ENV
-DOCKER_DAEMON_ID_ENV_KEY = run_production_readiness.DOCKER_DAEMON_ID_ENV
-PREFLIGHT_MAX_AGE_ENV_KEY = run_production_readiness.PRODUCTION_HOST_PREFLIGHT_MAX_AGE_ENV
+DOCKER_COMPOSE_PLUGIN_SHA256_ENV_KEY = (
+    "SERVERWARE_DOCKER_COMPOSE_PLUGIN_SHA256"
+)
+DOCKER_UNIX_SOCKET_ENV_KEY = "SERVERWARE_DOCKER_UNIX_SOCKET"
+DOCKER_DAEMON_ID_ENV_KEY = "SERVERWARE_DOCKER_DAEMON_ID"
+PREFLIGHT_MAX_AGE_ENV_KEY = (
+    "SERVERWARE_PRODUCTION_HOST_PREFLIGHT_MAX_AGE_SECONDS"
+)
 PREFLIGHT_SIGNING_PUBLIC_KEY_ENV_KEY = (
-    run_production_readiness.PRODUCTION_HOST_PREFLIGHT_SIGNING_PUBLIC_KEY_ENV
+    "SERVERWARE_PRODUCTION_HOST_PREFLIGHT_SIGNING_PUBLIC_KEY"
 )
 PREFLIGHT_SIGNING_KEY_ID_ENV_KEY = (
-    run_production_readiness.PRODUCTION_HOST_PREFLIGHT_SIGNING_KEY_ID_ENV
+    "SERVERWARE_PRODUCTION_HOST_PREFLIGHT_SIGNING_KEY_ID"
 )
 
 
@@ -335,8 +832,99 @@ class InputSnapshots:
         return self.by_key
 
 
+def external_counter_field(name: str, value: Any) -> bool:
+    normalized = re.sub(r"[^a-z0-9]", "", name.lower())
+    return (
+        normalized == "ordinal"
+        or normalized.endswith("generation")
+        or normalized.endswith("epoch")
+        or normalized.endswith("sequence")
+        or normalized.endswith("treesize")
+        or normalized.endswith("index")
+    )
+
+
+def validate_canonical_json_profile(
+    value: Any,
+    *,
+    label: str,
+    depth: int = 0,
+    field_name: str | None = None,
+) -> None:
+    require(depth <= 64, f"{label} exceeds the canonical JSON nesting limit")
+    if field_name is not None and external_counter_field(field_name, value):
+        require(
+            type(value) is int and value >= 0,
+            f"{label} {field_name} must be an unsigned integer",
+        )
+    if isinstance(value, dict):
+        require(len(value) <= 100_000, f"{label} has too many object fields")
+        for key, child in value.items():
+            require(isinstance(key, str), f"{label} contains a non-string object key")
+            validate_canonical_json_string(key, f"{label} object key")
+            validate_canonical_json_profile(
+                child,
+                label=label,
+                depth=depth + 1,
+                field_name=key,
+            )
+        return
+    if isinstance(value, list):
+        require(len(value) <= 100_000, f"{label} has too many array items")
+        for child in value:
+            validate_canonical_json_profile(
+                child,
+                label=label,
+                depth=depth + 1,
+            )
+        return
+    if isinstance(value, str):
+        validate_canonical_json_string(value, label)
+        return
+    if value is None or isinstance(value, bool):
+        return
+    if type(value) is int:
+        require(
+            -(1 << 63) <= value <= CANONICAL_JSON_SIGNED_MAX,
+            f"{label} integer is outside the canonical signed 64-bit profile",
+        )
+        return
+    raise ValueError(
+        f"{label} contains a value outside {CANONICAL_JSON_PROFILE}"
+    )
+
+
+def validate_canonical_json_string(value: str, label: str) -> None:
+    require("\x00" not in value, f"{label} contains NUL")
+    require(
+        all(not 0xD800 <= ord(character) <= 0xDFFF for character in value),
+        f"{label} contains a Unicode surrogate",
+    )
+    require(
+        unicodedata.normalize("NFC", value) == value,
+        f"{label} is not Unicode NFC",
+    )
+
+
 def canonical_json(value: Any) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    validate_canonical_json_profile(value, label="canonical JSON value")
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    )
+
+
+def canonical_legacy_preflight_signature_json(value: Any) -> str:
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    )
 
 
 def sha256_prefixed_bytes(value: bytes) -> str:
@@ -359,7 +947,11 @@ def node_hash(left: str, right: str) -> str:
 def transparency_leaf_payload(item: dict[str, Any]) -> dict[str, Any]:
     return {
         "anchor_id": item.get("anchor_id"),
-        "sequence": item.get("sequence"),
+        "sequence": require_bounded_uint(
+            item.get("sequence"),
+            "transparency leaf sequence",
+            minimum=1,
+        ),
         "received_at": item.get("received_at"),
         "record": item.get("record"),
         "record_digest": item.get("record_digest"),
@@ -542,6 +1134,11 @@ def verify_external_checkpoint_receipt(
     require(payload.get("log_id") == log_id, f"{label} external transparency receipt log mismatch")
     for field, expected in expected_fields.items():
         require(payload.get(field) == expected, f"{label} external transparency receipt {field} mismatch")
+    external_sequence = require_bounded_uint(
+        checkpoint.get("external_sequence"),
+        f"{label} external checkpoint sequence",
+        minimum=1,
+    )
     verify_ed25519(
         trusted_public_key_pem,
         signature,
@@ -551,7 +1148,7 @@ def verify_external_checkpoint_receipt(
     return {
         "provider": provider,
         "log_id": log_id,
-        "external_sequence": checkpoint.get("external_sequence"),
+        "external_sequence": external_sequence,
         "checkpoint_sha256": sha256_prefixed_json(checkpoint),
         "receipt_payload_sha256": sha256_prefixed_json(payload),
     }
@@ -560,7 +1157,15 @@ def verify_external_checkpoint_receipt(
 def verify_signed_tree_head(sth: dict[str, Any], *, root: str, tree_size: int, label: str) -> None:
     require(sth.get("version") == "serverware.transparencyLog/v1", f"{label} signed tree head version mismatch")
     require(sth.get("tree_head_hash") == root, f"{label} signed tree head root mismatch")
-    require(sth.get("tree_size") == tree_size, f"{label} signed tree head size mismatch")
+    require(
+        require_bounded_uint(
+            sth.get("tree_size"),
+            f"{label} signed tree head size",
+            minimum=1,
+        )
+        == tree_size,
+        f"{label} signed tree head size mismatch",
+    )
     public_key_pem = sth.get("public_key_pem")
     signature = sth.get("signature")
     require(isinstance(public_key_pem, str) and public_key_pem, f"{label} signed tree head is missing public key")
@@ -579,6 +1184,58 @@ def reject_duplicate_json_object_keys(pairs: list[tuple[str, Any]]) -> dict[str,
             raise ValueError(f"duplicate JSON object key: {key}")
         parsed[key] = value
     return parsed
+
+
+def reject_non_integer_json_number(value: str) -> None:
+    raise ValueError(
+        f"floating-point or non-finite JSON value {value!r} is not accepted"
+    )
+
+
+@dataclass(frozen=True)
+class ExactJsonDecimal:
+    token: str
+
+
+def exact_milliseconds_to_nanoseconds(
+    value: int | str | ExactJsonDecimal,
+    *,
+    label: str,
+    positive: bool = False,
+) -> int:
+    require(type(value) is not bool, f"{label} must be an exact decimal millisecond value")
+    if type(value) is int:
+        require(value >= 0, f"{label} must not be negative")
+        nanoseconds = value * MILLISECONDS_TO_NANOSECONDS
+    else:
+        token = value.token if isinstance(value, ExactJsonDecimal) else value
+        require(
+            isinstance(token, str) and EXACT_MILLISECONDS_RE.fullmatch(token) is not None,
+            f"{label} must be canonical decimal milliseconds with at most six fractional digits",
+        )
+        whole, separator, fractional = token.partition(".")
+        nanoseconds = int(whole) * MILLISECONDS_TO_NANOSECONDS
+        if separator:
+            nanoseconds += int(fractional.ljust(6, "0"))
+    require(
+        nanoseconds <= CANONICAL_JSON_SIGNED_MAX,
+        f"{label} exceeds the canonical signed 64-bit nanosecond maximum",
+    )
+    if positive:
+        require(nanoseconds > 0, f"{label} must be positive")
+    return nanoseconds
+
+
+def benchmark_milliseconds_to_nanoseconds(
+    value: int | ExactJsonDecimal,
+    *,
+    label: str,
+) -> int:
+    require(
+        type(value) is int or isinstance(value, ExactJsonDecimal),
+        f"{label} must be a JSON number expressed as exact decimal milliseconds",
+    )
+    return exact_milliseconds_to_nanoseconds(value, label=label)
 
 
 def snapshot_regular_file(
@@ -750,9 +1407,114 @@ def load_json_bytes(data: bytes, path: Path, label: str) -> dict[str, Any]:
         text = data.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise ValueError(f"{label} artifact is not valid UTF-8: {path}") from exc
-    parsed = json.loads(text, object_pairs_hook=reject_duplicate_json_object_keys)
+    parsed = json.loads(
+        text,
+        object_pairs_hook=reject_duplicate_json_object_keys,
+        parse_float=reject_non_integer_json_number,
+        parse_constant=reject_non_integer_json_number,
+    )
     if not isinstance(parsed, dict):
         raise ValueError(f"{label} artifact must be a JSON object: {path}")
+    validate_canonical_json_profile(parsed, label=label)
+    return parsed
+
+
+def load_benchmark_json_snapshot(
+    snapshot: FileSnapshot,
+    label: str,
+) -> dict[str, Any]:
+    try:
+        text = snapshot.data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(
+            f"{label} artifact is not valid UTF-8: {snapshot.path}"
+        ) from exc
+    parsed = json.loads(
+        text,
+        object_pairs_hook=reject_duplicate_json_object_keys,
+        parse_float=ExactJsonDecimal,
+        parse_constant=reject_non_integer_json_number,
+    )
+    require(
+        isinstance(parsed, dict),
+        f"{label} artifact must be a JSON object: {snapshot.path}",
+    )
+    for key, value in parsed.items():
+        validate_canonical_json_string(key, f"{label} object key")
+        if key in BENCHMARK_MILLISECOND_FIELDS:
+            benchmark_milliseconds_to_nanoseconds(
+                value,
+                label=f"{label} {key}",
+            )
+        else:
+            validate_canonical_json_profile(value, label=f"{label} {key}")
+    return parsed
+
+
+def load_production_host_preflight_json_snapshot(
+    snapshot: FileSnapshot,
+    label: str,
+) -> dict[str, Any]:
+    try:
+        text = snapshot.data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(
+            f"{label} artifact is not valid UTF-8: {snapshot.path}"
+        ) from exc
+    parsed = json.loads(
+        text,
+        object_pairs_hook=reject_duplicate_json_object_keys,
+        parse_float=ExactJsonDecimal,
+        parse_constant=reject_non_integer_json_number,
+    )
+    require(
+        isinstance(parsed, dict),
+        f"{label} artifact must be a JSON object: {snapshot.path}",
+    )
+    allowed_decimal_paths = {
+        ("checks", "release_artifacts", "bench", field)
+        for field in PREFLIGHT_BENCHMARK_MILLISECOND_FIELDS
+    }
+
+    def validate_value(value: Any, path: tuple[str, ...], depth: int = 0) -> None:
+        require(depth <= 64, f"{label} exceeds the canonical JSON nesting limit")
+        if path in allowed_decimal_paths:
+            benchmark_milliseconds_to_nanoseconds(
+                value,
+                label=f"{label} {'/'.join(path)}",
+            )
+            return
+        if isinstance(value, dict):
+            require(
+                len(value) <= 100_000,
+                f"{label} has too many object fields",
+            )
+            for key, child in value.items():
+                require(
+                    isinstance(key, str),
+                    f"{label} contains a non-string object key",
+                )
+                validate_canonical_json_string(key, f"{label} object key")
+                validate_value(child, path + (key,), depth + 1)
+            return
+        if isinstance(value, list):
+            require(len(value) <= 100_000, f"{label} has too many array items")
+            for child in value:
+                validate_value(child, path + ("[]",), depth + 1)
+            return
+        validate_canonical_json_profile(value, label=label, depth=depth)
+
+    validate_value(parsed, ())
+    benchmark = (
+        parsed.get("checks", {})
+        .get("release_artifacts", {})
+        .get("bench", {})
+    )
+    if isinstance(benchmark, dict):
+        for field in PREFLIGHT_BENCHMARK_MILLISECOND_FIELDS:
+            value = benchmark.get(field)
+            if isinstance(value, ExactJsonDecimal):
+                benchmark[field] = float(value.token)
     return parsed
 
 
@@ -1212,10 +1974,56 @@ def assert_no_secret_fields(value: Any, path: str = "$") -> None:
 
 
 def require_exact_keys(value: dict[str, Any], expected: set[str], label: str) -> None:
+    validate_canonical_json_profile(value, label=label)
     missing = sorted(expected - set(value))
     unexpected = sorted(set(value) - expected)
     require(not missing, f"{label} is missing required fields: {missing}")
     require(not unexpected, f"{label} contains unexpected fields: {unexpected}")
+
+
+def require_final_v1_identifier(value: Any, label: str) -> str:
+    require(
+        type(value) is str and FINAL_V1_IDENTIFIER_RE.fullmatch(value) is not None,
+        f"{label} must match the closed final-v1 identifier grammar",
+    )
+    return value
+
+
+def require_public_nitro_provider(value: Any, label: str) -> str:
+    try:
+        return verify_nitro_tee.require_public_nitro_provider(
+            value,
+            label,
+        )
+    except verify_nitro_tee.VerificationError as exc:
+        raise ValueError(str(exc)) from exc
+
+
+def validate_final_v1_digest_map(
+    value: Any,
+    label: str,
+) -> dict[str, str]:
+    require(
+        isinstance(value, dict) and 1 <= len(value) <= 64,
+        f"{label} must contain between 1 and 64 entries",
+    )
+    for name, digest_value in value.items():
+        require(
+            type(name) is str
+            and FINAL_V1_DIGEST_MAP_KEY_RE.fullmatch(name) is not None,
+            f"{label} key does not match the closed final-v1 digest-map grammar",
+        )
+        require_sha256(digest_value, f"{label} {name}")
+    return value
+
+
+def require_final_v1_non_empty_string(value: Any, label: str) -> str:
+    require(
+        type(value) is str
+        and FINAL_V1_NON_EMPTY_STRING_RE.fullmatch(value) is not None,
+        f"{label} must match the closed final-v1 boundary-string grammar",
+    )
+    return value
 
 
 def require_sha384(value: Any, label: str) -> str:
@@ -1228,6 +2036,2747 @@ def require_launch_authority_binding(value: Any, label: str) -> dict[str, str]:
     return {
         field: require_sha256(value.get(field), f"{label} {field}")
         for field in LAUNCH_AUTHORITY_BINDING_FIELDS
+    }
+
+
+def require_bounded_uint(
+    value: Any,
+    label: str,
+    *,
+    minimum: int = 0,
+    maximum: int = 9_007_199_254_740_991,
+) -> int:
+    require(
+        type(value) is int and minimum <= value <= maximum,
+        f"{label} must be an integer between {minimum} and {maximum}",
+    )
+    return value
+
+
+def load_canonical_json_artifact(
+    snapshot: FileSnapshot,
+    label: str,
+    *,
+    api_version: str | None = None,
+) -> dict[str, Any]:
+    document = load_json_snapshot(snapshot, label)
+    require(
+        snapshot.data == canonical_json(document).encode("utf-8") + b"\n",
+        f"{label} is not canonical versioned JSON with one trailing newline",
+    )
+    if api_version is not None:
+        require(
+            document.get("apiVersion") == api_version,
+            f"{label} apiVersion mismatch",
+        )
+    return document
+
+
+def load_ed25519_trust_root(
+    snapshot: FileSnapshot,
+    label: str,
+) -> tuple[Ed25519PublicKey, dict[str, str]]:
+    try:
+        if snapshot.data.startswith(b"-----BEGIN PUBLIC KEY-----"):
+            public_key = serialization.load_pem_public_key(snapshot.data)
+        else:
+            public_key = serialization.load_der_public_key(snapshot.data)
+    except Exception as exc:
+        raise ValueError(f"{label} is not a valid public key") from exc
+    require(isinstance(public_key, Ed25519PublicKey), f"{label} is not Ed25519")
+    der = public_key.public_bytes(
+        serialization.Encoding.DER,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    raw = public_key.public_bytes(
+        serialization.Encoding.Raw,
+        serialization.PublicFormat.Raw,
+    )
+    return public_key, {
+        "file_sha256": snapshot.sha256,
+        "spki_sha256": sha256_prefixed_bytes(der),
+        "raw_key_sha256": sha256_prefixed_bytes(raw),
+    }
+
+
+def verify_domain_ed25519_envelope(
+    document: dict[str, Any],
+    *,
+    public_key_snapshot: FileSnapshot,
+    api_version: str,
+    domain: bytes,
+    label: str,
+) -> tuple[dict[str, Any], dict[str, str]]:
+    require_exact_keys(
+        document,
+        {"apiVersion", "payload", "payloadSha256", "signature"},
+        label,
+    )
+    require(document.get("apiVersion") == api_version, f"{label} apiVersion mismatch")
+    payload = document.get("payload")
+    require(isinstance(payload, dict), f"{label} payload must be an object")
+    payload_sha256 = require_sha256(
+        document.get("payloadSha256"),
+        f"{label} payload digest",
+    )
+    require(
+        payload_sha256 == sha256_prefixed_json(payload),
+        f"{label} payload digest mismatch",
+    )
+    public_key, identity = load_ed25519_trust_root(
+        public_key_snapshot,
+        f"{label} trust root",
+    )
+    signature = document.get("signature")
+    require(isinstance(signature, dict), f"{label} signature must be an object")
+    require_exact_keys(
+        signature,
+        {
+            "algorithm",
+            "domain",
+            "keyFileSha256",
+            "rawKeySha256",
+            "value",
+        },
+        f"{label} signature",
+    )
+    require(signature.get("algorithm") == "Ed25519", f"{label} signature algorithm mismatch")
+    require(
+        signature.get("domain") == domain[:-1].decode("ascii"),
+        f"{label} signature domain mismatch",
+    )
+    require(
+        signature.get("keyFileSha256") == identity["file_sha256"],
+        f"{label} signature key-file digest mismatch",
+    )
+    require(
+        signature.get("rawKeySha256") == identity["raw_key_sha256"],
+        f"{label} signature raw-key digest mismatch",
+    )
+    signature_value = signature.get("value")
+    require(
+        isinstance(signature_value, str)
+        and re.fullmatch(r"[A-Za-z0-9+/]{86}==", signature_value) is not None,
+        f"{label} signature is not canonical padded base64",
+    )
+    try:
+        signature_bytes = base64.b64decode(signature_value, validate=True)
+    except Exception as exc:
+        raise ValueError(f"{label} signature is invalid base64") from exc
+    require(len(signature_bytes) == 64, f"{label} signature is not 64 bytes")
+    signed = domain + canonical_json(
+        {"payload": payload, "payloadSha256": payload_sha256}
+    ).encode("utf-8")
+    try:
+        public_key.verify(signature_bytes, signed)
+    except InvalidSignature as exc:
+        raise ValueError(f"{label} signature verification failed") from exc
+    return payload, {
+        **identity,
+        "payload_sha256": payload_sha256,
+        "signed_message_sha256": sha256_prefixed_bytes(signed),
+    }
+
+
+def require_digest_list(
+    value: Any,
+    label: str,
+    *,
+    minimum: int = 1,
+    maximum: int = 4096,
+) -> list[str]:
+    require(
+        isinstance(value, list) and minimum <= len(value) <= maximum,
+        f"{label} must contain between {minimum} and {maximum} digests",
+    )
+    normalized = [require_sha256(item, f"{label} item") for item in value]
+    require(
+        normalized == list(dict.fromkeys(normalized)),
+        f"{label} contains duplicate digests",
+    )
+    return normalized
+
+
+def verify_source_input_continuity(
+    source_document: dict[str, Any],
+    *,
+    source_snapshot: FileSnapshot,
+    git_inventory_public_key: FileSnapshot,
+    untracked_approval_public_key: FileSnapshot,
+) -> dict[str, Any]:
+    require_exact_keys(
+        source_document,
+        {
+            "aggregateBytes",
+            "apiVersion",
+            "entries",
+            "entryCount",
+            "fileCount",
+            "gitInventory",
+            "gitInventoryPayloadSha256",
+            "pathListSha256",
+            "payloadSha256",
+            "requiredUntrackedInventorySha256",
+            "requiredUntrackedPaths",
+            "selectionModel",
+            "symlinkCount",
+            "trackedInventorySha256",
+            "trackedPaths",
+            "untrackedApproval",
+            "untrackedApprovalPayloadSha256",
+        },
+        "source-input manifest",
+    )
+    require(
+        source_document.get("apiVersion") == SOURCE_INPUT_MANIFEST_API_VERSION,
+        "source-input manifest apiVersion mismatch",
+    )
+    require(
+        source_document.get("selectionModel")
+        == "signed-complete-git-index-worktree-status-plus-approved-untracked/v2",
+        "source-input manifest selection model mismatch",
+    )
+    payload_without_digest = dict(source_document)
+    supplied_payload_sha256 = require_sha256(
+        payload_without_digest.pop("payloadSha256", None),
+        "source-input manifest payload digest",
+    )
+    require(
+        supplied_payload_sha256 == sha256_prefixed_json(payload_without_digest),
+        "source-input manifest payload digest mismatch",
+    )
+
+    git_envelope = source_document.get("gitInventory")
+    approval_envelope = source_document.get("untrackedApproval")
+    require(isinstance(git_envelope, dict), "source Git inventory envelope is missing")
+    require(isinstance(approval_envelope, dict), "untracked source approval envelope is missing")
+    git_payload, git_key = verify_domain_ed25519_envelope(
+        git_envelope,
+        public_key_snapshot=git_inventory_public_key,
+        api_version=GIT_SOURCE_INVENTORY_API_VERSION,
+        domain=GIT_SOURCE_INVENTORY_SIGNATURE_DOMAIN,
+        label="source Git inventory",
+    )
+    approval_payload, approval_key = verify_domain_ed25519_envelope(
+        approval_envelope,
+        public_key_snapshot=untracked_approval_public_key,
+        api_version=UNTRACKED_SOURCE_APPROVAL_API_VERSION,
+        domain=UNTRACKED_SOURCE_APPROVAL_SIGNATURE_DOMAIN,
+        label="untracked source approval",
+    )
+    require(
+        git_key["raw_key_sha256"] != approval_key["raw_key_sha256"],
+        "source Git inventory and untracked approval authorities must be independent",
+    )
+    require(
+        source_document.get("gitInventoryPayloadSha256")
+        == git_key["payload_sha256"],
+        "source-input manifest Git inventory payload binding mismatch",
+    )
+    require(
+        source_document.get("untrackedApprovalPayloadSha256")
+        == approval_key["payload_sha256"],
+        "source-input manifest untracked approval payload binding mismatch",
+    )
+
+    require_exact_keys(
+        git_payload,
+        {
+            "headTree",
+            "indexEntries",
+            "indexEntriesSha256",
+            "indexFileSha256",
+            "objectFormat",
+            "repositoryIdSha256",
+            "status",
+            "worktreeEntries",
+            "worktreeEntriesSha256",
+        },
+        "source Git inventory payload",
+    )
+    object_format = git_payload.get("objectFormat")
+    object_hex_length = 40 if object_format == "sha1" else 64 if object_format == "sha256" else 0
+    require(
+        object_hex_length > 0
+        and re.fullmatch(
+            rf"{object_format}:[0-9a-f]{{{object_hex_length}}}",
+            str(git_payload.get("headTree") or ""),
+        )
+        is not None,
+        "source Git inventory tree identity is invalid",
+    )
+    require_sha256(git_payload.get("indexFileSha256"), "source Git index file")
+    require_sha256(git_payload.get("repositoryIdSha256"), "source repository identity")
+    index_entries = git_payload.get("indexEntries")
+    worktree_entries = git_payload.get("worktreeEntries")
+    require(
+        isinstance(index_entries, list)
+        and isinstance(worktree_entries, list)
+        and bool(index_entries)
+        and len(index_entries) <= 100_000
+        and len(worktree_entries) == len(index_entries),
+        "source Git inventory is empty, oversized, or incomplete",
+    )
+    require(
+        git_payload.get("indexEntriesSha256") == sha256_prefixed_json(index_entries)
+        and git_payload.get("worktreeEntriesSha256")
+        == sha256_prefixed_json(worktree_entries),
+        "source Git inventory list digests mismatch",
+    )
+    indexed_paths: list[str] = []
+    worktree_paths: list[str] = []
+    for index, entry in enumerate(index_entries):
+        require(
+            isinstance(entry, dict)
+            and set(entry) == {"gitMode", "objectId", "path", "stage"},
+            f"source Git index entry {index} is invalid",
+        )
+        path = entry.get("path")
+        require(
+            isinstance(path, str)
+            and bool(path)
+            and path == path.strip()
+            and not path.startswith("/")
+            and "\x00" not in path
+            and all(part not in {"", ".", ".."} for part in path.split("/")),
+            f"source Git index entry {index} path is invalid",
+        )
+        require(entry.get("stage") == 0, f"source Git index entry {index} is not stage zero")
+        require(
+            entry.get("gitMode") in {"100644", "100755", "120000"},
+            f"source Git index entry {index} mode is unsupported",
+        )
+        require(
+            re.fullmatch(
+                rf"{object_format}:[0-9a-f]{{{object_hex_length}}}",
+                str(entry.get("objectId") or ""),
+            )
+            is not None,
+            f"source Git index entry {index} object identity is invalid",
+        )
+        indexed_paths.append(path)
+    require(
+        indexed_paths == sorted(set(indexed_paths)),
+        "source Git index paths are not unique and sorted",
+    )
+    for index, entry in enumerate(worktree_entries):
+        require(isinstance(entry, dict), f"source worktree entry {index} is invalid")
+        path = entry.get("path")
+        require(path == indexed_paths[index], f"source worktree entry {index} path mismatch")
+        require(
+            entry.get("classification") in {"source", "build-input"}
+            and entry.get("gitMode") == index_entries[index]["gitMode"]
+            and entry.get("indexObjectId") == index_entries[index]["objectId"]
+            and entry.get("type") in {"file", "symlink"},
+            f"source worktree entry {index} provenance is invalid",
+        )
+        if entry.get("type") == "file":
+            require_sha256(entry.get("sha256"), f"source worktree file {path}")
+            require_bounded_uint(entry.get("size"), f"source worktree file {path} size")
+        else:
+            require(
+                isinstance(entry.get("target"), str)
+                and bool(entry["target"])
+                and "\x00" not in entry["target"],
+                f"source worktree symlink {path} target is invalid",
+            )
+        worktree_paths.append(path)
+    require(worktree_paths == indexed_paths, "source worktree does not match the complete Git index")
+
+    status = git_payload.get("status")
+    require(isinstance(status, dict), "source Git status evidence is missing")
+    require_exact_keys(
+        status,
+        {
+            "ignoredPaths",
+            "ignoredPathsSha256",
+            "policy",
+            "trackedChanges",
+            "trackedChangesSha256",
+            "untrackedPaths",
+            "untrackedPathsSha256",
+        },
+        "source Git status evidence",
+    )
+    ignored = status.get("ignoredPaths")
+    untracked_status = status.get("untrackedPaths")
+    tracked_changes = status.get("trackedChanges")
+    require(
+        isinstance(ignored, list)
+        and isinstance(untracked_status, list)
+        and isinstance(tracked_changes, list)
+        and ignored == sorted(set(ignored))
+        and untracked_status == sorted(set(untracked_status)),
+        "source Git status path lists are invalid",
+    )
+    require(
+        status.get("ignoredPathsSha256") == sha256_prefixed_json(ignored)
+        and status.get("untrackedPathsSha256") == sha256_prefixed_json(untracked_status)
+        and status.get("trackedChangesSha256") == sha256_prefixed_json(tracked_changes),
+        "source Git status list digests mismatch",
+    )
+
+    tracked_paths = source_document.get("trackedPaths")
+    approved_paths = source_document.get("requiredUntrackedPaths")
+    require(
+        tracked_paths == indexed_paths
+        and isinstance(approved_paths, list)
+        and approved_paths == sorted(set(approved_paths))
+        and set(approved_paths).issubset(set(untracked_status))
+        and not set(approved_paths).intersection(ignored),
+        "source-input tracked or approved-untracked inventory mismatch",
+    )
+    require(
+        source_document.get("trackedInventorySha256")
+        == sha256_prefixed_json(tracked_paths)
+        and source_document.get("requiredUntrackedInventorySha256")
+        == sha256_prefixed_json(approved_paths),
+        "source-input path inventory digests mismatch",
+    )
+    selected_paths = sorted([*tracked_paths, *approved_paths])
+    require(
+        source_document.get("pathListSha256") == sha256_prefixed_json(selected_paths),
+        "source-input selected path digest mismatch",
+    )
+    require_exact_keys(
+        approval_payload,
+        {
+            "challengeSha256",
+            "decision",
+            "entries",
+            "gitInventoryPayloadSha256",
+            "pathListSha256",
+        },
+        "untracked source approval payload",
+    )
+    require(
+        approval_payload.get("decision")
+        == "approve-exact-required-untracked-for-source-freeze"
+        and approval_payload.get("gitInventoryPayloadSha256")
+        == git_key["payload_sha256"]
+        and approval_payload.get("pathListSha256") == sha256_prefixed_json(approved_paths),
+        "untracked source approval decision or Git binding mismatch",
+    )
+    require_sha256(
+        approval_payload.get("challengeSha256"),
+        "untracked source approval challenge",
+    )
+    approval_entries = approval_payload.get("entries")
+    require(isinstance(approval_entries, list), "untracked source approval entries are missing")
+    require(
+        [entry.get("path") for entry in approval_entries if isinstance(entry, dict)]
+        == approved_paths,
+        "untracked source approval entries do not match the approved paths",
+    )
+    entries = source_document.get("entries")
+    require(
+        isinstance(entries, list)
+        and len(entries) == len(selected_paths)
+        and len(entries) <= 100_000
+        and [entry.get("path") for entry in entries if isinstance(entry, dict)]
+        == selected_paths,
+        "source-input entries do not exactly match selected paths",
+    )
+    require(
+        source_document.get("entryCount") == len(entries),
+        "source-input entry count mismatch",
+    )
+    file_count = 0
+    symlink_count = 0
+    aggregate_bytes = 0
+    approved_entry_map = {
+        entry["path"]: entry for entry in approval_entries if isinstance(entry, dict)
+    }
+    worktree_entry_map = {
+        entry["path"]: entry for entry in worktree_entries if isinstance(entry, dict)
+    }
+    for entry in entries:
+        require(isinstance(entry, dict), "source-input entry is not an object")
+        path = entry["path"]
+        expected_provenance = "tracked" if path in worktree_entry_map else "required-untracked"
+        require(
+            entry.get("provenance") == expected_provenance
+            and entry.get("classification") in {"source", "build-input"},
+            f"source-input entry {path} provenance is invalid",
+        )
+        if entry.get("type") == "file":
+            require_sha256(entry.get("sha256"), f"source-input file {path}")
+            aggregate_bytes += require_bounded_uint(
+                entry.get("size"),
+                f"source-input file {path} size",
+            )
+            file_count += 1
+        elif entry.get("type") == "symlink":
+            require(
+                isinstance(entry.get("target"), str)
+                and bool(entry["target"])
+                and "\x00" not in entry["target"],
+                f"source-input symlink {path} target is invalid",
+            )
+            symlink_count += 1
+        else:
+            raise ValueError(f"source-input entry {path} has unsupported type")
+        if expected_provenance == "tracked":
+            signed = {
+                key: value
+                for key, value in worktree_entry_map[path].items()
+                if key not in {"gitMode", "indexObjectId"}
+            }
+            signed["provenance"] = "tracked"
+            require(entry == signed, f"source-input tracked entry {path} differs from signed inventory")
+        else:
+            require(
+                entry == approved_entry_map.get(path),
+                f"source-input untracked entry {path} differs from signed approval",
+            )
+    require(
+        source_document.get("fileCount") == file_count
+        and source_document.get("symlinkCount") == symlink_count
+        and source_document.get("aggregateBytes") == aggregate_bytes,
+        "source-input aggregate counts mismatch",
+    )
+    return {
+        "file_sha256": source_snapshot.sha256,
+        "payload_sha256": supplied_payload_sha256,
+        "path_list_sha256": source_document["pathListSha256"],
+        "tracked_inventory_sha256": source_document["trackedInventorySha256"],
+        "required_untracked_inventory_sha256": source_document[
+            "requiredUntrackedInventorySha256"
+        ],
+        "git_inventory_payload_sha256": git_key["payload_sha256"],
+        "untracked_approval_payload_sha256": approval_key["payload_sha256"],
+        "git_inventory_key_id": git_key["spki_sha256"],
+        "untracked_approval_key_id": approval_key["spki_sha256"],
+        "entry_count": len(entries),
+        "aggregate_bytes": aggregate_bytes,
+    }
+
+
+def validate_dependency_bundle_continuity(
+    document: dict[str, Any],
+    *,
+    snapshot: FileSnapshot,
+) -> dict[str, Any]:
+    require_exact_keys(
+        document,
+        {"apiVersion", "bundles", "manifestSha256"},
+        "dependency closure manifest",
+    )
+    require(
+        document.get("apiVersion") == DEPENDENCY_BUNDLE_API_VERSION,
+        "dependency closure manifest apiVersion mismatch",
+    )
+    payload = dict(document)
+    manifest_sha256 = require_sha256(
+        payload.pop("manifestSha256", None),
+        "dependency closure manifest payload",
+    )
+    require(
+        manifest_sha256 == sha256_prefixed_json(payload),
+        "dependency closure manifest digest mismatch",
+    )
+    bundles = document.get("bundles")
+    require(
+        isinstance(bundles, dict)
+        and tuple(bundles) == DEPENDENCY_ROLE_ORDER,
+        "dependency closure role inventory is not exact and ordered",
+    )
+    role_closures: dict[str, str] = {}
+    for role in DEPENDENCY_ROLE_ORDER:
+        bundle = bundles[role]
+        require(isinstance(bundle, dict), f"{role} dependency closure is invalid")
+        require_exact_keys(
+            bundle,
+            {
+                "baseImageDigest",
+                "capabilities",
+                "closureSha256",
+                "fileManifestSha256",
+                "files",
+                "packages",
+            },
+            f"{role} dependency closure",
+        )
+        require_sha256(bundle.get("baseImageDigest"), f"{role} base image")
+        file_manifest_sha256 = require_sha256(
+            bundle.get("fileManifestSha256"),
+            f"{role} dependency file manifest",
+        )
+        files = bundle.get("files")
+        packages = bundle.get("packages")
+        capabilities = bundle.get("capabilities")
+        require(
+            isinstance(files, list)
+            and isinstance(packages, list)
+            and isinstance(capabilities, list)
+            and files
+            == sorted(files, key=lambda item: str(item.get("path", "")) if isinstance(item, dict) else ""),
+            f"{role} dependency files are not a bounded ordered inventory",
+        )
+        require(
+            file_manifest_sha256 == sha256_prefixed_json(files),
+            f"{role} dependency file manifest digest mismatch",
+        )
+        seen_paths: set[str] = set()
+        for item in files:
+            require(
+                isinstance(item, dict)
+                and isinstance(item.get("path"), str)
+                and item["path"].startswith("/")
+                and item["path"] not in seen_paths
+                and item.get("type") in {"file", "symlink"},
+                f"{role} dependency file inventory is invalid",
+            )
+            seen_paths.add(item["path"])
+            if item["type"] == "file":
+                require_sha256(item.get("sha256"), f"{role} dependency file {item['path']}")
+                require_bounded_uint(item.get("size"), f"{role} dependency file {item['path']} size")
+            else:
+                require(
+                    isinstance(item.get("target"), str)
+                    and bool(item["target"])
+                    and "\x00" not in item["target"],
+                    f"{role} dependency symlink target is invalid",
+                )
+        package_paths: set[str] = set()
+        for package in packages:
+            require(
+                isinstance(package, dict)
+                and set(package) == {"files", "name", "purl", "version"}
+                and all(
+                    isinstance(package.get(field), str) and bool(package[field])
+                    for field in ("name", "purl", "version")
+                )
+                and isinstance(package.get("files"), list)
+                and package["files"] == sorted(set(package["files"]))
+                and set(package["files"]).issubset(seen_paths)
+                and not set(package["files"]).intersection(package_paths),
+                f"{role} dependency package inventory is invalid",
+            )
+            package_paths.update(package["files"])
+        require(
+            package_paths == seen_paths,
+            f"{role} dependency packages do not own every file exactly once",
+        )
+        closure_payload = {
+            "baseImageDigest": bundle["baseImageDigest"],
+            "capabilities": capabilities,
+            "files": files,
+            "packages": packages,
+        }
+        closure_sha256 = require_sha256(
+            bundle.get("closureSha256"),
+            f"{role} dependency closure digest",
+        )
+        require(
+            closure_sha256 == sha256_prefixed_json(closure_payload),
+            f"{role} dependency closure digest mismatch",
+        )
+        role_closures[role] = closure_sha256
+    return {
+        "file_sha256": snapshot.sha256,
+        "manifest_sha256": manifest_sha256,
+        "role_closures": role_closures,
+        "role_closures_sha256": sha256_prefixed_json(role_closures),
+    }
+
+
+def candidate_image_identity(value: Any, role: str) -> dict[str, Any]:
+    require(isinstance(value, dict), f"{role} candidate image is invalid")
+    require_exact_keys(
+        value,
+        {
+            "archive",
+            "build",
+            "configDigest",
+            "fileManifest",
+            "indexDigest",
+            "layerDigests",
+            "manifestDigest",
+            "platform",
+            "role",
+            "rootfsDiffIds",
+            "rootfsDigest",
+            "sbom",
+        },
+        f"{role} candidate image",
+    )
+    require(
+        value.get("role") == role
+        and value.get("platform") == {"architecture": "amd64", "os": "linux"},
+        f"{role} candidate image role or platform mismatch",
+    )
+    archive = value.get("archive")
+    file_manifest = value.get("fileManifest")
+    sbom = value.get("sbom")
+    require(
+        isinstance(archive, dict)
+        and isinstance(file_manifest, dict)
+        and isinstance(sbom, dict),
+        f"{role} candidate image artifacts are invalid",
+    )
+    archive_sha256 = require_sha256(archive.get("sha256"), f"{role} OCI archive")
+    archive_size = require_bounded_uint(
+        archive.get("size"),
+        f"{role} OCI archive size",
+        minimum=1,
+    )
+    identity = {
+        "archiveSha256": archive_sha256,
+        "archiveSize": archive_size,
+        "configDigest": require_sha256(value.get("configDigest"), f"{role} config"),
+        "fileManifestSha256": require_sha256(
+            file_manifest.get("sha256"),
+            f"{role} file manifest",
+        ),
+        "indexDigest": require_sha256(value.get("indexDigest"), f"{role} OCI index"),
+        "layerDigests": require_digest_list(value.get("layerDigests"), f"{role} layers"),
+        "manifestDigest": require_sha256(
+            value.get("manifestDigest"),
+            f"{role} OCI manifest",
+        ),
+        "rootfsDiffIds": require_digest_list(
+            value.get("rootfsDiffIds"),
+            f"{role} rootfs diff IDs",
+        ),
+        "rootfsDigest": require_sha256(
+            value.get("rootfsDigest"),
+            f"{role} rootfs",
+        ),
+        "sbomSha256": require_sha256(sbom.get("sha256"), f"{role} SBOM"),
+    }
+    return identity
+
+
+def validate_imported_image(value: Any, role: str) -> dict[str, Any]:
+    require(isinstance(value, dict), f"{role} imported image is invalid")
+    require_exact_keys(
+        value,
+        {
+            "configDigest",
+            "containerdImageId",
+            "fileManifestSha256",
+            "independentInspectionSha256",
+            "manifestDigest",
+            "platform",
+            "role",
+            "rootfsDiffIds",
+            "rootfsDigest",
+            "sbomSha256",
+        },
+        f"{role} imported image",
+    )
+    require(
+        value.get("role") == role
+        and value.get("platform") == {"architecture": "amd64", "os": "linux"},
+        f"{role} imported image role or platform mismatch",
+    )
+    normalized = {
+        "role": role,
+        "platform": value["platform"],
+        "configDigest": require_sha256(value.get("configDigest"), f"{role} imported config"),
+        "containerdImageId": require_sha256(
+            value.get("containerdImageId"),
+            f"{role} containerd image ID",
+        ),
+        "fileManifestSha256": require_sha256(
+            value.get("fileManifestSha256"),
+            f"{role} imported file manifest",
+        ),
+        "independentInspectionSha256": require_sha256(
+            value.get("independentInspectionSha256"),
+            f"{role} independent inspection",
+        ),
+        "manifestDigest": require_sha256(
+            value.get("manifestDigest"),
+            f"{role} imported manifest",
+        ),
+        "rootfsDiffIds": require_digest_list(
+            value.get("rootfsDiffIds"),
+            f"{role} imported rootfs diff IDs",
+        ),
+        "rootfsDigest": require_sha256(
+            value.get("rootfsDigest"),
+            f"{role} imported rootfs",
+        ),
+        "sbomSha256": require_sha256(
+            value.get("sbomSha256"),
+            f"{role} imported SBOM",
+        ),
+    }
+    require(
+        normalized["containerdImageId"] == normalized["manifestDigest"],
+        f"{role} containerd image ID is not the OCI manifest digest",
+    )
+    return normalized
+
+
+def validate_candidate_to_imported_mapping(
+    value: Any,
+    *,
+    role: str,
+    expected_candidate: dict[str, Any],
+    expected_imported: dict[str, Any],
+) -> dict[str, Any]:
+    require(isinstance(value, dict), f"{role} promotion mapping is invalid")
+    require_exact_keys(
+        value,
+        {"candidate", "imported", "mappingSha256", "role"},
+        f"{role} promotion mapping",
+    )
+    require(value.get("role") == role, f"{role} promotion mapping role mismatch")
+    require(value.get("candidate") == expected_candidate, f"{role} candidate mapping mismatch")
+    require(value.get("imported") == expected_imported, f"{role} imported mapping mismatch")
+    for candidate_key, imported_key in (
+        ("configDigest", "configDigest"),
+        ("fileManifestSha256", "fileManifestSha256"),
+        ("manifestDigest", "manifestDigest"),
+        ("rootfsDiffIds", "rootfsDiffIds"),
+        ("rootfsDigest", "rootfsDigest"),
+        ("sbomSha256", "sbomSha256"),
+    ):
+        require(
+            expected_candidate[candidate_key] == expected_imported[imported_key],
+            f"{role} candidate/imported {candidate_key} mismatch",
+        )
+    mapping_payload = {
+        "candidate": expected_candidate,
+        "imported": expected_imported,
+        "role": role,
+    }
+    mapping_sha256 = require_sha256(
+        value.get("mappingSha256"),
+        f"{role} promotion mapping",
+    )
+    require(
+        mapping_sha256 == sha256_prefixed_json(mapping_payload),
+        f"{role} promotion mapping digest mismatch",
+    )
+    return {
+        "role": role,
+        "candidate": expected_candidate,
+        "imported": expected_imported,
+        "mappingSha256": mapping_sha256,
+    }
+
+
+def verify_build_watchdog_continuity(
+    document: dict[str, Any],
+    *,
+    snapshot: FileSnapshot,
+    public_key_snapshot: FileSnapshot,
+    candidate_document: dict[str, Any],
+) -> dict[str, Any]:
+    payload, key = verify_domain_ed25519_envelope(
+        document,
+        public_key_snapshot=public_key_snapshot,
+        api_version=BUILD_WATCHDOG_RECEIPT_API_VERSION,
+        domain=BUILD_WATCHDOG_SIGNATURE_DOMAIN,
+        label="build-watchdog receipt",
+    )
+    build_continuity = candidate_document.get("buildContinuity")
+    require(isinstance(build_continuity, dict), "Candidate Manifest v6 build continuity is missing")
+    candidate_watchdog = build_continuity.get("buildWatchdogReceipt")
+    require(isinstance(candidate_watchdog, dict), "Candidate Manifest v6 watchdog binding is missing")
+    require(
+        candidate_watchdog.get("document") == document
+        and candidate_watchdog.get("receiptFileSha256") == snapshot.sha256,
+        "Candidate Manifest v6 does not bind the exact build-watchdog receipt",
+    )
+    require_exact_keys(
+        payload,
+        {
+            "bootId",
+            "buildBundleSha256",
+            "candidateRequest",
+            "candidateRequestSha256",
+            "daemonIdentity",
+            "daemonIdentitySha256",
+            "eventHeadSha256",
+            "events",
+            "lease",
+            "planSha256",
+            "request",
+            "requestSha256",
+            "serviceIdentity",
+            "serviceIdentitySha256",
+        },
+        "build-watchdog receipt payload",
+    )
+    candidate_request = payload.get("candidateRequest")
+    require(isinstance(candidate_request, dict), "build-watchdog candidate request is missing")
+    require(
+        candidate_request.get("imageRoles") == list(PRODUCTION_IMAGE_ROLE_ORDER)
+        and candidate_request.get("network") == "none"
+        and candidate_request.get("platform") == {"architecture": "amd64", "os": "linux"},
+        "build-watchdog candidate request is not the closed no-network image inventory",
+    )
+    require(
+        payload.get("candidateRequestSha256") == sha256_prefixed_json(candidate_request),
+        "build-watchdog candidate request digest mismatch",
+    )
+    request = payload.get("request")
+    require(isinstance(request, dict), "build-watchdog request is missing")
+    require(
+        request.get("candidateRequestSha256") == payload["candidateRequestSha256"]
+        and request.get("operation") == "build-all-oci-v3"
+        and payload.get("requestSha256") == sha256_prefixed_json(request),
+        "build-watchdog request binding mismatch",
+    )
+    events = payload.get("events")
+    require(
+        isinstance(events, list) and 6 <= len(events) <= 100_000,
+        "build-watchdog event transcript is incomplete or oversized",
+    )
+    previous = sha256_prefixed_bytes(b"")
+    resources: dict[tuple[str, str], dict[str, Any]] = {}
+    cleanup_actions: dict[tuple[str, str], set[str]] = {}
+    absence_ordinals: list[int] = []
+    for sequence, event in enumerate(events, start=1):
+        require(
+            isinstance(event, dict),
+            "build-watchdog event chain is malformed",
+        )
+        event_sequence = require_bounded_uint(
+            event.get("sequence"),
+            "build-watchdog event sequence",
+            minimum=1,
+        )
+        require(
+            set(event) == {"event", "eventSha256", "previousEventSha256", "sequence"}
+            and event_sequence == sequence
+            and event.get("previousEventSha256") == previous
+            and isinstance(event.get("event"), dict),
+            "build-watchdog event chain is malformed",
+        )
+        event_payload = {
+            "event": event["event"],
+            "previousEventSha256": previous,
+            "sequence": sequence,
+        }
+        measured = sha256_prefixed_json(event_payload)
+        require(event.get("eventSha256") == measured, "build-watchdog event digest mismatch")
+        previous = measured
+        body = event["event"]
+        event_type = body.get("type")
+        if event_type == "resource-created":
+            resource = body.get("resource")
+            require(isinstance(resource, dict), "build-watchdog resource event is invalid")
+            kind = resource.get("kind")
+            resource_id = resource.get("id")
+            role = resource.get("role")
+            require(
+                kind in {"builder", "container", "content", "image", "snapshot", "task"}
+                and isinstance(resource_id, str)
+                and bool(resource_id)
+                and role in PRODUCTION_IMAGE_ROLE_ORDER,
+                "build-watchdog created an unknown, network, or unbound resource",
+            )
+            key_pair = (kind, resource_id)
+            require(key_pair not in resources, "build-watchdog resource identity is duplicated")
+            resources[key_pair] = resource
+        elif event_type == "cleanup-action":
+            resource = body.get("resource")
+            require(
+                isinstance(resource, dict)
+                and set(resource) == {"id", "kind"}
+                and body.get("action") in {"inspect", "kill", "remove"},
+                "build-watchdog cleanup event is invalid",
+            )
+            key_pair = (resource["kind"], resource["id"])
+            require(key_pair in resources, "build-watchdog cleanup references an unknown resource")
+            actions = cleanup_actions.setdefault(key_pair, set())
+            require(body["action"] not in actions, "build-watchdog cleanup action is duplicated")
+            actions.add(body["action"])
+        elif event_type == "daemon-inventory-absence":
+            ordinal = body.get("ordinal")
+            require(
+                type(ordinal) is int
+                and ordinal == len(absence_ordinals) + 1
+                and body.get("presentResources") == []
+                and body.get("labelledAlternates") == [],
+                "build-watchdog absence inventory is invalid",
+            )
+            absence_ordinals.append(ordinal)
+        else:
+            require(
+                event_type in {"lease-begin", "cleanup-started", "lease-finished"},
+                "build-watchdog event type is unsupported",
+            )
+    require(
+        payload.get("eventHeadSha256") == previous
+        and absence_ordinals == [1, 2, 3]
+        and events[0]["event"].get("type") == "lease-begin"
+        and events[-1]["event"].get("type") == "lease-finished",
+        "build-watchdog transcript boundaries or cleanup observations are invalid",
+    )
+    image_roles = sorted(
+        resource["role"]
+        for resource in resources.values()
+        if resource.get("kind") == "image"
+    )
+    require(
+        image_roles == sorted(PRODUCTION_IMAGE_ROLE_ORDER),
+        "build-watchdog did not create exactly one image resource per production role",
+    )
+    for key_pair, resource in resources.items():
+        expected_actions = {"inspect", "remove"}
+        if resource["kind"] in {"builder", "container", "task"}:
+            expected_actions.add("kill")
+        require(
+            cleanup_actions.get(key_pair) == expected_actions,
+            "build-watchdog omitted exact cleanup for a created resource",
+        )
+    return {
+        "file_sha256": snapshot.sha256,
+        "payload_sha256": key["payload_sha256"],
+        "signing_key_id": key["spki_sha256"],
+        "event_head_sha256": previous,
+        "resource_inventory_sha256": sha256_prefixed_json(
+            [resources[key_pair] for key_pair in sorted(resources)]
+        ),
+    }
+
+
+def validate_candidate_manifest_v6(
+    document: dict[str, Any],
+    *,
+    snapshot: FileSnapshot,
+    source_document: dict[str, Any],
+    source_summary: dict[str, Any],
+    dependency_document: dict[str, Any],
+) -> dict[str, Any]:
+    require_exact_keys(
+        document,
+        {
+            "apiVersion",
+            "buildContinuity",
+            "candidateManifestPayloadSha256",
+            "companions",
+            "images",
+            "laneOrder",
+            "lanes",
+            "promotionContract",
+            "sourceSnapshot",
+        },
+        "Candidate Manifest v6",
+    )
+    require(
+        document.get("apiVersion") == CANDIDATE_MANIFEST_V6_API_VERSION,
+        "Candidate Manifest v6 apiVersion mismatch",
+    )
+    payload = dict(document)
+    payload_sha256 = require_sha256(
+        payload.pop("candidateManifestPayloadSha256", None),
+        "Candidate Manifest v6 payload",
+    )
+    require(
+        payload_sha256 == sha256_prefixed_json(payload),
+        "Candidate Manifest v6 payload digest mismatch",
+    )
+    require(
+        document.get("laneOrder") == list(PRODUCTION_LANE_ORDER)
+        and isinstance(document.get("lanes"), dict)
+        and tuple(document["lanes"]) == PRODUCTION_LANE_ORDER
+        and isinstance(document.get("images"), dict)
+        and tuple(document["images"]) == PRODUCTION_IMAGE_ROLE_ORDER,
+        "Candidate Manifest v6 role inventory is not the exact ordered 14 lanes plus npm companion",
+    )
+    source = document.get("sourceSnapshot")
+    require(isinstance(source, dict), "Candidate Manifest v6 source snapshot is missing")
+    for field in (
+        "sourceClosureSha256",
+        "sourceManifestFileSha256",
+        "sourceManifestPayloadSha256",
+        "sourceSelectionManifestFileSha256",
+        "sourceSelectionManifestPayloadSha256",
+        "sourceGitInventoryPayloadSha256",
+        "sourceUntrackedApprovalPayloadSha256",
+    ):
+        require_sha256(source.get(field), f"Candidate Manifest v6 {field}")
+    source_manifest = source.get("sourceManifest")
+    require(isinstance(source_manifest, dict), "Candidate Manifest v6 embedded source manifest is missing")
+    require_exact_keys(
+        source_manifest,
+        {
+            "aggregateBytes",
+            "apiVersion",
+            "closureSha256",
+            "entries",
+            "entryCount",
+            "fileCount",
+            "root",
+            "rootBindingSha256",
+            "rootIdentity",
+            "selection",
+            "selectionManifestFileSha256",
+            "selectionManifestPayloadSha256",
+            "sourceRoot",
+            "sourceRootBindingSha256",
+            "sourceRootIdentity",
+            "symlinkCount",
+        },
+        "Candidate Manifest v6 embedded source manifest",
+    )
+    expected_source_entries = [
+        {
+            key: value
+            for key, value in entry.items()
+            if key not in {"classification", "provenance"}
+        }
+        for entry in source_document["entries"]
+    ]
+    expected_source_directories: set[str] = set()
+    for entry in source_document["entries"]:
+        path = PurePosixPath(entry["path"])
+        for end in range(1, len(path.parts)):
+            expected_source_directories.add(
+                PurePosixPath(*path.parts[:end]).as_posix()
+            )
+    expected_snapshot_entries = [
+        {"mode": 0o500, "path": path, "type": "directory"}
+        for path in expected_source_directories
+    ] + expected_source_entries
+    expected_snapshot_entries.sort(
+        key=lambda item: (
+            len(PurePosixPath(item["path"]).parts),
+            item["path"],
+            item["type"],
+        )
+    )
+    closure_payload = {
+        "aggregateBytes": source_manifest.get("aggregateBytes"),
+        "entries": source_manifest.get("entries"),
+        "entryCount": source_manifest.get("entryCount"),
+        "fileCount": source_manifest.get("fileCount"),
+        "symlinkCount": source_manifest.get("symlinkCount"),
+    }
+    require(
+        source_manifest.get("apiVersion") == "serverware.sourceSnapshot/v6"
+        and source_manifest.get("selection") == source_document
+        and source_manifest.get("entries") == expected_snapshot_entries
+        and source_manifest.get("aggregateBytes")
+        == source_document.get("aggregateBytes")
+        and source_manifest.get("entryCount") == len(expected_snapshot_entries)
+        and source_manifest.get("fileCount") == source_document.get("fileCount")
+        and source_manifest.get("symlinkCount")
+        == source_document.get("symlinkCount")
+        and source_manifest.get("selectionManifestFileSha256")
+        == source_summary["file_sha256"]
+        and source_manifest.get("selectionManifestPayloadSha256")
+        == source_summary["payload_sha256"]
+        and source_manifest.get("closureSha256")
+        == sha256_prefixed_json(closure_payload)
+        and source.get("sourceClosureSha256")
+        == source_manifest.get("closureSha256")
+        and source.get("sourceManifestPayloadSha256")
+        == sha256_prefixed_json(source_manifest)
+        and source.get("sourceManifestFileSha256")
+        == sha256_prefixed_bytes(
+            canonical_json(source_manifest).encode("utf-8") + b"\n"
+        ),
+        "Candidate Manifest v6 embedded source closure or source-input binding mismatch",
+    )
+    require(
+        source.get("sourceSelectionManifestFileSha256") == source_summary["file_sha256"]
+        and source.get("sourceSelectionManifestPayloadSha256")
+        == source_summary["payload_sha256"]
+        and source.get("sourcePathListSha256") == source_summary["path_list_sha256"]
+        and source.get("sourceGitInventoryPayloadSha256")
+        == source_summary["git_inventory_payload_sha256"]
+        and source.get("sourceUntrackedApprovalPayloadSha256")
+        == source_summary["untracked_approval_payload_sha256"],
+        "Candidate Manifest v6 source selection differs from directly verified source evidence",
+    )
+    build_continuity = document.get("buildContinuity")
+    require(isinstance(build_continuity, dict), "Candidate Manifest v6 build continuity is missing")
+    require(
+        build_continuity.get("dependencyBundle") == dependency_document,
+        "Candidate Manifest v6 dependency closure differs from the supplied closure manifest",
+    )
+    build_plan = build_continuity.get("buildPlan")
+    require(
+        isinstance(build_plan, dict)
+        and build_plan.get("dependencyBundle") == dependency_document
+        and build_plan.get("imageOrder") == list(PRODUCTION_IMAGE_ROLE_ORDER)
+        and build_plan.get("sourceSnapshot") == source,
+        "Candidate Manifest v6 build plan continuity mismatch",
+    )
+    candidate_images = {
+        role: candidate_image_identity(document["images"][role], role)
+        for role in PRODUCTION_IMAGE_ROLE_ORDER
+    }
+    promotion_contract = document.get("promotionContract")
+    require(isinstance(promotion_contract, dict), "Candidate Manifest v6 promotion contract is missing")
+    require_sha256(
+        promotion_contract.get("contractSha256"),
+        "Candidate Manifest v6 promotion contract",
+    )
+    require(
+        promotion_contract.get("finalManifestVersion")
+        == "serverware.consolidatedTestArtifacts/v6",
+        "Candidate Manifest v6 does not target the Manifest v6 promoted artifact",
+    )
+    return {
+        "file_sha256": snapshot.sha256,
+        "payload_sha256": payload_sha256,
+        "source_closure_sha256": source["sourceClosureSha256"],
+        "source_manifest_file_sha256": source["sourceManifestFileSha256"],
+        "source_manifest_payload_sha256": source["sourceManifestPayloadSha256"],
+        "source_selection_file_sha256": source_summary["file_sha256"],
+        "source_selection_payload_sha256": source_summary["payload_sha256"],
+        "promotion_contract_sha256": promotion_contract["contractSha256"],
+        "candidate_images": candidate_images,
+        "candidate_images_sha256": sha256_prefixed_json(candidate_images),
+    }
+
+
+def verify_promotion_continuity(
+    document: dict[str, Any],
+    *,
+    snapshot: FileSnapshot,
+    public_key_snapshot: FileSnapshot,
+    candidate_summary: dict[str, Any],
+) -> dict[str, Any]:
+    payload, key = verify_domain_ed25519_envelope(
+        document,
+        public_key_snapshot=public_key_snapshot,
+        api_version=PROMOTION_RECEIPT_API_VERSION,
+        domain=PROMOTION_RECEIPT_SIGNATURE_DOMAIN,
+        label="promotion receipt",
+    )
+    require(
+        payload.get("candidateManifestFileSha256")
+        == candidate_summary["file_sha256"]
+        and payload.get("candidateManifestPayloadSha256")
+        == candidate_summary["payload_sha256"]
+        and payload.get("candidatePromotionContractSha256")
+        == candidate_summary["promotion_contract_sha256"],
+        "promotion receipt does not bind the exact Candidate Manifest v6",
+    )
+    images = payload.get("images")
+    mappings = payload.get("imageMappings")
+    require(
+        isinstance(images, dict)
+        and tuple(images) == PRODUCTION_IMAGE_ROLE_ORDER
+        and isinstance(mappings, dict)
+        and tuple(mappings) == PRODUCTION_IMAGE_ROLE_ORDER,
+        "promotion receipt image inventory is not exactly 14 lanes plus npm companion",
+    )
+    verified_mappings: dict[str, Any] = {}
+    imported_images: dict[str, Any] = {}
+    for role in PRODUCTION_IMAGE_ROLE_ORDER:
+        imported = validate_imported_image(images[role], role)
+        mapping = validate_candidate_to_imported_mapping(
+            mappings[role],
+            role=role,
+            expected_candidate=candidate_summary["candidate_images"][role],
+            expected_imported=imported,
+        )
+        imported_images[role] = imported
+        verified_mappings[role] = mapping
+    return {
+        "file_sha256": snapshot.sha256,
+        "payload_sha256": key["payload_sha256"],
+        "signing_key_id": key["spki_sha256"],
+        "final_manifest_sha256": require_sha256(
+            payload.get("finalManifestSha256"),
+            "promotion receipt final Manifest v6",
+        ),
+        "promotion_acceptance_sha256": require_sha256(
+            payload.get("promotionAcceptanceSha256"),
+            "promotion acceptance",
+        ),
+        "imported_images": imported_images,
+        "image_mappings": verified_mappings,
+        "image_mappings_sha256": sha256_prefixed_json(verified_mappings),
+    }
+
+
+def verify_raw_builder_transcript(
+    document: dict[str, Any],
+    *,
+    snapshot: FileSnapshot,
+    label: str,
+    candidate_summary: dict[str, Any],
+    source_summary: dict[str, Any],
+    dependency_summary: dict[str, Any],
+) -> dict[str, Any]:
+    require_exact_keys(
+        document,
+        {
+            "apiVersion",
+            "builderId",
+            "candidate",
+            "completedAtUnix",
+            "dependencies",
+            "eventHeadSha256",
+            "events",
+            "imageOutputs",
+            "invocationId",
+            "kind",
+            "network",
+            "pipeline",
+            "sandbox",
+            "source",
+            "startedAtUnix",
+            "transcriptSha256",
+        },
+        label,
+    )
+    require(
+        document.get("apiVersion") == RAW_BUILDER_TRANSCRIPT_API_VERSION
+        and document.get("kind") == "HermeticBuilderTranscript"
+        and document.get("pipeline") == MANIFEST_V6_PIPELINE,
+        f"{label} version, kind, or pipeline mismatch",
+    )
+    builder_id = document.get("builderId")
+    invocation_id = document.get("invocationId")
+    require(
+        isinstance(builder_id, str)
+        and 1 <= len(builder_id) <= 128
+        and isinstance(invocation_id, str)
+        and 1 <= len(invocation_id) <= 128,
+        f"{label} builder or invocation identity is invalid",
+    )
+    started = require_bounded_uint(document.get("startedAtUnix"), f"{label} start time")
+    completed = require_bounded_uint(document.get("completedAtUnix"), f"{label} completion time")
+    require(started <= completed, f"{label} completion predates its start")
+    require(
+        document.get("network") == {"mode": "none", "observedEndpoints": []},
+        f"{label} did not directly record a no-network build",
+    )
+    sandbox = document.get("sandbox")
+    require(isinstance(sandbox, dict), f"{label} sandbox evidence is missing")
+    require_exact_keys(
+        sandbox,
+        {
+            "environmentSha256",
+            "filesystemInputSha256",
+            "kind",
+            "profileSha256",
+            "toolchainSha256",
+        },
+        f"{label} sandbox evidence",
+    )
+    require(
+        sandbox.get("kind") == "independently-measured-hermetic-builder",
+        f"{label} sandbox kind is not independently measured",
+    )
+    for field in (
+        "environmentSha256",
+        "filesystemInputSha256",
+        "profileSha256",
+        "toolchainSha256",
+    ):
+        require_sha256(sandbox.get(field), f"{label} sandbox {field}")
+    expected_source = {
+        "sourceClosureSha256": candidate_summary["source_closure_sha256"],
+        "sourceInputManifestFileSha256": source_summary["file_sha256"],
+        "sourceInputManifestPayloadSha256": source_summary["payload_sha256"],
+        "gitInventoryPayloadSha256": source_summary["git_inventory_payload_sha256"],
+        "untrackedApprovalPayloadSha256": source_summary[
+            "untracked_approval_payload_sha256"
+        ],
+    }
+    expected_candidate = {
+        "candidateManifestFileSha256": candidate_summary["file_sha256"],
+        "candidateManifestPayloadSha256": candidate_summary["payload_sha256"],
+        "candidateImagesSha256": candidate_summary["candidate_images_sha256"],
+        "promotionContractSha256": candidate_summary["promotion_contract_sha256"],
+    }
+    expected_dependencies = {
+        "dependencyManifestFileSha256": dependency_summary["file_sha256"],
+        "dependencyManifestPayloadSha256": dependency_summary["manifest_sha256"],
+        "roleClosuresSha256": dependency_summary["role_closures_sha256"],
+    }
+    require(document.get("source") == expected_source, f"{label} source binding mismatch")
+    require(document.get("candidate") == expected_candidate, f"{label} candidate binding mismatch")
+    require(
+        document.get("dependencies") == expected_dependencies,
+        f"{label} dependency binding mismatch",
+    )
+    outputs = document.get("imageOutputs")
+    require(
+        isinstance(outputs, dict)
+        and tuple(outputs) == PRODUCTION_IMAGE_ROLE_ORDER
+        and outputs == candidate_summary["candidate_images"],
+        f"{label} image outputs differ from Candidate Manifest v6",
+    )
+    events = document.get("events")
+    require(
+        isinstance(events, list) and 3 <= len(events) <= 100_000,
+        f"{label} event transcript is incomplete or oversized",
+    )
+    previous = sha256_prefixed_bytes(b"")
+    for sequence, event in enumerate(events, start=1):
+        require(
+            isinstance(event, dict),
+            f"{label} event chain is malformed",
+        )
+        event_sequence = require_bounded_uint(
+            event.get("sequence"),
+            f"{label} event sequence",
+            minimum=1,
+        )
+        require(
+            set(event) == {"event", "eventSha256", "previousEventSha256", "sequence"}
+            and event_sequence == sequence
+            and event.get("previousEventSha256") == previous
+            and isinstance(event.get("event"), dict),
+            f"{label} event chain is invalid",
+        )
+        event_payload = {
+            "event": event["event"],
+            "previousEventSha256": previous,
+            "sequence": sequence,
+        }
+        measured = sha256_prefixed_json(event_payload)
+        require(event.get("eventSha256") == measured, f"{label} event digest mismatch")
+        previous = measured
+    require(
+        events[0]["event"].get("type") == "build-started"
+        and events[-1]["event"].get("type") == "build-completed"
+        and document.get("eventHeadSha256") == previous,
+        f"{label} event boundaries or head mismatch",
+    )
+    transcript_payload = dict(document)
+    transcript_sha256 = require_sha256(
+        transcript_payload.pop("transcriptSha256", None),
+        f"{label} transcript payload",
+    )
+    require(
+        transcript_sha256 == sha256_prefixed_json(transcript_payload),
+        f"{label} transcript digest mismatch",
+    )
+    return {
+        "file_sha256": snapshot.sha256,
+        "payload_sha256": transcript_sha256,
+        "builder_id": builder_id,
+        "invocation_id": invocation_id,
+        "started_at_unix": started,
+        "completed_at_unix": completed,
+        "event_head_sha256": previous,
+        "sandbox_sha256": sha256_prefixed_json(sandbox),
+    }
+
+
+def verify_raw_builder_statement(
+    document: dict[str, Any],
+    *,
+    snapshot: FileSnapshot,
+    public_key_snapshot: FileSnapshot,
+    transcript_summary: dict[str, Any],
+    candidate_summary: dict[str, Any],
+    source_summary: dict[str, Any],
+    dependency_summary: dict[str, Any],
+    label: str,
+    now_unix: int | None = None,
+) -> dict[str, Any]:
+    payload, key = verify_domain_ed25519_envelope(
+        document,
+        public_key_snapshot=public_key_snapshot,
+        api_version=RAW_BUILDER_STATEMENT_API_VERSION,
+        domain=RAW_BUILDER_STATEMENT_SIGNATURE_DOMAIN,
+        label=label,
+    )
+    require_exact_keys(
+        payload,
+        {
+            "builderId",
+            "candidateManifestFileSha256",
+            "candidateManifestPayloadSha256",
+            "dependencyManifestFileSha256",
+            "dependencyManifestPayloadSha256",
+            "environmentSha256",
+            "expiresAtUnix",
+            "imageOutputsSha256",
+            "invocationId",
+            "issuedAtUnix",
+            "operatorId",
+            "pipeline",
+            "sourceClosureSha256",
+            "sourceInputManifestFileSha256",
+            "sourceInputManifestPayloadSha256",
+            "toolchainSha256",
+            "transcriptFileSha256",
+            "transcriptPayloadSha256",
+        },
+        f"{label} payload",
+    )
+    require(payload.get("pipeline") == MANIFEST_V6_PIPELINE, f"{label} pipeline mismatch")
+    issued = require_bounded_uint(payload.get("issuedAtUnix"), f"{label} issue time")
+    expires = require_bounded_uint(payload.get("expiresAtUnix"), f"{label} expiry")
+    now = int(time.time()) if now_unix is None else now_unix
+    require(
+        issued <= now + HARDWARE_PROOF_FUTURE_SKEW_SECONDS
+        and expires > now
+        and issued < expires
+        and expires - issued <= CONTINUITY_MAX_VALIDITY_SECONDS,
+        f"{label} validity window is stale, future, expired, or too broad",
+    )
+    require(
+        payload.get("builderId") == transcript_summary["builder_id"]
+        and payload.get("invocationId") == transcript_summary["invocation_id"]
+        and payload.get("transcriptFileSha256") == transcript_summary["file_sha256"]
+        and payload.get("transcriptPayloadSha256") == transcript_summary["payload_sha256"],
+        f"{label} does not bind its raw transcript",
+    )
+    require(
+        payload.get("candidateManifestFileSha256") == candidate_summary["file_sha256"]
+        and payload.get("candidateManifestPayloadSha256")
+        == candidate_summary["payload_sha256"]
+        and payload.get("imageOutputsSha256")
+        == candidate_summary["candidate_images_sha256"],
+        f"{label} Candidate Manifest v6 binding mismatch",
+    )
+    require(
+        payload.get("sourceClosureSha256") == candidate_summary["source_closure_sha256"]
+        and payload.get("sourceInputManifestFileSha256")
+        == source_summary["file_sha256"]
+        and payload.get("sourceInputManifestPayloadSha256")
+        == source_summary["payload_sha256"],
+        f"{label} source closure binding mismatch",
+    )
+    require(
+        payload.get("dependencyManifestFileSha256")
+        == dependency_summary["file_sha256"]
+        and payload.get("dependencyManifestPayloadSha256")
+        == dependency_summary["manifest_sha256"],
+        f"{label} dependency closure binding mismatch",
+    )
+    for field in ("environmentSha256", "toolchainSha256"):
+        require_sha256(payload.get(field), f"{label} {field}")
+    operator_id = payload.get("operatorId")
+    require(
+        isinstance(operator_id, str) and 1 <= len(operator_id) <= 128,
+        f"{label} operator identity is invalid",
+    )
+    return {
+        "file_sha256": snapshot.sha256,
+        "payload_sha256": key["payload_sha256"],
+        "signing_key_id": key["spki_sha256"],
+        "builder_id": transcript_summary["builder_id"],
+        "operator_id": operator_id,
+        "invocation_id": transcript_summary["invocation_id"],
+        "transcript_file_sha256": transcript_summary["file_sha256"],
+        "transcript_payload_sha256": transcript_summary["payload_sha256"],
+        "issued_at_unix": issued,
+        "expires_at_unix": expires,
+    }
+
+
+def verify_independent_raw_builders(
+    *,
+    left_statement: dict[str, Any],
+    left_statement_snapshot: FileSnapshot,
+    left_transcript: dict[str, Any],
+    left_transcript_snapshot: FileSnapshot,
+    left_public_key: FileSnapshot,
+    right_statement: dict[str, Any],
+    right_statement_snapshot: FileSnapshot,
+    right_transcript: dict[str, Any],
+    right_transcript_snapshot: FileSnapshot,
+    right_public_key: FileSnapshot,
+    candidate_summary: dict[str, Any],
+    source_summary: dict[str, Any],
+    dependency_summary: dict[str, Any],
+) -> dict[str, Any]:
+    transcript_left = verify_raw_builder_transcript(
+        left_transcript,
+        snapshot=left_transcript_snapshot,
+        label="left raw builder transcript",
+        candidate_summary=candidate_summary,
+        source_summary=source_summary,
+        dependency_summary=dependency_summary,
+    )
+    transcript_right = verify_raw_builder_transcript(
+        right_transcript,
+        snapshot=right_transcript_snapshot,
+        label="right raw builder transcript",
+        candidate_summary=candidate_summary,
+        source_summary=source_summary,
+        dependency_summary=dependency_summary,
+    )
+    builder_left = verify_raw_builder_statement(
+        left_statement,
+        snapshot=left_statement_snapshot,
+        public_key_snapshot=left_public_key,
+        transcript_summary=transcript_left,
+        candidate_summary=candidate_summary,
+        source_summary=source_summary,
+        dependency_summary=dependency_summary,
+        label="left raw builder statement",
+    )
+    builder_right = verify_raw_builder_statement(
+        right_statement,
+        snapshot=right_statement_snapshot,
+        public_key_snapshot=right_public_key,
+        transcript_summary=transcript_right,
+        candidate_summary=candidate_summary,
+        source_summary=source_summary,
+        dependency_summary=dependency_summary,
+        label="right raw builder statement",
+    )
+    require(
+        builder_left["signing_key_id"] != builder_right["signing_key_id"]
+        and builder_left["builder_id"] != builder_right["builder_id"]
+        and builder_left["operator_id"] != builder_right["operator_id"]
+        and builder_left["invocation_id"] != builder_right["invocation_id"],
+        "raw builders must use distinct keys, builders, operators, and invocations",
+    )
+    builders = {"left": builder_left, "right": builder_right}
+    return {**builders, "builders_sha256": sha256_prefixed_json(builders)}
+
+
+def verify_manifest_v6_eif_build(
+    document: dict[str, Any],
+    *,
+    snapshot: FileSnapshot,
+    public_key_snapshot: FileSnapshot,
+    candidate_summary: dict[str, Any],
+    source_summary: dict[str, Any],
+    watchdog_summary: dict[str, Any],
+    promotion_summary: dict[str, Any],
+    builders_summary: dict[str, Any],
+    dependency_summary: dict[str, Any],
+) -> dict[str, Any]:
+    payload, key = verify_domain_ed25519_envelope(
+        document,
+        public_key_snapshot=public_key_snapshot,
+        api_version=MANIFEST_V6_EIF_BUILD_API_VERSION,
+        domain=MANIFEST_V6_EIF_BUILD_SIGNATURE_DOMAIN,
+        label="Manifest v6 EIF build statement",
+    )
+    require_exact_keys(
+        payload,
+        {
+            "builderStatementsSha256",
+            "candidateManifestFileSha256",
+            "candidateManifestPayloadSha256",
+            "completionIdentity",
+            "completionIdentitySha256",
+            "dependencyClosureSha256",
+            "eifFileSha384",
+            "importedImageMappingsSha256",
+            "legacyDockerNsmAccepted",
+            "pcrs",
+            "pipeline",
+            "promotionReceiptFileSha256",
+            "promotionReceiptPayloadSha256",
+            "releaseGeneration",
+            "rollbackEpoch",
+            "sourceClosureSha256",
+            "sourceInputManifestFileSha256",
+            "sourceInputManifestPayloadSha256",
+            "watchdogReceiptFileSha256",
+            "watchdogReceiptPayloadSha256",
+        },
+        "Manifest v6 EIF build payload",
+    )
+    pipeline = payload.get("pipeline")
+    require(
+        pipeline == MANIFEST_V6_PIPELINE
+        and pipeline not in LEGACY_DOCKER_NSM_PIPELINES
+        and payload.get("legacyDockerNsmAccepted") is False,
+        "EIF build statement is legacy Docker /dev/nsm evidence or accepts cross-pipeline evidence",
+    )
+    require(
+        payload.get("candidateManifestFileSha256") == candidate_summary["file_sha256"]
+        and payload.get("candidateManifestPayloadSha256")
+        == candidate_summary["payload_sha256"]
+        and payload.get("sourceClosureSha256") == candidate_summary["source_closure_sha256"]
+        and payload.get("sourceInputManifestFileSha256") == source_summary["file_sha256"]
+        and payload.get("sourceInputManifestPayloadSha256")
+        == source_summary["payload_sha256"],
+        "EIF build statement source or candidate continuity mismatch",
+    )
+    require(
+        payload.get("watchdogReceiptFileSha256") == watchdog_summary["file_sha256"]
+        and payload.get("watchdogReceiptPayloadSha256")
+        == watchdog_summary["payload_sha256"]
+        and payload.get("promotionReceiptFileSha256")
+        == promotion_summary["file_sha256"]
+        and payload.get("promotionReceiptPayloadSha256")
+        == promotion_summary["payload_sha256"],
+        "EIF build statement watchdog or promotion continuity mismatch",
+    )
+    require(
+        payload.get("builderStatementsSha256") == builders_summary["builders_sha256"]
+        and payload.get("dependencyClosureSha256")
+        == dependency_summary["role_closures_sha256"]
+        and payload.get("importedImageMappingsSha256")
+        == promotion_summary["image_mappings_sha256"],
+        "EIF build statement builder, dependency, or imported-image mapping mismatch",
+    )
+    pcrs = payload.get("pcrs")
+    require(isinstance(pcrs, dict), "EIF build statement PCRs are missing")
+    require_exact_keys(pcrs, {"PCR0", "PCR1", "PCR2"}, "EIF build statement PCRs")
+    normalized_pcrs = {
+        name: require_sha384(pcrs.get(name), f"EIF build statement {name}")
+        for name in ("PCR0", "PCR1", "PCR2")
+    }
+    release_generation = require_bounded_uint(
+        payload.get("releaseGeneration"),
+        "EIF build release generation",
+        minimum=1,
+    )
+    rollback_epoch = require_bounded_uint(
+        payload.get("rollbackEpoch"),
+        "EIF build rollback epoch",
+    )
+    return {
+        "file_sha256": snapshot.sha256,
+        "payload_sha256": key["payload_sha256"],
+        "signing_key_id": key["spki_sha256"],
+        "eif_file_sha384": require_sha384(
+            payload.get("eifFileSha384"),
+            "EIF file digest",
+        ),
+        "pcrs": normalized_pcrs,
+        "release_generation": release_generation,
+        "rollback_epoch": rollback_epoch,
+    }
+
+
+def production_release_core_identity(
+    *,
+    candidate_summary: dict[str, Any],
+    source_summary: dict[str, Any],
+    watchdog_summary: dict[str, Any],
+    promotion_summary: dict[str, Any],
+    builders_summary: dict[str, Any],
+    dependency_summary: dict[str, Any],
+    eif_summary: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "apiVersion": PRODUCTION_RELEASE_IDENTITY_API_VERSION,
+        "pipeline": MANIFEST_V6_PIPELINE,
+        "releaseGeneration": eif_summary["release_generation"],
+        "rollbackEpoch": eif_summary["rollback_epoch"],
+        "candidate": {
+            "fileSha256": candidate_summary["file_sha256"],
+            "payloadSha256": candidate_summary["payload_sha256"],
+            "imagesSha256": candidate_summary["candidate_images_sha256"],
+            "promotionContractSha256": candidate_summary[
+                "promotion_contract_sha256"
+            ],
+        },
+        "source": {
+            "closureSha256": candidate_summary["source_closure_sha256"],
+            "sourceManifestFileSha256": candidate_summary[
+                "source_manifest_file_sha256"
+            ],
+            "sourceManifestPayloadSha256": candidate_summary[
+                "source_manifest_payload_sha256"
+            ],
+            "sourceInputManifestFileSha256": source_summary["file_sha256"],
+            "sourceInputManifestPayloadSha256": source_summary["payload_sha256"],
+            "trackedInventorySha256": source_summary["tracked_inventory_sha256"],
+            "requiredUntrackedInventorySha256": source_summary[
+                "required_untracked_inventory_sha256"
+            ],
+            "gitInventoryPayloadSha256": source_summary[
+                "git_inventory_payload_sha256"
+            ],
+            "gitInventoryKeyId": source_summary["git_inventory_key_id"],
+            "untrackedApprovalPayloadSha256": source_summary[
+                "untracked_approval_payload_sha256"
+            ],
+            "untrackedApprovalKeyId": source_summary[
+                "untracked_approval_key_id"
+            ],
+        },
+        "buildWatchdog": {
+            "fileSha256": watchdog_summary["file_sha256"],
+            "payloadSha256": watchdog_summary["payload_sha256"],
+            "signingKeyId": watchdog_summary["signing_key_id"],
+            "eventHeadSha256": watchdog_summary["event_head_sha256"],
+            "resourceInventorySha256": watchdog_summary[
+                "resource_inventory_sha256"
+            ],
+        },
+        "promotion": {
+            "fileSha256": promotion_summary["file_sha256"],
+            "payloadSha256": promotion_summary["payload_sha256"],
+            "signingKeyId": promotion_summary["signing_key_id"],
+            "finalManifestSha256": promotion_summary["final_manifest_sha256"],
+            "acceptanceSha256": promotion_summary["promotion_acceptance_sha256"],
+            "imageMappingsSha256": promotion_summary["image_mappings_sha256"],
+            "importedImages": promotion_summary["imported_images"],
+        },
+        "builders": {
+            "leftStatementSha256": builders_summary["left"]["file_sha256"],
+            "leftStatementPayloadSha256": builders_summary["left"][
+                "payload_sha256"
+            ],
+            "leftTranscriptSha256": builders_summary["left"][
+                "transcript_file_sha256"
+            ],
+            "leftTranscriptPayloadSha256": builders_summary["left"][
+                "transcript_payload_sha256"
+            ],
+            "leftKeyId": builders_summary["left"]["signing_key_id"],
+            "rightStatementSha256": builders_summary["right"]["file_sha256"],
+            "rightStatementPayloadSha256": builders_summary["right"][
+                "payload_sha256"
+            ],
+            "rightTranscriptSha256": builders_summary["right"][
+                "transcript_file_sha256"
+            ],
+            "rightTranscriptPayloadSha256": builders_summary["right"][
+                "transcript_payload_sha256"
+            ],
+            "rightKeyId": builders_summary["right"]["signing_key_id"],
+            "buildersSha256": builders_summary["builders_sha256"],
+        },
+        "dependencies": {
+            "fileSha256": dependency_summary["file_sha256"],
+            "manifestSha256": dependency_summary["manifest_sha256"],
+            "roleClosures": dependency_summary["role_closures"],
+            "roleClosuresSha256": dependency_summary["role_closures_sha256"],
+        },
+        "eif": {
+            "buildStatementFileSha256": eif_summary["file_sha256"],
+            "buildStatementPayloadSha256": eif_summary["payload_sha256"],
+            "buildStatementKeyId": eif_summary["signing_key_id"],
+            "eifFileSha384": eif_summary["eif_file_sha384"],
+            "pcrs": eif_summary["pcrs"],
+        },
+    }
+
+
+def verify_key_custody_continuity(
+    document: dict[str, Any],
+    *,
+    snapshot: FileSnapshot,
+    public_key_snapshot: FileSnapshot,
+    release_core_identity_sha256: str,
+    eif_summary: dict[str, Any],
+    expected_policy_hash: str,
+    now_unix: int | None = None,
+) -> dict[str, Any]:
+    payload, key = verify_domain_ed25519_envelope(
+        document,
+        public_key_snapshot=public_key_snapshot,
+        api_version=KEY_CUSTODY_EVIDENCE_API_VERSION,
+        domain=KEY_CUSTODY_SIGNATURE_DOMAIN,
+        label="enclave key-custody evidence",
+    )
+    require_exact_keys(
+        payload,
+        {
+            "eifFileSha384",
+            "enclaveBootId",
+            "enclaveInstanceId",
+            "expiresAtUnix",
+            "issuedAtUnix",
+            "keys",
+            "pcrs",
+            "pipeline",
+            "policyHash",
+            "releaseCoreIdentitySha256",
+            "releaseGeneration",
+            "rollbackEpoch",
+        },
+        "enclave key-custody payload",
+    )
+    require(payload.get("pipeline") == MANIFEST_V6_PIPELINE, "key-custody pipeline mismatch")
+    require_bounded_uint(
+        payload.get("releaseGeneration"),
+        "key-custody release generation",
+        minimum=1,
+    )
+    require_bounded_uint(
+        payload.get("rollbackEpoch"),
+        "key-custody rollback epoch",
+    )
+    require(
+        payload.get("releaseCoreIdentitySha256") == release_core_identity_sha256,
+        "key-custody evidence does not bind the production release core identity",
+    )
+    require(
+        payload.get("eifFileSha384") == eif_summary["eif_file_sha384"]
+        and payload.get("pcrs") == eif_summary["pcrs"]
+        and payload.get("releaseGeneration") == eif_summary["release_generation"]
+        and payload.get("rollbackEpoch") == eif_summary["rollback_epoch"],
+        "key-custody evidence EIF, PCR, generation, or epoch mismatch",
+    )
+    policy_hash = require_sha256(payload.get("policyHash"), "key-custody policy hash")
+    require(policy_hash == expected_policy_hash, "key-custody policy hash mismatch")
+    issued = require_bounded_uint(payload.get("issuedAtUnix"), "key-custody issue time")
+    expires = require_bounded_uint(payload.get("expiresAtUnix"), "key-custody expiry")
+    now = int(time.time()) if now_unix is None else now_unix
+    require(
+        issued <= now + HARDWARE_PROOF_FUTURE_SKEW_SECONDS
+        and expires > now
+        and issued < expires
+        and expires - issued <= CONTINUITY_MAX_VALIDITY_SECONDS,
+        "key-custody evidence validity is stale, future, expired, or too broad",
+    )
+    for field in ("enclaveBootId", "enclaveInstanceId"):
+        value = payload.get(field)
+        require(
+            isinstance(value, str) and 1 <= len(value) <= 128,
+            f"key-custody {field} is invalid",
+        )
+    keys = payload.get("keys")
+    require(
+        isinstance(keys, list)
+        and [entry.get("role") for entry in keys if isinstance(entry, dict)]
+        == list(KEY_CUSTODY_ROLE_ORDER),
+        "key-custody role inventory is not exact and ordered",
+    )
+    normalized_keys: dict[str, Any] = {}
+    recipient_ids: set[str] = set()
+    identity_ids: set[str] = set()
+    for entry in keys:
+        role = entry["role"]
+        require_exact_keys(
+            entry,
+            {
+                "enclaveGenerationEvidenceSha256",
+                "identitySpkiSha256",
+                "kmsAttestationDocumentSha256",
+                "kmsCiphertextForRecipientSha256",
+                "kmsEncryptionContext",
+                "kmsEncryptionContextSha256",
+                "kmsKeyArnSha256",
+                "plaintextExported",
+                "recipientAlgorithm",
+                "recipientKeyGeneration",
+                "recipientPublicKeySpkiSha256",
+                "releaseConditions",
+                "role",
+            },
+            f"{role} key-custody entry",
+        )
+        require(
+            entry.get("plaintextExported") is False
+            and entry.get("recipientAlgorithm")
+            == "RSAES_OAEP_SHA_256_CiphertextForRecipient",
+            f"{role} key custody permits plaintext export or wrong recipient algorithm",
+        )
+        identity_spki = require_sha256(
+            entry.get("identitySpkiSha256"),
+            f"{role} key identity SPKI",
+        )
+        recipient_spki = require_sha256(
+            entry.get("recipientPublicKeySpkiSha256"),
+            f"{role} recipient SPKI",
+        )
+        require(
+            identity_spki not in identity_ids and recipient_spki not in recipient_ids,
+            f"{role} key identity or recipient key is reused across custody roles",
+        )
+        identity_ids.add(identity_spki)
+        recipient_ids.add(recipient_spki)
+        generation = require_bounded_uint(
+            entry.get("recipientKeyGeneration"),
+            f"{role} recipient key generation",
+            minimum=1,
+        )
+        for field in (
+            "enclaveGenerationEvidenceSha256",
+            "kmsAttestationDocumentSha256",
+            "kmsCiphertextForRecipientSha256",
+            "kmsEncryptionContextSha256",
+            "kmsKeyArnSha256",
+        ):
+            require_sha256(entry.get(field), f"{role} {field}")
+        encryption_context = entry.get("kmsEncryptionContext")
+        require(isinstance(encryption_context, dict), f"{role} KMS encryption context is missing")
+        require_bounded_uint(
+            encryption_context.get("releaseGeneration"),
+            f"{role} KMS context release generation",
+            minimum=1,
+        )
+        require_bounded_uint(
+            encryption_context.get("rollbackEpoch"),
+            f"{role} KMS context rollback epoch",
+        )
+        expected_conditions = {
+            "eifFileSha384": eif_summary["eif_file_sha384"],
+            "pcrs": eif_summary["pcrs"],
+            "policyHash": policy_hash,
+            "recipientPublicKeySpkiSha256": recipient_spki,
+            "releaseGeneration": eif_summary["release_generation"],
+            "rollbackEpoch": eif_summary["rollback_epoch"],
+        }
+        require(
+            encryption_context == {"keyRole": role, **expected_conditions}
+            and entry.get("kmsEncryptionContextSha256")
+            == sha256_prefixed_json(encryption_context),
+            f"{role} KMS encryption context does not bind the exact release conditions",
+        )
+        conditions = entry.get("releaseConditions")
+        require(
+            isinstance(conditions, dict),
+            f"{role} KMS release conditions are missing",
+        )
+        require_bounded_uint(
+            conditions.get("releaseGeneration"),
+            f"{role} KMS condition release generation",
+            minimum=1,
+        )
+        require_bounded_uint(
+            conditions.get("rollbackEpoch"),
+            f"{role} KMS condition rollback epoch",
+        )
+        require(
+            conditions == expected_conditions,
+            f"{role} KMS release conditions do not bind PCR, policy, epoch, release, and recipient",
+        )
+        normalized_keys[role] = {
+            "identitySpkiSha256": identity_spki,
+            "recipientPublicKeySpkiSha256": recipient_spki,
+            "recipientKeyGeneration": generation,
+            "kmsCiphertextForRecipientSha256": entry[
+                "kmsCiphertextForRecipientSha256"
+            ],
+            "kmsAttestationDocumentSha256": entry[
+                "kmsAttestationDocumentSha256"
+            ],
+            "enclaveGenerationEvidenceSha256": entry[
+                "enclaveGenerationEvidenceSha256"
+            ],
+            "kmsKeyArnSha256": entry["kmsKeyArnSha256"],
+            "kmsEncryptionContextSha256": entry["kmsEncryptionContextSha256"],
+        }
+    return {
+        "file_sha256": snapshot.sha256,
+        "payload_sha256": key["payload_sha256"],
+        "signing_key_id": key["spki_sha256"],
+        "release_core_identity_sha256": release_core_identity_sha256,
+        "policy_hash": policy_hash,
+        "enclave_instance_id": payload["enclaveInstanceId"],
+        "enclave_boot_id": payload["enclaveBootId"],
+        "keys": normalized_keys,
+        "keys_sha256": sha256_prefixed_json(normalized_keys),
+        "issued_at_unix": issued,
+        "expires_at_unix": expires,
+        "identity_and_custody_distinguished": True,
+        "kms_ciphertext_for_recipient_bound": True,
+    }
+
+
+def verify_merkle_consistency(
+    *,
+    old_size: int,
+    new_size: int,
+    old_root: str,
+    new_root: str,
+    proof: Any,
+    label: str,
+) -> None:
+    require(
+        1 <= old_size <= new_size,
+        f"{label} tree sizes are invalid",
+    )
+    old_root = require_sha256(old_root, f"{label} old root")
+    new_root = require_sha256(new_root, f"{label} new root")
+    require(isinstance(proof, list) and len(proof) <= 256, f"{label} proof is invalid")
+    proof_hashes = [require_sha256(item, f"{label} proof hash") for item in proof]
+    if old_size == new_size:
+        require(not proof_hashes and old_root == new_root, f"{label} equal-size proof mismatch")
+        return
+    first = old_size - 1
+    second = new_size - 1
+    while first & 1:
+        first >>= 1
+        second >>= 1
+    index = 0
+    if first == 0:
+        old_cursor = old_root
+        new_cursor = old_root
+    else:
+        require(bool(proof_hashes), f"{label} proof is empty")
+        old_cursor = proof_hashes[0]
+        new_cursor = proof_hashes[0]
+        index = 1
+    while index < len(proof_hashes):
+        require(second != 0, f"{label} proof has trailing hashes")
+        sibling = proof_hashes[index]
+        if (first & 1) or first == second:
+            old_cursor = node_hash(sibling, old_cursor)
+            new_cursor = node_hash(sibling, new_cursor)
+            while first != 0 and (first & 1) == 0:
+                first >>= 1
+                second >>= 1
+        else:
+            new_cursor = node_hash(new_cursor, sibling)
+        first >>= 1
+        second >>= 1
+        index += 1
+    require(
+        second == 0
+        and hmac.compare_digest(old_cursor, old_root)
+        and hmac.compare_digest(new_cursor, new_root),
+        f"{label} does not prove append-only consistency",
+    )
+
+
+def validate_prior_witness_state(
+    document: dict[str, Any],
+    *,
+    snapshot: FileSnapshot,
+) -> dict[str, Any]:
+    require_exact_keys(
+        document,
+        {
+            "apiVersion",
+            "checkpointSha256",
+            "logId",
+            "provider",
+            "releaseGeneration",
+            "rollbackEpoch",
+            "rootHash",
+            "sequence",
+            "stateSha256",
+            "treeSize",
+            "witnessKeyId",
+        },
+        "prior monotonic witness client state",
+    )
+    require(
+        document.get("apiVersion") == MONOTONIC_WITNESS_STATE_API_VERSION,
+        "prior monotonic witness state apiVersion mismatch",
+    )
+    payload = dict(document)
+    state_sha256 = require_sha256(
+        payload.pop("stateSha256", None),
+        "prior witness state",
+    )
+    require(
+        state_sha256 == sha256_prefixed_json(payload),
+        "prior witness state digest mismatch",
+    )
+    return {
+        "file_sha256": snapshot.sha256,
+        "state_sha256": state_sha256,
+        "provider": document.get("provider"),
+        "log_id": require_sha256(document.get("logId"), "prior witness log ID"),
+        "witness_key_id": require_sha256(
+            document.get("witnessKeyId"),
+            "prior witness key ID",
+        ),
+        "checkpoint_sha256": require_sha256(
+            document.get("checkpointSha256"),
+            "prior witness checkpoint",
+        ),
+        "release_generation": require_bounded_uint(
+            document.get("releaseGeneration"),
+            "prior witness release generation",
+            minimum=1,
+        ),
+        "rollback_epoch": require_bounded_uint(
+            document.get("rollbackEpoch"),
+            "prior witness rollback epoch",
+        ),
+        "sequence": require_bounded_uint(
+            document.get("sequence"),
+            "prior witness sequence",
+            minimum=1,
+        ),
+        "tree_size": require_bounded_uint(
+            document.get("treeSize"),
+            "prior witness tree size",
+            minimum=1,
+        ),
+        "root_hash": require_sha256(
+            document.get("rootHash"),
+            "prior witness root hash",
+        ),
+    }
+
+
+def verify_monotonic_witness(
+    document: dict[str, Any],
+    *,
+    snapshot: FileSnapshot,
+    public_key_snapshot: FileSnapshot,
+    prior_state: dict[str, Any],
+    production_release_identity_sha256: str,
+    release_generation: int,
+    rollback_epoch: int,
+    expected_challenge_nonce_sha256: str,
+    now_unix: int | None = None,
+) -> dict[str, Any]:
+    payload, key = verify_domain_ed25519_envelope(
+        document,
+        public_key_snapshot=public_key_snapshot,
+        api_version=MONOTONIC_WITNESS_API_VERSION,
+        domain=MONOTONIC_WITNESS_SIGNATURE_DOMAIN,
+        label="off-host monotonic witness",
+    )
+    require_exact_keys(
+        payload,
+        {
+            "challengeConsumption",
+            "consistencyProof",
+            "expiresAtUnix",
+            "inclusion",
+            "issuedAtUnix",
+            "logId",
+            "priorStateSha256",
+            "provider",
+            "releaseGeneration",
+            "releaseIdentitySha256",
+            "revocation",
+            "rollbackEpoch",
+            "rootHash",
+            "sequence",
+            "treeSize",
+        },
+        "off-host monotonic witness payload",
+    )
+    require(
+        payload.get("priorStateSha256") == prior_state["state_sha256"],
+        "off-host witness does not bind the verifier-retained prior state",
+    )
+    require(
+        payload.get("provider") == prior_state["provider"]
+        and payload.get("logId") == prior_state["log_id"]
+        and key["spki_sha256"] == prior_state["witness_key_id"],
+        "off-host witness provider, log, or independently pinned key changed",
+    )
+    require(
+        payload.get("releaseIdentitySha256")
+        == production_release_identity_sha256,
+        "off-host witness release identity mismatch",
+    )
+    current_generation = require_bounded_uint(
+        payload.get("releaseGeneration"),
+        "off-host witness release generation",
+        minimum=1,
+    )
+    current_epoch = require_bounded_uint(
+        payload.get("rollbackEpoch"),
+        "off-host witness rollback epoch",
+    )
+    current_sequence = require_bounded_uint(
+        payload.get("sequence"),
+        "off-host witness sequence",
+        minimum=1,
+    )
+    current_tree_size = require_bounded_uint(
+        payload.get("treeSize"),
+        "off-host witness tree size",
+        minimum=1,
+    )
+    current_root = require_sha256(payload.get("rootHash"), "off-host witness root")
+    require(
+        current_generation == release_generation
+        and current_epoch == rollback_epoch,
+        "off-host witness generation or rollback epoch differs from the production identity",
+    )
+    require(
+        current_sequence > prior_state["sequence"]
+        and current_tree_size > prior_state["tree_size"]
+        and (
+            current_epoch > prior_state["rollback_epoch"]
+            or (
+                current_epoch == prior_state["rollback_epoch"]
+                and current_generation > prior_state["release_generation"]
+            )
+        ),
+        "off-host witness did not advance high-water state",
+    )
+    verify_merkle_consistency(
+        old_size=prior_state["tree_size"],
+        new_size=current_tree_size,
+        old_root=prior_state["root_hash"],
+        new_root=current_root,
+        proof=payload.get("consistencyProof"),
+        label="off-host witness consistency",
+    )
+    inclusion = payload.get("inclusion")
+    require(isinstance(inclusion, dict), "off-host witness inclusion proof is missing")
+    require_exact_keys(
+        inclusion,
+        {"leafSha256", "proof", "rootHash", "treeSize"},
+        "off-host witness inclusion",
+    )
+    expected_leaf = sha256_prefixed_bytes(
+        b"\x00"
+        + canonical_json(
+            {
+                "releaseGeneration": release_generation,
+                "releaseIdentitySha256": production_release_identity_sha256,
+                "rollbackEpoch": rollback_epoch,
+            }
+        ).encode("utf-8")
+    )
+    inclusion_tree_size = require_bounded_uint(
+        inclusion.get("treeSize"),
+        "off-host witness inclusion tree size",
+        minimum=1,
+    )
+    require(
+        inclusion.get("leafSha256") == expected_leaf
+        and inclusion.get("rootHash") == current_root
+        and inclusion_tree_size == current_tree_size
+        and isinstance(inclusion.get("proof"), list)
+        and verify_merkle_inclusion(expected_leaf, inclusion["proof"], current_root),
+        "off-host witness release inclusion proof is invalid",
+    )
+    issued = require_bounded_uint(payload.get("issuedAtUnix"), "off-host witness issue time")
+    expires = require_bounded_uint(payload.get("expiresAtUnix"), "off-host witness expiry")
+    now = int(time.time()) if now_unix is None else now_unix
+    require(
+        issued <= now + HARDWARE_PROOF_FUTURE_SKEW_SECONDS
+        and expires > now
+        and issued < expires
+        and expires - issued <= CONTINUITY_MAX_VALIDITY_SECONDS,
+        "off-host witness is stale, future, expired, or too broadly valid",
+    )
+    revocation = payload.get("revocation")
+    require(isinstance(revocation, dict), "off-host witness revocation evidence is missing")
+    require_exact_keys(
+        revocation,
+        {
+            "asOfUnix",
+            "releaseIdentitySha256",
+            "revocationListSha256",
+            "revokedIdentities",
+            "status",
+        },
+        "off-host witness revocation evidence",
+    )
+    revoked = revocation.get("revokedIdentities")
+    require(
+        isinstance(revoked, list)
+        and revoked == sorted(set(revoked))
+        and all(SHA256_RE.fullmatch(str(item)) is not None for item in revoked)
+        and revocation.get("revocationListSha256") == sha256_prefixed_json(revoked)
+        and revocation.get("releaseIdentitySha256")
+        == production_release_identity_sha256
+        and revocation.get("status") == "active"
+        and production_release_identity_sha256 not in revoked
+        and revocation.get("asOfUnix") == issued,
+        "off-host witness current revocation state is invalid or revoked",
+    )
+    consumption = payload.get("challengeConsumption")
+    require(isinstance(consumption, dict), "off-host witness challenge consumption is missing")
+    require_exact_keys(
+        consumption,
+        {
+            "challengeNonceSha256",
+            "consumedAtUnix",
+            "consumptionId",
+            "expiresAtUnix",
+            "oneUse",
+            "status",
+        },
+        "off-host witness challenge consumption",
+    )
+    consumption_id = consumption.get("consumptionId")
+    require(
+        consumption.get("challengeNonceSha256")
+        == expected_challenge_nonce_sha256
+        and consumption.get("status") == "consumed"
+        and consumption.get("oneUse") is True
+        and isinstance(consumption_id, str)
+        and 1 <= len(consumption_id) <= 128
+        and consumption.get("consumedAtUnix") == issued
+        and consumption.get("expiresAtUnix") == expires,
+        "off-host witness did not atomically consume the expected one-use challenge",
+    )
+    next_state_payload = {
+        "apiVersion": MONOTONIC_WITNESS_STATE_API_VERSION,
+        "checkpointSha256": snapshot.sha256,
+        "logId": prior_state["log_id"],
+        "provider": prior_state["provider"],
+        "releaseGeneration": current_generation,
+        "rollbackEpoch": current_epoch,
+        "rootHash": current_root,
+        "sequence": current_sequence,
+        "treeSize": current_tree_size,
+        "witnessKeyId": key["spki_sha256"],
+    }
+    return {
+        "file_sha256": snapshot.sha256,
+        "payload_sha256": key["payload_sha256"],
+        "signing_key_id": key["spki_sha256"],
+        "release_identity_sha256": production_release_identity_sha256,
+        "release_generation": current_generation,
+        "rollback_epoch": current_epoch,
+        "sequence": current_sequence,
+        "tree_size": current_tree_size,
+        "root_hash": current_root,
+        "consumption_id": consumption_id,
+        "revocation_checked": True,
+        "prior_state_required": True,
+        "stateless_verification_rejected": True,
+        "next_state": {
+            **next_state_payload,
+            "stateSha256": sha256_prefixed_json(next_state_payload),
+        },
+    }
+
+
+def verify_production_continuity(
+    *,
+    snapshots: dict[str, FileSnapshot],
+    expected_policy_hash: str,
+    expected_challenge_nonce_sha256: str,
+) -> dict[str, Any]:
+    source_document = load_canonical_json_artifact(
+        snapshots["source_input_manifest"],
+        "source-input manifest",
+        api_version=SOURCE_INPUT_MANIFEST_API_VERSION,
+    )
+    source_summary = verify_source_input_continuity(
+        source_document,
+        source_snapshot=snapshots["source_input_manifest"],
+        git_inventory_public_key=snapshots[
+            "source_git_inventory_public_key"
+        ],
+        untracked_approval_public_key=snapshots[
+            "source_untracked_approval_public_key"
+        ],
+    )
+    dependency_document = load_canonical_json_artifact(
+        snapshots["dependency_closure"],
+        "dependency closure manifest",
+        api_version=DEPENDENCY_BUNDLE_API_VERSION,
+    )
+    dependency_summary = validate_dependency_bundle_continuity(
+        dependency_document,
+        snapshot=snapshots["dependency_closure"],
+    )
+    candidate_document = load_canonical_json_artifact(
+        snapshots["candidate_manifest_v6"],
+        "Candidate Manifest v6",
+        api_version=CANDIDATE_MANIFEST_V6_API_VERSION,
+    )
+    candidate_summary = validate_candidate_manifest_v6(
+        candidate_document,
+        snapshot=snapshots["candidate_manifest_v6"],
+        source_document=source_document,
+        source_summary=source_summary,
+        dependency_document=dependency_document,
+    )
+    watchdog_document = load_canonical_json_artifact(
+        snapshots["build_watchdog_receipt"],
+        "build-watchdog receipt",
+        api_version=BUILD_WATCHDOG_RECEIPT_API_VERSION,
+    )
+    watchdog_summary = verify_build_watchdog_continuity(
+        watchdog_document,
+        snapshot=snapshots["build_watchdog_receipt"],
+        public_key_snapshot=snapshots["build_watchdog_public_key"],
+        candidate_document=candidate_document,
+    )
+    promotion_document = load_canonical_json_artifact(
+        snapshots["promotion_receipt"],
+        "promotion receipt",
+        api_version=PROMOTION_RECEIPT_API_VERSION,
+    )
+    promotion_summary = verify_promotion_continuity(
+        promotion_document,
+        snapshot=snapshots["promotion_receipt"],
+        public_key_snapshot=snapshots["promotion_public_key"],
+        candidate_summary=candidate_summary,
+    )
+    builders_summary = verify_independent_raw_builders(
+        left_statement=load_canonical_json_artifact(
+            snapshots["builder_left_statement"],
+            "left raw builder statement",
+            api_version=RAW_BUILDER_STATEMENT_API_VERSION,
+        ),
+        left_statement_snapshot=snapshots["builder_left_statement"],
+        left_transcript=load_canonical_json_artifact(
+            snapshots["builder_left_transcript"],
+            "left raw builder transcript",
+            api_version=RAW_BUILDER_TRANSCRIPT_API_VERSION,
+        ),
+        left_transcript_snapshot=snapshots["builder_left_transcript"],
+        left_public_key=snapshots["builder_left_public_key"],
+        right_statement=load_canonical_json_artifact(
+            snapshots["builder_right_statement"],
+            "right raw builder statement",
+            api_version=RAW_BUILDER_STATEMENT_API_VERSION,
+        ),
+        right_statement_snapshot=snapshots["builder_right_statement"],
+        right_transcript=load_canonical_json_artifact(
+            snapshots["builder_right_transcript"],
+            "right raw builder transcript",
+            api_version=RAW_BUILDER_TRANSCRIPT_API_VERSION,
+        ),
+        right_transcript_snapshot=snapshots["builder_right_transcript"],
+        right_public_key=snapshots["builder_right_public_key"],
+        candidate_summary=candidate_summary,
+        source_summary=source_summary,
+        dependency_summary=dependency_summary,
+    )
+    eif_summary = verify_manifest_v6_eif_build(
+        load_canonical_json_artifact(
+            snapshots["manifest_v6_eif_build"],
+            "Manifest v6 EIF build statement",
+            api_version=MANIFEST_V6_EIF_BUILD_API_VERSION,
+        ),
+        snapshot=snapshots["manifest_v6_eif_build"],
+        public_key_snapshot=snapshots["manifest_v6_eif_builder_public_key"],
+        candidate_summary=candidate_summary,
+        source_summary=source_summary,
+        watchdog_summary=watchdog_summary,
+        promotion_summary=promotion_summary,
+        builders_summary=builders_summary,
+        dependency_summary=dependency_summary,
+    )
+    release_core = production_release_core_identity(
+        candidate_summary=candidate_summary,
+        source_summary=source_summary,
+        watchdog_summary=watchdog_summary,
+        promotion_summary=promotion_summary,
+        builders_summary=builders_summary,
+        dependency_summary=dependency_summary,
+        eif_summary=eif_summary,
+    )
+    release_core_sha256 = sha256_prefixed_json(release_core)
+    custody_summary = verify_key_custody_continuity(
+        load_canonical_json_artifact(
+            snapshots["key_custody_evidence"],
+            "enclave key-custody evidence",
+            api_version=KEY_CUSTODY_EVIDENCE_API_VERSION,
+        ),
+        snapshot=snapshots["key_custody_evidence"],
+        public_key_snapshot=snapshots["key_custody_public_key"],
+        release_core_identity_sha256=release_core_sha256,
+        eif_summary=eif_summary,
+        expected_policy_hash=expected_policy_hash,
+    )
+    production_identity_payload = {
+        **release_core,
+        "releaseCoreIdentitySha256": release_core_sha256,
+        "keyCustody": {
+            "evidenceFileSha256": custody_summary["file_sha256"],
+            "evidencePayloadSha256": custody_summary["payload_sha256"],
+            "verifierKeyId": custody_summary["signing_key_id"],
+            "keysSha256": custody_summary["keys_sha256"],
+            "keys": custody_summary["keys"],
+            "identityAndCustodyDistinguished": True,
+            "kmsCiphertextForRecipientBound": True,
+        },
+    }
+    production_identity = {
+        **production_identity_payload,
+        "productionReleaseIdentitySha256": sha256_prefixed_json(
+            production_identity_payload
+        ),
+    }
+    prior_state = validate_prior_witness_state(
+        load_canonical_json_artifact(
+            snapshots["prior_witness_state"],
+            "prior monotonic witness client state",
+            api_version=MONOTONIC_WITNESS_STATE_API_VERSION,
+        ),
+        snapshot=snapshots["prior_witness_state"],
+    )
+    witness_summary = verify_monotonic_witness(
+        load_canonical_json_artifact(
+            snapshots["monotonic_witness"],
+            "off-host monotonic witness",
+            api_version=MONOTONIC_WITNESS_API_VERSION,
+        ),
+        snapshot=snapshots["monotonic_witness"],
+        public_key_snapshot=snapshots["monotonic_witness_public_key"],
+        prior_state=prior_state,
+        production_release_identity_sha256=production_identity[
+            "productionReleaseIdentitySha256"
+        ],
+        release_generation=eif_summary["release_generation"],
+        rollback_epoch=eif_summary["rollback_epoch"],
+        expected_challenge_nonce_sha256=expected_challenge_nonce_sha256,
+    )
+    summary_payload = {
+        "apiVersion": PRODUCTION_CONTINUITY_SUMMARY_API_VERSION,
+        "pipeline": MANIFEST_V6_PIPELINE,
+        "productionReleaseIdentity": production_identity,
+        "source": source_summary,
+        "candidate": {
+            key: value
+            for key, value in candidate_summary.items()
+            if key != "candidate_images"
+        },
+        "buildWatchdog": watchdog_summary,
+        "promotion": {
+            key: value
+            for key, value in promotion_summary.items()
+            if key not in {"image_mappings", "imported_images"}
+        },
+        "builders": builders_summary,
+        "dependencies": dependency_summary,
+        "eif": eif_summary,
+        "keyCustody": custody_summary,
+        "monotonicWitness": witness_summary,
+        "legacyDockerNsmAccepted": False,
+    }
+    return {
+        **summary_payload,
+        "continuitySha256": sha256_prefixed_json(summary_payload),
+    }
+
+
+def verify_completion_proof_authentication(
+    *,
+    authentication_document: dict[str, Any],
+    authentication_snapshot: FileSnapshot,
+    authentication_public_key: FileSnapshot,
+    checkpoint_document: dict[str, Any],
+    checkpoint_snapshot: FileSnapshot,
+    checkpoint_public_key: FileSnapshot,
+    expected_completion_identity_sha256: str,
+    expected_proof_core_sha256: str,
+    continuity: dict[str, Any],
+    now_unix: int | None = None,
+) -> dict[str, Any]:
+    statement, authentication_key = verify_domain_ed25519_envelope(
+        authentication_document,
+        public_key_snapshot=authentication_public_key,
+        api_version=COMPLETION_AUTHENTICATION_API_VERSION,
+        domain=COMPLETION_AUTHENTICATION_SIGNATURE_DOMAIN,
+        label="completion proof authentication",
+    )
+    require_exact_keys(
+        statement,
+        {
+            "completionIdentity",
+            "completionIdentitySha256",
+            "expiresAtUnix",
+            "issuedAtUnix",
+            "keyCustodyEvidenceSha256",
+            "productionReleaseIdentitySha256",
+            "proofApiVersion",
+            "proofCoreSha256",
+            "witnessEvidenceSha256",
+        },
+        "completion proof authentication payload",
+    )
+    require(
+        statement.get("proofApiVersion") == COMPLETION_PROOF_API_VERSION
+        and statement.get("completionIdentitySha256")
+        == expected_completion_identity_sha256
+        and statement.get("proofCoreSha256") == expected_proof_core_sha256
+        and statement.get("productionReleaseIdentitySha256")
+        == continuity["productionReleaseIdentity"][
+            "productionReleaseIdentitySha256"
+        ]
+        and statement.get("keyCustodyEvidenceSha256")
+        == continuity["keyCustody"]["file_sha256"]
+        and statement.get("witnessEvidenceSha256")
+        == continuity["monotonicWitness"]["file_sha256"],
+        "completion authentication does not bind the exact aggregate proof and production continuity",
+    )
+    issued = require_bounded_uint(
+        statement.get("issuedAtUnix"),
+        "completion authentication issue time",
+    )
+    expires = require_bounded_uint(
+        statement.get("expiresAtUnix"),
+        "completion authentication expiry",
+    )
+    now = int(time.time()) if now_unix is None else now_unix
+    require(
+        issued <= now + HARDWARE_PROOF_FUTURE_SKEW_SECONDS
+        and expires > now
+        and issued < expires
+        and expires - issued <= CONTINUITY_MAX_VALIDITY_SECONDS,
+        "completion authentication is stale, future, expired, or too broadly valid",
+    )
+    checkpoint, checkpoint_key = verify_domain_ed25519_envelope(
+        checkpoint_document,
+        public_key_snapshot=checkpoint_public_key,
+        api_version=COMPLETION_CHECKPOINT_API_VERSION,
+        domain=COMPLETION_CHECKPOINT_SIGNATURE_DOMAIN,
+        label="completion proof checkpoint",
+    )
+    require(
+        checkpoint_key["spki_sha256"] != authentication_key["spki_sha256"],
+        "completion proof signer and checkpoint log must use independent keys",
+    )
+    require_exact_keys(
+        checkpoint,
+        {
+            "expiresAtUnix",
+            "inclusionProof",
+            "issuedAtUnix",
+            "leafSha256",
+            "logId",
+            "provider",
+            "rootHash",
+            "statementPayloadSha256",
+            "treeSize",
+        },
+        "completion proof checkpoint payload",
+    )
+    checkpoint_issued = require_bounded_uint(
+        checkpoint.get("issuedAtUnix"),
+        "completion checkpoint issue time",
+    )
+    checkpoint_expires = require_bounded_uint(
+        checkpoint.get("expiresAtUnix"),
+        "completion checkpoint expiry",
+    )
+    require(
+        checkpoint_issued >= issued
+        and checkpoint_issued <= now + HARDWARE_PROOF_FUTURE_SKEW_SECONDS
+        and checkpoint_expires > now
+        and checkpoint_expires > checkpoint_issued
+        and checkpoint_expires - checkpoint_issued <= CONTINUITY_MAX_VALIDITY_SECONDS,
+        "completion checkpoint is stale, future, expired, or too broadly valid",
+    )
+    require(
+        checkpoint.get("statementPayloadSha256")
+        == authentication_key["payload_sha256"]
+        and checkpoint.get("logId") == checkpoint_key["spki_sha256"],
+        "completion checkpoint does not bind the signed completion statement or pinned log",
+    )
+    require(
+        isinstance(checkpoint.get("provider"), str)
+        and 1 <= len(checkpoint["provider"]) <= 256,
+        "completion checkpoint provider identity is invalid",
+    )
+    expected_leaf = sha256_prefixed_bytes(
+        b"\x00"
+        + canonical_json(
+            {
+                "completionAuthenticationPayloadSha256": authentication_key[
+                    "payload_sha256"
+                ],
+                "proofCoreSha256": expected_proof_core_sha256,
+            }
+        ).encode("utf-8")
+    )
+    tree_size = require_bounded_uint(
+        checkpoint.get("treeSize"),
+        "completion checkpoint tree size",
+        minimum=1,
+    )
+    root_hash = require_sha256(checkpoint.get("rootHash"), "completion checkpoint root")
+    inclusion_proof = checkpoint.get("inclusionProof")
+    require(
+        checkpoint.get("leafSha256") == expected_leaf
+        and isinstance(inclusion_proof, list)
+        and verify_merkle_inclusion(expected_leaf, inclusion_proof, root_hash),
+        "completion authentication is not included in the independently signed checkpoint",
+    )
+    return {
+        "independently_authenticated": True,
+        "authentication_file_sha256": authentication_snapshot.sha256,
+        "authentication_payload_sha256": authentication_key["payload_sha256"],
+        "authentication_key_id": authentication_key["spki_sha256"],
+        "checkpoint_file_sha256": checkpoint_snapshot.sha256,
+        "checkpoint_payload_sha256": checkpoint_key["payload_sha256"],
+        "checkpoint_key_id": checkpoint_key["spki_sha256"],
+        "checkpoint_provider": checkpoint.get("provider"),
+        "checkpoint_tree_size": tree_size,
+        "checkpoint_root_hash": root_hash,
+        "proof_core_sha256": expected_proof_core_sha256,
+        "completion_identity_sha256": expected_completion_identity_sha256,
+        "issued_at_unix": issued,
+        "expires_at_unix": min(expires, checkpoint_expires),
     }
 
 
@@ -1809,12 +5358,18 @@ def completion_assurance(
         "hardware assurance is not bound to the recomputed current-host identity",
     )
     return {
-        "level": "hardware-backed-release-completion",
-        "final_completion": True,
-        "hardware_proof": True,
+        "level": "pre-enclave-readiness",
+        "final_completion": False,
+        "hardware_proof": False,
         "hardware_evidence_verified": True,
-        "reason": "fresh independently signed hardware evidence and current-host binding verified",
-        "required_final_evidence": [],
+        "reason": (
+            "legacy hardware evidence and current-host binding are readiness context "
+            "only; final completion requires the independent final-v1 path"
+        ),
+        "required_final_evidence": [
+            "independent Manifest v6 public Nitro verification and protected state",
+            "releaseCompletionVerification/v1 external result signature",
+        ],
     }
 
 
@@ -2164,8 +5719,11 @@ def transparency_record_binding(
     expected_leaf_hash = transparency_leaf_hash(item)
     require(item.get("leaf_hash") == expected_leaf_hash, f"{label} transparency inclusion leaf payload mismatch")
     require(inclusion.get("leaf_hash") == expected_leaf_hash, f"{label} transparency inclusion leaf hash mismatch")
-    tree_size = inclusion.get("tree_size")
-    require(isinstance(tree_size, int) and tree_size >= 1, f"{label} transparency tree size is invalid")
+    tree_size = require_bounded_uint(
+        inclusion.get("tree_size"),
+        f"{label} transparency tree size",
+        minimum=1,
+    )
     tree_head_hash = require_sha256(inclusion.get("tree_head_hash"), f"{label} transparency tree head")
     proof = inclusion.get("proof")
     require(isinstance(proof, list), f"{label} transparency inclusion proof must be a list")
@@ -2182,7 +5740,15 @@ def transparency_record_binding(
     require(matching_anchor is not None, f"{label} transparency anchor response did not bind record digest")
     require(matching_anchor.get("leaf_hash") == expected_leaf_hash, f"{label} transparency anchor leaf hash mismatch")
     require(matching_anchor.get("tree_head_hash") == tree_head_hash, f"{label} transparency anchor tree head mismatch")
-    require(matching_anchor.get("tree_size") == tree_size, f"{label} transparency anchor tree size mismatch")
+    require(
+        require_bounded_uint(
+            matching_anchor.get("tree_size"),
+            f"{label} transparency anchor tree size",
+            minimum=1,
+        )
+        == tree_size,
+        f"{label} transparency anchor tree size mismatch",
+    )
     anchor_sth = matching_anchor.get("signed_tree_head") if isinstance(matching_anchor.get("signed_tree_head"), dict) else {}
     require(anchor_sth == signed_tree_head, f"{label} transparency anchor signed tree head mismatch")
     checkpoint = matching_anchor.get("external_checkpoint") if isinstance(matching_anchor.get("external_checkpoint"), dict) else {}
@@ -2822,7 +6388,7 @@ def verify_image_signatures(
 
 def verify_benchmark(
     bench: dict[str, Any],
-    p99_limit_ms: float,
+    p99_limit_ns: int,
     expected_binary_digest: str,
 ) -> dict[str, Any]:
     require(bench.get("candidate") == "rust-decision-gate", "benchmark did not run against rust-decision-gate")
@@ -2838,17 +6404,40 @@ def verify_benchmark(
     require(isinstance(nonce_before, str) and bool(nonce_before), "benchmark is missing its initial attestation nonce")
     require(isinstance(nonce_after, str) and bool(nonce_after), "benchmark is missing its final attestation nonce")
     require(nonce_before != nonce_after, "benchmark attestation nonces must be distinct")
-    requests = int(bench.get("requests") or 0)
-    require(requests >= 100, "benchmark request count is too small")
-    p99 = float(bench.get("p99_ms"))
-    require(p99 <= p99_limit_ms, f"benchmark p99 {p99} ms exceeds {p99_limit_ms} ms")
+    requests = bench.get("requests")
+    require(
+        type(requests) is int
+        and 100 <= requests <= CANONICAL_JSON_SIGNED_MAX,
+        "benchmark request count must be an integer between 100 and the signed 64-bit maximum",
+    )
+    p50_ns = benchmark_milliseconds_to_nanoseconds(
+        bench.get("p50_ms"),
+        label="benchmark p50_ms",
+    )
+    p95_ns = benchmark_milliseconds_to_nanoseconds(
+        bench.get("p95_ms"),
+        label="benchmark p95_ms",
+    )
+    p99_ns = benchmark_milliseconds_to_nanoseconds(
+        bench.get("p99_ms"),
+        label="benchmark p99_ms",
+    )
+    require(
+        type(p99_limit_ns) is int and 0 < p99_limit_ns <= CANONICAL_JSON_SIGNED_MAX,
+        "benchmark p99 nanosecond limit must be a positive signed 64-bit integer",
+    )
+    require(
+        p99_ns <= p99_limit_ns,
+        f"benchmark p99 {p99_ns} ns exceeds {p99_limit_ns} ns",
+    )
     return {
         "candidate": bench.get("candidate"),
         "requests": requests,
-        "p50_ms": bench.get("p50_ms"),
-        "p95_ms": bench.get("p95_ms"),
-        "p99_ms": p99,
-        "limit_ms": p99_limit_ms,
+        "latency_unit": "nanoseconds",
+        "p50_ns": p50_ns,
+        "p95_ns": p95_ns,
+        "p99_ns": p99_ns,
+        "limit_ns": p99_limit_ns,
         "data_plane_binary_digest": binary_digest,
         "policy_hash": policy_hash,
         "runtime_manifest_digest": runtime_manifest_digest,
@@ -2970,7 +6559,9 @@ def verify_preflight_authenticity(
     )
     payload_document = dict(preflight)
     payload_document.pop("authenticity", None)
-    payload = canonical_json(payload_document).encode("utf-8")
+    payload = canonical_legacy_preflight_signature_json(
+        payload_document
+    ).encode("utf-8")
     require(
         hmac.compare_digest(
             require_sha256(authenticity.get("payload_sha256"), "production host preflight payload digest"),
@@ -3014,20 +6605,54 @@ def verify_production_host_preflight(
     preflight_signing_key_id: str | None = None,
     preflight_max_age_seconds: int | None = None,
     expected_bootstrap_receipt: dict[str, Any] | None = None,
+    expected_nonce_rollback_assurance: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    launcher_enforced = expected_bootstrap_receipt is not None
+    strict_execution = verification_mode == "final" or launcher_enforced
     production_env_snapshot = load_production_env_snapshot(
         snapshots.by_key["production_readiness_env"]
     )
     preflight_module = load_production_host_preflight_module(
         production_env_snapshot,
-        final=verification_mode == "final",
+        final=strict_execution,
     )
     assert_no_secret_fields(preflight)
     require(preflight.get("apiVersion") == "serverware.productionHostPreflight/v1", "production host preflight has wrong apiVersion")
     require(preflight.get("ok") is True, "production host preflight is not ok")
     require(not preflight.get("failures"), "production host preflight includes failures")
+    require(
+        preflight.get("verification_mode") == "readiness"
+        and preflight.get("readiness_only") is True
+        and preflight.get("final_nitro_execution_proven") is False
+        and preflight.get("ok_for_action") is False,
+        "production host preflight crossed its readiness-only authority boundary",
+    )
+    preflight_authority_boundary = (
+        preflight_module.validate_readiness_authority_boundary(
+            preflight.get("authority_boundary")
+        )
+    )
+    launcher_authorization_fresh = False
+    if launcher_enforced:
+        launch_identity = (
+            run_production_readiness.bootstrap_launch_authorization_identity(
+                expected_bootstrap_receipt
+            )
+        )
+        launcher_authorization_fresh = (
+            int(time.time()) < launch_identity["expires_at_unix_seconds"]
+        )
+    require(
+        preflight_authority_boundary.get("launcherEvidenceVerified")
+        is launcher_enforced
+        and preflight_authority_boundary.get(
+            "currentFreshnessVerifiedUsingTrustedHostWallClock"
+        )
+        is launcher_authorization_fresh,
+        "production host preflight launcher evidence classification does not match the selected readiness path",
+    )
     preflight_authenticity: dict[str, Any] | None = None
-    if verification_mode == "final":
+    if strict_execution:
         require(preflight_signing_public_key is not None, "final completion is missing the preflight signing trust root snapshot")
         require(isinstance(preflight_signing_key_id, str), "final completion is missing the preflight signing key ID")
         require(isinstance(preflight_max_age_seconds, int), "final completion is missing the preflight freshness policy")
@@ -3137,7 +6762,7 @@ def verify_production_host_preflight(
     script_digests: dict[str, str] = {}
     docker_toolchain = runtime_trust.get("docker_toolchain")
     material_digests = runtime_trust.get("material_digests")
-    if verification_mode == "final":
+    if strict_execution:
         script_entries = runtime_trust.get("python_script_digests")
         require(isinstance(script_entries, list), "production host preflight did not report pinned Python scripts")
         for item in script_entries:
@@ -3200,7 +6825,12 @@ def verify_production_host_preflight(
     require(production_env.get("ok") is True, "production host preflight production env check did not pass")
     preflight_executing_script: dict[str, Any] | None = None
     preflight_bootstrap_receipt: dict[str, Any] | None = None
-    if verification_mode == "final":
+    preflight_nonce_rollback_assurance = (
+        checks.get("nonce_rollback_assurance")
+        if isinstance(checks.get("nonce_rollback_assurance"), dict)
+        else {}
+    )
+    if strict_execution:
         launcher_trust = (
             production_env.get("launcher_trust")
             if isinstance(production_env.get("launcher_trust"), dict)
@@ -3214,6 +6844,15 @@ def verify_production_host_preflight(
             "production host preflight is not bound to the current sealed launcher receipt",
         )
         preflight_bootstrap_receipt = candidate_receipt
+        require(
+            isinstance(expected_nonce_rollback_assurance, dict)
+            and expected_nonce_rollback_assurance.get("verified") is True
+            and preflight_nonce_rollback_assurance
+            == expected_nonce_rollback_assurance
+            and launcher_trust.get("nonce_rollback_assurance")
+            == expected_nonce_rollback_assurance,
+            "production host preflight is not bound to the current retained nonce rollback assurance snapshot",
+        )
         candidate = production_env.get("executing_script")
         require(
             isinstance(candidate, dict)
@@ -3234,6 +6873,16 @@ def verify_production_host_preflight(
             "production host preflight did not bind its descriptor-executed script identity",
         )
         preflight_executing_script = candidate
+    else:
+        require(
+            preflight_nonce_rollback_assurance
+            == {
+                "apiVersion": run_production_readiness.NONCE_ROLLBACK_ASSURANCE_BINDING_API_VERSION,
+                "enforcement": "not-native-launcher-enforced",
+                "verified": False,
+            },
+            "manual production host preflight must not claim launcher-enforced nonce rollback assurance",
+        )
     production_env_file = production_env.get("file") if isinstance(production_env.get("file"), dict) else {}
     require(
         production_env_file.get("sha256") == snapshots.by_key["production_readiness_env"].sha256,
@@ -3293,7 +6942,7 @@ def verify_production_host_preflight(
     )
     compose_renderer: dict[str, Any] | None = None
     production_runtime_model: dict[str, Any] | None = None
-    if verification_mode == "final":
+    if strict_execution:
         compose_renderer = {
             "path": production_compose.get("compose_plugin_executable"),
             "sha256": require_sha256(
@@ -3368,7 +7017,7 @@ def verify_production_host_preflight(
     release_security = checks.get("release_security_evidence") if isinstance(checks.get("release_security_evidence"), dict) else {}
     require(release_security.get("ok") is True, "production host preflight release security evidence did not pass")
     policy_trust_roots: dict[str, Any] = {}
-    if verification_mode == "final":
+    if strict_execution:
         candidate_trust_roots = release_security.get("trust_roots")
         require(
             isinstance(candidate_trust_roots, dict)
@@ -3523,6 +7172,11 @@ def verify_production_host_preflight(
         "production host preflight KMS material bindings do not match current KMS materials file",
     )
     return {
+        "verification_mode": "readiness",
+        "readiness_only": True,
+        "final_nitro_execution_proven": False,
+        "ok_for_action": False,
+        "authority_boundary": preflight_authority_boundary,
         "host": {
             "system": host.get("system"),
             "machine": host.get("machine"),
@@ -3548,6 +7202,7 @@ def verify_production_host_preflight(
         },
         "authenticity": preflight_authenticity,
         "bootstrap_receipt": preflight_bootstrap_receipt,
+        "nonce_rollback_assurance": preflight_nonce_rollback_assurance,
         "executing_script": preflight_executing_script,
         "production_env_keys": production_env.get("env_keys") or [],
         "production_readiness_env_sha256": production_env_file.get("sha256"),
@@ -3634,7 +7289,7 @@ def verify_current_production_env_binding(
     proxy_observation_body: str | None = None,
     proxy_max_observation_body_bytes: int | None = None,
     proxy_operation_context_digest: str | None = None,
-    p99_limit_ms: float | None = None,
+    p99_limit_ms: str | None = None,
     docker_executable: str | None = None,
     docker_compose_plugin_executable: str | None = None,
     docker_unix_socket: str | None = None,
@@ -3643,10 +7298,12 @@ def verify_current_production_env_binding(
     preflight_signing_key_id: str | None = None,
     preflight_max_age_seconds: int | None = None,
     remeasure_runtime_trust: bool = True,
+    launcher_enforced: bool = False,
 ) -> dict[str, Any]:
+    strict_execution = verification_mode == "final" or launcher_enforced
     env_snapshot = snapshots.by_key["production_readiness_env"]
     launcher_trust: dict[str, Any] | None = None
-    if verification_mode == "final":
+    if strict_execution:
         require(launcher_trust_inputs is not None, "final verification is missing launcher trust inputs")
         launcher_trust = run_production_readiness.validate_launcher_trusted_env(
             env_snapshot.path,
@@ -3667,13 +7324,13 @@ def verify_current_production_env_binding(
         not run_production_readiness.LAUNCHER_TRUST_INPUT_NAMES & set(production_env),
         "out-of-band launcher trust inputs must not be defined inside the production readiness env",
     )
-    if verification_mode == "final":
+    if strict_execution:
         launcher_trust["startup_environment_contract"] = (
             run_production_readiness.validate_final_launcher_contract(production_env)
         )
     preflight_module = load_production_host_preflight_module(
         production_env,
-        final=verification_mode == "final",
+        final=strict_execution,
     )
     raw_max_age = production_env.get(PROXY_PROOF_MAX_AGE_ENV_KEY)
     require(isinstance(raw_max_age, str), f"production readiness env must pin {PROXY_PROOF_MAX_AGE_ENV_KEY}")
@@ -3810,13 +7467,10 @@ def verify_current_production_env_binding(
         expected_operation_context_digest = None
     raw_p99_limit = production_env.get(COMPLETION_P99_LIMIT_ENV_KEY)
     require(isinstance(raw_p99_limit, str), f"production readiness env must pin {COMPLETION_P99_LIMIT_ENV_KEY}")
-    try:
-        expected_p99_limit_ms = float(raw_p99_limit)
-    except ValueError as exc:
-        raise ValueError(f"{COMPLETION_P99_LIMIT_ENV_KEY} must be numeric") from exc
-    require(
-        math.isfinite(expected_p99_limit_ms) and expected_p99_limit_ms > 0,
-        f"{COMPLETION_P99_LIMIT_ENV_KEY} must be finite and positive",
+    expected_p99_limit_ns = exact_milliseconds_to_nanoseconds(
+        raw_p99_limit,
+        label=COMPLETION_P99_LIMIT_ENV_KEY,
+        positive=True,
     )
     expected_docker_executable = production_env.get(DOCKER_EXECUTABLE_ENV_KEY)
     require(
@@ -3826,7 +7480,7 @@ def verify_current_production_env_binding(
     )
     docker_toolchain_settings = (
         run_production_readiness.validate_docker_toolchain_settings(production_env)
-        if verification_mode == "final"
+        if strict_execution
         else {
             DOCKER_COMPOSE_PLUGIN_EXECUTABLE_ENV_KEY: production_env.get(
                 DOCKER_COMPOSE_PLUGIN_EXECUTABLE_ENV_KEY, "readiness-unbound"
@@ -3858,16 +7512,22 @@ def verify_current_production_env_binding(
             production_env.get(PREFLIGHT_SIGNING_KEY_ID_ENV_KEY),
             "production host preflight signing key ID",
         )
-        if verification_mode == "final"
+        if strict_execution
         else production_env.get(PREFLIGHT_SIGNING_KEY_ID_ENV_KEY, "sha256:" + "0" * 64)
     )
-    if verification_mode == "final":
+    if strict_execution:
         require(
             proxy_proof_max_age_seconds == expected_proxy_proof_max_age_seconds,
             f"selected proxy proof max age does not exactly match {PROXY_PROOF_MAX_AGE_ENV_KEY}",
         )
         require(
-            p99_limit_ms == expected_p99_limit_ms,
+            p99_limit_ms is not None
+            and exact_milliseconds_to_nanoseconds(
+                p99_limit_ms,
+                label="selected p99 limit",
+                positive=True,
+            )
+            == expected_p99_limit_ns,
             f"selected p99 limit does not exactly match {COMPLETION_P99_LIMIT_ENV_KEY}",
         )
         require(
@@ -3968,7 +7628,7 @@ def verify_current_production_env_binding(
         )
         for env_name in PROXY_EXPECTED_DIGEST_ENV_KEYS.values()
     }
-    if verification_mode == "final":
+    if strict_execution:
         require(proxy_digest_inputs is not None, "final verification is missing expected proxy digest inputs")
         for attribute, env_name in PROXY_EXPECTED_DIGEST_ENV_KEYS.items():
             require(
@@ -4025,7 +7685,7 @@ def verify_current_production_env_binding(
         "current executable bytes do not match the hashed production readiness env pins",
     )
     current_script_digests: dict[str, str] = {}
-    if verification_mode == "final":
+    if strict_execution:
         expected_script_pins = {
             setting: production_env.get(setting)
             for setting in run_production_readiness.PINNED_PYTHON_SCRIPTS.values()
@@ -4163,7 +7823,7 @@ def verify_current_production_env_binding(
         ),
     ):
         if (
-            verification_mode != "final"
+            not strict_execution
             and env_name
             in {
                 run_production_readiness.POLICY_TRUST_ROOT_ENV,
@@ -4259,7 +7919,7 @@ def verify_current_production_env_binding(
         "reproducible_build": run_production_readiness.REPRODUCIBLE_BUILD_TRUST_ROOT_ID_ENV,
     }
     for role, key_id in policy_role_ids.items():
-        if verification_mode == "final":
+        if strict_execution:
             require(
                 hmac.compare_digest(
                     key_id,
@@ -4300,7 +7960,7 @@ def verify_current_production_env_binding(
         not in existing_release_trust_root_ids,
         "control-plane responses must use an independent signing public key",
     )
-    if verification_mode == "final":
+    if strict_execution:
         require(
             len(set(policy_role_ids.values())) == len(policy_role_ids),
             "policy identity, activation, and reproducible-build roles must use distinct public keys",
@@ -4464,7 +8124,7 @@ def verify_current_production_env_binding(
             expected_proxy_max_observation_body_bytes
         ),
         "proxy_operation_context_digest": expected_operation_context_digest,
-        "p99_limit_ms": expected_p99_limit_ms,
+        "p99_limit_ns": expected_p99_limit_ns,
         "docker_executable": expected_docker_executable,
         "docker_compose_plugin_executable": docker_toolchain_settings[
             DOCKER_COMPOSE_PLUGIN_EXECUTABLE_ENV_KEY
@@ -5222,7 +8882,7 @@ def verify_running_production_containers(
     final_mode: bool,
 ) -> dict[str, Any]:
     if skip_current_host_check:
-        return {"ok": True, "skipped": True, "containers": []}
+        return {"skipped": True, "containers": []}
     require(final_mode, "live production container verification requires final mode")
     require(
         runtime_model.get("sha256")
@@ -5549,7 +9209,6 @@ def verify_running_production_containers(
         daemon_after,
     )
     return {
-        "ok": True,
         "skipped": False,
         "compose_file": str(compose_file),
         "compose_project_name": compose_project_name,
@@ -5617,12 +9276,26 @@ def require_production_identifier(value: Any, label: str) -> str:
 
 
 def require_exact_object_fields(value: dict[str, Any], expected_fields: set[str], label: str) -> None:
+    validate_canonical_json_profile(value, label=label)
     actual_fields = set(value)
     missing = sorted(expected_fields - actual_fields)
     unexpected = sorted(actual_fields - expected_fields)
     require(
         not missing and not unexpected,
         f"{label} fields do not match the contract; missing={missing}, unexpected={unexpected}",
+    )
+
+
+def is_bounded_printable_utf8_identity(value: Any) -> bool:
+    if not isinstance(value, str) or value != value.strip():
+        return False
+    try:
+        encoded = value.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return (
+        1 <= len(encoded) <= 256
+        and all(character.isprintable() for character in value)
     )
 
 
@@ -5761,6 +9434,313 @@ def verify_proxy_release_authority(
     return authority
 
 
+def canonical_control_plane_response_headers(
+    value: Any,
+    *,
+    label: str,
+) -> bytes:
+    require(
+        isinstance(value, list) and 1 <= len(value) <= 128,
+        f"{label} response headers must contain 1 to 128 fields",
+    )
+    previous_name: str | None = None
+    total_bytes = 0
+    repeatable = {"link", "set-cookie", "warning", "www-authenticate"}
+    forbidden = {
+        "connection",
+        "keep-alive",
+        "proxy-authenticate",
+        "proxy-authorization",
+        "te",
+        "trailer",
+        "transfer-encoding",
+        "upgrade",
+    }
+    secret_markers = {
+        "authorization",
+        "cookie",
+        "secret",
+        "token",
+        "password",
+        "passwd",
+        "api-key",
+        "apikey",
+        "private-key",
+    }
+    for index, item in enumerate(value):
+        item_label = f"{label} response header {index}"
+        require(isinstance(item, dict), f"{item_label} must be an object")
+        require_exact_object_fields(
+            item,
+            {"name", "value_b64"},
+            item_label,
+        )
+        name = item.get("name")
+        require(
+            isinstance(name, str)
+            and len(name) <= 256
+            and bool(re.fullmatch(r"[!#$%&'*+\-.^_`|~0-9a-z]+", name))
+            and not name.startswith("x-serverware-response-")
+            and name not in forbidden
+            and not any(marker in name for marker in secret_markers),
+            f"{item_label} name is invalid",
+        )
+        if previous_name is not None:
+            require(
+                name >= previous_name,
+                f"{label} response headers are not canonically ordered",
+            )
+            require(
+                name != previous_name or name in repeatable,
+                f"{label} response headers duplicate a singleton field",
+            )
+        encoded_value = item.get("value_b64")
+        require(
+            isinstance(encoded_value, str),
+            f"{item_label} value is invalid",
+        )
+        decoded = (
+            b""
+            if encoded_value == ""
+            else decode_canonical_base64url(
+                encoded_value,
+                f"{item_label} value",
+            )
+        )
+        require(
+            not any(
+                byte <= 0x08
+                or 0x0A <= byte <= 0x1F
+                or byte == 0x7F
+                for byte in decoded
+            ),
+            f"{item_label} value contains a forbidden control byte",
+        )
+        total_bytes += len(name) + len(decoded)
+        require(
+            total_bytes <= 64 * 1024,
+            f"{label} response headers exceed 64 KiB",
+        )
+        previous_name = name
+    return canonical_json(value).encode("ascii")
+
+
+def verify_control_plane_receipt_authorization_binding(
+    value: Any,
+    *,
+    expected_release_authority: dict[str, Any],
+    expected_principal_id: str,
+    expected_route_id: str,
+    expected_policy_digest: str,
+) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    label = "control-plane authorization receipt trusted authorization binding"
+    require(isinstance(value, dict), f"{label} must be an object")
+    binding = dict(value)
+    base_fields = {
+        "attempt_id",
+        "flow_id",
+        "principal_id",
+        "route_id",
+        "credential_id",
+        "credential_version",
+        "policy_hash",
+        "request_digest",
+        "operation_digest",
+        "operation_context",
+        "require_jit_grant",
+        "shared_quotas",
+    }
+    durable_present = "api_version" in binding or "durable_policy" in binding
+    expected_fields = (
+        base_fields | {"api_version", "durable_policy"}
+        if durable_present
+        else base_fields
+    )
+    require_exact_object_fields(binding, expected_fields, label)
+    if durable_present:
+        require(
+            binding.get("api_version") == RELEASE_AUTHORIZATION_BINDING_V2
+            and isinstance(binding.get("durable_policy"), dict),
+            f"{label} durable protocol is inconsistent",
+        )
+    expected_fields_and_values = {
+        "attempt_id": expected_release_authority["attempt_id"],
+        "flow_id": expected_release_authority["attempt_id"],
+        "principal_id": expected_principal_id,
+        "route_id": expected_route_id,
+        "credential_id": expected_release_authority["credential_ref"] or "",
+        "credential_version": expected_release_authority["credential_version"],
+        "policy_hash": expected_policy_digest,
+        "request_digest": expected_release_authority["request_digest"],
+        "operation_digest": expected_release_authority["operation_digest"],
+    }
+    for field, expected in expected_fields_and_values.items():
+        require(
+            binding.get(field) == expected,
+            f"{label} identity or digest binding mismatch",
+        )
+    require(
+        isinstance(binding.get("operation_context"), dict),
+        f"{label} operation context is invalid",
+    )
+    require(
+        isinstance(binding.get("require_jit_grant"), bool)
+        and binding["require_jit_grant"]
+        == (
+            expected_release_authority["grant_id"] is not None
+            and expected_release_authority["approval_id"] is not None
+        ),
+        f"{label} JIT binding is inconsistent",
+    )
+    require(
+        isinstance(binding.get("shared_quotas"), list)
+        and len(binding["shared_quotas"]) <= 256,
+        f"{label} shared quota binding is invalid",
+    )
+    require(
+        sha256_prefixed_json(binding)
+        == expected_release_authority["consumption_identity_digest"],
+        f"{label} digest mismatch",
+    )
+    if not durable_present:
+        return None
+    durable = binding["durable_policy"]
+    require_exact_object_fields(
+        durable,
+        {"actorId", "claimDigest", "claims"},
+        f"{label} durable policy",
+    )
+    actor_id = durable.get("actorId")
+    require(
+        is_bounded_printable_utf8_identity(actor_id),
+        f"{label} durable actor is invalid",
+    )
+    claim_digest = require_sha256(
+        durable.get("claimDigest"),
+        f"{label} durable claim digest",
+    )
+    claims = durable.get("claims")
+    require(
+        isinstance(claims, list)
+        and 1 <= len(claims) <= 64
+        and all(isinstance(claim, dict) for claim in claims),
+        f"{label} durable claims are invalid",
+    )
+    require(
+        claim_digest == sha256_prefixed_json(claims),
+        f"{label} durable claim digest mismatch",
+    )
+    return durable
+
+
+def verify_custody_authorization_envelope(
+    envelope: Any,
+    *,
+    expected_custody_signing_key_id: str,
+    expected_binding_digest: str,
+    expected_receipt: Any,
+) -> dict[str, Any]:
+    label = "custody authorization envelope"
+    require(isinstance(envelope, dict), f"{label} must be an object")
+    require_exact_object_fields(
+        envelope,
+        {"statement", "statement_sha256", "signature"},
+        label,
+    )
+    statement = envelope.get("statement")
+    require(isinstance(statement, dict), f"{label} statement must be an object")
+    statement_digest = require_sha256(
+        envelope.get("statement_sha256"),
+        f"{label} statement digest",
+    )
+    require(
+        statement_digest == sha256_prefixed_json(statement),
+        f"{label} statement digest mismatch",
+    )
+    signature = envelope.get("signature")
+    require(isinstance(signature, dict), f"{label} signature must be an object")
+    require_exact_object_fields(
+        signature,
+        {"algorithm", "key_id", "public_key_pem", "signature"},
+        f"{label} signature",
+    )
+    require(
+        signature.get("algorithm") == "Ed25519",
+        f"{label} signature algorithm mismatch",
+    )
+    response_public_key_pem = signature.get("public_key_pem")
+    require(
+        isinstance(response_public_key_pem, str) and response_public_key_pem,
+        f"{label} signing public key is missing",
+    )
+    response_signing_key_id = ed25519_public_key_id(
+        response_public_key_pem,
+        f"{label} response signer",
+    )
+    require(
+        signature.get("key_id") == response_signing_key_id,
+        f"{label} embedded response signer identity mismatch",
+    )
+    require(
+        hmac.compare_digest(
+            response_signing_key_id,
+            require_sha256(
+                expected_custody_signing_key_id,
+                f"{label} expected response signer",
+            ),
+        ),
+        f"{label} response signer mismatch",
+    )
+    verify_ed25519(
+        response_public_key_pem,
+        str(signature.get("signature") or ""),
+        canonical_json(statement).encode("utf-8"),
+        f"{label} statement",
+    )
+    if isinstance(statement.get("release_authority"), dict):
+        binding_digest = statement["release_authority"].get(
+            "consumption_identity_digest"
+        )
+        embedded_receipt = statement.get("control_plane_authorization_receipt")
+    else:
+        authorization = statement.get("authorization")
+        require(
+            isinstance(authorization, dict),
+            f"{label} statement lacks authorization evidence",
+        )
+        binding_digest = authorization.get("binding_digest")
+        embedded_receipt = authorization.get(
+            "control_plane_authorization_receipt"
+        )
+    binding_digest = require_sha256(
+        binding_digest,
+        f"{label} binding digest",
+    )
+    require(
+        hmac.compare_digest(
+            binding_digest,
+            require_sha256(
+                expected_binding_digest,
+                f"{label} expected binding digest",
+            ),
+        ),
+        f"{label} authorization binding mismatch",
+    )
+    require(
+        embedded_receipt == expected_receipt,
+        f"{label} receipt mismatch",
+    )
+    return {
+        "binding_digest": binding_digest,
+        "statement_digest": statement_digest,
+        "response_signing_key_id": response_signing_key_id,
+        "receipt_digest": sha256_prefixed_json(expected_receipt),
+        "signature_verified": True,
+    }
+
+
 def verify_control_plane_authorization_receipt(
     document: Any,
     *,
@@ -5774,6 +9754,9 @@ def verify_control_plane_authorization_receipt(
     expected_provenance_digest: str,
     expected_image_signatures_digest: str,
     expected_source_tree_digest: str,
+    expected_authorization_binding: dict[str, Any] | None = None,
+    custody_authorization_envelope: Any | None = None,
+    expected_custody_signing_key_id: str | None = None,
 ) -> dict[str, Any]:
     label = "control-plane authorization receipt"
     require(isinstance(document, dict), f"{label} must be an object")
@@ -5812,6 +9795,34 @@ def verify_control_plane_authorization_receipt(
         document.get("release_authority") == expected_release_authority,
         f"{label} release authority mismatch",
     )
+    trusted_durable_binding = verify_control_plane_receipt_authorization_binding(
+        expected_authorization_binding,
+        expected_release_authority=expected_release_authority,
+        expected_principal_id=expected_principal_id,
+        expected_route_id=expected_route_id,
+        expected_policy_digest=expected_policy_digest,
+    )
+    custody_authorization_binding: dict[str, Any] | None = None
+    if expected_authorization_binding is None:
+        require(
+            custody_authorization_envelope is not None
+            and expected_custody_signing_key_id is not None,
+            f"{label} requires an authenticated custody authorization binding",
+        )
+        custody_authorization_binding = verify_custody_authorization_envelope(
+            custody_authorization_envelope,
+            expected_custody_signing_key_id=expected_custody_signing_key_id,
+            expected_binding_digest=expected_release_authority[
+                "consumption_identity_digest"
+            ],
+            expected_receipt=document,
+        )
+    else:
+        require(
+            custody_authorization_envelope is None
+            and expected_custody_signing_key_id is None,
+            f"{label} authorization binding trust source is ambiguous",
+        )
 
     request = document.get("request")
     require(isinstance(request, dict), f"{label} request must be an object")
@@ -5831,6 +9842,10 @@ def verify_control_plane_authorization_receipt(
         request_nonce,
         f"{label} request nonce",
         minimum_bytes=32,
+    )
+    require(
+        len(request_nonce_bytes) == 32,
+        f"{label} request nonce must contain exactly 32 bytes",
     )
     request_body_bytes = decode_canonical_base64url(
         request.get("body_b64"),
@@ -5854,24 +9869,89 @@ def verify_control_plane_authorization_receipt(
         f"{label} request body",
     )
     require(isinstance(request_body, dict), f"{label} request body must be an object")
-    require_exact_object_fields(
-        request_body,
-        {"apiVersion", "attemptId", "bindingDigest"},
-        f"{label} request body",
-    )
     require(
         canonical_json(request_body).encode("utf-8") == request_body_bytes,
         f"{label} request body is not canonical JSON",
     )
+    request_version = request_body.get("apiVersion")
+    request_base = {
+        "apiVersion",
+        "attemptId",
+        "bindingDigest",
+    }
+    durable_request: dict[str, Any] | None = None
+    if request_version == RELEASE_AUTHORIZATION_DISPATCH_V1:
+        require_exact_object_fields(
+            request_body,
+            request_base,
+            f"{label} request body",
+        )
+        require(
+            trusted_durable_binding is None,
+            f"{label} v1 request cannot carry a durable authorization binding",
+        )
+    elif request_version == RELEASE_AUTHORIZATION_DISPATCH_V2:
+        # Buffered and observation proofs intentionally keep the full durable
+        # binding preimage inside custody. Their callers set the explicit marker
+        # only after verifying the custody-signed envelope that binds this receipt.
+        require(
+            trusted_durable_binding is not None
+            or custody_authorization_binding is not None,
+            f"{label} v2 request requires the full trusted binding or a verified custody envelope",
+        )
+        require_exact_object_fields(
+            request_body,
+            request_base | {"durablePolicy"},
+            f"{label} request body",
+        )
+        durable_value = request_body.get("durablePolicy")
+        require(
+            isinstance(durable_value, dict),
+            f"{label} request durable policy must be an object",
+        )
+        durable_request = dict(durable_value)
+        require_exact_object_fields(
+            durable_request,
+            {
+                "actorId",
+                "attemptId",
+                "claimDigest",
+                "reservationId",
+                "dispatchDeadlineAtEpochMs",
+            },
+            f"{label} request durable policy",
+        )
+        reservation_id = durable_request.get("reservationId")
+        require(
+            is_bounded_printable_utf8_identity(reservation_id),
+            f"{label} request durable reservation ID is invalid",
+        )
+        require(
+            is_bounded_printable_utf8_identity(
+                durable_request.get("actorId")
+            )
+            and SHA256_RE.fullmatch(str(durable_request.get("claimDigest")))
+            is not None
+            and durable_request.get("attemptId")
+            == expected_release_authority["attempt_id"]
+            and durable_request.get("dispatchDeadlineAtEpochMs")
+            == expected_release_authority["dispatch_expires_at_epoch_ms"],
+            f"{label} request durable policy binding mismatch",
+        )
+        if trusted_durable_binding is not None:
+            require(
+                durable_request.get("actorId")
+                == trusted_durable_binding["actorId"]
+                and durable_request.get("claimDigest")
+                == trusted_durable_binding["claimDigest"],
+                f"{label} request durable policy differs from the trusted binding",
+            )
+    else:
+        raise ValueError(f"{label} request apiVersion is unsupported")
     require(
-        request_body
-        == {
-            "apiVersion": "serverware.releaseAuthorizationDispatch/v1",
-            "attemptId": expected_release_authority["attempt_id"],
-            "bindingDigest": expected_release_authority[
-                "consumption_identity_digest"
-            ],
-        },
+        request_body.get("attemptId") == expected_release_authority["attempt_id"]
+        and request_body.get("bindingDigest")
+        == expected_release_authority["consumption_identity_digest"],
         f"{label} dispatch request body mismatch",
     )
 
@@ -5883,6 +9963,7 @@ def verify_control_plane_authorization_receipt(
             "status",
             "body_b64",
             "body_sha256",
+            "response_headers",
             "response_signing_key_id",
             "statement_b64",
             "statement_sha256",
@@ -5914,37 +9995,47 @@ def verify_control_plane_authorization_receipt(
         response_body_sha256 == sha256_prefixed_bytes(response_body_bytes),
         f"{label} response body digest mismatch",
     )
+    response_headers_bytes = canonical_control_plane_response_headers(
+        response.get("response_headers"),
+        label=label,
+    )
     response_body = load_json_bytes(
         response_body_bytes,
         Path("<embedded-control-plane-dispatch-response>"),
         f"{label} response body",
     )
     assert_no_secret_fields(response_body)
+    response_base = {
+        "apiVersion",
+        "ok",
+        "authorized",
+        "state",
+        "reason",
+        "attemptId",
+        "bindingDigest",
+        "idempotentReplay",
+        "grantId",
+        "approvalRequestId",
+        "reservationExpiresAtEpochMs",
+        "dispatchStartedAtEpochMs",
+        "dispatchExpiresAtEpochMs",
+        "completionOutcome",
+        "retryAfterSeconds",
+        "quotas",
+        "store",
+    }
+    expected_response_version = (
+        RELEASE_AUTHORIZATION_RESPONSE_V2
+        if durable_request is not None
+        else RELEASE_AUTHORIZATION_RESPONSE_V1
+    )
     require_exact_object_fields(
         response_body,
-        {
-            "apiVersion",
-            "ok",
-            "authorized",
-            "state",
-            "reason",
-            "attemptId",
-            "bindingDigest",
-            "idempotentReplay",
-            "grantId",
-            "approvalRequestId",
-            "reservationExpiresAtEpochMs",
-            "dispatchStartedAtEpochMs",
-            "dispatchExpiresAtEpochMs",
-            "completionOutcome",
-            "retryAfterSeconds",
-            "quotas",
-            "store",
-        },
+        response_base | ({"durablePolicy"} if durable_request is not None else set()),
         f"{label} response body",
     )
     exact_dispatch_fields = {
-        "apiVersion": "serverware.releaseAuthorization/v1",
+        "apiVersion": expected_response_version,
         "ok": True,
         "authorized": True,
         "state": "dispatching",
@@ -5996,6 +10087,10 @@ def verify_control_plane_authorization_receipt(
             # releaseAuthorization/v1 originally emitted fixed windows without
             # an explicit kind or end. Accept only that closed legacy shape;
             # current calendar windows can never be confused with it.
+            require(
+                expected_response_version == RELEASE_AUTHORIZATION_RESPONSE_V1,
+                f"{quota_label} legacy fixed-window shape is forbidden in v2",
+            )
             window_kind = "fixed"
             quota_fields = common_fields | {"windowSeconds"}
             legacy_fixed_window = True
@@ -6074,9 +10169,12 @@ def verify_control_plane_authorization_receipt(
     store = response_body.get("store")
     require(isinstance(store, dict), f"{label} response body store is invalid")
     require_exact_object_fields(store, {"backend", "ha"}, f"{label} response body store")
+    store_backend = store.get("backend")
     require(
-        isinstance(store.get("backend"), str)
-        and bool(store["backend"])
+        isinstance(store_backend, str)
+        and store_backend == store_backend.strip()
+        and 1 <= len(store_backend.encode("utf-8")) <= 256
+        and all(character.isprintable() for character in store_backend)
         and store.get("ha") is True,
         f"{label} response body does not prove an HA authorization store",
     )
@@ -6097,6 +10195,66 @@ def verify_control_plane_authorization_receipt(
         )
     require(dispatch_started_at_epoch_ms < dispatch_expires_at_epoch_ms, f"{label} dispatch window is invalid")
     require(dispatch_started_at_epoch_ms < reservation_expires_at_epoch_ms, f"{label} reservation expired before dispatch")
+    if durable_request is None:
+        require(
+            trusted_durable_binding is None
+            and "durablePolicy" not in response_body,
+            f"{label} v1 response cannot carry durable policy state",
+        )
+    else:
+        durable_response_value = response_body.get("durablePolicy")
+        require(
+            isinstance(durable_response_value, dict),
+            f"{label} response durable policy must be an object",
+        )
+        durable_response = dict(durable_response_value)
+        require_exact_object_fields(
+            durable_response,
+            {
+                "state",
+                "attemptId",
+                "claimDigest",
+                "reservationId",
+                "actorId",
+                "reservationDeadlineAtEpochMs",
+                "dispatchDeadlineAtEpochMs",
+                "responseEvidenceDigest",
+                "failureReason",
+                "responseBodySha256",
+                "uncertainty",
+            },
+            f"{label} response durable policy",
+        )
+        require(
+            durable_response.get("state") == "dispatched"
+            and durable_response.get("attemptId")
+            == expected_release_authority["attempt_id"]
+            and durable_response.get("attemptId") == durable_request["attemptId"]
+            and durable_response.get("actorId") == durable_request["actorId"]
+            and durable_response.get("claimDigest")
+            == durable_request["claimDigest"]
+            and durable_response.get("reservationId")
+            == durable_request["reservationId"]
+            and durable_response.get("reservationDeadlineAtEpochMs")
+            == reservation_expires_at_epoch_ms
+            and durable_response.get("dispatchDeadlineAtEpochMs")
+            == dispatch_expires_at_epoch_ms
+            and durable_response.get("dispatchDeadlineAtEpochMs")
+            == durable_request["dispatchDeadlineAtEpochMs"]
+            and durable_response.get("responseEvidenceDigest") is None
+            and durable_response.get("failureReason") is None
+            and durable_response.get("responseBodySha256") is None
+            and durable_response.get("uncertainty") is None,
+            f"{label} durable policy lifecycle mismatch",
+        )
+        if trusted_durable_binding is not None:
+            require(
+                durable_response.get("actorId")
+                == trusted_durable_binding["actorId"]
+                and durable_response.get("claimDigest")
+                == trusted_durable_binding["claimDigest"],
+                f"{label} durable response differs from the trusted binding",
+            )
 
     response_statement_bytes = decode_canonical_base64url(
         response.get("statement_b64"),
@@ -6123,6 +10281,8 @@ def verify_control_plane_authorization_receipt(
             "request",
             "status_code",
             "body_sha256",
+            "response_headers_sha256",
+            "response_header_count",
             "nonce",
             "response_signing_key_id",
             "context",
@@ -6171,6 +10331,16 @@ def verify_control_plane_authorization_receipt(
     )
     require(response_statement.get("status_code") == response_status, f"{label} signed response status mismatch")
     require(response_statement.get("body_sha256") == response_body_sha256, f"{label} signed response body digest mismatch")
+    require(
+        response_statement.get("response_headers_sha256")
+        == sha256_prefixed_bytes(response_headers_bytes),
+        f"{label} signed response header digest mismatch",
+    )
+    require(
+        response_statement.get("response_header_count")
+        == len(response["response_headers"]),
+        f"{label} signed response header count mismatch",
+    )
     require(response_statement.get("nonce") == request_nonce, f"{label} signed response nonce mismatch")
 
     expected_context = {
@@ -6241,6 +10411,23 @@ def verify_control_plane_authorization_receipt(
         "reservation_expires_at_epoch_ms": reservation_expires_at_epoch_ms,
         "issued_at_ms": issued_at_ms,
         "quotas": quotas,
+        "dispatch_request_api_version": request_version,
+        "dispatch_response_api_version": expected_response_version,
+        "durable_policy_verified": durable_request is not None,
+        "idempotent_replay": response_body["idempotentReplay"],
+        "custody_authorization_envelope_verified": (
+            custody_authorization_binding is not None
+        ),
+        "custody_authorization_statement_sha256": (
+            custody_authorization_binding["statement_digest"]
+            if custody_authorization_binding is not None
+            else None
+        ),
+        "custody_authorization_signing_key_id": (
+            custody_authorization_binding["response_signing_key_id"]
+            if custody_authorization_binding is not None
+            else None
+        ),
         "canonical_signature_verified": True,
         "dispatch_body_exact_match": True,
         "attested_context_exact_match": True,
@@ -7160,7 +11347,8 @@ def verify_production_streaming_proxy_response_proof(
         external_capture.get("apiVersion") == "serverware.streamingProxyResponseCapture/v1"
         and external_capture.get("environment") == "production"
         and external_capture.get("collection_mode") == "strict-incremental-stream-capture"
-        and external_capture.get("classification") == "verified-complete-stream",
+        and external_capture.get("classification")
+        == "runtime-verified-complete-stream",
         f"{label} external capture is not strict production stream evidence",
     )
     captured_at = require_unix_time(external_capture.get("captured_at_unix"), f"{label} capture time")
@@ -7175,6 +11363,11 @@ def verify_production_streaming_proxy_response_proof(
         policy_snapshot,
         principal_id=expected_principal_id,
         route_id=external_capture.get("route_id"),
+    )
+    matched_route = require_proxy_policy_route(
+        policy_snapshot,
+        principal_id=expected_principal_id,
+        route_id=matched_route_id,
     )
     client_request_digest = require_sha256(external_capture.get("client_request_digest"), f"{label} client request digest")
     request_digest = require_sha256(external_capture.get("request_digest"), f"{label} request digest")
@@ -7425,6 +11618,13 @@ def verify_production_streaming_proxy_response_proof(
         expected_provenance_digest=expected_release_digest,
         expected_image_signatures_digest=expected_image_signatures_digest,
         expected_source_tree_digest=expected_source_tree_digest,
+        expected_authorization_binding=authorization_binding,
+    )
+    verify_route_authorization_evidence(
+        matched_route,
+        release_authority,
+        control_plane_authorization,
+        label=label,
     )
     verify_streaming_dispatch_quota_commitments(embedded_receipt, authorization_binding["shared_quotas"])
     control_plane_key_id = control_plane_authorization["signing_key_id"]
@@ -7453,6 +11653,7 @@ def verify_production_streaming_proxy_response_proof(
         "principal_id": expected_principal_id,
         "route_id": matched_route_id,
         "release_authority": release_authority,
+        "compiled_route_authority_verified": True,
         "authorization_binding_digest": authorization_binding_digest,
         "authorization_binding_commitment": authorization_binding,
         "control_plane_response_signing_key_id": control_plane_key_id,
@@ -7552,6 +11753,10 @@ def verify_production_buffered_proxy_response_proof(
         "expected proxy proof client nonce",
         minimum_bytes=32,
     )
+    require(
+        len(expected_nonce_bytes) == 32,
+        "expected proxy proof client nonce must contain exactly 32 bytes",
+    )
     require_sha256(expected_request_digest, "expected proxy request digest")
     require_sha256(expected_operation_digest, "expected proxy operation digest")
     expected_bindings = {
@@ -7631,6 +11836,11 @@ def verify_production_buffered_proxy_response_proof(
         policy_snapshot,
         principal_id=expected_principal_id,
         route_id=external_capture.get("route_id"),
+    )
+    matched_route = require_proxy_policy_route(
+        policy_snapshot,
+        principal_id=expected_principal_id,
+        route_id=matched_route_id,
     )
     require(
         external_capture.get("route_id") == matched_route_id,
@@ -8208,6 +12418,18 @@ def verify_production_buffered_proxy_response_proof(
         expected_provenance_digest=expected_release_digest,
         expected_image_signatures_digest=expected_image_signatures_digest,
         expected_source_tree_digest=expected_source_tree_digest,
+        custody_authorization_envelope={
+            "statement": server_statement,
+            "statement_sha256": server_statement_digest,
+            "signature": server_signature,
+        },
+        expected_custody_signing_key_id=expected_response_signing_key_id,
+    )
+    verify_route_authorization_evidence(
+        matched_route,
+        release_authority,
+        control_plane_authorization,
+        label="buffered proxy response proof",
     )
     control_plane_authorization_key_id = control_plane_authorization[
         "signing_key_id"
@@ -8239,6 +12461,7 @@ def verify_production_buffered_proxy_response_proof(
         "principal_id": expected_principal_id,
         "route_id": matched_route_id,
         "release_authority": release_authority,
+        "compiled_route_authority_verified": True,
         "control_plane_response_signing_key_id": (
             control_plane_authorization_key_id
         ),
@@ -9070,6 +13293,12 @@ def verify_production_response_observation_proof(
             expected_provenance_digest=expected_release_digest,
             expected_image_signatures_digest=expected_image_signatures_digest,
             expected_source_tree_digest=expected_source_tree_digest,
+            custody_authorization_envelope={
+                "statement": statement,
+                "statement_sha256": statement_digest,
+                "signature": server_signature,
+            },
+            expected_custody_signing_key_id=expected_response_signing_key_id,
         )
         require(
             control_plane["signing_key_id"] == control_plane_key_id,
@@ -9104,6 +13333,7 @@ def verify_production_response_observation_proof(
         "operation_digest": operation_digest,
         "principal_id": principal_id,
         "route_id": route_id,
+        "compiled_route_authority_verified": full_authorization,
         "response_path": response_path,
         "upstream_attempt": upstream_attempt,
         "authorization_state": authorization_state,
@@ -9272,8 +13502,9 @@ def write_output(
     proof: dict[str, Any],
     *,
     fail_after_checksum_publish: bool = False,
+    before_output_publication: Any | None = None,
 ) -> str:
-    payload = (json.dumps(proof, indent=2, sort_keys=True, ensure_ascii=True) + "\n").encode("utf-8")
+    payload = canonical_json(proof).encode("utf-8") + b"\n"
     proof_digest = sha256_prefixed_bytes(payload)
     integrity = proof.get("integrity_metadata")
     require(isinstance(integrity, dict), "completion proof is missing integrity metadata")
@@ -9322,11 +13553,20 @@ def write_output(
                     temporary.flush()
                     os.fsync(temporary.fileno())
                     staged[destination] = temporary_path
+            if before_output_publication is not None:
+                before_output_publication()
             os.replace(staged[digest_path], digest_path)
             temporary_paths.remove(staged[digest_path])
             fsync_directory(path.parent)
             if fail_after_checksum_publish:
                 raise RuntimeError("injected failure after checksum publication")
+            if before_output_publication is not None:
+                try:
+                    before_output_publication()
+                except Exception:
+                    digest_path.unlink(missing_ok=True)
+                    fsync_directory(path.parent)
+                    raise
             os.replace(staged[path], path)
             temporary_paths.remove(staged[path])
             fsync_directory(path.parent)
@@ -9488,53 +13728,19 @@ def final_completion_identity(
     *,
     bootstrap_receipt: dict[str, Any],
     current_host_identity_sha256: str,
+    key_custody_evidence_sha256: str,
+    monotonic_witness_sha256: str,
+    production_continuity_sha256: str,
+    production_release_identity_sha256: str,
     proxy_server_statement_sha256: str,
     security_role_map_sha256: str,
 ) -> dict[str, Any]:
-    current_host_identity = require_sha256(
-        current_host_identity_sha256,
-        "final completion current-host identity digest",
+    raise VerificationError(
+        "legacy full-file completion identity assembly is incompatible with "
+        "serverware.finalCompletionIdentity/v3; construct the identity only "
+        "from authenticated identity-free cores in the Manifest v6 public "
+        "Nitro bridge"
     )
-    launch_identity = run_production_readiness.bootstrap_launch_authorization_identity(
-        bootstrap_receipt
-    )
-    require(
-        launch_identity["deployment_identity_sha256"] == current_host_identity,
-        "launch authorization deployment identity does not match the current completion host",
-    )
-    return {
-        "apiVersion": FINAL_COMPLETION_IDENTITY_API_VERSION,
-        "release_identity_sha256": require_sha256(
-            hardware_assurance.get("release_identity_sha256"),
-            "final completion release identity digest",
-        ),
-        "current_host_identity_sha256": current_host_identity,
-        "launch_authorization": launch_identity,
-        "hardware_verifier_key_id": require_sha256(
-            hardware_assurance.get("trusted_verifier_key_id"),
-            "final completion hardware verifier key id",
-        ),
-        "hardware_assurance_document_sha256": require_sha256(
-            hardware_assurance.get("hardware_assurance_document_sha256"),
-            "final completion hardware assurance document digest",
-        ),
-        "hardware_assurance_signed_statement_sha256": require_sha256(
-            hardware_assurance.get("hardware_assurance_signed_statement_sha256"),
-            "final completion hardware assurance signed statement digest",
-        ),
-        "challenge_nonce_sha256": require_sha256(
-            hardware_assurance.get("challenge_nonce_sha256"),
-            "final completion challenge digest",
-        ),
-        "proxy_server_statement_sha256": require_sha256(
-            proxy_server_statement_sha256,
-            "final completion proxy server statement digest",
-        ),
-        "security_role_map_sha256": require_sha256(
-            security_role_map_sha256,
-            "final completion security role map digest",
-        ),
-    }
 
 
 def verify_final_challenge_receipt(
@@ -9680,6 +13886,7 @@ def verify_release_security_evidence(
     benchmark: dict[str, Any],
     attested_runtime: dict[str, Any],
     preflight: dict[str, Any],
+    directly_verified_builders: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     identity = verify_production_policy_identity.verify_persisted_report(
         bundle_path=paths["policy_bundle"],
@@ -9722,13 +13929,14 @@ def verify_release_security_evidence(
         "reproducible-build report must use "
         + REPRODUCIBLE_BUILD_VERIFICATION_API_VERSION,
     )
-    require(reproducibility_report.get("reproducible") is True, "reproducible-build report did not pass")
     reproducibility_scope = reproducibility_report.get("scope")
-    require(
-        isinstance(reproducibility_scope, dict)
-        and reproducibility_scope.get("independent_execution_proven") is True,
-        "reproducible-build report did not prove two independent trusted builders",
-    )
+    require(isinstance(reproducibility_scope, dict), "reproducible-build report scope is missing")
+    if directly_verified_builders is None:
+        require(
+            reproducibility_report.get("reproducible") is True
+            and reproducibility_scope.get("independent_execution_proven") is True,
+            "readiness reproducible-build report did not report two independent matching builds",
+        )
     reproducibility_inputs = reproducibility_report.get("inputs")
     require(
         isinstance(reproducibility_inputs, dict)
@@ -9744,17 +13952,28 @@ def verify_release_security_evidence(
             and isinstance(input_record.get("attestation"), dict)
             else {}
         )
-        require(
-            attestation.get("signature_verified") is True
-            and attestation.get("operator_trusted") is True,
-            f"reproducible-build {side} builder was not independently signature-verified and trusted",
-        )
-        builder_records.append(
-            {
-                "builder_id": attestation.get("builder_id"),
-                "key_id": attestation.get("key_id"),
-            }
-        )
+        reported_builder = {
+            "builder_id": attestation.get("builder_id"),
+            "key_id": attestation.get("key_id"),
+        }
+        if directly_verified_builders is None:
+            require(
+                attestation.get("signature_verified") is True
+                and attestation.get("operator_trusted") is True,
+                f"readiness reproducible-build {side} builder was not reported as signature-verified and trusted",
+            )
+        else:
+            direct = directly_verified_builders.get(side)
+            require(
+                isinstance(direct, dict)
+                and reported_builder
+                == {
+                    "builder_id": direct.get("builder_id"),
+                    "key_id": direct.get("signing_key_id"),
+                },
+                f"reproducible-build {side} identity differs from the directly verified raw statement and transcript",
+            )
+        builder_records.append(reported_builder)
     reproducible_builders = verified_reproducible_builder_identities(
         builder_records,
         "verified reproducible-build report builders",
@@ -9824,10 +14043,672 @@ def verify_release_security_evidence(
             "productionLauncherBinaryDigest": production_launcher_binary_digest,
             "launchAuthority": reproducible_launch_authority,
             "builders": reproducible_builders,
+            "builder_authentication": (
+                "direct-raw-statements-and-transcripts"
+                if directly_verified_builders is not None
+                else "signed-readiness-report-only"
+            ),
             "productionBuildBound": True,
         },
         "benchmarkPolicyBound": True,
         "nitroAttestedPolicyBound": True,
+    }
+
+
+def _decode_launch_ed25519_spki(
+    value: Any,
+    label: str,
+) -> tuple[Ed25519PublicKey, str]:
+    der = decode_canonical_base64url(value, label)
+    try:
+        public_key = serialization.load_der_public_key(der)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label} is not canonical Ed25519 SPKI DER") from exc
+    require(
+        isinstance(public_key, Ed25519PublicKey)
+        and public_key.public_bytes(
+            serialization.Encoding.DER,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        == der,
+        f"{label} is not canonical Ed25519 SPKI DER",
+    )
+    return public_key, sha256_prefixed_bytes(der)
+
+
+def verify_launcher_nonce_rollback_manifest_v3(
+    bootstrap_receipt: dict[str, Any],
+    retained_assurance: dict[str, Any],
+) -> dict[str, Any]:
+    run_production_readiness.validate_bootstrap_receipt_summary(
+        bootstrap_receipt
+    )
+    require(
+        retained_assurance.get("verified") is True
+        and retained_assurance.get("enforcement")
+        == "native-launcher-measured-retained-snapshot",
+        "launcher manifest verification requires a verified retained nonce rollback assurance snapshot",
+    )
+    receipt_manifest = bootstrap_receipt["manifest"]
+    manifest_path = Path(str(receipt_manifest.get("path", "")))
+    require(
+        manifest_path.is_absolute()
+        and manifest_path == Path("/etc/serverware") / manifest_path.name,
+        "sealed launcher receipt manifest path is not a direct /etc/serverware artifact",
+    )
+    manifest_bytes, manifest_metadata = (
+        run_production_readiness.read_regular_file_once(
+            manifest_path,
+            "production launch manifest v3",
+            max_bytes=run_production_readiness.MAX_BOOTSTRAP_RECEIPT_BYTES,
+            owner_only=True,
+        )
+    )
+    require(
+        manifest_metadata.st_uid == 0
+        and stat.S_IMODE(manifest_metadata.st_mode) == 0o400,
+        "production launch manifest v3 must remain root-owned mode 0400",
+    )
+    manifest_sha256 = sha256_prefixed_bytes(manifest_bytes)
+    request = bootstrap_receipt["launchAuthorization"]["request"]
+    require(
+        manifest_sha256
+        == receipt_manifest.get("sha256")
+        == request.get("manifestSha256"),
+        "production launch manifest v3 digest differs from the sealed receipt or signed launch request",
+    )
+    manifest = load_json_bytes(
+        manifest_bytes,
+        manifest_path,
+        "production launch manifest v3",
+    )
+    require(
+        set(manifest)
+        == {
+            "apiVersion",
+            "kind",
+            "releaseRoot",
+            "stateDirectory",
+            "sourceTreeDigest",
+            "authorization",
+            "launchAttemptJournal",
+            "globalRoleRegistry",
+            "nonceRollbackAssurance",
+            "productionEnv",
+            "python",
+            "scripts",
+            "composeFile",
+            "inputs",
+            "outputs",
+        },
+        "production launch manifest v3 does not use the closed top-level contract",
+    )
+    require(
+        manifest.get("apiVersion")
+        == "serverware.productionReadinessLaunch/v3"
+        and manifest.get("kind") == "ProductionReadinessLaunch",
+        "legacy v2 launch manifests cannot satisfy launcher-enforced nonce rollback assurance",
+    )
+    require(
+        manifest_bytes == canonical_json(manifest).encode("ascii") + b"\n",
+        "production launch manifest v3 is not canonical JSON plus LF",
+    )
+    authorization = manifest.get("authorization")
+    require(
+        isinstance(authorization, dict)
+        and set(authorization)
+        == {
+            "authorizationScope",
+            "deploymentAudience",
+            "deploymentIdentitySha256",
+            "freshnessAuthority",
+            "monotonicWitness",
+            "releaseSequence",
+            "rollbackEpoch",
+        }
+        and authorization["authorizationScope"]
+        == request["authorizationScope"]
+        == "trusted-host-readiness"
+        and authorization["deploymentAudience"]
+        == request["deploymentAudience"]
+        and authorization["deploymentIdentitySha256"]
+        == request["deploymentIdentitySha256"]
+        and authorization["freshnessAuthority"]
+        == request["freshnessAuthority"]
+        == "trusted-host-wall-clock"
+        and authorization["releaseSequence"] == request["releaseSequence"]
+        and authorization["rollbackEpoch"] == request["rollbackEpoch"],
+        "production launch manifest authorization differs from the signed launch request",
+    )
+    require(
+        "useLimit" not in canonical_json(manifest)
+        and "use_limit" not in canonical_json(manifest),
+        "production launch manifest contains an obsolete use-limit contract",
+    )
+    require(
+        manifest.get("sourceTreeDigest")
+        == bootstrap_receipt.get("sourceTreeDigest")
+        == request.get("sourceTreeDigest"),
+        "production launch manifest source tree differs from the sealed launch identity",
+    )
+    require(
+        manifest.get("stateDirectory")
+        == "/var/lib/serverware/production-proof",
+        "production launch manifest stateDirectory is not the fixed production proof directory",
+    )
+    journal = manifest.get("launchAttemptJournal")
+    expected_journal_path = (
+        "/var/lib/serverware/production-proof/"
+        "launch-authorization-attempt.v1.json"
+    )
+    expected_journal_lock_path = (
+        "/var/lib/serverware/production-proof/"
+        "launch-authorization-attempt.v1.lock"
+    )
+    require(
+        isinstance(journal, dict)
+        and set(journal)
+        == {
+            "apiVersion",
+            "path",
+            "lockPath",
+            "domain",
+            "maxBytes",
+            "consistencyScope",
+            "rollbackAuthority",
+        }
+        and journal["apiVersion"]
+        == "serverware.launchAuthorizationAttemptJournal/v1"
+        and journal["path"] == expected_journal_path
+        and journal["lockPath"] == expected_journal_lock_path
+        and journal["domain"]
+        == request["launchAttemptJournalDomain"]
+        == "serverware.launchAuthorizationAttemptJournal/v1"
+        and journal["maxBytes"] == 64 * 1024
+        and journal["consistencyScope"]
+        == "trusted-host-readiness-availability-and-consistency-only"
+        and journal["rollbackAuthority"] == "external-monotonic-witness",
+        "production launch manifest launch-attempt journal is not the fixed v1 contract",
+    )
+    recovery_identity = {
+        "domain": request["launchAttemptJournalDomain"],
+        "launcherNonce": request["launcherNonce"],
+        "witnessChallenge": request["launchAuthorityWitnessChallenge"],
+        "bootIdSha256": request["bootIdSha256"],
+        "manifestSha256": request["manifestSha256"],
+        "globalRoleRegistrySha256": request[
+            "globalRoleRegistrySha256"
+        ],
+    }
+    recovery_identity_sha256 = sha256_prefixed_bytes(
+        b"serverware.launchAuthorizationAttemptRecoveryIdentity/v1\0"
+        + canonical_json(recovery_identity).encode("ascii")
+    )
+    require(
+        request["launchAttemptRecoveryIdentitySha256"]
+        == recovery_identity_sha256,
+        "launch-attempt journal recovery identity crossed the signed request",
+    )
+    role_binding = manifest.get("globalRoleRegistry")
+    require(
+        isinstance(role_binding, dict)
+        and set(role_binding)
+        == {
+            "apiVersion",
+            "canonicalProfile",
+            "claimScope",
+            "registry",
+            "registrySha256",
+            "pinsFile",
+        }
+        and role_binding["apiVersion"]
+        == "serverware.productionLaunchGlobalRoleRegistryBinding/v1"
+        and role_binding["canonicalProfile"] == CANONICAL_JSON_PROFILE
+        and role_binding["claimScope"]
+        == "roles-present-in-native-launch-contract"
+        and role_binding["registry"] == request["globalRoleRegistry"],
+        "production launch manifest global-role registry is not the closed v1 binding",
+    )
+    role_registry = role_binding["registry"]
+    require(
+        isinstance(role_registry, dict)
+        and set(role_registry)
+        == {"apiVersion", "claimScope", "roles", "rolesOutsideClaim"}
+        and role_registry["apiVersion"]
+        == "serverware.productionLaunchGlobalRoleRegistry/v1"
+        and role_registry["claimScope"]
+        == "roles-present-in-native-launch-contract"
+        and isinstance(role_registry["roles"], dict)
+        and set(role_registry["roles"]) == LAUNCH_GLOBAL_ROLE_NAMES
+        and all(
+            isinstance(key_id, str) and SHA256_RE.fullmatch(key_id) is not None
+            for key_id in role_registry["roles"].values()
+        )
+        and len(set(role_registry["roles"].values()))
+        == len(role_registry["roles"])
+        and role_registry["rolesOutsideClaim"]
+        == list(LAUNCH_GLOBAL_ROLES_OUTSIDE_CLAIM),
+        "production launch global-role registry core is open, malformed, or colliding",
+    )
+    role_registry_sha256 = sha256_prefixed_json(role_registry)
+    role_pins_sha256 = sha256_prefixed_bytes(
+        canonical_json(role_registry).encode("ascii") + b"\n"
+    )
+    role_pins_file = role_binding["pinsFile"]
+    role_pins_path = PurePosixPath(
+        str(role_pins_file.get("path", ""))
+        if isinstance(role_pins_file, dict)
+        else ""
+    )
+    require(
+        isinstance(role_pins_file, dict)
+        and set(role_pins_file) == {"path", "sha256"}
+        and role_pins_path.is_absolute()
+        and str(role_pins_path) == role_pins_file["path"]
+        and role_pins_path != PurePosixPath("/etc/serverware")
+        and PurePosixPath("/etc/serverware") in role_pins_path.parents
+        and role_registry_sha256
+        == role_binding["registrySha256"]
+        == request["globalRoleRegistrySha256"]
+        and role_pins_sha256
+        == role_pins_file["sha256"]
+        == request["globalRoleRegistryPinsSha256"],
+        "production launch global-role registry bytes, digest, or measured pins were substituted",
+    )
+    roles = role_registry["roles"]
+    require(
+        len(set(roles.values())) == len(roles)
+        and roles["launchAuthority"]
+        == bootstrap_receipt["launchAuthorityKeyId"],
+        "production launch global-role registry reused or crossed the launch-authority role",
+    )
+    authorization_envelope = bootstrap_receipt["launchAuthorization"][
+        "envelope"
+    ]
+    authorization_statement = authorization_envelope["statement"]
+    witness_envelope = authorization_statement["monotonicWitness"]
+    witness_statement = witness_envelope["statement"]
+    witness_configuration = authorization["monotonicWitness"]
+    require(
+        isinstance(witness_configuration, dict)
+        and set(witness_configuration)
+        == {
+            "administrativeDomainSha256",
+            "identitySha256",
+            "signingKeyId",
+            "signingPublicKeySpkiDerBase64url",
+            "storeAssurance",
+            "storeAssuranceIssuerKeyId",
+            "storeAssuranceIssuerPublicKeySpkiDerBase64url",
+            "storeAssuranceSha256",
+        },
+        "production launch monotonic-witness configuration is not closed",
+    )
+    witness_public_key, witness_key_id = _decode_launch_ed25519_spki(
+        witness_configuration["signingPublicKeySpkiDerBase64url"],
+        "production launch monotonic-witness signing key",
+    )
+    require(
+        witness_configuration["signingPublicKeySpkiDerBase64url"]
+        == bootstrap_receipt["launchAuthorization"][
+            "witnessPublicKeySpkiDerBase64url"
+        ]
+        and witness_configuration["signingKeyId"]
+        == witness_key_id
+        == request["launchAuthorityWitnessKeyId"]
+        == roles["launchAuthorityWitness"]
+        and witness_configuration["identitySha256"]
+        == request["launchAuthorityWitnessIdentitySha256"]
+        and witness_configuration["administrativeDomainSha256"]
+        == request[
+            "launchAuthorityWitnessAdministrativeDomainSha256"
+        ]
+        and witness_configuration["storeAssuranceSha256"]
+        == request["launchAuthorityWitnessStoreAssuranceSha256"],
+        "production launch monotonic-witness key or identity crossed the signed request",
+    )
+    store_assurance = witness_configuration["storeAssurance"]
+    require(
+        isinstance(store_assurance, dict)
+        and set(store_assurance)
+        == {"apiVersion", "kind", "statement", "signature"}
+        and store_assurance["apiVersion"]
+        == "serverware.launchAuthorityWitnessStoreAssurance/v1"
+        and store_assurance["kind"]
+        == "LaunchAuthorityWitnessStoreAssurance",
+        "production launch witness-store assurance envelope is not closed",
+    )
+    store_statement = store_assurance["statement"]
+    require(
+        isinstance(store_statement, dict)
+        and set(store_statement)
+        == {
+            "assuranceIssuerKeyId",
+            "witnessKeyId",
+            "witnessIdentitySha256",
+            "witnessAdministrativeDomainSha256",
+            "storeIdentitySha256",
+            "storeAdministrativeDomainSha256",
+            "storeClass",
+            "rollbackResistance",
+            "independentAdministration",
+        }
+        and store_statement["witnessKeyId"] == witness_key_id
+        and store_statement["witnessIdentitySha256"]
+        == witness_configuration["identitySha256"]
+        and store_statement["witnessAdministrativeDomainSha256"]
+        == witness_configuration["administrativeDomainSha256"]
+        and store_statement["storeClass"]
+        in {
+            "hardwareMonotonicCounter",
+            "independentlyAdministeredLinearizableCas",
+            "appendOnlyTransparencyLedger",
+        }
+        and store_statement["rollbackResistance"]
+        == "externally-witnessed-monotonic"
+        and store_statement["independentAdministration"] is True,
+        "production launch witness-store assurance statement is not the exact rollback-resistant contract",
+    )
+    store_issuer_key, store_issuer_key_id = _decode_launch_ed25519_spki(
+        witness_configuration[
+            "storeAssuranceIssuerPublicKeySpkiDerBase64url"
+        ],
+        "production launch witness-store assurance issuer key",
+    )
+    for field in (
+        "assuranceIssuerKeyId",
+        "witnessKeyId",
+        "witnessIdentitySha256",
+        "witnessAdministrativeDomainSha256",
+        "storeIdentitySha256",
+        "storeAdministrativeDomainSha256",
+    ):
+        require_sha256(
+            store_statement[field],
+            f"production launch witness-store assurance {field}",
+        )
+    require(
+        store_issuer_key_id
+        == witness_configuration["storeAssuranceIssuerKeyId"]
+        == store_statement["assuranceIssuerKeyId"]
+        == roles["launchAuthorityWitnessStoreAssurance"]
+        and store_issuer_key_id
+        not in {witness_key_id, bootstrap_receipt["launchAuthorityKeyId"]}
+        and store_statement["storeIdentitySha256"]
+        not in {
+            store_statement["witnessIdentitySha256"],
+            store_statement["witnessAdministrativeDomainSha256"],
+        }
+        and store_statement["storeAdministrativeDomainSha256"]
+        != store_statement["witnessAdministrativeDomainSha256"],
+        "production launch witness-store assurance is not independently pinned",
+    )
+    store_assurance_sha256 = sha256_prefixed_json(store_assurance)
+    require(
+        store_assurance_sha256
+        == witness_configuration["storeAssuranceSha256"]
+        == request["launchAuthorityWitnessStoreAssuranceSha256"],
+        "production launch witness-store assurance digest was substituted",
+    )
+    store_unsigned = dict(store_assurance)
+    store_signature = store_unsigned.pop("signature")
+    try:
+        store_issuer_key.verify(
+            decode_ed25519_signature(
+                store_signature,
+                "production launch witness-store assurance signature",
+            ),
+            b"serverware.launchAuthorityWitnessStoreAssurance/v1\0"
+            + canonical_json(store_unsigned).encode("ascii"),
+        )
+    except InvalidSignature as exc:
+        raise ValueError(
+            "production launch witness-store assurance signature verification failed"
+        ) from exc
+    require(
+        authorization_statement["authorizationScope"]
+        == witness_statement["authorizationScope"]
+        == authorization["authorizationScope"]
+        and authorization_statement["freshnessAuthority"]
+        == authorization["freshnessAuthority"]
+        and authorization_statement["capabilitySemantics"]
+        == "time-bounded-idempotent-readiness-authorization"
+        and authorization_statement["globalRoleRegistrySha256"]
+        == role_registry_sha256
+        and witness_statement["operation"]
+        == "authorize-trusted-host-readiness"
+        and witness_statement["operationId"] == request["launcherNonce"]
+        and witness_statement["authorizationId"]
+        == authorization_statement["authorizationId"]
+        and witness_statement["requestSha256"]
+        == bootstrap_receipt["launchAuthorization"]["requestSha256"]
+        == authorization_statement["requestSha256"]
+        and witness_statement["challenge"]
+        == request["launchAuthorityWitnessChallenge"]
+        and witness_statement["authorityKeyId"]
+        == bootstrap_receipt["launchAuthorityKeyId"]
+        and witness_statement["witnessKeyId"] == witness_key_id
+        and witness_statement["witnessIdentitySha256"]
+        == witness_configuration["identitySha256"]
+        and witness_statement["witnessAdministrativeDomainSha256"]
+        == witness_configuration["administrativeDomainSha256"]
+        and witness_statement["storeAssuranceSha256"]
+        == store_assurance_sha256
+        and witness_statement["deploymentAudience"]
+        == authorization["deploymentAudience"]
+        and witness_statement["deploymentIdentitySha256"]
+        == authorization["deploymentIdentitySha256"]
+        and witness_statement["releaseSequence"]
+        == authorization["releaseSequence"]
+        and witness_statement["rollbackEpoch"]
+        == authorization["rollbackEpoch"]
+        and witness_statement["stateTransitionCommitted"] is True
+        and witness_statement["predecessorStateSha256"]
+        != witness_statement["successorStateSha256"],
+        "production launch authorization crossed its readiness scope, freshness authority, witness, or v7 saga projection",
+    )
+    for field in (
+        "registrySha256",
+        "predecessorStateSha256",
+        "successorStateSha256",
+    ):
+        require_sha256(
+            witness_statement[field],
+            f"production launch witness {field}",
+        )
+    for field in ("registryGeneration", "checkpointSequence"):
+        require_bounded_uint(
+            witness_statement[field],
+            f"production launch witness {field}",
+            minimum=1,
+        )
+    witness_unsigned = dict(witness_envelope)
+    witness_signature = witness_unsigned.pop("signature")
+    try:
+        witness_public_key.verify(
+            decode_ed25519_signature(
+                witness_signature,
+                "production launch monotonic-witness signature",
+            ),
+            b"serverware.launchAuthorityWitnessTransition/v1\0"
+            + canonical_json(witness_unsigned).encode("ascii"),
+        )
+    except InvalidSignature as exc:
+        raise ValueError(
+            "production launch monotonic-witness signature verification failed"
+        ) from exc
+    binding = manifest.get("nonceRollbackAssurance")
+    require(
+        isinstance(binding, dict)
+        and set(binding)
+        == {
+            "apiVersion",
+            "canonicalProfile",
+            "contract",
+            "contractSha256",
+            "enforcement",
+            "pinsFile",
+            "purpose",
+        }
+        and binding["apiVersion"]
+        == run_production_readiness.NONCE_ROLLBACK_ASSURANCE_BINDING_API_VERSION
+        and binding["canonicalProfile"]
+        == "serverware.canonicalJson/integer-string-bool-null-array-object-nfc-v1"
+        and binding["enforcement"] == "native-launcher-measured"
+        and binding["purpose"] == "readiness-only",
+        "production launch manifest has an invalid nonce rollback assurance binding",
+    )
+    contract = run_production_readiness.validate_nonce_rollback_assurance_contract(
+        binding["contract"]
+    )
+    public_config = contract["publicConfigPins"]
+    _, nonce_assurance_evidence_key_id = _decode_launch_ed25519_spki(
+        public_config[
+            "nonceAuthorityAssuranceEvidenceSigningPublicKeySpkiDerBase64url"
+        ],
+        "production launch nonce-assurance evidence key",
+    )
+    _, nonce_verifier_state_key_id = _decode_launch_ed25519_spki(
+        public_config[
+            "nonceAuthorityVerifierStateSigningPublicKeySpkiDerBase64url"
+        ],
+        "production launch nonce verifier-state key",
+    )
+    _, nonce_store_attestation_key_id = _decode_launch_ed25519_spki(
+        public_config[
+            "nonceAuthorityVerifierStateStoreAttestationPublicKeySpkiDerBase64url"
+        ],
+        "production launch nonce verifier-state store-attestation key",
+    )
+    require(
+        roles["nonceAuthorityAssuranceEvidence"]
+        == nonce_assurance_evidence_key_id
+        and roles["nonceAuthorityVerifierState"]
+        == nonce_verifier_state_key_id
+        and roles["nonceAuthorityVerifierStateStoreAttestation"]
+        == nonce_store_attestation_key_id,
+        "production launch global-role registry crossed the exact nonce-assurance keys",
+    )
+    verifier_state_service = {
+        "signingPublicKeySpkiDerBase64url": public_config[
+            "nonceAuthorityVerifierStateSigningPublicKeySpkiDerBase64url"
+        ],
+        "storeAdministrativeDomainSha256": public_config[
+            "nonceAuthorityVerifierStateStoreAdministrativeDomainSha256"
+        ],
+        "storeAssuranceEvidenceSha256": public_config[
+            "nonceAuthorityVerifierStateStoreAssuranceEvidenceSha256"
+        ],
+        "storeAttestationPublicKeySpkiDerBase64url": public_config[
+            "nonceAuthorityVerifierStateStoreAttestationPublicKeySpkiDerBase64url"
+        ],
+        "storeIdentitySha256": public_config[
+            "nonceAuthorityVerifierStateStoreIdentitySha256"
+        ],
+    }
+    canonical_contract = canonical_json(contract).encode("ascii")
+    contract_sha256 = sha256_prefixed_bytes(canonical_contract)
+    pins_sha256 = sha256_prefixed_bytes(canonical_contract + b"\n")
+    receipt_binding = bootstrap_receipt["nonceRollbackAssurance"]
+    receipt_pins_file = receipt_binding["pinsFile"]
+    manifest_pins_file = binding["pinsFile"]
+    require(
+        isinstance(manifest_pins_file, dict)
+        and set(manifest_pins_file) == {"path", "sha256"}
+        and manifest_pins_file["path"] == receipt_pins_file["path"]
+        and manifest_pins_file["sha256"] == receipt_pins_file["sha256"]
+        and contract_sha256
+        == binding["contractSha256"]
+        == receipt_binding["contractSha256"]
+        == retained_assurance["contractSha256"]
+        == request["nonceRollbackAssuranceContractSha256"]
+        and pins_sha256
+        == manifest_pins_file["sha256"]
+        == receipt_binding["retainedSnapshotSha256"]
+        == retained_assurance["retainedSnapshotSha256"]
+        == request["nonceRollbackAssurancePinsSha256"],
+        "production launch manifest nonce rollback contract or pin-file binding was substituted",
+    )
+    require(
+        receipt_binding["verifierStateService"]
+        == retained_assurance["verifierStateService"]
+        == verifier_state_service,
+        "production launch verifier-state service configuration was substituted",
+    )
+    return {
+        "apiVersion": "serverware.productionReadinessLaunch/v3",
+        "manifestSha256": manifest_sha256,
+        "authorizationScope": authorization["authorizationScope"],
+        "freshnessAuthority": authorization["freshnessAuthority"],
+        "capabilitySemantics": authorization_statement[
+            "capabilitySemantics"
+        ],
+        "launchAttemptJournal": journal,
+        "launchAttemptRecoveryIdentitySha256": (
+            recovery_identity_sha256
+        ),
+        "globalRoleRegistry": role_registry,
+        "globalRoleRegistrySha256": role_registry_sha256,
+        "globalRoleRegistryPinsFile": role_pins_file,
+        "monotonicWitness": {
+            "sha256": sha256_prefixed_json(witness_envelope),
+            "signingKeyId": witness_key_id,
+            "identitySha256": witness_configuration["identitySha256"],
+            "administrativeDomainSha256": witness_configuration[
+                "administrativeDomainSha256"
+            ],
+            "storeAssuranceSha256": store_assurance_sha256,
+            "storeAssuranceIssuerKeyId": store_issuer_key_id,
+            "registryGeneration": witness_statement[
+                "registryGeneration"
+            ],
+            "registrySha256": witness_statement["registrySha256"],
+            "predecessorStateSha256": witness_statement[
+                "predecessorStateSha256"
+            ],
+            "successorStateSha256": witness_statement[
+                "successorStateSha256"
+            ],
+            "checkpointSequence": witness_statement[
+                "checkpointSequence"
+            ],
+            "stateTransitionCommitted": True,
+        },
+        "launchAuthorityIssuanceSaga": {
+            "ledgerSchemaVersion": 7,
+            "requestSha256": bootstrap_receipt["launchAuthorization"][
+                "requestSha256"
+            ],
+            "authorizationId": authorization_statement[
+                "authorizationId"
+            ],
+            "recoveryIdentitySha256": recovery_identity_sha256,
+            "registryGeneration": witness_statement[
+                "registryGeneration"
+            ],
+            "registrySha256": witness_statement["registrySha256"],
+            "predecessorStateSha256": witness_statement[
+                "predecessorStateSha256"
+            ],
+            "successorStateSha256": witness_statement[
+                "successorStateSha256"
+            ],
+            "checkpointSequence": witness_statement[
+                "checkpointSequence"
+            ],
+            "witnessTransitionSha256": sha256_prefixed_json(
+                witness_envelope
+            ),
+            "stateTransitionCommitted": True,
+        },
+        "contractSha256": contract_sha256,
+        "pinsFile": {
+            "path": manifest_pins_file["path"],
+            "sha256": pins_sha256,
+        },
+        "verifierStateService": verifier_state_service,
+        "purpose": "readiness-only",
+        "verified": True,
     }
 
 
@@ -9884,6 +14765,8 @@ def verify_bootstrap_launch_authorization_bindings(
     reproducible_build_verification_sha256: str,
     current_host_identity_sha256: str,
     release_artifact_launch_authority: dict[str, str],
+    nonce_rollback_assurance: dict[str, Any],
+    launch_manifest_v3: dict[str, Any],
 ) -> dict[str, Any]:
     run_production_readiness.validate_bootstrap_receipt_summary(bootstrap_receipt)
     identity = run_production_readiness.bootstrap_launch_authorization_identity(
@@ -9910,6 +14793,14 @@ def verify_bootstrap_launch_authorization_bindings(
             current_host_identity_sha256,
             "launch authorization current-host deployment identity digest",
         ),
+        "nonce_rollback_assurance_contract_sha256": require_sha256(
+            nonce_rollback_assurance.get("contractSha256"),
+            "launch authorization nonce rollback assurance contract digest",
+        ),
+        "nonce_rollback_assurance_pins_sha256": require_sha256(
+            nonce_rollback_assurance.get("retainedSnapshotSha256"),
+            "launch authorization nonce rollback assurance pins digest",
+        ),
     }
     for field, expected_value in expected.items():
         require(
@@ -9930,6 +14821,127 @@ def verify_bootstrap_launch_authorization_bindings(
         == artifact_authority["launch_authority_root_sha256"],
         "launch authorization root digest does not match release artifact bindings",
     )
+    require(
+        launch_manifest_v3.get("verified") is True
+        and launch_manifest_v3.get("manifestSha256")
+        == bootstrap_receipt["manifest"]["sha256"]
+        and launch_manifest_v3.get("contractSha256")
+        == identity["nonce_rollback_assurance_contract_sha256"]
+        and nested(launch_manifest_v3, "pinsFile", "sha256")
+        == identity["nonce_rollback_assurance_pins_sha256"]
+        and launch_manifest_v3.get("verifierStateService")
+        == nonce_rollback_assurance.get("verifierStateService")
+        == bootstrap_receipt["nonceRollbackAssurance"][
+            "verifierStateService"
+        ],
+        "launch authorization is not bound to the independently remeasured v3 launch manifest",
+    )
+    request = bootstrap_receipt["launchAuthorization"]["request"]
+    statement = bootstrap_receipt["launchAuthorization"]["envelope"][
+        "statement"
+    ]
+    witness_statement = statement["monotonicWitness"]["statement"]
+    manifest_witness = launch_manifest_v3.get("monotonicWitness")
+    manifest_saga = launch_manifest_v3.get(
+        "launchAuthorityIssuanceSaga"
+    )
+    require(
+        launch_manifest_v3.get("authorizationScope")
+        == request["authorizationScope"]
+        == statement["authorizationScope"]
+        == witness_statement["authorizationScope"]
+        == "trusted-host-readiness"
+        and launch_manifest_v3.get("freshnessAuthority")
+        == request["freshnessAuthority"]
+        == statement["freshnessAuthority"]
+        == "trusted-host-wall-clock"
+        and launch_manifest_v3.get("capabilitySemantics")
+        == statement["capabilitySemantics"]
+        == "time-bounded-idempotent-readiness-authorization"
+        and launch_manifest_v3.get("globalRoleRegistry")
+        == request["globalRoleRegistry"]
+        and launch_manifest_v3.get("globalRoleRegistrySha256")
+        == request["globalRoleRegistrySha256"]
+        == statement["globalRoleRegistrySha256"]
+        and nested(
+            launch_manifest_v3,
+            "globalRoleRegistryPinsFile",
+            "sha256",
+        )
+        == request["globalRoleRegistryPinsSha256"]
+        and nested(
+            launch_manifest_v3,
+            "launchAttemptJournal",
+            "domain",
+        )
+        == request["launchAttemptJournalDomain"]
+        and launch_manifest_v3.get(
+            "launchAttemptRecoveryIdentitySha256"
+        )
+        == request["launchAttemptRecoveryIdentitySha256"]
+        and isinstance(manifest_witness, dict)
+        and manifest_witness.get("sha256")
+        == sha256_prefixed_json(statement["monotonicWitness"])
+        and manifest_witness.get("signingKeyId")
+        == request["launchAuthorityWitnessKeyId"]
+        == witness_statement["witnessKeyId"]
+        and manifest_witness.get("identitySha256")
+        == request["launchAuthorityWitnessIdentitySha256"]
+        == witness_statement["witnessIdentitySha256"]
+        and manifest_witness.get("administrativeDomainSha256")
+        == request[
+            "launchAuthorityWitnessAdministrativeDomainSha256"
+        ]
+        == witness_statement["witnessAdministrativeDomainSha256"]
+        and manifest_witness.get("storeAssuranceSha256")
+        == request["launchAuthorityWitnessStoreAssuranceSha256"]
+        == witness_statement["storeAssuranceSha256"]
+        and manifest_witness.get("storeAssuranceIssuerKeyId")
+        == request["globalRoleRegistry"]["roles"][
+            "launchAuthorityWitnessStoreAssurance"
+        ]
+        and manifest_witness.get("registryGeneration")
+        == witness_statement["registryGeneration"]
+        and manifest_witness.get("registrySha256")
+        == witness_statement["registrySha256"]
+        and manifest_witness.get("predecessorStateSha256")
+        == witness_statement["predecessorStateSha256"]
+        and manifest_witness.get("successorStateSha256")
+        == witness_statement["successorStateSha256"]
+        and manifest_witness.get("checkpointSequence")
+        == witness_statement["checkpointSequence"]
+        and manifest_witness.get("stateTransitionCommitted") is True
+        and isinstance(manifest_saga, dict)
+        and manifest_saga
+        == {
+            "ledgerSchemaVersion": 7,
+            "requestSha256": bootstrap_receipt[
+                "launchAuthorization"
+            ]["requestSha256"],
+            "authorizationId": statement["authorizationId"],
+            "recoveryIdentitySha256": request[
+                "launchAttemptRecoveryIdentitySha256"
+            ],
+            "registryGeneration": witness_statement[
+                "registryGeneration"
+            ],
+            "registrySha256": witness_statement["registrySha256"],
+            "predecessorStateSha256": witness_statement[
+                "predecessorStateSha256"
+            ],
+            "successorStateSha256": witness_statement[
+                "successorStateSha256"
+            ],
+            "checkpointSequence": witness_statement[
+                "checkpointSequence"
+            ],
+            "witnessTransitionSha256": sha256_prefixed_json(
+                statement["monotonicWitness"]
+            ),
+            "stateTransitionCommitted": True,
+        },
+        "launch authorization is not bound to the fixed journal, global-role registry, trusted-host scope/freshness, or v7 witnessed issuance saga",
+    )
     return {
         **identity,
         "canonical_request_digest_verified": True,
@@ -9941,6 +14953,13 @@ def verify_bootstrap_launch_authorization_bindings(
         "independent_build_report_bound": True,
         "current_host_deployment_identity_bound": True,
         "release_artifact_authority_bound": True,
+        "nonce_rollback_assurance_bound": True,
+        "launch_manifest_v3_bound": True,
+        "launch_attempt_journal_bound": True,
+        "global_role_registry_bound": True,
+        "trusted_host_scope_and_freshness_bound": True,
+        "monotonic_witness_bound": True,
+        "launch_authority_v7_saga_bound": True,
     }
 
 
@@ -9987,6 +15006,5435 @@ def verify_launch_authority_key_role_separation(
     }
 
 
+def load_final_v6_canonical_json(
+    raw_path: str,
+    label: str,
+) -> tuple[dict[str, Any], bytes]:
+    document, raw = verify_nitro_tee.load_json_file(Path(raw_path), label)
+    require(isinstance(document, dict), f"{label} must be a JSON object")
+    validate_canonical_json_profile(document, label=label)
+    require(
+        raw == verify_nitro_tee.canonical_json_bytes(document) + b"\n",
+        f"{label} must use exact {CANONICAL_JSON_PROFILE} bytes plus LF",
+    )
+    return document, raw
+
+
+def reconstruct_final_v6_completion_identity(
+    expectations: dict[str, Any],
+) -> tuple[dict[str, Any], str]:
+    identity = verify_nitro_tee.verify_completion_identity(
+        expectations["completionIdentity"],
+        expectations["completionIdentitySha256"],
+        label="independently expected completion identity",
+    )
+    identity_sha256 = verify_nitro_tee.sha256_json(identity)
+    require(
+        hmac.compare_digest(
+            identity_sha256,
+            expectations["completionIdentitySha256"],
+        ),
+        "canonical completionIdentity does not match the independently expected completionIdentitySha256",
+    )
+    return identity, identity_sha256
+
+
+def validate_final_v6_completion_identity(
+    value: Any,
+) -> tuple[dict[str, Any], str]:
+    expected_fields = {
+        "apiVersion",
+        "challengeNonceSha256",
+        "coreDigests",
+        "pipeline",
+        "releaseGeneration",
+        "rollbackEpoch",
+    }
+    require(
+        isinstance(value, dict) and set(value) == expected_fields,
+        "final completion identity does not match the closed v3 field set",
+    )
+    require(
+        value["apiVersion"] == FINAL_COMPLETION_IDENTITY_API_VERSION
+        and value["pipeline"] == MANIFEST_V6_PIPELINE,
+        "final completion identity version or pipeline is invalid",
+    )
+    require_sha256(
+        value["challengeNonceSha256"],
+        "final completion challenge nonce",
+    )
+    core_digests = value["coreDigests"]
+    require(
+        isinstance(core_digests, dict)
+        and set(core_digests) == FINAL_V6_COMPLETION_CORE_FIELDS,
+        "final completion identity core-digest inventory is invalid",
+    )
+    for name, digest_value in core_digests.items():
+        require_sha256(
+            digest_value,
+            f"final completion {name} core digest",
+        )
+    for field in ("releaseGeneration", "rollbackEpoch"):
+        require(
+            type(value[field]) is int
+            and 0 <= value[field] <= CANONICAL_JSON_SIGNED_MAX,
+            f"final completion identity {field} is invalid",
+        )
+    return value, verify_nitro_tee.sha256_json(value)
+
+
+def _require_digest_fields(
+    value: dict[str, Any],
+    fields: set[str] | frozenset[str],
+    label: str,
+) -> None:
+    for field in fields:
+        require_sha256(value.get(field), f"{label} {field}")
+
+
+def _validate_final_state_commit(
+    value: Any,
+    *,
+    role_key_ids: dict[str, str],
+) -> dict[str, Any]:
+    fields = {
+        "apiVersion",
+        "status",
+        "actionable",
+        "redemptionVerified",
+        "commitId",
+        "storeId",
+        "signingKeyId",
+        "stateStoreSigningKeyId",
+        "receiptFileSha256",
+        "receiptPayloadSha256",
+        "priorStateSha256",
+        "currentStateSha256",
+        "transitionSha256",
+        "challengeConsumptionSha256",
+        "currentHeadAuthorizationId",
+        "currentHeadAuthorizationFileSha256",
+        "currentHeadAuthorizationKeyId",
+        "currentHeadSha256",
+        "currentHeadVerifierNonceSha256",
+        "currentHeadReservationId",
+        "currentHeadRedemptionId",
+        "currentHeadRedemptionReceiptFileSha256",
+        "currentHeadRedemptionReceiptIdentitySha256",
+        "currentHeadRedemptionVerifierNonceSha256",
+        "currentHeadRedemptionKeyId",
+        "currentFinalHeadSha256",
+        "currentHeadOneUseSequence",
+        "verifierStateKeyId",
+        "storeAssuranceKeyId",
+        "tlsReleaseKeyId",
+        "rollbackResistanceBoundary",
+    }
+    require(
+        isinstance(value, dict)
+        and set(value) == fields
+        and value["apiVersion"] == FINAL_V6_STATE_COMMIT_API_VERSION
+        and value["status"] == "redemption-verified-non-actionable"
+        and value["actionable"] is False
+        and value["redemptionVerified"] is True,
+        "public Nitro state commit does not match the closed non-actionable contract",
+    )
+    _require_digest_fields(
+        value,
+        {
+            "signingKeyId",
+            "stateStoreSigningKeyId",
+            "receiptFileSha256",
+            "receiptPayloadSha256",
+            "priorStateSha256",
+            "currentStateSha256",
+            "transitionSha256",
+            "challengeConsumptionSha256",
+            "currentHeadAuthorizationFileSha256",
+            "currentHeadAuthorizationKeyId",
+            "currentHeadSha256",
+            "currentHeadVerifierNonceSha256",
+            "currentHeadRedemptionReceiptFileSha256",
+            "currentHeadRedemptionReceiptIdentitySha256",
+            "currentHeadRedemptionVerifierNonceSha256",
+            "currentHeadRedemptionKeyId",
+            "currentFinalHeadSha256",
+            "verifierStateKeyId",
+            "storeAssuranceKeyId",
+            "tlsReleaseKeyId",
+        },
+        "public Nitro state commit",
+    )
+    require(
+        type(value["currentHeadOneUseSequence"]) is int
+        and 0
+        < value["currentHeadOneUseSequence"]
+        <= CANONICAL_JSON_SIGNED_MAX,
+        "public Nitro state commit one-use sequence is invalid",
+    )
+    for field in (
+        "commitId",
+        "storeId",
+        "currentHeadAuthorizationId",
+        "currentHeadReservationId",
+        "currentHeadRedemptionId",
+    ):
+        require_final_v1_identifier(
+            value[field],
+            f"public Nitro state commit {field}",
+        )
+    require_final_v1_non_empty_string(
+        value["rollbackResistanceBoundary"],
+        "public Nitro state commit rollbackResistanceBoundary",
+    )
+    require(
+        value["signingKeyId"] == role_key_ids["stateCommit"]
+        and value["stateStoreSigningKeyId"] == role_key_ids["stateStore"]
+        and value["currentHeadAuthorizationKeyId"]
+        == role_key_ids["currentHeadAuthorization"]
+        and value["currentHeadRedemptionKeyId"]
+        == role_key_ids["currentHeadRedemption"]
+        and value["verifierStateKeyId"] == role_key_ids["verifierState"]
+        and value["storeAssuranceKeyId"] == role_key_ids["storeAssurance"]
+        and value["tlsReleaseKeyId"] == role_key_ids["tlsRelease"],
+        "public Nitro state commit crossed its pinned store, authorization, or TLS roles",
+    )
+    return value
+
+
+def _validate_public_nitro_live_result(value: Any) -> dict[str, Any]:
+    fields = {
+        "apiVersion",
+        "verificationOk",
+        "finalCompletionVerified",
+        "actionAuthorization",
+        "okForAction",
+        "status",
+        "pipeline",
+        "canonicalProfile",
+        "verifiedAtUnix",
+        "evidenceBundleFileSha256",
+        "expectationsFileSha256",
+        "trustRootBundleFileSha256",
+        "completionIdentity",
+        "completionIdentitySha256",
+        "completionCoreDigests",
+        "candidateManifestFileSha256",
+        "candidateManifestPayloadSha256",
+        "sourceInputManifestFileSha256",
+        "sourceClosureSha256",
+        "buildWatchdogReceiptFileSha256",
+        "promotionReceiptFileSha256",
+        "promotedManifestFileSha256",
+        "productionIdentitySha256",
+        "runtimeStateFileSha256",
+        "runtimeKeyCustodyFileSha256",
+        "candidateToEifBuildStatementFileSha256",
+        "eifSha384",
+        "pcrs",
+        "nitroAttestationDocumentSha256",
+        "attestationRequestSha256",
+        "requestSha256",
+        "responseBytesSha256",
+        "tlsExporterSha256",
+        "tlsSpkiSha256",
+        "tlsPeerSpkiSha256",
+        "tlsStackMeasurementSha256",
+        "kmsAuditProofSha256s",
+        "witness",
+        "nextClientState",
+        "stateTransition",
+        "stateCommit",
+        "roleKeyIds",
+        "roleRegistrySha256",
+    }
+    require(
+        fields == verify_nitro_tee.PUBLIC_NITRO_RESULT_FIELDS,
+        "final-v1 and native public Nitro result field inventories diverged",
+    )
+    require(
+        CANONICAL_JSON_SIGNED_MAX
+        == PUBLIC_NITRO_CANONICAL_INTEGER_MAX,
+        "final-v1 and native public Nitro integer domains diverged",
+    )
+    verify_nitro_tee.validate_public_nitro_final_result_contract(value)
+    require(
+        isinstance(value, dict)
+        and set(value) == fields
+        and value["apiVersion"] == verify_nitro_tee.RESULT_VERSION
+        and value["verificationOk"] is True
+        and value["finalCompletionVerified"] is True
+        and value["actionAuthorization"] is None
+        and value["okForAction"] is False
+        and value["status"] == "redemption-verified-non-actionable"
+        and value["pipeline"] == MANIFEST_V6_PIPELINE
+        and value["canonicalProfile"] == CANONICAL_JSON_PROFILE,
+        "signed public Nitro result is not the current final non-actionable contract",
+    )
+    require(
+        type(value["verifiedAtUnix"]) is int
+        and 0 < value["verifiedAtUnix"] <= CANONICAL_JSON_SIGNED_MAX,
+        "signed public Nitro result verification time is invalid",
+    )
+    completion_identity, completion_identity_sha256 = (
+        validate_final_v6_completion_identity(value["completionIdentity"])
+    )
+    require(
+        value["completionIdentitySha256"] == completion_identity_sha256
+        and value["completionCoreDigests"] == completion_identity["coreDigests"],
+        "signed public Nitro result crossed its completion identity",
+    )
+    _require_digest_fields(
+        value,
+        {
+            "evidenceBundleFileSha256",
+            "expectationsFileSha256",
+            "trustRootBundleFileSha256",
+            "completionIdentitySha256",
+            "candidateManifestFileSha256",
+            "candidateManifestPayloadSha256",
+            "sourceInputManifestFileSha256",
+            "sourceClosureSha256",
+            "buildWatchdogReceiptFileSha256",
+            "promotionReceiptFileSha256",
+            "promotedManifestFileSha256",
+            "productionIdentitySha256",
+            "runtimeStateFileSha256",
+            "runtimeKeyCustodyFileSha256",
+            "candidateToEifBuildStatementFileSha256",
+            "nitroAttestationDocumentSha256",
+            "attestationRequestSha256",
+            "requestSha256",
+            "responseBytesSha256",
+            "tlsExporterSha256",
+            "tlsSpkiSha256",
+            "tlsPeerSpkiSha256",
+            "tlsStackMeasurementSha256",
+            "roleRegistrySha256",
+        },
+        "signed public Nitro result",
+    )
+    require_sha384(value["eifSha384"], "signed public Nitro EIF digest")
+    pcrs = value["pcrs"]
+    require(
+        isinstance(pcrs, dict) and set(pcrs) == {"PCR0", "PCR1", "PCR2"},
+        "signed public Nitro result PCR inventory is invalid",
+    )
+    for name, digest_value in pcrs.items():
+        require_sha384(digest_value, f"signed public Nitro {name}")
+    validate_final_v1_digest_map(
+        value["kmsAuditProofSha256s"],
+        "signed public Nitro KMS audit digest inventory",
+    )
+    role_key_ids = value["roleKeyIds"]
+    require(
+        isinstance(role_key_ids, dict)
+        and set(role_key_ids) == FINAL_PUBLIC_RESULT_ROLE_NAMES,
+        "signed public Nitro result role map omitted or added a final input role",
+    )
+    normalized_roles = {
+        role: require_sha256(role_key_ids[role], f"{role} role key ID")
+        for role in sorted(role_key_ids)
+    }
+    require(
+        len(set(normalized_roles.values())) == len(normalized_roles),
+        "signed public Nitro result reused a key across final input roles",
+    )
+    expected_public_role_digest = verify_nitro_tee.sha256_json(
+        {
+            "apiVersion": PUBLIC_NITRO_ROLE_REGISTRY_API_VERSION,
+            "roles": normalized_roles,
+        }
+    )
+    require(
+        value["roleRegistrySha256"] == expected_public_role_digest,
+        "signed public Nitro result role registry digest is invalid",
+    )
+    witness = value["witness"]
+    witness_fields = {
+        "checkpointSha256",
+        "challengeConsumptionSha256",
+        "leafIndex",
+        "releaseGeneration",
+        "rollbackEpoch",
+        "sequence",
+        "treeSize",
+        "rootHash",
+        "witnessKeyId",
+        "witnessStoreKeyId",
+        "witnessStoreIdentitySha256",
+        "witnessStoreAssuranceSha256",
+    }
+    require(
+        isinstance(witness, dict)
+        and set(witness) == witness_fields
+        and witness["witnessKeyId"] == normalized_roles["witness"]
+        and witness["witnessStoreKeyId"] == normalized_roles["witnessStore"],
+        "signed public Nitro witness omitted or crossed its witness/store roles",
+    )
+    _require_digest_fields(
+        witness,
+        {
+            "checkpointSha256",
+            "challengeConsumptionSha256",
+            "rootHash",
+            "witnessKeyId",
+            "witnessStoreKeyId",
+            "witnessStoreIdentitySha256",
+            "witnessStoreAssuranceSha256",
+        },
+        "signed public Nitro witness",
+    )
+    for field in (
+        "leafIndex",
+        "releaseGeneration",
+        "rollbackEpoch",
+        "sequence",
+        "treeSize",
+    ):
+        require(
+            type(witness[field]) is int
+            and 0 <= witness[field] <= CANONICAL_JSON_SIGNED_MAX,
+            f"signed public Nitro witness {field} is invalid",
+        )
+    next_state = verify_nitro_tee.load_client_state(value["nextClientState"])
+    require_final_v1_identifier(
+        next_state["provider"],
+        "signed public Nitro next-client-state provider",
+    )
+    transition = value["stateTransition"]
+    require(
+        isinstance(transition, dict)
+        and set(transition)
+        == {"oldStateSha256", "newStateSha256", "transitionSha256"},
+        "signed public Nitro state transition is invalid",
+    )
+    _require_digest_fields(
+        transition,
+        {"oldStateSha256", "newStateSha256", "transitionSha256"},
+        "signed public Nitro state transition",
+    )
+    transition_core = {
+        "oldStateSha256": transition["oldStateSha256"],
+        "newStateSha256": transition["newStateSha256"],
+    }
+    require(
+        transition["newStateSha256"] == next_state["stateSha256"]
+        and transition["transitionSha256"]
+        == verify_nitro_tee.sha256_json(transition_core)
+        and next_state["challengeConsumptionSha256"]
+        == witness["challengeConsumptionSha256"],
+        "signed public Nitro state transition crossed the witness high-water",
+    )
+    state_commit = _validate_final_state_commit(
+        value["stateCommit"],
+        role_key_ids=normalized_roles,
+    )
+    require(
+        state_commit["priorStateSha256"] == transition["oldStateSha256"]
+        and state_commit["currentStateSha256"] == transition["newStateSha256"]
+        and state_commit["transitionSha256"] == transition["transitionSha256"]
+        and state_commit["challengeConsumptionSha256"]
+        == witness["challengeConsumptionSha256"],
+        "signed public Nitro state commit crossed its transition or witness",
+    )
+    return value
+
+
+def verify_signed_public_nitro_result_envelope(
+    value: Any,
+    *,
+    trusted_public_key_pem: str,
+    expected_provider: str,
+    expected_key_id: str,
+    expected_spki_sha256: str,
+) -> dict[str, Any]:
+    fields = {
+        "apiVersion",
+        "provider",
+        "signingKeyId",
+        "signingKeySpkiSha256",
+        "result",
+        "resultSha256",
+        "signature",
+    }
+    require(
+        isinstance(value, dict)
+        and set(value) == fields
+        and value["apiVersion"]
+        == PUBLIC_NITRO_LIVE_RESULT_ENVELOPE_API_VERSION,
+        "public Nitro live result envelope does not match the closed v1 contract",
+    )
+    calculated_key_id = release_public_key_id(trusted_public_key_pem)
+    pinned_provider = require_public_nitro_provider(
+        expected_provider,
+        "expected public Nitro result provider",
+    )
+    envelope_provider = require_public_nitro_provider(
+        value["provider"],
+        "public Nitro result provider",
+    )
+    require(
+        envelope_provider == pinned_provider
+        and value["signingKeyId"]
+        == require_sha256(expected_key_id, "expected public Nitro result key ID")
+        == calculated_key_id
+        and value["signingKeySpkiSha256"]
+        == require_sha256(
+            expected_spki_sha256,
+            "expected public Nitro result SPKI digest",
+        )
+        == calculated_key_id,
+        "public Nitro live result signer does not match caller-pinned provider/key/SPKI",
+    )
+    result = _validate_public_nitro_live_result(value["result"])
+    require(
+        result["roleKeyIds"]["publicNitroResult"] == calculated_key_id,
+        "public Nitro result signer differs from its global role",
+    )
+    result_sha256 = verify_nitro_tee.sha256_json(result)
+    require(
+        value["resultSha256"] == result_sha256,
+        "public Nitro live result digest does not match its canonical result",
+    )
+    signed_envelope = dict(value)
+    signature = signed_envelope.pop("signature")
+    verify_ed25519(
+        trusted_public_key_pem,
+        str(signature),
+        PUBLIC_NITRO_LIVE_RESULT_SIGNATURE_DOMAIN
+        + verify_nitro_tee.canonical_json_bytes(signed_envelope),
+        "public Nitro live result",
+    )
+    return result
+
+
+def host_readiness_completion_proof_v6_core(
+    value: dict[str, Any],
+) -> dict[str, Any]:
+    require(
+        HOST_READINESS_V6_ENVELOPE_FIELDS.issubset(value),
+        "completionProof/v6 is missing its persisted envelope fields",
+    )
+    return {
+        key: child
+        for key, child in value.items()
+        if key not in HOST_READINESS_V6_ENVELOPE_FIELDS
+    }
+
+
+def _schema_object_without_duplicates(
+    pairs: list[tuple[str, Any]],
+    label: str,
+) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, child in pairs:
+        require(key not in value, f"{label} duplicates field {key!r}")
+        value[key] = child
+    return value
+
+
+def _reject_schema_noninteger_number(value: str, label: str) -> None:
+    raise ValueError(f"{label} contains non-integer number {value!r}")
+
+
+def host_readiness_completion_proof_v6_schema_validator() -> Any:
+    global _HOST_READINESS_V6_SCHEMA_VALIDATOR
+    if _HOST_READINESS_V6_SCHEMA_VALIDATOR is not None:
+        return _HOST_READINESS_V6_SCHEMA_VALIDATOR
+    try:
+        from jsonschema import Draft202012Validator
+    except ImportError as exc:
+        raise ValueError(
+            "jsonschema is required to validate completionProof/v6"
+        ) from exc
+    schema_path = (
+        Path(__file__).resolve().parent.parent
+        / "schemas"
+        / "completion-proof.v6.schema.json"
+    )
+    schema_raw = verify_nitro_tee.read_regular(
+        schema_path,
+        label="completionProof/v6 schema",
+        max_bytes=1024 * 1024,
+    )
+    try:
+        schema_text = schema_raw.decode("utf-8")
+        schema = json.loads(
+            schema_text,
+            object_pairs_hook=lambda pairs: _schema_object_without_duplicates(
+                pairs,
+                "completionProof/v6 schema",
+            ),
+            parse_float=lambda value: _reject_schema_noninteger_number(
+                value,
+                "completionProof/v6 schema",
+            ),
+            parse_constant=lambda value: _reject_schema_noninteger_number(
+                value,
+                "completionProof/v6 schema",
+            ),
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(
+            "completionProof/v6 schema is not strict UTF-8 JSON"
+        ) from exc
+    require(
+        isinstance(schema, dict),
+        "completionProof/v6 schema must be a JSON object",
+    )
+    Draft202012Validator.check_schema(schema)
+    _HOST_READINESS_V6_SCHEMA_VALIDATOR = Draft202012Validator(schema)
+    return _HOST_READINESS_V6_SCHEMA_VALIDATOR
+
+
+def validate_host_readiness_completion_proof_v6(value: Any) -> dict[str, Any]:
+    fields = {
+        "apiVersion",
+        "kind",
+        "verificationOk",
+        "finalCompletionVerified",
+        "actionAuthorization",
+        "okForAction",
+        "verification_passed",
+        "verification_mode",
+        "result_scope",
+        "readiness_only",
+        "readiness_ok",
+        "completion_status",
+        "release_completion",
+        "hardware_proof",
+        "assurance_ceiling",
+        "generated_at_unix",
+        "artifacts",
+        "production_readiness",
+        "production_readiness_config",
+        "current_completion_host",
+        "production_env_binding",
+        "running_production_containers",
+        "production_host_preflight",
+        "bootstrap_launcher",
+        "nonce_rollback_assurance",
+        "nitro_kms_evidence",
+        "nitro_evidence_binding",
+        "hardware_assurance_evidence",
+        "final_challenge_consumption",
+        "production_images_build",
+        "production_images_published",
+        "release_provenance",
+        "image_signatures",
+        "benchmark",
+        "release_security_evidence",
+        "production_proxy_response_proof",
+        "production_continuity",
+        "proof_core_sha256",
+        "independently_authenticated",
+        "aggregate_authentication",
+        "proof_path",
+        "integrity_metadata",
+    }
+    validate_canonical_json_profile(
+        value,
+        label="completionProof/v6",
+    )
+    schema_error = next(
+        host_readiness_completion_proof_v6_schema_validator().iter_errors(
+            value
+        ),
+        None,
+    )
+    require(
+        schema_error is None,
+        "completionProof/v6 failed its closed schema: "
+        + (schema_error.message if schema_error is not None else ""),
+    )
+    require(
+        isinstance(value, dict)
+        and set(value) == fields
+        and value["apiVersion"] == COMPLETION_PROOF_API_VERSION
+        and value["kind"] == "ServerwarePreEnclaveReadiness"
+        and value["verificationOk"] is True
+        and value["finalCompletionVerified"] is False
+        and value["actionAuthorization"] is None
+        and value["okForAction"] is False
+        and value["verification_passed"] is True
+        and value["verification_mode"] == "readiness"
+        and value["result_scope"] == "readiness-only"
+        and value["readiness_only"] is True
+        and value["readiness_ok"] is True
+        and value["completion_status"] == "pre-enclave-readiness"
+        and value["release_completion"] == "not-final"
+        and value["hardware_proof"] is False
+        and value["independently_authenticated"] is False
+        and value["final_challenge_consumption"]
+        == {"required": False, "consumed": False}
+        and value["aggregate_authentication"]
+        == {
+            "required": False,
+            "independently_authenticated": False,
+            "scope": "readiness-only",
+        },
+        "completionProof/v6 is strictly a trusted-host readiness contract",
+    )
+    require_sha256(
+        value["proof_core_sha256"],
+        "host readiness proof core digest",
+    )
+    integrity = value["integrity_metadata"]
+    require(
+        isinstance(integrity, dict)
+        and set(integrity)
+        == {
+            "generation",
+            "detached_sha256_path",
+            "scope",
+            "independently_authenticated",
+            "authenticity_requires_external_signature_or_checkpoint",
+        }
+        and integrity["scope"] == "checksum-only"
+        and integrity["independently_authenticated"] is False
+        and integrity[
+            "authenticity_requires_external_signature_or_checkpoint"
+        ]
+        is True,
+        "host readiness proof integrity metadata is not the closed v6 wire shape",
+    )
+    proof_core = host_readiness_completion_proof_v6_core(value)
+    require(
+        hmac.compare_digest(
+            value["proof_core_sha256"],
+            sha256_prefixed_json(proof_core),
+        ),
+        "completionProof/v6 proof core digest does not match the fully "
+        "validated nested readiness core",
+    )
+    require(
+        "public_verifier_bridge" not in canonical_json(value)
+        and "completionProofFileB64" not in canonical_json(value),
+        "completionProof/v6 contains obsolete final bridge injection",
+    )
+    return value
+
+
+def _validate_final_role_registry(
+    value: Any,
+    *,
+    public_result_roles: dict[str, str],
+    public_result_signer_key_id: str,
+    result_signer_key_id: str,
+    launch_authority_key_id: str | None,
+    expected_registry_sha256: str,
+) -> dict[str, Any]:
+    require(
+        isinstance(value, dict)
+        and set(value) == {"apiVersion", "roles", "registrySha256"}
+        and value["apiVersion"] == FINAL_ROLE_REGISTRY_API_VERSION,
+        "final role registry does not match the closed v1 contract",
+    )
+    expected_roles = set(FINAL_REQUIRED_ROLE_NAMES)
+    if launch_authority_key_id is not None:
+        expected_roles.add("launchAuthority")
+    roles = value["roles"]
+    require(
+        isinstance(roles, dict) and set(roles) == expected_roles,
+        "final role registry omitted or added a role visible in final inputs",
+    )
+    normalized_roles = {
+        role: require_sha256(roles[role], f"final {role} role key ID")
+        for role in sorted(roles)
+    }
+    require(
+        len(set(normalized_roles.values())) == len(normalized_roles),
+        "final role registry reused a key across security roles",
+    )
+    require(
+        {
+            role: normalized_roles[role]
+            for role in FINAL_PUBLIC_RESULT_ROLE_NAMES
+        }
+        == public_result_roles
+        and normalized_roles["publicNitroResult"]
+        == public_result_signer_key_id
+        and normalized_roles["releaseCompletionResult"]
+        == result_signer_key_id
+        and (
+            launch_authority_key_id is None
+            or normalized_roles["launchAuthority"]
+            == launch_authority_key_id
+        ),
+        "final role registry crossed a signed result, result signer, or supplied launch authority",
+    )
+    digest_payload = {
+        "apiVersion": FINAL_ROLE_REGISTRY_API_VERSION,
+        "roles": normalized_roles,
+    }
+    registry_sha256 = verify_nitro_tee.sha256_json(digest_payload)
+    require(
+        value["registrySha256"] == registry_sha256
+        and registry_sha256
+        == require_sha256(
+            expected_registry_sha256,
+            "expected final role registry",
+        ),
+        "final role registry does not match the independently pinned digest",
+    )
+    return value
+
+
+def _verify_final_result_authenticity(
+    authenticity: Any,
+    *,
+    result_core: dict[str, Any],
+    result_sha256: str,
+    trusted_public_key_pem: str,
+    expected_provider: str,
+    expected_key_id: str,
+    expected_spki_sha256: str,
+) -> None:
+    require(
+        isinstance(authenticity, dict)
+        and set(authenticity)
+        == {
+            "apiVersion",
+            "provider",
+            "signingKeyId",
+            "signingKeySpkiSha256",
+            "resultSha256",
+            "signature",
+        }
+        and authenticity["apiVersion"]
+        == FINAL_RESULT_AUTHENTICITY_API_VERSION,
+        "final result authenticity does not match the closed signature envelope",
+    )
+    calculated_key_id = release_public_key_id(trusted_public_key_pem)
+    pinned_provider = require_final_v1_identifier(
+        expected_provider,
+        "expected final result provider",
+    )
+    envelope_provider = require_final_v1_identifier(
+        authenticity["provider"],
+        "final result provider",
+    )
+    require(
+        envelope_provider == pinned_provider
+        and authenticity["signingKeyId"]
+        == require_sha256(expected_key_id, "expected final result key ID")
+        == calculated_key_id
+        and authenticity["signingKeySpkiSha256"]
+        == require_sha256(
+            expected_spki_sha256,
+            "expected final result SPKI digest",
+        )
+        == calculated_key_id
+        and authenticity["resultSha256"] == result_sha256,
+        "final result signer does not match caller-pinned provider/key/SPKI or result digest",
+    )
+    verify_ed25519(
+        trusted_public_key_pem,
+        str(authenticity["signature"]),
+        FINAL_RESULT_SIGNATURE_DOMAIN
+        + verify_nitro_tee.canonical_json_bytes(result_core),
+        "release completion result",
+    )
+
+
+def validate_release_completion_verification_v1(
+    value: Any,
+    *,
+    trusted_result_public_key_pem: str,
+    expected_result_provider: str,
+    expected_result_key_id: str,
+    expected_result_spki_sha256: str,
+    trusted_public_nitro_result_public_key_pem: str,
+    expected_public_nitro_result_provider: str,
+    expected_public_nitro_result_key_id: str,
+    expected_public_nitro_result_spki_sha256: str,
+    expected_final_role_registry_sha256: str,
+) -> dict[str, Any]:
+    fields = {
+        "apiVersion",
+        "verificationOk",
+        "finalCompletionVerified",
+        "actionAuthorization",
+        "okForAction",
+        "verificationMode",
+        "redemptionVerified",
+        "readinessOnly",
+        "independentlyAuthenticated",
+        "pipeline",
+        "canonicalProfile",
+        "verifiedAtUnix",
+        "publicNitroVerification",
+        "aggregateAuthentication",
+        "completionIdentity",
+        "completionIdentitySha256",
+        "nextClientState",
+        "stateCommit",
+        "hostReadinessContext",
+        "hostBootstrapBoundary",
+        "globalRoleRegistry",
+        "externalPinProvenanceBoundary",
+        "externalProvisioningBoundary",
+        "resultSha256",
+        "authenticity",
+    }
+    require(
+        isinstance(value, dict) and set(value) == fields,
+        "final verification result does not match the closed v1 field set",
+    )
+    require(
+        not {
+            "ok",
+            "finalCompletion",
+            "final_completion",
+            "stateCommitRequired",
+            "public_verifier_bridge",
+            "completionProofFileSha256",
+        }.intersection(value),
+        "final verification result contains an obsolete authority alias",
+    )
+    require(
+        value["apiVersion"] == FINAL_V6_RESULT_API_VERSION
+        and value["verificationOk"] is True
+        and value["finalCompletionVerified"] is True
+        and value["actionAuthorization"] is None
+        and value["okForAction"] is False
+        and value["verificationMode"] == "final"
+        and value["redemptionVerified"] is True
+        and value["readinessOnly"] is False
+        and value["independentlyAuthenticated"] is True
+        and value["pipeline"] == MANIFEST_V6_PIPELINE
+        and value["canonicalProfile"] == CANONICAL_JSON_PROFILE,
+        "final verification result is not the current authenticated historical non-actionable contract",
+    )
+    require(
+        type(value["verifiedAtUnix"]) is int
+        and 0 < value["verifiedAtUnix"] <= CANONICAL_JSON_SIGNED_MAX,
+        "final verification time is invalid",
+    )
+    completion_identity, completion_identity_sha256 = (
+        validate_final_v6_completion_identity(value["completionIdentity"])
+    )
+    require(
+        value["completionIdentitySha256"] == completion_identity_sha256,
+        "final verification result crossed its completion identity digest",
+    )
+    public_verification = value["publicNitroVerification"]
+    require(
+        isinstance(public_verification, dict)
+        and set(public_verification)
+        == {
+            "envelope",
+            "envelopeFileSha256",
+            "resultSha256",
+            "evidenceBundleFileSha256",
+            "expectationsFileSha256",
+            "trustRootBundleFileSha256",
+        },
+        "final result public Nitro verification binding is invalid",
+    )
+    public_result = verify_signed_public_nitro_result_envelope(
+        public_verification["envelope"],
+        trusted_public_key_pem=trusted_public_nitro_result_public_key_pem,
+        expected_provider=expected_public_nitro_result_provider,
+        expected_key_id=expected_public_nitro_result_key_id,
+        expected_spki_sha256=expected_public_nitro_result_spki_sha256,
+    )
+    public_envelope_file_sha256 = verify_nitro_tee.sha256(
+        verify_nitro_tee.canonical_json_bytes(
+            public_verification["envelope"]
+        )
+        + b"\n"
+    )
+    require(
+        public_verification["envelopeFileSha256"]
+        == public_envelope_file_sha256
+        and public_verification["resultSha256"]
+        == public_verification["envelope"]["resultSha256"]
+        == verify_nitro_tee.sha256_json(public_result)
+        and public_verification["evidenceBundleFileSha256"]
+        == public_result["evidenceBundleFileSha256"]
+        and public_verification["expectationsFileSha256"]
+        == public_result["expectationsFileSha256"]
+        and public_verification["trustRootBundleFileSha256"]
+        == public_result["trustRootBundleFileSha256"]
+        and public_result["completionIdentity"] == completion_identity
+        and public_result["completionIdentitySha256"]
+        == completion_identity_sha256,
+        "final result crossed a signed public Nitro result or input digest",
+    )
+    _require_digest_fields(
+        public_verification,
+        {
+            "envelopeFileSha256",
+            "resultSha256",
+            "evidenceBundleFileSha256",
+            "expectationsFileSha256",
+            "trustRootBundleFileSha256",
+        },
+        "final public Nitro verification",
+    )
+    require(
+        value["nextClientState"] == public_result["nextClientState"]
+        and value["stateCommit"] == public_result["stateCommit"],
+        "final result crossed the signed public Nitro state transition",
+    )
+    context = value["hostReadinessContext"]
+    require(
+        isinstance(context, dict)
+        and set(context)
+        == {
+            "apiVersion",
+            "provided",
+            "completionProofApiVersion",
+            "completionProofFileSha256",
+            "completionProofCoreSha256",
+            "generatedAtUnix",
+            "launchAuthorityKeyId",
+            "authoritativeForFinalCompletion",
+        }
+        and context["apiVersion"] == HOST_READINESS_CONTEXT_API_VERSION
+        and context["authoritativeForFinalCompletion"] is False,
+        "host readiness context does not match its closed non-authoritative contract",
+    )
+    if context["provided"] is True:
+        require(
+            context["completionProofApiVersion"] == COMPLETION_PROOF_API_VERSION
+            and type(context["generatedAtUnix"]) is int
+            and context["generatedAtUnix"] > 0,
+            "provided host readiness context is invalid",
+        )
+        require_sha256(
+            context["completionProofFileSha256"],
+            "host readiness completion proof file",
+        )
+        require_sha256(
+            context["completionProofCoreSha256"],
+            "host readiness completion proof core",
+        )
+        if context["launchAuthorityKeyId"] is not None:
+            require_sha256(
+                context["launchAuthorityKeyId"],
+                "host readiness launch authority",
+            )
+    else:
+        require(
+            context
+            == {
+                "apiVersion": HOST_READINESS_CONTEXT_API_VERSION,
+                "provided": False,
+                "completionProofApiVersion": None,
+                "completionProofFileSha256": None,
+                "completionProofCoreSha256": None,
+                "generatedAtUnix": None,
+                "launchAuthorityKeyId": None,
+                "authoritativeForFinalCompletion": False,
+            },
+            "absent host readiness context contains an authority claim",
+        )
+    context_sha256 = verify_nitro_tee.sha256_json(context)
+    boundary = value["hostBootstrapBoundary"]
+    require(
+        isinstance(boundary, dict)
+        and set(boundary) == FINAL_V6_HOST_BOOTSTRAP_BOUNDARY_FIELDS
+        and boundary["apiVersion"]
+        == FINAL_V6_HOST_BOOTSTRAP_BOUNDARY_API_VERSION
+        and boundary["launchManifestApiVersion"]
+        == "serverware.productionReadinessLaunch/v3"
+        and boundary["launchAuthorizationRequestApiVersion"]
+        == "serverware.launchAuthorizationRequest/v2"
+        and boundary["launchAuthorizationApiVersion"]
+        == "serverware.launchAuthorization/v2"
+        and boundary["bootstrapReceiptApiVersion"]
+        == "serverware.bootstrapReceipt/v3"
+        and boundary["nonceRollbackAssuranceBindingApiVersion"]
+        == "serverware.productionNonceRollbackAssuranceBinding/v1"
+        and boundary["authorizationScope"] == "trusted-host-readiness"
+        and boundary["freshnessAuthority"] == "trusted-host-wall-clock"
+        and boundary["evidenceProvidedToFinalVerifier"]
+        is context["provided"]
+        and boundary["hostReadinessContextSha256"] == context_sha256
+        and boundary["hostReadinessCompletionProofFileSha256"]
+        == context["completionProofFileSha256"]
+        and boundary["launchAuthorityKeyId"]
+        == context["launchAuthorityKeyId"]
+        and boundary["authoritativeForFinalCompletion"] is False
+        and boundary["requiredForFinalCompletion"] is False
+        and boundary["relationship"]
+        == "non-authoritative-readiness-context-only"
+        and boundary["finalAuthority"]
+        == "independent-manifest-v6-public-nitro-verifier-and-protected-state"
+        and boundary["completionIdentitySha256"]
+        == completion_identity_sha256
+        and boundary["bindingMechanism"]
+        == "signed-final-result-core-non-authoritative-context-binding",
+        "host bootstrap boundary exceeded or crossed its non-authoritative role",
+    )
+    boundary_core = dict(boundary)
+    boundary_sha256 = boundary_core.pop("boundarySha256")
+    expected_boundary_sha256 = verify_nitro_tee.sha256_json(boundary_core)
+    require(
+        boundary_sha256 == expected_boundary_sha256,
+        "host bootstrap boundary digest does not match its canonical fields",
+    )
+    result_key_id = release_public_key_id(trusted_result_public_key_pem)
+    public_result_key_id = release_public_key_id(
+        trusted_public_nitro_result_public_key_pem
+    )
+    _validate_final_role_registry(
+        value["globalRoleRegistry"],
+        public_result_roles=public_result["roleKeyIds"],
+        public_result_signer_key_id=public_result_key_id,
+        result_signer_key_id=result_key_id,
+        launch_authority_key_id=context["launchAuthorityKeyId"],
+        expected_registry_sha256=expected_final_role_registry_sha256,
+    )
+    aggregate = value["aggregateAuthentication"]
+    require(
+        isinstance(aggregate, dict)
+        and set(aggregate)
+        == {
+            "independentlyAuthenticated",
+            "publicNitroResultEnvelopeSha256",
+            "publicNitroResultSha256",
+            "completionIdentitySha256",
+            "stateTransitionSha256",
+            "stateCommitReceiptSha256",
+            "hostBootstrapBoundarySha256",
+            "globalRoleRegistrySha256",
+            "releaseCompletionResultKeyId",
+            "allResultDigestsCrossBound",
+        }
+        and aggregate["independentlyAuthenticated"] is True
+        and aggregate["allResultDigestsCrossBound"] is True
+        and aggregate["publicNitroResultEnvelopeSha256"]
+        == public_envelope_file_sha256
+        and aggregate["publicNitroResultSha256"]
+        == public_verification["resultSha256"]
+        and aggregate["completionIdentitySha256"]
+        == completion_identity_sha256
+        and aggregate["stateTransitionSha256"]
+        == public_result["stateTransition"]["transitionSha256"]
+        and aggregate["stateCommitReceiptSha256"]
+        == public_result["stateCommit"]["receiptFileSha256"]
+        and aggregate["hostBootstrapBoundarySha256"]
+        == expected_boundary_sha256
+        and aggregate["globalRoleRegistrySha256"]
+        == value["globalRoleRegistry"]["registrySha256"]
+        and aggregate["releaseCompletionResultKeyId"] == result_key_id,
+        "aggregate authentication crossed a final result digest",
+    )
+    _require_digest_fields(
+        aggregate,
+        set(aggregate)
+        - {"independentlyAuthenticated", "allResultDigestsCrossBound"},
+        "aggregate authentication",
+    )
+    require(
+        value["externalPinProvenanceBoundary"]
+        == FINAL_V6_EXTERNAL_PIN_PROVENANCE_BOUNDARY
+        and value["externalProvisioningBoundary"]
+        == FINAL_V6_EXTERNAL_PROVISIONING_BOUNDARY,
+        "final verification result changed its external trust boundary",
+    )
+    result_core = dict(value)
+    authenticity = result_core.pop("authenticity")
+    result_sha256 = result_core.pop("resultSha256")
+    expected_result_sha256 = verify_nitro_tee.sha256_json(result_core)
+    require(
+        result_sha256 == expected_result_sha256,
+        "final verification result digest does not match its exact core",
+    )
+    _verify_final_result_authenticity(
+        authenticity,
+        result_core=result_core,
+        result_sha256=result_sha256,
+        trusted_public_key_pem=trusted_result_public_key_pem,
+        expected_provider=expected_result_provider,
+        expected_key_id=expected_result_key_id,
+        expected_spki_sha256=expected_result_spki_sha256,
+    )
+    require(
+        result_key_id not in set(public_result["roleKeyIds"].values()),
+        "releaseCompletionResult signer is not distinct from every final input role",
+    )
+    return value
+
+
+def final_v6_completion_bound_artifact(
+    artifact: dict[str, Any],
+    *,
+    completion_identity: dict[str, Any],
+    completion_identity_sha256: str,
+    label: str,
+) -> dict[str, Any]:
+    binding = {
+        "artifact": artifact,
+        "completionIdentity": completion_identity,
+        "completionIdentitySha256": completion_identity_sha256,
+        "label": label,
+    }
+    return {
+        **binding,
+        "bindingSha256": verify_nitro_tee.sha256_json(binding),
+    }
+
+
+def load_final_v6_pinned_ed25519_key(
+    raw_path: str,
+    *,
+    expected_key_id: str,
+    label: str,
+) -> tuple[Ed25519PublicKey, str, str]:
+    raw = verify_nitro_tee.read_regular(
+        Path(raw_path),
+        label=label,
+        max_bytes=8192,
+    )
+    try:
+        pem = raw.decode("ascii")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"{label} must be ASCII PEM") from exc
+    key, key_id = verify_nitro_tee.load_ed25519_key(pem, label)
+    require(
+        expected_key_id == key_id,
+        f"{label} does not match the independently expected key ID",
+    )
+    return key, key_id, verify_nitro_tee.sha256(raw)
+
+
+def verify_protected_final_v6_client_state(
+    *,
+    state_document: dict[str, Any],
+    state_raw: bytes,
+    checkpoint_document: dict[str, Any],
+    checkpoint_raw: bytes,
+    state_key: Ed25519PublicKey,
+    state_key_id: str,
+    state_key_file_sha256: str,
+    checkpoint_key: Ed25519PublicKey,
+    checkpoint_key_id: str,
+    checkpoint_key_file_sha256: str,
+    trust_root_bundle_sha256: str,
+    trust_root_pin_id: str,
+    trust_key_ids: dict[str, str],
+    now: int,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    require(
+        state_key_id != checkpoint_key_id,
+        "protected client-state signer and checkpoint root must be distinct",
+    )
+    require(
+        state_key_id == trust_key_ids.get("clientState")
+        and checkpoint_key_id
+        == trust_key_ids.get("clientStateCheckpoint"),
+        "protected client-state keys do not match their pinned public verifier roles",
+    )
+    evidence_key_ids = {
+        key_id
+        for role, key_id in trust_key_ids.items()
+        if role not in {"clientState", "clientStateCheckpoint"}
+    }
+    require(
+        state_key_id not in evidence_key_ids
+        and checkpoint_key_id not in evidence_key_ids,
+        "protected client-state keys must be separate from every evidence trust-root role",
+    )
+    state_payload, state_document_sha256 = verify_nitro_tee.verify_standard_envelope(
+        state_document,
+        api_version=PROTECTED_CLIENT_STATE_API_VERSION,
+        domain=PROTECTED_CLIENT_STATE_SIGNATURE_DOMAIN,
+        key=state_key,
+        key_id=state_key_id,
+        label="protected prior client state",
+    )
+    verify_nitro_tee.exact_keys(
+        state_payload,
+        {
+            "canonicalProfile",
+            "clientState",
+            "clientStateSha256",
+            "expiresAtUnix",
+            "issuedAtUnix",
+            "protectedClientStateId",
+            "provenanceBoundary",
+            "trustRootBundleSha256",
+            "trustRootPinId",
+        },
+        "protected prior client-state payload",
+    )
+    require(
+        state_document_sha256 == verify_nitro_tee.sha256(state_raw),
+        "protected prior client-state envelope byte digest mismatch",
+    )
+    require(
+        state_payload["canonicalProfile"] == CANONICAL_JSON_PROFILE,
+        "protected prior client state selects an unsupported canonical profile",
+    )
+    protected_state_id = verify_nitro_tee.require_identifier(
+        state_payload["protectedClientStateId"],
+        "protected client-state ID",
+    )
+    require(
+        state_payload["provenanceBoundary"]
+        == PROTECTED_CLIENT_STATE_PROVENANCE_BOUNDARY,
+        "protected client-state provenance boundary mismatch",
+    )
+    require(
+        state_payload["trustRootBundleSha256"] == trust_root_bundle_sha256
+        and state_payload["trustRootPinId"] == trust_root_pin_id,
+        "protected client state crossed the externally pinned trust-root bundle",
+    )
+    prior_state = verify_nitro_tee.load_client_state(state_payload["clientState"])
+    prior_state_sha256 = verify_nitro_tee.sha256_json(prior_state)
+    require(
+        state_payload["clientStateSha256"] == prior_state_sha256,
+        "protected prior client-state digest mismatch",
+    )
+    state_issued = verify_nitro_tee.require_uint(
+        state_payload["issuedAtUnix"],
+        "protected client-state issue time",
+    )
+    state_expires = verify_nitro_tee.require_uint(
+        state_payload["expiresAtUnix"],
+        "protected client-state expiry",
+    )
+    require(
+        state_issued <= now <= state_expires
+        and 0 < state_expires - state_issued <= FINAL_V6_MAX_VALIDITY_SECONDS,
+        "protected prior client state is future, stale, or overlong",
+    )
+
+    checkpoint_payload, checkpoint_document_sha256 = (
+        verify_nitro_tee.verify_standard_envelope(
+            checkpoint_document,
+            api_version=PROTECTED_CLIENT_STATE_CHECKPOINT_API_VERSION,
+            domain=PROTECTED_CLIENT_STATE_CHECKPOINT_SIGNATURE_DOMAIN,
+            key=checkpoint_key,
+            key_id=checkpoint_key_id,
+            label="protected client-state checkpoint",
+        )
+    )
+    verify_nitro_tee.exact_keys(
+        checkpoint_payload,
+        {
+            "canonicalProfile",
+            "clientStateSha256",
+            "expiresAtUnix",
+            "inclusionProof",
+            "issuedAtUnix",
+            "leafIndex",
+            "leafSha256",
+            "logId",
+            "protectedClientStateId",
+            "protectedClientStatePayloadSha256",
+            "provider",
+            "rootHashSha256",
+            "treeSize",
+            "trustRootBundleSha256",
+            "trustRootPinId",
+        },
+        "protected client-state checkpoint payload",
+    )
+    require(
+        checkpoint_document_sha256 == verify_nitro_tee.sha256(checkpoint_raw),
+        "protected client-state checkpoint byte digest mismatch",
+    )
+    require(
+        checkpoint_payload["canonicalProfile"] == CANONICAL_JSON_PROFILE,
+        "protected client-state checkpoint selects an unsupported canonical profile",
+    )
+    require(
+        checkpoint_payload["protectedClientStateId"] == protected_state_id
+        and checkpoint_payload["protectedClientStatePayloadSha256"]
+        == state_document["payloadSha256"]
+        and checkpoint_payload["clientStateSha256"] == prior_state_sha256,
+        "protected client-state checkpoint crossed the signed state identity",
+    )
+    require(
+        checkpoint_payload["trustRootBundleSha256"] == trust_root_bundle_sha256
+        and checkpoint_payload["trustRootPinId"] == trust_root_pin_id,
+        "protected client-state checkpoint crossed the pinned trust-root bundle",
+    )
+    require(
+        checkpoint_payload["logId"] == checkpoint_key_id,
+        "protected client-state checkpoint log is not the independently pinned root",
+    )
+    require(
+        isinstance(checkpoint_payload["provider"], str)
+        and 1 <= len(checkpoint_payload["provider"]) <= 128,
+        "protected client-state checkpoint provider is invalid",
+    )
+    checkpoint_issued = verify_nitro_tee.require_uint(
+        checkpoint_payload["issuedAtUnix"],
+        "protected client-state checkpoint issue time",
+    )
+    checkpoint_expires = verify_nitro_tee.require_uint(
+        checkpoint_payload["expiresAtUnix"],
+        "protected client-state checkpoint expiry",
+    )
+    require(
+        state_issued <= checkpoint_issued <= now <= checkpoint_expires
+        and 0
+        < checkpoint_expires - checkpoint_issued
+        <= FINAL_V6_MAX_VALIDITY_SECONDS,
+        "protected client-state checkpoint is future, stale, or overlong",
+    )
+    tree_size = verify_nitro_tee.require_uint(
+        checkpoint_payload["treeSize"],
+        "protected client-state checkpoint tree size",
+    )
+    leaf_index = verify_nitro_tee.require_uint(
+        checkpoint_payload["leafIndex"],
+        "protected client-state checkpoint leaf index",
+    )
+    require(tree_size > 0, "protected client-state checkpoint tree is empty")
+    inclusion_proof = checkpoint_payload["inclusionProof"]
+    require(
+        isinstance(inclusion_proof, list)
+        and len(inclusion_proof) <= 64
+        and all(
+            isinstance(item, str)
+            and SHA256_RE.fullmatch(item) is not None
+            for item in inclusion_proof
+        ),
+        "protected client-state checkpoint inclusion proof is invalid",
+    )
+    state_leaf = {
+        "apiVersion": PROTECTED_CLIENT_STATE_LEAF_API_VERSION,
+        "canonicalProfile": CANONICAL_JSON_PROFILE,
+        "clientStateSha256": prior_state_sha256,
+        "protectedClientStateId": protected_state_id,
+        "protectedClientStatePayloadSha256": state_document["payloadSha256"],
+        "trustRootBundleSha256": trust_root_bundle_sha256,
+        "trustRootPinId": trust_root_pin_id,
+    }
+    expected_leaf_sha256 = (
+        "sha256:" + verify_nitro_tee.merkle_leaf_hash(state_leaf).hex()
+    )
+    require(
+        checkpoint_payload["leafSha256"] == expected_leaf_sha256,
+        "protected client-state checkpoint leaf mismatch",
+    )
+    verify_nitro_tee.verify_inclusion(
+        leaf=state_leaf,
+        leaf_index=leaf_index,
+        tree_size=tree_size,
+        proof=inclusion_proof,
+        expected_root=checkpoint_payload["rootHashSha256"],
+    )
+    protected_identity = {
+        "apiVersion": "serverware.protectedNitroClientStateIdentity/v1",
+        "canonicalProfile": CANONICAL_JSON_PROFILE,
+        "protectedClientStateId": protected_state_id,
+        "stateEnvelopeFileSha256": state_document_sha256,
+        "statePayloadSha256": state_document["payloadSha256"],
+        "clientStateSha256": prior_state_sha256,
+        "stateSigningKeyId": state_key_id,
+        "stateSigningKeyFileSha256": state_key_file_sha256,
+        "checkpointFileSha256": checkpoint_document_sha256,
+        "checkpointPayloadSha256": checkpoint_document["payloadSha256"],
+        "checkpointKeyId": checkpoint_key_id,
+        "checkpointKeyFileSha256": checkpoint_key_file_sha256,
+        "checkpointProvider": checkpoint_payload["provider"],
+        "checkpointTreeSize": tree_size,
+        "checkpointRootHashSha256": checkpoint_payload["rootHashSha256"],
+        "trustRootBundleSha256": trust_root_bundle_sha256,
+        "trustRootPinId": trust_root_pin_id,
+        "provenanceBoundary": PROTECTED_CLIENT_STATE_PROVENANCE_BOUNDARY,
+    }
+    protected_identity["identitySha256"] = verify_nitro_tee.sha256_json(
+        protected_identity
+    )
+    return prior_state, protected_identity
+
+
+def write_final_v6_result(path: Path, result: dict[str, Any]) -> str:
+    require(path.name not in {"", ".", ".."}, "final result output path is invalid")
+    payload = verify_nitro_tee.canonical_json_bytes(result) + b"\n"
+    digest = verify_nitro_tee.sha256(payload)
+    verify_private_output_directory(path.parent)
+    validate_existing_private_output(path, "final verification result")
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            delete=False,
+        ) as temporary:
+            temporary_path = Path(temporary.name)
+            os.fchmod(temporary.fileno(), 0o600)
+            temporary.write(payload)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        os.replace(temporary_path, path)
+        temporary_path = None
+        fsync_directory(path.parent)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+    return digest
+
+
+def final_v6_dependency_role(name: str) -> str:
+    if name in {
+        "browser-python-compatibility",
+        "chromium-compatibility",
+        "portal-browser-oauth",
+    }:
+        return "browser-runtime"
+    if name == "clean-room":
+        return "clean-room-runtime"
+    if name == "rust-decision-gate-tests":
+        return "rust-runtime"
+    if name == "npm-publish-companion":
+        return "npm-11.8-runtime"
+    return "python-runtime"
+
+
+def final_v6_process(name: str) -> dict[str, Any]:
+    if name == "npm-publish-companion":
+        return {
+            "argv": [],
+            "cwd": "/work",
+            "dynamicEnvironment": [],
+            "entrypoint": [
+                "/opt/serverware/node/bin/node",
+                FINAL_V6_NPM_ENTRYPOINT_IMAGE,
+            ],
+            "environment": {
+                "CI": "true",
+                "HOME": "/work/home",
+                "LANG": "C",
+                "LC_ALL": "C",
+                "NO_PROXY": "",
+                "TMPDIR": "/work/tmp",
+                "XDG_RUNTIME_DIR": "/run/serverware-runtime",
+                "npm_config_audit": "false",
+                "npm_config_fund": "false",
+                "npm_config_update_notifier": "false",
+            },
+            "gid": 65532,
+            "uid": 65532,
+        }
+    if name == "rust-decision-gate-tests":
+        entrypoint = ["/opt/serverware/bin/serverware-decision-gate-tests"]
+        argv = ["--test-threads=1"]
+    else:
+        entrypoint = [
+            "/opt/serverware/python/bin/python3",
+            "-I",
+            FINAL_V6_PYTHON_ENTRYPOINT_IMAGE,
+        ]
+        argv = ["--role", name]
+    return {
+        "argv": argv,
+        "cwd": "/work",
+        "dynamicEnvironment": (
+            list(FINAL_V6_PORTAL_DYNAMIC_ENVIRONMENT)
+            if name == "portal-browser-oauth"
+            else []
+        ),
+        "entrypoint": entrypoint,
+        "environment": dict(FINAL_V6_BASE_ENVIRONMENT),
+        "gid": 65532,
+        "uid": 65532,
+    }
+
+
+def final_v6_source_set(name: str) -> dict[str, list[str]]:
+    if name == "npm-publish-companion":
+        return {"exact": [FINAL_V6_NPM_ENTRYPOINT_SOURCE], "prefixes": []}
+    configured = FINAL_V6_SOURCE_CONTRACTS[name]
+    exact = set(configured["exact"])
+    if name != "rust-decision-gate-tests":
+        exact.add(FINAL_V6_PYTHON_ENTRYPOINT_SOURCE)
+    return {
+        "exact": sorted(exact),
+        "prefixes": list(configured["prefixes"]),
+    }
+
+
+def final_v6_network(name: str) -> dict[str, Any]:
+    if name == "portal-browser-oauth":
+        return {
+            "egress": "none",
+            "mode": "internal",
+            "namespace": "private-anchor",
+            "role": "portal-npm-private",
+        }
+    if name == "npm-publish-companion":
+        return {
+            "egress": "none",
+            "mode": "join",
+            "namespace": "lane:portal-browser-oauth",
+            "role": "portal-npm-private",
+        }
+    return {
+        "egress": "none",
+        "mode": "none",
+        "namespace": "private",
+        "role": None,
+    }
+
+
+def final_v6_isolation(
+    name: str,
+    *,
+    apparmor_sha256: str,
+    seccomp_sha256: str,
+) -> dict[str, Any]:
+    return {
+        "apparmorProfileSha256": apparmor_sha256,
+        "capDrop": ["ALL"],
+        "cpuQuotaMicros": 1_000_000,
+        "memoryBytes": (
+            1024 * 1024 * 1024
+            if name == "portal-browser-oauth"
+            else 512 * 1024 * 1024
+        ),
+        "mounts": [
+            {
+                "destination": "/dev",
+                "gid": 0,
+                "mode": 0o755,
+                "options": ["nosuid", "strictatime"],
+                "sizeBytes": 16 * 1024 * 1024,
+                "source": "tmpfs",
+                "type": "tmpfs",
+                "uid": 0,
+            },
+            {
+                "destination": "/proc",
+                "options": ["nosuid", "noexec", "nodev"],
+                "source": "proc",
+                "type": "proc",
+            },
+        ],
+        "noNewPrivileges": True,
+        "outputStderrBytes": 16 * 1024 * 1024,
+        "outputStdoutBytes": 32 * 1024 * 1024,
+        "pidsLimit": 256,
+        "readOnlyRootfs": True,
+        "seccompProfileSha256": seccomp_sha256,
+        "tmpfs": [
+            {
+                "destination": "/run/serverware-runtime",
+                "gid": 65532,
+                "mode": 0o700,
+                "options": ["nodev", "noexec", "nosuid", "strictatime"],
+                "sizeBytes": 16 * 1024 * 1024,
+                "uid": 65532,
+            },
+            {
+                "destination": "/tmp",
+                "gid": 65532,
+                "mode": 0o700,
+                "options": ["nodev", "noexec", "nosuid", "strictatime"],
+                "sizeBytes": 256 * 1024 * 1024,
+                "uid": 65532,
+            },
+            {
+                "destination": "/work",
+                "gid": 65532,
+                "mode": 0o700,
+                "options": ["nodev", "nosuid", "strictatime"],
+                "sizeBytes": 256 * 1024 * 1024,
+                "uid": 65532,
+            },
+        ],
+        "timeoutSeconds": (
+            900
+            if name == "portal-browser-oauth"
+            else 120
+            if name == "npm-publish-companion"
+            else 300
+        ),
+    }
+
+
+def final_v6_capability_probes(name: str) -> list[str]:
+    if name in {
+        "browser-python-compatibility",
+        "host-python-compatibility",
+        "proxy-python-compatibility",
+    }:
+        return list(FINAL_V6_PYTHON_CAPABILITY_PROBES)
+    if name == "chromium-compatibility":
+        return ["chromium-startup-no-network"]
+    return []
+
+
+def final_v6_dockerfile(
+    process: dict[str, Any],
+    base_image_digest: str,
+) -> str:
+    environment = " ".join(
+        f"{name}={json.dumps(value, ensure_ascii=True)}"
+        for name, value in sorted(process["environment"].items())
+    )
+    return "\n".join(
+        (
+            "FROM scratch",
+            f"ARG SERVERWARE_BASE_IMAGE_DIGEST={base_image_digest}",
+            "ARG SOURCE_DATE_EPOCH=0",
+            "COPY --chown=0:0 rootfs/ /",
+            f"ENV {environment}",
+            f"WORKDIR {json.dumps(process['cwd'])}",
+            f"USER {process['uid']}:{process['gid']}",
+            "ENTRYPOINT "
+            + json.dumps(
+                process["entrypoint"],
+                ensure_ascii=True,
+                separators=(",", ":"),
+            ),
+            "CMD "
+            + json.dumps(
+                process["argv"],
+                ensure_ascii=True,
+                separators=(",", ":"),
+            ),
+            "",
+        )
+    )
+
+
+def verify_final_v6_candidate_execution_contract(
+    candidate: dict[str, Any],
+    source: dict[str, Any],
+    *,
+    expected_apparmor_sha256: str,
+    expected_seccomp_sha256: str,
+) -> dict[str, Any]:
+    continuity = verify_nitro_tee.exact_keys(
+        candidate["buildContinuity"],
+        {
+            "buildBundle",
+            "buildPlan",
+            "buildWatchdogReceipt",
+            "dependencyBundle",
+            "sourceSnapshot",
+        },
+        "Candidate Manifest v6 build continuity",
+    )
+    plan = continuity["buildPlan"]
+    lanes = plan.get("lanes")
+    require(
+        isinstance(lanes, dict)
+        and list(lanes) == list(verify_nitro_tee.LANE_ORDER)
+        and candidate.get("lanes") == lanes,
+        "Candidate lane definitions differ from the exact build plan",
+    )
+    dependencies = continuity["dependencyBundle"]
+    dependency_bundles = dependencies.get("bundles")
+    require(
+        isinstance(dependency_bundles, dict)
+        and set(dependency_bundles) == set(FINAL_V6_DEPENDENCY_CAPABILITIES),
+        "Candidate dependency bundle role inventory is not exact",
+    )
+    selected_entries = source.get("entries")
+    require(
+        isinstance(selected_entries, list) and selected_entries,
+        "signed source-input entry inventory is missing",
+    )
+    frozen_entries = [
+        {
+            key: value
+            for key, value in entry.items()
+            if key not in {"classification", "provenance"}
+        }
+        for entry in selected_entries
+    ]
+    source_snapshot = verify_nitro_tee.exact_keys(
+        plan["sourceSnapshot"],
+        {
+            "sourceClosureSha256",
+            "sourceEvidence",
+            "sourceEvidenceSha256",
+            "sourceFileInventorySha256",
+            "sourceGitInventoryPayloadSha256",
+            "sourceManifest",
+            "sourceManifestFileSha256",
+            "sourceManifestPayloadSha256",
+            "sourcePathListSha256",
+            "sourceSelectionManifestFileSha256",
+            "sourceSelectionManifestPayloadSha256",
+            "sourceSelectionModel",
+            "sourceUntrackedApprovalPayloadSha256",
+        },
+        "Candidate build-plan source snapshot",
+    )
+    require(
+        source_snapshot == candidate["sourceSnapshot"]
+        and continuity["sourceSnapshot"] == source_snapshot,
+        "Candidate source snapshot differs between the plan, continuity, and top-level identity",
+    )
+    source_manifest = verify_nitro_tee.exact_keys(
+        source_snapshot["sourceManifest"],
+        {
+            "aggregateBytes",
+            "apiVersion",
+            "closureSha256",
+            "entries",
+            "entryCount",
+            "fileCount",
+            "selection",
+            "selectionManifestFileSha256",
+            "selectionManifestPayloadSha256",
+            "symlinkCount",
+        },
+        "Candidate embedded source manifest",
+    )
+    require(
+        source_manifest["apiVersion"]
+        == verify_nitro_tee.SOURCE_SNAPSHOT_VERSION,
+        "Candidate embedded source manifest version mismatch",
+    )
+    expected_directories: set[str] = set()
+    for entry in selected_entries:
+        parts = PurePosixPath(entry["path"]).parts
+        for end in range(1, len(parts)):
+            expected_directories.add(
+                PurePosixPath(*parts[:end]).as_posix()
+            )
+    expected_snapshot_entries = [
+        {"mode": 0o500, "path": path, "type": "directory"}
+        for path in expected_directories
+    ] + frozen_entries
+    expected_snapshot_entries.sort(
+        key=lambda item: (
+            len(PurePosixPath(item["path"]).parts),
+            item["path"],
+            item["type"],
+        )
+    )
+    require(
+        source_manifest["selection"] == source
+        and source_manifest["entries"] == expected_snapshot_entries
+        and source_manifest["selectionManifestPayloadSha256"]
+        == source["payloadSha256"]
+        and source_snapshot["sourceSelectionManifestPayloadSha256"]
+        == source["payloadSha256"],
+        "Candidate embedded source snapshot does not exactly equal the signed source selection and entries",
+    )
+    security_profiles = verify_nitro_tee.exact_keys(
+        plan.get("securityProfiles"),
+        {"apparmor", "seccomp"},
+        "Manifest v6 security profiles",
+    )
+    for name, expected in (
+        ("apparmor", expected_apparmor_sha256),
+        ("seccomp", expected_seccomp_sha256),
+    ):
+        profile = verify_nitro_tee.exact_keys(
+            security_profiles[name],
+            {"path", "sha256", "size"},
+            f"Manifest v6 {name} profile",
+        )
+        require(
+            profile["sha256"] == expected
+            and isinstance(profile["path"], str)
+            and profile["path"]
+            and type(profile["size"]) is int
+            and profile["size"] > 0,
+            f"Manifest v6 {name} profile differs from the independent pin",
+        )
+
+    def validate_semantic_contract(
+        dependency: dict[str, Any],
+        *,
+        dependency_role: str,
+    ) -> str | None:
+        semantic = dependency.get("semanticContract")
+        if dependency_role != "clean-room-runtime":
+            require(
+                semantic is None,
+                f"{dependency_role} unexpectedly carries a semantic contract",
+            )
+            return None
+        semantic = verify_nitro_tee.exact_keys(
+            semantic,
+            {
+                "apiVersion",
+                "contractSha256",
+                "derivedEntries",
+                "derivedInstallationSha256",
+                "exerciseScenarios",
+                "installContractSha256",
+                "payloadClosureSha256",
+                "requirementsResolution",
+                "requirementsResolutionSha256",
+                "wheelRecords",
+                "wheelRecordsSha256",
+                "wheelhouseManifestPayloadSha256",
+            },
+            "clean-room semantic contract",
+        )
+        payload = dict(semantic)
+        supplied = payload.pop("contractSha256")
+        require(
+            semantic["apiVersion"]
+            == "serverware.cleanRoomExpectedDerivation/v1"
+            and supplied == verify_nitro_tee.sha256_json(payload)
+            and isinstance(semantic["derivedEntries"], list)
+            and bool(semantic["derivedEntries"])
+            and semantic["derivedInstallationSha256"]
+            == verify_nitro_tee.sha256_json(semantic["derivedEntries"])
+            and isinstance(semantic["requirementsResolution"], list)
+            and semantic["requirementsResolutionSha256"]
+            == verify_nitro_tee.sha256_json(
+                semantic["requirementsResolution"]
+            ),
+            "clean-room semantic contract digest or derived closure is invalid",
+        )
+        for field in (
+            "derivedInstallationSha256",
+            "installContractSha256",
+            "payloadClosureSha256",
+            "requirementsResolutionSha256",
+            "wheelRecordsSha256",
+            "wheelhouseManifestPayloadSha256",
+        ):
+            verify_nitro_tee.require_sha256(
+                semantic[field],
+                f"clean-room semantic contract {field}",
+            )
+        return supplied
+
+    def validate_execution(
+        execution: Any,
+        *,
+        name: str,
+        npm_companion: bool,
+    ) -> dict[str, Any]:
+        required_fields = {
+            "build",
+            "imageRole",
+            "installedSourceFiles",
+            "isolation",
+            "network",
+            "process",
+            "runtime",
+            "sourceFiles",
+            "sourceSet",
+        }
+        if not npm_companion:
+            required_fields |= {"capabilityProbes", "name"}
+        execution = verify_nitro_tee.exact_keys(
+            execution,
+            required_fields,
+            f"{name} execution contract",
+        )
+        expected_role = (
+            "npm-publish-companion"
+            if npm_companion
+            else f"lane-{name}"
+        )
+        require(
+            execution["imageRole"] == expected_role
+            and (npm_companion or execution["name"] == name),
+            f"{name} execution identity mismatch",
+        )
+        expected_process = final_v6_process(name)
+        expected_network = final_v6_network(name)
+        expected_source_set = final_v6_source_set(name)
+        require(
+            execution["process"] == expected_process
+            and execution["network"] == expected_network
+            and execution["sourceSet"] == expected_source_set
+            and (
+                npm_companion
+                or execution["capabilityProbes"]
+                == final_v6_capability_probes(name)
+            ),
+            f"{name} process, argv, environment, network, source-set, or capability probes are not the fixed v6 contract",
+        )
+        expected_source_files = [
+            entry
+            for entry in frozen_entries
+            if entry.get("type") == "file"
+            and (
+                entry.get("path") in expected_source_set["exact"]
+                or any(
+                    str(entry.get("path") or "").startswith(prefix)
+                    for prefix in expected_source_set["prefixes"]
+                )
+            )
+        ]
+        selected_paths = {
+            str(entry["path"]) for entry in expected_source_files
+        }
+        require(
+            bool(expected_source_files)
+            and all(
+                path in selected_paths
+                for path in expected_source_set["exact"]
+            )
+            and all(
+                any(path.startswith(prefix) for path in selected_paths)
+                for prefix in expected_source_set["prefixes"]
+            )
+            and execution["sourceFiles"] == expected_source_files,
+            f"{name} sourceFiles are empty, incomplete, reordered, or differ from the fixed signed source selection",
+        )
+        expected_installed_sources = [
+            {
+                "imagePath": "/opt/serverware/src/" + entry["path"],
+                "mode": 0o444,
+                "source": entry,
+            }
+            for entry in expected_source_files
+        ]
+        require(
+            bool(expected_installed_sources)
+            and execution["installedSourceFiles"]
+            == expected_installed_sources,
+            f"{name} installedSourceFiles do not exactly install the fixed source closure",
+        )
+        dependency_role = final_v6_dependency_role(name)
+        dependency = dependency_bundles[dependency_role]
+        require(
+            dependency.get("capabilities")
+            == FINAL_V6_DEPENDENCY_CAPABILITIES[dependency_role],
+            f"{name} dependency capabilities are not the fixed v6 set",
+        )
+        semantic_sha256 = validate_semantic_contract(
+            dependency,
+            dependency_role=dependency_role,
+        )
+        expected_runtime = {
+            "dependencyCapabilityCatalogSha256": dependency[
+                "capabilityCatalogSha256"
+            ],
+            "dependencyCapabilities": FINAL_V6_DEPENDENCY_CAPABILITIES[
+                dependency_role
+            ],
+            "dependencyClosureSha256": dependency["closureSha256"],
+            "dependencyFileManifestSha256": dependency[
+                "fileManifestSha256"
+            ],
+            "dependencyRole": dependency_role,
+            "semanticContractSha256": semantic_sha256,
+        }
+        require(
+            execution["runtime"] == expected_runtime,
+            f"{name} runtime or semanticContractSha256 was not independently rederived",
+        )
+        expected_isolation = final_v6_isolation(
+            name,
+            apparmor_sha256=expected_apparmor_sha256,
+            seccomp_sha256=expected_seccomp_sha256,
+        )
+        require(
+            execution["isolation"] == expected_isolation,
+            f"{name} isolation is not the fixed independently pinned v6 contract",
+        )
+        dependency_paths = {
+            item["path"]
+            for item in dependency.get("files", [])
+            if isinstance(item, dict) and isinstance(item.get("path"), str)
+        }
+        require(
+            not any(
+                installed["imagePath"] in dependency_paths
+                for installed in expected_installed_sources
+            ),
+            f"{name} fixed source collides with its dependency closure",
+        )
+        installed_entrypoint = (
+            {
+                "imagePath": expected_process["entrypoint"][0],
+                "origin": "rust-runtime-bundle",
+            }
+            if name == "rust-decision-gate-tests"
+            else {
+                "imagePath": (
+                    FINAL_V6_NPM_ENTRYPOINT_IMAGE
+                    if npm_companion
+                    else FINAL_V6_PYTHON_ENTRYPOINT_IMAGE
+                ),
+                "mode": 0o444,
+                "source": next(
+                    item
+                    for item in expected_source_files
+                    if item["path"]
+                    == (
+                        FINAL_V6_NPM_ENTRYPOINT_SOURCE
+                        if npm_companion
+                        else FINAL_V6_PYTHON_ENTRYPOINT_SOURCE
+                    )
+                ),
+            }
+        )
+        context_payload = {
+            "dependencyBundle": {
+                "capabilities": dependency["capabilities"],
+                "closureSha256": dependency["closureSha256"],
+                "fileManifestSha256": dependency["fileManifestSha256"],
+                "role": dependency_role,
+            },
+            "installedEntrypoint": installed_entrypoint,
+            "installedSourceFiles": expected_installed_sources,
+            "sourceFiles": expected_source_files,
+        }
+        dockerfile = final_v6_dockerfile(
+            expected_process,
+            dependency["baseImageDigest"],
+        )
+        expected_build = {
+            "baseImageDigest": dependency["baseImageDigest"],
+            "contextManifestSha256": verify_nitro_tee.sha256_json(
+                context_payload
+            ),
+            "dependencyRole": dependency_role,
+            "dockerfile": dockerfile,
+            "dockerfileSha256": verify_nitro_tee.sha256(
+                dockerfile.encode("ascii")
+            ),
+            "network": "none",
+            "platform": {"architecture": "amd64", "os": "linux"},
+            "sourceDateEpoch": 0,
+        }
+        require(
+            execution["build"] == expected_build,
+            f"{name} Dockerfile, context, dependency, platform, or no-network build contract was not rederived",
+        )
+        return execution
+
+    verified_lanes = {
+        name: validate_execution(
+            lanes[name],
+            name=name,
+            npm_companion=False,
+        )
+        for name in verify_nitro_tee.LANE_ORDER
+    }
+    npm_plan = validate_execution(
+        plan.get("npmCompanion"),
+        name="npm-publish-companion",
+        npm_companion=True,
+    )
+    expected_companions = {
+        "npmPublish": {
+            "imageRole": "npm-publish-companion",
+            "inputProtocol": (
+                "one-canonical-json-frame-on-stdin-no-generic-command"
+            ),
+            "isolation": npm_plan["isolation"],
+            "network": npm_plan["network"],
+            "npmVersion": "11.8.0",
+            "operation": "npm.publish.fixture",
+            "operationCount": 2,
+            "plan": npm_plan,
+            "retryEquality": {
+                "canonicalHttpRequestBytes": "identical",
+                "operationInputBytes": "identical",
+                "rawHttpRequestBytes": "different-only-by-npm-session",
+                "requestBodyBytes": "identical",
+            },
+        }
+    }
+    require(
+        candidate.get("companions") == expected_companions,
+        "Candidate npm companion behavior differs from the fixed v6 protocol",
+    )
+    semantic_contract = {
+        "apiVersion": "serverware.manifestV6SemanticExecutionContract/v1",
+        "imageOrder": list(verify_nitro_tee.IMAGE_ORDER),
+        "laneOrder": list(verify_nitro_tee.LANE_ORDER),
+        "lanes": verified_lanes,
+        "npmCompanion": npm_plan,
+        "securityProfiles": {
+            "apparmorSha256": expected_apparmor_sha256,
+            "seccompSha256": expected_seccomp_sha256,
+        },
+    }
+    semantic_contract_sha256 = verify_nitro_tee.sha256_json(
+        semantic_contract
+    )
+    return {
+        "commandContractSha256": semantic_contract_sha256,
+        "semanticContractSha256": semantic_contract_sha256,
+        "dependencyManifestFileSha256": verify_nitro_tee.sha256(
+            verify_nitro_tee.canonical_json_bytes(dependencies) + b"\n"
+        ),
+        "dependencyManifestPayloadSha256": dependencies["manifestSha256"],
+        "planSha256": plan["planSha256"],
+        "sourceClosureSha256": plan["sourceSnapshot"][
+            "sourceClosureSha256"
+        ],
+        "sourceFilesSha256": verify_nitro_tee.sha256_json(
+            {
+                **{
+                    name: verified_lanes[name]["sourceFiles"]
+                    for name in verify_nitro_tee.LANE_ORDER
+                },
+                "npm-publish-companion": npm_plan["sourceFiles"],
+            }
+        ),
+        "installedSourceFilesSha256": verify_nitro_tee.sha256_json(
+            {
+                **{
+                    name: verified_lanes[name]["installedSourceFiles"]
+                    for name in verify_nitro_tee.LANE_ORDER
+                },
+                "npm-publish-companion": npm_plan[
+                    "installedSourceFiles"
+                ],
+            }
+        ),
+    }
+
+
+def verify_final_v6_watchdog_and_builder_grammar(
+    *,
+    candidate: dict[str, Any],
+    watchdog: dict[str, Any],
+    builders: Any,
+    execution: dict[str, Any],
+) -> dict[str, Any]:
+    continuity = candidate["buildContinuity"]
+    plan = continuity["buildPlan"]
+    build_bundle = verify_nitro_tee.exact_keys(
+        continuity["buildBundle"],
+        {
+            "apiVersion",
+            "buildLeaseId",
+            "bundleSha256",
+            "candidateRequestSha256",
+            "images",
+            "planSha256",
+        },
+        "Candidate OCI build bundle",
+    )
+    require(
+        build_bundle["apiVersion"] == "serverware.ociBuildBundle/v2"
+        and build_bundle["planSha256"] == plan["planSha256"]
+        and isinstance(build_bundle["images"], dict)
+        and list(build_bundle["images"]) == list(verify_nitro_tee.IMAGE_ORDER),
+        "Candidate OCI build bundle inventory or plan binding mismatch",
+    )
+    payload = verify_nitro_tee.exact_keys(
+        watchdog.get("payload"),
+        {
+            "bootId",
+            "buildBundleSha256",
+            "candidateRequest",
+            "candidateRequestSha256",
+            "daemonIdentity",
+            "daemonIdentitySha256",
+            "eventHeadSha256",
+            "events",
+            "lease",
+            "planSha256",
+            "request",
+            "requestSha256",
+            "serviceIdentity",
+            "serviceIdentitySha256",
+        },
+        "build-watchdog payload",
+    )
+    lease = verify_nitro_tee.exact_keys(
+        payload["lease"],
+        {"capabilitySha256", "challengeSha256", "id"},
+        "build-watchdog lease",
+    )
+    require(
+        lease["id"] == build_bundle["buildLeaseId"],
+        "build-watchdog lease differs from the exact build bundle",
+    )
+    source_snapshot = plan["sourceSnapshot"]
+    output_identities = verify_nitro_tee.candidate_image_identities(candidate)
+    output_identities_sha256 = verify_nitro_tee.sha256_json(output_identities)
+    candidate_request = {
+        "dependencyBundleSha256": continuity["dependencyBundle"][
+            "manifestSha256"
+        ],
+        "imageRoles": list(verify_nitro_tee.IMAGE_ORDER),
+        "network": "none",
+        "outputIdentitiesSha256": output_identities_sha256,
+        "planSha256": plan["planSha256"],
+        "platform": {"architecture": "amd64", "os": "linux"},
+        "sourceClosureSha256": source_snapshot["sourceClosureSha256"],
+        "sourceEvidence": source_snapshot["sourceEvidence"],
+        "sourceEvidenceSha256": source_snapshot["sourceEvidenceSha256"],
+        "sourceGitInventoryPayloadSha256": source_snapshot[
+            "sourceGitInventoryPayloadSha256"
+        ],
+        "sourceManifestFileSha256": source_snapshot[
+            "sourceManifestFileSha256"
+        ],
+        "sourceSelectionManifestFileSha256": source_snapshot[
+            "sourceSelectionManifestFileSha256"
+        ],
+        "sourceSelectionManifestPayloadSha256": source_snapshot[
+            "sourceSelectionManifestPayloadSha256"
+        ],
+        "sourceUntrackedApprovalPayloadSha256": source_snapshot[
+            "sourceUntrackedApprovalPayloadSha256"
+        ],
+    }
+    candidate_request_sha256 = verify_nitro_tee.sha256_json(candidate_request)
+    require(
+        payload["candidateRequest"] == candidate_request
+        and payload["candidateRequestSha256"] == candidate_request_sha256
+        and build_bundle["candidateRequestSha256"]
+        == candidate_request_sha256
+        and payload["planSha256"] == plan["planSha256"]
+        and payload["buildBundleSha256"] == build_bundle["bundleSha256"],
+        "build-watchdog did not rederive the exact source, dependency, plan, bundle, and output request",
+    )
+    watchdog_contract = plan["buildWatchdogContract"]
+    request = {
+        "buildBundleSha256": build_bundle["bundleSha256"],
+        "candidateRequestSha256": candidate_request_sha256,
+        "challengeSha256": lease["challengeSha256"],
+        "contractSha256": watchdog_contract["contractSha256"],
+        "leaseCapabilitySha256": lease["capabilitySha256"],
+        "leaseId": lease["id"],
+        "operation": "build-all-oci-v3",
+    }
+    request_sha256 = verify_nitro_tee.sha256_json(request)
+    require(
+        payload["request"] == request
+        and payload["requestSha256"] == request_sha256,
+        "build-watchdog request differs from the exact lease and contract request",
+    )
+    for identity_name, service_unit_field in (
+        ("serviceIdentity", "serviceUnit"),
+        ("daemonIdentity", "daemonServiceUnit"),
+    ):
+        identity = verify_nitro_tee.exact_keys(
+            payload[identity_name],
+            {
+                "bootId",
+                "cgroup",
+                "exeSha256",
+                "pid",
+                "pidStartTime",
+                "serviceUnit",
+            },
+            f"build-watchdog {identity_name}",
+        )
+        require(
+            identity["bootId"] == payload["bootId"]
+            and identity["serviceUnit"] == watchdog_contract[service_unit_field]
+            and isinstance(identity["cgroup"], str)
+            and identity["cgroup"].startswith("/")
+            and type(identity["pid"]) is int
+            and identity["pid"] > 0
+            and isinstance(identity["pidStartTime"], str)
+            and bool(identity["pidStartTime"])
+            and payload[identity_name + "Sha256"]
+            == verify_nitro_tee.sha256_json(identity),
+            f"build-watchdog {identity_name} is not exactly rederived",
+        )
+        verify_nitro_tee.require_sha256(
+            identity["exeSha256"],
+            f"build-watchdog {identity_name} executable",
+        )
+
+    resources: dict[tuple[str, str], dict[str, Any]] = {}
+    cleanup_log: list[dict[str, Any]] = []
+    event_types: list[str] = []
+    for record in payload["events"]:
+        event = record["event"]
+        event_type = event.get("type")
+        require(
+            isinstance(event_type, str),
+            "build-watchdog event type is invalid",
+        )
+        event_types.append(event_type)
+        if event_type == "resource-created":
+            resource = event["resource"]
+            key = (resource["kind"], resource["id"])
+            require(
+                key not in resources,
+                "build-watchdog resource identity is duplicated",
+            )
+            resources[key] = resource
+        elif event_type == "cleanup-action":
+            cleanup_log.append(
+                {
+                    "action": event["action"],
+                    "resource": event["resource"],
+                    "result": event["result"],
+                }
+            )
+    require(
+        event_types[0] == "lease-begin"
+        and event_types[-1] == "lease-finished"
+        and event_types.count("lease-begin") == 1
+        and event_types.count("cleanup-started") == 1
+        and event_types.count("lease-finished") == 1,
+        "build-watchdog lease phases are not exact",
+    )
+    cleanup_index = event_types.index("cleanup-started")
+    absence_indices = [
+        index
+        for index, event_type in enumerate(event_types)
+        if event_type == "daemon-inventory-absence"
+    ]
+    require(
+        absence_indices
+        == [
+            len(event_types) - 4,
+            len(event_types) - 3,
+            len(event_types) - 2,
+        ]
+        and cleanup_index < absence_indices[0]
+        and all(
+            event_type == "resource-created"
+            for event_type in event_types[1:cleanup_index]
+        )
+        and all(
+            event_type == "cleanup-action"
+            for event_type in event_types[
+                cleanup_index + 1 : absence_indices[0]
+            ]
+        ),
+        "build-watchdog cleanup must finish before exactly three terminal absence observations",
+    )
+    expected_cleanup: list[dict[str, Any]] = []
+    for key in sorted(resources):
+        resource = resources[key]
+        reference = {"id": resource["id"], "kind": resource["kind"]}
+        expected_cleanup.append(
+            {
+                "action": "inspect",
+                "resource": reference,
+                "result": "present-or-already-absent",
+            }
+        )
+        if resource["kind"] in {"builder", "container", "task"}:
+            expected_cleanup.append(
+                {
+                    "action": "kill",
+                    "resource": reference,
+                    "result": "killed-reaped-or-already-absent",
+                }
+            )
+        expected_cleanup.append(
+            {
+                "action": "remove",
+                "resource": reference,
+                "result": "removed-or-already-absent",
+            }
+        )
+    require(
+        cleanup_log == expected_cleanup,
+        "build-watchdog cleanup actions are not complete and exactly ordered",
+    )
+
+    require(
+        isinstance(builders, list) and len(builders) == 2,
+        "exactly two builder transcripts are required",
+    )
+    transcript_grammar_digests: list[str] = []
+    for index, wrapper in enumerate(builders):
+        role = ("builderA", "builderB")[index]
+        wrapper = verify_nitro_tee.exact_keys(
+            wrapper,
+            {"statement", "transcript"},
+            f"{role} raw builder evidence",
+        )
+        transcript = wrapper["transcript"]
+        statement_payload = wrapper["statement"]["payload"]
+        output_events = [
+            {
+                "ordinal": ordinal,
+                "outputSha256": verify_nitro_tee.sha256_json(
+                    transcript["imageOutputs"][image_role]
+                ),
+                "role": image_role,
+                "type": "output-measured",
+            }
+            for ordinal, image_role in enumerate(
+                verify_nitro_tee.IMAGE_ORDER,
+                start=1,
+            )
+        ]
+        expected_events = [
+            {
+                "builderId": transcript["builderId"],
+                "candidateManifestFileSha256": statement_payload[
+                    "candidateManifestFileSha256"
+                ],
+                "candidateManifestPayloadSha256": statement_payload[
+                    "candidateManifestPayloadSha256"
+                ],
+                "candidateImagesSha256": statement_payload[
+                    "imageOutputsSha256"
+                ],
+                "dependencyManifestFileSha256": execution[
+                    "dependencyManifestFileSha256"
+                ],
+                "dependencyManifestPayloadSha256": execution[
+                    "dependencyManifestPayloadSha256"
+                ],
+                "dependencyRoleClosuresSha256": transcript["dependencies"][
+                    "roleClosuresSha256"
+                ],
+                "gitInventoryPayloadSha256": transcript["source"][
+                    "gitInventoryPayloadSha256"
+                ],
+                "invocationId": transcript["invocationId"],
+                "planSha256": execution["planSha256"],
+                "sourceClosureSha256": execution["sourceClosureSha256"],
+                "sourceInputManifestFileSha256": transcript["source"][
+                    "sourceInputManifestFileSha256"
+                ],
+                "sourceInputManifestPayloadSha256": transcript["source"][
+                    "sourceInputManifestPayloadSha256"
+                ],
+                "startedAtUnix": transcript["startedAtUnix"],
+                "type": "build-started",
+                "untrackedApprovalPayloadSha256": transcript["source"][
+                    "untrackedApprovalPayloadSha256"
+                ],
+            },
+            {
+                "commandContractSha256": execution[
+                    "commandContractSha256"
+                ],
+                "type": "command-measured",
+            },
+            {
+                "environmentSha256": transcript["sandbox"][
+                    "environmentSha256"
+                ],
+                "type": "environment-measured",
+            },
+            {
+                "sandboxSha256": verify_nitro_tee.sha256_json(
+                    transcript["sandbox"]
+                ),
+                "type": "sandbox-measured",
+            },
+            {
+                "networkSha256": verify_nitro_tee.sha256_json(
+                    {"mode": "none", "observedEndpoints": []}
+                ),
+                "type": "network-measured",
+            },
+            *output_events,
+            {
+                "exitCode": 0,
+                "success": True,
+                "type": "process-exited",
+            },
+            {
+                "completedAtUnix": transcript["completedAtUnix"],
+                "imageOutputsSha256": verify_nitro_tee.sha256_json(
+                    transcript["imageOutputs"]
+                ),
+                "type": "build-completed",
+            },
+        ]
+        actual_events = [record["event"] for record in transcript["events"]]
+        require(
+            actual_events == expected_events,
+            f"{role} transcript does not use the exact measured start, command, environment, sandbox, no-network, outputs, success-exit, completion grammar",
+        )
+        require(
+            statement_payload["environmentSha256"]
+            == transcript["sandbox"]["environmentSha256"]
+            and statement_payload["imageOutputsSha256"]
+            == verify_nitro_tee.sha256_json(transcript["imageOutputs"])
+            and statement_payload["completionIdentity"]
+            == transcript["completionIdentity"]
+            and statement_payload["completionIdentitySha256"]
+            == transcript["completionIdentitySha256"]
+            == verify_nitro_tee.sha256_json(
+                statement_payload["completionIdentity"]
+            ),
+            f"{role} statement crossed transcript environment or output identities",
+        )
+        transcript_grammar_digests.append(
+            verify_nitro_tee.sha256_json(actual_events)
+        )
+    return {
+        "builderEventGrammarSha256": verify_nitro_tee.sha256_json(
+            transcript_grammar_digests
+        ),
+        "candidateRequestSha256": candidate_request_sha256,
+        "outputIdentitiesSha256": output_identities_sha256,
+        "requestSha256": request_sha256,
+        "watchdogEventOrderSha256": verify_nitro_tee.sha256_json(
+            event_types
+        ),
+    }
+
+
+def verify_final_v6_promotion_acceptance(
+    *,
+    candidate: dict[str, Any],
+    promoted_manifest: dict[str, Any],
+) -> dict[str, Any]:
+    promotion = verify_nitro_tee.exact_keys(
+        promoted_manifest["promotion"],
+        {
+            "acceptanceSha256",
+            "apiVersion",
+            "candidatePromotionContractSha256",
+        },
+        "promoted Manifest v6 acceptance",
+    )
+    canonical_payload = {
+        "apiVersion": verify_nitro_tee.PROMOTION_ACCEPTANCE_VERSION,
+        "candidatePromotionContractSha256": candidate[
+            "promotionContract"
+        ]["contractSha256"],
+    }
+    acceptance_sha256 = verify_nitro_tee.sha256_json(canonical_payload)
+    require(
+        promotion
+        == {
+            **canonical_payload,
+            "acceptanceSha256": acceptance_sha256,
+        },
+        "promotion acceptance is not the single canonical payload used by the public verifier",
+    )
+    inspection_digests: dict[str, str] = {}
+    for role in verify_nitro_tee.IMAGE_ORDER:
+        imported = promoted_manifest["images"][role]
+        inspection_digests[role] = verify_nitro_tee.require_sha256(
+            imported["independentInspectionSha256"],
+            f"{role} independent promotion inspection",
+        )
+    return {
+        "acceptanceSha256": acceptance_sha256,
+        "canonicalPayload": canonical_payload,
+        "canonicalPayloadSha256": acceptance_sha256,
+        "imageMappingsSha256": verify_nitro_tee.sha256_json(
+            promoted_manifest["imageMappings"]
+        ),
+        "inspectionInventorySha256": verify_nitro_tee.sha256_json(
+            inspection_digests
+        ),
+    }
+
+
+def verify_final_v6_candidate_to_eif(
+    document: dict[str, Any],
+    raw: bytes,
+    *,
+    public_key: Ed25519PublicKey,
+    public_key_id: str,
+    public_key_file_sha256: str,
+    candidate: dict[str, Any],
+    candidate_raw: bytes,
+    source: dict[str, Any],
+    source_raw: bytes,
+    watchdog: dict[str, Any],
+    watchdog_raw: bytes,
+    promotion_receipt: dict[str, Any],
+    promotion_receipt_raw: bytes,
+    promoted_manifest: dict[str, Any],
+    builders: list[dict[str, Any]],
+    expectations: dict[str, Any],
+    trust_key_ids: dict[str, str],
+) -> dict[str, Any]:
+    payload, measured_file_sha256 = verify_nitro_tee.verify_existing_envelope(
+        document,
+        api_version=MANIFEST_V6_EIF_BUILD_API_VERSION,
+        domain=MANIFEST_V6_EIF_BUILD_SIGNATURE_DOMAIN,
+        key=public_key,
+        key_id=public_key_id,
+        key_file_sha256=public_key_file_sha256,
+        raw_key_sha256=verify_nitro_tee.ed25519_raw_key_id(public_key),
+        label="Manifest v6 candidate-to-EIF build statement",
+    )
+    require(
+        measured_file_sha256 == verify_nitro_tee.sha256(raw),
+        "candidate-to-EIF statement canonical file digest mismatch",
+    )
+    payload = verify_nitro_tee.exact_keys(
+        payload,
+        {
+            "builderStatementsSha256",
+            "candidateManifestFileSha256",
+            "candidateManifestPayloadSha256",
+            "completionIdentity",
+            "completionIdentitySha256",
+            "dependencyClosureSha256",
+            "eifFileSha384",
+            "importedImageMappingsSha256",
+            "legacyDockerNsmAccepted",
+            "pcrs",
+            "pipeline",
+            "promotionReceiptFileSha256",
+            "promotionReceiptPayloadSha256",
+            "releaseGeneration",
+            "rollbackEpoch",
+            "sourceClosureSha256",
+            "sourceInputManifestFileSha256",
+            "sourceInputManifestPayloadSha256",
+            "watchdogReceiptFileSha256",
+            "watchdogReceiptPayloadSha256",
+        },
+        "Manifest v6 candidate-to-EIF payload",
+    )
+    require(
+        payload["pipeline"] == MANIFEST_V6_PIPELINE
+        and payload["legacyDockerNsmAccepted"] is False,
+        "candidate-to-EIF statement selected or accepted a legacy pipeline",
+    )
+    verify_nitro_tee.require_uint(
+        payload["releaseGeneration"],
+        "candidate-to-EIF release generation",
+    )
+    verify_nitro_tee.require_uint(
+        payload["rollbackEpoch"],
+        "candidate-to-EIF rollback epoch",
+    )
+    dependency_bundles = candidate["buildContinuity"][
+        "dependencyBundle"
+    ]["bundles"]
+    dependency_role_closures = {
+        role: dependency_bundles[role]["closureSha256"]
+        for role in sorted(dependency_bundles)
+    }
+    builder_summaries: dict[str, dict[str, Any]] = {}
+    for side, trust_role, wrapper in zip(
+        ("left", "right"),
+        ("builderA", "builderB"),
+        builders,
+        strict=True,
+    ):
+        wrapper = verify_nitro_tee.exact_keys(
+            wrapper,
+            {"statement", "transcript"},
+            f"{side} candidate-to-EIF builder evidence",
+        )
+        statement = wrapper["statement"]
+        transcript = wrapper["transcript"]
+        statement_payload = statement["payload"]
+        builder_summaries[side] = {
+            "file_sha256": verify_nitro_tee.sha256(
+                verify_nitro_tee.canonical_json_bytes(statement) + b"\n"
+            ),
+            "payload_sha256": statement["payloadSha256"],
+            "signing_key_id": trust_key_ids[trust_role],
+            "builder_id": statement_payload["builderId"],
+            "operator_id": statement_payload["operatorId"],
+            "invocation_id": statement_payload["invocationId"],
+            "transcript_file_sha256": verify_nitro_tee.sha256(
+                verify_nitro_tee.canonical_json_bytes(transcript) + b"\n"
+            ),
+            "transcript_payload_sha256": transcript["transcriptSha256"],
+            "completion_identity": statement_payload[
+                "completionIdentity"
+            ],
+            "completion_identity_sha256": statement_payload[
+                "completionIdentitySha256"
+            ],
+            "issued_at_unix": statement_payload["issuedAtUnix"],
+            "expires_at_unix": statement_payload["expiresAtUnix"],
+        }
+    builders_sha256 = verify_nitro_tee.sha256_json(builder_summaries)
+    expected_bindings = {
+        "builderStatementsSha256": builders_sha256,
+        "candidateManifestFileSha256": verify_nitro_tee.sha256(
+            candidate_raw
+        ),
+        "candidateManifestPayloadSha256": candidate[
+            "candidateManifestPayloadSha256"
+        ],
+        "completionIdentity": expectations["completionIdentity"],
+        "completionIdentitySha256": expectations[
+            "completionIdentitySha256"
+        ],
+        "dependencyClosureSha256": verify_nitro_tee.sha256_json(
+            dependency_role_closures
+        ),
+        "eifFileSha384": expectations["eifSha384"],
+        "importedImageMappingsSha256": verify_nitro_tee.sha256_json(
+            promoted_manifest["imageMappings"]
+        ),
+        "pcrs": expectations["pcrs"],
+        "promotionReceiptFileSha256": verify_nitro_tee.sha256(
+            promotion_receipt_raw
+        ),
+        "promotionReceiptPayloadSha256": promotion_receipt[
+            "payloadSha256"
+        ],
+        "releaseGeneration": expectations["releaseGeneration"],
+        "rollbackEpoch": expectations["rollbackEpoch"],
+        "sourceClosureSha256": candidate["sourceSnapshot"][
+            "sourceClosureSha256"
+        ],
+        "sourceInputManifestFileSha256": verify_nitro_tee.sha256(
+            source_raw
+        ),
+        "sourceInputManifestPayloadSha256": source["payloadSha256"],
+        "watchdogReceiptFileSha256": verify_nitro_tee.sha256(
+            watchdog_raw
+        ),
+        "watchdogReceiptPayloadSha256": watchdog["payloadSha256"],
+    }
+    for field, expected in expected_bindings.items():
+        require(
+            payload[field] == expected,
+            f"candidate-to-EIF {field} crossed candidate, source, dependencies, promotion, imported images, or measured EIF state",
+        )
+    require(
+        payload["pcrs"]["PCR0"] == payload["eifFileSha384"],
+        "candidate-to-EIF statement does not map EIF digest exactly to PCR0",
+    )
+    require(
+        measured_file_sha256
+        == expectations["manifestV6EifBuildStatementFileSha256"]
+        and document["payloadSha256"]
+        == expectations["manifestV6EifBuildStatementPayloadSha256"],
+        "candidate-to-EIF statement differs from the independently pinned file or payload digest",
+    )
+    return {
+        "fileSha256": measured_file_sha256,
+        "payloadSha256": document["payloadSha256"],
+        "signingKeyId": public_key_id,
+        "signingKeyFileSha256": public_key_file_sha256,
+        "builderStatementsSha256": builders_sha256,
+        "completionIdentity": payload["completionIdentity"],
+        "completionIdentitySha256": payload[
+            "completionIdentitySha256"
+        ],
+        "dependencyClosureSha256": payload["dependencyClosureSha256"],
+        "importedImageMappingsSha256": payload[
+            "importedImageMappingsSha256"
+        ],
+        "eifSha384": payload["eifFileSha384"],
+        "pcrs": payload["pcrs"],
+        "releaseGeneration": payload["releaseGeneration"],
+        "rollbackEpoch": payload["rollbackEpoch"],
+    }
+
+
+def verify_final_v6_public_handoff(
+    *,
+    bundle: dict[str, Any],
+    protected_state: dict[str, Any],
+    protected_checkpoint: dict[str, Any],
+    trust_bundle_sha256: str,
+    trust_root_pin_id: str,
+    candidate_to_eif_document: dict[str, Any],
+    candidate_to_eif_raw: bytes,
+) -> dict[str, Any]:
+    embedded_eif_document, embedded_eif_raw = (
+        verify_nitro_tee.decode_canonical_json_file_b64(
+            bundle.get("candidateToEifBuildStatementFileB64"),
+            "public candidate-to-EIF build statement",
+        )
+    )
+    require(
+        embedded_eif_document == candidate_to_eif_document
+        and embedded_eif_raw == candidate_to_eif_raw,
+        "public bundle candidate-to-EIF artifact differs from the independently pinned final input",
+    )
+    runtime_custody, _ = verify_nitro_tee.decode_canonical_json_file_b64(
+        bundle["runtimeKeyCustodyFileB64"],
+        "public runtime key-custody file",
+    )
+    require(
+        runtime_custody.get("apiVersion")
+        == FINAL_V6_RUNTIME_CUSTODY_API_VERSION,
+        "public bundle uses legacy runtime custody rather than custody v3",
+    )
+    tls_evidence = bundle["tlsEvidence"]
+    trusted_scope = tls_evidence.get("trustedScope")
+    require(
+        tls_evidence.get("apiVersion")
+        == "serverware.liveEnclaveTlsEvidence/v2"
+        and isinstance(trusted_scope, dict)
+        and trusted_scope.get("apiVersion")
+        == FINAL_V6_TLS_SCOPE_API_VERSION,
+        "public bundle does not carry TLS evidence v2 and TLS scope v2",
+    )
+    response_proof = bundle["responseProof"]
+    response_bytes = verify_nitro_tee.b64url_decode(
+        response_proof.get("responseBodyB64"),
+        "exact HTTP response body",
+        max_bytes=verify_nitro_tee.MAX_RESPONSE_BYTES,
+    )
+    statement = verify_nitro_tee.exact_keys(
+        response_proof.get("statement"),
+        {
+            "apiVersion",
+            "bodySha256",
+            "challengeId",
+            "challengeSha256",
+            "httpResponse",
+            "issuedAtUnix",
+            "keyGenerations",
+            "policy",
+            "quoteSha256",
+            "release",
+            "requestSha256",
+            "responseSigningKeyId",
+            "tlsBindingSha256",
+        },
+        "attestation response statement v2",
+    )
+    require(
+        statement["apiVersion"]
+        == FINAL_V6_RESPONSE_STATEMENT_API_VERSION,
+        "public bundle does not carry response statement v2",
+    )
+    http_response = verify_nitro_tee.exact_keys(
+        statement.get("httpResponse"),
+        {
+            "apiVersion",
+            "bodyLength",
+            "bodySha256",
+            "coreHeaders",
+            "detachedProofHeaders",
+            "ordinaryHostTlsAccepted",
+            "status",
+            "transport",
+        },
+        "exact attestation HTTP response envelope",
+    )
+    expected_header_names = [
+        "cache-control",
+        "pragma",
+        "content-type",
+        "content-length",
+        "x-serverware-attestation-body-sha256",
+        "x-serverware-attestation-key-id",
+        "x-serverware-attestation-request-sha256",
+        "x-serverware-attestation-tls-binding-sha256",
+        "x-serverware-attestation-quote-sha256",
+    ]
+    headers = http_response["coreHeaders"]
+    expected_headers = [
+        {"name": "cache-control", "value": "no-store"},
+        {"name": "pragma", "value": "no-cache"},
+        {"name": "content-type", "value": "application/json"},
+        {"name": "content-length", "value": str(len(response_bytes))},
+        {
+            "name": "x-serverware-attestation-body-sha256",
+            "value": verify_nitro_tee.sha256(response_bytes),
+        },
+        {
+            "name": "x-serverware-attestation-key-id",
+            "value": statement["responseSigningKeyId"],
+        },
+        {
+            "name": "x-serverware-attestation-request-sha256",
+            "value": statement["requestSha256"],
+        },
+        {
+            "name": "x-serverware-attestation-tls-binding-sha256",
+            "value": statement["tlsBindingSha256"],
+        },
+        {
+            "name": "x-serverware-attestation-quote-sha256",
+            "value": statement["quoteSha256"],
+        },
+    ]
+    expected_detached_headers = {
+        "statement": (
+            "x-serverware-attestation-statement-b64:"
+            "base64url(canonical-statement)"
+        ),
+        "statementSha256": (
+            "x-serverware-attestation-statement-sha256:"
+            "sha256(canonical-statement)"
+        ),
+        "signature": (
+            "x-serverware-attestation-signature:"
+            "ed25519(canonical-statement)"
+        ),
+    }
+    require(
+        http_response["apiVersion"] == FINAL_V6_HTTP_RESPONSE_API_VERSION
+        and http_response["status"] == 200
+        and http_response["ordinaryHostTlsAccepted"] is False
+        and http_response["transport"]
+        == "enclave-owned-tls-stack-with-authenticated-asgi-extension"
+        and http_response["bodyLength"] == len(response_bytes)
+        and http_response["bodySha256"]
+        == verify_nitro_tee.sha256(response_bytes)
+        and statement["bodySha256"] == http_response["bodySha256"]
+        and headers == expected_headers
+        and [item["name"] for item in headers] == expected_header_names
+        and http_response["detachedProofHeaders"]
+        == expected_detached_headers,
+        "response statement does not bind the exact status, ordered headers, and body bytes returned by the enclave TLS stack",
+    )
+    return {
+        "httpResponseEnvelopeSha256": verify_nitro_tee.sha256_json(
+            {
+                "bodySha256": verify_nitro_tee.sha256(response_bytes),
+                "httpResponse": http_response,
+                "statementSha256": verify_nitro_tee.sha256_json(statement),
+            }
+        ),
+        "runtimeCustodyApiVersion": FINAL_V6_RUNTIME_CUSTODY_API_VERSION,
+        "tlsScopeApiVersion": FINAL_V6_TLS_SCOPE_API_VERSION,
+        "responseStatementApiVersion": (
+            FINAL_V6_RESPONSE_STATEMENT_API_VERSION
+        ),
+        "protectedPriorClientStateEnvelopeSha256": (
+            verify_nitro_tee.sha256(
+                verify_nitro_tee.canonical_json_bytes(protected_state)
+                + b"\n"
+            )
+        ),
+        "protectedPriorClientStateCheckpointSha256": (
+            verify_nitro_tee.sha256(
+                verify_nitro_tee.canonical_json_bytes(
+                    protected_checkpoint
+                )
+                + b"\n"
+            )
+        ),
+        "trustRootBundleSha256": trust_bundle_sha256,
+        "trustRootPinId": trust_root_pin_id,
+        "candidateToEifBuildStatementFileSha256": (
+            verify_nitro_tee.sha256(candidate_to_eif_raw)
+        ),
+    }
+
+
+def verify_final_v6_state_commit(
+    *,
+    commit_receipt: dict[str, Any],
+    commit_receipt_raw: bytes,
+    current_head_authorization: dict[str, Any],
+    current_head_authorization_raw: bytes,
+    current_head_verifier_nonce: bytes,
+    current_head_redemption_receipt: dict[str, Any],
+    current_head_redemption_receipt_raw: bytes,
+    current_head_redemption_verifier_nonce: bytes,
+    pending_result: dict[str, Any],
+    prior_state: dict[str, Any],
+    trust: dict[str, Any],
+    challenge_consumption_sha256: str,
+    now: int,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    next_state = verify_nitro_tee.load_client_state(
+        pending_result.get("nextClientState")
+    )
+    transition = pending_result.get("stateTransition")
+    expected_transition = {
+        "oldStateSha256": prior_state["stateSha256"],
+        "newStateSha256": next_state["stateSha256"],
+    }
+    expected_transition["transitionSha256"] = (
+        verify_nitro_tee.sha256_json(expected_transition)
+    )
+    require(
+        "ok" not in pending_result
+        and pending_result.get("okForAction") is False
+        and pending_result.get("status") == "pending-state-commit"
+        and pending_result.get("stateCommitRequired")
+        == (
+            "persist nextClientState with durable compare-and-swap before "
+            "accepting or acting on the response"
+        )
+        and transition == expected_transition
+        and next_state["challengeConsumptionSha256"]
+        == challenge_consumption_sha256,
+        "public verifier did not return the exact non-actionable pending-state-commit transition",
+    )
+    witness = pending_result.get("witness")
+    require(
+        isinstance(witness, dict)
+        and next_state["checkpointSha256"] == witness["checkpointSha256"]
+        and next_state["releaseGeneration"]
+        == witness["releaseGeneration"]
+        and next_state["rollbackEpoch"] == witness["rollbackEpoch"]
+        and next_state["rootHash"] == witness["rootHash"]
+        and next_state["sequence"] == witness["sequence"]
+        and next_state["treeSize"] == witness["treeSize"],
+        "pending next state does not exactly equal the verified current witness high-water",
+    )
+    require(
+        next_state["sequence"] > prior_state["sequence"]
+        and next_state["treeSize"] > prior_state["treeSize"]
+        and next_state["releaseGeneration"]
+        >= prior_state["releaseGeneration"]
+        and next_state["rollbackEpoch"] >= prior_state["rollbackEpoch"],
+        "pending state transition does not monotonically advance the rollback-resistant high-water",
+    )
+    post_cas_result = verify_nitro_tee.finalize_state_commit(
+        pending_result,
+        commit_receipt,
+        trust=trust,
+        now=now,
+    )
+    require(
+        "ok" not in post_cas_result
+        and post_cas_result.get("okForAction") is False
+        and post_cas_result.get("status")
+        == "pending-current-head-authorization"
+        and "stateCommitRequired" not in post_cas_result
+        and post_cas_result.get("stateCommitPhase")
+        == "committed-awaiting-current-head-authorization"
+        and post_cas_result.get("currentHeadAuthorizationRequired")
+        and post_cas_result.get("nextClientState") == next_state
+        and post_cas_result.get("stateTransition") == expected_transition
+        and post_cas_result.get("stateCommitReceiptSha256")
+        == verify_nitro_tee.sha256(commit_receipt_raw),
+        "public verifier treated the CAS receipt as current-head authority",
+    )
+    authorized_result = verify_nitro_tee.authorize_current_head(
+        post_cas_result,
+        current_head_authorization,
+        verifier_nonce=current_head_verifier_nonce,
+        trust=trust,
+        now=now,
+    )
+    require(
+        "ok" not in authorized_result
+        and authorized_result.get("okForAction") is False
+        and authorized_result.get("status")
+        == "pending-current-head-redemption"
+        and authorized_result.get("currentHeadAuthorizationRequired")
+        is False
+        and authorized_result.get("currentHeadRedemptionRequired")
+        and authorized_result.get("currentHeadAuthorizationFileSha256")
+        == verify_nitro_tee.sha256(current_head_authorization_raw)
+        and authorized_result.get("currentHeadVerifierNonceSha256")
+        == verify_nitro_tee.sha256(current_head_verifier_nonce),
+        "public verifier treated reservation as redemption or crossed the fresh authorization",
+    )
+    verified_redemption_result = (
+        verify_nitro_tee.finalize_current_head_redemption(
+            authorized_result,
+            current_head_redemption_receipt,
+            verifier_nonce=current_head_redemption_verifier_nonce,
+            trust=trust,
+            now=now,
+        )
+    )
+    require(
+        verified_redemption_result.get("verificationOk") is True
+        and verified_redemption_result.get("finalCompletionVerified")
+        is True
+        and verified_redemption_result.get("actionAuthorization") is None
+        and verified_redemption_result.get("okForAction") is False
+        and "ok" not in verified_redemption_result
+        and "finalCompletion" not in verified_redemption_result
+        and "stateCommitRequired" not in verified_redemption_result
+        and verified_redemption_result.get("status")
+        == "redemption-verified-non-actionable"
+        and verified_redemption_result.get(
+            "currentHeadRedemptionVerified"
+        )
+        is True
+        and verified_redemption_result.get(
+            "currentHeadRedemptionRequired"
+        )
+        is False
+        and verified_redemption_result.get(
+            "currentHeadRedemptionReceiptFileSha256"
+        )
+        == verify_nitro_tee.sha256(
+            current_head_redemption_receipt_raw
+        )
+        and verified_redemption_result.get(
+            "currentHeadRedemptionVerifierNonceSha256"
+        )
+        == verify_nitro_tee.sha256(
+            current_head_redemption_verifier_nonce
+        ),
+        "public verifier did not verify the exact atomic current-head redemption as non-actionable evidence",
+    )
+    summary = {
+        "apiVersion": FINAL_V6_STATE_COMMIT_API_VERSION,
+        "status": "redemption-verified-non-actionable",
+        "actionable": False,
+        "redemptionVerified": True,
+        "commitId": verified_redemption_result["stateCommitId"],
+        "storeId": verified_redemption_result["stateStoreId"],
+        "signingKeyId": trust["keyIds"]["stateCommit"],
+        "receiptFileSha256": verified_redemption_result[
+            "stateCommitReceiptSha256"
+        ],
+        "receiptPayloadSha256": commit_receipt["payloadSha256"],
+        "priorStateSha256": prior_state["stateSha256"],
+        "currentStateSha256": next_state["stateSha256"],
+        "transitionSha256": expected_transition["transitionSha256"],
+        "challengeConsumptionSha256": challenge_consumption_sha256,
+        "currentHeadAuthorizationId": verified_redemption_result[
+            "currentHeadAuthorizationId"
+        ],
+        "currentHeadAuthorizationFileSha256": verified_redemption_result[
+            "currentHeadAuthorizationFileSha256"
+        ],
+        "currentHeadSha256": verified_redemption_result[
+            "currentHeadSha256"
+        ],
+        "currentHeadVerifierNonceSha256": verified_redemption_result[
+            "currentHeadVerifierNonceSha256"
+        ],
+        "currentHeadReservationId": verified_redemption_result[
+            "currentHeadReservationId"
+        ],
+        "currentHeadRedemptionId": verified_redemption_result[
+            "currentHeadRedemptionId"
+        ],
+        "currentHeadRedemptionReceiptFileSha256": verified_redemption_result[
+            "currentHeadRedemptionReceiptFileSha256"
+        ],
+        "currentHeadRedemptionReceiptIdentitySha256": (
+            verified_redemption_result[
+                "currentHeadRedemptionReceiptIdentitySha256"
+            ]
+        ),
+        "currentHeadRedemptionVerifierNonceSha256": verified_redemption_result[
+            "currentHeadRedemptionVerifierNonceSha256"
+        ],
+        "currentFinalHeadSha256": verified_redemption_result[
+            "currentFinalHeadSha256"
+        ],
+        "currentHeadOneUseSequence": verified_redemption_result[
+            "currentHeadOneUseSequence"
+        ],
+        "rollbackResistanceBoundary": verified_redemption_result[
+            "rollbackResistanceBoundary"
+        ],
+    }
+    return verified_redemption_result, summary
+
+
+def _removed_final_shaped_v6_compatibility_path(
+    bundle_document: dict[str, Any],
+) -> None:
+    raise ValueError(
+        "final-shaped completionProof/v6 and public_verifier_bridge are obsolete and rejected"
+    )
+    for field, label in (
+        ("sourceInputManifestFileB64", "source-input manifest file"),
+        ("candidateManifestFileB64", "Candidate Manifest v6 file"),
+        ("buildWatchdogReceiptFileB64", "build-watchdog receipt file"),
+        ("promotionReceiptFileB64", "promotion receipt file"),
+        ("promotedManifestFileB64", "promoted Manifest v6 file"),
+        ("productionIdentityFileB64", "production attestation identity file"),
+        ("runtimeStateFileB64", "production runtime state file"),
+        ("runtimeKeyCustodyFileB64", "runtime key-custody file"),
+    ):
+        embedded_document, _ = (
+            verify_nitro_tee.decode_canonical_json_file_b64(
+                bundle_document.get(field),
+                label,
+            )
+        )
+        validate_canonical_json_profile(embedded_document, label=label)
+    completion_proof, _ = verify_nitro_tee.decode_canonical_json_file_b64(
+        bundle_document.get("completionProofFileB64"),
+        "completionProof/v6 file",
+    )
+    validate_canonical_json_profile(
+        completion_proof,
+        label="completionProof/v6",
+    )
+    require(
+        "proof_path" not in completion_proof
+        and "integrity_metadata" not in completion_proof,
+        "Manifest v6 final proof must not bind local proof paths or legacy detached-file state",
+    )
+    require(
+        completion_proof.get("readiness_ok") is False
+        and completion_proof.get("readiness_only") is False
+        and completion_proof.get("verification_mode") == "final"
+        and completion_proof.get("result_scope") == "final-completion",
+        "Manifest v6 final proof crossed readiness semantics",
+    )
+    verify_nitro_tee.validate_non_actionable_final_result(
+        completion_proof,
+        label="Manifest v6 completion proof",
+    )
+    legacy_slots = (
+        "artifacts",
+        "authentication_artifacts",
+        "benchmark",
+        "bootstrap_launcher",
+        "current_completion_host",
+        "final_challenge_consumption",
+        "hardware_assurance_evidence",
+        "image_signatures",
+        "nitro_evidence_binding",
+        "nitro_kms_evidence",
+        "production_env_binding",
+        "production_host_preflight",
+        "production_images_build",
+        "production_images_published",
+        "production_proxy_response_proof",
+        "production_readiness",
+        "production_readiness_config",
+        "release_provenance",
+        "release_security_evidence",
+        "running_production_containers",
+    )
+    for field in legacy_slots:
+        expected = {
+            "apiVersion": "serverware.manifestV6LegacyCompatibilitySlot/v1",
+            "consumed": False,
+            "field": field,
+            "pipeline": MANIFEST_V6_PIPELINE,
+        }
+        require(
+            completion_proof.get(field) == expected,
+            f"Manifest v6 final proof {field} must be an exact inert compatibility slot",
+        )
+
+
+def verify_final_v6_witness_handoff(
+    *,
+    pending_public_result: dict[str, Any],
+    witness_payload: dict[str, Any],
+) -> dict[str, Any]:
+    inclusion = verify_nitro_tee.exact_keys(
+        witness_payload["inclusion"],
+        {
+            "leafIndex",
+            "leafSha256",
+            "proof",
+            "rootHash",
+            "treeSize",
+        },
+        "indexed witness inclusion",
+    )
+    leaf_index = verify_nitro_tee.require_uint(
+        inclusion["leafIndex"],
+        "witness inclusion leaf index",
+    )
+    verified_leaf_index = verify_nitro_tee.require_uint(
+        pending_public_result["witness"]["leafIndex"],
+        "verified witness leaf index",
+    )
+    tree_size = verify_nitro_tee.require_uint(
+        inclusion["treeSize"],
+        "witness inclusion tree size",
+    )
+    proof = inclusion["proof"]
+    require(
+        leaf_index < tree_size
+        and verified_leaf_index == leaf_index
+        and isinstance(proof, list)
+        and len(proof) <= 256
+        and all(
+            isinstance(step, str)
+            and SHA256_RE.fullmatch(step) is not None
+            for step in proof
+        ),
+        "witness inclusion handoff is not exact, indexed, and bounded",
+    )
+    release_leaf = {
+        "releaseGeneration": witness_payload["releaseGeneration"],
+        "releaseCoreSha256": witness_payload["releaseCoreSha256"],
+        "rollbackEpoch": witness_payload["rollbackEpoch"],
+    }
+    expected_leaf_sha256 = verify_nitro_tee.sha256(
+        b"\x00" + verify_nitro_tee.canonical_json_bytes(release_leaf)
+    )
+    require(
+        inclusion["leafSha256"] == expected_leaf_sha256
+        and inclusion["rootHash"] == witness_payload["rootHash"]
+        and tree_size == witness_payload["treeSize"],
+        "indexed witness inclusion crossed the exact release leaf or checkpoint",
+    )
+    verify_nitro_tee.verify_indexed_merkle_inclusion(
+        leaf_sha256=expected_leaf_sha256,
+        leaf_index=leaf_index,
+        tree_size=tree_size,
+        proof=proof,
+        root_sha256=inclusion["rootHash"],
+        label="final completion witness",
+    )
+    return {
+        "leafIndex": leaf_index,
+        "leafSha256": expected_leaf_sha256,
+        "rootHash": inclusion["rootHash"],
+        "treeSize": tree_size,
+    }
+
+
+def _removed_verify_manifest_v6_final_bridge_path(
+    args: argparse.Namespace,
+) -> None:
+    raise ValueError(
+        "final-shaped completionProof/v6 and public_verifier_bridge are obsolete and rejected"
+    )
+    required_inputs = {
+        "--public-nitro-evidence-bundle": args.public_nitro_evidence_bundle,
+        "--public-nitro-expectations": args.public_nitro_expectations,
+        "--public-nitro-trust-roots": args.public_nitro_trust_roots,
+        "--expected-public-nitro-trust-roots-sha256": (
+            args.expected_public_nitro_trust_roots_sha256
+        ),
+        "--public-nitro-trust-root-pin-id": (
+            args.public_nitro_trust_root_pin_id
+        ),
+        "--public-nitro-state-commit-receipt": (
+            args.public_nitro_state_commit_receipt
+        ),
+        "--public-nitro-current-head-authorization": (
+            args.public_nitro_current_head_authorization
+        ),
+        "--public-nitro-current-head-verifier-nonce": (
+            args.public_nitro_current_head_verifier_nonce
+        ),
+        "--public-nitro-current-head-redemption-receipt": (
+            args.public_nitro_current_head_redemption_receipt
+        ),
+        "--public-nitro-current-head-redemption-verifier-nonce": (
+            args.public_nitro_current_head_redemption_verifier_nonce
+        ),
+        "--manifest-v6-eif-build": args.manifest_v6_eif_build,
+        "--manifest-v6-eif-builder-public-key": (
+            args.manifest_v6_eif_builder_public_key
+        ),
+        "--expected-final-v6-apparmor-profile-sha256": (
+            args.expected_final_v6_apparmor_profile_sha256
+        ),
+        "--expected-final-v6-seccomp-profile-sha256": (
+            args.expected_final_v6_seccomp_profile_sha256
+        ),
+        "--protected-client-state": args.protected_client_state,
+        "--protected-client-state-public-key": (
+            args.protected_client_state_public_key
+        ),
+        "--expected-protected-client-state-public-key-id": (
+            args.expected_protected_client_state_public_key_id
+        ),
+        "--protected-client-state-checkpoint": (
+            args.protected_client_state_checkpoint
+        ),
+        "--protected-client-state-checkpoint-public-key": (
+            args.protected_client_state_checkpoint_public_key
+        ),
+        "--expected-protected-client-state-checkpoint-public-key-id": (
+            args.expected_protected_client_state_checkpoint_public_key_id
+        ),
+        "--public-nitro-challenge": args.public_nitro_challenge,
+    }
+    missing = [option for option, value in required_inputs.items() if not value]
+    require(
+        not missing,
+        "final Manifest v6 verification requires: " + ", ".join(missing),
+    )
+    forbidden_legacy_inputs = {
+        "--docker-executable": args.docker_executable,
+        "--docker-compose-plugin-executable": (
+            args.docker_compose_plugin_executable
+        ),
+        "--docker-unix-socket": args.docker_unix_socket,
+        "--docker-daemon-id": args.docker_daemon_id,
+        "--production-host-preflight-signing-public-key": (
+            args.production_host_preflight_signing_public_key
+        ),
+        "--production-host-preflight-signing-key-id": (
+            args.production_host_preflight_signing_key_id
+        ),
+        "--production-host-preflight-max-age-seconds": (
+            args.production_host_preflight_max_age_seconds
+        ),
+        "--hardware-assurance": args.hardware_assurance,
+        "--hardware-assurance-trusted-public-key": (
+            args.hardware_assurance_trusted_public_key
+        ),
+        "--hardware-assurance-trusted-public-key-id": (
+            args.hardware_assurance_trusted_public_key_id
+        ),
+        "--hardware-assurance-expected-challenge-nonce": (
+            args.hardware_assurance_expected_challenge_nonce
+        ),
+        "--hardware-assurance-expected-challenge-nonce-sha256": (
+            args.hardware_assurance_expected_challenge_nonce_sha256
+        ),
+        "--final-challenge-receipt": args.final_challenge_receipt,
+        "--final-challenge-authority-public-key": (
+            args.final_challenge_authority_public_key
+        ),
+        "--final-challenge-authority-public-key-id": (
+            args.final_challenge_authority_public_key_id
+        ),
+        "--final-challenge-authority-provider": (
+            args.final_challenge_authority_provider
+        ),
+        "--candidate-manifest-v6": args.candidate_manifest_v6,
+        "--source-input-manifest": args.source_input_manifest,
+        "--source-git-inventory-public-key": (
+            args.source_git_inventory_public_key
+        ),
+        "--source-untracked-approval-public-key": (
+            args.source_untracked_approval_public_key
+        ),
+        "--dependency-closure": args.dependency_closure,
+        "--build-watchdog-receipt": args.build_watchdog_receipt,
+        "--build-watchdog-public-key": args.build_watchdog_public_key,
+        "--promotion-receipt": args.promotion_receipt,
+        "--promotion-public-key": args.promotion_public_key,
+        "--builder-left-statement": args.builder_left_statement,
+        "--builder-left-transcript": args.builder_left_transcript,
+        "--builder-left-public-key": args.builder_left_public_key,
+        "--builder-right-statement": args.builder_right_statement,
+        "--builder-right-transcript": args.builder_right_transcript,
+        "--builder-right-public-key": args.builder_right_public_key,
+        "--promotion-acceptance-evidence": (
+            args.promotion_acceptance_evidence
+        ),
+        "--key-custody-evidence": args.key_custody_evidence,
+        "--key-custody-public-key": args.key_custody_public_key,
+        "--monotonic-witness": args.monotonic_witness,
+        "--monotonic-witness-public-key": (
+            args.monotonic_witness_public_key
+        ),
+        "--prior-witness-state": args.prior_witness_state,
+        "--completion-proof-authentication": (
+            args.completion_proof_authentication
+        ),
+        "--completion-authentication-public-key": (
+            args.completion_authentication_public_key
+        ),
+        "--completion-proof-checkpoint": args.completion_proof_checkpoint,
+        "--completion-checkpoint-public-key": (
+            args.completion_checkpoint_public_key
+        ),
+        "--control-plane-response-signing-public-key": (
+            args.control_plane_response_signing_public_key
+        ),
+        "--control-plane-response-signing-public-key-id": (
+            args.control_plane_response_signing_public_key_id
+        ),
+        "--proxy-response-proof": args.proxy_response_proof,
+        "--proxy-proof-contract": args.proxy_proof_contract,
+        "--proxy-stream-body": args.proxy_stream_body,
+        "--proxy-observation-body": args.proxy_observation_body,
+        "--proxy-proof-verifier-public-key": (
+            args.proxy_proof_verifier_public_key
+        ),
+        "--proxy-collector-public-key": args.proxy_collector_public_key,
+        "--proxy-server-instance-id": args.proxy_server_instance_id,
+        "--proxy-client-nonce": args.proxy_client_nonce,
+        "--proxy-client-request-digest": args.proxy_client_request_digest,
+        "--proxy-request-digest": args.proxy_request_digest,
+        "--proxy-operation-digest": args.proxy_operation_digest,
+        "--proxy-operation-context-digest": (
+            args.proxy_operation_context_digest
+        ),
+        "--proxy-tls-channel-binding": args.proxy_tls_channel_binding,
+        "--proxy-proof-max-age-seconds": args.proxy_proof_max_age_seconds,
+        "--p99-limit-ms": args.p99_limit_ms,
+        "--policy-bundle": args.policy_bundle,
+        "--policy-trusted-public-key": args.policy_trusted_public_key,
+        "--policy-identity-verification": args.policy_identity_verification,
+        "--policy-activation-verification": (
+            args.policy_activation_verification
+        ),
+        "--policy-activation-signature": args.policy_activation_signature,
+        "--policy-activation-trusted-public-key": (
+            args.policy_activation_trusted_public_key
+        ),
+        "--reproducible-build-verification": (
+            args.reproducible_build_verification
+        ),
+        "--reproducible-build-signature": args.reproducible_build_signature,
+        "--reproducible-build-trusted-public-key": (
+            args.reproducible_build_trusted_public_key
+        ),
+        "--release-provenance-trusted-public-key": (
+            args.release_provenance_trusted_public_key
+        ),
+        "--sigstore-trusted-public-key": args.sigstore_trusted_public_key,
+        "--rekor-trusted-public-key": args.rekor_trusted_public_key,
+        "--external-checkpoint-provider": args.external_checkpoint_provider,
+        "--external-checkpoint-trusted-public-key": (
+            args.external_checkpoint_trusted_public_key
+        ),
+    }
+    supplied_legacy_inputs = [
+        option
+        for option, value in forbidden_legacy_inputs.items()
+        if value is not None
+    ]
+    require(
+        not supplied_legacy_inputs,
+        "Manifest v6 final mode rejects legacy readiness inputs: "
+        + ", ".join(supplied_legacy_inputs),
+    )
+    require(
+        not args.skip_current_host_check,
+        "final Manifest v6 verification forbids --skip-current-host-check",
+    )
+    expected_trust_bundle_sha256 = require_sha256(
+        args.expected_public_nitro_trust_roots_sha256,
+        "expected public Nitro trust-root bundle",
+    )
+    trust_root_pin_id = verify_nitro_tee.require_identifier(
+        args.public_nitro_trust_root_pin_id,
+        "public Nitro trust-root pin ID",
+    )
+    bundle_document, bundle_raw = load_final_v6_canonical_json(
+        args.public_nitro_evidence_bundle,
+        "public Nitro evidence bundle",
+    )
+    expectations_document, expectations_raw = load_final_v6_canonical_json(
+        args.public_nitro_expectations,
+        "independent production expectations",
+    )
+    trust_document, trust_raw = load_final_v6_canonical_json(
+        args.public_nitro_trust_roots,
+        "closed public Nitro trust-root bundle",
+    )
+    state_commit_receipt_document, state_commit_receipt_raw = (
+        load_final_v6_canonical_json(
+            args.public_nitro_state_commit_receipt,
+            "rollback-resistant public Nitro state CAS receipt",
+        )
+    )
+    (
+        current_head_authorization_document,
+        current_head_authorization_raw,
+    ) = load_final_v6_canonical_json(
+        args.public_nitro_current_head_authorization,
+        "fresh one-use current-head authorization",
+    )
+    current_head_verifier_nonce = verify_nitro_tee.b64url_decode(
+        args.public_nitro_current_head_verifier_nonce,
+        "fresh current-head verifier nonce",
+        max_bytes=32,
+    )
+    require(
+        len(current_head_verifier_nonce) == 32,
+        "current-head verifier nonce must contain exactly 32 bytes",
+    )
+    (
+        current_head_redemption_receipt_document,
+        current_head_redemption_receipt_raw,
+    ) = load_final_v6_canonical_json(
+        args.public_nitro_current_head_redemption_receipt,
+        "atomic current-head redemption receipt",
+    )
+    current_head_redemption_verifier_nonce = (
+        verify_nitro_tee.b64url_decode(
+            args.public_nitro_current_head_redemption_verifier_nonce,
+            "fresh current-head redemption verifier nonce",
+            max_bytes=32,
+        )
+    )
+    require(
+        len(current_head_redemption_verifier_nonce) == 32,
+        "current-head redemption verifier nonce must contain exactly 32 bytes",
+    )
+    trust_bundle_sha256 = verify_nitro_tee.sha256(trust_raw)
+    require(
+        hmac.compare_digest(
+            trust_bundle_sha256,
+            expected_trust_bundle_sha256,
+        ),
+        "public Nitro trust-root bundle differs from the external expected digest",
+    )
+    expectations = verify_nitro_tee.load_expectations(
+        expectations_document
+    )
+    completion_identity, completion_identity_sha256 = (
+        reconstruct_final_v6_completion_identity(expectations)
+    )
+    trust = verify_nitro_tee.load_trust_roots(
+        trust_document,
+        trust_raw,
+        independently_expected_sha256=expected_trust_bundle_sha256,
+    )
+    require(
+        trust["trustRootBundleSha256"] == trust_bundle_sha256,
+        "shared public verifier loaded a different trust-root bundle",
+    )
+    _removed_final_shaped_v6_compatibility_path(bundle_document)
+    source_document, source_raw = verify_nitro_tee.decode_canonical_json_file_b64(
+        bundle_document["sourceInputManifestFileB64"],
+        "source-input manifest file",
+    )
+    candidate_document, candidate_raw = (
+        verify_nitro_tee.decode_canonical_json_file_b64(
+            bundle_document["candidateManifestFileB64"],
+            "Candidate Manifest v6 file",
+        )
+    )
+    watchdog_document, watchdog_raw = (
+        verify_nitro_tee.decode_canonical_json_file_b64(
+            bundle_document["buildWatchdogReceiptFileB64"],
+            "build-watchdog receipt file",
+        )
+    )
+    promotion_receipt_document, promotion_receipt_raw = (
+        verify_nitro_tee.decode_canonical_json_file_b64(
+            bundle_document["promotionReceiptFileB64"],
+            "promotion receipt file",
+        )
+    )
+    promoted_manifest_document, promoted_manifest_raw = (
+        verify_nitro_tee.decode_canonical_json_file_b64(
+            bundle_document["promotedManifestFileB64"],
+            "promoted Manifest v6 file",
+        )
+    )
+    promotion_acceptance = verify_final_v6_promotion_acceptance(
+        candidate=candidate_document,
+        promoted_manifest=promoted_manifest_document,
+    )
+    production_identity_document, production_identity_raw = (
+        verify_nitro_tee.decode_canonical_json_file_b64(
+            bundle_document["productionIdentityFileB64"],
+            "production attestation identity file",
+        )
+    )
+    runtime_state_document, runtime_state_raw = (
+        verify_nitro_tee.decode_canonical_json_file_b64(
+            bundle_document["runtimeStateFileB64"],
+            "production runtime state file",
+        )
+    )
+    runtime_custody_document, runtime_custody_raw = (
+        verify_nitro_tee.decode_canonical_json_file_b64(
+            bundle_document["runtimeKeyCustodyFileB64"],
+            "runtime key-custody file",
+        )
+    )
+    completion_proof_document, completion_proof_raw = (
+        verify_nitro_tee.decode_canonical_json_file_b64(
+            bundle_document["completionProofFileB64"],
+            "completionProof/v6 file",
+        )
+    )
+    completion_authentication_payload = verify_nitro_tee.exact_keys(
+        bundle_document["completionProofAuthentication"]["payload"],
+        {
+            "completionIdentity",
+            "completionIdentitySha256",
+            "expiresAtUnix",
+            "issuedAtUnix",
+            "keyCustodyEvidenceSha256",
+            "productionReleaseIdentitySha256",
+            "proofApiVersion",
+            "proofCoreSha256",
+            "witnessEvidenceSha256",
+        },
+        "completion proof authentication payload",
+    )
+    completion_bridge = verify_nitro_tee.exact_keys(
+        completion_proof_document["public_verifier_bridge"],
+        {
+            "apiVersion",
+            "candidateManifestFileSha256",
+            "candidateManifestPayloadSha256",
+            "completionIdentity",
+            "completionIdentitySha256",
+            "eifFileSha384",
+            "keyCustodyEvidenceSha256",
+            "monotonicWitnessSha256",
+            "pcrs",
+            "pipeline",
+            "productionContinuitySha256",
+            "productionReleaseIdentitySha256",
+            "promotionReceiptSha256",
+            "releaseGeneration",
+            "rollbackEpoch",
+            "sourceClosureSha256",
+        },
+        "completion proof public-verifier bridge",
+    )
+    completion_claim = verify_nitro_tee.exact_keys(
+        bundle_document["claims"]["completion"],
+        {
+            "completionIdentity",
+            "completionIdentitySha256",
+            "keyCustodyEvidenceSha256",
+            "monotonicWitnessSha256",
+            "productionContinuitySha256",
+            "productionReleaseIdentitySha256",
+        },
+        "Nitro completion claim",
+    )
+    completion_identity_occurrences = [
+        production_identity_document["completionIdentity"],
+        runtime_state_document["completionIdentity"],
+        runtime_custody_document["completionIdentity"],
+        completion_authentication_payload["completionIdentity"],
+        completion_bridge["completionIdentity"],
+        completion_claim["completionIdentity"],
+        *[
+            wrapper["statement"]["payload"]["completionIdentity"]
+            for wrapper in bundle_document["builders"]
+        ],
+        *[
+            wrapper["transcript"]["completionIdentity"]
+            for wrapper in bundle_document["builders"]
+        ],
+    ]
+    completion_digest_occurrences = [
+        production_identity_document["completionIdentitySha256"],
+        runtime_state_document["completionIdentitySha256"],
+        runtime_custody_document["completionIdentitySha256"],
+        completion_authentication_payload["completionIdentitySha256"],
+        completion_bridge["completionIdentitySha256"],
+        completion_claim["completionIdentitySha256"],
+        *[
+            wrapper["statement"]["payload"]["completionIdentitySha256"]
+            for wrapper in bundle_document["builders"]
+        ],
+        *[
+            wrapper["transcript"]["completionIdentitySha256"]
+            for wrapper in bundle_document["builders"]
+        ],
+    ]
+    require(
+        completion_identity_occurrences
+        and all(
+            value == completion_identity
+            for value in completion_identity_occurrences
+        )
+        and completion_digest_occurrences
+        and all(
+            hmac.compare_digest(value, completion_identity_sha256)
+            for value in completion_digest_occurrences
+        ),
+        "production identity, runtime, custody, Nitro claim, builders, and completion proof do not share the exact closed completionIdentity object and canonical digest",
+    )
+    execution_contract = verify_final_v6_candidate_execution_contract(
+        candidate_document,
+        source_document,
+        expected_apparmor_sha256=require_sha256(
+            args.expected_final_v6_apparmor_profile_sha256,
+            "independently expected Manifest v6 AppArmor profile",
+        ),
+        expected_seccomp_sha256=require_sha256(
+            args.expected_final_v6_seccomp_profile_sha256,
+            "independently expected Manifest v6 seccomp profile",
+        ),
+    )
+    build_grammar = verify_final_v6_watchdog_and_builder_grammar(
+        candidate=candidate_document,
+        watchdog=watchdog_document,
+        builders=bundle_document["builders"],
+        execution=execution_contract,
+    )
+    protected_state_document, protected_state_raw = (
+        load_final_v6_canonical_json(
+            args.protected_client_state,
+            "protected prior client state",
+        )
+    )
+    protected_checkpoint_document, protected_checkpoint_raw = (
+        load_final_v6_canonical_json(
+            args.protected_client_state_checkpoint,
+            "protected client-state checkpoint",
+        )
+    )
+    candidate_to_eif_document, candidate_to_eif_raw = (
+        load_final_v6_canonical_json(
+            args.manifest_v6_eif_build,
+            "Manifest v6 candidate-to-EIF build statement",
+        )
+    )
+    candidate_to_eif_key, candidate_to_eif_key_id, candidate_to_eif_key_file_sha256 = (
+        load_final_v6_pinned_ed25519_key(
+            args.manifest_v6_eif_builder_public_key,
+            expected_key_id=trust["keyIds"]["manifestV6EifBuilder"],
+            label="Manifest v6 candidate-to-EIF builder trust root",
+        )
+    )
+    candidate_to_eif_key_raw = verify_nitro_tee.read_regular(
+        Path(args.manifest_v6_eif_builder_public_key),
+        label="Manifest v6 candidate-to-EIF builder trust root",
+        max_bytes=8192,
+    )
+    try:
+        candidate_to_eif_key_pem = candidate_to_eif_key_raw.decode("ascii")
+    except UnicodeDecodeError as exc:
+        raise ValueError(
+            "Manifest v6 candidate-to-EIF builder trust root must be ASCII PEM"
+        ) from exc
+    require(
+        trust_document["keys"]["manifestV6EifBuilder"]
+        == candidate_to_eif_key_pem,
+        "candidate-to-EIF builder key differs from the externally pinned public trust bundle",
+    )
+    state_key, state_key_id, state_key_file_sha256 = (
+        load_final_v6_pinned_ed25519_key(
+            args.protected_client_state_public_key,
+            expected_key_id=(
+                args.expected_protected_client_state_public_key_id
+            ),
+            label="protected client-state signing trust root",
+        )
+    )
+    checkpoint_key, checkpoint_key_id, checkpoint_key_file_sha256 = (
+        load_final_v6_pinned_ed25519_key(
+            args.protected_client_state_checkpoint_public_key,
+            expected_key_id=(
+                args.expected_protected_client_state_checkpoint_public_key_id
+            ),
+            label="protected client-state checkpoint trust root",
+        )
+    )
+    require(
+        state_key_id == trust["keyIds"]["clientState"]
+        and checkpoint_key_id == trust["keyIds"]["clientStateCheckpoint"],
+        "protected state keys differ from the externally pinned public verifier roles",
+    )
+    now = int(time.time())
+    prior_state, protected_state_identity = (
+        verify_protected_final_v6_client_state(
+            state_document=protected_state_document,
+            state_raw=protected_state_raw,
+            checkpoint_document=protected_checkpoint_document,
+            checkpoint_raw=protected_checkpoint_raw,
+            state_key=state_key,
+            state_key_id=state_key_id,
+            state_key_file_sha256=state_key_file_sha256,
+            checkpoint_key=checkpoint_key,
+            checkpoint_key_id=checkpoint_key_id,
+            checkpoint_key_file_sha256=checkpoint_key_file_sha256,
+            trust_root_bundle_sha256=trust_bundle_sha256,
+            trust_root_pin_id=trust_root_pin_id,
+            trust_key_ids=trust["keyIds"],
+            now=now,
+        )
+    )
+    public_handoff = verify_final_v6_public_handoff(
+        bundle=bundle_document,
+        protected_state=protected_state_document,
+        protected_checkpoint=protected_checkpoint_document,
+        trust_bundle_sha256=trust_bundle_sha256,
+        trust_root_pin_id=trust_root_pin_id,
+        candidate_to_eif_document=candidate_to_eif_document,
+        candidate_to_eif_raw=candidate_to_eif_raw,
+    )
+    candidate_to_eif = verify_final_v6_candidate_to_eif(
+        candidate_to_eif_document,
+        candidate_to_eif_raw,
+        public_key=candidate_to_eif_key,
+        public_key_id=candidate_to_eif_key_id,
+        public_key_file_sha256=candidate_to_eif_key_file_sha256,
+        candidate=candidate_document,
+        candidate_raw=candidate_raw,
+        source=source_document,
+        source_raw=source_raw,
+        watchdog=watchdog_document,
+        watchdog_raw=watchdog_raw,
+        promotion_receipt=promotion_receipt_document,
+        promotion_receipt_raw=promotion_receipt_raw,
+        promoted_manifest=promoted_manifest_document,
+        builders=bundle_document["builders"],
+        expectations=expectations,
+        trust_key_ids=trust["keyIds"],
+    )
+    require(
+        candidate_to_eif["completionIdentity"] == completion_identity
+        and candidate_to_eif["completionIdentitySha256"]
+        == completion_identity_sha256,
+        "candidate-to-EIF mapping crossed the exact closed completion identity",
+    )
+    challenge = verify_nitro_tee.b64url_decode(
+        args.public_nitro_challenge,
+        "independently generated public Nitro challenge",
+        max_bytes=32,
+    )
+    require(
+        len(challenge) == 32,
+        "public Nitro challenge must contain exactly 32 bytes",
+    )
+    pending_public_result = verify_nitro_tee.verify_bundle(
+        bundle_document,
+        expectations=expectations,
+        trust=trust,
+        prior_state=prior_state,
+        challenge=challenge,
+        now=now,
+    )
+    require(
+        "ok" not in pending_public_result
+        and pending_public_result.get("okForAction") is False
+        and pending_public_result.get("status")
+        == "pending-state-commit"
+        and pending_public_result.get("apiVersion")
+        == verify_nitro_tee.RESULT_VERSION
+        and pending_public_result.get("pipeline")
+        == MANIFEST_V6_PIPELINE,
+        "raw public Nitro verifier did not establish a non-actionable Manifest v6 pending-state-commit result",
+    )
+    require(
+        pending_public_result.get(
+            "candidateToEifBuildStatementFileSha256"
+        )
+        == candidate_to_eif["fileSha256"]
+        and pending_public_result.get("completionIdentity")
+        == completion_identity
+        and pending_public_result.get("completionIdentitySha256")
+        == completion_identity_sha256,
+        "public verifier did not authenticate the exact candidate-to-EIF statement and closed completion identity",
+    )
+    reconstructed_completion_identity = (
+        verify_nitro_tee.reconstruct_completion_identity(
+            core_digests=pending_public_result["completionCoreDigests"],
+            challenge_nonce_sha256=verify_nitro_tee.sha256(challenge),
+            release_generation=completion_identity["releaseGeneration"],
+            rollback_epoch=completion_identity["rollbackEpoch"],
+        )
+    )
+    reconstructed_completion_identity_sha256 = (
+        verify_nitro_tee.sha256_json(reconstructed_completion_identity)
+    )
+    require(
+        reconstructed_completion_identity == completion_identity
+        and hmac.compare_digest(
+            reconstructed_completion_identity_sha256,
+            completion_identity_sha256,
+        )
+        and pending_public_result["completionIdentity"]
+        == reconstructed_completion_identity
+        and pending_public_result["completionIdentitySha256"]
+        == reconstructed_completion_identity_sha256,
+        "release completion did not reconstruct every authenticated core before constructing completionIdentity",
+    )
+    completion_identity = reconstructed_completion_identity
+    completion_identity_sha256 = reconstructed_completion_identity_sha256
+    completion_key_id = trust["keyIds"]["completion"]
+    completion_checkpoint_key_id = trust["keyIds"]["completionCheckpoint"]
+    require(
+        completion_key_id != completion_checkpoint_key_id,
+        "aggregate completion signature and checkpoint keys are not independent",
+    )
+    witness_payload = bundle_document["witness"]["payload"]
+    witness_handoff = verify_final_v6_witness_handoff(
+        pending_public_result=pending_public_result,
+        witness_payload=witness_payload,
+    )
+    challenge_consumption_sha256 = verify_nitro_tee.sha256_json(
+        witness_payload["challengeConsumption"]
+    )
+    witness_result = pending_public_result["witness"]
+    require(
+        witness_result["challengeConsumptionSha256"]
+        == challenge_consumption_sha256
+        and witness_result["leafIndex"] == witness_handoff["leafIndex"]
+        and witness_result["sequence"] > prior_state["sequence"]
+        and witness_result["treeSize"] > prior_state["treeSize"]
+        and witness_result["releaseGeneration"]
+        >= prior_state["releaseGeneration"]
+        and witness_result["rollbackEpoch"] >= prior_state["rollbackEpoch"],
+        "witness did not advance sequence/tree/challenge or attempted a generation/epoch rollback",
+    )
+    require(
+        pending_public_result["nextClientState"][
+            "challengeConsumptionSha256"
+        ]
+        == challenge_consumption_sha256,
+        "public verifier next state omitted or crossed challengeConsumptionSha256",
+    )
+    public_result, state_commit = verify_final_v6_state_commit(
+        commit_receipt=state_commit_receipt_document,
+        commit_receipt_raw=state_commit_receipt_raw,
+        current_head_authorization=current_head_authorization_document,
+        current_head_authorization_raw=current_head_authorization_raw,
+        current_head_verifier_nonce=current_head_verifier_nonce,
+        current_head_redemption_receipt=(
+            current_head_redemption_receipt_document
+        ),
+        current_head_redemption_receipt_raw=(
+            current_head_redemption_receipt_raw
+        ),
+        current_head_redemption_verifier_nonce=(
+            current_head_redemption_verifier_nonce
+        ),
+        pending_result=pending_public_result,
+        prior_state=prior_state,
+        trust=trust,
+        challenge_consumption_sha256=challenge_consumption_sha256,
+        now=now,
+    )
+    builder_artifact_bindings: dict[str, dict[str, Any]] = {}
+    for side, wrapper in zip(
+        ("left", "right"),
+        bundle_document["builders"],
+        strict=True,
+    ):
+        statement = wrapper["statement"]
+        transcript = wrapper["transcript"]
+        builder_artifact_bindings[side] = (
+            final_v6_completion_bound_artifact(
+                {
+                    "statementFileSha256": verify_nitro_tee.sha256(
+                        verify_nitro_tee.canonical_json_bytes(statement)
+                        + b"\n"
+                    ),
+                    "statementPayloadSha256": statement["payloadSha256"],
+                    "transcriptFileSha256": verify_nitro_tee.sha256(
+                        verify_nitro_tee.canonical_json_bytes(transcript)
+                        + b"\n"
+                    ),
+                    "transcriptPayloadSha256": transcript[
+                        "transcriptSha256"
+                    ],
+                },
+                completion_identity=completion_identity,
+                completion_identity_sha256=completion_identity_sha256,
+                label=f"{side}-raw-builder-statement-and-transcript",
+            )
+        )
+    artifact_bindings_payload = {
+        "apiVersion": FINAL_V6_ARTIFACT_BINDINGS_API_VERSION,
+        "builders": builder_artifact_bindings,
+        "candidateManifestAndSource": final_v6_completion_bound_artifact(
+            {
+                "candidateManifestFileSha256": verify_nitro_tee.sha256(
+                    candidate_raw
+                ),
+                "candidateManifestPayloadSha256": candidate_document[
+                    "candidateManifestPayloadSha256"
+                ],
+                "sourceClosureSha256": expectations[
+                    "sourceClosureSha256"
+                ],
+                "sourceInputManifestFileSha256": verify_nitro_tee.sha256(
+                    source_raw
+                ),
+                "sourceInputManifestPayloadSha256": source_document[
+                    "payloadSha256"
+                ],
+                "watchdogReceiptFileSha256": verify_nitro_tee.sha256(
+                    watchdog_raw
+                ),
+                "watchdogReceiptPayloadSha256": watchdog_document[
+                    "payloadSha256"
+                ],
+            },
+            completion_identity=completion_identity,
+            completion_identity_sha256=completion_identity_sha256,
+            label="candidate-manifest-source-and-watchdog",
+        ),
+        "completionIdentity": completion_identity,
+        "completionIdentitySha256": completion_identity_sha256,
+        "completionProof": final_v6_completion_bound_artifact(
+            {
+                "authenticationPayloadSha256": bundle_document[
+                    "completionProofAuthentication"
+                ]["payloadSha256"],
+                "fileSha256": verify_nitro_tee.sha256(
+                    completion_proof_raw
+                ),
+                "proofCoreSha256": completion_proof_document[
+                    "proof_core_sha256"
+                ],
+                "publicVerifierBridgeSha256": verify_nitro_tee.sha256_json(
+                    completion_bridge
+                ),
+            },
+            completion_identity=completion_identity,
+            completion_identity_sha256=completion_identity_sha256,
+            label="completion-proof-v6",
+        ),
+        "eifMapping": final_v6_completion_bound_artifact(
+            {
+                "candidateToEifBuildStatementFileSha256": candidate_to_eif[
+                    "fileSha256"
+                ],
+                "candidateToEifBuildStatementPayloadSha256": (
+                    candidate_to_eif["payloadSha256"]
+                ),
+                "candidateToEifBuilderKeyId": candidate_to_eif[
+                    "signingKeyId"
+                ],
+                "eifSha384": candidate_to_eif["eifSha384"],
+                "pcrs": candidate_to_eif["pcrs"],
+            },
+            completion_identity=completion_identity,
+            completion_identity_sha256=completion_identity_sha256,
+            label="candidate-promotion-to-eif-mapping",
+        ),
+        "productionIdentity": final_v6_completion_bound_artifact(
+            {
+                "productionIdentityFileSha256": verify_nitro_tee.sha256(
+                    production_identity_raw
+                ),
+                "productionReleaseIdentitySha256": (
+                    production_identity_document[
+                        "productionReleaseIdentitySha256"
+                    ]
+                ),
+                "runtimeCustodyFileSha256": verify_nitro_tee.sha256(
+                    runtime_custody_raw
+                ),
+                "runtimeStateFileSha256": verify_nitro_tee.sha256(
+                    runtime_state_raw
+                ),
+            },
+            completion_identity=completion_identity,
+            completion_identity_sha256=completion_identity_sha256,
+            label="production-identity-runtime-and-custody",
+        ),
+        "promotion": final_v6_completion_bound_artifact(
+            {
+                "importedImageMappingsSha256": promotion_acceptance[
+                    "imageMappingsSha256"
+                ],
+                "promotedManifestFileSha256": verify_nitro_tee.sha256(
+                    promoted_manifest_raw
+                ),
+                "promotedManifestPayloadSha256": promoted_manifest_document[
+                    "manifestSha256"
+                ],
+                "promotionAcceptanceSha256": promotion_acceptance[
+                    "acceptanceSha256"
+                ],
+                "promotionReceiptFileSha256": verify_nitro_tee.sha256(
+                    promotion_receipt_raw
+                ),
+                "promotionReceiptPayloadSha256": (
+                    promotion_receipt_document["payloadSha256"]
+                ),
+            },
+            completion_identity=completion_identity,
+            completion_identity_sha256=completion_identity_sha256,
+            label="promotion-receipt-and-imported-image-mappings",
+        ),
+    }
+    release_artifact_bindings = {
+        **artifact_bindings_payload,
+        "artifactBindingsSha256": verify_nitro_tee.sha256_json(
+            artifact_bindings_payload
+        ),
+    }
+    public_result_sha256 = verify_nitro_tee.sha256_json(public_result)
+    host_bootstrap_boundary_payload = {
+        "apiVersion": FINAL_V6_HOST_BOOTSTRAP_BOUNDARY_API_VERSION,
+        "launchManifestApiVersion": "serverware.productionReadinessLaunch/v3",
+        "launchAuthorizationRequestApiVersion": (
+            "serverware.launchAuthorizationRequest/v2"
+        ),
+        "launchAuthorizationApiVersion": "serverware.launchAuthorization/v2",
+        "bootstrapReceiptApiVersion": "serverware.bootstrapReceipt/v3",
+        "nonceRollbackAssuranceBindingApiVersion": (
+            "serverware.productionNonceRollbackAssuranceBinding/v1"
+        ),
+        "authorizationScope": "trusted-host-readiness",
+        "freshnessAuthority": "trusted-host-wall-clock",
+        "evidenceProvidedToFinalVerifier": False,
+        "authoritativeForFinalCompletion": False,
+        "requiredForFinalCompletion": False,
+        "relationship": "non-authoritative-readiness-context-only",
+        "finalAuthority": (
+            "independent-manifest-v6-public-nitro-verifier-and-protected-state"
+        ),
+        "completionIdentitySha256": completion_identity_sha256,
+        "bindingMechanism": (
+            "verifier-validated-canonical-binding-to-authenticated-completion-identity"
+        ),
+    }
+    host_bootstrap_boundary = {
+        **host_bootstrap_boundary_payload,
+        "boundarySha256": verify_nitro_tee.sha256_json(
+            host_bootstrap_boundary_payload
+        ),
+    }
+    production_identity = {
+        "apiVersion": FINAL_V6_IDENTITY_API_VERSION,
+        "canonicalProfile": CANONICAL_JSON_PROFILE,
+        "pipeline": MANIFEST_V6_PIPELINE,
+        "legacyDockerNsmAccepted": False,
+        "completionIdentity": completion_identity,
+        "completionIdentitySha256": completion_identity_sha256,
+        "releaseArtifactBindings": release_artifact_bindings,
+        "publicNitroEvidenceBundleFileSha256": verify_nitro_tee.sha256(
+            bundle_raw
+        ),
+        "publicNitroExpectationsFileSha256": verify_nitro_tee.sha256(
+            expectations_raw
+        ),
+        "publicVerifierResultSha256": public_result_sha256,
+        "productionIdentitySha256": public_result[
+            "productionIdentitySha256"
+        ],
+        "candidateManifestFileSha256": public_result[
+            "candidateManifestFileSha256"
+        ],
+        "candidateManifestPayloadSha256": expectations[
+            "candidateManifestPayloadSha256"
+        ],
+        "sourceInputManifestFileSha256": expectations[
+            "sourceInputManifestFileSha256"
+        ],
+        "sourceClosureSha256": public_result["sourceClosureSha256"],
+        "buildWatchdogReceiptFileSha256": public_result[
+            "buildWatchdogReceiptFileSha256"
+        ],
+        "promotionReceiptFileSha256": public_result[
+            "promotionReceiptFileSha256"
+        ],
+        "promotedManifestFileSha256": expectations[
+            "promotedManifestFileSha256"
+        ],
+        "promotedManifestPayloadSha256": promoted_manifest_document[
+            "manifestSha256"
+        ],
+        "promotedManifestMeasuredFileSha256": verify_nitro_tee.sha256(
+            promoted_manifest_raw
+        ),
+        "candidateToEif": candidate_to_eif,
+        "runtimeStateFileSha256": expectations["runtimeStateFileSha256"],
+        "runtimeKeyCustodyFileSha256": public_result[
+            "runtimeKeyCustodyFileSha256"
+        ],
+        "enclaveInstanceId": runtime_state_document["enclaveInstanceId"],
+        "enclaveBootId": runtime_state_document["enclaveBootId"],
+        "runtimeKeyGenerations": runtime_state_document["keyGenerations"],
+        "releaseGeneration": expectations["releaseGeneration"],
+        "rollbackEpoch": expectations["rollbackEpoch"],
+        "policyHash": expectations["policyHash"],
+        "policySequence": expectations["policySequence"],
+        "caSpkiSha256": expectations["caSpkiSha256"],
+        "eifSha384": public_result["eifSha384"],
+        "pcrs": public_result["pcrs"],
+        "rawNitroAttestationDocumentSha256": public_result[
+            "nitroAttestationDocumentSha256"
+        ],
+        "tlsExporterSha256": public_result["tlsExporterSha256"],
+        "tlsSpkiSha256": public_result["tlsSpkiSha256"],
+        "tlsPeerSpkiSha256": expectations["liveTlsPeerSpkiSha256"],
+        "tlsStackMeasurementSha256": expectations[
+            "tlsStackMeasurementSha256"
+        ],
+        "attestationRequestSha256": expectations[
+            "attestationRequestSha256"
+        ],
+        "requestSha256": public_result["requestSha256"],
+        "responseBytesSha256": public_result["responseBytesSha256"],
+        "releaseKeyCustodyEvidenceSha256": public_result[
+            "runtimeKeyCustodyFileSha256"
+        ],
+        "kmsAuditProofSha256s": public_result[
+            "kmsAuditProofSha256s"
+        ],
+        "completionProofFileSha256": public_result[
+            "completionProofFileSha256"
+        ],
+        "completionAuthenticationKeyId": completion_key_id,
+        "completionCheckpointKeyId": completion_checkpoint_key_id,
+        "hostBootstrapBoundarySha256": host_bootstrap_boundary[
+            "boundarySha256"
+        ],
+        "witnessCheckpointSha256": public_result["witness"][
+            "checkpointSha256"
+        ],
+        "witnessChallengeConsumptionSha256": public_result["witness"][
+            "challengeConsumptionSha256"
+        ],
+        "witnessLeafIndex": public_result["witness"]["leafIndex"],
+        "challengeSha256": verify_nitro_tee.sha256(challenge),
+        "candidateExecutionContract": execution_contract,
+        "watchdogAndBuilderGrammar": build_grammar,
+        "promotionAcceptance": promotion_acceptance,
+        "publicHandoff": public_handoff,
+        "protectedPriorClientState": protected_state_identity,
+        "stateCommit": state_commit,
+        "trustRootPin": {
+            "bundleFileSha256": trust_bundle_sha256,
+            "expectedBundleFileSha256": expected_trust_bundle_sha256,
+            "pinId": trust_root_pin_id,
+            "keyIds": {
+                role: trust["keyIds"][role]
+                for role in sorted(trust["keyIds"])
+            },
+            "provenanceBoundary": (
+                "Only a client or out-of-band comparison of the expected "
+                "bundle digest and key IDs establishes provenance; these "
+                "on-host CLI paths are transport only."
+            ),
+        },
+    }
+    production_identity["identitySha256"] = verify_nitro_tee.sha256_json(
+        production_identity
+    )
+    final_result = {
+        "apiVersion": FINAL_V6_RESULT_API_VERSION,
+        "verificationOk": True,
+        "finalCompletionVerified": True,
+        "actionAuthorization": None,
+        "okForAction": False,
+        "verificationMode": "final",
+        "redemptionVerified": True,
+        "readinessOnly": False,
+        "independentlyAuthenticated": True,
+        "pipeline": MANIFEST_V6_PIPELINE,
+        "canonicalProfile": CANONICAL_JSON_PROFILE,
+        "verifiedAtUnix": now,
+        "productionReleaseIdentity": production_identity,
+        "publicVerifierResult": public_result,
+        "aggregateAuthentication": {
+            "independentlyAuthenticated": True,
+            "completionIdentity": completion_identity,
+            "completionIdentitySha256": completion_identity_sha256,
+            "completionProofFileSha256": public_result[
+                "completionProofFileSha256"
+            ],
+            "completionAuthenticationKeyId": completion_key_id,
+            "completionCheckpointKeyId": completion_checkpoint_key_id,
+            "hostBootstrapBoundarySha256": host_bootstrap_boundary[
+                "boundarySha256"
+            ],
+            "keysAreDistinct": True,
+        },
+        "completionIdentity": completion_identity,
+        "completionIdentitySha256": completion_identity_sha256,
+        "releaseArtifactBindings": release_artifact_bindings,
+        "nextClientState": public_result["nextClientState"],
+        "stateCommit": state_commit,
+        "hostBootstrapBoundary": host_bootstrap_boundary,
+        "externalPinProvenanceBoundary": (
+            FINAL_V6_EXTERNAL_PIN_PROVENANCE_BOUNDARY
+        ),
+        "externalProvisioningBoundary": (
+            FINAL_V6_EXTERNAL_PROVISIONING_BOUNDARY
+        ),
+    }
+    verify_nitro_tee.validate_non_actionable_final_result(
+        final_result,
+        label="final Manifest v6 verification result",
+    )
+    final_result["resultSha256"] = verify_nitro_tee.sha256_json(final_result)
+    raise ValueError(
+        "obsolete final-shaped completionProof/v6 bridge cannot emit final v1"
+    )
+    if args.out:
+        output_digest = write_final_v6_result(Path(args.out), final_result)
+        require(
+            output_digest
+            == verify_nitro_tee.sha256(
+                verify_nitro_tee.canonical_json_bytes(final_result) + b"\n"
+            ),
+            "final verification result output digest mismatch",
+        )
+    sys.stdout.buffer.write(
+        verify_nitro_tee.canonical_json_bytes(final_result) + b"\n"
+    )
+
+
+def _reject_obsolete_final_v6_injection(
+    value: Any,
+    *,
+    path: str = "$",
+) -> None:
+    if isinstance(value, dict):
+        forbidden = {
+            "completionProofFileB64",
+            "completionProofAuthentication",
+            "completionProofCheckpoint",
+            "public_verifier_bridge",
+        }.intersection(value)
+        require(
+            not forbidden,
+            "public Nitro final input contains obsolete final-shaped v6 "
+            f"bridge injection at {path}: {', '.join(sorted(forbidden))}",
+        )
+        for key, child in value.items():
+            _reject_obsolete_final_v6_injection(
+                child,
+                path=f"{path}.{key}",
+            )
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            _reject_obsolete_final_v6_injection(
+                child,
+                path=f"{path}[{index}]",
+            )
+
+
+def _load_pinned_ed25519_pem(
+    raw_path: str,
+    *,
+    expected_key_id: str,
+    expected_spki_sha256: str,
+    label: str,
+) -> tuple[str, str]:
+    raw = verify_nitro_tee.read_regular(
+        Path(raw_path),
+        label=label,
+        max_bytes=8192,
+    )
+    try:
+        pem = raw.decode("ascii")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"{label} must be ASCII PEM") from exc
+    calculated_key_id = release_public_key_id(pem)
+    require(
+        calculated_key_id
+        == require_sha256(expected_key_id, f"{label} expected key ID")
+        == require_sha256(
+            expected_spki_sha256,
+            f"{label} expected SPKI digest",
+        ),
+        f"{label} does not match caller-pinned key and SPKI identities",
+    )
+    key = serialization.load_pem_public_key(pem.encode("ascii"))
+    require(isinstance(key, Ed25519PublicKey), f"{label} is not Ed25519")
+    return pem, calculated_key_id
+
+
+def _load_host_readiness_context(
+    raw_path: str | None,
+) -> dict[str, Any]:
+    if raw_path is None:
+        return {
+            "apiVersion": HOST_READINESS_CONTEXT_API_VERSION,
+            "provided": False,
+            "completionProofApiVersion": None,
+            "completionProofFileSha256": None,
+            "completionProofCoreSha256": None,
+            "generatedAtUnix": None,
+            "launchAuthorityKeyId": None,
+            "authoritativeForFinalCompletion": False,
+        }
+    proof, raw = load_final_v6_canonical_json(
+        raw_path,
+        "optional trusted-host readiness completionProof/v6",
+    )
+    validate_host_readiness_completion_proof_v6(proof)
+    bootstrap = proof["bootstrap_launcher"]
+    launch_authority_key_id: str | None = None
+    if isinstance(bootstrap, dict) and bootstrap.get("sealed") is True:
+        launch_authority_key_id = require_sha256(
+            bootstrap.get("launchAuthorityKeyId"),
+            "host readiness launch authority",
+        )
+    return {
+        "apiVersion": HOST_READINESS_CONTEXT_API_VERSION,
+        "provided": True,
+        "completionProofApiVersion": COMPLETION_PROOF_API_VERSION,
+        "completionProofFileSha256": verify_nitro_tee.sha256(raw),
+        "completionProofCoreSha256": proof["proof_core_sha256"],
+        "generatedAtUnix": proof["generated_at_unix"],
+        "launchAuthorityKeyId": launch_authority_key_id,
+        "authoritativeForFinalCompletion": False,
+    }
+
+
+def build_release_completion_verification_v1_core(
+    *,
+    public_envelope: dict[str, Any],
+    public_envelope_file_sha256: str,
+    public_result: dict[str, Any],
+    evidence_bundle_file_sha256: str,
+    expectations_file_sha256: str,
+    trust_root_bundle_file_sha256: str,
+    completion_identity: dict[str, Any],
+    completion_identity_sha256: str,
+    host_context: dict[str, Any],
+    host_boundary: dict[str, Any],
+    global_role_registry: dict[str, Any],
+    result_signer_key_id: str,
+) -> dict[str, Any]:
+    return {
+        "apiVersion": FINAL_V6_RESULT_API_VERSION,
+        "verificationOk": True,
+        "finalCompletionVerified": True,
+        "actionAuthorization": None,
+        "okForAction": False,
+        "verificationMode": "final",
+        "redemptionVerified": True,
+        "readinessOnly": False,
+        "independentlyAuthenticated": True,
+        "pipeline": MANIFEST_V6_PIPELINE,
+        "canonicalProfile": CANONICAL_JSON_PROFILE,
+        "verifiedAtUnix": public_result["verifiedAtUnix"],
+        "publicNitroVerification": {
+            "envelope": public_envelope,
+            "envelopeFileSha256": public_envelope_file_sha256,
+            "resultSha256": public_envelope["resultSha256"],
+            "evidenceBundleFileSha256": evidence_bundle_file_sha256,
+            "expectationsFileSha256": expectations_file_sha256,
+            "trustRootBundleFileSha256": trust_root_bundle_file_sha256,
+        },
+        "aggregateAuthentication": {
+            "independentlyAuthenticated": True,
+            "publicNitroResultEnvelopeSha256": (
+                public_envelope_file_sha256
+            ),
+            "publicNitroResultSha256": public_envelope["resultSha256"],
+            "completionIdentitySha256": completion_identity_sha256,
+            "stateTransitionSha256": public_result["stateTransition"][
+                "transitionSha256"
+            ],
+            "stateCommitReceiptSha256": public_result["stateCommit"][
+                "receiptFileSha256"
+            ],
+            "hostBootstrapBoundarySha256": host_boundary[
+                "boundarySha256"
+            ],
+            "globalRoleRegistrySha256": global_role_registry[
+                "registrySha256"
+            ],
+            "releaseCompletionResultKeyId": result_signer_key_id,
+            "allResultDigestsCrossBound": True,
+        },
+        "completionIdentity": completion_identity,
+        "completionIdentitySha256": completion_identity_sha256,
+        "nextClientState": public_result["nextClientState"],
+        "stateCommit": public_result["stateCommit"],
+        "hostReadinessContext": host_context,
+        "hostBootstrapBoundary": host_boundary,
+        "globalRoleRegistry": global_role_registry,
+        "externalPinProvenanceBoundary": (
+            FINAL_V6_EXTERNAL_PIN_PROVENANCE_BOUNDARY
+        ),
+        "externalProvisioningBoundary": (
+            FINAL_V6_EXTERNAL_PROVISIONING_BOUNDARY
+        ),
+    }
+
+
+def build_release_completion_result_signing_request(
+    result_core: dict[str, Any],
+    *,
+    provider: str,
+    signing_key_id: str,
+    signing_key_spki_sha256: str,
+    global_role_registry_sha256: str,
+) -> dict[str, Any]:
+    validate_canonical_json_profile(
+        result_core,
+        label="release completion result signing core",
+    )
+    provider = require_final_v1_identifier(
+        provider,
+        "release completion signing provider",
+    )
+    signing_key_id = require_sha256(
+        signing_key_id,
+        "release completion signing key ID",
+    )
+    signing_key_spki_sha256 = require_sha256(
+        signing_key_spki_sha256,
+        "release completion signing SPKI digest",
+    )
+    global_role_registry_sha256 = require_sha256(
+        global_role_registry_sha256,
+        "release completion signing global role registry",
+    )
+    require(
+        signing_key_id == signing_key_spki_sha256
+        and nested(
+            result_core,
+            "globalRoleRegistry",
+            "registrySha256",
+        )
+        == global_role_registry_sha256
+        and nested(
+            result_core,
+            "aggregateAuthentication",
+            "globalRoleRegistrySha256",
+        )
+        == global_role_registry_sha256
+        and nested(
+            result_core,
+            "globalRoleRegistry",
+            "roles",
+            "releaseCompletionResult",
+        )
+        == signing_key_id
+        and nested(
+            result_core,
+            "aggregateAuthentication",
+            "releaseCompletionResultKeyId",
+        )
+        == signing_key_id,
+        "release completion signing request crossed its signer or global role registry",
+    )
+    result_sha256 = verify_nitro_tee.sha256_json(result_core)
+    signing_bytes = (
+        FINAL_RESULT_SIGNATURE_DOMAIN
+        + verify_nitro_tee.canonical_json_bytes(result_core)
+    )
+    signing_bytes_sha256 = verify_nitro_tee.sha256(signing_bytes)
+    idempotency_binding = {
+        "apiVersion": FINAL_RESULT_SIGNING_REQUEST_API_VERSION,
+        "operation": FINAL_RESULT_SIGNING_OPERATION,
+        "provider": provider,
+        "signingKeyId": signing_key_id,
+        "signingKeySpkiSha256": signing_key_spki_sha256,
+        "globalRoleRegistrySha256": global_role_registry_sha256,
+        "resultSha256": result_sha256,
+        "signingBytesSha256": signing_bytes_sha256,
+    }
+    request_core = {
+        "apiVersion": FINAL_RESULT_SIGNING_REQUEST_API_VERSION,
+        "kind": FINAL_RESULT_SIGNING_REQUEST_KIND,
+        "operation": FINAL_RESULT_SIGNING_OPERATION,
+        "provider": provider,
+        "signingKeyId": signing_key_id,
+        "signingKeySpkiSha256": signing_key_spki_sha256,
+        "globalRoleRegistrySha256": global_role_registry_sha256,
+        "resultCore": result_core,
+        "resultSha256": result_sha256,
+        "signingBytesBase64url": base64.urlsafe_b64encode(
+            signing_bytes
+        ).decode("ascii").rstrip("="),
+        "signingBytesSha256": signing_bytes_sha256,
+        "idempotencyKey": verify_nitro_tee.sha256_json(idempotency_binding),
+        "retrySemantics": FINAL_RESULT_SIGNING_RETRY_SEMANTICS,
+        "lostResponseRecovery": FINAL_RESULT_SIGNING_LOST_RESPONSE_RECOVERY,
+        "conflictSemantics": FINAL_RESULT_SIGNING_CONFLICT_SEMANTICS,
+    }
+    return {
+        **request_core,
+        "requestSha256": verify_nitro_tee.sha256_json(request_core),
+    }
+
+
+def validate_release_completion_result_signing_request(
+    value: Any,
+    *,
+    expected_result_core: dict[str, Any],
+    expected_provider: str,
+    expected_signing_key_id: str,
+    expected_signing_key_spki_sha256: str,
+    expected_global_role_registry_sha256: str,
+) -> dict[str, Any]:
+    expected = build_release_completion_result_signing_request(
+        expected_result_core,
+        provider=expected_provider,
+        signing_key_id=expected_signing_key_id,
+        signing_key_spki_sha256=expected_signing_key_spki_sha256,
+        global_role_registry_sha256=(
+            expected_global_role_registry_sha256
+        ),
+    )
+    require(
+        isinstance(value, dict) and value == expected,
+        "release completion signing request is not the exact deterministic request",
+    )
+    return value
+
+
+def verify_release_completion_result_signing_response(
+    value: Any,
+    *,
+    signing_request: dict[str, Any],
+    trusted_public_key_pem: str,
+    expected_provider: str,
+    expected_signing_key_id: str,
+    expected_signing_key_spki_sha256: str,
+    expected_global_role_registry_sha256: str,
+) -> dict[str, Any]:
+    signing_request = validate_release_completion_result_signing_request(
+        signing_request,
+        expected_result_core=(
+            signing_request.get("resultCore")
+            if isinstance(signing_request, dict)
+            else {}
+        ),
+        expected_provider=expected_provider,
+        expected_signing_key_id=expected_signing_key_id,
+        expected_signing_key_spki_sha256=expected_signing_key_spki_sha256,
+        expected_global_role_registry_sha256=(
+            expected_global_role_registry_sha256
+        ),
+    )
+    fields = {
+        "apiVersion",
+        "kind",
+        "operation",
+        "status",
+        "requestSha256",
+        "idempotencyKey",
+        "provider",
+        "signingKeyId",
+        "signingKeySpkiSha256",
+        "globalRoleRegistrySha256",
+        "resultSha256",
+        "signingBytesSha256",
+        "signature",
+    }
+    require(
+        isinstance(value, dict)
+        and set(value) == fields
+        and value["apiVersion"]
+        == FINAL_RESULT_SIGNING_RESPONSE_API_VERSION
+        and value["kind"] == FINAL_RESULT_SIGNING_RESPONSE_KIND
+        and value["operation"] == FINAL_RESULT_SIGNING_OPERATION
+        and value["status"] == "signed",
+        "release completion signing response does not match the closed v1 contract",
+    )
+    provider = require_final_v1_identifier(
+        value["provider"],
+        "release completion signing response provider",
+    )
+    pinned_provider = require_final_v1_identifier(
+        expected_provider,
+        "expected release completion signing response provider",
+    )
+    signing_key_id = require_sha256(
+        value["signingKeyId"],
+        "release completion signing response key ID",
+    )
+    signing_key_spki_sha256 = require_sha256(
+        value["signingKeySpkiSha256"],
+        "release completion signing response SPKI digest",
+    )
+    calculated_key_id = release_public_key_id(trusted_public_key_pem)
+    require(
+        provider == pinned_provider == signing_request["provider"]
+        and signing_key_id
+        == require_sha256(
+            expected_signing_key_id,
+            "expected release completion signing response key ID",
+        )
+        == signing_request["signingKeyId"]
+        == calculated_key_id
+        and signing_key_spki_sha256
+        == require_sha256(
+            expected_signing_key_spki_sha256,
+            "expected release completion signing response SPKI digest",
+        )
+        == signing_request["signingKeySpkiSha256"]
+        == calculated_key_id
+        and value["globalRoleRegistrySha256"]
+        == require_sha256(
+            expected_global_role_registry_sha256,
+            "expected release completion signing response global role registry",
+        )
+        == signing_request["globalRoleRegistrySha256"]
+        and value["requestSha256"] == signing_request["requestSha256"]
+        and value["idempotencyKey"] == signing_request["idempotencyKey"]
+        and value["resultSha256"] == signing_request["resultSha256"]
+        and value["signingBytesSha256"]
+        == signing_request["signingBytesSha256"],
+        "release completion signing response crossed its exact request, signer, or role registry",
+    )
+    require(
+        isinstance(value["signature"], str)
+        and re.fullmatch(
+            r"ed25519:[A-Za-z0-9_-]{86}",
+            value["signature"],
+            re.ASCII,
+        )
+        is not None,
+        "release completion signing response signature is not canonical Ed25519",
+    )
+    signing_bytes = decode_canonical_base64url(
+        signing_request["signingBytesBase64url"],
+        "release completion signing request bytes",
+    )
+    require(
+        verify_nitro_tee.sha256(signing_bytes)
+        == signing_request["signingBytesSha256"],
+        "release completion signing request bytes changed after preparation",
+    )
+    verify_ed25519(
+        trusted_public_key_pem,
+        value["signature"],
+        signing_bytes,
+        "release completion signing response",
+    )
+    return {
+        "apiVersion": FINAL_RESULT_AUTHENTICITY_API_VERSION,
+        "provider": provider,
+        "signingKeyId": signing_key_id,
+        "signingKeySpkiSha256": signing_key_spki_sha256,
+        "resultSha256": value["resultSha256"],
+        "signature": value["signature"],
+    }
+
+
+def finalize_release_completion_verification_v1(
+    result_core: dict[str, Any],
+    signing_response: dict[str, Any],
+    *,
+    trusted_result_public_key_pem: str,
+    expected_result_provider: str,
+    expected_result_key_id: str,
+    expected_result_spki_sha256: str,
+    trusted_public_nitro_result_public_key_pem: str,
+    expected_public_nitro_result_provider: str,
+    expected_public_nitro_result_key_id: str,
+    expected_public_nitro_result_spki_sha256: str,
+    expected_final_role_registry_sha256: str,
+) -> dict[str, Any]:
+    signing_request = build_release_completion_result_signing_request(
+        result_core,
+        provider=expected_result_provider,
+        signing_key_id=expected_result_key_id,
+        signing_key_spki_sha256=expected_result_spki_sha256,
+        global_role_registry_sha256=(
+            expected_final_role_registry_sha256
+        ),
+    )
+    authenticity = verify_release_completion_result_signing_response(
+        signing_response,
+        signing_request=signing_request,
+        trusted_public_key_pem=trusted_result_public_key_pem,
+        expected_provider=expected_result_provider,
+        expected_signing_key_id=expected_result_key_id,
+        expected_signing_key_spki_sha256=(
+            expected_result_spki_sha256
+        ),
+        expected_global_role_registry_sha256=(
+            expected_final_role_registry_sha256
+        ),
+    )
+    final_result = {
+        **result_core,
+        "resultSha256": signing_request["resultSha256"],
+        "authenticity": authenticity,
+    }
+    return validate_release_completion_verification_v1(
+        final_result,
+        trusted_result_public_key_pem=trusted_result_public_key_pem,
+        expected_result_provider=expected_result_provider,
+        expected_result_key_id=expected_result_key_id,
+        expected_result_spki_sha256=expected_result_spki_sha256,
+        trusted_public_nitro_result_public_key_pem=(
+            trusted_public_nitro_result_public_key_pem
+        ),
+        expected_public_nitro_result_provider=(
+            expected_public_nitro_result_provider
+        ),
+        expected_public_nitro_result_key_id=(
+            expected_public_nitro_result_key_id
+        ),
+        expected_public_nitro_result_spki_sha256=(
+            expected_public_nitro_result_spki_sha256
+        ),
+        expected_final_role_registry_sha256=(
+            expected_final_role_registry_sha256
+        ),
+    )
+
+
+def validate_final_result_signer_phase(args: argparse.Namespace) -> str:
+    phase = getattr(args, "final_result_phase", None)
+    require(
+        phase in {"prepare", "finalize"},
+        "final Manifest v6 verification requires an explicit supported signer phase",
+    )
+    signing_response_path = getattr(
+        args,
+        "release_completion_result_signature",
+        None,
+    )
+    signing_request_path = getattr(
+        args,
+        "release_completion_result_signing_request",
+        None,
+    )
+    if phase == "prepare":
+        require(
+            signing_response_path is None,
+            "final signer prepare phase rejects a preexisting signed response",
+        )
+        require(
+            signing_request_path is None,
+            "final signer prepare phase rejects a preexisting prepared request",
+        )
+    else:
+        require(
+            bool(signing_response_path),
+            "final signer finalize phase requires --release-completion-result-signature",
+        )
+        require(
+            bool(signing_request_path),
+            "final signer finalize phase requires --release-completion-result-signing-request",
+        )
+    require(
+        bool(getattr(args, "out", None)),
+        "final signer prepare and finalize phases require --out for a durable artifact",
+    )
+    reject_final_protocol_output_collisions(args)
+    return phase
+
+
+def final_protocol_paths_have_same_identity(
+    left: str,
+    right: str,
+) -> bool:
+    left_identity = os.path.normcase(
+        os.path.realpath(os.path.abspath(left))
+    )
+    right_identity = os.path.normcase(
+        os.path.realpath(os.path.abspath(right))
+    )
+    if left_identity == right_identity:
+        return True
+    try:
+        return os.path.samefile(left, right)
+    except (FileNotFoundError, OSError):
+        return False
+
+
+def reject_final_protocol_output_collisions(
+    args: argparse.Namespace,
+) -> None:
+    output_path = getattr(args, "out", None)
+    require(
+        type(output_path) is str and bool(output_path),
+        "final protocol output path is absent",
+    )
+    final_protocol_inputs = (
+        (
+            "--public-nitro-evidence-bundle",
+            "public_nitro_evidence_bundle",
+        ),
+        ("--public-nitro-expectations", "public_nitro_expectations"),
+        ("--public-nitro-trust-roots", "public_nitro_trust_roots"),
+        (
+            "--public-nitro-verification-result",
+            "public_nitro_verification_result",
+        ),
+        (
+            "--public-nitro-verification-result-public-key",
+            "public_nitro_verification_result_public_key",
+        ),
+        (
+            "--host-readiness-completion-proof",
+            "host_readiness_completion_proof",
+        ),
+        (
+            "--release-completion-result-public-key",
+            "release_completion_result_public_key",
+        ),
+        (
+            "--release-completion-result-signature",
+            "release_completion_result_signature",
+        ),
+        (
+            "--release-completion-result-signing-request",
+            "release_completion_result_signing_request",
+        ),
+    )
+    for option, attribute in final_protocol_inputs:
+        input_path = getattr(args, attribute, None)
+        if input_path is None:
+            continue
+        require(
+            type(input_path) is str and bool(input_path),
+            f"{option} path is invalid",
+        )
+        require(
+            not final_protocol_paths_have_same_identity(
+                output_path,
+                input_path,
+            ),
+            f"--out must be a distinct artifact and must not collide with {option}",
+        )
+
+
+def emit_release_completion_result_signer_phase(
+    args: argparse.Namespace,
+    result_core: dict[str, Any],
+    *,
+    trusted_result_public_key_pem: str,
+    trusted_public_nitro_result_public_key_pem: str,
+) -> dict[str, Any]:
+    phase = validate_final_result_signer_phase(args)
+    signing_request = build_release_completion_result_signing_request(
+        result_core,
+        provider=args.expected_release_completion_result_provider,
+        signing_key_id=args.expected_release_completion_result_key_id,
+        signing_key_spki_sha256=(
+            args.expected_release_completion_result_spki_sha256
+        ),
+        global_role_registry_sha256=(
+            args.expected_final_role_registry_sha256
+        ),
+    )
+    if phase == "prepare":
+        document = signing_request
+        output_label = "release completion signing request"
+    else:
+        retained_signing_request, _ = load_final_v6_canonical_json(
+            args.release_completion_result_signing_request,
+            "retained release completion signing request",
+        )
+        validate_release_completion_result_signing_request(
+            retained_signing_request,
+            expected_result_core=result_core,
+            expected_provider=(
+                args.expected_release_completion_result_provider
+            ),
+            expected_signing_key_id=(
+                args.expected_release_completion_result_key_id
+            ),
+            expected_signing_key_spki_sha256=(
+                args.expected_release_completion_result_spki_sha256
+            ),
+            expected_global_role_registry_sha256=(
+                args.expected_final_role_registry_sha256
+            ),
+        )
+        signing_response, _ = load_final_v6_canonical_json(
+            args.release_completion_result_signature,
+            "release completion result signed response",
+        )
+        document = finalize_release_completion_verification_v1(
+            result_core,
+            signing_response,
+            trusted_result_public_key_pem=trusted_result_public_key_pem,
+            expected_result_provider=(
+                args.expected_release_completion_result_provider
+            ),
+            expected_result_key_id=(
+                args.expected_release_completion_result_key_id
+            ),
+            expected_result_spki_sha256=(
+                args.expected_release_completion_result_spki_sha256
+            ),
+            trusted_public_nitro_result_public_key_pem=(
+                trusted_public_nitro_result_public_key_pem
+            ),
+            expected_public_nitro_result_provider=(
+                args.expected_public_nitro_verification_result_provider
+            ),
+            expected_public_nitro_result_key_id=(
+                args.expected_public_nitro_verification_result_key_id
+            ),
+            expected_public_nitro_result_spki_sha256=(
+                args.expected_public_nitro_verification_result_spki_sha256
+            ),
+            expected_final_role_registry_sha256=(
+                args.expected_final_role_registry_sha256
+            ),
+        )
+        output_label = "final verification result"
+    if args.out:
+        reject_final_protocol_output_collisions(args)
+        output_digest = write_final_v6_result(Path(args.out), document)
+        require(
+            output_digest
+            == verify_nitro_tee.sha256(
+                verify_nitro_tee.canonical_json_bytes(document) + b"\n"
+            ),
+            f"{output_label} output digest mismatch",
+        )
+    sys.stdout.buffer.write(
+        verify_nitro_tee.canonical_json_bytes(document) + b"\n"
+    )
+    return document
+
+
+def verify_manifest_v6_final(args: argparse.Namespace) -> None:
+    required_inputs = {
+        "--public-nitro-evidence-bundle": args.public_nitro_evidence_bundle,
+        "--public-nitro-expectations": args.public_nitro_expectations,
+        "--public-nitro-trust-roots": args.public_nitro_trust_roots,
+        "--expected-public-nitro-trust-roots-sha256": (
+            args.expected_public_nitro_trust_roots_sha256
+        ),
+        "--public-nitro-verification-result": (
+            args.public_nitro_verification_result
+        ),
+        "--public-nitro-verification-result-public-key": (
+            args.public_nitro_verification_result_public_key
+        ),
+        "--expected-public-nitro-verification-result-provider": (
+            args.expected_public_nitro_verification_result_provider
+        ),
+        "--expected-public-nitro-verification-result-key-id": (
+            args.expected_public_nitro_verification_result_key_id
+        ),
+        "--expected-public-nitro-verification-result-spki-sha256": (
+            args.expected_public_nitro_verification_result_spki_sha256
+        ),
+        "--expected-final-role-registry-sha256": (
+            args.expected_final_role_registry_sha256
+        ),
+        "--release-completion-result-public-key": (
+            args.release_completion_result_public_key
+        ),
+        "--expected-release-completion-result-provider": (
+            args.expected_release_completion_result_provider
+        ),
+        "--expected-release-completion-result-key-id": (
+            args.expected_release_completion_result_key_id
+        ),
+        "--expected-release-completion-result-spki-sha256": (
+            args.expected_release_completion_result_spki_sha256
+        ),
+    }
+    missing = [option for option, value in required_inputs.items() if not value]
+    require(
+        not missing,
+        "final Manifest v6 verification requires: " + ", ".join(missing),
+    )
+    validate_final_result_signer_phase(args)
+    obsolete_final_inputs = {
+        "--public-nitro-trust-root-pin-id": (
+            args.public_nitro_trust_root_pin_id
+        ),
+        "--public-nitro-state-commit-receipt": (
+            args.public_nitro_state_commit_receipt
+        ),
+        "--public-nitro-current-head-authorization": (
+            args.public_nitro_current_head_authorization
+        ),
+        "--public-nitro-current-head-verifier-nonce": (
+            args.public_nitro_current_head_verifier_nonce
+        ),
+        "--public-nitro-current-head-redemption-receipt": (
+            args.public_nitro_current_head_redemption_receipt
+        ),
+        "--public-nitro-current-head-redemption-verifier-nonce": (
+            args.public_nitro_current_head_redemption_verifier_nonce
+        ),
+        "--promotion-acceptance-evidence": (
+            args.promotion_acceptance_evidence
+        ),
+        "--protected-client-state": args.protected_client_state,
+        "--protected-client-state-public-key": (
+            args.protected_client_state_public_key
+        ),
+        "--expected-protected-client-state-public-key-id": (
+            args.expected_protected_client_state_public_key_id
+        ),
+        "--protected-client-state-checkpoint": (
+            args.protected_client_state_checkpoint
+        ),
+        "--protected-client-state-checkpoint-public-key": (
+            args.protected_client_state_checkpoint_public_key
+        ),
+        "--expected-protected-client-state-checkpoint-public-key-id": (
+            args.expected_protected_client_state_checkpoint_public_key_id
+        ),
+        "--public-nitro-challenge": args.public_nitro_challenge,
+        "--final-challenge-receipt": args.final_challenge_receipt,
+        "--final-challenge-authority-public-key": (
+            args.final_challenge_authority_public_key
+        ),
+        "--final-challenge-authority-public-key-id": (
+            args.final_challenge_authority_public_key_id
+        ),
+        "--final-challenge-authority-provider": (
+            args.final_challenge_authority_provider
+        ),
+        "--candidate-manifest-v6": args.candidate_manifest_v6,
+        "--source-input-manifest": args.source_input_manifest,
+        "--source-git-inventory-public-key": (
+            args.source_git_inventory_public_key
+        ),
+        "--source-untracked-approval-public-key": (
+            args.source_untracked_approval_public_key
+        ),
+        "--dependency-closure": args.dependency_closure,
+        "--build-watchdog-receipt": args.build_watchdog_receipt,
+        "--build-watchdog-public-key": args.build_watchdog_public_key,
+        "--promotion-receipt": args.promotion_receipt,
+        "--promotion-public-key": args.promotion_public_key,
+        "--builder-left-statement": args.builder_left_statement,
+        "--builder-left-transcript": args.builder_left_transcript,
+        "--builder-left-public-key": args.builder_left_public_key,
+        "--builder-right-statement": args.builder_right_statement,
+        "--builder-right-transcript": args.builder_right_transcript,
+        "--builder-right-public-key": args.builder_right_public_key,
+        "--manifest-v6-eif-build": args.manifest_v6_eif_build,
+        "--manifest-v6-eif-builder-public-key": (
+            args.manifest_v6_eif_builder_public_key
+        ),
+        "--expected-final-v6-apparmor-profile-sha256": (
+            args.expected_final_v6_apparmor_profile_sha256
+        ),
+        "--expected-final-v6-seccomp-profile-sha256": (
+            args.expected_final_v6_seccomp_profile_sha256
+        ),
+        "--key-custody-evidence": args.key_custody_evidence,
+        "--key-custody-public-key": args.key_custody_public_key,
+        "--monotonic-witness": args.monotonic_witness,
+        "--monotonic-witness-public-key": (
+            args.monotonic_witness_public_key
+        ),
+        "--prior-witness-state": args.prior_witness_state,
+        "--completion-proof-authentication": (
+            args.completion_proof_authentication
+        ),
+        "--completion-authentication-public-key": (
+            args.completion_authentication_public_key
+        ),
+        "--completion-proof-checkpoint": args.completion_proof_checkpoint,
+        "--completion-checkpoint-public-key": (
+            args.completion_checkpoint_public_key
+        ),
+    }
+    supplied_obsolete = [
+        option
+        for option, supplied in obsolete_final_inputs.items()
+        if supplied is not None
+    ]
+    require(
+        not supplied_obsolete,
+        "final verification consumes the signed public-Nitro live result; "
+        "obsolete local finalization or completionProof/v6 inputs are rejected: "
+        + ", ".join(supplied_obsolete),
+    )
+    require(
+        not args.skip_current_host_check,
+        "final Manifest v6 verification forbids --skip-current-host-check",
+    )
+    bundle_document, bundle_raw = load_final_v6_canonical_json(
+        args.public_nitro_evidence_bundle,
+        "public Nitro evidence bundle",
+    )
+    expectations_document, expectations_raw = load_final_v6_canonical_json(
+        args.public_nitro_expectations,
+        "independent production expectations",
+    )
+    trust_document, trust_raw = load_final_v6_canonical_json(
+        args.public_nitro_trust_roots,
+        "closed public Nitro trust-root bundle",
+    )
+    _reject_obsolete_final_v6_injection(bundle_document)
+    _reject_obsolete_final_v6_injection(expectations_document)
+    _reject_obsolete_final_v6_injection(trust_document)
+    trust_bundle_file_sha256 = verify_nitro_tee.sha256(trust_raw)
+    require(
+        trust_bundle_file_sha256
+        == require_sha256(
+            args.expected_public_nitro_trust_roots_sha256,
+            "expected public Nitro trust-root bundle",
+        ),
+        "public Nitro trust-root bundle differs from the caller-pinned digest",
+    )
+    public_envelope, public_envelope_raw = load_final_v6_canonical_json(
+        args.public_nitro_verification_result,
+        "signed public Nitro live verification result",
+    )
+    _reject_obsolete_final_v6_injection(public_envelope)
+    public_result_pem, public_result_key_id = _load_pinned_ed25519_pem(
+        args.public_nitro_verification_result_public_key,
+        expected_key_id=(
+            args.expected_public_nitro_verification_result_key_id
+        ),
+        expected_spki_sha256=(
+            args.expected_public_nitro_verification_result_spki_sha256
+        ),
+        label="public Nitro live result trust root",
+    )
+    public_result = verify_signed_public_nitro_result_envelope(
+        public_envelope,
+        trusted_public_key_pem=public_result_pem,
+        expected_provider=(
+            args.expected_public_nitro_verification_result_provider
+        ),
+        expected_key_id=(
+            args.expected_public_nitro_verification_result_key_id
+        ),
+        expected_spki_sha256=(
+            args.expected_public_nitro_verification_result_spki_sha256
+        ),
+    )
+    evidence_bundle_file_sha256 = verify_nitro_tee.sha256(bundle_raw)
+    expectations_file_sha256 = verify_nitro_tee.sha256(expectations_raw)
+    require(
+        public_result["evidenceBundleFileSha256"]
+        == evidence_bundle_file_sha256
+        and public_result["expectationsFileSha256"]
+        == expectations_file_sha256
+        and public_result["trustRootBundleFileSha256"]
+        == trust_bundle_file_sha256,
+        "signed public Nitro result crossed its exact bundle, expectations, or trust-root bytes",
+    )
+    completion_identity, completion_identity_sha256 = (
+        validate_final_v6_completion_identity(
+            public_result["completionIdentity"]
+        )
+    )
+    host_context = _load_host_readiness_context(
+        args.host_readiness_completion_proof
+    )
+    host_context_sha256 = verify_nitro_tee.sha256_json(host_context)
+    host_boundary_core = {
+        "apiVersion": FINAL_V6_HOST_BOOTSTRAP_BOUNDARY_API_VERSION,
+        "launchManifestApiVersion": "serverware.productionReadinessLaunch/v3",
+        "launchAuthorizationRequestApiVersion": (
+            "serverware.launchAuthorizationRequest/v2"
+        ),
+        "launchAuthorizationApiVersion": "serverware.launchAuthorization/v2",
+        "bootstrapReceiptApiVersion": "serverware.bootstrapReceipt/v3",
+        "nonceRollbackAssuranceBindingApiVersion": (
+            "serverware.productionNonceRollbackAssuranceBinding/v1"
+        ),
+        "authorizationScope": "trusted-host-readiness",
+        "freshnessAuthority": "trusted-host-wall-clock",
+        "evidenceProvidedToFinalVerifier": host_context["provided"],
+        "hostReadinessContextSha256": host_context_sha256,
+        "hostReadinessCompletionProofFileSha256": host_context[
+            "completionProofFileSha256"
+        ],
+        "launchAuthorityKeyId": host_context["launchAuthorityKeyId"],
+        "authoritativeForFinalCompletion": False,
+        "requiredForFinalCompletion": False,
+        "relationship": "non-authoritative-readiness-context-only",
+        "finalAuthority": (
+            "independent-manifest-v6-public-nitro-verifier-and-protected-state"
+        ),
+        "completionIdentitySha256": completion_identity_sha256,
+        "bindingMechanism": (
+            "signed-final-result-core-non-authoritative-context-binding"
+        ),
+    }
+    host_boundary = {
+        **host_boundary_core,
+        "boundarySha256": verify_nitro_tee.sha256_json(host_boundary_core),
+    }
+    result_signer_pem, result_signer_key_id = _load_pinned_ed25519_pem(
+        args.release_completion_result_public_key,
+        expected_key_id=args.expected_release_completion_result_key_id,
+        expected_spki_sha256=(
+            args.expected_release_completion_result_spki_sha256
+        ),
+        label="release completion result trust root",
+    )
+    roles = {
+        role: public_result["roleKeyIds"][role]
+        for role in sorted(FINAL_PUBLIC_RESULT_ROLE_NAMES)
+    }
+    roles["releaseCompletionResult"] = result_signer_key_id
+    if host_context["launchAuthorityKeyId"] is not None:
+        roles["launchAuthority"] = host_context["launchAuthorityKeyId"]
+    roles = {role: roles[role] for role in sorted(roles)}
+    role_registry_core = {
+        "apiVersion": FINAL_ROLE_REGISTRY_API_VERSION,
+        "roles": roles,
+    }
+    global_role_registry = {
+        **role_registry_core,
+        "registrySha256": verify_nitro_tee.sha256_json(role_registry_core),
+    }
+    _validate_final_role_registry(
+        global_role_registry,
+        public_result_roles=public_result["roleKeyIds"],
+        public_result_signer_key_id=public_result_key_id,
+        result_signer_key_id=result_signer_key_id,
+        launch_authority_key_id=host_context["launchAuthorityKeyId"],
+        expected_registry_sha256=args.expected_final_role_registry_sha256,
+    )
+    public_envelope_file_sha256 = verify_nitro_tee.sha256(
+        public_envelope_raw
+    )
+    final_core = build_release_completion_verification_v1_core(
+        public_envelope=public_envelope,
+        public_envelope_file_sha256=public_envelope_file_sha256,
+        public_result=public_result,
+        evidence_bundle_file_sha256=evidence_bundle_file_sha256,
+        expectations_file_sha256=expectations_file_sha256,
+        trust_root_bundle_file_sha256=trust_bundle_file_sha256,
+        completion_identity=completion_identity,
+        completion_identity_sha256=completion_identity_sha256,
+        host_context=host_context,
+        host_boundary=host_boundary,
+        global_role_registry=global_role_registry,
+        result_signer_key_id=result_signer_key_id,
+    )
+    emit_release_completion_result_signer_phase(
+        args,
+        final_core,
+        trusted_result_public_key_pem=result_signer_pem,
+        trusted_public_nitro_result_public_key_pem=public_result_pem,
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Verify Serverware release readiness and independently proven final completion.")
     parser.add_argument(
@@ -9995,20 +20443,218 @@ def main() -> None:
         default="readiness",
         help="Readiness never claims final completion; final fails closed unless all final evidence and one-use state pass.",
     )
+    parser.add_argument(
+        "--final-result-phase",
+        choices=("prepare", "finalize"),
+        default="finalize",
+        help=(
+            "Prepare emits the deterministic external-signer request; finalize "
+            "verifies the exact signed response and emits final v1."
+        ),
+    )
+    parser.add_argument("--public-nitro-evidence-bundle", default=None)
+    parser.add_argument("--public-nitro-expectations", default=None)
+    parser.add_argument("--public-nitro-trust-roots", default=None)
+    parser.add_argument(
+        "--expected-public-nitro-trust-roots-sha256",
+        default=None,
+        help=(
+            "Closed trust-root bundle digest obtained from a client or "
+            "out-of-band pin; an on-host path alone is not provenance."
+        ),
+    )
+    parser.add_argument("--public-nitro-trust-root-pin-id", default=None)
+    parser.add_argument("--public-nitro-verification-result", default=None)
+    parser.add_argument(
+        "--public-nitro-verification-result-public-key",
+        default=None,
+    )
+    parser.add_argument(
+        "--expected-public-nitro-verification-result-provider",
+        default=None,
+    )
+    parser.add_argument(
+        "--expected-public-nitro-verification-result-key-id",
+        default=None,
+    )
+    parser.add_argument(
+        "--expected-public-nitro-verification-result-spki-sha256",
+        default=None,
+    )
+    parser.add_argument(
+        "--host-readiness-completion-proof",
+        default=None,
+        help=(
+            "Optional completionProof/v6 trusted-host readiness context. "
+            "It is validated as readiness-only and never contributes final authority."
+        ),
+    )
+    parser.add_argument(
+        "--expected-final-role-registry-sha256",
+        default=None,
+    )
+    parser.add_argument(
+        "--release-completion-result-signing-request",
+        default=None,
+        help=(
+            "Retained canonical releaseCompletionResultSigningRequest/v1 "
+            "emitted by prepare; finalize requires and revalidates these exact bytes."
+        ),
+    )
+    parser.add_argument(
+        "--release-completion-result-signature",
+        default=None,
+        help=(
+            "Canonical external HSM/KMS/TEE signed response to the exact "
+            "releaseCompletionResultSigningRequest/v1 emitted by prepare."
+        ),
+    )
+    parser.add_argument(
+        "--release-completion-result-public-key",
+        default=None,
+    )
+    parser.add_argument(
+        "--expected-release-completion-result-provider",
+        default=None,
+    )
+    parser.add_argument(
+        "--expected-release-completion-result-key-id",
+        default=None,
+    )
+    parser.add_argument(
+        "--expected-release-completion-result-spki-sha256",
+        default=None,
+    )
+    parser.add_argument(
+        "--public-nitro-state-commit-receipt",
+        default=None,
+        help=(
+            "Canonical signed rollback-resistant CAS receipt for finalizing "
+            "the exact pending public-verifier state transition."
+        ),
+    )
+    parser.add_argument(
+        "--public-nitro-current-head-authorization",
+        default=None,
+        help=(
+            "Canonical signed one-use current-head authorization issued by "
+            "the external state store only after the exact CAS receipt is "
+            "verified."
+        ),
+    )
+    parser.add_argument(
+        "--public-nitro-current-head-verifier-nonce",
+        default=None,
+        help=(
+            "Fresh independently generated exactly 32-byte unpadded base64url "
+            "nonce consumed by the external store for current-head "
+            "authorization."
+        ),
+    )
+    parser.add_argument(
+        "--public-nitro-current-head-redemption-receipt",
+        default=None,
+        help=(
+            "Canonical signed receipt from the atomic compare-current-head-"
+            "and-redeem operation performed after authorization."
+        ),
+    )
+    parser.add_argument(
+        "--public-nitro-current-head-redemption-verifier-nonce",
+        default=None,
+        help=(
+            "Fresh independently generated exactly 32-byte unpadded base64url "
+            "nonce created only after current-head authorization and consumed "
+            "by the atomic redemption operation."
+        ),
+    )
+    parser.add_argument("--promotion-acceptance-evidence", default=None)
+    parser.add_argument("--protected-client-state", default=None)
+    parser.add_argument("--protected-client-state-public-key", default=None)
+    parser.add_argument(
+        "--expected-protected-client-state-public-key-id",
+        default=None,
+    )
+    parser.add_argument("--protected-client-state-checkpoint", default=None)
+    parser.add_argument(
+        "--protected-client-state-checkpoint-public-key",
+        default=None,
+    )
+    parser.add_argument(
+        "--expected-protected-client-state-checkpoint-public-key-id",
+        default=None,
+    )
+    parser.add_argument(
+        "--public-nitro-challenge",
+        default=None,
+        help="Independent fresh exactly 32-byte unpadded base64url challenge.",
+    )
     parser.add_argument("--final-challenge-receipt", default=None)
     parser.add_argument("--final-challenge-authority-public-key", default=None)
     parser.add_argument("--final-challenge-authority-public-key-id", default=None)
     parser.add_argument("--final-challenge-authority-provider", default=None)
+    parser.add_argument("--candidate-manifest-v6", default=None)
+    parser.add_argument("--source-input-manifest", default=None)
+    parser.add_argument("--source-git-inventory-public-key", default=None)
+    parser.add_argument("--source-untracked-approval-public-key", default=None)
+    parser.add_argument("--dependency-closure", default=None)
+    parser.add_argument("--build-watchdog-receipt", default=None)
+    parser.add_argument("--build-watchdog-public-key", default=None)
+    parser.add_argument("--promotion-receipt", default=None)
+    parser.add_argument("--promotion-public-key", default=None)
+    parser.add_argument("--builder-left-statement", default=None)
+    parser.add_argument("--builder-left-transcript", default=None)
+    parser.add_argument("--builder-left-public-key", default=None)
+    parser.add_argument("--builder-right-statement", default=None)
+    parser.add_argument("--builder-right-transcript", default=None)
+    parser.add_argument("--builder-right-public-key", default=None)
+    parser.add_argument("--manifest-v6-eif-build", default=None)
+    parser.add_argument("--manifest-v6-eif-builder-public-key", default=None)
+    parser.add_argument(
+        "--expected-final-v6-apparmor-profile-sha256",
+        default=None,
+        help="Out-of-band pin for the exact fixed Manifest v6 AppArmor profile.",
+    )
+    parser.add_argument(
+        "--expected-final-v6-seccomp-profile-sha256",
+        default=None,
+        help="Out-of-band pin for the exact fixed Manifest v6 seccomp profile.",
+    )
+    parser.add_argument("--key-custody-evidence", default=None)
+    parser.add_argument("--key-custody-public-key", default=None)
+    parser.add_argument("--monotonic-witness", default=None)
+    parser.add_argument("--monotonic-witness-public-key", default=None)
+    parser.add_argument("--prior-witness-state", default=None)
+    parser.add_argument("--completion-proof-authentication", default=None)
+    parser.add_argument("--completion-authentication-public-key", default=None)
+    parser.add_argument("--completion-proof-checkpoint", default=None)
+    parser.add_argument("--completion-checkpoint-public-key", default=None)
     parser.add_argument("--production-readiness", default=".tmp/production-readiness.json")
     parser.add_argument("--production-readiness-config", default=".tmp/production-readiness-config.json")
     parser.add_argument("--production-readiness-env", default="ops/production-readiness.env")
     parser.add_argument(
         "--launcher-trusted-production-env-path",
-        default=os.getenv(run_production_readiness.LAUNCHER_TRUSTED_ENV_PATH_INPUT),
+        default=os.getenv(
+            "SERVERWARE_LAUNCHER_TRUSTED_PRODUCTION_ENV_PATH"
+        ),
     )
     parser.add_argument(
         "--launcher-trusted-production-env-sha256",
-        default=os.getenv(run_production_readiness.LAUNCHER_TRUSTED_ENV_SHA256_INPUT),
+        default=os.getenv(
+            "SERVERWARE_LAUNCHER_TRUSTED_PRODUCTION_ENV_SHA256"
+        ),
+    )
+    parser.add_argument(
+        "--launcher-nonce-rollback-assurance-pins",
+        default=None,
+    )
+    parser.add_argument(
+        "--launcher-nonce-rollback-assurance-pins-sha256",
+        default=None,
+    )
+    parser.add_argument(
+        "--launcher-nonce-rollback-assurance-contract-sha256",
+        default=None,
     )
     parser.add_argument("--docker-executable", default=None)
     parser.add_argument("--docker-compose-plugin-executable", default=None)
@@ -10038,25 +20684,25 @@ def main() -> None:
     parser.add_argument("--production-images-published", default=".tmp/production-images-published.json")
     parser.add_argument("--release-provenance-summary", default=".tmp/release-provenance-summary.json")
     parser.add_argument("--release-provenance", default=".tmp/release-provenance.json")
-    parser.add_argument("--release-provenance-trusted-public-key", required=True)
+    parser.add_argument("--release-provenance-trusted-public-key", default=None)
     parser.add_argument("--image-signatures-summary", default=".tmp/image-signatures-summary.json")
     parser.add_argument("--image-signatures", default=".tmp/image-signatures.json")
-    parser.add_argument("--sigstore-trusted-public-key", required=True)
-    parser.add_argument("--rekor-trusted-public-key", required=True)
-    parser.add_argument("--external-checkpoint-provider", required=True)
-    parser.add_argument("--external-checkpoint-trusted-public-key", required=True)
+    parser.add_argument("--sigstore-trusted-public-key", default=None)
+    parser.add_argument("--rekor-trusted-public-key", default=None)
+    parser.add_argument("--external-checkpoint-provider", default=None)
+    parser.add_argument("--external-checkpoint-trusted-public-key", default=None)
     parser.add_argument("--bench", default=".tmp/decision-gate-rs-bench.json")
-    parser.add_argument("--policy-bundle", required=True)
-    parser.add_argument("--policy-trusted-public-key", required=True)
+    parser.add_argument("--policy-bundle", default=None)
+    parser.add_argument("--policy-trusted-public-key", default=None)
     parser.add_argument("--policy-trusted-public-key-id", default=None)
-    parser.add_argument("--policy-identity-verification", required=True)
-    parser.add_argument("--policy-activation-verification", required=True)
-    parser.add_argument("--policy-activation-signature", required=True)
-    parser.add_argument("--policy-activation-trusted-public-key", required=True)
+    parser.add_argument("--policy-identity-verification", default=None)
+    parser.add_argument("--policy-activation-verification", default=None)
+    parser.add_argument("--policy-activation-signature", default=None)
+    parser.add_argument("--policy-activation-trusted-public-key", default=None)
     parser.add_argument("--policy-activation-trusted-public-key-id", default=None)
-    parser.add_argument("--reproducible-build-verification", required=True)
-    parser.add_argument("--reproducible-build-signature", required=True)
-    parser.add_argument("--reproducible-build-trusted-public-key", required=True)
+    parser.add_argument("--reproducible-build-verification", default=None)
+    parser.add_argument("--reproducible-build-signature", default=None)
+    parser.add_argument("--reproducible-build-trusted-public-key", default=None)
     parser.add_argument("--reproducible-build-trusted-public-key-id", default=None)
     parser.add_argument("--kms-materials", default="/etc/serverware/kms-materials.json")
     parser.add_argument(
@@ -10083,10 +20729,69 @@ def main() -> None:
     parser.add_argument("--proxy-operation-context-digest", default=None)
     parser.add_argument("--proxy-tls-channel-binding", default=None)
     parser.add_argument("--proxy-proof-max-age-seconds", type=int, default=None)
-    parser.add_argument("--p99-limit-ms", type=float, default=None)
+    parser.add_argument("--p99-limit-ms", default=None)
     parser.add_argument("--out", default=None)
     parser.add_argument("--skip-current-host-check", action="store_true", help="Test-only bypass for synthetic fixture completion tests.")
     args = parser.parse_args()
+
+    if args.verification_mode == "final":
+        verify_manifest_v6_final(args)
+        return
+
+    load_readiness_dependencies()
+
+    # Everything below this point is the legacy Docker /dev/nsm readiness
+    # verifier. It cannot issue or validate Manifest v6 final completion.
+    # Historical final-condition branches are permanently disabled behind
+    # this local constant; the dispatch above is the sole final path.
+    legacy_final_mode = False
+    require(
+        args.verification_mode == "readiness",
+        "legacy verifier path is readiness-only",
+    )
+    require(
+        args.final_result_phase == "finalize",
+        "--final-result-phase prepare is only valid with --verification-mode final",
+    )
+    readiness_required_inputs = {
+        "--release-provenance-trusted-public-key": (
+            args.release_provenance_trusted_public_key
+        ),
+        "--sigstore-trusted-public-key": args.sigstore_trusted_public_key,
+        "--rekor-trusted-public-key": args.rekor_trusted_public_key,
+        "--external-checkpoint-provider": args.external_checkpoint_provider,
+        "--external-checkpoint-trusted-public-key": (
+            args.external_checkpoint_trusted_public_key
+        ),
+        "--policy-bundle": args.policy_bundle,
+        "--policy-trusted-public-key": args.policy_trusted_public_key,
+        "--policy-identity-verification": args.policy_identity_verification,
+        "--policy-activation-verification": (
+            args.policy_activation_verification
+        ),
+        "--policy-activation-signature": args.policy_activation_signature,
+        "--policy-activation-trusted-public-key": (
+            args.policy_activation_trusted_public_key
+        ),
+        "--reproducible-build-verification": (
+            args.reproducible_build_verification
+        ),
+        "--reproducible-build-signature": args.reproducible_build_signature,
+        "--reproducible-build-trusted-public-key": (
+            args.reproducible_build_trusted_public_key
+        ),
+        "--out": args.out,
+    }
+    missing_readiness_inputs = [
+        option
+        for option, value in readiness_required_inputs.items()
+        if not value
+    ]
+    require(
+        not missing_readiness_inputs,
+        "legacy readiness verification requires: "
+        + ", ".join(missing_readiness_inputs),
+    )
 
     require(
         bool(args.hardware_assurance) == bool(args.hardware_assurance_trusted_public_key),
@@ -10110,71 +20815,87 @@ def main() -> None:
             supplied_hardware_challenges == 0,
             "hardware assurance expected challenge options require --hardware-assurance",
         )
-    if args.verification_mode == "final":
-        forbidden_environment = run_production_readiness.forbidden_process_environment_names(
-            dict(os.environ)
-        )
-        require(
-            not forbidden_environment,
-            "final verifier environment contains forbidden runtime/loader injection settings: "
-            + ", ".join(forbidden_environment),
-        )
-        require(sys.flags.isolated == 1, "final verifier Python interpreter must run in isolated mode")
-        require(bool(args.docker_executable), "final verification mode requires --docker-executable")
-        require(
-            bool(args.docker_compose_plugin_executable),
-            "final verification mode requires --docker-compose-plugin-executable",
-        )
-        require(bool(args.docker_unix_socket), "final verification mode requires --docker-unix-socket")
-        require(bool(args.docker_daemon_id), "final verification mode requires --docker-daemon-id")
-        require(
-            bool(args.production_host_preflight_signing_public_key),
-            "final verification mode requires --production-host-preflight-signing-public-key",
-        )
-        require(
-            bool(args.production_host_preflight_signing_key_id),
-            "final verification mode requires --production-host-preflight-signing-key-id",
-        )
-        require(
-            isinstance(args.production_host_preflight_max_age_seconds, int),
-            "final verification mode requires --production-host-preflight-max-age-seconds",
-        )
-        require(bool(args.hardware_assurance), "final verification mode requires hardware assurance evidence")
-        require(bool(args.final_challenge_receipt), "final verification mode requires --final-challenge-receipt")
-        require(
-            bool(args.final_challenge_authority_public_key),
-            "final verification mode requires --final-challenge-authority-public-key",
-        )
-        require(
-            bool(args.final_challenge_authority_public_key_id),
-            "final verification mode requires --final-challenge-authority-public-key-id",
-        )
-        require(
-            bool(args.hardware_assurance_trusted_public_key_id),
-            "final verification mode requires --hardware-assurance-trusted-public-key-id",
-        )
-        require(
-            bool(args.final_challenge_authority_provider),
-            "final verification mode requires --final-challenge-authority-provider",
-        )
-        require(not args.skip_current_host_check, "final verification mode forbids --skip-current-host-check")
-        bootstrap_receipt, _ = run_production_readiness.load_sealed_bootstrap_receipt(
-            required=True
-        )
-    else:
-        bootstrap_receipt = None
-        require(
-            not any(
-                (
-                    args.final_challenge_receipt,
-                    args.final_challenge_authority_public_key,
-                    args.final_challenge_authority_public_key_id,
-                    args.final_challenge_authority_provider,
-                    args.hardware_assurance_trusted_public_key_id,
-                )
+    bootstrap_receipt, bootstrap_receipt_fd = (
+        run_production_readiness.load_sealed_bootstrap_receipt(required=False)
+    )
+    nonce_rollback_assurance = (
+        run_production_readiness.validate_retained_nonce_rollback_assurance(
+            retained_path=args.launcher_nonce_rollback_assurance_pins,
+            expected_pins_sha256=(
+                args.launcher_nonce_rollback_assurance_pins_sha256
             ),
-            "final challenge receipt options are only valid with --verification-mode final",
+            expected_contract_sha256=(
+                args.launcher_nonce_rollback_assurance_contract_sha256
+            ),
+            bootstrap_receipt=bootstrap_receipt,
+            required=bootstrap_receipt is not None,
         )
+    )
+    launch_manifest_v3 = (
+        verify_launcher_nonce_rollback_manifest_v3(
+            bootstrap_receipt,
+            nonce_rollback_assurance,
+        )
+        if bootstrap_receipt is not None
+        else {
+            "apiVersion": "serverware.productionReadinessLaunch/v3",
+            "purpose": "readiness-only",
+            "verified": False,
+        }
+    )
+    require(
+        not any(
+            (
+                args.public_nitro_evidence_bundle,
+                args.public_nitro_expectations,
+                args.public_nitro_trust_roots,
+                args.expected_public_nitro_trust_roots_sha256,
+                args.public_nitro_trust_root_pin_id,
+                args.promotion_acceptance_evidence,
+                args.protected_client_state,
+                args.protected_client_state_public_key,
+                args.expected_protected_client_state_public_key_id,
+                args.protected_client_state_checkpoint,
+                args.protected_client_state_checkpoint_public_key,
+                args.expected_protected_client_state_checkpoint_public_key_id,
+                args.public_nitro_challenge,
+                args.final_challenge_receipt,
+                args.final_challenge_authority_public_key,
+                args.final_challenge_authority_public_key_id,
+                args.final_challenge_authority_provider,
+                args.hardware_assurance_trusted_public_key_id,
+                args.candidate_manifest_v6,
+                args.source_input_manifest,
+                args.source_git_inventory_public_key,
+                args.source_untracked_approval_public_key,
+                args.dependency_closure,
+                args.build_watchdog_receipt,
+                args.build_watchdog_public_key,
+                args.promotion_receipt,
+                args.promotion_public_key,
+                args.builder_left_statement,
+                args.builder_left_transcript,
+                args.builder_left_public_key,
+                args.builder_right_statement,
+                args.builder_right_transcript,
+                args.builder_right_public_key,
+                args.manifest_v6_eif_build,
+                args.manifest_v6_eif_builder_public_key,
+                args.expected_final_v6_apparmor_profile_sha256,
+                args.expected_final_v6_seccomp_profile_sha256,
+                args.key_custody_evidence,
+                args.key_custody_public_key,
+                args.monotonic_witness,
+                args.monotonic_witness_public_key,
+                args.prior_witness_state,
+                args.completion_proof_authentication,
+                args.completion_authentication_public_key,
+                args.completion_proof_checkpoint,
+                args.completion_checkpoint_public_key,
+            )
+        ),
+        "Manifest v6 final evidence options are not accepted by legacy readiness mode",
+    )
     require(
         bool(args.control_plane_response_signing_public_key),
         "production completion requires --control-plane-response-signing-public-key",
@@ -10312,9 +21033,55 @@ def main() -> None:
     if args.hardware_assurance:
         paths["hardware_assurance"] = Path(args.hardware_assurance)
         paths["hardware_assurance_trusted_public_key"] = Path(args.hardware_assurance_trusted_public_key)
-    if args.verification_mode == "final":
+    if legacy_final_mode:
         paths["final_challenge_receipt"] = Path(args.final_challenge_receipt)
         paths["final_challenge_authority_public_key"] = Path(args.final_challenge_authority_public_key)
+        paths.update(
+            {
+                "candidate_manifest_v6": Path(args.candidate_manifest_v6),
+                "source_input_manifest": Path(args.source_input_manifest),
+                "source_git_inventory_public_key": Path(
+                    args.source_git_inventory_public_key
+                ),
+                "source_untracked_approval_public_key": Path(
+                    args.source_untracked_approval_public_key
+                ),
+                "dependency_closure": Path(args.dependency_closure),
+                "build_watchdog_receipt": Path(args.build_watchdog_receipt),
+                "build_watchdog_public_key": Path(args.build_watchdog_public_key),
+                "promotion_receipt": Path(args.promotion_receipt),
+                "promotion_public_key": Path(args.promotion_public_key),
+                "builder_left_statement": Path(args.builder_left_statement),
+                "builder_left_transcript": Path(args.builder_left_transcript),
+                "builder_left_public_key": Path(args.builder_left_public_key),
+                "builder_right_statement": Path(args.builder_right_statement),
+                "builder_right_transcript": Path(args.builder_right_transcript),
+                "builder_right_public_key": Path(args.builder_right_public_key),
+                "manifest_v6_eif_build": Path(args.manifest_v6_eif_build),
+                "manifest_v6_eif_builder_public_key": Path(
+                    args.manifest_v6_eif_builder_public_key
+                ),
+                "key_custody_evidence": Path(args.key_custody_evidence),
+                "key_custody_public_key": Path(args.key_custody_public_key),
+                "monotonic_witness": Path(args.monotonic_witness),
+                "monotonic_witness_public_key": Path(
+                    args.monotonic_witness_public_key
+                ),
+                "prior_witness_state": Path(args.prior_witness_state),
+                "completion_proof_authentication": Path(
+                    args.completion_proof_authentication
+                ),
+                "completion_authentication_public_key": Path(
+                    args.completion_authentication_public_key
+                ),
+                "completion_proof_checkpoint": Path(
+                    args.completion_proof_checkpoint
+                ),
+                "completion_checkpoint_public_key": Path(
+                    args.completion_checkpoint_public_key
+                ),
+            }
+        )
 
     trust_root_keys = {
         "release_provenance_trusted_public_key",
@@ -10330,6 +21097,17 @@ def main() -> None:
         "hardware_assurance_trusted_public_key",
         "final_challenge_authority_public_key",
         "production_host_preflight_signing_public_key",
+        "source_git_inventory_public_key",
+        "source_untracked_approval_public_key",
+        "build_watchdog_public_key",
+        "promotion_public_key",
+        "builder_left_public_key",
+        "builder_right_public_key",
+        "manifest_v6_eif_builder_public_key",
+        "key_custody_public_key",
+        "monotonic_witness_public_key",
+        "completion_authentication_public_key",
+        "completion_checkpoint_public_key",
     }
     input_limits: dict[str, tuple[str, int]] = {}
     for key in paths:
@@ -10357,7 +21135,10 @@ def main() -> None:
 
     readiness = load_json_snapshot(final_file_snapshots["production_readiness"], "production readiness")
     production_readiness_config = load_json_snapshot(final_file_snapshots["production_readiness_config"], "production readiness config")
-    production_host_preflight = load_json_snapshot(final_file_snapshots["production_host_preflight"], "production host preflight")
+    production_host_preflight = load_production_host_preflight_json_snapshot(
+        final_file_snapshots["production_host_preflight"],
+        "production host preflight",
+    )
     nitro_evidence = load_json_snapshot(final_file_snapshots["nitro_evidence"], "Nitro/KMS evidence")
     production_images_build = load_json_snapshot(final_file_snapshots["production_images_build"], "production images build")
     production_images_published = load_json_snapshot(final_file_snapshots["production_images_published"], "production images published")
@@ -10365,7 +21146,10 @@ def main() -> None:
     provenance_document = load_json_snapshot(final_file_snapshots["release_provenance"], "release provenance")
     image_summary = load_json_snapshot(final_file_snapshots["image_signatures_summary"], "image signatures summary")
     image_document = load_json_snapshot(final_file_snapshots["image_signatures"], "image signatures")
-    bench = load_json_snapshot(final_file_snapshots["bench"], "decision-gate benchmark")
+    bench = load_benchmark_json_snapshot(
+        final_file_snapshots["bench"],
+        "decision-gate benchmark",
+    )
     proxy_response_proof = load_json_snapshot(
         final_file_snapshots["proxy_response_proof"],
         "production proxy response proof",
@@ -10401,6 +21185,7 @@ def main() -> None:
         preflight_signing_key_id=args.production_host_preflight_signing_key_id,
         preflight_max_age_seconds=args.production_host_preflight_max_age_seconds,
         expected_bootstrap_receipt=bootstrap_receipt,
+        expected_nonce_rollback_assurance=nonce_rollback_assurance,
     )
     current_host_summary = verify_current_completion_host(
         preflight_summary,
@@ -10484,21 +21269,31 @@ def main() -> None:
         preflight_signing_public_key=args.production_host_preflight_signing_public_key,
         preflight_signing_key_id=args.production_host_preflight_signing_key_id,
         preflight_max_age_seconds=args.production_host_preflight_max_age_seconds,
+        launcher_enforced=bootstrap_receipt is not None,
     )
+    if bootstrap_receipt is not None:
+        launcher_trust = production_env_binding.get("launcher_trust")
+        require(
+            isinstance(launcher_trust, dict),
+            "launcher-enforced readiness is missing its production env trust binding",
+        )
+        launcher_trust["bootstrap_receipt"] = bootstrap_receipt
+        launcher_trust["nonce_rollback_assurance"] = (
+            nonce_rollback_assurance
+        )
     production_env = load_production_env_snapshot(
         final_file_snapshots["production_readiness_env"]
     )
     args.proxy_proof_max_age_seconds = production_env_binding[
         "proxy_proof_max_age_seconds"
     ]
-    args.p99_limit_ms = production_env_binding["p99_limit_ms"]
     args.docker_executable = production_env_binding["docker_executable"]
     args.docker_compose_plugin_executable = production_env_binding[
         "docker_compose_plugin_executable"
     ]
     args.docker_unix_socket = production_env_binding["docker_unix_socket"]
     args.docker_daemon_id = production_env_binding["docker_daemon_id"]
-    if args.verification_mode == "final":
+    if legacy_final_mode:
         production_env_binding["executing_interpreter"] = verify_current_interpreter_binding(
             production_env,
             production_env_binding["current_executable_digests"],
@@ -10581,7 +21376,7 @@ def main() -> None:
             "hardware assurance trust root",
             encoding="ascii",
         )
-        if args.verification_mode == "final":
+        if legacy_final_mode:
             require(
                 hmac.compare_digest(
                     release_public_key_id(trusted_hardware_verifier_public_key_pem),
@@ -10589,7 +21384,7 @@ def main() -> None:
                 ),
                 "loaded hardware assurance trust root identity differs from the hashed production readiness env binding",
             )
-    if args.verification_mode == "final":
+    if legacy_final_mode:
         trusted_final_challenge_authority_public_key_pem = snapshot_text(
             final_file_snapshots["final_challenge_authority_public_key"],
             "final challenge authority trust root",
@@ -10679,7 +21474,7 @@ def main() -> None:
         compose_plugin_sha256=production_env_binding["docker_compose_plugin_sha256"],
         docker_unix_socket=args.docker_unix_socket,
         docker_daemon_id=args.docker_daemon_id,
-        final_mode=args.verification_mode == "final",
+        final_mode=legacy_final_mode,
     )
     image_summary_out = verify_image_signatures(
         image_summary,
@@ -10697,7 +21492,7 @@ def main() -> None:
     )
     benchmark_summary = verify_benchmark(
         bench,
-        args.p99_limit_ms,
+        production_env_binding["p99_limit_ns"],
         str(production_env_binding["expected_data_plane_binary_digest"]),
     )
     production_gate_binary = next(
@@ -10760,7 +21555,7 @@ def main() -> None:
             trusted_public_key_pem=trusted_hardware_verifier_public_key_pem,
             expected_trusted_public_key_id=(
                 args.hardware_assurance_trusted_public_key_id
-                if args.verification_mode == "final"
+                if legacy_final_mode
                 else None
             ),
             hardware_assurance_document_sha256=final_file_snapshots[
@@ -10774,12 +21569,37 @@ def main() -> None:
             expected_challenge_nonce=args.hardware_assurance_expected_challenge_nonce,
             expected_challenge_nonce_sha256=args.hardware_assurance_expected_challenge_nonce_sha256,
         )
+    production_continuity: dict[str, Any] | None = None
+    if legacy_final_mode:
+        require(
+            hardware_assurance_summary is not None,
+            "final Manifest v6 continuity requires verified hardware assurance",
+        )
+        production_continuity = verify_production_continuity(
+            snapshots=final_file_snapshots,
+            expected_policy_hash=str(attested_runtime["policy_digest"]),
+            expected_challenge_nonce_sha256=hardware_assurance_summary[
+                "challenge_nonce_sha256"
+            ],
+        )
+        require(
+            production_continuity["eif"]["eif_file_sha384"]
+            == hardware_assurance_summary["eif"]["image_sha384"]
+            and production_continuity["eif"]["pcrs"]
+            == hardware_assurance_summary["pcrs"],
+            "Manifest v6 EIF identity or PCRs differ from hardware assurance",
+        )
     release_security_summary = verify_release_security_evidence(
         paths=stable_paths,
         production_build=production_images_build_summary,
         benchmark=benchmark_summary,
         attested_runtime=attested_runtime,
         preflight=preflight_summary,
+        directly_verified_builders=(
+            production_continuity["builders"]
+            if production_continuity is not None
+            else None
+        ),
     )
     require(
         final_file_snapshots["reproducible_build_verification"].sha256
@@ -10801,6 +21621,18 @@ def main() -> None:
         == provenance_summary_out["reproducible_build_builders"],
         "signed release provenance builder identities do not match the independently verified reproducible-build report",
     )
+    if production_continuity is not None:
+        raw_builder_key_ids = {
+            production_continuity["builders"]["left"]["signing_key_id"],
+            production_continuity["builders"]["right"]["signing_key_id"],
+        }
+        mediated_builder_key_ids = {
+            item["key_id"] for item in verified_builders
+        }
+        require(
+            raw_builder_key_ids == mediated_builder_key_ids,
+            "raw builder statements do not match the independently configured reproducible-builder identities",
+        )
     if bootstrap_receipt is not None:
         launcher_authorization = verify_bootstrap_launcher_authorization(
             bootstrap_receipt,
@@ -10832,6 +21664,8 @@ def main() -> None:
                 release_artifact_launch_authority=production_images_build_summary[
                     "launch_authority"
                 ],
+                nonce_rollback_assurance=nonce_rollback_assurance,
+                launch_manifest_v3=launch_manifest_v3,
             )
         )
         provenance_summary_out["executed_production_launcher"] = launcher_authorization
@@ -10907,7 +21741,9 @@ def main() -> None:
     )
     candidate_assurance = completion_assurance(hardware_assurance_summary, current_host_summary)
     final_challenge_consumption: dict[str, Any] | None = None
-    if args.verification_mode == "final":
+    completion_identity: dict[str, Any] | None = None
+    completion_identity_sha256: str | None = None
+    if legacy_final_mode:
         require(
             candidate_assurance.get("final_completion") is True,
             "final verification mode did not satisfy hardware-backed final completion requirements",
@@ -10916,6 +21752,18 @@ def main() -> None:
         require(
             isinstance(verified_builders, list) and len(verified_builders) == 2,
             "final verification mode is missing both independently verified builders",
+        )
+        require(
+            production_continuity is not None,
+            "final verification mode is missing Manifest v6 production continuity",
+        )
+        _, completion_authentication_key = load_ed25519_trust_root(
+            final_file_snapshots["completion_authentication_public_key"],
+            "completion proof authentication trust root",
+        )
+        _, completion_checkpoint_key = load_ed25519_trust_root(
+            final_file_snapshots["completion_checkpoint_public_key"],
+            "completion proof checkpoint trust root",
         )
         launch_authorization_identity = launcher_authorization[
             "launch_authorization"
@@ -10967,6 +21815,33 @@ def main() -> None:
                 "final_challenge_authority": production_env_binding[
                     "final_challenge_authority_public_key_id"
                 ],
+                "source_git_inventory_authority": production_continuity[
+                    "source"
+                ]["git_inventory_key_id"],
+                "source_untracked_approval_authority": production_continuity[
+                    "source"
+                ]["untracked_approval_key_id"],
+                "build_watchdog_signer": production_continuity[
+                    "buildWatchdog"
+                ]["signing_key_id"],
+                "promotion_receipt_signer": production_continuity[
+                    "promotion"
+                ]["signing_key_id"],
+                "manifest_v6_eif_builder": production_continuity["eif"][
+                    "signing_key_id"
+                ],
+                "key_custody_verifier": production_continuity["keyCustody"][
+                    "signing_key_id"
+                ],
+                "monotonic_release_witness": production_continuity[
+                    "monotonicWitness"
+                ]["signing_key_id"],
+                "completion_proof_authenticator": completion_authentication_key[
+                    "spki_sha256"
+                ],
+                "completion_proof_checkpoint": completion_checkpoint_key[
+                    "spki_sha256"
+                ],
             },
         )
         provenance_summary_out["security_role_map"] = security_role_map
@@ -10974,6 +21849,18 @@ def main() -> None:
             hardware_assurance_summary,
             bootstrap_receipt=bootstrap_receipt,
             current_host_identity_sha256=current_host_summary["identity"]["identity_sha256"],
+            key_custody_evidence_sha256=production_continuity["keyCustody"][
+                "file_sha256"
+            ],
+            monotonic_witness_sha256=production_continuity[
+                "monotonicWitness"
+            ]["file_sha256"],
+            production_continuity_sha256=production_continuity[
+                "continuitySha256"
+            ],
+            production_release_identity_sha256=production_continuity[
+                "productionReleaseIdentity"
+            ]["productionReleaseIdentitySha256"],
             proxy_server_statement_sha256=proxy_response_summary["server_statement_sha256"],
             security_role_map_sha256=security_role_map["sha256"],
         )
@@ -11008,39 +21895,38 @@ def main() -> None:
         assurance = candidate_assurance
     else:
         assurance = candidate_assurance
-        if candidate_assurance.get("final_completion") is True:
-            assurance = {
-                "level": "pre-enclave-readiness",
-                "final_completion": False,
-                "hardware_proof": False,
-                "hardware_evidence_verified": True,
-                "reason": "readiness verification mode never claims or consumes final completion",
-                "required_final_evidence": [
-                    "rerun with --verification-mode final and an off-host challenge-authority consumption receipt"
-                ],
-            }
 
+    proof_generated_at_unix = int(time.time())
     proof = {
-        "apiVersion": "serverware.completionProof/v5",
-        "kind": "ServerwareCompletionProof" if assurance["final_completion"] else "ServerwarePreEnclaveReadiness",
-        "ok": True,
+        "apiVersion": COMPLETION_PROOF_API_VERSION,
+        "kind": "ServerwarePreEnclaveReadiness",
+        "verificationOk": True,
+        "finalCompletionVerified": False,
+        "actionAuthorization": None,
+        "okForAction": False,
         "verification_passed": True,
-        "verification_mode": args.verification_mode,
-        "result_scope": "final-completion" if assurance["final_completion"] else "readiness-only",
-        "readiness_only": not assurance["final_completion"],
+        "verification_mode": "readiness",
+        "result_scope": "readiness-only",
+        "readiness_only": True,
         "readiness_ok": True,
-        "completion_status": assurance["level"],
-        "release_completion": "pass" if assurance["final_completion"] else "not-final",
-        "final_completion": assurance["final_completion"],
-        "hardware_proof": assurance["hardware_proof"],
+        "completion_status": "pre-enclave-readiness",
+        "release_completion": "not-final",
+        "hardware_proof": False,
         "assurance_ceiling": assurance,
-        "generated_at_unix": int(time.time()),
+        "generated_at_unix": proof_generated_at_unix,
         "artifacts": {
             label: {
                 "path": str(snapshot.path),
                 "sha256": snapshot.sha256,
             }
             for label, snapshot in sorted(final_file_snapshots.items())
+            if label
+            not in {
+                "completion_proof_authentication",
+                "completion_authentication_public_key",
+                "completion_proof_checkpoint",
+                "completion_checkpoint_public_key",
+            }
         },
         "production_readiness": readiness_summary,
         "production_readiness_config": production_config_summary,
@@ -11051,14 +21937,20 @@ def main() -> None:
         "bootstrap_launcher": bootstrap_receipt
         if bootstrap_receipt is not None
         else {"required": False, "verified": False},
+        "nonce_rollback_assurance": {
+            **nonce_rollback_assurance,
+            "launchManifest": launch_manifest_v3,
+            "purpose": "readiness-only",
+        },
         "nitro_kms_evidence": nitro_summary,
         "nitro_evidence_binding": nitro_binding,
         "hardware_assurance_evidence": hardware_assurance_summary
         if hardware_assurance_summary is not None
         else {"provided": False, "verified": False},
-        "final_challenge_consumption": final_challenge_consumption
-        if final_challenge_consumption is not None
-        else {"required": args.verification_mode == "final", "consumed": False},
+        "final_challenge_consumption": {
+            "required": False,
+            "consumed": False,
+        },
         "production_images_build": production_images_build_summary,
         "production_images_published": production_images_published_summary,
         "release_provenance": provenance_summary_out,
@@ -11066,20 +21958,49 @@ def main() -> None:
         "benchmark": benchmark_summary,
         "release_security_evidence": release_security_summary,
         "production_proxy_response_proof": proxy_response_summary,
+        "production_continuity": {
+            "required": False,
+            "verified": False,
+            "pipeline": "readiness-only",
+        },
     }
-    if args.out:
-        proof["proof_path"] = args.out
-        generation = secrets.token_hex(16)
-        proof_digest_path = completion_proof_digest_path(Path(args.out), generation)
-        proof["integrity_metadata"] = {
-            "generation": generation,
-            "detached_sha256_path": str(proof_digest_path),
-            "scope": "checksum-only",
-            "independently_authenticated": False,
-            "authenticity_requires_external_signature_or_checkpoint": True,
-        }
-        proof["proof_sha256"] = write_output(Path(args.out), proof)
-        proof["proof_sha256_path"] = str(proof_digest_path)
+    proof_core_sha256 = sha256_prefixed_json(proof)
+    proof["proof_core_sha256"] = proof_core_sha256
+    proof["independently_authenticated"] = False
+    proof["aggregate_authentication"] = {
+        "required": False,
+        "independently_authenticated": False,
+        "scope": "readiness-only",
+    }
+    proof["proof_path"] = args.out
+    generation = secrets.token_hex(16)
+    proof_digest_path = completion_proof_digest_path(Path(args.out), generation)
+    proof["integrity_metadata"] = {
+        "generation": generation,
+        "detached_sha256_path": str(proof_digest_path),
+        "scope": "checksum-only",
+        "independently_authenticated": False,
+        "authenticity_requires_external_signature_or_checkpoint": True,
+    }
+    before_output_publication = None
+    if bootstrap_receipt is not None:
+        def revalidate_before_output_publication() -> None:
+            (
+                run_production_readiness
+                .revalidate_bootstrap_launch_authorization_at_completion(
+                    expected_receipt=bootstrap_receipt,
+                    expected_descriptor=bootstrap_receipt_fd,
+                    generated_at_unix=proof_generated_at_unix,
+                )
+            )
+
+        before_output_publication = revalidate_before_output_publication
+
+    write_output(
+        Path(args.out),
+        proof,
+        before_output_publication=before_output_publication,
+    )
     print(canonical_json(proof))
     stable_input_directory.cleanup()
 
@@ -11088,5 +22009,14 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as exc:
-        print(canonical_json({"ok": False, "error": str(exc)}), file=sys.stderr)
+        print(
+            canonical_json(
+                {
+                    "apiVersion":
+                    "serverware.releaseCompletionError/v1",
+                    "error": str(exc),
+                }
+            ),
+            file=sys.stderr,
+        )
         raise SystemExit(1) from exc

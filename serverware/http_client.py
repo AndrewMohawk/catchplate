@@ -36,10 +36,18 @@ class HttpDeadline:
 class HttpResponse:
     status: int
     headers: Mapping[str, str]
+    raw_headers: tuple[tuple[str, str], ...]
     body: bytes
 
 
+@dataclass(frozen=True)
+class HttpJsonResponse:
+    response: HttpResponse
+    value: Any
+
+
 _TOKEN_RE = re.compile(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+")
+_JSON_SAFE_INTEGER_MAX = (1 << 53) - 1
 _MEDIA_TYPE_RE = re.compile(
     rf"(?P<media>{_TOKEN_RE.pattern}/{_TOKEN_RE.pattern})"
     rf'(?:\s*;\s*charset\s*=\s*(?P<charset>{_TOKEN_RE.pattern}|"[^"\r\n]*"))?\s*',
@@ -135,15 +143,63 @@ def _validate_content_encoding(headers: Any) -> None:
     values = _header_values(headers, "Content-Encoding")
     if not values:
         return
-    if len(values) != 1 or values[0].strip().lower() != "identity":
-        raise HttpClientError("HTTP response Content-Encoding is not identity")
+    # Python exposes parsed header values here, so raw leading OWS may already
+    # be normalized. Enforce zero values or one parsed value exactly "identity".
+    if len(values) != 1 or values[0] != "identity":
+        raise HttpClientError(
+            "HTTP response Content-Encoding must be absent or exactly identity"
+        )
 
 
-def _set_stream_timeout(stream: Any, timeout: float) -> None:
-    try:
-        stream.fp.raw._sock.settimeout(timeout)
-    except (AttributeError, OSError):
-        pass
+def _stream_layers(stream: Any) -> tuple[Any, ...]:
+    layers: list[Any] = []
+    current = stream
+    seen: set[int] = set()
+    while current is not None and len(layers) < 8:
+        identity = id(current)
+        if identity in seen:
+            break
+        seen.add(identity)
+        layers.append(current)
+        current = getattr(current, "fp", None)
+    return tuple(layers)
+
+
+def _stream_is_closed(stream: Any) -> bool:
+    for layer in _stream_layers(stream):
+        isclosed = getattr(layer, "isclosed", None)
+        if callable(isclosed):
+            try:
+                if isclosed():
+                    return True
+            except (OSError, ValueError):
+                return True
+        if getattr(layer, "closed", False) is True:
+            return True
+    return False
+
+
+def _set_stream_timeout(stream: Any, timeout: float) -> bool:
+    for layer in _stream_layers(stream):
+        for candidate in (layer, getattr(layer, "raw", None)):
+            if candidate is None:
+                continue
+            socket = getattr(candidate, "_sock", None)
+            setter = getattr(
+                socket if socket is not None else candidate,
+                "settimeout",
+                None,
+            )
+            if not callable(setter):
+                continue
+            try:
+                setter(timeout)
+            except (OSError, ValueError) as exc:
+                raise HttpClientError(
+                    "HTTP response deadline cannot be enforced"
+                ) from exc
+            return True
+    return False
 
 
 def _remaining_seconds(deadline_at: float) -> float:
@@ -163,11 +219,19 @@ def _bounded_read(
     if max_bytes < 1:
         raise HttpClientError("HTTP response limit must be positive")
     remaining = max_bytes + 1
+    received = 0
     chunks: list[bytes] = []
     read = getattr(stream, "read1", None) or stream.read
     while remaining > 0:
         if deadline_at is not None:
-            _set_stream_timeout(stream, _remaining_seconds(deadline_at))
+            timeout_set = _set_stream_timeout(
+                stream,
+                _remaining_seconds(deadline_at),
+            )
+            if not timeout_set:
+                if _stream_is_closed(stream):
+                    break
+                raise HttpClientError("HTTP response deadline cannot be enforced")
         try:
             chunk = read(min(64 * 1024, remaining))
         except TimeoutError as exc:
@@ -176,12 +240,19 @@ def _bounded_read(
             raise HttpClientError("HTTP response body is truncated") from exc
         except http.client.HTTPException as exc:
             raise HttpClientError("HTTP response framing is invalid") from exc
+        except ValueError as exc:
+            raise HttpClientError("HTTP response framing is invalid") from exc
+        except OSError as exc:
+            raise HttpClientError("HTTP response body transport failed") from exc
         if not chunk:
             break
         if not isinstance(chunk, bytes):
             raise HttpClientError("HTTP response body reader returned non-bytes data")
         chunks.append(chunk)
+        received += len(chunk)
         remaining -= len(chunk)
+        if content_length is not None and received == content_length:
+            break
         if remaining < 0:
             break
     body = b"".join(chunks)
@@ -307,17 +378,79 @@ def _strict_json_loads(raw: bytes) -> Any:
             raise HttpClientError("HTTP JSON response contains a non-finite number")
         return parsed
 
+    def finite_int(value: str) -> int:
+        if value == "-0":
+            raise HttpClientError(
+                "HTTP JSON response integer must use canonical zero"
+            )
+        parsed = int(value)
+        if abs(parsed) > _JSON_SAFE_INTEGER_MAX:
+            raise HttpClientError(
+                "HTTP JSON response integer is outside the canonical safe domain"
+            )
+        return parsed
+
     try:
         return json.loads(
             text,
             object_pairs_hook=reject_duplicate_keys,
             parse_float=finite_float,
+            parse_int=finite_int,
             parse_constant=reject_constant,
         )
     except HttpClientError:
         raise
     except (json.JSONDecodeError, OverflowError, RecursionError, ValueError) as exc:
         raise HttpClientError("HTTP response is not valid JSON") from exc
+
+
+def _captured_http_response(
+    stream: Any,
+    *,
+    status: int,
+    request_method: str,
+    max_bytes: int,
+    deadline_at: float,
+    expected_statuses: frozenset[int] | None,
+    expected_content_types: tuple[str, ...] | None,
+) -> HttpResponse:
+    _validate_content_encoding(stream.headers)
+    if expected_statuses is not None and status not in expected_statuses:
+        raise HttpClientError(f"HTTP response status {status} is not allowed")
+    if expected_content_types is not None:
+        _response_media_type(stream.headers, expected=expected_content_types)
+    content_length = _content_length(stream.headers, max_bytes=max_bytes)
+    _validate_transfer_encoding(
+        stream.headers,
+        has_content_length=content_length is not None,
+    )
+    body = _bounded_read(
+        stream,
+        max_bytes=max_bytes,
+        content_length=(
+            None
+            if request_method.upper() == "HEAD"
+            or 100 <= status < 200
+            or status in {204, 304}
+            else content_length
+        ),
+        deadline_at=deadline_at,
+    )
+    raw_items = getattr(stream.headers, "raw_items", None)
+    raw_headers = tuple(
+        (str(key), str(value))
+        for key, value in (
+            raw_items()
+            if callable(raw_items)
+            else stream.headers.items()
+        )
+    )
+    return HttpResponse(
+        status=status,
+        headers={key.lower(): value for key, value in stream.headers.items()},
+        raw_headers=raw_headers,
+        body=body,
+    )
 
 
 def request_bytes(
@@ -334,46 +467,95 @@ def request_bytes(
     req = urllib.request.Request(request) if isinstance(request, str) else request
     validate_http_url(req.full_url, require_https=require_https)
     deadline_at = _effective_deadline(timeout, deadline)
+    statuses = (
+        None
+        if expected_statuses is None
+        else _normalized_statuses(expected_statuses)
+    )
+    media_types = (
+        None
+        if expected_content_types is None
+        else _normalized_media_types(expected_content_types)
+    )
     opener = urllib.request.build_opener(
         urllib.request.ProxyHandler({}),
         _NoRedirectHandler(),
         urllib.request.HTTPSHandler(context=context),
     )
     opener.addheaders = []
-    with opener.open(req, timeout=_remaining_seconds(deadline_at)) as response:
-        status = int(response.status)
-        if expected_statuses is not None and status not in _normalized_statuses(expected_statuses):
-            raise HttpClientError(f"HTTP response status {status} is not allowed")
-        if expected_content_types is not None:
-            _response_media_type(response.headers, expected=expected_content_types)
-        content_length = _content_length(response.headers, max_bytes=max_bytes)
-        _validate_transfer_encoding(
-            response.headers,
-            has_content_length=content_length is not None,
-        )
-        _validate_content_encoding(response.headers)
-        body = _bounded_read(
+    try:
+        response = opener.open(req, timeout=_remaining_seconds(deadline_at))
+    except urllib.error.HTTPError as error:
+        status = int(error.code)
+        if statuses is not None and status in statuses:
+            with error:
+                return _captured_http_response(
+                    error,
+                    status=status,
+                    request_method=req.get_method(),
+                    max_bytes=max_bytes,
+                    deadline_at=deadline_at,
+                    expected_statuses=statuses,
+                    expected_content_types=media_types,
+                )
+        try:
+            _validate_content_encoding(error.headers)
+        except Exception:
+            error.close()
+            raise
+        raise
+    with response:
+        return _captured_http_response(
             response,
+            status=int(response.status),
+            request_method=req.get_method(),
             max_bytes=max_bytes,
-            content_length=content_length,
             deadline_at=deadline_at,
+            expected_statuses=statuses,
+            expected_content_types=media_types,
         )
-        return HttpResponse(
-            status=status,
-            headers={key.lower(): value for key, value in response.headers.items()},
-            body=body,
-        )
+
+
+def request_json_bytes(
+    request: str | urllib.request.Request,
+    *,
+    timeout: float,
+    max_bytes: int,
+    context: ssl.SSLContext | None = None,
+    require_https: bool = False,
+    deadline: HttpDeadline | None = None,
+    expected_statuses: Collection[int] = (200,),
+    expected_content_types: Collection[str] = ("application/json",),
+) -> HttpJsonResponse:
+    response = request_bytes(
+        request,
+        timeout=timeout,
+        max_bytes=max_bytes,
+        context=context,
+        require_https=require_https,
+        deadline=deadline,
+        expected_statuses=expected_statuses,
+        expected_content_types=expected_content_types,
+    )
+    return HttpJsonResponse(response=response, value=_strict_json_loads(response.body))
 
 
 def http_error_body(error: urllib.error.HTTPError, *, max_bytes: int) -> bytes:
-    content_length = _content_length(error.headers, max_bytes=max_bytes)
-    _validate_transfer_encoding(error.headers, has_content_length=content_length is not None)
-    _validate_content_encoding(error.headers)
-    return _bounded_read(
-        error,
-        max_bytes=max_bytes,
-        content_length=content_length,
-    )
+    try:
+        _validate_content_encoding(error.headers)
+        content_length = _content_length(error.headers, max_bytes=max_bytes)
+        _validate_transfer_encoding(
+            error.headers,
+            has_content_length=content_length is not None,
+        )
+        return _bounded_read(
+            error,
+            max_bytes=max_bytes,
+            content_length=content_length,
+        )
+    except BaseException:
+        error.close()
+        raise
 
 
 def request_json(

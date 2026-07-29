@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/release-completion-result-signing-request.v1.schema.json",
+  "title": "Serverware Release Completion Result Signing Request v1",
+  "$comment": "Closed, language-neutral handoff of the exact non-actionable final-v1 result core to an external HSM, KMS, or TEE signer. Structural validation does not recompute deterministic digests or canonical bytes, authenticate the embedded public-Nitro result, establish caller-pinned provider/key/SPKI/role-registry trust, accept a signature, or authorize an action. The native verifier must require exact deterministic request identity before finalization.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "kind",
+    "operation",
+    "provider",
+    "signingKeyId",
+    "signingKeySpkiSha256",
+    "globalRoleRegistrySha256",
+    "resultCore",
+    "resultSha256",
+    "signingBytesBase64url",
+    "signingBytesSha256",
+    "idempotencyKey",
+    "retrySemantics",
+    "lostResponseRecovery",
+    "conflictSemantics",
+    "requestSha256"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "serverware.releaseCompletionResultSigningRequest/v1"
+    },
+    "kind": {
+      "const": "ReleaseCompletionResultSigningRequest"
+    },
+    "operation": {
+      "const": "sign-release-completion-result"
+    },
+    "provider": {"$ref": "#/$defs/identifier"},
+    "signingKeyId": {"$ref": "#/$defs/sha256"},
+    "signingKeySpkiSha256": {"$ref": "#/$defs/sha256"},
+    "globalRoleRegistrySha256": {"$ref": "#/$defs/sha256"},
+    "resultCore": {
+      "$ref": "https://serverware.invalid/schemas/release-completion-verification.v1.schema.json#/$defs/resultCore"
+    },
+    "resultSha256": {"$ref": "#/$defs/sha256"},
+    "signingBytesBase64url": {
+      "$ref": "#/$defs/canonicalBase64url"
+    },
+    "signingBytesSha256": {"$ref": "#/$defs/sha256"},
+    "idempotencyKey": {"$ref": "#/$defs/sha256"},
+    "retrySemantics": {
+      "const": "same-idempotency-key-requires-byte-identical-request-and-response"
+    },
+    "lostResponseRecovery": {
+      "const": "resubmit-byte-identical-request-and-recover-identical-signed-response"
+    },
+    "conflictSemantics": {
+      "const": "same-idempotency-key-with-different-request-fails-closed"
+    },
+    "requestSha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}(?![\\s\\S])"
+    },
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@+-]{0,255}(?![\\s\\S])"
+    },
+    "canonicalBase64url": {
+      "$comment": "Canonical RFC 4648 base64url without padding. The terminal alternatives enforce zero unused pad bits for two- and three-character final quanta.",
+      "type": "string",
+      "minLength": 2,
+      "pattern": "^(?:[A-Za-z0-9_-]{4})*(?:[A-Za-z0-9_-][AQgw]|[A-Za-z0-9_-]{2}[AEIMQUYcgkosw048])?(?![\\s\\S])"
+    }
+  }
+}

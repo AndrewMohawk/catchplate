@@ -1,0 +1,965 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/public-attestation-config.v2.schema.json",
+  "title": "Serverware public attestation immutable config v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "minimumRollbackContinuityCommitmentSha256",
+    "nonceAuthorityAssurance",
+    "nonceAuthorityAssuranceEvidence",
+    "nonceAuthorityAssuranceEvidenceSigningPublicKeySpkiDerBase64url",
+    "nonceAuthorityAssuranceSha256",
+    "nonceAuthorityVerifierStateService",
+    "nonceAuthorityVerifierStateRoleSeparationEvidence",
+    "nonceAuthorityVerifierStateRoleSeparationEvidenceIssuer",
+    "nonceAuthorityVerifierStateRoleSeparationEvidenceSigningPublicKeySpkiDerBase64url",
+    "nonceAuthorityVerifierStateSigningPublicKeySpkiDerBase64url",
+    "nonceAuthorityVerifierStateStoreAdministrativeDomainSha256",
+    "nonceAuthorityVerifierStateStoreAssuranceEvidence",
+    "nonceAuthorityVerifierStateStoreAssuranceEvidenceSha256",
+    "nonceAuthorityVerifierStateStoreAssuranceEvidenceSigningPublicKeySpkiDerBase64url",
+    "nonceAuthorityVerifierStateStoreAssuranceIssuerAdministrativeDomainSha256",
+    "nonceAuthorityVerifierStateStoreAssuranceIssuerCredentialIdentitySha256",
+    "nonceAuthorityVerifierStateStoreAssuranceIssuerIdentitySha256",
+    "nonceAuthorityVerifierStateStoreAttestationPublicKeySpkiDerBase64url",
+    "nonceAuthorityVerifierStateStoreConfigurationSha256",
+    "nonceAuthorityVerifierStateStoreCredentialIdentitySha256",
+    "nonceAuthorityVerifierStateStoreIdentitySha256",
+    "nonceAuthorityVerifierStateStoreMinimumCommitIndex",
+    "nonceAuthorityVerifierStateStoreMinimumGeneration",
+    "nonceAuthorityVerifierStateStoreRollbackMechanism",
+    "nonceStoreSigningPublicKeySpkiDerBase64url",
+    "producerPolicy",
+    "releaseIdentity",
+    "releaseIdentitySha256",
+    "sandboxDescriptorSha256",
+    "tlsScopeSigningPublicKeySpkiDerBase64url",
+    "witnessStoreSigningPublicKeySpkiDerBase64url"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "serverware.publicAttestationConfig/v2"
+    },
+    "minimumRollbackContinuityCommitmentSha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "nonceAuthorityAssurance": {
+      "$ref": "#/$defs/nonceAuthorityAssurance"
+    },
+    "nonceAuthorityAssuranceEvidence": {
+      "$ref": "#/$defs/signedNonceAssuranceEvidence"
+    },
+    "nonceAuthorityAssuranceEvidenceSigningPublicKeySpkiDerBase64url": {
+      "$ref": "#/$defs/ed25519Spki"
+    },
+    "nonceAuthorityAssuranceSha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "nonceAuthorityVerifierStateService": {
+      "$ref": "#/$defs/verifierStateService"
+    },
+    "nonceAuthorityVerifierStateRoleSeparationEvidence": {
+      "$ref": "#/$defs/signedRoleSeparationEvidence"
+    },
+    "nonceAuthorityVerifierStateRoleSeparationEvidenceIssuer": {
+      "$ref": "#/$defs/role"
+    },
+    "nonceAuthorityVerifierStateRoleSeparationEvidenceSigningPublicKeySpkiDerBase64url": {
+      "$ref": "#/$defs/ed25519Spki"
+    },
+    "nonceAuthorityVerifierStateSigningPublicKeySpkiDerBase64url": {
+      "$ref": "#/$defs/ed25519Spki"
+    },
+    "nonceAuthorityVerifierStateStoreAdministrativeDomainSha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "nonceAuthorityVerifierStateStoreAssuranceEvidence": {
+      "$ref": "#/$defs/signedStoreAssuranceEvidence"
+    },
+    "nonceAuthorityVerifierStateStoreAssuranceEvidenceSha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "nonceAuthorityVerifierStateStoreAssuranceEvidenceSigningPublicKeySpkiDerBase64url": {
+      "$ref": "#/$defs/ed25519Spki"
+    },
+    "nonceAuthorityVerifierStateStoreAssuranceIssuerAdministrativeDomainSha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "nonceAuthorityVerifierStateStoreAssuranceIssuerCredentialIdentitySha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "nonceAuthorityVerifierStateStoreAssuranceIssuerIdentitySha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "nonceAuthorityVerifierStateStoreAttestationPublicKeySpkiDerBase64url": {
+      "$ref": "#/$defs/ed25519Spki"
+    },
+    "nonceAuthorityVerifierStateStoreConfigurationSha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "nonceAuthorityVerifierStateStoreCredentialIdentitySha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "nonceAuthorityVerifierStateStoreIdentitySha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "nonceAuthorityVerifierStateStoreMinimumCommitIndex": {
+      "$ref": "#/$defs/positiveU64"
+    },
+    "nonceAuthorityVerifierStateStoreMinimumGeneration": {
+      "$ref": "#/$defs/positiveU64"
+    },
+    "nonceAuthorityVerifierStateStoreRollbackMechanism": {
+      "enum": [
+        "appendOnlyWitnessedLedger",
+        "hardwareMonotonicCounter",
+        "linearizableCasWithRollbackProtectedStorage"
+      ]
+    },
+    "nonceStoreSigningPublicKeySpkiDerBase64url": {
+      "$ref": "#/$defs/ed25519Spki"
+    },
+    "producerPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "nonceStoreIdentitySha256",
+        "nonceStoreKeySpkiSha256",
+        "producerDescriptorSha256",
+        "producerExecutableSha256",
+        "producerRequestSchemaSha256",
+        "sandboxDescriptorSha256",
+        "sandboxLauncherSha256",
+        "witnessStoreIdentitySha256",
+        "witnessStoreKeySpkiSha256"
+      ],
+      "properties": {
+        "nonceStoreIdentitySha256": {"$ref": "#/$defs/sha256"},
+        "nonceStoreKeySpkiSha256": {"$ref": "#/$defs/sha256"},
+        "producerDescriptorSha256": {"$ref": "#/$defs/sha256"},
+        "producerExecutableSha256": {"$ref": "#/$defs/sha256"},
+        "producerRequestSchemaSha256": {"$ref": "#/$defs/sha256"},
+        "sandboxDescriptorSha256": {"$ref": "#/$defs/sha256"},
+        "sandboxLauncherSha256": {"$ref": "#/$defs/sha256"},
+        "witnessStoreIdentitySha256": {"$ref": "#/$defs/sha256"},
+        "witnessStoreKeySpkiSha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "releaseIdentity": {
+      "$ref": "release-identity.v1.schema.json"
+    },
+    "releaseIdentitySha256": {"$ref": "#/$defs/sha256"},
+    "sandboxDescriptorSha256": {"$ref": "#/$defs/sha256"},
+    "tlsScopeSigningPublicKeySpkiDerBase64url": {
+      "$ref": "#/$defs/ed25519Spki"
+    },
+    "witnessStoreSigningPublicKeySpkiDerBase64url": {
+      "$ref": "#/$defs/ed25519Spki"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": ["nonceAuthorityAssurance"],
+        "properties": {
+          "nonceAuthorityAssurance": {
+            "required": ["productionEligible"],
+            "properties": {
+              "productionEligible": {"const": true}
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "nonceAuthorityVerifierStateStoreAssuranceEvidenceSha256": {
+            "$ref": "#/$defs/sha256"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "nonceAuthorityVerifierStateStoreAssuranceEvidenceSha256": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "oneOf": [
+        {
+          "properties": {
+            "nonceAuthorityAssurance": {
+              "properties": {
+                "backendClass": {
+                  "const": "hardwareMonotonicCounter"
+                }
+              }
+            },
+            "nonceAuthorityAssuranceEvidence": {
+              "properties": {
+                "payload": {
+                  "properties": {
+                    "assuranceEvidenceType": {
+                      "const": "hardwareMonotonicCounterAttestation"
+                    },
+                    "backendClass": {
+                      "const": "hardwareMonotonicCounter"
+                    },
+                    "rollbackMechanism": {
+                      "const": "hardwareMonotonicCounter"
+                    },
+                    "stateCommitment": {
+                      "const": "monotonicCounterCommitment"
+                    },
+                    "verifierStateStoreClass": {
+                      "const": "hardwareProtectedStateStore"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "properties": {
+            "nonceAuthorityAssurance": {
+              "properties": {
+                "backendClass": {
+                  "const": "independentlyAdministeredLinearizableCas"
+                }
+              }
+            },
+            "nonceAuthorityAssuranceEvidence": {
+              "properties": {
+                "payload": {
+                  "properties": {
+                    "assuranceEvidenceType": {
+                      "const": "linearizableCasOperatorAttestation"
+                    },
+                    "backendClass": {
+                      "const": "independentlyAdministeredLinearizableCas"
+                    },
+                    "rollbackMechanism": {
+                      "const": "linearizableCasWithRollbackProtectedStorage"
+                    },
+                    "stateCommitment": {
+                      "const": "hashChainedLinearizableCommitment"
+                    },
+                    "verifierStateStoreClass": {
+                      "const": "independentlyAdministeredLinearizableCas"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "properties": {
+            "nonceAuthorityAssurance": {
+              "properties": {
+                "backendClass": {
+                  "const": "appendOnlyTransparencyLedger"
+                }
+              }
+            },
+            "nonceAuthorityAssuranceEvidence": {
+              "properties": {
+                "payload": {
+                  "properties": {
+                    "assuranceEvidenceType": {
+                      "const": "transparencyLedgerOperatorAttestation"
+                    },
+                    "backendClass": {
+                      "const": "appendOnlyTransparencyLedger"
+                    },
+                    "rollbackMechanism": {
+                      "const": "appendOnlyWitnessedLedger"
+                    },
+                    "stateCommitment": {
+                      "const": "appendOnlyMerkleCommitment"
+                    },
+                    "verifierStateStoreClass": {
+                      "const": "independentlyAdministeredLinearizableCas"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "$defs": {
+    "ed25519Spki": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{58}[AEIMQUYcgkosw048]$"
+    },
+    "nonceAuthorityAssurance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "administrativeDomainSha256",
+        "assuranceEvidenceSha256",
+        "assuranceEvidenceType",
+        "assuranceLevel",
+        "authorityEpoch",
+        "authorityGeneration",
+        "authorityIdentitySha256",
+        "backendClass",
+        "productionEligible",
+        "rollbackProtection"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nonceAuthorityAssurance/v1"
+        },
+        "administrativeDomainSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "assuranceEvidenceSha256": {
+          "$ref": "#/$defs/nullableSha256"
+        },
+        "assuranceEvidenceType": {
+          "enum": [
+            "hardwareMonotonicCounterAttestation",
+            "linearizableCasOperatorAttestation",
+            "transparencyLedgerOperatorAttestation",
+            "none"
+          ]
+        },
+        "assuranceLevel": {
+          "enum": [
+            "productionRollbackProtected",
+            "nonProductionFixture",
+            "nonProductionDurableReference"
+          ]
+        },
+        "authorityEpoch": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "authorityGeneration": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "authorityIdentitySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "backendClass": {
+          "enum": [
+            "hardwareMonotonicCounter",
+            "independentlyAdministeredLinearizableCas",
+            "appendOnlyTransparencyLedger",
+            "nonProductionSqlite"
+          ]
+        },
+        "productionEligible": {
+          "const": true
+        },
+        "rollbackProtection": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "administrativeRollbackResistance",
+            "backendAttestationRequired",
+            "exactSuccessorRequired",
+            "freshVerifierChallengeRequired",
+            "keyProtection",
+            "mechanism",
+            "stateCommitment",
+            "verifierStateStoreClass"
+          ],
+          "properties": {
+            "administrativeRollbackResistance": {
+              "type": "boolean"
+            },
+            "backendAttestationRequired": {
+              "type": "boolean"
+            },
+            "exactSuccessorRequired": {
+              "const": true
+            },
+            "freshVerifierChallengeRequired": {
+              "const": true
+            },
+            "keyProtection": {
+              "enum": [
+                "nonExportableHsm",
+                "nonExportableKmsHsm",
+                "retainedFdReference"
+              ]
+            },
+            "mechanism": {
+              "enum": [
+                "hardwareMonotonicCounter",
+                "linearizableCasWithRollbackProtectedStorage",
+                "appendOnlyWitnessedLedger",
+                "none"
+              ]
+            },
+            "stateCommitment": {
+              "enum": [
+                "monotonicCounterCommitment",
+                "hashChainedLinearizableCommitment",
+                "appendOnlyMerkleCommitment",
+                "localHashChain"
+              ]
+            },
+            "verifierStateStoreClass": {
+              "enum": [
+                "independentlyAdministeredLinearizableCas",
+                "hardwareProtectedStateStore",
+                "nonProductionCallerFile"
+              ]
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "productionEligible": {
+                "const": true
+              }
+            },
+            "required": [
+              "productionEligible"
+            ]
+          },
+          "then": {
+            "properties": {
+              "assuranceEvidenceSha256": {
+                "$ref": "#/$defs/sha256"
+              },
+              "assuranceEvidenceType": {
+                "enum": [
+                  "hardwareMonotonicCounterAttestation",
+                  "linearizableCasOperatorAttestation",
+                  "transparencyLedgerOperatorAttestation"
+                ]
+              },
+              "assuranceLevel": {
+                "const": "productionRollbackProtected"
+              },
+              "backendClass": {
+                "enum": [
+                  "hardwareMonotonicCounter",
+                  "independentlyAdministeredLinearizableCas",
+                  "appendOnlyTransparencyLedger"
+                ]
+              },
+              "rollbackProtection": {
+                "properties": {
+                  "administrativeRollbackResistance": {
+                    "const": true
+                  },
+                  "backendAttestationRequired": {
+                    "const": true
+                  },
+                  "keyProtection": {
+                    "enum": [
+                      "nonExportableHsm",
+                      "nonExportableKmsHsm"
+                    ]
+                  },
+                  "mechanism": {
+                    "enum": [
+                      "hardwareMonotonicCounter",
+                      "linearizableCasWithRollbackProtectedStorage",
+                      "appendOnlyWitnessedLedger"
+                    ]
+                  },
+                  "stateCommitment": {
+                    "enum": [
+                      "monotonicCounterCommitment",
+                      "hashChainedLinearizableCommitment",
+                      "appendOnlyMerkleCommitment"
+                    ]
+                  },
+                  "verifierStateStoreClass": {
+                    "enum": [
+                      "independentlyAdministeredLinearizableCas",
+                      "hardwareProtectedStateStore"
+                    ]
+                  }
+                }
+              }
+            },
+            "oneOf": [
+              {
+                "properties": {
+                  "backendClass": {
+                    "const": "hardwareMonotonicCounter"
+                  },
+                  "assuranceEvidenceType": {
+                    "const": "hardwareMonotonicCounterAttestation"
+                  },
+                  "rollbackProtection": {
+                    "properties": {
+                      "keyProtection": {
+                        "const": "nonExportableHsm"
+                      },
+                      "mechanism": {
+                        "const": "hardwareMonotonicCounter"
+                      },
+                      "stateCommitment": {
+                        "const": "monotonicCounterCommitment"
+                      },
+                      "verifierStateStoreClass": {
+                        "const": "hardwareProtectedStateStore"
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "backendClass": {
+                    "const": "independentlyAdministeredLinearizableCas"
+                  },
+                  "assuranceEvidenceType": {
+                    "const": "linearizableCasOperatorAttestation"
+                  },
+                  "rollbackProtection": {
+                    "properties": {
+                      "keyProtection": {
+                        "const": "nonExportableKmsHsm"
+                      },
+                      "mechanism": {
+                        "const": "linearizableCasWithRollbackProtectedStorage"
+                      },
+                      "stateCommitment": {
+                        "const": "hashChainedLinearizableCommitment"
+                      },
+                      "verifierStateStoreClass": {
+                        "const": "independentlyAdministeredLinearizableCas"
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "backendClass": {
+                    "const": "appendOnlyTransparencyLedger"
+                  },
+                  "assuranceEvidenceType": {
+                    "const": "transparencyLedgerOperatorAttestation"
+                  },
+                  "rollbackProtection": {
+                    "properties": {
+                      "keyProtection": {
+                        "const": "nonExportableKmsHsm"
+                      },
+                      "mechanism": {
+                        "const": "appendOnlyWitnessedLedger"
+                      },
+                      "stateCommitment": {
+                        "const": "appendOnlyMerkleCommitment"
+                      },
+                      "verifierStateStoreClass": {
+                        "const": "independentlyAdministeredLinearizableCas"
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          "else": {
+            "properties": {
+              "assuranceEvidenceSha256": {
+                "type": "null"
+              },
+              "assuranceEvidenceType": {
+                "const": "none"
+              },
+              "assuranceLevel": {
+                "enum": [
+                  "nonProductionFixture",
+                  "nonProductionDurableReference"
+                ]
+              },
+              "backendClass": {
+                "const": "nonProductionSqlite"
+              },
+              "rollbackProtection": {
+                "properties": {
+                  "administrativeRollbackResistance": {
+                    "const": false
+                  },
+                  "backendAttestationRequired": {
+                    "const": false
+                  },
+                  "keyProtection": {
+                    "const": "retainedFdReference"
+                  },
+                  "mechanism": {
+                    "const": "none"
+                  },
+                  "stateCommitment": {
+                    "const": "localHashChain"
+                  },
+                  "verifierStateStoreClass": {
+                    "const": "nonProductionCallerFile"
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "nullableSha256": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/sha256"
+        }
+      ]
+    },
+    "positiveU64": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 18446744073709551615
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "role": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "administrativeDomainSha256",
+        "assuranceEvidenceSha256",
+        "credentialIdentitySha256",
+        "endpointIdentitySha256",
+        "keySpkiSha256",
+        "roleIdentitySha256"
+      ],
+      "properties": {
+        "administrativeDomainSha256": {"$ref": "#/$defs/sha256"},
+        "assuranceEvidenceSha256": {"$ref": "#/$defs/sha256"},
+        "credentialIdentitySha256": {"$ref": "#/$defs/sha256"},
+        "endpointIdentitySha256": {"$ref": "#/$defs/sha256"},
+        "keySpkiSha256": {"$ref": "#/$defs/sha256"},
+        "roleIdentitySha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "signedNonceAssuranceEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "payload",
+        "payloadSha256",
+        "signatureAlgorithm",
+        "signatureBase64url",
+        "signingKeyId",
+        "signingKeySpkiSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.signedNonceAuthorityAssuranceEvidence/v1"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "administrativeDomainSha256",
+            "apiVersion",
+            "assuranceEvidenceType",
+            "authorityEpoch",
+            "authorityGeneration",
+            "authorityIdentitySha256",
+            "backendClass",
+            "expiresAtUnix",
+            "issuedAtUnix",
+            "nonceAuthorityStateSigningKeySpkiSha256",
+            "rollbackMechanism",
+            "stateCommitment",
+            "verifierStateStoreAdministrativeDomainSha256",
+            "verifierStateStoreClass",
+            "verifierStateStoreIdentitySha256",
+            "verifierStateStoreSigningKeySpkiSha256"
+          ],
+          "properties": {
+            "apiVersion": {
+              "const": "serverware.nonceAuthorityAssuranceEvidence/v1"
+            },
+            "administrativeDomainSha256": {"$ref": "#/$defs/sha256"},
+            "assuranceEvidenceType": {
+              "enum": [
+                "hardwareMonotonicCounterAttestation",
+                "linearizableCasOperatorAttestation",
+                "transparencyLedgerOperatorAttestation"
+              ]
+            },
+            "authorityEpoch": {"$ref": "#/$defs/positiveU64"},
+            "authorityGeneration": {"$ref": "#/$defs/positiveU64"},
+            "authorityIdentitySha256": {"$ref": "#/$defs/sha256"},
+            "backendClass": {
+              "enum": [
+                "appendOnlyTransparencyLedger",
+                "hardwareMonotonicCounter",
+                "independentlyAdministeredLinearizableCas"
+              ]
+            },
+            "expiresAtUnix": {"$ref": "#/$defs/positiveU64"},
+            "issuedAtUnix": {"$ref": "#/$defs/positiveU64"},
+            "nonceAuthorityStateSigningKeySpkiSha256": {"$ref": "#/$defs/sha256"},
+            "rollbackMechanism": {
+              "enum": [
+                "appendOnlyWitnessedLedger",
+                "hardwareMonotonicCounter",
+                "linearizableCasWithRollbackProtectedStorage"
+              ]
+            },
+            "stateCommitment": {
+              "enum": [
+                "appendOnlyMerkleCommitment",
+                "hashChainedLinearizableCommitment",
+                "monotonicCounterCommitment"
+              ]
+            },
+            "verifierStateStoreAdministrativeDomainSha256": {"$ref": "#/$defs/sha256"},
+            "verifierStateStoreClass": {
+              "enum": [
+                "hardwareProtectedStateStore",
+                "independentlyAdministeredLinearizableCas"
+              ]
+            },
+            "verifierStateStoreIdentitySha256": {"$ref": "#/$defs/sha256"},
+            "verifierStateStoreSigningKeySpkiSha256": {"$ref": "#/$defs/sha256"}
+          }
+        },
+        "payloadSha256": {"$ref": "#/$defs/sha256"},
+        "signatureAlgorithm": {"const": "Ed25519"},
+        "signatureBase64url": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{85}[AQgw]$"
+        },
+        "signingKeyId": {"$ref": "#/$defs/sha256"},
+        "signingKeySpkiSha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "signedStoreAssuranceEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "payload",
+        "payloadSha256",
+        "signatureAlgorithm",
+        "signatureBase64url",
+        "signingKeyId",
+        "signingKeySpkiSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.signedVerifierStateStoreAssuranceEvidence/v1"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "apiVersion",
+            "commitIndexSemantics",
+            "evidenceExpiresAtUnix",
+            "evidenceIssuedAtUnix",
+            "generationSemantics",
+            "issuerAdministrativeDomainSha256",
+            "issuerCredentialIdentitySha256",
+            "issuerIdentitySha256",
+            "minimumStoreCommitIndex",
+            "minimumStoreGeneration",
+            "productionEligible",
+            "rollbackMechanism",
+            "storeAdministrativeDomainSha256",
+            "storeAttestationKeySpkiSha256",
+            "storeConfigurationSha256",
+            "storeCredentialIdentitySha256",
+            "storeIdentitySha256"
+          ],
+          "properties": {
+            "apiVersion": {"const": "serverware.verifierStateStoreAssuranceEvidence/v1"},
+            "commitIndexSemantics": {"const": "equalToVerifierStateGeneration"},
+            "evidenceExpiresAtUnix": {"$ref": "#/$defs/positiveU64"},
+            "evidenceIssuedAtUnix": {"$ref": "#/$defs/positiveU64"},
+            "generationSemantics": {"const": "strictlyMonotonicU64"},
+            "issuerAdministrativeDomainSha256": {"$ref": "#/$defs/sha256"},
+            "issuerCredentialIdentitySha256": {"$ref": "#/$defs/sha256"},
+            "issuerIdentitySha256": {"$ref": "#/$defs/sha256"},
+            "minimumStoreCommitIndex": {"$ref": "#/$defs/positiveU64"},
+            "minimumStoreGeneration": {"$ref": "#/$defs/positiveU64"},
+            "productionEligible": {"const": true},
+            "rollbackMechanism": {
+              "enum": [
+                "appendOnlyWitnessedLedger",
+                "hardwareMonotonicCounter",
+                "linearizableCasWithRollbackProtectedStorage"
+              ]
+            },
+            "storeAdministrativeDomainSha256": {"$ref": "#/$defs/sha256"},
+            "storeAttestationKeySpkiSha256": {"$ref": "#/$defs/sha256"},
+            "storeConfigurationSha256": {"$ref": "#/$defs/sha256"},
+            "storeCredentialIdentitySha256": {"$ref": "#/$defs/sha256"},
+            "storeIdentitySha256": {"$ref": "#/$defs/sha256"}
+          }
+        },
+        "payloadSha256": {"$ref": "#/$defs/sha256"},
+        "signatureAlgorithm": {"const": "Ed25519"},
+        "signatureBase64url": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{85}[AQgw]$"
+        },
+        "signingKeyId": {"$ref": "#/$defs/sha256"},
+        "signingKeySpkiSha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "signedRoleSeparationEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "payload",
+        "payloadSha256",
+        "signatureAlgorithm",
+        "signatureBase64url",
+        "signingKeyId",
+        "signingKeySpkiSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.signedVerifierStateRoleSeparationEvidence/v1"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "apiVersion",
+            "assuranceSha256",
+            "evidenceExpiresAtUnix",
+            "evidenceIssuedAtUnix",
+            "nonceAuthority",
+            "nonceAuthorityAssuranceEvidenceIssuer",
+            "productionEligible",
+            "publicAttestationClientTls",
+            "roleSeparationEvidenceIssuer",
+            "storeAssuranceEvidenceIssuer",
+            "verifierStateServiceListenerTls",
+            "verifierStateSigner",
+            "verifierStateSignerClientTls",
+            "verifierStateSignerServerTls",
+            "verifierStateStore",
+            "verifierStateStoreClientTls",
+            "verifierStateStoreServerTls"
+          ],
+          "properties": {
+            "apiVersion": {"const": "serverware.verifierStateRoleSeparationEvidence/v1"},
+            "assuranceSha256": {"$ref": "#/$defs/sha256"},
+            "evidenceExpiresAtUnix": {"$ref": "#/$defs/positiveU64"},
+            "evidenceIssuedAtUnix": {"$ref": "#/$defs/positiveU64"},
+            "nonceAuthority": {"$ref": "#/$defs/role"},
+            "nonceAuthorityAssuranceEvidenceIssuer": {"$ref": "#/$defs/role"},
+            "productionEligible": {"const": true},
+            "publicAttestationClientTls": {"$ref": "#/$defs/role"},
+            "roleSeparationEvidenceIssuer": {"$ref": "#/$defs/role"},
+            "storeAssuranceEvidenceIssuer": {"$ref": "#/$defs/role"},
+            "verifierStateServiceListenerTls": {"$ref": "#/$defs/role"},
+            "verifierStateSigner": {"$ref": "#/$defs/role"},
+            "verifierStateSignerClientTls": {"$ref": "#/$defs/role"},
+            "verifierStateSignerServerTls": {"$ref": "#/$defs/role"},
+            "verifierStateStore": {"$ref": "#/$defs/role"},
+            "verifierStateStoreClientTls": {"$ref": "#/$defs/role"},
+            "verifierStateStoreServerTls": {"$ref": "#/$defs/role"}
+          }
+        },
+        "payloadSha256": {"$ref": "#/$defs/sha256"},
+        "signatureAlgorithm": {"const": "Ed25519"},
+        "signatureBase64url": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{85}[AQgw]$"
+        },
+        "signingKeyId": {"$ref": "#/$defs/sha256"},
+        "signingKeySpkiSha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "verifierStateService": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "abortPath",
+        "apiVersion",
+        "attachNonceStatusPath",
+        "clientCertificateSpkiSha256",
+        "commitPath",
+        "concurrencyLimit",
+        "endpoint",
+        "issueChallengePath",
+        "markConsumptionPath",
+        "maxResponseBytes",
+        "preparePath",
+        "readPath",
+        "recoverPath",
+        "recoverChallengePath",
+        "recoveryLookupPath",
+        "serverLeafSpkiSha256",
+        "serviceConfigurationSha256",
+        "timeoutMilliseconds"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.attestationVerifierStateClient/v2"
+        },
+        "abortPath": {"const": "/v1/state/abort"},
+        "attachNonceStatusPath": {
+          "const": "/v1/state/attach-nonce-status"
+        },
+        "clientCertificateSpkiSha256": {"$ref": "#/$defs/sha256"},
+        "commitPath": {"const": "/v1/state/commit"},
+        "concurrencyLimit": {"const": 1},
+        "endpoint": {
+          "type": "string",
+          "pattern": "^https://(?:(?:0|[1-9][0-9]?|1[0-9]{2}|2[0-4][0-9]|25[0-5])\\.){3}(?:0|[1-9][0-9]?|1[0-9]{2}|2[0-4][0-9]|25[0-5]):(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$",
+          "maxLength": 512
+        },
+        "issueChallengePath": {
+          "const": "/v1/state/issue-challenge"
+        },
+        "markConsumptionPath": {
+          "const": "/v1/state/mark-consumption"
+        },
+        "maxResponseBytes": {
+          "type": "integer",
+          "minimum": 1024,
+          "maximum": 262144
+        },
+        "preparePath": {"const": "/v1/state/prepare"},
+        "readPath": {"const": "/v1/state/read"},
+        "recoverPath": {"const": "/v1/state/recover"},
+        "recoverChallengePath": {
+          "const": "/v1/state/recover-challenge"
+        },
+        "recoveryLookupPath": {
+          "const": "/v1/state/recovery-lookup"
+        },
+        "serverLeafSpkiSha256": {"$ref": "#/$defs/sha256"},
+        "serviceConfigurationSha256": {"$ref": "#/$defs/sha256"},
+        "timeoutMilliseconds": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 10000
+        }
+      }
+    }
+  }
+}

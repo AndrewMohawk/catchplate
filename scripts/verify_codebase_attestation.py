@@ -23,8 +23,10 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
 import serverware_source_tree
+import verify_nitro_tee
 import verify_production_readiness
 from serverware.http_client import request_bytes as bounded_request_bytes
+from serverware.response_identity import response_headers_binding
 
 
 def canonical_json(value: Any) -> str:
@@ -41,6 +43,10 @@ def sha256_prefixed_json(value: Any) -> str:
 
 def b64d(value: str) -> bytes:
     return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+
+
+def b64e(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
 
 
 def require_sha256(value: Any, label: str) -> str:
@@ -84,14 +90,23 @@ def source_tree_digest(root: Path) -> str:
     return serverware_source_tree.source_tree_digest(root)
 
 
-def request_bytes(url: str, *, headers: dict[str, str] | None = None) -> tuple[bytes, dict[str, str]]:
+def request_bytes(
+    url: str,
+    *,
+    headers: dict[str, str] | None = None,
+) -> tuple[bytes, dict[str, str], tuple[tuple[str, str], ...], int]:
     request = urllib.request.Request(url, headers=headers or {})
     response = bounded_request_bytes(request, timeout=10, max_bytes=8 * 1024 * 1024)
-    return response.body, dict(response.headers)
+    return (
+        response.body,
+        dict(response.headers),
+        response.raw_headers,
+        response.status,
+    )
 
 
 def request_json(url: str, *, headers: dict[str, str] | None = None) -> dict[str, Any]:
-    body, _ = request_bytes(url, headers=headers)
+    body, _, _, _ = request_bytes(url, headers=headers)
     value = json.loads(body)
     if not isinstance(value, dict):
         raise ValueError(f"{url} returned non-object JSON")
@@ -109,11 +124,20 @@ def verify_ed25519(
     prefix = next((candidate for candidate in prefixes if signature.startswith(candidate)), None)
     if prefix is None:
         raise ValueError(f"{label} signature is not an accepted Ed25519 signature")
+    encoded_signature = signature[len(prefix) :]
+    if (
+        not re.fullmatch(r"[A-Za-z0-9_-]{86}", encoded_signature)
+        or b64e(b64d(encoded_signature)) != encoded_signature
+    ):
+        raise ValueError(f"{label} signature is not canonical Ed25519")
+    signature_bytes = b64d(encoded_signature)
+    if len(signature_bytes) != 64:
+        raise ValueError(f"{label} signature is not canonical Ed25519")
     public_key = serialization.load_pem_public_key(public_key_pem.encode("ascii"))
     if not isinstance(public_key, Ed25519PublicKey):
         raise ValueError(f"{label} public key is not Ed25519")
     try:
-        public_key.verify(b64d(signature[len(prefix) :]), payload)
+        public_key.verify(signature_bytes, payload)
     except InvalidSignature as exc:
         raise ValueError(f"{label} signature verification failed") from exc
 
@@ -443,26 +467,168 @@ def verify_image_signature_bundle(
         raise ValueError("image signature bundle omitted a provenance image")
 
 
-def verify_response_signature(attestation: dict[str, Any], body: bytes, headers: dict[str, str], nonce: str) -> None:
-    statement_b64 = headers.get("x-serverware-response-statement-b64")
-    signature = headers.get("x-serverware-response-signature")
-    if not statement_b64 or not signature:
+def verify_response_signature(
+    attestation: dict[str, Any],
+    body: bytes,
+    raw_headers: tuple[tuple[str, str], ...],
+    nonce: str,
+    *,
+    method: str,
+    path: str,
+    query: str,
+    status: int,
+) -> None:
+    expected_proof_names = {
+        "x-serverware-response-key-id",
+        "x-serverware-response-body-sha256",
+        "x-serverware-response-statement-sha256",
+        "x-serverware-response-statement-b64",
+        "x-serverware-response-signature",
+    }
+    proof_headers: dict[str, str] = {}
+    authenticated_headers: list[tuple[bytes, bytes]] = []
+    hop_by_hop = {
+        "connection",
+        "keep-alive",
+        "proxy-authenticate",
+        "proxy-authorization",
+        "te",
+        "trailer",
+        "transfer-encoding",
+        "upgrade",
+    }
+    for raw_name, raw_value in raw_headers:
+        try:
+            name = raw_name.encode("ascii").decode("ascii").lower()
+            value_bytes = raw_value.encode("latin-1")
+        except (UnicodeEncodeError, UnicodeDecodeError) as exc:
+            raise ValueError("response contains a noncanonical header") from exc
+        if name.startswith("x-serverware-response-"):
+            if name not in expected_proof_names or name in proof_headers:
+                raise ValueError("response proof headers are unknown or repeated")
+            proof_headers[name] = raw_value
+        elif name not in hop_by_hop:
+            authenticated_headers.append((name.encode("ascii"), value_bytes))
+    if set(proof_headers) != expected_proof_names:
         raise ValueError("response proof headers are missing")
-    statement = json.loads(b64d(statement_b64))
+    statement_b64 = proof_headers["x-serverware-response-statement-b64"]
+    if (
+        not re.fullmatch(r"[A-Za-z0-9_-]+", statement_b64)
+        or "=" in statement_b64
+    ):
+        raise ValueError("response statement encoding is not canonical")
+    statement_bytes = b64d(statement_b64)
+    if b64e(statement_bytes) != statement_b64:
+        raise ValueError("response statement encoding is not canonical")
+
+    def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("response statement contains duplicate keys")
+            result[key] = value
+        return result
+
+    try:
+        statement = json.loads(
+            statement_bytes,
+            object_pairs_hook=reject_duplicate_keys,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("response statement is not valid JSON") from exc
+    if (
+        not isinstance(statement, dict)
+        or canonical_json(statement).encode("utf-8") != statement_bytes
+    ):
+        raise ValueError("response statement is not canonical JSON")
+    if set(statement) != {
+        "version",
+        "issued_at_ms",
+        "request",
+        "status_code",
+        "body_sha256",
+        "response_headers_sha256",
+        "response_header_count",
+        "nonce",
+        "response_signing_key_id",
+        "context",
+    }:
+        raise ValueError("response statement fields do not match v3")
+    if statement.get("version") != "serverware.responseSignature/v3":
+        raise ValueError("response signature version mismatch")
     if statement.get("nonce") != nonce:
         raise ValueError("response signature nonce mismatch")
+    if statement.get("status_code") != status:
+        raise ValueError("response signature status mismatch")
+    if statement.get("request") != {
+        "method": method,
+        "path": path,
+        "query_sha256": sha256_prefixed(query.encode("utf-8")),
+    }:
+        raise ValueError("response signature request binding mismatch")
     if statement.get("body_sha256") != sha256_prefixed(body):
         raise ValueError("response signature body digest mismatch")
+    headers_digest, header_count = response_headers_binding(
+        authenticated_headers
+    )
+    if (
+        statement.get("response_headers_sha256") != headers_digest
+        or statement.get("response_header_count") != header_count
+    ):
+        raise ValueError("response signature header binding mismatch")
     if statement.get("response_signing_key_id") != attestation.get("response_signing_key_id"):
         raise ValueError("response signing key id is not attested")
+    if (
+        proof_headers["x-serverware-response-key-id"]
+        != statement.get("response_signing_key_id")
+    ):
+        raise ValueError("detached response signing key id mismatch")
+    if (
+        proof_headers["x-serverware-response-body-sha256"]
+        != sha256_prefixed(body)
+    ):
+        raise ValueError("detached response body digest mismatch")
+    if (
+        proof_headers["x-serverware-response-statement-sha256"]
+        != sha256_prefixed(statement_bytes)
+    ):
+        raise ValueError("detached response statement digest mismatch")
     context = statement.get("context") or {}
+    if not isinstance(context, dict) or set(context) != {
+        "runtime_manifest_digest",
+        "policy_bundle_digest",
+        "provenance_digest",
+        "image_signatures_digest",
+        "source_tree_digest",
+    }:
+        raise ValueError("response signature context fields do not match v3")
     for field in ("runtime_manifest_digest", "policy_bundle_digest", "provenance_digest", "image_signatures_digest", "source_tree_digest"):
         if context.get(field) != attestation.get(field):
             raise ValueError(f"response signature context {field} mismatch")
     public_key_pem = attestation.get("response_signing_public_key_pem")
     if not isinstance(public_key_pem, str):
         raise ValueError("attestation missing response signing public key")
-    verify_ed25519(public_key_pem, signature, canonical_json(statement).encode("utf-8"), "response")
+    response_key = serialization.load_pem_public_key(
+        public_key_pem.encode("ascii")
+    )
+    if not isinstance(response_key, Ed25519PublicKey):
+        raise ValueError("attested response signing key is not Ed25519")
+    response_key_id = sha256_prefixed(
+        response_key.public_bytes(
+            serialization.Encoding.DER,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+    )
+    if response_key_id != attestation.get("response_signing_key_id"):
+        raise ValueError(
+            "attested response signing key does not match its SPKI identity"
+        )
+    verify_ed25519(
+        public_key_pem,
+        proof_headers["x-serverware-response-signature"],
+        statement_bytes,
+        "response",
+    )
 
 
 def git_commit(root: Path) -> str | None:
@@ -472,8 +638,32 @@ def git_commit(root: Path) -> str | None:
         return None
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Verify that a Serverware server is attesting this source tree and signing responses.")
+def main(argv: list[str] | None = None) -> None:
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if not arguments or arguments[0] not in {"development", "production"}:
+        raise SystemExit(
+            "usage: verify_codebase_attestation.py development [options] | "
+            "production --evidence-bundle ... --expectations ... "
+            "--trust-roots ... --expected-trust-roots-sha256 ... "
+            "--protected-client-state ... "
+            "--protected-client-state-checkpoint ... --challenge ... "
+            "[--mode verify|finalize --state-commit-receipt ...]"
+        )
+    mode = arguments.pop(0)
+    if mode == "production":
+        # Production verification is entirely offline and accepts only the
+        # Manifest v6 Nitro protocol. Keeping it in a separate parser prevents
+        # development admin tokens, dev quotes, manifest-v6-nitro-eif, and
+        # legacy Docker /dev/nsm evidence from crossing into production.
+        verify_nitro_tee.main(arguments)
+        return
+
+    parser = argparse.ArgumentParser(
+        description=(
+            "Development-only verification of a dev-signed Serverware quote. "
+            "This mode is never production evidence."
+        )
+    )
     parser.add_argument("--base", default="http://localhost:3000", help="Serverware control-plane base URL")
     parser.add_argument(
         "--admin-token",
@@ -499,7 +689,7 @@ def main() -> None:
         default=os.getenv("SERVERWARE_IMAGE_VERIFY_COMMAND", "python3 scripts/cosign_sigstore.py verify"),
     )
     parser.add_argument("--allow-missing-image-signatures", action="store_true")
-    args = parser.parse_args()
+    args = parser.parse_args(arguments)
 
     base = args.base.rstrip("/")
     token_sources: dict[str, str] = {}
@@ -543,12 +733,25 @@ def main() -> None:
 
     admin_headers = {"X-Serverware-Admin-Token": args.admin_token}
     nonce = secrets.token_urlsafe(24)
-    body, proof_headers = request_bytes(f"{base}/attestation?nonce={nonce}", headers={"X-Serverware-Response-Nonce": nonce})
+    attestation_query = f"nonce={nonce}"
+    body, _proof_headers, raw_proof_headers, response_status = request_bytes(
+        f"{base}/attestation?{attestation_query}",
+        headers={"X-Serverware-Response-Nonce": nonce},
+    )
     attestation = json.loads(body)
     if attestation.get("nonce") != nonce:
         raise ValueError("attestation nonce mismatch")
     verify_dev_quote(attestation)
-    verify_response_signature(attestation, body, proof_headers, nonce)
+    verify_response_signature(
+        attestation,
+        body,
+        raw_proof_headers,
+        nonce,
+        method="GET",
+        path="/attestation",
+        query=attestation_query,
+        status=response_status,
+    )
 
     provenance_document = request_json(f"{base}/api/release/provenance", headers=admin_headers)
     provenance = verify_release_provenance(

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create and verify unsigned, local-integrity-only onboarding evidence."""
+"""Create and verify local onboarding evidence and pinned signed envelopes."""
 
 from __future__ import annotations
 
@@ -22,11 +22,79 @@ from pathlib import Path, PurePosixPath
 from typing import NoReturn
 from urllib.parse import parse_qsl, urlsplit
 
-from cryptography.exceptions import InvalidSignature
+from cryptography.exceptions import InvalidSignature, UnsupportedAlgorithm
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric.utils import (
+    decode_dss_signature,
+    encode_dss_signature,
+)
 
 API_VERSION = "serverware.onboardingEvidence/v3"
+AUTHENTICATED_ENVELOPE_VERSION = (
+    "serverware.onboardingEvidenceVerifierEnvelope/v1"
+)
+AUTHENTICATED_STATEMENT_TYPE = (
+    "serverware.onboardingEvidenceManifestDigest/v1"
+)
+AUTHENTICATED_ASSURANCE_PROFILE = "manifest-authentication-only-v1"
+AUTHENTICATED_VALIDITY_SCOPE = "envelope-signature-only"
+AUTHENTICATED_CHALLENGE_SCOPE = "envelope-response-only"
+AUTHENTICATED_RESULT_VERSION = (
+    "serverware.onboardingEvidenceAuthenticatedVerification/v1"
+)
+CHALLENGE_CONSUMPTION_VERSION = (
+    "serverware.onboardingEvidenceChallengeConsumption/v1"
+)
+AUTHENTICATED_SIGNATURE_ALGORITHM = "ES256-SHA256"
+AUTHENTICATED_SIGNATURE_ENCODING = "asn1-der-low-s"
+AUTHENTICATED_SIGNATURE_DOMAIN = (
+    b"serverware.onboardingEvidenceVerifierEnvelope/v1\x00"
+)
+AUTHENTICATED_ASSURANCE = {
+    "classification": "caller-pinned-envelope-integrity",
+    "manifestLocalIntegrityVerified": True,
+    "challengeBoundToSignedManifestDigest": True,
+    "verifierChallengeFreshnessEstablishedByThisTool": False,
+    "challengeConsumptionRequired": True,
+    "signerSignatureVerified": True,
+    "pinProvenanceEstablishedByThisTool": False,
+    "underlyingV3TimestampsAuthenticated": False,
+    "underlyingJourneyActionsChallengeBound": False,
+    "staleTranscriptReenvelopingPrevented": False,
+    "replayProtectionScope": "caller-provided-private-root-local-ledger-only",
+    "verificationTimeSource": "caller-supplied",
+    "trustworthyTimeEstablishedByThisTool": False,
+    "portableFilesystemAclPrivacyEstablishedByThisTool": False,
+    "executionAttestation": False,
+    "serverAttestation": False,
+    "provenanceAttestation": False,
+    "teeAttestation": False,
+    "statement": (
+        "A caller-supplied expected ES256 key digest matched the supplied key, "
+        "which signed the exact manifest digest, verifier challenge digest, "
+        "identities, key digest, and envelope-only validity window; this tool "
+        "does not establish the pin's provenance or independence. The v3 "
+        "manifest's local consistency was also verified. Underlying v3 "
+        "timestamps and actions remain unauthenticated and are not "
+        "challenge-bound, so a stale transcript can be re-enveloped unless its "
+        "artifacts separately bind the verifier challenge. Challenge issuance "
+        "and freshness remain verifier assertions. Replay rejection is only as "
+        "durable and complete as the caller-provided private local ledger. This "
+        "tool pins each root directory chain only for one invocation and does "
+        "not establish pathname continuity, prevent caller selection of a "
+        "different ledger, or prevent filesystem rollback across invocations. "
+        "The tool checks portable mode and ownership bits but cannot establish "
+        "the "
+        "absence of platform ACLs or equivalent out-of-band filesystem access. "
+        "The 256 MiB verifier work ceiling accounts only the explicitly "
+        "weighted application byte operations reported by the verifier, not "
+        "CPU time, wall time, allocator behavior, kernel work, or cryptographic "
+        "cost. This does not establish server, source, execution, provenance, "
+        "or TEE "
+        "authorship."
+    ),
+}
 ASSURANCE = {
     "classification": "local-integrity-only",
     "unsigned": True,
@@ -64,6 +132,34 @@ MAX_HTTP_BODY_BYTES = 512 * 1024
 MAX_HTTP_HEADERS = 64
 MAX_HTTP_LINE_BYTES = 8 * 1024
 MAX_WEBAUTHN_COMPONENT_BYTES = 16 * 1024
+MAX_AUTHENTICATED_ENVELOPE_BYTES = 64 * 1024
+MAX_VERIFIER_CHALLENGE_BYTES = 4 * 1024
+MIN_VERIFIER_CHALLENGE_BYTES = 16
+MAX_TRUSTED_PUBLIC_KEY_BYTES = 16 * 1024
+MAX_AUTHENTICATED_VALIDITY_SECONDS = 3_600
+MAX_AUTHENTICATED_WORK_UNITS = 256 * 1024 * 1024
+MAX_AUTHENTICATED_CAPTURE_FILES = 64
+MAX_ROOT_PATH_COMPONENTS = 64
+MAX_RELATIVE_PATH_COMPONENTS = 32
+MAX_REPLAY_DIRECTORY_ENTRIES = 4_096
+FILE_READ_HASH_WORK_PER_BYTE = 2
+PNG_ENCODED_WORK_PER_BYTE = 3
+PNG_DECODED_WORK_PER_BYTE = 2
+PNG_DECOMPRESSION_OVERFLOW_SENTINEL_WORK_UNITS = 1
+PNG_CHUNK_WORK_UNITS = 256
+AUTHENTICATED_WORK_SCOPE = (
+    "weighted application byte operations only: two units per retained input "
+    "byte for read plus SHA-256, three units per encoded PNG byte for bounded "
+    "structure scan plus CRC plus IDAT collection, one unit per compressed "
+    "PNG byte presented to zlib, two units per declared decoded PNG byte for "
+    "decompression output plus row validation, one unit for the bounded "
+    "decompression overflow sentinel, and 256 units per PNG chunk; "
+    "this is not a CPU-time, wall-time, allocator, kernel, or cryptographic "
+    "cost bound"
+)
+P256_ORDER = (
+    0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551
+)
 
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 MAX_PNG_WIDTH = 8_192
@@ -82,6 +178,17 @@ class EvidenceError(ValueError):
     """Raised when evidence is unsafe, malformed, incomplete, or stale."""
 
 
+def _close_descriptors(descriptors: list[int], *, label: str) -> list[str]:
+    errors: list[str] = []
+    for descriptor in reversed(descriptors):
+        try:
+            os.close(descriptor)
+        except OSError as exc:
+            errors.append(f"{label} close failed for fd {descriptor}: {exc}")
+    descriptors.clear()
+    return errors
+
+
 @dataclass(frozen=True)
 class _Capture:
     path: str
@@ -89,6 +196,100 @@ class _Capture:
     limit: int
     identity: tuple[int, ...]
     facts: dict[str, object]
+    descriptor: int | None = None
+
+
+@dataclass
+class _WorkBudget:
+    limit: int
+    consumed: int = 0
+    capture_count: int = 0
+    retained_descriptors: list[int] | None = None
+
+    def __post_init__(self) -> None:
+        self.retained_descriptors = []
+
+    def consume(self, amount: int, *, label: str) -> None:
+        if amount < 0 or self.consumed + amount > self.limit:
+            _fail(
+                "authenticated verification exceeds the exact "
+                f"{self.limit}-unit weighted application byte-work aggregate "
+                f"work budget while processing {label}; {AUTHENTICATED_WORK_SCOPE}"
+            )
+        self.consumed += amount
+
+    def refund(self, amount: int) -> None:
+        if amount < 0 or amount > self.consumed:
+            _fail("authenticated verification work accounting became invalid")
+        self.consumed -= amount
+
+    def register_capture(self, *, label: str) -> None:
+        if self.capture_count >= MAX_AUTHENTICATED_CAPTURE_FILES:
+            _fail(
+                "authenticated verification exceeds the "
+                f"{MAX_AUTHENTICATED_CAPTURE_FILES}-file retained capture limit "
+                f"while opening {label}"
+            )
+        self.capture_count += 1
+
+    def retain_descriptor(self, descriptor: int) -> None:
+        assert self.retained_descriptors is not None
+        self.retained_descriptors.append(descriptor)
+
+    def close_retained_descriptors(self) -> list[str]:
+        assert self.retained_descriptors is not None
+        return _close_descriptors(
+            self.retained_descriptors,
+            label="retained input descriptor",
+        )
+
+
+@dataclass
+class _PinnedRoot:
+    components: tuple[str, ...]
+    descriptors: list[int]
+    identities: list[tuple[int, ...]]
+
+    @property
+    def fd(self) -> int:
+        return self.descriptors[-1]
+
+    def revalidate(self) -> None:
+        try:
+            for index, descriptor in enumerate(self.descriptors):
+                current = os.fstat(descriptor)
+                if (
+                    _traversal_directory_identity(current)
+                    != self.identities[index]
+                ):
+                    _fail("pinned root directory chain changed during use")
+                if index == 0:
+                    continue
+                child = os.stat(
+                    self.components[index - 1],
+                    dir_fd=self.descriptors[index - 1],
+                    follow_symlinks=False,
+                )
+                if (
+                    not stat.S_ISDIR(child.st_mode)
+                    or (child.st_dev, child.st_ino)
+                    != (current.st_dev, current.st_ino)
+                ):
+                    _fail("pinned root directory chain was substituted during use")
+        except EvidenceError:
+            raise
+        except OSError as exc:
+            _raise_with_cleanup(
+                exc,
+                context="cannot revalidate pinned root directory chain",
+                cleanup_errors=[],
+            )
+
+    def close(self) -> list[str]:
+        return _close_descriptors(
+            self.descriptors,
+            label="pinned root descriptor",
+        )
 
 
 @dataclass
@@ -111,6 +312,31 @@ class _OutputPublication:
 
 def _fail(message: str) -> NoReturn:
     raise EvidenceError(message)
+
+
+def _raise_with_cleanup(
+    error: BaseException,
+    *,
+    context: str,
+    cleanup_errors: list[str],
+) -> NoReturn:
+    message = str(error) if isinstance(error, EvidenceError) else f"{context}: {error}"
+    if cleanup_errors:
+        message += f"; cleanup failed: {'; '.join(cleanup_errors)}"
+    raise EvidenceError(message) from error
+
+
+def _raise_close_errors(close_errors: list[str], *, context: str) -> None:
+    if not close_errors:
+        return
+    active_error = sys.exc_info()[1]
+    if active_error is not None:
+        _raise_with_cleanup(
+            active_error,
+            context=context,
+            cleanup_errors=close_errors,
+        )
+    _fail(f"{context}: cleanup failed: {'; '.join(close_errors)}")
 
 
 def _closed_object(
@@ -141,6 +367,16 @@ def _text(value: object, *, name: str, maximum: int = 512) -> str:
     if any(unicodedata.category(character).startswith("C") for character in value):
         _fail(f"{name} must not contain control characters")
     return value
+
+
+def _identity(value: object, *, name: str) -> str:
+    identity = _text(value, name=name, maximum=256)
+    if re.fullmatch(r"[A-Za-z0-9._:/@-]+", identity) is None:
+        _fail(
+            f"{name} must contain only ASCII letters, digits, '.', '_', ':', "
+            "'/', '@', or '-'"
+        )
+    return identity
 
 
 def _digest(value: object, *, name: str) -> str:
@@ -182,6 +418,11 @@ def _canonical_relative_path(value: object, *, name: str) -> str:
         or any(part in {"", ".", ".."} for part in pure.parts)
     ):
         _fail(f"{name} must be a canonical POSIX relative path without . or ..")
+    if len(pure.parts) > MAX_RELATIVE_PATH_COMPONENTS:
+        _fail(
+            f"{name} exceeds the {MAX_RELATIVE_PATH_COMPONENTS}-component "
+            "relative path limit"
+        )
     return path
 
 
@@ -278,41 +519,161 @@ def _decode_json(data: bytes, *, name: str) -> object:
 
 
 def _directory_flags() -> int:
-    for required in ("O_DIRECTORY", "O_NOFOLLOW"):
+    for required in ("O_DIRECTORY", "O_NOFOLLOW", "O_NONBLOCK"):
         if not hasattr(os, required):
             _fail("this platform cannot provide fail-closed no-follow traversal")
     return os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
 
 
-def _open_root_fd(root: Path) -> int:
+def _regular_file_flags() -> int:
+    for required in ("O_NOFOLLOW", "O_NONBLOCK"):
+        if not hasattr(os, required):
+            _fail("this platform cannot provide fail-closed regular-file opening")
+    return (
+        os.O_RDONLY
+        | os.O_NONBLOCK
+        | os.O_NOFOLLOW
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+
+
+def _root_path_components(root: Path) -> tuple[str, tuple[str, ...]]:
+    value = os.fspath(root)
+    if not value or "\x00" in value:
+        _fail("root path must be non-empty and contain no NUL")
+    parsed = Path(value)
+    anchor = parsed.anchor
+    components: list[str] = []
+    for component in parsed.parts:
+        if component in {"", ".", anchor}:
+            continue
+        if component == "..":
+            _fail("root path must not contain parent traversal")
+        components.append(component)
+    if len(components) > MAX_ROOT_PATH_COMPONENTS:
+        _fail(
+            f"root path exceeds the {MAX_ROOT_PATH_COMPONENTS}-component limit"
+        )
+    return (anchor or ".", tuple(components))
+
+
+def _traversal_directory_identity(value: os.stat_result) -> tuple[int, ...]:
+    return (
+        value.st_dev,
+        value.st_ino,
+        value.st_mode,
+        value.st_uid,
+        value.st_gid,
+    )
+
+
+def _validate_traversal_directory(value: os.stat_result, *, label: str) -> None:
+    if not stat.S_ISDIR(value.st_mode):
+        _fail(f"root path component {label} is not a directory")
+    mode = stat.S_IMODE(value.st_mode)
+    if mode & 0o022 and not mode & stat.S_ISVTX:
+        _fail(
+            f"root path component {label} is group/world writable without "
+            "sticky-directory protection"
+        )
+
+
+def _open_root_fd(root: Path) -> _PinnedRoot:
+    anchor, components = _root_path_components(root)
+    descriptors: list[int] = []
+    identities: list[tuple[int, ...]] = []
     try:
-        descriptor = os.open(os.fspath(root), _directory_flags())
-        opened = os.fstat(descriptor)
-        if not stat.S_ISDIR(opened.st_mode):
-            os.close(descriptor)
-            _fail("root must be a directory")
-        return descriptor
-    except EvidenceError:
-        raise
-    except OSError as exc:
-        _fail(f"cannot pin root directory safely: {exc}")
+        descriptors.append(os.open(anchor, _directory_flags()))
+        opened = os.fstat(descriptors[-1])
+        _validate_traversal_directory(opened, label=anchor)
+        identities.append(_traversal_directory_identity(opened))
+        for index, component in enumerate(components):
+            descriptors.append(
+                os.open(component, _directory_flags(), dir_fd=descriptors[-1])
+            )
+            opened = os.fstat(descriptors[-1])
+            label = "/".join(components[: index + 1])
+            _validate_traversal_directory(opened, label=label)
+            identities.append(_traversal_directory_identity(opened))
+        for index in range(1, len(descriptors)):
+            current = os.fstat(descriptors[index])
+            child = os.stat(
+                components[index - 1],
+                dir_fd=descriptors[index - 1],
+                follow_symlinks=False,
+            )
+            if (
+                not stat.S_ISDIR(child.st_mode)
+                or (child.st_dev, child.st_ino)
+                != (current.st_dev, current.st_ino)
+                or _traversal_directory_identity(current) != identities[index]
+                or _traversal_directory_identity(
+                    os.fstat(descriptors[index - 1])
+                )
+                != identities[index - 1]
+            ):
+                _fail(
+                    "root path directory chain changed during component-wise "
+                    "no-follow traversal"
+                )
+        pinned = _PinnedRoot(
+            components=components,
+            descriptors=descriptors,
+            identities=identities,
+        )
+        pinned.revalidate()
+        return pinned
+    except (EvidenceError, OSError) as exc:
+        cleanup_errors = _close_descriptors(
+            descriptors,
+            label="partially pinned root descriptor",
+        )
+        _raise_with_cleanup(
+            exc,
+            context="cannot pin root directory safely",
+            cleanup_errors=cleanup_errors,
+        )
 
 
 def _open_directory(root_fd: int, parts: tuple[str, ...]) -> int:
-    descriptor = os.dup(root_fd)
+    descriptors: list[int] = []
     try:
+        descriptors.append(os.dup(root_fd))
         for part in parts:
-            next_descriptor = os.open(
-                part,
-                _directory_flags(),
-                dir_fd=descriptor,
+            descriptors.append(
+                os.open(
+                    part,
+                    _directory_flags(),
+                    dir_fd=descriptors[-1],
+                )
             )
-            os.close(descriptor)
-            descriptor = next_descriptor
-        return descriptor
-    except OSError as exc:
-        os.close(descriptor)
-        _fail(f"symlinks and unsafe path components are not allowed: {exc}")
+    except (EvidenceError, OSError) as exc:
+        cleanup_errors = _close_descriptors(
+            descriptors,
+            label="input directory descriptor",
+        )
+        _raise_with_cleanup(
+            exc,
+            context="symlinks and unsafe path components are not allowed",
+            cleanup_errors=cleanup_errors,
+        )
+    descriptor = descriptors.pop()
+    close_errors = _close_descriptors(
+        descriptors,
+        label="input directory ancestor descriptor",
+    )
+    if close_errors:
+        close_errors.extend(
+            _close_descriptors(
+                [descriptor],
+                label="input directory result descriptor",
+            )
+        )
+        _fail(
+            "input directory traversal cleanup failed: "
+            f"{'; '.join(close_errors)}"
+        )
+    return descriptor
 
 
 def _stat_identity(value: os.stat_result) -> tuple[int, ...]:
@@ -335,16 +696,37 @@ def _open_regular_fd(root_fd: int, relative: str) -> tuple[int, os.stat_result]:
     try:
         descriptor = os.open(
             parts[-1],
-            os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0),
+            _regular_file_flags(),
             dir_fd=parent_fd,
         )
-    except OSError as exc:
-        os.close(parent_fd)
-        _fail(
-            f"{relative}: symlinks are not allowed and the file cannot be "
-            f"opened safely: {exc}"
+    except (EvidenceError, OSError) as exc:
+        cleanup_errors = _close_descriptors(
+            [parent_fd],
+            label=f"{relative} input parent descriptor",
         )
-    os.close(parent_fd)
+        _raise_with_cleanup(
+            exc,
+            context=(
+                f"{relative}: symlinks are not allowed and the file cannot "
+                "be opened safely"
+            ),
+            cleanup_errors=cleanup_errors,
+        )
+    parent_close_errors = _close_descriptors(
+        [parent_fd],
+        label=f"{relative} input parent descriptor",
+    )
+    if parent_close_errors:
+        parent_close_errors.extend(
+            _close_descriptors(
+                [descriptor],
+                label=f"{relative} safely opened input descriptor",
+            )
+        )
+        _fail(
+            f"{relative}: input descriptor cleanup failed: "
+            f"{'; '.join(parent_close_errors)}"
+        )
     try:
         opened = os.fstat(descriptor)
         if not stat.S_ISREG(opened.st_mode):
@@ -352,9 +734,16 @@ def _open_regular_fd(root_fd: int, relative: str) -> tuple[int, os.stat_result]:
         if opened.st_nlink != 1:
             _fail(f"{relative}: regular file must have exactly one hard link")
         return descriptor, opened
-    except Exception:
-        os.close(descriptor)
-        raise
+    except (EvidenceError, OSError) as exc:
+        cleanup_errors = _close_descriptors(
+            [descriptor],
+            label=f"{relative} safely opened input descriptor",
+        )
+        _raise_with_cleanup(
+            exc,
+            context=f"{relative}: cannot inspect safely opened input",
+            cleanup_errors=cleanup_errors,
+        )
 
 
 def _capture_regular(
@@ -363,21 +752,33 @@ def _capture_regular(
     *,
     limit: int,
     collect: bool = False,
+    work_budget: _WorkBudget | None = None,
 ) -> tuple[_Capture, bytes | None]:
+    if work_budget is not None:
+        work_budget.register_capture(label=relative)
     descriptor, before = _open_regular_fd(root_fd, relative)
     chunks: list[bytes] | None = [] if collect else None
     hasher = hashlib.sha256()
     size = 0
+    retained = False
+    descriptor_owned = True
     try:
         if before.st_size > limit:
             _fail(f"{relative}: exceeds the {limit}-byte limit")
-        while True:
-            chunk = os.read(
-                descriptor,
-                min(READ_CHUNK_BYTES, limit - size + 1),
-            )
+        while size < before.st_size:
+            requested = min(READ_CHUNK_BYTES, before.st_size - size)
+            if work_budget is not None:
+                work_budget.consume(
+                    requested * FILE_READ_HASH_WORK_PER_BYTE,
+                    label=f"{relative} retained read and SHA-256 pass",
+                )
+            chunk = os.read(descriptor, requested)
+            if work_budget is not None and len(chunk) < requested:
+                work_budget.refund(
+                    (requested - len(chunk)) * FILE_READ_HASH_WORK_PER_BYTE
+                )
             if not chunk:
-                break
+                _fail(f"{relative}: shrank while reading")
             size += len(chunk)
             if size > limit:
                 _fail(f"{relative}: grew beyond the {limit}-byte limit while reading")
@@ -385,36 +786,72 @@ def _capture_regular(
             if chunks is not None:
                 chunks.append(chunk)
         after = os.fstat(descriptor)
-    except EvidenceError:
-        raise
-    except OSError as exc:
-        _fail(f"{relative}: cannot read stable input: {exc}")
-    finally:
-        os.close(descriptor)
-    if after.st_nlink != 1:
-        _fail(f"{relative}: regular file must have exactly one hard link")
-    if _stat_identity(before) != _stat_identity(after) or size != before.st_size:
-        _fail(f"{relative}: file changed while reading")
-    facts = {
-        "path": relative,
-        "sha256": f"sha256:{hasher.hexdigest()}",
-        "byteSize": size,
-    }
-    return (
-        _Capture(
+        if after.st_nlink != 1:
+            _fail(f"{relative}: regular file must have exactly one hard link")
+        if _stat_identity(before) != _stat_identity(after) or size != before.st_size:
+            _fail(f"{relative}: file changed while reading")
+        raw = b"".join(chunks) if chunks is not None else None
+        facts = {
+            "path": relative,
+            "sha256": f"sha256:{hasher.hexdigest()}",
+            "byteSize": size,
+        }
+        if work_budget is not None:
+            work_budget.retain_descriptor(descriptor)
+            retained = True
+            descriptor_owned = False
+        capture = _Capture(
             path=relative,
             kind="regular",
             limit=limit,
             identity=_stat_identity(before),
             facts=facts,
-        ),
-        b"".join(chunks) if chunks is not None else None,
-    )
+            descriptor=descriptor if retained else None,
+        )
+        if not retained:
+            close_errors = _close_descriptors(
+                [descriptor],
+                label=f"{relative} captured input descriptor",
+            )
+            descriptor_owned = False
+            _raise_close_errors(
+                close_errors,
+                context=f"{relative}: captured input cleanup",
+            )
+        return capture, raw
+    except (EvidenceError, OSError) as exc:
+        cleanup_errors = (
+            []
+            if not descriptor_owned
+            else _close_descriptors(
+                [descriptor],
+                label=f"{relative} captured input descriptor",
+            )
+        )
+        _raise_with_cleanup(
+            exc,
+            context=f"{relative}: cannot read stable input",
+            cleanup_errors=cleanup_errors,
+        )
 
 
-def _parse_png(data: bytes, *, relative: str) -> dict[str, int]:
+def _parse_png(
+    data: bytes,
+    *,
+    relative: str,
+    work_budget: _WorkBudget | None = None,
+) -> dict[str, int]:
     if len(data) > MAX_FILE_BYTES:
         _fail(f"{relative}: exceeds the {MAX_FILE_BYTES}-byte screenshot limit")
+    encoded_reservation = (
+        len(data) * PNG_ENCODED_WORK_PER_BYTE
+        + MAX_PNG_CHUNKS * PNG_CHUNK_WORK_UNITS
+    )
+    if work_budget is not None:
+        work_budget.consume(
+            encoded_reservation,
+            label=f"{relative} precharged PNG structure, CRC, and IDAT collection",
+        )
     if not data.startswith(PNG_SIGNATURE):
         _fail(f"{relative}: is not a PNG")
     offset = len(PNG_SIGNATURE)
@@ -423,6 +860,7 @@ def _parse_png(data: bytes, *, relative: str) -> dict[str, int]:
     compressed = bytearray()
     width: int | None = None
     height: int | None = None
+    color_type: int | None = None
     decoded_size: int | None = None
     saw_idat = False
     idat_ended = False
@@ -473,16 +911,17 @@ def _parse_png(data: bytes, *, relative: str) -> dict[str, int]:
                 _fail(f"{relative}: PNG rows exceed the {MAX_PNG_ROWS}-row limit")
             if (
                 bit_depth != 8
-                or color_type != 6
+                or color_type not in {2, 6}
                 or compression_method != 0
                 or filter_method != 0
                 or interlace != 0
             ):
                 _fail(
                     f"{relative}: PNG must use the supported non-interlaced "
-                    "8-bit RGBA subset"
+                    "8-bit RGB or RGBA subset"
                 )
-            row_bytes = width * 4
+            channels = 3 if color_type == 2 else 4
+            row_bytes = width * channels
             if row_bytes > MAX_PNG_ROW_BYTES:
                 _fail(
                     f"{relative}: PNG row exceeds the "
@@ -525,19 +964,38 @@ def _parse_png(data: bytes, *, relative: str) -> dict[str, int]:
 
     if offset != len(data):
         _fail(f"{relative}: PNG has trailing bytes")
-    if width is None or height is None or decoded_size is None or not compressed:
+    if (
+        width is None
+        or height is None
+        or color_type is None
+        or decoded_size is None
+        or not compressed
+    ):
         _fail(f"{relative}: PNG is missing required data")
     parser_work = (
-        len(data)
+        len(data) * PNG_ENCODED_WORK_PER_BYTE
         + len(compressed)
-        + decoded_size
-        + chunk_count * 256
-        + height
+        + decoded_size * PNG_DECODED_WORK_PER_BYTE
+        + PNG_DECOMPRESSION_OVERFLOW_SENTINEL_WORK_UNITS
+        + chunk_count * PNG_CHUNK_WORK_UNITS
     )
     if parser_work > MAX_PNG_PARSER_WORK:
         _fail(
             f"{relative}: PNG parser work exceeds the "
             f"{MAX_PNG_PARSER_WORK}-unit limit"
+        )
+    if work_budget is not None:
+        work_budget.refund(
+            (MAX_PNG_CHUNKS - chunk_count) * PNG_CHUNK_WORK_UNITS
+        )
+        work_budget.consume(
+            len(compressed)
+            + decoded_size * PNG_DECODED_WORK_PER_BYTE
+            + PNG_DECOMPRESSION_OVERFLOW_SENTINEL_WORK_UNITS,
+            label=(
+                f"{relative} precharged PNG compressed input, declared "
+                "decompression output, overflow sentinel, and row validation"
+            ),
         )
     try:
         decompressor = zlib.decompressobj()
@@ -554,7 +1012,8 @@ def _parse_png(data: bytes, *, relative: str) -> dict[str, int]:
         or len(decoded) != decoded_size
     ):
         _fail(f"{relative}: PNG IDAT data does not match declared dimensions")
-    row_bytes = width * 4
+    channels = 3 if color_type == 2 else 4
+    row_bytes = width * channels
     offset = 0
     for _ in range(height):
         if decoded[offset] > 4:
@@ -569,22 +1028,31 @@ def _parse_png(data: bytes, *, relative: str) -> dict[str, int]:
     }
 
 
-def _capture_png(root_fd: int, relative: str) -> _Capture:
+def _capture_png(
+    root_fd: int,
+    relative: str,
+    *,
+    work_budget: _WorkBudget | None = None,
+) -> _Capture:
     regular, raw = _capture_regular(
         root_fd,
         relative,
         limit=MAX_FILE_BYTES,
         collect=True,
+        work_budget=work_budget,
     )
     assert raw is not None
     facts = dict(regular.facts)
-    facts.update(_parse_png(raw, relative=relative))
+    facts.update(
+        _parse_png(raw, relative=relative, work_budget=work_budget)
+    )
     return _Capture(
         path=relative,
         kind="png",
         limit=regular.limit,
         identity=regular.identity,
         facts=facts,
+        descriptor=regular.descriptor,
     )
 
 
@@ -1148,6 +1616,7 @@ def _capture_source_inputs(
     *,
     collect_paths: set[str],
     path_limits: dict[str, int] | None = None,
+    work_budget: _WorkBudget | None = None,
 ) -> tuple[list[_Capture], dict[str, bytes]]:
     captures: list[_Capture] = []
     collected: dict[str, bytes] = {}
@@ -1158,6 +1627,7 @@ def _capture_source_inputs(
             path,
             limit=(path_limits or {}).get(path, MAX_FILE_BYTES),
             collect=path in collect_paths,
+            work_budget=work_budget,
         )
         total += capture.facts["byteSize"]
         if total > MAX_TOTAL_SOURCE_BYTES:
@@ -1168,12 +1638,21 @@ def _capture_source_inputs(
     return captures, collected
 
 
-def _capture_screenshots(root_fd: int, paths: list[str]) -> list[_Capture]:
+def _capture_screenshots(
+    root_fd: int,
+    paths: list[str],
+    *,
+    work_budget: _WorkBudget | None = None,
+) -> list[_Capture]:
     captures: list[_Capture] = []
     encoded_total = 0
     decoded_total = 0
     for path in sorted(paths):
-        capture = _capture_png(root_fd, path)
+        capture = _capture_png(
+            root_fd,
+            path,
+            work_budget=work_budget,
+        )
         encoded_total += capture.facts["byteSize"]
         decoded_total += capture.facts["decodedByteSize"]
         if encoded_total > MAX_TOTAL_SCREENSHOT_BYTES:
@@ -1999,6 +2478,231 @@ def _decode_base64url(value: object, *, name: str) -> bytes:
     return decoded
 
 
+def _canonical_json(value: object) -> bytes:
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    ).encode("ascii")
+
+
+def _authenticated_signature_payload(
+    signed_statement: dict[str, object],
+) -> bytes:
+    return AUTHENTICATED_SIGNATURE_DOMAIN + _canonical_json(
+        {
+            "apiVersion": AUTHENTICATED_ENVELOPE_VERSION,
+            "signedStatement": signed_statement,
+        }
+    )
+
+
+def _validate_authenticated_envelope(
+    value: object,
+) -> tuple[dict[str, object], dict[str, object], bytes]:
+    envelope = _closed_object(
+        value,
+        name="authenticated envelope",
+        fields={"apiVersion", "signedStatement", "signature"},
+    )
+    _literal(
+        envelope["apiVersion"],
+        AUTHENTICATED_ENVELOPE_VERSION,
+        name="authenticated envelope.apiVersion",
+    )
+    statement = _closed_object(
+        envelope["signedStatement"],
+        name="authenticated envelope.signedStatement",
+        fields={
+            "statementType",
+            "manifestApiVersion",
+            "assuranceProfile",
+            "challengeScope",
+            "verifierChallengeSha256",
+            "manifestSha256",
+            "signingKeySha256",
+            "verifierId",
+            "signerId",
+            "validFromEpochSeconds",
+            "validUntilEpochSeconds",
+            "validityWindowScope",
+            "underlyingV3TimestampsAuthenticated",
+            "underlyingJourneyActionsChallengeBound",
+            "signatureAlgorithm",
+            "signatureEncoding",
+        },
+    )
+    _literal(
+        statement["statementType"],
+        AUTHENTICATED_STATEMENT_TYPE,
+        name="authenticated envelope.signedStatement.statementType",
+    )
+    _literal(
+        statement["manifestApiVersion"],
+        API_VERSION,
+        name="authenticated envelope.signedStatement.manifestApiVersion",
+    )
+    _literal(
+        statement["assuranceProfile"],
+        AUTHENTICATED_ASSURANCE_PROFILE,
+        name="authenticated envelope.signedStatement.assuranceProfile",
+    )
+    _literal(
+        statement["challengeScope"],
+        AUTHENTICATED_CHALLENGE_SCOPE,
+        name="authenticated envelope.signedStatement.challengeScope",
+    )
+    _digest(
+        statement["verifierChallengeSha256"],
+        name="authenticated envelope.signedStatement.verifierChallengeSha256",
+    )
+    _digest(
+        statement["manifestSha256"],
+        name="authenticated envelope.signedStatement.manifestSha256",
+    )
+    _digest(
+        statement["signingKeySha256"],
+        name="authenticated envelope.signedStatement.signingKeySha256",
+    )
+    _identity(
+        statement["verifierId"],
+        name="authenticated envelope.signedStatement.verifierId",
+    )
+    _identity(
+        statement["signerId"],
+        name="authenticated envelope.signedStatement.signerId",
+    )
+    valid_from = _integer(
+        statement["validFromEpochSeconds"],
+        name="authenticated envelope.signedStatement.validFromEpochSeconds",
+        maximum=MAX_EPOCH_SECONDS,
+    )
+    valid_until = _integer(
+        statement["validUntilEpochSeconds"],
+        name="authenticated envelope.signedStatement.validUntilEpochSeconds",
+        maximum=MAX_EPOCH_SECONDS,
+    )
+    if not valid_from < valid_until:
+        _fail("authenticated envelope validity window must be non-empty")
+    if valid_until - valid_from > MAX_AUTHENTICATED_VALIDITY_SECONDS:
+        _fail(
+            "authenticated envelope validity window exceeds "
+            f"{MAX_AUTHENTICATED_VALIDITY_SECONDS} seconds"
+        )
+    _literal(
+        statement["validityWindowScope"],
+        AUTHENTICATED_VALIDITY_SCOPE,
+        name="authenticated envelope.signedStatement.validityWindowScope",
+    )
+    _literal(
+        statement["underlyingV3TimestampsAuthenticated"],
+        False,
+        name=(
+            "authenticated envelope.signedStatement."
+            "underlyingV3TimestampsAuthenticated"
+        ),
+    )
+    _literal(
+        statement["underlyingJourneyActionsChallengeBound"],
+        False,
+        name=(
+            "authenticated envelope.signedStatement."
+            "underlyingJourneyActionsChallengeBound"
+        ),
+    )
+    _literal(
+        statement["signatureAlgorithm"],
+        AUTHENTICATED_SIGNATURE_ALGORITHM,
+        name="authenticated envelope.signedStatement.signatureAlgorithm",
+    )
+    _literal(
+        statement["signatureEncoding"],
+        AUTHENTICATED_SIGNATURE_ENCODING,
+        name="authenticated envelope.signedStatement.signatureEncoding",
+    )
+    signature_object = _closed_object(
+        envelope["signature"],
+        name="authenticated envelope.signature",
+        fields={"value"},
+    )
+    signature = _decode_base64url(
+        signature_object["value"],
+        name="authenticated envelope.signature.value",
+    )
+    if not 8 <= len(signature) <= 80:
+        _fail("authenticated envelope ES256 signature has an invalid DER length")
+    try:
+        r_value, s_value = decode_dss_signature(signature)
+    except ValueError as exc:
+        _fail(f"authenticated envelope ES256 signature is malformed: {exc}")
+    if (
+        not 1 <= r_value < P256_ORDER
+        or not 1 <= s_value <= P256_ORDER // 2
+        or encode_dss_signature(r_value, s_value) != signature
+    ):
+        _fail(
+            "authenticated envelope ES256 signature must be canonical low-S DER"
+        )
+    return envelope, statement, signature
+
+
+def _load_pinned_envelope_public_key(
+    raw_public_key: bytes,
+    *,
+    expected_sha256: str,
+) -> tuple[ec.EllipticCurvePublicKey, str]:
+    try:
+        public_key = serialization.load_pem_public_key(raw_public_key)
+    except (TypeError, ValueError, UnsupportedAlgorithm) as exc:
+        _fail(f"trusted public key is not valid PEM: {exc}")
+    if (
+        not isinstance(public_key, ec.EllipticCurvePublicKey)
+        or not isinstance(public_key.curve, ec.SECP256R1)
+    ):
+        _fail("trusted public key must be an ES256 P-256 key")
+    canonical_public_key = public_key.public_bytes(
+        serialization.Encoding.PEM,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    if canonical_public_key != raw_public_key:
+        _fail("trusted public key PEM must be canonical SubjectPublicKeyInfo")
+    canonical_der = public_key.public_bytes(
+        serialization.Encoding.DER,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    actual_sha256 = f"sha256:{hashlib.sha256(canonical_der).hexdigest()}"
+    if actual_sha256 != expected_sha256:
+        _fail(
+            "trusted public key does not match the caller-supplied expected "
+            "canonical DER SubjectPublicKeyInfo digest"
+        )
+    return public_key, actual_sha256
+
+
+def _verify_authenticated_signature(
+    public_key: ec.EllipticCurvePublicKey,
+    signature: bytes,
+    signed_payload: bytes,
+) -> None:
+    try:
+        public_key.verify(
+            signature,
+            signed_payload,
+            ec.ECDSA(hashes.SHA256()),
+        )
+    except InvalidSignature:
+        _fail("authenticated envelope signature verification failed")
+    except UnsupportedAlgorithm as exc:
+        _fail(
+            "authenticated envelope signature algorithm is unsupported: "
+            f"{exc}"
+        )
+    except ValueError as exc:
+        _fail(f"authenticated envelope signature is malformed: {exc}")
+
+
 def _verify_webauthn(
     journey: dict[str, object],
     source_by_path: dict[str, _Capture],
@@ -2059,7 +2763,7 @@ def _verify_webauthn(
     public_key_bytes = collected[public_key_path]
     try:
         public_key = serialization.load_pem_public_key(public_key_bytes)
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, UnsupportedAlgorithm) as exc:
         _fail(f"WebAuthn public key artifact is not valid PEM: {exc}")
     if (
         not isinstance(public_key, ec.EllipticCurvePublicKey)
@@ -2080,6 +2784,8 @@ def _verify_webauthn(
         public_key.verify(signature, signed_data, ec.ECDSA(hashes.SHA256()))
     except InvalidSignature:
         _fail("WebAuthn signature verification failed")
+    except UnsupportedAlgorithm as exc:
+        _fail(f"WebAuthn signature algorithm is unsupported: {exc}")
     except ValueError as exc:
         _fail(f"WebAuthn signature is malformed: {exc}")
     return {
@@ -2279,15 +2985,41 @@ def _assert_unique_captures(captures: list[_Capture]) -> None:
 
 def _revalidate_captures(root_fd: int, captures: list[_Capture]) -> None:
     for capture in captures:
-        if capture.kind == "png":
-            fresh = _capture_png(root_fd, capture.path)
-        else:
-            fresh, _ = _capture_regular(
-                root_fd,
-                capture.path,
-                limit=capture.limit,
+        if capture.descriptor is not None:
+            try:
+                retained = os.fstat(capture.descriptor)
+            except OSError as exc:
+                _raise_with_cleanup(
+                    exc,
+                    context=(
+                        f"{capture.path}: retained input descriptor cannot "
+                        "be revalidated"
+                    ),
+                    cleanup_errors=[],
+                )
+            if (
+                _stat_identity(retained) != capture.identity
+                or retained.st_size != capture.facts["byteSize"]
+            ):
+                _fail(
+                    f"{capture.path}: retained input snapshot changed before "
+                    "finalization"
+                )
+        descriptor, current = _open_regular_fd(root_fd, capture.path)
+        try:
+            current_identity = _stat_identity(current)
+        finally:
+            _raise_close_errors(
+                _close_descriptors(
+                    [descriptor],
+                    label=f"{capture.path} revalidation input descriptor",
+                ),
+                context=f"{capture.path}: revalidation input cleanup",
             )
-        if fresh.identity != capture.identity or fresh.facts != capture.facts:
+        if (
+            current_identity != capture.identity
+            or current.st_size != capture.facts["byteSize"]
+        ):
             _fail(f"{capture.path}: input changed before finalization")
 
 
@@ -2332,9 +3064,10 @@ def _validate_output_directory(
 def _pin_output_publication(root_fd: int, relative: str) -> _OutputPublication:
     parts = PurePosixPath(relative).parts
     directory_parts = parts[:-1]
-    directory_fds = [os.dup(root_fd)]
+    directory_fds: list[int] = []
     identities: list[tuple[int, ...]] = []
     try:
+        directory_fds.append(os.dup(root_fd))
         for index, component in enumerate(directory_parts):
             current = os.fstat(directory_fds[-1])
             label = "." if index == 0 else "/".join(directory_parts[:index])
@@ -2366,53 +3099,67 @@ def _pin_output_publication(root_fd: int, relative: str) -> _OutputPublication:
         )
         _revalidate_output_chain(publication)
         return publication
-    except EvidenceError:
-        for descriptor in reversed(directory_fds):
-            os.close(descriptor)
-        raise
-    except OSError as exc:
-        for descriptor in reversed(directory_fds):
-            os.close(descriptor)
-        _fail(
-            f"{relative}: cannot pin private output directory chain without "
-            f"following links: {exc}"
+    except (EvidenceError, OSError) as exc:
+        cleanup_errors = _close_descriptors(
+            directory_fds,
+            label=f"{relative} partially pinned output directory descriptor",
+        )
+        _raise_with_cleanup(
+            exc,
+            context=(
+                f"{relative}: cannot pin private output directory chain "
+                "without following links"
+            ),
+            cleanup_errors=cleanup_errors,
         )
 
 
 def _revalidate_output_chain(publication: _OutputPublication) -> None:
-    for index, descriptor in enumerate(publication.directory_fds):
-        current = os.fstat(descriptor)
-        label = (
-            "."
-            if index == 0
-            else "/".join(publication.directory_parts[:index])
-        )
-        _validate_output_directory(
-            current,
-            relative=publication.relative,
-            label=label,
-            final_parent=index == len(publication.directory_fds) - 1,
-        )
-        if _directory_identity(current) != publication.directory_identities[index]:
-            _fail(
-                f"{publication.relative}: output directory chain changed at {label}"
+    try:
+        for index, descriptor in enumerate(publication.directory_fds):
+            current = os.fstat(descriptor)
+            label = (
+                "."
+                if index == 0
+                else "/".join(publication.directory_parts[:index])
             )
-        if index == 0:
-            continue
-        child = os.stat(
-            publication.directory_parts[index - 1],
-            dir_fd=publication.directory_fds[index - 1],
-            follow_symlinks=False,
-        )
-        if (
-            not stat.S_ISDIR(child.st_mode)
-            or child.st_dev != current.st_dev
-            or child.st_ino != current.st_ino
-        ):
-            _fail(
-                f"{publication.relative}: output directory chain was substituted "
-                f"at {label}"
+            _validate_output_directory(
+                current,
+                relative=publication.relative,
+                label=label,
+                final_parent=index == len(publication.directory_fds) - 1,
             )
+            if (
+                _directory_identity(current)
+                != publication.directory_identities[index]
+            ):
+                _fail(
+                    f"{publication.relative}: output directory chain changed "
+                    f"at {label}"
+                )
+            if index == 0:
+                continue
+            child = os.stat(
+                publication.directory_parts[index - 1],
+                dir_fd=publication.directory_fds[index - 1],
+                follow_symlinks=False,
+            )
+            if (
+                not stat.S_ISDIR(child.st_mode)
+                or child.st_dev != current.st_dev
+                or child.st_ino != current.st_ino
+            ):
+                _fail(
+                    f"{publication.relative}: output directory chain was "
+                    f"substituted at {label}"
+                )
+    except EvidenceError:
+        raise
+    except OSError as exc:
+        _fail(
+            f"{publication.relative}: cannot revalidate pinned output "
+            f"directory chain: {exc}"
+        )
 
 
 def _pending_prefix(leaf: str) -> str:
@@ -2422,13 +3169,24 @@ def _pending_prefix(leaf: str) -> str:
 
 def _pending_entries(publication: _OutputPublication) -> list[str]:
     prefix = _pending_prefix(publication.leaf)
+    matches: list[str] = []
+    entry_count = 0
     try:
-        return sorted(
-            entry
-            for entry in os.listdir(publication.parent_fd)
-            if entry.startswith(prefix) and entry.endswith(".pending")
-        )
-    except OSError as exc:
+        with os.scandir(publication.parent_fd) as entries:
+            for entry in entries:
+                entry_count += 1
+                if entry_count > MAX_REPLAY_DIRECTORY_ENTRIES:
+                    _fail(
+                        f"{publication.relative}: output directory exceeds the "
+                        f"{MAX_REPLAY_DIRECTORY_ENTRIES}-entry bounded "
+                        "enumeration limit"
+                    )
+                if entry.name.startswith(prefix) and entry.name.endswith(".pending"):
+                    matches.append(entry.name)
+        return matches
+    except EvidenceError:
+        raise
+    except (OSError, TypeError) as exc:
         _fail(
             f"{publication.relative}: cannot inspect output publication state: {exc}"
         )
@@ -2473,17 +3231,19 @@ def _assert_no_pending_output_state(publication: _OutputPublication) -> None:
 def _close_output_publication(publication: _OutputPublication) -> list[str]:
     errors: list[str] = []
     if publication.pending_fd is not None:
-        try:
-            os.close(publication.pending_fd)
-        except OSError as exc:
-            errors.append(f"pending descriptor close failed: {exc}")
+        errors.extend(
+            _close_descriptors(
+                [publication.pending_fd],
+                label="pending descriptor",
+            )
+        )
         publication.pending_fd = None
-    for descriptor in reversed(publication.directory_fds):
-        try:
-            os.close(descriptor)
-        except OSError as exc:
-            errors.append(f"output directory descriptor close failed: {exc}")
-    publication.directory_fds.clear()
+    errors.extend(
+        _close_descriptors(
+            publication.directory_fds,
+            label="output directory descriptor",
+        )
+    )
     return errors
 
 
@@ -2579,6 +3339,20 @@ def _stage_output_file(publication: _OutputPublication, data: bytes) -> None:
         _fail(f"{publication.relative}: cannot stage durable private output: {exc}")
 
 
+def _output_fstat(
+    publication: _OutputPublication,
+    descriptor: int,
+    *,
+    label: str,
+) -> os.stat_result:
+    try:
+        return os.fstat(descriptor)
+    except OSError as exc:
+        _fail(
+            f"{publication.relative}: cannot inspect {label} output state: {exc}"
+        )
+
+
 def _publish_output_file(publication: _OutputPublication, data_size: int) -> None:
     assert publication.pending_leaf is not None
     assert publication.pending_fd is not None
@@ -2606,7 +3380,11 @@ def _publish_output_file(publication: _OutputPublication, data_size: int) -> Non
             f"{publication.relative}: cannot atomically publish staged output: {exc}"
         )
     os.fsync(publication.parent_fd)
-    output_stat = os.fstat(publication.pending_fd)
+    output_stat = _output_fstat(
+        publication,
+        publication.pending_fd,
+        label="linked staged",
+    )
     if (
         (output_stat.st_dev, output_stat.st_ino) != publication.inode_identity
         or output_stat.st_nlink != 2
@@ -2619,7 +3397,11 @@ def _publish_output_file(publication: _OutputPublication, data_size: int) -> Non
         )
     os.unlink(publication.pending_leaf, dir_fd=publication.parent_fd)
     publication.pending_exists = False
-    output_stat = os.fstat(publication.pending_fd)
+    output_stat = _output_fstat(
+        publication,
+        publication.pending_fd,
+        label="final",
+    )
     if (
         output_stat.st_nlink != 1
         or output_stat.st_size != data_size
@@ -2649,82 +3431,494 @@ def _assert_private_existing_manifest(
         ):
             _fail(f"{relative}: manifest must remain owner-owned mode 0600")
     finally:
-        close_errors = _close_output_publication(publication)
-    if close_errors:
-        _fail(f"{relative}: {'; '.join(close_errors)}")
+        _raise_close_errors(
+            _close_output_publication(publication),
+            context=f"{relative}: manifest publication inspection cleanup",
+        )
+
+
+def _verify_manifest_at(
+    root_fd: int,
+    manifest_path: str,
+    *,
+    work_budget: _WorkBudget | None = None,
+) -> tuple[dict[str, object], list[_Capture]]:
+    manifest_path = _canonical_relative_path(manifest_path, name="manifest path")
+    manifest_capture, raw_manifest = _capture_regular(
+        root_fd,
+        manifest_path,
+        limit=MAX_JSON_BYTES,
+        collect=True,
+        work_budget=work_budget,
+    )
+    _assert_private_existing_manifest(root_fd, manifest_path, manifest_capture)
+    assert raw_manifest is not None
+    manifest = _validate_manifest_shape(
+        _decode_json(raw_manifest, name=manifest_path)
+    )
+    _validate_path_sets(manifest, manifest_path)
+
+    journey_path = manifest["journeyArtifact"]["path"]
+    journey_capture, raw_journey = _capture_regular(
+        root_fd,
+        journey_path,
+        limit=MAX_JSON_BYTES,
+        collect=True,
+        work_budget=work_budget,
+    )
+    assert raw_journey is not None
+    _facts_match(
+        manifest["journeyArtifact"],
+        journey_capture.facts,
+        name="journey artifact",
+    )
+    journey = _validate_journey(_decode_json(raw_journey, name=journey_path))
+    references = _reference_paths(journey)
+    source_entries = manifest["sourceInputs"]
+    source_paths = [entry["path"] for entry in source_entries]
+    source_captures, collected = _capture_source_inputs(
+        root_fd,
+        source_paths,
+        collect_paths=references,
+        path_limits=_reference_limits(journey),
+        work_budget=work_budget,
+    )
+    if not references <= set(source_paths):
+        _fail("journey bound artifacts must all be declared sourceInputs")
+    for expected, actual in zip(source_entries, source_captures, strict=True):
+        _facts_match(expected, actual.facts, name="source input")
+
+    screenshot_entries = manifest["screenshots"]
+    screenshot_captures = _capture_screenshots(
+        root_fd,
+        [entry["path"] for entry in screenshot_entries],
+        work_budget=work_budget,
+    )
+    for expected, actual in zip(
+        screenshot_entries,
+        screenshot_captures,
+        strict=True,
+    ):
+        _facts_match(expected, actual.facts, name="screenshot")
+
+    derived_workflow = _derive_workflow(journey, source_captures, collected)
+    if manifest["workflow"] != derived_workflow:
+        _fail("manifest workflow does not match exact bound journey/artifact bytes")
+    captures = [
+        manifest_capture,
+        journey_capture,
+        *source_captures,
+        *screenshot_captures,
+    ]
+    _assert_unique_captures(captures)
+    _revalidate_captures(root_fd, captures)
+    return manifest, captures
 
 
 def verify_manifest(root: Path, manifest_path: str) -> dict[str, object]:
-    root_fd = _open_root_fd(root)
+    root_pin = _open_root_fd(root)
     try:
-        manifest_path = _canonical_relative_path(manifest_path, name="manifest path")
-        manifest_capture, raw_manifest = _capture_regular(
+        manifest, _ = _verify_manifest_at(root_pin.fd, manifest_path)
+    finally:
+        _raise_close_errors(
+            root_pin.close(),
+            context="manifest verification root cleanup",
+        )
+    return manifest
+
+
+def _manifest_bound_paths(
+    manifest: dict[str, object],
+    manifest_path: str,
+) -> set[str]:
+    return {
+        manifest_path,
+        manifest["journeyArtifact"]["path"],
+        *(entry["path"] for entry in manifest["sourceInputs"]),
+        *(entry["path"] for entry in manifest["screenshots"]),
+    }
+
+
+def _consume_verifier_challenge(
+    evidence_root_fd: int,
+    replay_root_fd: int,
+    *,
+    replay_directory: str,
+    challenge_sha256: str,
+    statement_sha256: str,
+    manifest_sha256: str,
+    trusted_public_key_sha256: str,
+    verifier_id: str,
+    signer_id: str,
+    verification_time_epoch_seconds: int,
+    captures: list[_Capture],
+) -> str:
+    marker_name = f"challenge-v1-{challenge_sha256[7:]}.used"
+    marker_path = f"{replay_directory}/{marker_name}"
+    marker = {
+        "apiVersion": CHALLENGE_CONSUMPTION_VERSION,
+        "verifierChallengeSha256": challenge_sha256,
+        "statementSha256": statement_sha256,
+        "manifestSha256": manifest_sha256,
+        "trustedPublicKeySha256": trusted_public_key_sha256,
+        "verifierId": verifier_id,
+        "signerId": signer_id,
+        "verificationTimeEpochSeconds": verification_time_epoch_seconds,
+        "verificationTimeSource": "caller-supplied",
+        "trustworthyTimeEstablishedByThisTool": False,
+        "replayProtectionScope": (
+            "caller-provided-private-root-local-ledger-only"
+        ),
+    }
+    encoded = _canonical_json(marker) + b"\n"
+    publication = _pin_output_publication(replay_root_fd, marker_path)
+    try:
+        _stage_output_file(publication, encoded)
+        _revalidate_captures(evidence_root_fd, captures)
+        _revalidate_output_chain(publication)
+        _publish_output_file(publication, len(encoded))
+        _revalidate_captures(evidence_root_fd, captures)
+        _revalidate_output_chain(publication)
+    except Exception as exc:
+        cleanup_errors = (
+            []
+            if publication.final_linked
+            else _cleanup_output_publication(publication)
+        )
+        failure = (
+            str(exc)
+            if isinstance(exc, EvidenceError)
+            else f"{marker_path}: challenge consumption failed: {exc}"
+        )
+        if "output already exists" in failure:
+            failure = (
+                "verifier challenge replay or caller-ledger conflict rejected: "
+                "a marker already exists, but this tool has not established "
+                "that marker's provenance"
+            )
+        if cleanup_errors:
+            failure += (
+                f"; cleanup failed: {'; '.join(cleanup_errors)}; "
+                "fail-closed challenge-consumption residue may remain"
+            )
+        if publication.final_linked:
+            failure += (
+                "; a fail-closed challenge marker remains present, but this "
+                "invocation did not establish its durability or successful "
+                "consumption"
+            )
+        raise EvidenceError(failure) from exc
+    finally:
+        _raise_close_errors(
+            _close_output_publication(publication),
+            context=(
+                f"{marker_path}: challenge publication descriptor cleanup; "
+                "a challenge marker may be present, but successful durable "
+                "consumption was not established"
+            ),
+        )
+    return marker_path
+
+
+def verify_authenticated_envelope(
+    *,
+    root: Path,
+    manifest_path: str,
+    envelope_path: str,
+    verifier_challenge_path: str,
+    expected_manifest_sha256: str,
+    trusted_public_key_path: str,
+    trusted_public_key_sha256: str,
+    expected_verifier_id: str,
+    expected_signer_id: str,
+    expected_valid_from_epoch_seconds: int,
+    expected_valid_until_epoch_seconds: int,
+    verification_time_epoch_seconds: int,
+    replay_root: Path,
+    replay_directory: str,
+) -> dict[str, object]:
+    expected_manifest_sha256 = _digest(
+        expected_manifest_sha256,
+        name="expected manifest digest",
+    )
+    trusted_public_key_sha256 = _digest(
+        trusted_public_key_sha256,
+        name="trusted public key digest",
+    )
+    expected_verifier_id = _identity(
+        expected_verifier_id,
+        name="expected verifier identity",
+    )
+    expected_signer_id = _identity(
+        expected_signer_id,
+        name="expected signer identity",
+    )
+    expected_valid_from_epoch_seconds = _integer(
+        expected_valid_from_epoch_seconds,
+        name="expected validity start",
+        maximum=MAX_EPOCH_SECONDS,
+    )
+    expected_valid_until_epoch_seconds = _integer(
+        expected_valid_until_epoch_seconds,
+        name="expected validity end",
+        maximum=MAX_EPOCH_SECONDS,
+    )
+    verification_time_epoch_seconds = _integer(
+        verification_time_epoch_seconds,
+        name="verification time",
+        maximum=MAX_EPOCH_SECONDS,
+    )
+    if not expected_valid_from_epoch_seconds < expected_valid_until_epoch_seconds:
+        _fail("caller-supplied expected validity window must be non-empty")
+    if (
+        expected_valid_until_epoch_seconds - expected_valid_from_epoch_seconds
+        > MAX_AUTHENTICATED_VALIDITY_SECONDS
+    ):
+        _fail(
+            "caller-supplied expected validity window exceeds "
+            f"{MAX_AUTHENTICATED_VALIDITY_SECONDS} seconds"
+        )
+    manifest_path = _canonical_relative_path(manifest_path, name="manifest path")
+    envelope_path = _canonical_relative_path(
+        envelope_path,
+        name="authenticated envelope path",
+    )
+    verifier_challenge_path = _canonical_relative_path(
+        verifier_challenge_path,
+        name="verifier challenge path",
+    )
+    trusted_public_key_path = _canonical_relative_path(
+        trusted_public_key_path,
+        name="trusted public key path",
+    )
+    replay_directory = _canonical_relative_path(
+        replay_directory,
+        name="replay directory",
+    )
+    external_paths = {
+        manifest_path,
+        envelope_path,
+        verifier_challenge_path,
+        trusted_public_key_path,
+    }
+    if len(external_paths) != 4:
+        _fail(
+            "manifest, envelope, verifier challenge, and trusted public key "
+            "paths must be distinct"
+        )
+
+    root_pin = _open_root_fd(root)
+    replay_root_pin: _PinnedRoot | None = None
+    work_budget: _WorkBudget | None = None
+    try:
+        replay_root_pin = _open_root_fd(replay_root)
+        root_fd = root_pin.fd
+        replay_root_fd = replay_root_pin.fd
+        try:
+            root_stat = os.fstat(root_fd)
+            replay_root_stat = os.fstat(replay_root_fd)
+        except OSError as exc:
+            _raise_with_cleanup(
+                exc,
+                context="cannot inspect pinned evidence and replay root identities",
+                cleanup_errors=[],
+            )
+        if (root_stat.st_dev, root_stat.st_ino) == (
+            replay_root_stat.st_dev,
+            replay_root_stat.st_ino,
+        ):
+            _fail(
+                "verifier replay root must be a separately pinned directory, "
+                "not the evidence root"
+            )
+        replay_mode = stat.S_IMODE(replay_root_stat.st_mode)
+        if (
+            replay_root_stat.st_uid != os.geteuid()
+            or replay_mode != 0o700
+        ):
+            _fail(
+                "verifier replay root must be effective-user-owned exact mode "
+                "0700 with no special bits; portable checks do not establish "
+                "absence of platform ACL access"
+            )
+        work_budget = _WorkBudget(MAX_AUTHENTICATED_WORK_UNITS)
+        envelope_capture, raw_envelope = _capture_regular(
+            root_fd,
+            envelope_path,
+            limit=MAX_AUTHENTICATED_ENVELOPE_BYTES,
+            collect=True,
+            work_budget=work_budget,
+        )
+        challenge_capture, verifier_challenge = _capture_regular(
+            root_fd,
+            verifier_challenge_path,
+            limit=MAX_VERIFIER_CHALLENGE_BYTES,
+            collect=True,
+            work_budget=work_budget,
+        )
+        public_key_capture, raw_public_key = _capture_regular(
+            root_fd,
+            trusted_public_key_path,
+            limit=MAX_TRUSTED_PUBLIC_KEY_BYTES,
+            collect=True,
+            work_budget=work_budget,
+        )
+        assert raw_envelope is not None
+        assert verifier_challenge is not None
+        assert raw_public_key is not None
+        if not MIN_VERIFIER_CHALLENGE_BYTES <= len(verifier_challenge):
+            _fail(
+                "verifier challenge must contain at least "
+                f"{MIN_VERIFIER_CHALLENGE_BYTES} bytes"
+            )
+        external_captures = [
+            envelope_capture,
+            challenge_capture,
+            public_key_capture,
+        ]
+        _assert_unique_captures(external_captures)
+
+        _, statement, signature = _validate_authenticated_envelope(
+            _decode_json(raw_envelope, name=envelope_path)
+        )
+        challenge_sha256 = (
+            f"sha256:{hashlib.sha256(verifier_challenge).hexdigest()}"
+        )
+        if statement["verifierChallengeSha256"] != challenge_sha256:
+            _fail(
+                "authenticated envelope does not bind the caller-supplied "
+                "verifier challenge"
+            )
+        if statement["manifestSha256"] != expected_manifest_sha256:
+            _fail(
+                "authenticated envelope manifest digest does not match the "
+                "caller-supplied expected digest"
+            )
+        if statement["verifierId"] != expected_verifier_id:
+            _fail(
+                "authenticated envelope verifier does not match the "
+                "caller-supplied expected verifier identity"
+            )
+        if statement["signerId"] != expected_signer_id:
+            _fail(
+                "authenticated envelope signer does not match the "
+                "caller-supplied expected signer identity"
+            )
+        if (
+            statement["validFromEpochSeconds"]
+            != expected_valid_from_epoch_seconds
+            or statement["validUntilEpochSeconds"]
+            != expected_valid_until_epoch_seconds
+        ):
+            _fail(
+                "authenticated envelope validity window does not match the "
+                "caller-supplied expected window"
+            )
+        if verification_time_epoch_seconds < expected_valid_from_epoch_seconds:
+            _fail("authenticated envelope is not yet valid")
+        if verification_time_epoch_seconds >= expected_valid_until_epoch_seconds:
+            _fail("authenticated envelope is stale")
+
+        public_key, actual_public_key_sha256 = _load_pinned_envelope_public_key(
+            raw_public_key,
+            expected_sha256=trusted_public_key_sha256,
+        )
+        if statement["signingKeySha256"] != actual_public_key_sha256:
+            _fail(
+                "authenticated envelope signing key digest does not match the "
+                "caller-supplied expected key"
+            )
+        signed_payload = _authenticated_signature_payload(statement)
+        _verify_authenticated_signature(public_key, signature, signed_payload)
+
+        manifest, manifest_captures = _verify_manifest_at(
             root_fd,
             manifest_path,
-            limit=MAX_JSON_BYTES,
-            collect=True,
+            work_budget=work_budget,
         )
-        _assert_private_existing_manifest(root_fd, manifest_path, manifest_capture)
-        assert raw_manifest is not None
-        manifest = _validate_manifest_shape(
-            _decode_json(raw_manifest, name=manifest_path)
-        )
-        _validate_path_sets(manifest, manifest_path)
+        if {
+            envelope_path,
+            verifier_challenge_path,
+            trusted_public_key_path,
+        } & _manifest_bound_paths(manifest, manifest_path):
+            _fail(
+                "authenticated envelope, verifier challenge, and trusted public "
+                "key must be independent of the manifest's bound artifacts"
+            )
+        manifest_capture = manifest_captures[0]
+        actual_manifest_sha256 = manifest_capture.facts["sha256"]
+        if actual_manifest_sha256 != expected_manifest_sha256:
+            _fail(
+                "exact manifest bytes do not match the caller-supplied expected "
+                "and signed digest"
+            )
 
-        journey_path = manifest["journeyArtifact"]["path"]
-        journey_capture, raw_journey = _capture_regular(
+        all_captures = [*external_captures, *manifest_captures]
+        _assert_unique_captures(all_captures)
+        _revalidate_captures(root_fd, all_captures)
+        root_pin.revalidate()
+        replay_root_pin.revalidate()
+        statement_sha256 = (
+            f"sha256:{hashlib.sha256(signed_payload).hexdigest()}"
+        )
+        marker_path = _consume_verifier_challenge(
             root_fd,
-            journey_path,
-            limit=MAX_JSON_BYTES,
-            collect=True,
+            replay_root_fd,
+            replay_directory=replay_directory,
+            challenge_sha256=challenge_sha256,
+            statement_sha256=statement_sha256,
+            manifest_sha256=actual_manifest_sha256,
+            trusted_public_key_sha256=actual_public_key_sha256,
+            verifier_id=expected_verifier_id,
+            signer_id=expected_signer_id,
+            verification_time_epoch_seconds=verification_time_epoch_seconds,
+            captures=all_captures,
         )
-        assert raw_journey is not None
-        _facts_match(
-            manifest["journeyArtifact"],
-            journey_capture.facts,
-            name="journey artifact",
-        )
-        journey = _validate_journey(_decode_json(raw_journey, name=journey_path))
-        references = _reference_paths(journey)
-        source_entries = manifest["sourceInputs"]
-        source_paths = [entry["path"] for entry in source_entries]
-        source_captures, collected = _capture_source_inputs(
-            root_fd,
-            source_paths,
-            collect_paths=references,
-            path_limits=_reference_limits(journey),
-        )
-        if not references <= set(source_paths):
-            _fail("journey bound artifacts must all be declared sourceInputs")
-        for expected, actual in zip(source_entries, source_captures, strict=True):
-            _facts_match(expected, actual.facts, name="source input")
-
-        screenshot_entries = manifest["screenshots"]
-        screenshot_captures = _capture_screenshots(
-            root_fd,
-            [entry["path"] for entry in screenshot_entries],
-        )
-        for expected, actual in zip(
-            screenshot_entries,
-            screenshot_captures,
-            strict=True,
-        ):
-            _facts_match(expected, actual.facts, name="screenshot")
-
-        derived_workflow = _derive_workflow(journey, source_captures, collected)
-        if manifest["workflow"] != derived_workflow:
-            _fail("manifest workflow does not match exact bound journey/artifact bytes")
-        captures = [
-            manifest_capture,
-            journey_capture,
-            *source_captures,
-            *screenshot_captures,
-        ]
-        _assert_unique_captures(captures)
-        _revalidate_captures(root_fd, captures)
-        return manifest
+        root_pin.revalidate()
+        replay_root_pin.revalidate()
+        return {
+            "apiVersion": AUTHENTICATED_RESULT_VERSION,
+            "assurance": dict(AUTHENTICATED_ASSURANCE),
+            "manifest": manifest,
+            "manifestSha256": actual_manifest_sha256,
+            "verifierChallengeSha256": challenge_sha256,
+            "trustedPublicKeySha256": actual_public_key_sha256,
+            "pinProvenanceEstablishedByThisTool": False,
+            "verifierId": expected_verifier_id,
+            "signerId": expected_signer_id,
+            "validFromEpochSeconds": expected_valid_from_epoch_seconds,
+            "validUntilEpochSeconds": expected_valid_until_epoch_seconds,
+            "verificationTimeEpochSeconds": verification_time_epoch_seconds,
+            "verificationTimeSource": "caller-supplied",
+            "trustworthyTimeEstablishedByThisTool": False,
+            "portableFilesystemAclPrivacyEstablishedByThisTool": False,
+            "signatureAlgorithm": AUTHENTICATED_SIGNATURE_ALGORITHM,
+            "signatureVerified": True,
+            "challengeConsumptionMarker": marker_path,
+            "verifierChallengeFreshnessEstablishedByThisTool": False,
+            "underlyingV3TimestampsAuthenticated": False,
+            "underlyingJourneyActionsChallengeBound": False,
+            "staleTranscriptReenvelopingPrevented": False,
+            "replayProtectionScope": (
+                "caller-provided-private-root-local-ledger-only"
+            ),
+            "authenticatedWorkBudget": {
+                "limitWeightedApplicationByteWorkUnits": work_budget.limit,
+                "consumedWeightedApplicationByteWorkUnits": work_budget.consumed,
+                "scope": AUTHENTICATED_WORK_SCOPE,
+            },
+        }
     finally:
-        os.close(root_fd)
+        close_errors: list[str] = []
+        if work_budget is not None:
+            close_errors.extend(work_budget.close_retained_descriptors())
+        if replay_root_pin is not None:
+            close_errors.extend(replay_root_pin.close())
+        close_errors.extend(root_pin.close())
+        _raise_close_errors(
+            close_errors,
+            context="authenticated verification descriptor cleanup",
+        )
 
 
 def create_manifest(
@@ -2737,7 +3931,8 @@ def create_manifest(
     playwright_version: str,
     chromium_version: str,
 ) -> dict[str, object]:
-    root_fd = _open_root_fd(root)
+    root_pin = _open_root_fd(root)
+    root_fd = root_pin.fd
     try:
         output_path = _canonical_relative_path(output_path, name="output path")
         journey_path = _canonical_relative_path(journey_path, name="journey path")
@@ -2841,48 +4036,202 @@ def create_manifest(
                 )
             raise EvidenceError(failure) from exc
         finally:
-            close_errors = _close_output_publication(publication)
-        if close_errors:
-            _fail(f"{output_path}: {'; '.join(close_errors)}")
+            _raise_close_errors(
+                _close_output_publication(publication),
+                context=f"{output_path}: manifest publication descriptor cleanup",
+            )
         return manifest
     finally:
-        os.close(root_fd)
+        _raise_close_errors(
+            root_pin.close(),
+            context="manifest creation root cleanup",
+        )
+
+
+class _RejectDuplicateAction(argparse.Action):
+    def __call__(
+        self,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values: object,
+        option_string: str | None = None,
+    ) -> None:
+        marker = f"_serverware_seen_{self.dest}"
+        if getattr(namespace, marker, False):
+            parser.error(f"{option_string or self.dest} may be supplied only once")
+        setattr(namespace, marker, True)
+        setattr(namespace, self.dest, values)
+
+
+def _scalar_authority_argument(
+    parser: argparse.ArgumentParser,
+    *names: str,
+    **options: object,
+) -> None:
+    parser.add_argument(
+        *names,
+        action=_RejectDuplicateAction,
+        **options,
+    )
 
 
 def _parser() -> argparse.ArgumentParser:
-    assurance = (
-        "This tool produces unsigned local-integrity-only evidence. It does not "
-        "provide execution, server, provenance, or TEE attestation."
+    local_assurance = (
+        "The create and verify modes produce or check unsigned "
+        "local-integrity-only v3 evidence."
+    )
+    tool_assurance = (
+        f"{local_assurance} The verify-authenticated mode separately checks an "
+        "envelope against caller-supplied expected pins without authenticating "
+        "the pin provenance or the underlying "
+        "journey. No mode provides execution, server, provenance, or TEE "
+        "attestation."
     )
     parser = argparse.ArgumentParser(
+        allow_abbrev=False,
         description=(
-            f"Create or verify a closed {API_VERSION} manifest. {assurance} "
+            f"Create or verify a closed {API_VERSION} manifest. {tool_assurance} "
             "All artifact paths are canonical POSIX paths relative to --root."
         )
     )
-    parser.add_argument("--root", default=".", help="pinned evidence filesystem root")
+    _scalar_authority_argument(
+        parser,
+        "--root",
+        default=".",
+        help="component-wise pinned evidence filesystem root",
+    )
     subparsers = parser.add_subparsers(dest="mode", required=True)
     create = subparsers.add_parser(
         "create",
+        allow_abbrev=False,
         help="create an unsigned local-integrity-only manifest",
-        description=assurance,
+        description=local_assurance,
     )
-    create.add_argument("--journey", required=True, help="bound journey JSON path")
+    _scalar_authority_argument(
+        create,
+        "--journey",
+        required=True,
+        help="bound journey JSON path",
+    )
     create.add_argument("--source", action="append", required=True, help="source input")
     create.add_argument("--screenshot", action="append", required=True, help="strict PNG")
-    create.add_argument("--playwright-version", required=True)
-    create.add_argument("--chromium-version", required=True)
-    create.add_argument(
+    _scalar_authority_argument(create, "--playwright-version", required=True)
+    _scalar_authority_argument(create, "--chromium-version", required=True)
+    _scalar_authority_argument(
+        create,
         "--output",
         required=True,
         help="new private 0600 manifest path; existing output is refused",
     )
     verify = subparsers.add_parser(
         "verify",
+        allow_abbrev=False,
         help="verify unsigned local artifact integrity only",
-        description=assurance,
+        description=local_assurance,
     )
-    verify.add_argument("--manifest", required=True, help="manifest path")
+    _scalar_authority_argument(
+        verify,
+        "--manifest",
+        required=True,
+        help="manifest path",
+    )
+    authenticated = subparsers.add_parser(
+        "verify-authenticated",
+        allow_abbrev=False,
+        help="verify a separately signed envelope against caller-supplied pins",
+        description=(
+            "Verify the local v3 manifest plus a closed signed envelope using "
+            "only caller-supplied expected trust pins and caller-maintained "
+            "private local "
+            "challenge-consumption state. This "
+            "authenticates the pinned signer's signature over exact digests and "
+            "bounds. It does not authenticate underlying v3 timestamps/actions "
+            "or prove server/source/execution/provenance/TEE authorship."
+        ),
+    )
+    _scalar_authority_argument(
+        authenticated,
+        "--manifest",
+        required=True,
+        help="v3 manifest path",
+    )
+    _scalar_authority_argument(
+        authenticated,
+        "--envelope",
+        required=True,
+        help=f"closed {AUTHENTICATED_ENVELOPE_VERSION} JSON path",
+    )
+    _scalar_authority_argument(
+        authenticated,
+        "--verifier-challenge",
+        required=True,
+        help="caller-supplied verifier challenge byte-file path",
+    )
+    _scalar_authority_argument(
+        authenticated,
+        "--expected-manifest-sha256",
+        required=True,
+        help="caller-supplied expected exact manifest sha256:<hex>",
+    )
+    _scalar_authority_argument(
+        authenticated,
+        "--trusted-public-key",
+        required=True,
+        help="caller-selected canonical ES256 public-key PEM path",
+    )
+    _scalar_authority_argument(
+        authenticated,
+        "--trusted-public-key-sha256",
+        required=True,
+        help="caller-supplied expected DER SubjectPublicKeyInfo sha256:<hex>",
+    )
+    _scalar_authority_argument(
+        authenticated,
+        "--expected-verifier-id",
+        required=True,
+        help="caller-supplied expected verifier/challenge-issuer identifier",
+    )
+    _scalar_authority_argument(
+        authenticated,
+        "--expected-signer-id",
+        required=True,
+        help="caller-supplied expected signer identifier",
+    )
+    _scalar_authority_argument(
+        authenticated,
+        "--expected-valid-from-epoch-seconds",
+        required=True,
+        type=int,
+        help="caller-supplied expected inclusive validity start",
+    )
+    _scalar_authority_argument(
+        authenticated,
+        "--expected-valid-until-epoch-seconds",
+        required=True,
+        type=int,
+        help="caller-supplied expected exclusive validity end",
+    )
+    _scalar_authority_argument(
+        authenticated,
+        "--verifier-time-epoch-seconds",
+        required=True,
+        type=int,
+        help="verifier-supplied time used for stale/future rejection",
+    )
+    _scalar_authority_argument(
+        authenticated,
+        "--replay-root",
+        required=True,
+        help=(
+            "separately pinned effective-user-owned mode-0700 verifier state root"
+        ),
+    )
+    _scalar_authority_argument(
+        authenticated,
+        "--replay-directory",
+        required=True,
+        help="existing private ledger path relative to --replay-root",
+    )
     return parser
 
 
@@ -2900,9 +4249,54 @@ def main(argv: list[str] | None = None) -> int:
                 chromium_version=arguments.chromium_version,
             )
             action = f"created {arguments.output}"
-        else:
+            authenticated = False
+        elif arguments.mode == "verify":
             manifest = verify_manifest(Path(arguments.root), arguments.manifest)
             action = f"verified {arguments.manifest}"
+            authenticated = False
+        else:
+            result = verify_authenticated_envelope(
+                root=Path(arguments.root),
+                manifest_path=arguments.manifest,
+                envelope_path=arguments.envelope,
+                verifier_challenge_path=arguments.verifier_challenge,
+                expected_manifest_sha256=arguments.expected_manifest_sha256,
+                trusted_public_key_path=arguments.trusted_public_key,
+                trusted_public_key_sha256=arguments.trusted_public_key_sha256,
+                expected_verifier_id=arguments.expected_verifier_id,
+                expected_signer_id=arguments.expected_signer_id,
+                expected_valid_from_epoch_seconds=(
+                    arguments.expected_valid_from_epoch_seconds
+                ),
+                expected_valid_until_epoch_seconds=(
+                    arguments.expected_valid_until_epoch_seconds
+                ),
+                verification_time_epoch_seconds=(
+                    arguments.verifier_time_epoch_seconds
+                ),
+                replay_root=Path(arguments.replay_root),
+                replay_directory=arguments.replay_directory,
+            )
+            manifest = result["manifest"]
+            action = f"verified authenticated envelope {arguments.envelope}"
+            authenticated = True
+        if authenticated:
+            print(
+                f"{action}: {len(manifest['sourceInputs'])} source inputs, "
+                f"{len(manifest['screenshots'])} screenshots; caller-supplied "
+                "expected ES256 key digest, exact manifest digest, validity "
+                "bounds, and verifier challenge verified, but pin provenance "
+                "was not established; the envelope-only window was checked "
+                "against caller-supplied time and challenge use was recorded "
+                "only in the separately pinned caller-provided private local "
+                "ledger; portable mode/ownership checks do not establish "
+                "absence of platform ACL access; underlying "
+                "v3 timestamps and actions remain unauthenticated and can be "
+                "stale/re-enveloped unless separately challenge-bound; "
+                "local-integrity-only artifact consistency; not server/source/"
+                "execution/provenance/TEE attestation"
+            )
+            return 0
         print(
             f"{action}: {len(manifest['sourceInputs'])} source inputs, "
             f"{len(manifest['screenshots'])} screenshots; "

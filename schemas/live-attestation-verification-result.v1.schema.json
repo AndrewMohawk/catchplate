@@ -1,0 +1,841 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/live-attestation-verification-result.v1.schema.json",
+  "title": "Serverware non-actionable live attestation verification result v1",
+  "$comment": "This result is historical verification evidence only. It is never an action capability or credential-release authorization.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "actionAuthorization",
+    "apiVersion",
+    "committedNonceAuthorityVerifierState",
+    "evidence",
+    "finalCompletionVerified",
+    "okForAction",
+    "verificationOk"
+  ],
+  "properties": {
+    "actionAuthorization": {
+      "type": "null"
+    },
+    "apiVersion": {
+      "const": "serverware.liveAttestationVerificationResult/v1"
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "committedNonceAuthorityVerifierStateSha256",
+        "deliveryRebindSha256",
+        "evidenceBodySha256",
+        "liveSessionProofSha256",
+        "liveSessionSignatureSha256",
+        "liveWitnessHeadPayloadSha256",
+        "nonceConsumptionReceiptSha256",
+        "nonceConsumptionSha256",
+        "nonceStoreKeySpkiSha256",
+        "nonceAuthorityAssuranceEvidenceSha256",
+        "nonceAuthorityAssuranceSha256",
+        "nonceAuthorityEpoch",
+        "nonceAuthorityGeneration",
+        "nonceAuthorityHighWaterCommitmentSha256",
+        "nonceAuthoritySequence",
+        "nonceAuthorityStateSha256",
+        "nonceAuthorityVerifierChallengeSha256",
+        "nonceAuthorityVerifierStateAuthorizationSha256",
+        "nonceAuthorityVerifierStateCommitReceiptSha256",
+        "nonceAuthorityVerifierStateSigningKeySpkiSha256",
+        "nonceAuthorityVerifierStateStoreGeneration",
+        "nonceAuthorityVerifierStateStoreIdentitySha256",
+        "priorProtectedLiveWitnessStateSha256",
+        "priorNonceAuthorityVerifierStateSha256",
+        "producerBindingSha256",
+        "producerEphemeralKeySpkiSha256",
+        "producerInvocationSha256",
+        "producerRequestSha256",
+        "protectedLiveWitnessStateSha256",
+        "releaseConfigSha256",
+        "releaseIdentitySha256",
+        "stableReleaseStatementSha256",
+        "witnessGeneration",
+        "witnessCurrentRequestSha256",
+        "witnessSequence",
+        "witnessStoreIdentitySha256",
+        "witnessVerifierChallengeSha256"
+      ],
+      "properties": {
+        "committedNonceAuthorityVerifierStateSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "deliveryRebindSha256": {"$ref": "#/$defs/sha256"},
+        "evidenceBodySha256": {"$ref": "#/$defs/sha256"},
+        "liveSessionProofSha256": {"$ref": "#/$defs/sha256"},
+        "liveSessionSignatureSha256": {"$ref": "#/$defs/sha256"},
+        "liveWitnessHeadPayloadSha256": {"$ref": "#/$defs/sha256"},
+        "nonceConsumptionReceiptSha256": {"$ref": "#/$defs/sha256"},
+        "nonceConsumptionSha256": {"$ref": "#/$defs/sha256"},
+        "nonceStoreKeySpkiSha256": {"$ref": "#/$defs/sha256"},
+        "nonceAuthorityAssuranceEvidenceSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "nonceAuthorityAssuranceSha256": {"$ref": "#/$defs/sha256"},
+        "nonceAuthorityEpoch": {"$ref": "#/$defs/positiveU64"},
+        "nonceAuthorityGeneration": {"$ref": "#/$defs/positiveU64"},
+        "nonceAuthorityHighWaterCommitmentSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "nonceAuthoritySequence": {"$ref": "#/$defs/positiveU64"},
+        "nonceAuthorityStateSha256": {"$ref": "#/$defs/sha256"},
+        "nonceAuthorityVerifierChallengeSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "nonceAuthorityVerifierStateAuthorizationSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "nonceAuthorityVerifierStateCommitReceiptSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "nonceAuthorityVerifierStateSigningKeySpkiSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "nonceAuthorityVerifierStateStoreGeneration": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "nonceAuthorityVerifierStateStoreIdentitySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "priorProtectedLiveWitnessStateSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "priorNonceAuthorityVerifierStateSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "producerBindingSha256": {"$ref": "#/$defs/sha256"},
+        "producerEphemeralKeySpkiSha256": {"$ref": "#/$defs/sha256"},
+        "producerInvocationSha256": {"$ref": "#/$defs/sha256"},
+        "producerRequestSha256": {"$ref": "#/$defs/sha256"},
+        "protectedLiveWitnessStateSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "releaseConfigSha256": {"$ref": "#/$defs/sha256"},
+        "releaseIdentitySha256": {"$ref": "#/$defs/sha256"},
+        "stableReleaseStatementSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "witnessGeneration": {"$ref": "#/$defs/positiveU64"},
+        "witnessCurrentRequestSha256": {"$ref": "#/$defs/sha256"},
+        "witnessSequence": {"$ref": "#/$defs/positiveU64"},
+        "witnessStoreIdentitySha256": {"$ref": "#/$defs/sha256"},
+        "witnessVerifierChallengeSha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "committedNonceAuthorityVerifierState": {
+      "$ref": "#/$defs/committedVerifierState"
+    },
+    "finalCompletionVerified": {
+      "const": true
+    },
+    "okForAction": {
+      "const": false
+    },
+    "verificationOk": {
+      "const": true
+    }
+  },
+  "$defs": {
+    "sha384": {
+      "type": "string",
+      "pattern": "^sha384:[0-9a-f]{96}$"
+    },
+    "unsignedU64": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9223372036854775807
+    },
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@+-]{0,255}$"
+    },
+    "publicNitroProvider": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "^[^\\r\\n\\u2028\\u2029]+$"
+    },
+    "signature": {
+      "type": "string",
+      "pattern": "^ed25519:[A-Za-z0-9_-]{85}[AQgw]$"
+    },
+    "pipeline": {
+      "const": "manifest-v6-promoted-oci-nitro-eif"
+    },
+    "canonicalProfile": {
+      "const": "serverware.canonicalJson/integer-string-bool-null-array-object-nfc-v1"
+    },
+    "pcrs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["PCR0", "PCR1", "PCR2"],
+      "properties": {
+        "PCR0": {"$ref": "#/$defs/sha384"},
+        "PCR1": {"$ref": "#/$defs/sha384"},
+        "PCR2": {"$ref": "#/$defs/sha384"}
+      }
+    },
+    "completionCoreDigests": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "builderA",
+        "builderB",
+        "continuity",
+        "custody",
+        "eif",
+        "hardware",
+        "promotion",
+        "release",
+        "response",
+        "runtime",
+        "source",
+        "trust",
+        "witness"
+      ],
+      "properties": {
+        "builderA": {"$ref": "#/$defs/sha256"},
+        "builderB": {"$ref": "#/$defs/sha256"},
+        "continuity": {"$ref": "#/$defs/sha256"},
+        "custody": {"$ref": "#/$defs/sha256"},
+        "eif": {"$ref": "#/$defs/sha256"},
+        "hardware": {"$ref": "#/$defs/sha256"},
+        "promotion": {"$ref": "#/$defs/sha256"},
+        "release": {"$ref": "#/$defs/sha256"},
+        "response": {"$ref": "#/$defs/sha256"},
+        "runtime": {"$ref": "#/$defs/sha256"},
+        "source": {"$ref": "#/$defs/sha256"},
+        "trust": {"$ref": "#/$defs/sha256"},
+        "witness": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "completionIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "challengeNonceSha256",
+        "coreDigests",
+        "pipeline",
+        "releaseGeneration",
+        "rollbackEpoch"
+      ],
+      "properties": {
+        "apiVersion": {"const": "serverware.finalCompletionIdentity/v3"},
+        "challengeNonceSha256": {"$ref": "#/$defs/sha256"},
+        "coreDigests": {"$ref": "#/$defs/completionCoreDigests"},
+        "pipeline": {"$ref": "#/$defs/pipeline"},
+        "releaseGeneration": {"$ref": "#/$defs/unsignedU64"},
+        "rollbackEpoch": {"$ref": "#/$defs/unsignedU64"}
+      }
+    },
+    "publicResultRoles": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "builderA",
+        "builderB",
+        "buildWatchdog",
+        "clientState",
+        "clientStateCheckpoint",
+        "currentHeadAuthorization",
+        "currentHeadRedemption",
+        "keyCustody",
+        "kmsAudit",
+        "manifestV6EifBuilder",
+        "nitroAttestationVerifier",
+        "promotion",
+        "publicNitroResult",
+        "sourceGitInventory",
+        "sourceUntrackedApproval",
+        "stateCommit",
+        "stateStore",
+        "storeAssurance",
+        "tlsRelease",
+        "verifierState",
+        "witness",
+        "witnessStore"
+      ],
+      "properties": {
+        "builderA": {"$ref": "#/$defs/sha256"},
+        "builderB": {"$ref": "#/$defs/sha256"},
+        "buildWatchdog": {"$ref": "#/$defs/sha256"},
+        "clientState": {"$ref": "#/$defs/sha256"},
+        "clientStateCheckpoint": {"$ref": "#/$defs/sha256"},
+        "currentHeadAuthorization": {"$ref": "#/$defs/sha256"},
+        "currentHeadRedemption": {"$ref": "#/$defs/sha256"},
+        "keyCustody": {"$ref": "#/$defs/sha256"},
+        "kmsAudit": {"$ref": "#/$defs/sha256"},
+        "manifestV6EifBuilder": {"$ref": "#/$defs/sha256"},
+        "nitroAttestationVerifier": {"$ref": "#/$defs/sha256"},
+        "promotion": {"$ref": "#/$defs/sha256"},
+        "publicNitroResult": {"$ref": "#/$defs/sha256"},
+        "sourceGitInventory": {"$ref": "#/$defs/sha256"},
+        "sourceUntrackedApproval": {"$ref": "#/$defs/sha256"},
+        "stateCommit": {"$ref": "#/$defs/sha256"},
+        "stateStore": {"$ref": "#/$defs/sha256"},
+        "storeAssurance": {"$ref": "#/$defs/sha256"},
+        "tlsRelease": {"$ref": "#/$defs/sha256"},
+        "verifierState": {"$ref": "#/$defs/sha256"},
+        "witness": {"$ref": "#/$defs/sha256"},
+        "witnessStore": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "witness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "checkpointSha256",
+        "challengeConsumptionSha256",
+        "leafIndex",
+        "releaseGeneration",
+        "rollbackEpoch",
+        "sequence",
+        "treeSize",
+        "rootHash",
+        "witnessKeyId",
+        "witnessStoreKeyId",
+        "witnessStoreIdentitySha256",
+        "witnessStoreAssuranceSha256"
+      ],
+      "properties": {
+        "checkpointSha256": {"$ref": "#/$defs/sha256"},
+        "challengeConsumptionSha256": {"$ref": "#/$defs/sha256"},
+        "leafIndex": {"$ref": "#/$defs/unsignedU64"},
+        "releaseGeneration": {"$ref": "#/$defs/unsignedU64"},
+        "rollbackEpoch": {"$ref": "#/$defs/unsignedU64"},
+        "sequence": {"$ref": "#/$defs/unsignedU64"},
+        "treeSize": {"$ref": "#/$defs/unsignedU64"},
+        "rootHash": {"$ref": "#/$defs/sha256"},
+        "witnessKeyId": {"$ref": "#/$defs/sha256"},
+        "witnessStoreKeyId": {"$ref": "#/$defs/sha256"},
+        "witnessStoreIdentitySha256": {"$ref": "#/$defs/sha256"},
+        "witnessStoreAssuranceSha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "clientState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "challengeConsumptionSha256",
+        "checkpointSha256",
+        "logId",
+        "provider",
+        "releaseGeneration",
+        "rollbackEpoch",
+        "rootHash",
+        "sequence",
+        "treeSize",
+        "witnessKeyId",
+        "stateSha256"
+      ],
+      "properties": {
+        "apiVersion": {"const": "serverware.monotonicReleaseWitnessState/v2"},
+        "challengeConsumptionSha256": {"$ref": "#/$defs/sha256"},
+        "checkpointSha256": {"$ref": "#/$defs/sha256"},
+        "logId": {"$ref": "#/$defs/sha256"},
+        "provider": {"$ref": "#/$defs/identifier"},
+        "releaseGeneration": {"$ref": "#/$defs/unsignedU64"},
+        "rollbackEpoch": {"$ref": "#/$defs/unsignedU64"},
+        "rootHash": {"$ref": "#/$defs/sha256"},
+        "sequence": {"$ref": "#/$defs/unsignedU64"},
+        "treeSize": {"$ref": "#/$defs/unsignedU64"},
+        "witnessKeyId": {"$ref": "#/$defs/sha256"},
+        "stateSha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "stateTransition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "oldStateSha256",
+        "newStateSha256",
+        "transitionSha256"
+      ],
+      "properties": {
+        "oldStateSha256": {"$ref": "#/$defs/sha256"},
+        "newStateSha256": {"$ref": "#/$defs/sha256"},
+        "transitionSha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "stateCommit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "status",
+        "actionable",
+        "redemptionVerified",
+        "commitId",
+        "storeId",
+        "signingKeyId",
+        "stateStoreSigningKeyId",
+        "receiptFileSha256",
+        "receiptPayloadSha256",
+        "priorStateSha256",
+        "currentStateSha256",
+        "transitionSha256",
+        "challengeConsumptionSha256",
+        "currentHeadAuthorizationId",
+        "currentHeadAuthorizationFileSha256",
+        "currentHeadAuthorizationKeyId",
+        "currentHeadSha256",
+        "currentHeadVerifierNonceSha256",
+        "currentHeadReservationId",
+        "currentHeadRedemptionId",
+        "currentHeadRedemptionReceiptFileSha256",
+        "currentHeadRedemptionReceiptIdentitySha256",
+        "currentHeadRedemptionVerifierNonceSha256",
+        "currentHeadRedemptionKeyId",
+        "currentFinalHeadSha256",
+        "currentHeadOneUseSequence",
+        "verifierStateKeyId",
+        "storeAssuranceKeyId",
+        "tlsReleaseKeyId",
+        "rollbackResistanceBoundary"
+      ],
+      "properties": {
+        "apiVersion": {"const": "serverware.publicNitroStateCommit/v1"},
+        "status": {"const": "redemption-verified-non-actionable"},
+        "actionable": {"const": false},
+        "redemptionVerified": {"const": true},
+        "commitId": {"$ref": "#/$defs/identifier"},
+        "storeId": {"$ref": "#/$defs/identifier"},
+        "signingKeyId": {"$ref": "#/$defs/sha256"},
+        "stateStoreSigningKeyId": {"$ref": "#/$defs/sha256"},
+        "receiptFileSha256": {"$ref": "#/$defs/sha256"},
+        "receiptPayloadSha256": {"$ref": "#/$defs/sha256"},
+        "priorStateSha256": {"$ref": "#/$defs/sha256"},
+        "currentStateSha256": {"$ref": "#/$defs/sha256"},
+        "transitionSha256": {"$ref": "#/$defs/sha256"},
+        "challengeConsumptionSha256": {"$ref": "#/$defs/sha256"},
+        "currentHeadAuthorizationId": {"$ref": "#/$defs/identifier"},
+        "currentHeadAuthorizationFileSha256": {"$ref": "#/$defs/sha256"},
+        "currentHeadAuthorizationKeyId": {"$ref": "#/$defs/sha256"},
+        "currentHeadSha256": {"$ref": "#/$defs/sha256"},
+        "currentHeadVerifierNonceSha256": {"$ref": "#/$defs/sha256"},
+        "currentHeadReservationId": {"$ref": "#/$defs/identifier"},
+        "currentHeadRedemptionId": {"$ref": "#/$defs/identifier"},
+        "currentHeadRedemptionReceiptFileSha256": {"$ref": "#/$defs/sha256"},
+        "currentHeadRedemptionReceiptIdentitySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "currentHeadRedemptionVerifierNonceSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "currentHeadRedemptionKeyId": {"$ref": "#/$defs/sha256"},
+        "currentFinalHeadSha256": {"$ref": "#/$defs/sha256"},
+        "currentHeadOneUseSequence": {"$ref": "#/$defs/positiveU64"},
+        "verifierStateKeyId": {"$ref": "#/$defs/sha256"},
+        "storeAssuranceKeyId": {"$ref": "#/$defs/sha256"},
+        "tlsReleaseKeyId": {"$ref": "#/$defs/sha256"},
+        "rollbackResistanceBoundary": {"$ref": "#/$defs/nonEmptyString"}
+      }
+    },
+    "digestMap": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 64,
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+      },
+      "additionalProperties": {"$ref": "#/$defs/sha256"}
+    },
+    "publicNitroResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "actionAuthorization",
+        "apiVersion",
+        "attestationRequestSha256",
+        "buildWatchdogReceiptFileSha256",
+        "candidateManifestFileSha256",
+        "candidateManifestPayloadSha256",
+        "candidateToEifBuildStatementFileSha256",
+        "canonicalProfile",
+        "completionCoreDigests",
+        "completionIdentity",
+        "completionIdentitySha256",
+        "eifSha384",
+        "evidenceBundleFileSha256",
+        "expectationsFileSha256",
+        "finalCompletionVerified",
+        "kmsAuditProofSha256s",
+        "nextClientState",
+        "nitroAttestationDocumentSha256",
+        "okForAction",
+        "pcrs",
+        "pipeline",
+        "productionIdentitySha256",
+        "promotedManifestFileSha256",
+        "promotionReceiptFileSha256",
+        "requestSha256",
+        "responseBytesSha256",
+        "roleKeyIds",
+        "roleRegistrySha256",
+        "runtimeKeyCustodyFileSha256",
+        "runtimeStateFileSha256",
+        "sourceClosureSha256",
+        "sourceInputManifestFileSha256",
+        "stateCommit",
+        "stateTransition",
+        "status",
+        "tlsExporterSha256",
+        "tlsPeerSpkiSha256",
+        "tlsSpkiSha256",
+        "tlsStackMeasurementSha256",
+        "trustRootBundleFileSha256",
+        "verificationOk",
+        "verifiedAtUnix",
+        "witness"
+      ],
+      "properties": {
+        "actionAuthorization": {"type": "null"},
+        "apiVersion": {"const": "serverware.publicNitroVerificationResult/v2"},
+        "attestationRequestSha256": {"$ref": "#/$defs/sha256"},
+        "buildWatchdogReceiptFileSha256": {"$ref": "#/$defs/sha256"},
+        "candidateManifestFileSha256": {"$ref": "#/$defs/sha256"},
+        "candidateManifestPayloadSha256": {"$ref": "#/$defs/sha256"},
+        "candidateToEifBuildStatementFileSha256": {"$ref": "#/$defs/sha256"},
+        "canonicalProfile": {"$ref": "#/$defs/canonicalProfile"},
+        "completionCoreDigests": {"$ref": "#/$defs/completionCoreDigests"},
+        "completionIdentity": {"$ref": "#/$defs/completionIdentity"},
+        "completionIdentitySha256": {"$ref": "#/$defs/sha256"},
+        "eifSha384": {"$ref": "#/$defs/sha384"},
+        "evidenceBundleFileSha256": {"$ref": "#/$defs/sha256"},
+        "expectationsFileSha256": {"$ref": "#/$defs/sha256"},
+        "finalCompletionVerified": {"const": true},
+        "kmsAuditProofSha256s": {"$ref": "#/$defs/digestMap"},
+        "nextClientState": {"$ref": "#/$defs/clientState"},
+        "nitroAttestationDocumentSha256": {"$ref": "#/$defs/sha256"},
+        "okForAction": {"const": false},
+        "pcrs": {"$ref": "#/$defs/pcrs"},
+        "pipeline": {"$ref": "#/$defs/pipeline"},
+        "productionIdentitySha256": {"$ref": "#/$defs/sha256"},
+        "promotedManifestFileSha256": {"$ref": "#/$defs/sha256"},
+        "promotionReceiptFileSha256": {"$ref": "#/$defs/sha256"},
+        "requestSha256": {"$ref": "#/$defs/sha256"},
+        "responseBytesSha256": {"$ref": "#/$defs/sha256"},
+        "roleKeyIds": {"$ref": "#/$defs/publicResultRoles"},
+        "roleRegistrySha256": {"$ref": "#/$defs/sha256"},
+        "runtimeKeyCustodyFileSha256": {"$ref": "#/$defs/sha256"},
+        "runtimeStateFileSha256": {"$ref": "#/$defs/sha256"},
+        "sourceClosureSha256": {"$ref": "#/$defs/sha256"},
+        "sourceInputManifestFileSha256": {"$ref": "#/$defs/sha256"},
+        "stateCommit": {"$ref": "#/$defs/stateCommit"},
+        "stateTransition": {"$ref": "#/$defs/stateTransition"},
+        "status": {"const": "redemption-verified-non-actionable"},
+        "tlsExporterSha256": {"$ref": "#/$defs/sha256"},
+        "tlsPeerSpkiSha256": {"$ref": "#/$defs/sha256"},
+        "tlsSpkiSha256": {"$ref": "#/$defs/sha256"},
+        "tlsStackMeasurementSha256": {"$ref": "#/$defs/sha256"},
+        "trustRootBundleFileSha256": {"$ref": "#/$defs/sha256"},
+        "verificationOk": {"const": true},
+        "verifiedAtUnix": {"$ref": "#/$defs/positiveU64"},
+        "witness": {"$ref": "#/$defs/witness"}
+      }
+    },
+    "publicNitroResultSigningTransportPins": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "signerServerTlsSpkiSha256"
+      ],
+      "properties": {
+        "signerServerTlsSpkiSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "publicNitroResultSigningEnvelopeCore": {
+      "$comment": "Signature input is ASCII domain serverware.publicNitroLiveVerificationResultEnvelope/v1 NUL signatureAlgorithm=Ed25519 NUL followed by canonical JSON for this exact object.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "provider",
+        "result",
+        "resultSha256",
+        "signingKeyId",
+        "signingKeySpkiSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.publicNitroLiveVerificationResultEnvelope/v1"
+        },
+        "provider": {"$ref": "#/$defs/publicNitroProvider"},
+        "result": {"$ref": "#/$defs/publicNitroResult"},
+        "resultSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "signingKeyId": {
+          "$ref": "#/$defs/sha256"
+        },
+        "signingKeySpkiSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "publicNitroResultSigningRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "envelopeCore",
+        "operation",
+        "operationIdSha256",
+        "recoveryKeySha256",
+        "requestSha256",
+        "retrySemantics",
+        "signingMessageSha256",
+        "transportPins"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.publicNitroLiveVerificationResultSigningRequest/v1"
+        },
+        "envelopeCore": {
+          "$ref": "#/$defs/publicNitroResultSigningEnvelopeCore"
+        },
+        "operation": {
+          "const": "sign-public-nitro-live-verification-result"
+        },
+        "operationIdSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "recoveryKeySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "requestSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "retrySemantics": {
+          "const": "same-recovery-key-requires-byte-identical-request-and-response"
+        },
+        "signingMessageSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "transportPins": {
+          "$ref": "#/$defs/publicNitroResultSigningTransportPins"
+        }
+      }
+    },
+    "publicNitroResultSignedEnvelope": {
+      "$comment": "The Ed25519 signature uses the publicNitroLiveVerificationResultEnvelope/v1 algorithm-separated domain declared on the envelope core.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "provider",
+        "result",
+        "resultSha256",
+        "signature",
+        "signingKeyId",
+        "signingKeySpkiSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.publicNitroLiveVerificationResultEnvelope/v1"
+        },
+        "provider": {"$ref": "#/$defs/publicNitroProvider"},
+        "result": {"$ref": "#/$defs/publicNitroResult"},
+        "resultSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "signature": {
+          "type": "string",
+          "pattern": "^ed25519:[A-Za-z0-9_-]{85}[AQgw]$"
+        },
+        "signingKeyId": {
+          "$ref": "#/$defs/sha256"
+        },
+        "signingKeySpkiSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "publicNitroResultSigningResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "envelope",
+        "operationIdSha256",
+        "recoveryKeySha256",
+        "requestSha256",
+        "status",
+        "transportPins"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.publicNitroLiveVerificationResultSigningResponse/v1"
+        },
+        "envelope": {
+          "$ref": "#/$defs/publicNitroResultSignedEnvelope"
+        },
+        "operationIdSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "recoveryKeySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "requestSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "status": {
+          "const": "signed"
+        },
+        "transportPins": {
+          "$ref": "#/$defs/publicNitroResultSigningTransportPins"
+        }
+      }
+    },
+    "publicNitroResultSignerRecoveryRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "operation",
+        "operationIdSha256",
+        "recoveryKeySha256",
+        "requestSha256",
+        "signingRequest",
+        "transportPins",
+        "recoveryRequestSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.publicNitroLiveVerificationResultRecoveryRequest/v1"
+        },
+        "operation": {
+          "const": "recover-public-nitro-live-verification-result"
+        },
+        "operationIdSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "recoveryKeySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "requestSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "signingRequest": {
+          "$ref": "#/$defs/publicNitroResultSigningRequest"
+        },
+        "transportPins": {
+          "$ref": "#/$defs/publicNitroResultSigningTransportPins"
+        },
+        "recoveryRequestSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "publicNitroResultSignerStatusRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "operation",
+        "operationIdSha256",
+        "recoveryKeySha256",
+        "requestSha256",
+        "signingRequest",
+        "statusRequestSha256",
+        "transportPins"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.publicNitroLiveVerificationResultStatusRequest/v1"
+        },
+        "operation": {
+          "const": "status-public-nitro-live-verification-result"
+        },
+        "operationIdSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "recoveryKeySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "requestSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "signingRequest": {
+          "$ref": "#/$defs/publicNitroResultSigningRequest"
+        },
+        "statusRequestSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "transportPins": {
+          "$ref": "#/$defs/publicNitroResultSigningTransportPins"
+        }
+      }
+    },
+    "base64url32": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$"
+    },
+    "committedVerifierState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "assuranceSha256",
+        "authorityEpoch",
+        "authorityGeneration",
+        "commitOperationIdBase64url",
+        "committedAtUnix",
+        "highWaterCommitmentSha256",
+        "highWaterReceiptSha256",
+        "highWaterSequence",
+        "priorVerifierStateSha256",
+        "stateStoreGeneration",
+        "stateStoreHeadSha256",
+        "stateStoreIdentitySha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nonceAuthorityVerifierState/v1"
+        },
+        "assuranceSha256": {"$ref": "#/$defs/sha256"},
+        "authorityEpoch": {"$ref": "#/$defs/positiveU64"},
+        "authorityGeneration": {"$ref": "#/$defs/positiveU64"},
+        "commitOperationIdBase64url": {
+          "$ref": "#/$defs/base64url32"
+        },
+        "committedAtUnix": {"$ref": "#/$defs/positiveU64"},
+        "highWaterCommitmentSha256": {"$ref": "#/$defs/sha256"},
+        "highWaterReceiptSha256": {"$ref": "#/$defs/sha256"},
+        "highWaterSequence": {"$ref": "#/$defs/positiveU64"},
+        "priorVerifierStateSha256": {"$ref": "#/$defs/sha256"},
+        "stateStoreGeneration": {"$ref": "#/$defs/positiveU64"},
+        "stateStoreHeadSha256": {"$ref": "#/$defs/sha256"},
+        "stateStoreIdentitySha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "positiveU64": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9223372036854775807
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  }
+}

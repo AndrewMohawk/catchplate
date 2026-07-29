@@ -1,0 +1,163 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/launch-authorization-request.v2.schema.json",
+  "title": "Serverware Production Launch Authorization Request v2",
+  "$comment": "This request authorizes trusted-host readiness only. Its wall-clock freshness claim is not secure TEE time, and its external witness pins must identify an independently administered monotonic store.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "kind",
+    "launcherNonce",
+    "bootIdSha256",
+    "launcherSha256",
+    "manifestSha256",
+    "nonceRollbackAssuranceContractSha256",
+    "nonceRollbackAssurancePinsSha256",
+    "releaseProvenanceSha256",
+    "provenanceDigest",
+    "reproducibleBuildVerificationSha256",
+    "sourceTreeDigest",
+    "deploymentAudience",
+    "deploymentIdentitySha256",
+    "releaseSequence",
+    "rollbackEpoch",
+    "authorizationScope",
+    "freshnessAuthority",
+    "launchAuthorityWitnessChallenge",
+    "launchAuthorityWitnessKeyId",
+    "launchAuthorityWitnessIdentitySha256",
+    "launchAuthorityWitnessAdministrativeDomainSha256",
+    "launchAuthorityWitnessStoreAssuranceSha256",
+    "globalRoleRegistry",
+    "globalRoleRegistrySha256",
+    "globalRoleRegistryPinsSha256",
+    "launchAttemptJournalDomain",
+    "launchAttemptRecoveryIdentitySha256"
+  ],
+  "properties": {
+    "apiVersion": {"const": "serverware.launchAuthorizationRequest/v2"},
+    "kind": {"const": "ProductionLaunchAuthorizationRequest"},
+    "launcherNonce": {"$ref": "#/$defs/hex64"},
+    "bootIdSha256": {"$ref": "#/$defs/sha256"},
+    "launcherSha256": {"$ref": "#/$defs/sha256"},
+    "manifestSha256": {"$ref": "#/$defs/sha256"},
+    "nonceRollbackAssuranceContractSha256": {"$ref": "#/$defs/sha256"},
+    "nonceRollbackAssurancePinsSha256": {"$ref": "#/$defs/sha256"},
+    "releaseProvenanceSha256": {"$ref": "#/$defs/sha256"},
+    "provenanceDigest": {"$ref": "#/$defs/sha256"},
+    "reproducibleBuildVerificationSha256": {"$ref": "#/$defs/sha256"},
+    "sourceTreeDigest": {"$ref": "#/$defs/sha256"},
+    "deploymentAudience": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z0-9][a-z0-9._:-]{0,127}$"
+    },
+    "deploymentIdentitySha256": {"$ref": "#/$defs/sha256"},
+    "releaseSequence": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "rollbackEpoch": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "authorizationScope": {"const": "trusted-host-readiness"},
+    "freshnessAuthority": {"const": "trusted-host-wall-clock"},
+    "launchAuthorityWitnessChallenge": {"$ref": "#/$defs/hex64"},
+    "launchAuthorityWitnessKeyId": {"$ref": "#/$defs/sha256"},
+    "launchAuthorityWitnessIdentitySha256": {"$ref": "#/$defs/sha256"},
+    "launchAuthorityWitnessAdministrativeDomainSha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "launchAuthorityWitnessStoreAssuranceSha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "globalRoleRegistry": {"$ref": "#/$defs/globalRoleRegistry"},
+    "globalRoleRegistrySha256": {"$ref": "#/$defs/sha256"},
+    "globalRoleRegistryPinsSha256": {"$ref": "#/$defs/sha256"},
+    "launchAttemptJournalDomain": {
+      "const": "serverware.launchAuthorizationAttemptJournal/v1"
+    },
+    "launchAttemptRecoveryIdentitySha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "globalRoleRegistry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "claimScope",
+        "roles",
+        "rolesOutsideClaim"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.productionLaunchGlobalRoleRegistry/v1"
+        },
+        "claimScope": {"const": "roles-present-in-native-launch-contract"},
+        "roles": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "launchAuthority",
+            "launchAuthorityWitness",
+            "launchAuthorityWitnessStoreAssurance",
+            "launchAuthorityWitnessTls",
+            "nonceAuthorityAssuranceEvidence",
+            "nonceAuthorityVerifierState",
+            "nonceAuthorityVerifierStateStoreAttestation",
+            "policyActivation",
+            "policyIdentity",
+            "reproducibleBuild"
+          ],
+          "properties": {
+            "launchAuthority": {"$ref": "#/$defs/sha256"},
+            "launchAuthorityWitness": {"$ref": "#/$defs/sha256"},
+            "launchAuthorityWitnessStoreAssurance": {
+              "$ref": "#/$defs/sha256"
+            },
+            "launchAuthorityWitnessTls": {"$ref": "#/$defs/sha256"},
+            "nonceAuthorityAssuranceEvidence": {"$ref": "#/$defs/sha256"},
+            "nonceAuthorityVerifierState": {"$ref": "#/$defs/sha256"},
+            "nonceAuthorityVerifierStateStoreAttestation": {
+              "$ref": "#/$defs/sha256"
+            },
+            "policyActivation": {"$ref": "#/$defs/sha256"},
+            "policyIdentity": {"$ref": "#/$defs/sha256"},
+            "reproducibleBuild": {"$ref": "#/$defs/sha256"}
+          }
+        },
+        "rolesOutsideClaim": {
+          "type": "array",
+          "prefixItems": [
+            {"const": "actionGate"},
+            {"const": "publicAttestationNonceStore"},
+            {"const": "publicAttestationProducer"},
+            {"const": "publicAttestationWitnessStore"},
+            {"const": "finalVerifier"},
+            {"const": "nonceAuthorityVerifierStateStoreAssurance"},
+            {"const": "release"},
+            {"const": "response"},
+            {"const": "verifierStateTlsClient"},
+            {"const": "verifierStateTlsServer"}
+          ],
+          "items": false,
+          "minItems": 10,
+          "maxItems": 10
+        }
+      }
+    },
+    "hex64": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  }
+}

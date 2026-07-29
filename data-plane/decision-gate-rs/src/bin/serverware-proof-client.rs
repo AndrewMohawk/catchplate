@@ -5034,7 +5034,7 @@ fn verify_stream_runtime_proof(
         "apiVersion":"serverware.streamingProxyResponseCapture/v1",
         "environment":"production",
         "collection_mode":"strict-incremental-stream-capture",
-        "classification":"verified-complete-stream",
+        "classification":"runtime-verified-complete-stream",
         "captured_at_unix":now_unix(),
         "client_nonce":expectations.nonce,
         "client_request_digest":expectations.client_request_digest,
@@ -7081,8 +7081,18 @@ mod tests {
         .into_bytes();
         let control_plane_nonce = general_purpose::URL_SAFE_NO_PAD.encode([20u8; 32]);
         let control_plane_key_id = digest(21);
+        let control_plane_response_headers = json!([
+            {
+                "name":"content-type",
+                "value_b64":general_purpose::URL_SAFE_NO_PAD
+                    .encode(b"application/json"),
+            },
+        ]);
+        let control_plane_response_headers_sha256 = sha256_prefixed(
+            canonical_json(&control_plane_response_headers).as_bytes(),
+        );
         let control_plane_response_statement = json!({
-            "version":"serverware.responseSignature/v2",
+            "version":"serverware.responseSignature/v3",
             "issued_at_ms":dispatch_started_at_epoch_ms,
             "request":{
                 "method":"POST",
@@ -7091,6 +7101,8 @@ mod tests {
             },
             "status_code":200,
             "body_sha256":sha256_prefixed(&dispatch_body),
+            "response_headers_sha256":control_plane_response_headers_sha256,
+            "response_header_count":1,
             "nonce":control_plane_nonce,
             "response_signing_key_id":control_plane_key_id,
             "context":{
@@ -7127,6 +7139,7 @@ mod tests {
                 "status":200,
                 "body_b64":general_purpose::URL_SAFE_NO_PAD.encode(&dispatch_body),
                 "body_sha256":sha256_prefixed(&dispatch_body),
+                "response_headers":control_plane_response_headers,
                 "response_signing_key_id":control_plane_key_id,
                 "statement_b64":general_purpose::URL_SAFE_NO_PAD.encode(&control_plane_response_statement),
                 "statement_sha256":sha256_prefixed(&control_plane_response_statement),

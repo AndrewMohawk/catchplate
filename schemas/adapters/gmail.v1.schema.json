@@ -31,6 +31,54 @@
         ]
       }
     },
+    "contentTypes": {
+      "type": "array",
+      "const": ["application/json"]
+    },
+    "valueRules": {
+      "type": "array",
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "https://serverware.local/schemas/policy-bundle.v1.schema.json#/$defs/requestValueRule"
+      }
+    },
+    "credentialBinding": {
+      "type": "object",
+      "required": ["credentialType", "provider", "subjects", "clientIds", "requiredScopes"],
+      "additionalProperties": false,
+      "properties": {
+        "credentialType": {"const": "oauth2"},
+        "provider": {"const": "google"},
+        "subjects": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "maxLength": 512}
+        },
+        "clientIds": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "maxLength": 512}
+        },
+        "requiredScopes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 38,
+            "maxLength": 128,
+            "pattern": "^https://www\\.googleapis\\.com/auth/gmail(?:\\.[a-z]+(?:\\.[a-z]+)*)?$"
+          }
+        }
+      },
+      "$comment": "Admission must require an exact provider, subject/account, OAuth client ID, and required-scope match against the referenced credential. A broader token scope does not authorize operations absent from this adapter and route."
+    },
     "errorResponse": {
       "type": "object",
       "additionalProperties": false,
@@ -46,36 +94,50 @@
     "request": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["allowedHeaders", "allowedQueryKeys", "allowedMediaTypes", "maxBodyBytes"],
+      "required": ["allowedHeaders", "allowedQueryKeys", "allowedMediaTypes", "maxBodyBytes", "valueRules"],
       "properties": {
         "allowedHeaders": {
           "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "https://serverware.local/schemas/policy-bundle.v1.schema.json#/$defs/adapterRequestHeaderName"
+          }
+        },
+        "discardHeaders": {
+          "type": "array",
+          "default": [],
+          "maxItems": 16,
           "uniqueItems": true,
           "items": {
             "type": "string",
             "minLength": 1,
             "maxLength": 128,
-            "pattern": "^[a-z0-9!#$%&'*+.^_`|~-]+$"
+            "pattern": "^[a-z0-9!#$%&'*+.^`|~-]+$"
           }
         },
         "allowedQueryKeys": {
           "type": "array",
+          "maxItems": 64,
           "uniqueItems": true,
           "items": {"type": "string", "minLength": 1, "maxLength": 256}
         },
         "allowedMediaTypes": {
           "type": "array",
+          "maxItems": 16,
           "uniqueItems": true,
           "items": {
             "type": "string",
             "pattern": "^[a-z0-9!#$%&'*+.^_`|~-]+/[a-z0-9!#$%&'*+.^_`|~-]+$"
           }
         },
-        "maxBodyBytes": {"type": "integer", "minimum": 0}
+        "maxBodyBytes": {"type": "integer", "minimum": 0, "maximum": 1048576},
+        "valueRules": {"$ref": "#/$defs/valueRules"}
       }
     }
   },
   "required": [
+    "credentialBinding",
     "request",
     "maxAgeDays",
     "maxResults",
@@ -86,13 +148,19 @@
   ],
   "additionalProperties": false,
   "properties": {
+    "credentialBinding": {"$ref": "#/$defs/credentialBinding"},
     "request": {"$ref": "#/$defs/request"},
     "maxAgeDays": {"type": "integer", "minimum": 1, "maximum": 3650},
     "maxResults": {"type": "integer", "minimum": 1, "maximum": 500},
     "forceQuery": {"const": true},
     "allowMessageGetOnlyFromPriorSearch": {"const": true},
     "cacheTtlSeconds": {"type": "integer", "minimum": 1, "maximum": 86400},
-    "denyEquivalentEndpoints": {"type": "array", "items": {"type": "string"}},
+    "denyEquivalentEndpoints": {
+      "type": "array",
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1, "maxLength": 2048, "pattern": "^/"}
+    },
     "response": {
       "type": "object",
       "additionalProperties": false,
@@ -100,6 +168,7 @@
         "validateInternalDate",
         "validateListByMetadataFetch",
         "maxBodyBytes",
+        "contentTypes",
         "allowedFields",
         "allowedHeaders",
         "error",
@@ -129,6 +198,7 @@
           }
         },
         "maxBodyBytes": {"type": "integer", "minimum": 1, "maximum": 1048576},
+        "contentTypes": {"$ref": "#/$defs/contentTypes"},
         "allowedFields": {"$ref": "#/$defs/allowedFields"},
         "allowedHeaders": {"$ref": "#/$defs/allowedHeaders"},
         "allowedMessageHeaderNames": {

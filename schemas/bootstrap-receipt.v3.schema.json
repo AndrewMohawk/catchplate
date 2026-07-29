@@ -1,0 +1,693 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/bootstrap-receipt.v3.schema.json",
+  "title": "Serverware Production Bootstrap Receipt v3",
+  "$comment": "This sealed native-launcher receipt records trusted-host readiness evidence only. The v3/v2/v3 launch and nonce assurances are non-authoritative host evidence and are not TEE proof or final release authority.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "kind",
+    "launchId",
+    "bootIdSha256",
+    "launcher",
+    "manifest",
+    "sourceTreeDigest",
+    "launchAuthorization",
+    "nonceRollbackAssurance",
+    "productionEnv",
+    "python",
+    "scripts",
+    "composeFile",
+    "inputs",
+    "argv",
+    "environment"
+  ],
+  "properties": {
+    "apiVersion": {"const": "serverware.bootstrapReceipt/v3"},
+    "kind": {"const": "ProductionBootstrapReceipt"},
+    "launchId": {"$ref": "#/$defs/hex64"},
+    "bootIdSha256": {"$ref": "#/$defs/sha256"},
+    "launcher": {"$ref": "#/$defs/file"},
+    "manifest": {"$ref": "#/$defs/manifestFile"},
+    "sourceTreeDigest": {"$ref": "#/$defs/sha256"},
+    "launchAuthorization": {"$ref": "#/$defs/launchAuthorization"},
+    "nonceRollbackAssurance": {"$ref": "#/$defs/nonceRollbackAssurance"},
+    "productionEnv": {"$ref": "#/$defs/etcServerwareFile"},
+    "python": {"$ref": "#/$defs/python"},
+    "scripts": {"$ref": "#/$defs/scripts"},
+    "composeFile": {"$ref": "#/$defs/file"},
+    "inputs": {"$ref": "#/$defs/inputs"},
+    "argv": {"$ref": "#/$defs/argv"},
+    "environment": {"$ref": "#/$defs/environment"}
+  },
+  "$defs": {
+    "unsignedU64": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 18446744073709551615
+    },
+    "positiveU64": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 18446744073709551615
+    },
+    "safeUnsignedInteger": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "safePositiveInteger": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "signedI128": {
+      "type": "integer",
+      "minimum": -170141183460469231731687303715884105728,
+      "maximum": 170141183460469231731687303715884105727
+    },
+    "hex64": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "signature": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{85}[AQgw]$"
+    },
+    "ed25519SpkiDerBase64url": {
+      "type": "string",
+      "pattern": "^MCowBQYDK2VwAyEA[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$"
+    },
+    "absolutePath": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 4096,
+      "pattern": "^/[^\\u0000]+$",
+      "not": {"pattern": "(^|/)\\.{1,2}(/|$)|//"}
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "device",
+        "inode",
+        "mode",
+        "ownerUid",
+        "ownerGid",
+        "linkCount",
+        "size",
+        "modifiedUnixNanos",
+        "changedUnixNanos"
+      ],
+      "properties": {
+        "device": {"$ref": "#/$defs/unsignedU64"},
+        "inode": {"$ref": "#/$defs/unsignedU64"},
+        "mode": {"type": "integer", "minimum": 0, "maximum": 4095},
+        "ownerUid": {"const": 0},
+        "ownerGid": {"const": 0},
+        "linkCount": {"$ref": "#/$defs/positiveU64"},
+        "size": {"$ref": "#/$defs/unsignedU64"},
+        "modifiedUnixNanos": {"$ref": "#/$defs/signedI128"},
+        "changedUnixNanos": {"$ref": "#/$defs/signedI128"}
+      }
+    },
+    "singleLinkMetadata": {
+      "allOf": [
+        {"$ref": "#/$defs/metadata"},
+        {
+          "properties": {
+            "linkCount": {"const": 1},
+            "mode": {"maximum": 1023}
+          }
+        }
+      ]
+    },
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "metadata"],
+      "properties": {
+        "path": {"$ref": "#/$defs/absolutePath"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "metadata": {
+          "allOf": [
+            {"$ref": "#/$defs/singleLinkMetadata"},
+            {
+              "properties": {
+                "size": {"maximum": 536870912}
+              }
+            }
+          ]
+        }
+      }
+    },
+    "readOnlyFile": {
+      "allOf": [
+        {"$ref": "#/$defs/file"},
+        {
+          "properties": {
+            "metadata": {
+              "properties": {
+                "mode": {"enum": [256, 288]}
+              }
+            }
+          }
+        }
+      ]
+    },
+    "etcServerwareFile": {
+      "allOf": [
+        {"$ref": "#/$defs/file"},
+        {
+          "properties": {
+            "path": {"pattern": "^/etc/serverware/.+$"}
+          }
+        }
+      ]
+    },
+    "manifestFile": {
+      "allOf": [
+        {"$ref": "#/$defs/readOnlyFile"},
+        {
+          "properties": {
+            "metadata": {
+              "properties": {
+                "size": {"maximum": 1048576}
+              }
+            }
+          }
+        }
+      ]
+    },
+    "importRoot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "metadata"],
+      "properties": {
+        "path": {"$ref": "#/$defs/absolutePath"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "metadata": {"$ref": "#/$defs/metadata"}
+      }
+    },
+    "python": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "metadata", "importRoots"],
+      "properties": {
+        "path": {
+          "allOf": [
+            {"$ref": "#/$defs/absolutePath"},
+            {"pattern": "^/(?:[^/]+/)+runtime/python/bin/python3$"}
+          ]
+        },
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "metadata": {
+          "allOf": [
+            {"$ref": "#/$defs/singleLinkMetadata"},
+            {
+              "properties": {
+                "size": {"maximum": 67108864}
+              }
+            }
+          ]
+        },
+        "importRoots": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 4,
+          "prefixItems": [
+            {"$ref": "#/$defs/importRoot"},
+            {
+              "allOf": [
+                {"$ref": "#/$defs/importRoot"},
+                {
+                  "properties": {
+                    "path": {
+                      "pattern": "^/(?:[^/]+/)+runtime/python/lib/python3\\.(?:0|[1-9][0-9]*)$"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "allOf": [
+                {"$ref": "#/$defs/importRoot"},
+                {
+                  "properties": {
+                    "path": {
+                      "pattern": "^/(?:[^/]+/)+runtime/python/lib/python3\\.(?:0|[1-9][0-9]*)/lib-dynload$"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "allOf": [
+                {"$ref": "#/$defs/importRoot"},
+                {
+                  "properties": {
+                    "path": {"pattern": "^/(?:[^/]+/)+vendor$"}
+                  }
+                }
+              ]
+            }
+          ],
+          "items": false
+        }
+      }
+    },
+    "scripts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["preflight", "runner"],
+      "properties": {
+        "preflight": {"$ref": "#/$defs/file"},
+        "runner": {"$ref": "#/$defs/file"}
+      }
+    },
+    "authorizationRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "kind",
+        "launcherNonce",
+        "bootIdSha256",
+        "launcherSha256",
+        "manifestSha256",
+        "globalRoleRegistry",
+        "globalRoleRegistrySha256",
+        "globalRoleRegistryPinsSha256",
+        "nonceRollbackAssuranceContractSha256",
+        "nonceRollbackAssurancePinsSha256",
+        "releaseProvenanceSha256",
+        "provenanceDigest",
+        "reproducibleBuildVerificationSha256",
+        "sourceTreeDigest",
+        "deploymentAudience",
+        "deploymentIdentitySha256",
+        "releaseSequence",
+        "rollbackEpoch",
+        "authorizationScope",
+        "freshnessAuthority",
+        "launchAttemptJournalDomain",
+        "launchAttemptRecoveryIdentitySha256",
+        "launchAuthorityWitnessChallenge",
+        "launchAuthorityWitnessKeyId",
+        "launchAuthorityWitnessIdentitySha256",
+        "launchAuthorityWitnessAdministrativeDomainSha256",
+        "launchAuthorityWitnessStoreAssuranceSha256"
+      ],
+      "properties": {
+        "apiVersion": {"const": "serverware.launchAuthorizationRequest/v2"},
+        "kind": {"const": "ProductionLaunchAuthorizationRequest"},
+        "launcherNonce": {"$ref": "#/$defs/hex64"},
+        "bootIdSha256": {"$ref": "#/$defs/sha256"},
+        "launcherSha256": {"$ref": "#/$defs/sha256"},
+        "manifestSha256": {"$ref": "#/$defs/sha256"},
+        "globalRoleRegistry": {
+          "$ref": "#/$defs/launchGlobalRoleRegistry"
+        },
+        "globalRoleRegistrySha256": {"$ref": "#/$defs/sha256"},
+        "globalRoleRegistryPinsSha256": {"$ref": "#/$defs/sha256"},
+        "nonceRollbackAssuranceContractSha256": {"$ref": "#/$defs/sha256"},
+        "nonceRollbackAssurancePinsSha256": {"$ref": "#/$defs/sha256"},
+        "releaseProvenanceSha256": {"$ref": "#/$defs/sha256"},
+        "provenanceDigest": {"$ref": "#/$defs/sha256"},
+        "reproducibleBuildVerificationSha256": {"$ref": "#/$defs/sha256"},
+        "sourceTreeDigest": {"$ref": "#/$defs/sha256"},
+        "deploymentAudience": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-z0-9][a-z0-9._:-]{0,127}$"
+        },
+        "deploymentIdentitySha256": {"$ref": "#/$defs/sha256"},
+        "releaseSequence": {"$ref": "#/$defs/safePositiveInteger"},
+        "rollbackEpoch": {"$ref": "#/$defs/safeUnsignedInteger"},
+        "authorizationScope": {"const": "trusted-host-readiness"},
+        "freshnessAuthority": {"const": "trusted-host-wall-clock"},
+        "launchAttemptJournalDomain": {
+          "const": "serverware.launchAuthorizationAttemptJournal/v1"
+        },
+        "launchAttemptRecoveryIdentitySha256": {"$ref": "#/$defs/sha256"},
+        "launchAuthorityWitnessChallenge": {"$ref": "#/$defs/hex64"},
+        "launchAuthorityWitnessKeyId": {"$ref": "#/$defs/sha256"},
+        "launchAuthorityWitnessIdentitySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "launchAuthorityWitnessAdministrativeDomainSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "launchAuthorityWitnessStoreAssuranceSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "authorizationStatement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authorizationId",
+        "authorityKeyId",
+        "requestSha256",
+        "issuedAtUnixSeconds",
+        "expiresAtUnixSeconds",
+        "authorizationScope",
+        "freshnessAuthority",
+        "capabilitySemantics",
+        "globalRoleRegistrySha256",
+        "monotonicWitness"
+      ],
+      "properties": {
+        "authorizationId": {"$ref": "#/$defs/hex64"},
+        "authorityKeyId": {"$ref": "#/$defs/sha256"},
+        "requestSha256": {"$ref": "#/$defs/sha256"},
+        "issuedAtUnixSeconds": {"$ref": "#/$defs/safePositiveInteger"},
+        "expiresAtUnixSeconds": {"$ref": "#/$defs/safePositiveInteger"},
+        "authorizationScope": {"const": "trusted-host-readiness"},
+        "freshnessAuthority": {"const": "trusted-host-wall-clock"},
+        "capabilitySemantics": {
+          "const": "time-bounded-idempotent-readiness-authorization"
+        },
+        "globalRoleRegistrySha256": {"$ref": "#/$defs/sha256"},
+        "monotonicWitness": {"$ref": "#/$defs/monotonicWitness"}
+      }
+    },
+    "monotonicWitness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["apiVersion", "kind", "statement", "signature"],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.launchAuthorityWitnessTransition/v1"
+        },
+        "kind": {"const": "LaunchAuthorityWitnessTransition"},
+        "statement": {"$ref": "#/$defs/monotonicWitnessStatement"},
+        "signature": {"$ref": "#/$defs/signature"}
+      }
+    },
+    "monotonicWitnessStatement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation",
+        "operationId",
+        "authorizationId",
+        "requestSha256",
+        "challenge",
+        "issuedAtUnixSeconds",
+        "expiresAtUnixSeconds",
+        "authorityKeyId",
+        "witnessKeyId",
+        "witnessIdentitySha256",
+        "witnessAdministrativeDomainSha256",
+        "storeAssuranceSha256",
+        "registryGeneration",
+        "registrySha256",
+        "predecessorStateSha256",
+        "successorStateSha256",
+        "deploymentAudience",
+        "deploymentIdentitySha256",
+        "releaseSequence",
+        "rollbackEpoch",
+        "authorizationScope",
+        "stateTransitionCommitted",
+        "checkpointSequence"
+      ],
+      "properties": {
+        "operation": {"const": "authorize-trusted-host-readiness"},
+        "operationId": {"$ref": "#/$defs/hex64"},
+        "authorizationId": {"$ref": "#/$defs/hex64"},
+        "requestSha256": {"$ref": "#/$defs/sha256"},
+        "challenge": {"$ref": "#/$defs/hex64"},
+        "issuedAtUnixSeconds": {"$ref": "#/$defs/safePositiveInteger"},
+        "expiresAtUnixSeconds": {"$ref": "#/$defs/safePositiveInteger"},
+        "authorityKeyId": {"$ref": "#/$defs/sha256"},
+        "witnessKeyId": {"$ref": "#/$defs/sha256"},
+        "witnessIdentitySha256": {"$ref": "#/$defs/sha256"},
+        "witnessAdministrativeDomainSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "storeAssuranceSha256": {"$ref": "#/$defs/sha256"},
+        "registryGeneration": {"$ref": "#/$defs/safePositiveInteger"},
+        "registrySha256": {"$ref": "#/$defs/sha256"},
+        "predecessorStateSha256": {"$ref": "#/$defs/sha256"},
+        "successorStateSha256": {"$ref": "#/$defs/sha256"},
+        "deploymentAudience": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-z0-9][a-z0-9._:-]{0,127}$"
+        },
+        "deploymentIdentitySha256": {"$ref": "#/$defs/sha256"},
+        "releaseSequence": {"$ref": "#/$defs/safePositiveInteger"},
+        "rollbackEpoch": {"$ref": "#/$defs/safeUnsignedInteger"},
+        "authorizationScope": {"const": "trusted-host-readiness"},
+        "stateTransitionCommitted": {"const": true},
+        "checkpointSequence": {"$ref": "#/$defs/safePositiveInteger"}
+      }
+    },
+    "authorizationEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["apiVersion", "kind", "statement", "signature"],
+      "properties": {
+        "apiVersion": {"const": "serverware.launchAuthorization/v2"},
+        "kind": {"const": "ProductionLaunchAuthorization"},
+        "statement": {"$ref": "#/$defs/authorizationStatement"},
+        "signature": {"$ref": "#/$defs/signature"}
+      }
+    },
+    "launchAuthorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "request",
+        "requestSha256",
+        "envelope",
+        "authorizationSha256",
+        "witnessPublicKeySpkiDerBase64url",
+        "verifiedAtUnixSeconds"
+      ],
+      "properties": {
+        "request": {"$ref": "#/$defs/authorizationRequest"},
+        "requestSha256": {"$ref": "#/$defs/sha256"},
+        "envelope": {"$ref": "#/$defs/authorizationEnvelope"},
+        "authorizationSha256": {"$ref": "#/$defs/sha256"},
+        "witnessPublicKeySpkiDerBase64url": {
+          "$ref": "#/$defs/ed25519SpkiDerBase64url"
+        },
+        "verifiedAtUnixSeconds": {"$ref": "#/$defs/safePositiveInteger"}
+      }
+    },
+    "globalRoleRegistryRoles": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "launchAuthority",
+        "launchAuthorityWitness",
+        "launchAuthorityWitnessStoreAssurance",
+        "launchAuthorityWitnessTls",
+        "nonceAuthorityAssuranceEvidence",
+        "nonceAuthorityVerifierState",
+        "nonceAuthorityVerifierStateStoreAttestation",
+        "policyActivation",
+        "policyIdentity",
+        "reproducibleBuild"
+      ],
+      "properties": {
+        "launchAuthority": {"$ref": "#/$defs/sha256"},
+        "launchAuthorityWitness": {"$ref": "#/$defs/sha256"},
+        "launchAuthorityWitnessStoreAssurance": {"$ref": "#/$defs/sha256"},
+        "launchAuthorityWitnessTls": {"$ref": "#/$defs/sha256"},
+        "nonceAuthorityAssuranceEvidence": {"$ref": "#/$defs/sha256"},
+        "nonceAuthorityVerifierState": {"$ref": "#/$defs/sha256"},
+        "nonceAuthorityVerifierStateStoreAttestation": {"$ref": "#/$defs/sha256"},
+        "policyActivation": {"$ref": "#/$defs/sha256"},
+        "policyIdentity": {"$ref": "#/$defs/sha256"},
+        "reproducibleBuild": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "launchGlobalRoleRegistry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "claimScope",
+        "roles",
+        "rolesOutsideClaim"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.productionLaunchGlobalRoleRegistry/v1"
+        },
+        "claimScope": {"const": "roles-present-in-native-launch-contract"},
+        "roles": {"$ref": "#/$defs/globalRoleRegistryRoles"},
+        "rolesOutsideClaim": {
+          "type": "array",
+          "minItems": 10,
+          "maxItems": 10,
+          "prefixItems": [
+            {"const": "actionGate"},
+            {"const": "publicAttestationNonceStore"},
+            {"const": "publicAttestationProducer"},
+            {"const": "publicAttestationWitnessStore"},
+            {"const": "finalVerifier"},
+            {"const": "nonceAuthorityVerifierStateStoreAssurance"},
+            {"const": "release"},
+            {"const": "response"},
+            {"const": "verifierStateTlsClient"},
+            {"const": "verifierStateTlsServer"}
+          ],
+          "items": false
+        }
+      }
+    },
+    "verifierStateService": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "signingPublicKeySpkiDerBase64url",
+        "storeAdministrativeDomainSha256",
+        "storeAssuranceEvidenceSha256",
+        "storeAttestationPublicKeySpkiDerBase64url",
+        "storeIdentitySha256"
+      ],
+      "properties": {
+        "signingPublicKeySpkiDerBase64url": {
+          "$ref": "#/$defs/ed25519SpkiDerBase64url"
+        },
+        "storeAdministrativeDomainSha256": {"$ref": "#/$defs/sha256"},
+        "storeAssuranceEvidenceSha256": {"$ref": "#/$defs/sha256"},
+        "storeAttestationPublicKeySpkiDerBase64url": {
+          "$ref": "#/$defs/ed25519SpkiDerBase64url"
+        },
+        "storeIdentitySha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "nonceRollbackAssurance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "contractSha256",
+        "pinsFile",
+        "retainedSnapshotFd",
+        "retainedSnapshotSha256",
+        "verifierStateService"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.productionNonceRollbackAssuranceBinding/v1"
+        },
+        "contractSha256": {"$ref": "#/$defs/sha256"},
+        "pinsFile": {
+          "allOf": [
+            {"$ref": "#/$defs/readOnlyFile"},
+            {
+              "properties": {
+                "path": {"pattern": "^/etc/serverware/.+$"},
+                "metadata": {
+                  "properties": {
+                    "size": {"minimum": 1, "maximum": 65536}
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "retainedSnapshotFd": {
+          "type": "integer",
+          "minimum": 3,
+          "maximum": 2147483647,
+          "not": {"const": 198}
+        },
+        "retainedSnapshotSha256": {"$ref": "#/$defs/sha256"},
+        "verifierStateService": {"$ref": "#/$defs/verifierStateService"}
+      }
+    },
+    "inputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "productionImagesBuild",
+        "productionImagesEnv",
+        "productionImagesPublished",
+        "releaseProvenanceSummary",
+        "releaseProvenance",
+        "imageSignaturesSummary",
+        "imageSignatures",
+        "bench",
+        "kmsMaterials",
+        "policyBundle",
+        "policyTrustedPublicKey",
+        "policyIdentityVerification",
+        "policyActivationVerification",
+        "policyActivationSignature",
+        "policyActivationTrustedPublicKey",
+        "reproducibleBuildVerification",
+        "reproducibleBuildSignature",
+        "reproducibleBuildTrustedPublicKey"
+      ],
+      "properties": {
+        "productionImagesBuild": {"$ref": "#/$defs/file"},
+        "productionImagesEnv": {"$ref": "#/$defs/file"},
+        "productionImagesPublished": {"$ref": "#/$defs/file"},
+        "releaseProvenanceSummary": {"$ref": "#/$defs/file"},
+        "releaseProvenance": {"$ref": "#/$defs/file"},
+        "imageSignaturesSummary": {"$ref": "#/$defs/file"},
+        "imageSignatures": {"$ref": "#/$defs/file"},
+        "bench": {"$ref": "#/$defs/file"},
+        "kmsMaterials": {"$ref": "#/$defs/file"},
+        "policyBundle": {"$ref": "#/$defs/file"},
+        "policyTrustedPublicKey": {"$ref": "#/$defs/file"},
+        "policyIdentityVerification": {"$ref": "#/$defs/file"},
+        "policyActivationVerification": {"$ref": "#/$defs/file"},
+        "policyActivationSignature": {"$ref": "#/$defs/file"},
+        "policyActivationTrustedPublicKey": {"$ref": "#/$defs/file"},
+        "reproducibleBuildVerification": {"$ref": "#/$defs/file"},
+        "reproducibleBuildSignature": {"$ref": "#/$defs/file"},
+        "reproducibleBuildTrustedPublicKey": {"$ref": "#/$defs/file"}
+      }
+    },
+    "argv": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["preflightSha256", "readinessSha256"],
+      "properties": {
+        "preflightSha256": {"$ref": "#/$defs/sha256"},
+        "readinessSha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["names", "sha256"],
+      "properties": {
+        "names": {
+          "type": "array",
+          "minItems": 8,
+          "maxItems": 8,
+          "prefixItems": [
+            {"const": "LANG"},
+            {"const": "LC_ALL"},
+            {"const": "PATH"},
+            {"const": "SERVERWARE_BOOTSTRAP_RECEIPT_API_VERSION"},
+            {"const": "SERVERWARE_BOOTSTRAP_RECEIPT_FD"},
+            {"const": "SERVERWARE_BOOTSTRAP_RECEIPT_SHA256"},
+            {"const": "SERVERWARE_LAUNCHER_IMPORT_MODE"},
+            {"const": "TZ"}
+          ],
+          "items": false
+        },
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  }
+}

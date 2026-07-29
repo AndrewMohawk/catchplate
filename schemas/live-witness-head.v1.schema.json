@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/live-witness-head.v1.schema.json",
+  "title": "Serverware live witness head v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "payload",
+    "payloadSha256",
+    "signature",
+    "signingKeyId"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "serverware.liveWitnessHead/v1"
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "expiresAtUnix",
+        "generation",
+        "headSha256",
+        "invocationBinding",
+        "issuedAtUnix",
+        "releaseIdentitySha256",
+        "rollbackEpoch",
+        "sequence",
+        "treeSize"
+      ],
+      "properties": {
+        "expiresAtUnix": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 18446744073709551615
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 18446744073709551615
+        },
+        "headSha256": {"$ref": "#/$defs/sha256"},
+        "invocationBinding": {"$ref": "#/$defs/invocationBinding"},
+        "issuedAtUnix": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 18446744073709551615
+        },
+        "releaseIdentitySha256": {"$ref": "#/$defs/sha256"},
+        "rollbackEpoch": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 18446744073709551615
+        },
+        "treeSize": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 18446744073709551615
+        }
+      }
+    },
+    "payloadSha256": {"$ref": "#/$defs/sha256"},
+    "signature": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{85}[AQgw]$"
+    },
+    "signingKeyId": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "base64url32": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$"
+    },
+    "invocationBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "currentRequestSha256",
+        "producerEphemeralKeySpkiSha256",
+        "producerInvocationSha256",
+        "producerRequestSha256",
+        "tlsBindingSha256",
+        "verifierChallengeBase64url"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.attestationWitnessInvocationBinding/v1"
+        },
+        "currentRequestSha256": {"$ref": "#/$defs/sha256"},
+        "producerEphemeralKeySpkiSha256": {"$ref": "#/$defs/sha256"},
+        "producerInvocationSha256": {"$ref": "#/$defs/sha256"},
+        "producerRequestSha256": {"$ref": "#/$defs/sha256"},
+        "tlsBindingSha256": {"$ref": "#/$defs/sha256"},
+        "verifierChallengeBase64url": {"$ref": "#/$defs/base64url32"}
+      }
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  }
+}

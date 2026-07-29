@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Cooperative Coder diagnostics only: this repository-controlled same-UID
+# script is not contained from Docker and does not establish provenance or
+# attestation. Run it only through a trusted orchestrator on an exclusive
+# disposable DinD sidecar that is destroyed during terminal cleanup.
 set -euo pipefail
 
 BASE="${BASE:-http://localhost:3000}"
@@ -12,30 +16,131 @@ ADMIN_HEADER=(-H "X-Serverware-Admin-Token: ${SERVERWARE_ADMIN_TOKEN:-dev-admin-
 
 mkdir -p "$TMP_DIR"
 
+bounded_curl() {
+  local failure_mode="${1:?curl failure mode is required}"
+  shift
+  local -a failure_args=()
+  case "$failure_mode" in
+    require-success)
+      failure_args=(--fail)
+      ;;
+    inspect-status)
+      ;;
+    *)
+      echo "invalid bounded curl failure mode: $failure_mode" >&2
+      return 2
+      ;;
+  esac
+  command curl \
+    --silent \
+    --show-error \
+    --connect-timeout 3 \
+    --max-time 30 \
+    --max-filesize 8388608 \
+    --speed-limit 1 \
+    --speed-time 10 \
+    "${failure_args[@]}" \
+    "$@"
+}
+
+demo_upstream_https_get() {
+  local url="$1"
+  docker compose exec -T demo-upstream python - "$url" <<'PY'
+import ssl
+import signal
+import sys
+import urllib.error
+import urllib.request
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def read_bounded(response):
+    body = response.read(1048577)
+    if len(body) > 1048576:
+        raise RuntimeError("HTTPS probe response exceeded 1 MiB")
+    return body
+
+
+def fetch_direct(opener, url):
+    try:
+        with opener.open(url, timeout=5) as response:
+            return read_bounded(response)
+    except urllib.error.HTTPError as exc:
+        if 300 <= exc.code < 400:
+            with exc:
+                return read_bounded(exc)
+        raise
+
+
+def deadline_expired(signum, frame):
+    raise TimeoutError("HTTPS probe exceeded its 5-second wall-clock deadline")
+
+
+url = sys.argv[1]
+context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+context.check_hostname = False
+context.verify_mode = ssl.CERT_NONE
+opener = urllib.request.build_opener(
+    urllib.request.ProxyHandler({}),
+    urllib.request.HTTPSHandler(context=context),
+    NoRedirect(),
+)
+previous_alarm_handler = signal.signal(signal.SIGALRM, deadline_expired)
+signal.setitimer(signal.ITIMER_REAL, 5.0)
+try:
+    body = fetch_direct(opener, url)
+except urllib.error.HTTPError as exc:
+    print(f"HTTPS probe failed with HTTP {exc.code}: {url}", file=sys.stderr)
+    raise SystemExit(22) from exc
+except (OSError, RuntimeError) as exc:
+    print(f"HTTPS probe failed: {url}: {exc}", file=sys.stderr)
+    raise SystemExit(1) from exc
+finally:
+    signal.setitimer(signal.ITIMER_REAL, 0)
+    signal.signal(signal.SIGALRM, previous_alarm_handler)
+sys.stdout.buffer.write(body)
+PY
+}
+
+serverware_healthy=0
 for _ in $(seq 1 60); do
-  if curl -fs "$BASE/healthz" >/dev/null 2>&1; then
+  if bounded_curl require-success \
+    --connect-timeout 1 \
+    --max-time 2 \
+    --max-filesize 65536 \
+    --speed-time 2 \
+    "$BASE/healthz" >/dev/null 2>&1; then
+    serverware_healthy=1
     break
   fi
   sleep 1
 done
+if [[ "$serverware_healthy" != "1" ]]; then
+  echo "serverware health check did not succeed within 60 attempts" >&2
+  exit 1
+fi
 
-unauth_code="$(curl -sS -o "$TMP_DIR/bootstrap-unauth.json" -w "%{http_code}" "$BASE/api/bootstrap")"
+unauth_code="$(bounded_curl inspect-status -o "$TMP_DIR/bootstrap-unauth.json" -w "%{http_code}" "$BASE/api/bootstrap")"
 if [[ "$unauth_code" != "401" ]]; then
   echo "expected unauthenticated bootstrap to fail with 401, got $unauth_code" >&2
   cat "$TMP_DIR/bootstrap-unauth.json" >&2
   exit 1
 fi
 
-ca_unauth_code="$(curl -sS -o "$TMP_DIR/ca-unauth.json" -w "%{http_code}" "$BASE/ca.pem")"
+ca_unauth_code="$(bounded_curl inspect-status -o "$TMP_DIR/ca-unauth.json" -w "%{http_code}" "$BASE/ca.pem")"
 if [[ "$ca_unauth_code" != "401" ]]; then
   echo "expected unauthenticated CA download to fail with 401, got $ca_unauth_code" >&2
   cat "$TMP_DIR/ca-unauth.json" >&2
   exit 1
 fi
 
-curl -fsS "${ADMIN_HEADER[@]}" -X POST "$BASE/api/demo/seed" > "$TMP_DIR/seed.json"
-curl -fsS "${ADMIN_HEADER[@]}" -X POST "$BASE/api/dev/webauthn/credential" > "$TMP_DIR/webauthn-dev-credential.json"
-curl -fsS "${ADMIN_HEADER[@]}" "$BASE/api/bootstrap" > "$TMP_DIR/bootstrap.json"
+bounded_curl require-success "${ADMIN_HEADER[@]}" -X POST "$BASE/api/demo/seed" > "$TMP_DIR/seed.json"
+bounded_curl require-success "${ADMIN_HEADER[@]}" -X POST "$BASE/api/dev/webauthn/credential" > "$TMP_DIR/webauthn-dev-credential.json"
+bounded_curl require-success "${ADMIN_HEADER[@]}" "$BASE/api/bootstrap" > "$TMP_DIR/bootstrap.json"
 python3 - "$TMP_DIR/bootstrap.json" "$TMP_DIR/credential-version-before-rotation.txt" <<'PY'
 import json, sys
 data = json.load(open(sys.argv[1]))
@@ -51,7 +156,7 @@ assert credential["secret_updated_at"], credential
 open(sys.argv[2], "w").write(str(credential["credential_version"]))
 PY
 
-curl -fsS "$BASE/attestation?nonce=e2e" > "$TMP_DIR/attestation.json"
+bounded_curl require-success "$BASE/attestation?nonce=e2e" > "$TMP_DIR/attestation.json"
 python3 - "$TMP_DIR/attestation.json" <<'PY'
 import json, sys
 data = json.load(open(sys.argv[1]))
@@ -92,23 +197,35 @@ if [[ "${SERVERWARE_START_DECISION_GATE:-1}" == "1" ]]; then
 fi
 
 set +e
-unknown_code="$(curl -sS -o "$TMP_DIR/unknown-route.json" -w "%{http_code}" --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
+unknown_code="$(bounded_curl inspect-status -o "$TMP_DIR/unknown-route.json" -w "%{http_code}" --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
   "https://demo-upstream:8443/unknown")"
 unknown_curl_status=$?
 set -e
-if [[ "$unknown_code" != "403" && ! ( "$unknown_code" == "000" && "$unknown_curl_status" == "56" ) ]]; then
-  echo "expected unknown route to fail closed with 403 or proxy CONNECT denial, got curl=$unknown_curl_status code=$unknown_code" >&2
-  cat "$TMP_DIR/unknown-route.json" >&2
-  exit 1
-fi
-python3 - "$TMP_DIR/unknown-route.json" <<'PY'
+if [[ "$unknown_code" == "000" && "$unknown_curl_status" == "56" ]]; then
+  if [[ -s "$TMP_DIR/unknown-route.json" ]]; then
+    echo "proxy CONNECT denial unexpectedly returned a response body" >&2
+    exit 1
+  fi
+elif [[ "$unknown_code" == "403" && "$unknown_curl_status" == "0" ]]; then
+  if [[ ! -s "$TMP_DIR/unknown-route.json" ]]; then
+    echo "HTTP 403 unknown-route denial returned no JSON body" >&2
+    exit 1
+  fi
+  python3 - "$TMP_DIR/unknown-route.json" <<'PY'
 import json, sys
 data = json.load(open(sys.argv[1]))
 payload = data.get("payload") if isinstance(data.get("payload"), dict) else data
 assert payload["error"] == "unknown_route_denied", data
 PY
+else
+  echo "expected unknown route to fail closed with 403 or proxy CONNECT denial, got curl=$unknown_curl_status code=$unknown_code" >&2
+  if [[ -f "$TMP_DIR/unknown-route.json" ]]; then
+    cat "$TMP_DIR/unknown-route.json" >&2
+  fi
+  exit 1
+fi
 
-curl -fsS --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
+bounded_curl require-success --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
   "https://demo-upstream:8443/echo" > "$TMP_DIR/echo.json"
 python3 - "$TMP_DIR/echo.json" <<'PY'
 import json, sys
@@ -124,7 +241,7 @@ PY
 docker compose stop serverware >/dev/null
 sleep 6
 set +e
-expired_lease_code="$(curl -sS -o "$TMP_DIR/expired-credential-lease.json" -w "%{http_code}" \
+expired_lease_code="$(bounded_curl inspect-status -o "$TMP_DIR/expired-credential-lease.json" -w "%{http_code}" \
   --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
   "https://demo-upstream:8443/echo")"
 expired_lease_curl_status=$?
@@ -149,7 +266,7 @@ PY
 
 recovered_lease=0
 for _ in $(seq 1 20); do
-  recovered_lease_code="$(curl -sS -o "$TMP_DIR/credential-lease-recovered.json" -w "%{http_code}" \
+  recovered_lease_code="$(bounded_curl inspect-status -o "$TMP_DIR/credential-lease-recovered.json" -w "%{http_code}" \
     --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
     "https://demo-upstream:8443/echo")"
   if python3 - "$TMP_DIR/credential-lease-recovered.json" <<'PY'
@@ -177,7 +294,7 @@ data = json.load(open(sys.argv[1]))
 assert data["authorization_present"] is True, data
 PY
 
-curl -fsS --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
+bounded_curl require-success --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
   "https://demo-upstream:8443/gmail/v1/users/me/messages?q=from%3Asecurity%40example.com&maxResults=500" \
   > "$TMP_DIR/gmail-list.json"
 python3 - "$TMP_DIR/gmail-list.json" <<'PY'
@@ -197,7 +314,7 @@ for item in data["messages"]:
         assert key not in item, item
 PY
 
-curl -fsS --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
+bounded_curl require-success --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
   "https://demo-upstream:8443/gmail/v1/users/me/messages?q=newer_than%3A3650d&maxResults=500" \
   > "$TMP_DIR/gmail-weak-query.json"
 python3 - "$TMP_DIR/gmail-weak-query.json" <<'PY'
@@ -211,7 +328,7 @@ assert all(
 ), data
 PY
 
-gmail_missing_date_code="$(curl -sS -o "$TMP_DIR/gmail-pending-list.json" -w "%{http_code}" \
+gmail_missing_date_code="$(bounded_curl inspect-status -o "$TMP_DIR/gmail-pending-list.json" -w "%{http_code}" \
   --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
   "https://demo-upstream:8443/gmail/v1/users/me/messages?q=subject%3Aserverware-fixture-omit-internal-date")"
 if [[ "$gmail_missing_date_code" != "200" ]]; then
@@ -227,7 +344,7 @@ assert all(item["serverwareAgeProof"] == "validated" for item in data["messages"
 assert all(str(item["internalDate"]).isdigit() for item in data["messages"]), data
 PY
 
-pending_get_code="$(curl -sS -o "$TMP_DIR/gmail-pending-get.json" -w "%{http_code}" --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
+pending_get_code="$(bounded_curl inspect-status -o "$TMP_DIR/gmail-pending-get.json" -w "%{http_code}" --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
   "https://demo-upstream:8443/gmail/v1/users/me/messages/pending-message-1")"
 if [[ "$pending_get_code" != "200" ]]; then
   echo "expected metadata-validated Gmail ID to authorize a direct read, got $pending_get_code" >&2
@@ -242,7 +359,7 @@ assert str(data["internalDate"]).isdigit(), data
 assert "body" not in data["payload"], data
 PY
 
-curl -fsS --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
+bounded_curl require-success --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
   "https://demo-upstream:8443/gmail/v1/users/me/messages?q=subject%3Aserverware-fixture-metadata-not-found" \
   > "$TMP_DIR/gmail-missing-metadata-list.json"
 python3 - "$TMP_DIR/gmail-missing-metadata-list.json" <<'PY'
@@ -250,7 +367,7 @@ import json, sys
 data = json.load(open(sys.argv[1]))
 assert [item["id"] for item in data["messages"]] == ["recent-message-1"], data
 PY
-missing_get_code="$(curl -sS -o "$TMP_DIR/gmail-missing-get-block.json" -w "%{http_code}" --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
+missing_get_code="$(bounded_curl inspect-status -o "$TMP_DIR/gmail-missing-get-block.json" -w "%{http_code}" --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
   "https://demo-upstream:8443/gmail/v1/users/me/messages/missing-message-1")"
 if [[ "$missing_get_code" != "403" ]]; then
   echo "expected Gmail ID whose metadata fetch failed to remain unauthorized, got $missing_get_code" >&2
@@ -258,7 +375,7 @@ if [[ "$missing_get_code" != "403" ]]; then
   exit 1
 fi
 
-curl -fsS --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
+bounded_curl require-success --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
   "https://demo-upstream:8443/gmail/v1/users/me/messages/recent-message-1" \
   > "$TMP_DIR/gmail-get.json"
 python3 - "$TMP_DIR/gmail-get.json" <<'PY'
@@ -272,7 +389,7 @@ for key in ("authorization", "proxy_authorization", "serverware_agent", "cookie"
     assert key not in data, data
 PY
 
-old_code="$(curl -sS -o "$TMP_DIR/gmail-old-block.json" -w "%{http_code}" --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
+old_code="$(bounded_curl inspect-status -o "$TMP_DIR/gmail-old-block.json" -w "%{http_code}" --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
   "https://demo-upstream:8443/gmail/v1/users/me/messages/old-message-1")"
 if [[ "$old_code" != "403" ]]; then
   echo "expected old gmail direct read to fail with 403, got $old_code" >&2
@@ -280,7 +397,7 @@ if [[ "$old_code" != "403" ]]; then
   exit 1
 fi
 
-curl -fsS --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
+bounded_curl require-success --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
   "https://demo-upstream:8443/2/tweets" > "$TMP_DIR/x-read.json"
 python3 - "$TMP_DIR/x-read.json" <<'PY'
 import json, sys
@@ -293,7 +410,7 @@ assert data["data"][0]["id"] == "tweet-1", data
 assert data["data"][0]["text"] == "demo", data
 PY
 
-x_write_code="$(curl -sS -o "$TMP_DIR/x-write-block.json" -w "%{http_code}" -X POST --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
+x_write_code="$(bounded_curl inspect-status -o "$TMP_DIR/x-write-block.json" -w "%{http_code}" -X POST --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
   "https://demo-upstream:8443/2/tweets")"
 if [[ "$x_write_code" != "403" ]]; then
   echo "expected X write to fail with 403, got $x_write_code" >&2
@@ -301,10 +418,10 @@ if [[ "$x_write_code" != "403" ]]; then
   exit 1
 fi
 
-docker compose exec -T demo-upstream curl -kfsS \
+demo_upstream_https_get \
   "https://localhost:8443/_test/request-count?method=POST&path=/2/tweets" \
   > "$TMP_DIR/x-empty-container-upstream-before.json"
-x_empty_container_code="$(curl -sS -o "$TMP_DIR/x-empty-container-block.json" -w "%{http_code}" \
+x_empty_container_code="$(bounded_curl inspect-status -o "$TMP_DIR/x-empty-container-block.json" -w "%{http_code}" \
   -X POST --data '{"text":"ship it","unexpected":{}}' -H "Content-Type: application/json" \
   --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
   "https://demo-upstream:8443/2/tweets")"
@@ -313,7 +430,7 @@ if [[ "$x_empty_container_code" != "403" ]]; then
   cat "$TMP_DIR/x-empty-container-block.json" >&2
   exit 1
 fi
-docker compose exec -T demo-upstream curl -kfsS \
+demo_upstream_https_get \
   "https://localhost:8443/_test/request-count?method=POST&path=/2/tweets" \
   > "$TMP_DIR/x-empty-container-upstream-after.json"
 python3 - \
@@ -329,7 +446,7 @@ after = json.load(open(sys.argv[3]))
 assert before["count"] == after["count"], (before, after)
 PY
 
-x_unknown_read_code="$(curl -sS -o "$TMP_DIR/x-unknown-read-block.json" -w "%{http_code}" --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
+x_unknown_read_code="$(bounded_curl inspect-status -o "$TMP_DIR/x-unknown-read-block.json" -w "%{http_code}" --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
   "https://demo-upstream:8443/2/future/unknown_endpoint")"
 if [[ "$x_unknown_read_code" != "403" ]]; then
   echo "expected unconfigured X read operation to fail with 403, got $x_unknown_read_code" >&2
@@ -340,14 +457,14 @@ fi
 npm_body='{"name":"demo-package","dist-tags":{"latest":"1.2.3"},"versions":{"1.2.3":{"version":"1.2.3","dist":{"integrity":"sha512-demo"}}}}'
 npm_url="https://demo-upstream:8443/npm/demo-package"
 bad_npm_body='{"name":"demo-package","dist-tags":{"latest":"1.2.3"},"versions":{"1.2.3":{"version":"1.2.3","dist":{}}}}'
-bad_npm_code="$(curl -sS -o "$TMP_DIR/npm-missing-fields-block.json" -w "%{http_code}" -X PUT --data "$bad_npm_body" -H "Content-Type: application/json" --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
+bad_npm_code="$(bounded_curl inspect-status -o "$TMP_DIR/npm-missing-fields-block.json" -w "%{http_code}" -X PUT --data "$bad_npm_body" -H "Content-Type: application/json" --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
   "$npm_url")"
 if [[ "$bad_npm_code" != "403" ]]; then
   echo "expected npm publish missing integrity to fail with 403, got $bad_npm_code" >&2
   cat "$TMP_DIR/npm-missing-fields-block.json" >&2
   exit 1
 fi
-approval_code="$(curl -sS -o "$TMP_DIR/approval-block.json" -w "%{http_code}" -X PUT --data "$npm_body" -H "Content-Type: application/json" --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
+approval_code="$(bounded_curl inspect-status -o "$TMP_DIR/approval-block.json" -w "%{http_code}" -X PUT --data "$npm_body" -H "Content-Type: application/json" --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
   "$npm_url")"
 if [[ "$approval_code" != "428" ]]; then
   echo "expected approval request to fail with 428, got $approval_code" >&2
@@ -360,7 +477,7 @@ import json, sys
 print(json.load(open(sys.argv[1]))["approval_id"])
 PY
 )"
-curl -fsS "${ADMIN_HEADER[@]}" "$BASE/api/approvals/$approval_id/review" > "$TMP_DIR/approval-review.json"
+bounded_curl require-success "${ADMIN_HEADER[@]}" "$BASE/api/approvals/$approval_id/review" > "$TMP_DIR/approval-review.json"
 python3 - "$TMP_DIR/approval-review.json" "$TMP_DIR/approval-review-request.json" <<'PY'
 import json, sys
 review = json.load(open(sys.argv[1]))
@@ -368,14 +485,14 @@ assert review["review_digest"].startswith("sha256:"), review
 assert review["review_receipt"]["id"], review
 json.dump({"reviewReceiptId": review["review_receipt"]["id"]}, open(sys.argv[2], "w"))
 PY
-approval_without_webauthn_code="$(curl -sS -o "$TMP_DIR/approval-no-webauthn.json" -w "%{http_code}" "${ADMIN_HEADER[@]}" -H "Content-Type: application/json" -X POST --data @"$TMP_DIR/approval-review-request.json" "$BASE/api/approvals/$approval_id/approve?ttl_seconds=30")"
+approval_without_webauthn_code="$(bounded_curl inspect-status -o "$TMP_DIR/approval-no-webauthn.json" -w "%{http_code}" "${ADMIN_HEADER[@]}" -H "Content-Type: application/json" -X POST --data @"$TMP_DIR/approval-review-request.json" "$BASE/api/approvals/$approval_id/approve?ttl_seconds=30")"
 if [[ "$approval_without_webauthn_code" != "412" ]]; then
   echo "expected approval without WebAuthn to fail with 412, got $approval_without_webauthn_code" >&2
   cat "$TMP_DIR/approval-no-webauthn.json" >&2
   exit 1
 fi
 
-curl -fsS "${ADMIN_HEADER[@]}" -H "Content-Type: application/json" -X POST \
+bounded_curl require-success "${ADMIN_HEADER[@]}" -H "Content-Type: application/json" -X POST \
   --data @"$TMP_DIR/approval-review-request.json" \
   "$BASE/api/approvals/$approval_id/webauthn/options" > "$TMP_DIR/approval-webauthn-options.json"
 challenge="$(python3 - "$TMP_DIR/approval-webauthn-options.json" <<'PY'
@@ -393,7 +510,7 @@ assert payload["review_digest"].startswith("sha256:"), data
 print(data["publicKey"]["challenge"])
 PY
 )"
-curl -fsS "${ADMIN_HEADER[@]}" -H "Content-Type: application/json" -X POST \
+bounded_curl require-success "${ADMIN_HEADER[@]}" -H "Content-Type: application/json" -X POST \
   --data "{\"challenge\":\"$challenge\"}" \
   "$BASE/api/dev/webauthn/assertion" > "$TMP_DIR/approval-webauthn-assertion.json"
 python3 - "$TMP_DIR/approval-webauthn-assertion.json" "$TMP_DIR/approval-review.json" "$TMP_DIR/approval-webauthn-approve.json" <<'PY'
@@ -402,7 +519,7 @@ assertion = json.load(open(sys.argv[1]))
 review = json.load(open(sys.argv[2]))
 json.dump({"assertion": assertion, "reviewReceiptId": review["review_receipt"]["id"]}, open(sys.argv[3], "w"))
 PY
-curl -fsS "${ADMIN_HEADER[@]}" -H "Content-Type: application/json" -X POST \
+bounded_curl require-success "${ADMIN_HEADER[@]}" -H "Content-Type: application/json" -X POST \
   --data @"$TMP_DIR/approval-webauthn-approve.json" \
   "$BASE/api/approvals/$approval_id/approve?ttl_seconds=30" > "$TMP_DIR/approval-approved.json"
 python3 - "$TMP_DIR/approval-approved.json" <<'PY'
@@ -414,7 +531,7 @@ assert isinstance(data["credential_version"], int) and data["credential_version"
 for forbidden in ("approval_authn", "approval_challenge_id", "canonical_request", "redacted_display"):
     assert forbidden not in data, data
 PY
-curl -fsS "${ADMIN_HEADER[@]}" \
+bounded_curl require-success "${ADMIN_HEADER[@]}" \
   "$BASE/api/audit/search?eventType=approval.approved&approvalId=$approval_id" \
   > "$TMP_DIR/approval-approved-audit.json"
 python3 - "$TMP_DIR/approval-approved-audit.json" "$approval_id" <<'PY'
@@ -434,7 +551,7 @@ assert event["approval_challenge_id"], event
 assert event["credential_id"] == "cred-demo-bearer", event
 assert isinstance(event["credential_version"], int) and event["credential_version"] >= 1, event
 PY
-repeat_approval_code="$(curl -sS -o "$TMP_DIR/approval-repeat-block.json" -w "%{http_code}" "${ADMIN_HEADER[@]}" -H "Content-Type: application/json" -X POST \
+repeat_approval_code="$(bounded_curl inspect-status -o "$TMP_DIR/approval-repeat-block.json" -w "%{http_code}" "${ADMIN_HEADER[@]}" -H "Content-Type: application/json" -X POST \
   --data @"$TMP_DIR/approval-webauthn-approve.json" \
   "$BASE/api/approvals/$approval_id/approve?ttl_seconds=30")"
 if [[ "$repeat_approval_code" != "409" ]]; then
@@ -442,7 +559,7 @@ if [[ "$repeat_approval_code" != "409" ]]; then
   cat "$TMP_DIR/approval-repeat-block.json" >&2
   exit 1
 fi
-curl -fsS -X PUT --data "$npm_body" -H "Content-Type: application/json" --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
+bounded_curl require-success -X PUT --data "$npm_body" -H "Content-Type: application/json" --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
   "$npm_url" > "$TMP_DIR/approval-pass.json"
 python3 - "$TMP_DIR/approval-pass.json" <<'PY'
 import json, sys
@@ -454,7 +571,7 @@ assert "authorization" not in data, data
 assert data["published"] is True, data
 PY
 
-reuse_code="$(curl -sS -o "$TMP_DIR/approval-reuse-block.json" -w "%{http_code}" -X PUT --data "$npm_body" -H "Content-Type: application/json" --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
+reuse_code="$(bounded_curl inspect-status -o "$TMP_DIR/approval-reuse-block.json" -w "%{http_code}" -X PUT --data "$npm_body" -H "Content-Type: application/json" --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
   "$npm_url")"
 if [[ "$reuse_code" != "428" ]]; then
   echo "expected consumed JIT grant to require a fresh approval, got $reuse_code" >&2
@@ -462,7 +579,7 @@ if [[ "$reuse_code" != "428" ]]; then
   exit 1
 fi
 
-curl -fsS "${ADMIN_HEADER[@]}" -H "Content-Type: application/json" -X PUT \
+bounded_curl require-success "${ADMIN_HEADER[@]}" -H "Content-Type: application/json" -X PUT \
   --data '{"secret":"rotated-token-from-vault"}' \
   "$BASE/api/credentials/cred-demo-bearer" > "$TMP_DIR/credential-rotated.json"
 python3 - "$TMP_DIR/credential-rotated.json" "$TMP_DIR/credential-version-before-rotation.txt" <<'PY'
@@ -475,7 +592,7 @@ PY
 
 rotated_seen=0
 for _ in $(seq 1 30); do
-  rotated_code="$(curl -sS -o "$TMP_DIR/echo-rotated.json" -w "%{http_code}" --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
+  rotated_code="$(bounded_curl inspect-status -o "$TMP_DIR/echo-rotated.json" -w "%{http_code}" --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
     "https://demo-upstream:8443/echo")"
   if [[ "$rotated_code" == "200" ]] && python3 - "$TMP_DIR/echo-rotated.json" <<'PY'
 import json, sys
@@ -499,13 +616,13 @@ if [[ "$rotated_seen" != "1" ]]; then
   exit 1
 fi
 
-curl -fsS "${ADMIN_HEADER[@]}" "$BASE/api/runtime/metrics" > "$TMP_DIR/runtime-metrics.json"
+bounded_curl require-success "${ADMIN_HEADER[@]}" "$BASE/api/runtime/metrics" > "$TMP_DIR/runtime-metrics.json"
 python3 - "$TMP_DIR/runtime-metrics.json" <<'PY'
 import json, sys
 data = json.load(open(sys.argv[1]))
 assert "credential_lease_replay_count" not in data, data
 PY
-curl -fsS "$DECISION_GATE_BASE/healthz" > "$TMP_DIR/decision-gate-health.json"
+bounded_curl require-success "$DECISION_GATE_BASE/healthz" > "$TMP_DIR/decision-gate-health.json"
 python3 - "$TMP_DIR/decision-gate-health.json" <<'PY'
 import json, sys
 data = json.load(open(sys.argv[1]))
@@ -513,7 +630,7 @@ assert data["credential_leases"] >= 1, data
 assert data["credential_lease_protocol"] == "scoped-recipient-bound-pull/v2", data
 PY
 
-curl -fsS "${ADMIN_HEADER[@]}" "$BASE/api/audit/verify" > "$TMP_DIR/audit-verify.json"
+bounded_curl require-success "${ADMIN_HEADER[@]}" "$BASE/api/audit/verify" > "$TMP_DIR/audit-verify.json"
 python3 - "$TMP_DIR/audit-verify.json" <<'PY'
 import json, sys
 data = json.load(open(sys.argv[1]))
@@ -521,7 +638,7 @@ assert data["ok"] is True, data
 assert data["count"] > 0, data
 assert data["head"].startswith("sha256:"), data
 PY
-curl -fsS "${ADMIN_HEADER[@]}" "$BASE/api/audit?limit=250" > "$TMP_DIR/audit-events.json"
+bounded_curl require-success "${ADMIN_HEADER[@]}" "$BASE/api/audit?limit=250" > "$TMP_DIR/audit-events.json"
 python3 - "$TMP_DIR/audit-events.json" <<'PY'
 import json, sys
 events = json.load(open(sys.argv[1]))

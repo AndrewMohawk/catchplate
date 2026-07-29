@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/stable-release-statement.v1.schema.json",
+  "title": "Serverware stable release statement v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "payload",
+    "payloadSha256",
+    "signature",
+    "signingKeyId"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "serverware.stableReleaseStatement/v1"
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "attestationPins",
+        "releaseIdentity",
+        "releaseIdentitySha256",
+        "trustRootBundleSha256"
+      ],
+      "properties": {
+        "attestationPins": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "descriptorSha256",
+            "executableSha256",
+            "immutableConfigSha256",
+            "nonceStoreIdentitySha256",
+            "nonceStoreKeySpkiSha256",
+            "producerRequestSchemaSha256",
+            "sandboxDescriptorSha256",
+            "sandboxLauncherSha256",
+            "trustRootsSha256",
+            "witnessStoreIdentitySha256",
+            "witnessStoreKeySpkiSha256"
+          ],
+          "properties": {
+            "descriptorSha256": {"$ref": "#/$defs/sha256"},
+            "executableSha256": {"$ref": "#/$defs/sha256"},
+            "immutableConfigSha256": {"$ref": "#/$defs/sha256"},
+            "nonceStoreIdentitySha256": {"$ref": "#/$defs/sha256"},
+            "nonceStoreKeySpkiSha256": {"$ref": "#/$defs/sha256"},
+            "producerRequestSchemaSha256": {"$ref": "#/$defs/sha256"},
+            "sandboxDescriptorSha256": {"$ref": "#/$defs/sha256"},
+            "sandboxLauncherSha256": {"$ref": "#/$defs/sha256"},
+            "trustRootsSha256": {"$ref": "#/$defs/sha256"},
+            "witnessStoreIdentitySha256": {"$ref": "#/$defs/sha256"},
+            "witnessStoreKeySpkiSha256": {"$ref": "#/$defs/sha256"}
+          }
+        },
+        "releaseIdentity": {
+          "$ref": "release-identity.v1.schema.json"
+        },
+        "releaseIdentitySha256": {"$ref": "#/$defs/sha256"},
+        "trustRootBundleSha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "payloadSha256": {"$ref": "#/$defs/sha256"},
+    "signature": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{85}[AQgw]$"
+    },
+    "signingKeyId": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  }
+}

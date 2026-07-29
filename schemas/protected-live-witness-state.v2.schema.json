@@ -1,0 +1,455 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/protected-live-witness-state.v2.schema.json",
+  "title": "Serverware signed protected current live-witness state v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "payload",
+    "payloadSha256",
+    "signature",
+    "signingKeyId"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "serverware.protectedLiveWitnessState/v2"
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "checkpointCasReceipt",
+        "current",
+        "expiresAtUnix",
+        "invocationBinding",
+        "issuedAtUnix",
+        "previous",
+        "releaseIdentitySha256",
+        "rollbackContinuityCommitmentSha256",
+        "storeAssurance",
+        "witnessStoreIdentity",
+        "witnessStoreIdentitySha256",
+        "witnessStoreKeySpkiSha256",
+        "witnessSigningKeyId"
+      ],
+      "properties": {
+        "checkpointCasReceipt": {
+          "$ref": "#/$defs/casReceipt"
+        },
+        "current": {
+          "$ref": "#/$defs/currentCheckpoint"
+        },
+        "expiresAtUnix": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "invocationBinding": {
+          "$ref": "#/$defs/invocationBinding"
+        },
+        "issuedAtUnix": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "previous": {
+          "oneOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/priorCheckpoint"}
+          ]
+        },
+        "releaseIdentitySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "rollbackContinuityCommitmentSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "storeAssurance": {
+          "enum": [
+            "nonProductionFixture",
+            "nonProductionSqliteReference",
+            "externallyWitnessedRollbackProtected"
+          ]
+        },
+        "witnessStoreIdentity": {
+          "$ref": "#/$defs/witnessStoreIdentity"
+        },
+        "witnessStoreIdentitySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "witnessStoreKeySpkiSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "witnessSigningKeyId": {
+          "$ref": "#/$defs/sha256"
+        }
+      },
+      "allOf": [
+        {
+          "oneOf": [
+            {
+              "properties": {
+                "storeAssurance": {
+                  "const": "nonProductionFixture"
+                },
+                "witnessStoreIdentity": {
+                  "properties": {
+                    "assurance": {
+                      "const": "nonProductionFixture"
+                    },
+                    "storageBackend": {
+                      "const": "fixture-sqlite"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "properties": {
+                "storeAssurance": {
+                  "const": "nonProductionSqliteReference"
+                },
+                "witnessStoreIdentity": {
+                  "properties": {
+                    "assurance": {
+                      "const": "nonProductionSqliteReference"
+                    },
+                    "storageBackend": {
+                      "const": "sqlite-wal-full-sync"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "properties": {
+                "storeAssurance": {
+                  "const": "externallyWitnessedRollbackProtected"
+                },
+                "witnessStoreIdentity": {
+                  "properties": {
+                    "assurance": {
+                      "const": "externallyWitnessedRollbackProtected"
+                    },
+                    "storageBackend": {
+                      "const": "external-linearizable-cas"
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "$comment": "Runtime validation additionally requires witnessStoreIdentitySha256 to equal the canonical identity digest, signingKeyId to equal witnessStoreKeySpkiSha256, witnessSigningKeyId to equal the live-head signer, and both signed envelopes to contain an identical invocationBinding."
+    },
+    "payloadSha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "signature": {
+      "$ref": "#/$defs/ed25519Signature"
+    },
+    "signingKeyId": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "casReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "checkpointSha256",
+        "committedAtUnix",
+        "committedRollbackContinuityCommitmentSha256",
+        "generation",
+        "previousRollbackContinuityCommitmentSha256",
+        "releaseIdentitySha256",
+        "sequence",
+        "witnessStoreIdentitySha256",
+        "transactionIdBase64url"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.liveWitnessCasReceipt/v1"
+        },
+        "checkpointSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "committedAtUnix": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "committedRollbackContinuityCommitmentSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "generation": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "previousRollbackContinuityCommitmentSha256": {
+          "oneOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/sha256"}
+          ]
+        },
+        "releaseIdentitySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "sequence": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "witnessStoreIdentitySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "transactionIdBase64url": {
+          "$ref": "#/$defs/base64url32"
+        }
+      }
+    },
+    "currentCheckpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "checkpointSha256",
+        "generation",
+        "headSha256",
+        "liveWitnessHeadPayloadSha256",
+        "releaseIdentitySha256",
+        "rollbackEpoch",
+        "sequence",
+        "treeSize"
+      ],
+      "properties": {
+        "checkpointSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "generation": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "headSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "liveWitnessHeadPayloadSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "releaseIdentitySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "rollbackEpoch": {
+          "$ref": "#/$defs/u64"
+        },
+        "sequence": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "treeSize": {
+          "$ref": "#/$defs/positiveU64"
+        }
+      }
+    },
+    "priorCheckpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "checkpointSha256",
+        "generation",
+        "headSha256",
+        "releaseIdentitySha256",
+        "rollbackEpoch",
+        "sequence",
+        "treeSize"
+      ],
+      "properties": {
+        "checkpointSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "generation": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "headSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "releaseIdentitySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "rollbackEpoch": {
+          "$ref": "#/$defs/u64"
+        },
+        "sequence": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "treeSize": {
+          "$ref": "#/$defs/positiveU64"
+        }
+      }
+    },
+    "base64url32": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$"
+    },
+    "ed25519Signature": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{85}[AQgw]$"
+    },
+    "invocationBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "currentRequestSha256",
+        "producerEphemeralKeySpkiSha256",
+        "producerInvocationSha256",
+        "producerRequestSha256",
+        "tlsBindingSha256",
+        "verifierChallengeBase64url"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.attestationWitnessInvocationBinding/v1"
+        },
+        "currentRequestSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "producerEphemeralKeySpkiSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "producerInvocationSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "producerRequestSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "tlsBindingSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "verifierChallengeBase64url": {
+          "$ref": "#/$defs/base64url32"
+        }
+      }
+    },
+    "positiveU64": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 18446744073709551615
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "witnessStoreIdentity": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/fixtureStoreIdentity"
+        },
+        {
+          "$ref": "#/$defs/sqliteReferenceStoreIdentity"
+        },
+        {
+          "$ref": "#/$defs/externalStoreIdentity"
+        }
+      ]
+    },
+    "fixtureStoreIdentity": {
+      "$ref": "#/$defs/storeIdentityCommon",
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.attestationWitnessStoreIdentity/v2"
+        },
+        "assurance": {
+          "const": "nonProductionFixture"
+        },
+        "deploymentId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "serviceId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "storageBackend": {
+          "const": "fixture-sqlite"
+        }
+      }
+    },
+    "sqliteReferenceStoreIdentity": {
+      "$ref": "#/$defs/storeIdentityCommon",
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.attestationWitnessStoreIdentity/v2"
+        },
+        "assurance": {
+          "const": "nonProductionSqliteReference"
+        },
+        "deploymentId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "serviceId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "storageBackend": {
+          "const": "sqlite-wal-full-sync"
+        }
+      }
+    },
+    "externalStoreIdentity": {
+      "$ref": "#/$defs/storeIdentityCommon",
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.attestationWitnessStoreIdentity/v2"
+        },
+        "assurance": {
+          "const": "externallyWitnessedRollbackProtected"
+        },
+        "deploymentId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "serviceId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "storageBackend": {
+          "const": "external-linearizable-cas"
+        }
+      }
+    },
+    "storeIdentityCommon": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "assurance",
+        "deploymentId",
+        "serviceId",
+        "storageBackend"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.attestationWitnessStoreIdentity/v2"
+        },
+        "assurance": {
+          "enum": [
+            "nonProductionFixture",
+            "nonProductionSqliteReference",
+            "externallyWitnessedRollbackProtected"
+          ]
+        },
+        "deploymentId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "serviceId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "storageBackend": {
+          "enum": [
+            "fixture-sqlite",
+            "sqlite-wal-full-sync",
+            "external-linearizable-cas"
+          ]
+        }
+      }
+    },
+    "identifier": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 128,
+      "pattern": "^[a-z0-9][a-z0-9._:/-]*[a-z0-9]$"
+    },
+    "u64": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 18446744073709551615
+    }
+  }
+}

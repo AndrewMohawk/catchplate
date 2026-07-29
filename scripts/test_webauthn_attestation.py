@@ -293,6 +293,34 @@ def main() -> None:
             trusted,
             {"allowedAuthenticatorClasses": ["hardware"], "requireHardwareAttestation": True},
         )
+        trusted_dev = {
+            **trusted,
+            "authenticator_class": "dev",
+            "dev_private_key_pem": "development-only",
+        }
+        original_dev_enabled = webauthn.DEV_AUTHENTICATOR_ENABLED
+        webauthn.DEV_AUTHENTICATOR_ENABLED = True
+        try:
+            for policy in (
+                {
+                    "allowedAuthenticatorClasses": ["hardware"],
+                    "requireHardwareAttestation": False,
+                },
+                {
+                    "allowedAuthenticatorClasses": ["dev", "hardware"],
+                    "requireHardwareAttestation": True,
+                },
+            ):
+                try:
+                    webauthn._allowed_authenticator(trusted_dev, policy)
+                except webauthn.WebAuthnError:
+                    pass
+                else:
+                    raise SystemExit(
+                        "trusted development credential satisfied a hardware-only policy"
+                    )
+        finally:
+            webauthn.DEV_AUTHENTICATOR_ENABLED = original_dev_enabled
 
         scoped_options = webauthn.registration_options(
             "user:challenge-owner", "challenge-scoped key"

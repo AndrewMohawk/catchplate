@@ -115,6 +115,19 @@ def assert_production_dependencies() -> None:
         raise AssertionError(
             "production control-plane image must contain its non-environment startup marker"
         )
+    if (
+        "mkdir -p /runtime/custody-trust /runtime/gate-materials" not in dockerfile
+        or "chmod 0750 /runtime/gate-materials" not in dockerfile
+        or (
+            "COPY --from=runtime-tree --chown=65532:65532 --chmod=0750 "
+            "/runtime/gate-materials /run/serverware/gate"
+        )
+        not in dockerfile
+    ):
+        raise AssertionError(
+            "production image must seed the shared gate volume for the "
+            "service-owned policy-directory lock"
+        )
     config_source = (ROOT / "serverware" / "config.py").read_text(encoding="utf-8")
     if "_PRODUCTION_IMAGE_MARKER_PRESENT or os.getenv" not in config_source:
         raise AssertionError(

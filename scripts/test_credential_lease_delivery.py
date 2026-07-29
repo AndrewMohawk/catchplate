@@ -28,6 +28,8 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from serverware.response_identity import response_headers_binding  # noqa: E402
+
 ADMIN_TOKEN = "credential-lease-test-admin-token"
 DATA_PLANE_TOKEN = "credential-lease-test-data-plane-token"
 DATA_PLANE_BINARY_DIGEST = "sha256:" + "7" * 64
@@ -59,6 +61,22 @@ RESPONSE_SIGNATURE_HEADERS = {
 AAD_FIELDS = (
     "apiVersion",
     "algorithm",
+    "recipientKeyId",
+    "recipientNonce",
+    "policyHash",
+    "dataPlaneBinaryDigest",
+    "principalId",
+    "routeId",
+    "credentialId",
+    "issuedAtEpochMs",
+    "expiresAtEpochMs",
+)
+V4_AAD_FIELDS = (
+    "apiVersion",
+    "algorithm",
+    "purpose",
+    "requestBindingSha256",
+    "requestAuthoritySha256",
     "recipientKeyId",
     "recipientNonce",
     "policyHash",
@@ -139,6 +157,16 @@ def recipient_attestation_verifier() -> None:
         ):
             if evidence.get(field) != request.get(field):
                 raise ValueError(f"recipient attestation {field} mismatch")
+        request_authority_sha256 = request.get("requestAuthoritySha256")
+        if request_authority_sha256 is None:
+            if "requestAuthoritySha256" in evidence:
+                raise ValueError(
+                    "legacy recipient attestation carried request authority"
+                )
+        elif evidence.get("requestAuthoritySha256") != request_authority_sha256:
+            raise ValueError(
+                "recipient attestation requestAuthoritySha256 mismatch"
+            )
         counter_path = evidence.get("testVerifierCounterPath")
         if counter_path:
             with open(counter_path, "a", encoding="ascii") as counter:
@@ -156,6 +184,8 @@ def recipient_attestation_verifier() -> None:
             "routeId": request["routeId"],
             "credentialId": request["credentialId"],
         }
+        if request_authority_sha256 is not None:
+            response["requestAuthoritySha256"] = request_authority_sha256
         if evidence.get("testLargeVerifierOutput") is True:
             response["padding"] = "x" * (64 * 1024)
         print(
@@ -195,6 +225,7 @@ def master_key_unseal_fixture() -> None:
 class AppResponse:
     status_code: int
     headers: dict[str, str]
+    raw_headers: tuple[tuple[bytes, bytes], ...]
     body: bytes
 
     def json(self) -> Any:
@@ -234,6 +265,7 @@ async def _asgi_request(
     request_sent = False
     status_code: int | None = None
     response_headers: dict[str, str] = {}
+    response_raw_headers: list[tuple[bytes, bytes]] = []
     response_body = bytearray()
 
     async def receive() -> dict[str, Any]:
@@ -247,6 +279,10 @@ async def _asgi_request(
         nonlocal status_code
         if message["type"] == "http.response.start":
             status_code = int(message["status"])
+            response_raw_headers.extend(
+                (bytes(key), bytes(value))
+                for key, value in message.get("headers", [])
+            )
             response_headers.update(
                 (key.decode("latin-1").lower(), value.decode("latin-1"))
                 for key, value in message.get("headers", [])
@@ -257,7 +293,12 @@ async def _asgi_request(
     await app(scope, receive, send)
     if status_code is None:
         raise AssertionError("ASGI application did not start a response")
-    return AppResponse(status_code, response_headers, bytes(response_body))
+    return AppResponse(
+        status_code,
+        response_headers,
+        tuple(response_raw_headers),
+        bytes(response_body),
+    )
 
 
 def app_request(
@@ -300,8 +341,23 @@ def verify_response_signature(
         raise AssertionError("response statement body digest mismatch")
     if response.headers["x-serverware-response-statement-sha256"] != sha256_prefixed(statement_bytes):
         raise AssertionError("response statement digest header mismatch")
-    if statement.get("version") != "serverware.responseSignature/v2":
+    if statement.get("version") != "serverware.responseSignature/v3":
         raise AssertionError(f"unexpected response signature version: {statement}")
+    authenticated_headers = [
+        (name, value)
+        for name, value in response.raw_headers
+        if not name.lower().startswith(b"x-serverware-response-")
+    ]
+    headers_digest, header_count = response_headers_binding(
+        authenticated_headers
+    )
+    if (
+        statement.get("response_headers_sha256") != headers_digest
+        or statement.get("response_header_count") != header_count
+    ):
+        raise AssertionError(
+            "response statement header binding mismatch"
+        )
     if statement.get("request") != {
         "method": method.upper(),
         "path": parsed.path,
@@ -336,8 +392,9 @@ def recipient_attestation(
     binary_digest: str,
     purpose: str,
     request_binding_sha256: str,
+    request_authority_sha256: str | None,
 ) -> dict[str, str]:
-    return {
+    evidence = {
         "format": "serverware.testRecipientAttestation/v1",
         "purpose": purpose,
         "requestBindingSha256": request_binding_sha256,
@@ -349,6 +406,9 @@ def recipient_attestation(
         "routeId": ROUTE_ID,
         "credentialId": CREDENTIAL_ID,
     }
+    if request_authority_sha256 is not None:
+        evidence["requestAuthoritySha256"] = request_authority_sha256
+    return evidence
 
 
 def credential_lease_request_binding(payload: dict[str, Any]) -> str:
@@ -362,7 +422,8 @@ def credential_lease_request_binding(payload: dict[str, Any]) -> str:
                 "credentialId": payload["credentialId"],
                 "expectedCredentialVersion": payload["expectedCredentialVersion"],
                 "expectedMetadataSha256": payload["expectedMetadataSha256"],
-                "releaseAuthorization": payload["releaseAuthorization"],
+                "requestAuthority": payload.get("requestAuthority"),
+                "releaseAuthorization": payload.get("releaseAuthorization"),
                 "recipientKeyId": payload["recipientKeyId"],
                 "recipientNonce": payload["recipientNonce"],
                 "policyHash": payload["policyHash"],
@@ -377,6 +438,28 @@ def credential_metadata_sha256(metadata: dict[str, Any]) -> str:
     return sha256_prefixed(canonical_json_bytes(metadata))
 
 
+def credential_request_authority(
+    *,
+    attempt_id: str,
+    reservation_id: str,
+    binding_digest: str,
+    request_digest: str,
+    operation_digest: str,
+    operation_context: dict[str, Any],
+    reservation_expires_at_epoch_ms: int,
+) -> dict[str, Any]:
+    return {
+        "apiVersion": "serverware.credentialLeaseRequestAuthority/v1",
+        "attemptId": attempt_id,
+        "reservationId": reservation_id,
+        "bindingDigest": binding_digest,
+        "requestDigest": request_digest,
+        "operationDigest": operation_digest,
+        "operationContext": operation_context,
+        "reservationExpiresAtEpochMs": reservation_expires_at_epoch_ms,
+    }
+
+
 def lease_payload(
     public_key_raw: bytes,
     policy_hash: str,
@@ -385,19 +468,23 @@ def lease_payload(
     purpose: str = "generationMetadata",
     expected_credential_version: int | None = None,
     expected_metadata_sha256: str | None = None,
+    request_authority: dict[str, Any] | None = None,
     release_authorization: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     key_id = sha256_prefixed(public_key_raw)
     nonce = recipient_nonce(label)
     payload = {
-        "apiVersion": "serverware.credentialLeaseRequest/v3",
+        "apiVersion": (
+            "serverware.credentialLeaseRequest/v4"
+            if request_authority is not None
+            else "serverware.credentialLeaseRequest/v3"
+        ),
         "purpose": purpose,
         "principalId": PRINCIPAL_ID,
         "routeId": ROUTE_ID,
         "credentialId": CREDENTIAL_ID,
         "expectedCredentialVersion": expected_credential_version,
         "expectedMetadataSha256": expected_metadata_sha256,
-        "releaseAuthorization": release_authorization,
         "recipientPublicKey": b64e(public_key_raw),
         "recipientKeyId": key_id,
         "recipientNonce": b64e(nonce),
@@ -405,15 +492,24 @@ def lease_payload(
         "dataPlaneBinaryDigest": DATA_PLANE_BINARY_DIGEST,
         "maxTtlSeconds": 5,
     }
+    if request_authority is not None:
+        payload["requestAuthority"] = request_authority
+        payload["releaseAuthorization"] = release_authorization
     request_binding_sha256 = credential_lease_request_binding(payload)
+    request_authority_sha256 = (
+        sha256_prefixed(canonical_json_bytes(request_authority))
+        if request_authority is not None
+        else None
+    )
     payload["recipientAttestation"] = recipient_attestation(
-            key_id,
-            b64e(nonce),
-            policy_hash,
-            DATA_PLANE_BINARY_DIGEST,
-            purpose,
-            request_binding_sha256,
-        )
+        key_id,
+        b64e(nonce),
+        policy_hash,
+        DATA_PLANE_BINARY_DIGEST,
+        purpose,
+        request_binding_sha256,
+        request_authority_sha256,
+    )
     return payload
 
 
@@ -424,10 +520,20 @@ def decrypt_lease(
     recipient_nonce_raw: bytes,
     request_payload: dict[str, Any],
 ) -> dict[str, Any]:
-    expected_fields = set(AAD_FIELDS).union(ENCRYPTED_FIELDS)
+    request_bound = (
+        request_payload["apiVersion"]
+        == "serverware.credentialLeaseRequest/v4"
+    )
+    aad_fields = V4_AAD_FIELDS if request_bound else AAD_FIELDS
+    expected_fields = set(aad_fields).union(ENCRYPTED_FIELDS)
     if set(envelope) != expected_fields:
         raise AssertionError(f"credential lease envelope fields changed: {sorted(envelope)}")
-    if envelope["apiVersion"] != "serverware.credentialLeaseEnvelope/v2":
+    expected_envelope_version = (
+        "serverware.credentialLeaseEnvelope/v3"
+        if request_bound
+        else "serverware.credentialLeaseEnvelope/v2"
+    )
+    if envelope["apiVersion"] != expected_envelope_version:
         raise AssertionError(f"unexpected credential lease envelope version: {envelope}")
     if envelope["algorithm"] != "X25519-HKDF-SHA256-AES-256-GCM":
         raise AssertionError(f"unexpected credential lease algorithm: {envelope}")
@@ -435,7 +541,7 @@ def decrypt_lease(
     if not 0 < lease_ttl_ms <= 5_000:
         raise AssertionError(f"credential lease TTL was not bounded to five seconds: {envelope}")
 
-    aad = {field: envelope[field] for field in AAD_FIELDS}
+    aad = {field: envelope[field] for field in aad_fields}
     aad_bytes = canonical_json_bytes(aad)
     server_public_key_raw = b64d(envelope["serverEphemeralPublicKey"])
     aead_nonce = b64d(envelope["aeadNonce"])
@@ -456,23 +562,61 @@ def decrypt_lease(
     plaintext = json.loads(plaintext_bytes)
     if canonical_json_bytes(plaintext) != plaintext_bytes:
         raise AssertionError("credential lease plaintext is not canonical JSON")
-    if plaintext.get("apiVersion") != "serverware.credentialLeaseSet/v3":
+    expected_set_version = (
+        "serverware.credentialLeaseSet/v4"
+        if request_bound
+        else "serverware.credentialLeaseSet/v3"
+    )
+    if plaintext.get("apiVersion") != expected_set_version:
         raise AssertionError(f"unexpected credential lease plaintext version: {plaintext}")
-    if set(plaintext) != {
+    expected_plaintext_fields = {
         "apiVersion",
         "purpose",
         "requestBindingSha256",
         "releaseAuthorization",
         *DUPLICATED_BINDINGS,
         "credentials",
-    }:
+    }
+    if request_bound:
+        expected_plaintext_fields.update(
+            {
+                "requestAuthority",
+                "requestAuthoritySha256",
+            }
+        )
+    if set(plaintext) != expected_plaintext_fields:
         raise AssertionError(f"credential lease plaintext fields changed: {sorted(plaintext)}")
     if plaintext["purpose"] != request_payload["purpose"]:
         raise AssertionError(f"credential lease purpose substitution: {plaintext}")
     if plaintext["requestBindingSha256"] != credential_lease_request_binding(request_payload):
         raise AssertionError(f"credential lease request binding mismatch: {plaintext}")
-    if plaintext["releaseAuthorization"] != request_payload["releaseAuthorization"]:
-        raise AssertionError(f"credential lease release authorization mismatch: {plaintext}")
+    if not request_bound and plaintext["releaseAuthorization"] is not None:
+        raise AssertionError(
+            f"legacy credential lease carried release authority: {plaintext}"
+        )
+    if request_bound:
+        request_authority_sha256 = sha256_prefixed(
+            canonical_json_bytes(request_payload["requestAuthority"])
+        )
+        if (
+            plaintext["requestAuthority"] != request_payload["requestAuthority"]
+            or plaintext["requestAuthoritySha256"] != request_authority_sha256
+            or envelope["requestAuthoritySha256"] != request_authority_sha256
+            or plaintext["releaseAuthorization"]
+            != request_payload["releaseAuthorization"]
+        ):
+            raise AssertionError(
+                f"credential lease v4 authority binding mismatch: {plaintext}"
+            )
+        if (
+            plaintext["expiresAtEpochMs"]
+            > request_payload["requestAuthority"][
+                "reservationExpiresAtEpochMs"
+            ]
+        ):
+            raise AssertionError(
+                "credential lease v4 outlived its request authority"
+            )
     for field in DUPLICATED_BINDINGS:
         if plaintext.get(field) != envelope.get(field):
             raise AssertionError(f"credential lease duplicated binding mismatch for {field}: {plaintext}")
@@ -501,6 +645,148 @@ def assert_status(response: AppResponse, expected: int, label: str, detail: str 
         raise AssertionError(f"{label} returned {response.status_code}: {response.body.decode(errors='replace')}")
     if detail is not None and detail not in json.dumps(response.json(), sort_keys=True):
         raise AssertionError(f"{label} failed for the wrong reason: {response.json()}")
+
+
+def assert_python_v4_golden(app_module: Any) -> None:
+    attempt_id = "sha256:" + "1" * 64
+    binding_digest = "sha256:" + "2" * 64
+    reservation_id = sha256_prefixed(
+        canonical_json_bytes(
+            {
+                "apiVersion": "serverware.releaseReservationIdentity/v1",
+                "attemptId": attempt_id,
+                "bindingDigest": binding_digest,
+            }
+        )
+    )
+    authority = credential_request_authority(
+        attempt_id=attempt_id,
+        reservation_id=reservation_id,
+        binding_digest=binding_digest,
+        request_digest="sha256:" + "3" * 64,
+        operation_digest="sha256:" + "4" * 64,
+        operation_context={
+            "account": "acct:golden",
+            "operation": "gmail.message.get",
+        },
+        reservation_expires_at_epoch_ms=4_102_444_800_000,
+    )
+    expected_authority_json = (
+        b'{"apiVersion":"serverware.credentialLeaseRequestAuthority/v1",'
+        b'"attemptId":"' + attempt_id.encode("ascii") + b'",'
+        b'"bindingDigest":"' + binding_digest.encode("ascii") + b'",'
+        b'"operationContext":{"account":"acct:golden",'
+        b'"operation":"gmail.message.get"},'
+        b'"operationDigest":"sha256:' + b"4" * 64 + b'",'
+        b'"requestDigest":"sha256:' + b"3" * 64 + b'",'
+        b'"reservationExpiresAtEpochMs":4102444800000,'
+        b'"reservationId":"' + reservation_id.encode("ascii") + b'"}'
+    )
+    if canonical_json_bytes(authority) != expected_authority_json:
+        raise AssertionError(
+            "credential lease v4 golden authority bytes drifted"
+        )
+    payload = {
+        "apiVersion": "serverware.credentialLeaseRequest/v4",
+        "purpose": "dispatchSecret",
+        "principalId": "agent:golden",
+        "routeId": "gmail.messages",
+        "credentialId": "credential:golden",
+        "expectedCredentialVersion": 7,
+        "expectedMetadataSha256": "sha256:" + "5" * 64,
+        "requestAuthority": authority,
+        "releaseAuthorization": None,
+        "recipientPublicKey": "A" * 43,
+        "recipientKeyId": "sha256:" + "6" * 64,
+        "recipientNonce": "B" * 43,
+        "policyHash": "sha256:" + "7" * 64,
+        "dataPlaneBinaryDigest": "sha256:" + "8" * 64,
+        "maxTtlSeconds": 5,
+    }
+    model = app_module.CredentialLeaseRequest.model_validate(payload)
+    authority_sha256 = sha256_prefixed(canonical_json_bytes(authority))
+    expected_request_binding_json = (
+        b'{"apiVersion":"serverware.credentialLeaseRequest/v4",'
+        b'"credentialId":"credential:golden",'
+        b'"dataPlaneBinaryDigest":"sha256:' + b"8" * 64 + b'",'
+        b'"expectedCredentialVersion":7,'
+        b'"expectedMetadataSha256":"sha256:' + b"5" * 64 + b'",'
+        b'"maxTtlSeconds":5,'
+        b'"policyHash":"sha256:' + b"7" * 64 + b'",'
+        b'"principalId":"agent:golden",'
+        b'"purpose":"dispatchSecret",'
+        b'"recipientKeyId":"sha256:' + b"6" * 64 + b'",'
+        b'"recipientNonce":"' + b"B" * 43 + b'",'
+        b'"releaseAuthorization":null,'
+        b'"requestAuthority":' + expected_authority_json + b','
+        b'"routeId":"gmail.messages"}'
+    )
+    request_binding_sha256 = sha256_prefixed(
+        expected_request_binding_json
+    )
+    if (
+        app_module._credential_lease_request_authority_sha256(
+            model.request_authority
+        )
+        != authority_sha256
+        or app_module._credential_lease_request_binding_sha256(model)
+        != request_binding_sha256
+        or credential_lease_request_binding(payload)
+        != request_binding_sha256
+    ):
+        raise AssertionError(
+            "Python credential lease v4 golden digest fixture drifted"
+        )
+    aad = {
+        "apiVersion": "serverware.credentialLeaseEnvelope/v3",
+        "algorithm": "X25519-HKDF-SHA256-AES-256-GCM",
+        "purpose": "dispatchSecret",
+        "requestBindingSha256": request_binding_sha256,
+        "requestAuthoritySha256": authority_sha256,
+        "recipientKeyId": payload["recipientKeyId"],
+        "recipientNonce": payload["recipientNonce"],
+        "policyHash": payload["policyHash"],
+        "dataPlaneBinaryDigest": payload["dataPlaneBinaryDigest"],
+        "principalId": payload["principalId"],
+        "routeId": payload["routeId"],
+        "credentialId": payload["credentialId"],
+        "issuedAtEpochMs": 4_102_444_795_000,
+        "expiresAtEpochMs": 4_102_444_800_000,
+    }
+    expected_aad_json = (
+        b'{"algorithm":"X25519-HKDF-SHA256-AES-256-GCM",'
+        b'"apiVersion":"serverware.credentialLeaseEnvelope/v3",'
+        b'"credentialId":"credential:golden",'
+        b'"dataPlaneBinaryDigest":"sha256:' + b"8" * 64 + b'",'
+        b'"expiresAtEpochMs":4102444800000,'
+        b'"issuedAtEpochMs":4102444795000,'
+        b'"policyHash":"sha256:' + b"7" * 64 + b'",'
+        b'"principalId":"agent:golden",'
+        b'"purpose":"dispatchSecret",'
+        b'"recipientKeyId":"sha256:' + b"6" * 64 + b'",'
+        b'"recipientNonce":"' + b"B" * 43 + b'",'
+        b'"requestAuthoritySha256":"' + authority_sha256.encode("ascii") + b'",'
+        b'"requestBindingSha256":"' + request_binding_sha256.encode("ascii") + b'",'
+        b'"routeId":"gmail.messages"}'
+    )
+    if (
+        tuple(aad) != V4_AAD_FIELDS
+        or canonical_json_bytes(aad) != expected_aad_json
+    ):
+        raise AssertionError(
+            "credential lease v4 golden AAD bytes drifted"
+        )
+    hkdf_info = (
+        b"serverware:credential-lease-envelope:v2\0"
+        + hashlib.sha256(expected_aad_json).digest()
+    )
+    if (
+        not hkdf_info.startswith(
+            b"serverware:credential-lease-envelope:v2\0"
+        )
+        or len(hkdf_info) != 72
+    ):
+        raise AssertionError("credential lease v4 HKDF domain drifted")
 
 
 def main() -> None:
@@ -544,7 +830,9 @@ def main() -> None:
         from serverware.auth import AdminIdentity
         from serverware.attestation import runtime_manifest, verify_attestation_quote
         from serverware.ca_material import ensure_mitm_ca_material
+        from serverware.constraints import shared_durable_budget_claims
 
+        assert_python_v4_golden(app_module)
         ensure_mitm_ca_material()
         db.init_db()
         original_replay_max = db.CREDENTIAL_LEASE_REPLAY_MAX_ENTRIES
@@ -640,6 +928,7 @@ def main() -> None:
                 None,
                 purpose="generationMetadata",
                 request_binding_sha256="sha256:" + "0" * 64,
+                request_authority_sha256=None,
                 recipient_key_id="sha256:" + "1" * 64,
                 recipient_nonce=b64e(recipient_nonce("production-misconfiguration")),
                 policy_hash_value="sha256:" + "2" * 64,
@@ -907,6 +1196,17 @@ def main() -> None:
             return response
 
         initial_payload = lease_payload(recipient_public_key_raw, snapshot.hash, "initial")
+        if (
+            initial_payload["apiVersion"]
+            != "serverware.credentialLeaseRequest/v3"
+            or "requestAuthority" in initial_payload
+            or "releaseAuthorization" in initial_payload
+            or "requestAuthoritySha256"
+            in initial_payload["recipientAttestation"]
+        ):
+            raise AssertionError(
+                "generationMetadata did not omit both authority fields"
+            )
         verifier_counter = data_dir / "recipient-verifier-count.txt"
         initial_payload["recipientAttestation"]["testVerifierCounterPath"] = str(verifier_counter)
         original_credential_for_lease = app_module._credential_for_lease
@@ -966,6 +1266,15 @@ def main() -> None:
             expected_credential_version=1,
             expected_metadata_sha256=initial_metadata_sha256,
         )
+        if (
+            dispatch_payload["apiVersion"]
+            != "serverware.credentialLeaseRequest/v3"
+            or "requestAuthority" in dispatch_payload
+            or "releaseAuthorization" in dispatch_payload
+        ):
+            raise AssertionError(
+                "legacy uncontrolled dispatch did not omit authority fields"
+            )
         dispatch_calls = 0
 
         def count_dispatch_refresh(credential_id: str) -> dict[str, Any] | None:
@@ -996,14 +1305,803 @@ def main() -> None:
         if dispatch_calls != 1:
             raise AssertionError(f"dispatch secret refresh path called {dispatch_calls} times")
 
+        original_active_route_by_id = app_module._active_route_by_id
+        original_atomic_release_enabled = (
+            app_module.ATOMIC_RELEASE_AUTHORIZATION_ENABLED
+        )
+        base_route = original_active_route_by_id(ROUTE_ID, snapshot=snapshot)
+        atomic_route = replace(
+            base_route,
+            jit={"required": False},
+            constraints=(
+                *base_route.constraints,
+                {
+                    "id": "credential-lease-atomic-fixture",
+                    "type": "rateLimit",
+                    "phase": "request",
+                    "store": "shared",
+                    "max": 1,
+                    "windowSeconds": 60,
+                    "key": {"scope": ["route", "operation"]},
+                },
+            ),
+        )
+        atomic_attempt_id = "sha256:" + "d" * 64
+        atomic_request_digest = "sha256:" + "e" * 64
+        atomic_operation_digest = "sha256:" + "f" * 64
+        atomic_quota = {
+            "counter_key": "sha256:" + "1" * 64,
+            "constraint_id": "credential-lease-atomic-fixture",
+            "operation": "demo.echo",
+            "window_kind": "fixed",
+            "window_seconds": 60,
+            "max_count": 1,
+        }
+        atomic_expected = runtime.expected_release_authorization_identity(
+            attempt_id=atomic_attempt_id,
+            flow_id=atomic_attempt_id,
+            principal_id=PRINCIPAL_ID,
+            route_id=ROUTE_ID,
+            credential_ref=CREDENTIAL_ID,
+            credential_version=1,
+            policy_hash=snapshot.hash,
+            request_digest=atomic_request_digest,
+            operation_digest=atomic_operation_digest,
+            operation_context={"operation": "demo.echo"},
+            shared_quotas=[atomic_quota],
+            require_jit_grant=False,
+        )
+        atomic_reserved = runtime._normalized_direct_release_authorization_response(
+            db.reserve_release_authorization(
+                attempt_id=atomic_attempt_id,
+                flow_id=atomic_attempt_id,
+                principal_id=PRINCIPAL_ID,
+                route_id=ROUTE_ID,
+                credential_id=CREDENTIAL_ID,
+                credential_version=1,
+                policy_hash=snapshot.hash,
+                request_digest=atomic_request_digest,
+                operation_digest=atomic_operation_digest,
+                operation_context={"operation": "demo.echo"},
+                shared_quotas=[atomic_quota],
+                require_jit_grant=False,
+                reservation_ttl_seconds=60,
+                actor_id="spiffe://test.serverware/decision-gate/credential-lease",
+            )
+        )
+        runtime.validate_reserve_release_authorization_response(
+            atomic_reserved,
+            attempt_id=atomic_attempt_id,
+            require_jit_grant=False,
+            expected_binding_digest=atomic_expected.binding_digest,
+            expected_shared_quotas=[atomic_quota],
+        )
+        atomic_release_authorization = (
+            runtime.credential_lease_release_authorization(
+                atomic_expected,
+                atomic_reserved,
+            )
+        )
+        if atomic_release_authorization is None:
+            raise AssertionError(
+                "non-JIT shared quota did not produce credential release authority"
+            )
+        atomic_request_authority = runtime.credential_lease_request_authority(
+            atomic_expected,
+            atomic_reserved,
+            operation_context={"operation": "demo.echo"},
+            controlled=True,
+        )
+        if atomic_request_authority is None:
+            raise AssertionError(
+                "non-JIT shared quota did not produce request authority"
+            )
+        if (
+            runtime.credential_lease_request_authority(
+                atomic_expected,
+                atomic_reserved,
+                operation_context={"operation": "demo.echo"},
+                controlled=False,
+            )
+            is not None
+        ):
+            raise AssertionError(
+                "uncontrolled credential dispatch unexpectedly gained request authority"
+            )
+        atomic_payload = lease_payload(
+            recipient_public_key_raw,
+            snapshot.hash,
+            "atomic-dispatch",
+            purpose="dispatchSecret",
+            expected_credential_version=1,
+            expected_metadata_sha256=initial_metadata_sha256,
+            request_authority=atomic_request_authority,
+            release_authorization=atomic_release_authorization,
+        )
+        if atomic_payload["recipientAttestation"].get(
+            "requestAuthoritySha256"
+        ) != sha256_prefixed(
+            canonical_json_bytes(atomic_request_authority)
+        ):
+            raise AssertionError(
+                "credential lease v4 recipient attestation lost request authority"
+            )
+        app_module._active_route_by_id = (
+            lambda route_id, *, snapshot=None: (
+                atomic_route
+                if route_id == ROUTE_ID
+                else original_active_route_by_id(route_id, snapshot=snapshot)
+            )
+        )
+        app_module.ATOMIC_RELEASE_AUTHORIZATION_ENABLED = True
+        try:
+            atomic_response = post_lease(
+                atomic_payload, "atomic-dispatch"
+            )
+            assert_status(
+                atomic_response,
+                200,
+                "non-JIT atomic dispatch credential lease",
+            )
+            atomic_plaintext = decrypt_lease(
+                atomic_response.json(),
+                recipient_private_key=recipient_private_key,
+                recipient_nonce_raw=recipient_nonce("atomic-dispatch"),
+                request_payload=atomic_payload,
+            )
+            if atomic_plaintext["credentials"] != [expected_initial_secret]:
+                raise AssertionError(
+                    "non-JIT atomic dispatch returned wrong credential material"
+                )
+            replay_payload = lease_payload(
+                recipient_public_key_raw,
+                snapshot.hash,
+                "atomic-dispatch-replay",
+                purpose="dispatchSecret",
+                expected_credential_version=1,
+                expected_metadata_sha256=initial_metadata_sha256,
+                request_authority=atomic_request_authority,
+                release_authorization=atomic_release_authorization,
+            )
+            assert_status(
+                post_lease(replay_payload, "atomic-dispatch-replay"),
+                409,
+                "non-JIT atomic dispatch replay",
+                "already issued credential material",
+            )
+        finally:
+            app_module.ATOMIC_RELEASE_AUTHORIZATION_ENABLED = (
+                original_atomic_release_enabled
+            )
+            app_module._active_route_by_id = original_active_route_by_id
+
+        gmail_traversal_constraint = {
+            "id": "credential-lease-gmail-traversal-fixture",
+            "type": "traversalBudget",
+            "store": "shared",
+            "maxPages": 2,
+            "reservationMode": "atomicReserveCommitRelease",
+            "onOverflow": "deny",
+            "requestSource": "query",
+            "requestField": "pageToken",
+            "responseField": "nextPageToken",
+            "operations": ["gmail.message.list"],
+            "key": {
+                "scope": [
+                    "principal",
+                    "route",
+                    "credential",
+                    "credentialVersion",
+                    "operation",
+                ]
+            },
+        }
+        gmail_route = replace(
+            base_route,
+            jit={"required": False},
+            constraints=(gmail_traversal_constraint,),
+        )
+        gmail_get_attempt_id = "sha256:" + "5" * 64
+        gmail_get_request_digest = "sha256:" + "6" * 64
+        gmail_get_operation_digest = "sha256:" + "7" * 64
+        gmail_get_operation = {"operation": "gmail.message.get"}
+        gmail_get_expected = runtime.expected_release_authorization_identity(
+            attempt_id=gmail_get_attempt_id,
+            flow_id=gmail_get_attempt_id,
+            principal_id=PRINCIPAL_ID,
+            route_id=ROUTE_ID,
+            credential_ref=CREDENTIAL_ID,
+            credential_version=1,
+            policy_hash=snapshot.hash,
+            request_digest=gmail_get_request_digest,
+            operation_digest=gmail_get_operation_digest,
+            operation_context=gmail_get_operation,
+            shared_quotas=[],
+            require_jit_grant=False,
+        )
+        gmail_get_reserved = (
+            runtime._normalized_direct_release_authorization_response(
+                db.reserve_release_authorization(
+                    attempt_id=gmail_get_attempt_id,
+                    flow_id=gmail_get_attempt_id,
+                    principal_id=PRINCIPAL_ID,
+                    route_id=ROUTE_ID,
+                    credential_id=CREDENTIAL_ID,
+                    credential_version=1,
+                    policy_hash=snapshot.hash,
+                    request_digest=gmail_get_request_digest,
+                    operation_digest=gmail_get_operation_digest,
+                    operation_context=gmail_get_operation,
+                    shared_quotas=[],
+                    require_jit_grant=False,
+                    reservation_ttl_seconds=60,
+                    actor_id=(
+                        "spiffe://test.serverware/decision-gate/"
+                        "credential-lease"
+                    ),
+                )
+            )
+        )
+        runtime.validate_reserve_release_authorization_response(
+            gmail_get_reserved,
+            attempt_id=gmail_get_attempt_id,
+            require_jit_grant=False,
+            expected_binding_digest=gmail_get_expected.binding_digest,
+            expected_shared_quotas=[],
+        )
+        gmail_get_authority = credential_request_authority(
+            attempt_id=gmail_get_attempt_id,
+            reservation_id=db.release_reservation_id(
+                gmail_get_attempt_id,
+                gmail_get_expected.binding_digest,
+            ),
+            binding_digest=gmail_get_expected.binding_digest,
+            request_digest=gmail_get_request_digest,
+            operation_digest=gmail_get_operation_digest,
+            operation_context=gmail_get_operation,
+            reservation_expires_at_epoch_ms=gmail_get_reserved[
+                "reservation_expires_at_epoch_ms"
+            ],
+        )
+
+        def gmail_get_payload(
+            label: str,
+            *,
+            authority: dict[str, Any] | None = None,
+            release: dict[str, Any] | None = None,
+        ) -> dict[str, Any]:
+            return lease_payload(
+                recipient_public_key_raw,
+                snapshot.hash,
+                label,
+                purpose="dispatchSecret",
+                expected_credential_version=1,
+                expected_metadata_sha256=initial_metadata_sha256,
+                request_authority=(
+                    gmail_get_authority
+                    if authority is None
+                    else authority
+                ),
+                release_authorization=release,
+            )
+
+        app_module._active_route_by_id = (
+            lambda route_id, *, snapshot=None: (
+                gmail_route
+                if route_id == ROUTE_ID
+                else original_active_route_by_id(
+                    route_id,
+                    snapshot=snapshot,
+                )
+            )
+        )
+        app_module.ATOMIC_RELEASE_AUTHORIZATION_ENABLED = True
+        try:
+            legacy_controlled = lease_payload(
+                recipient_public_key_raw,
+                snapshot.hash,
+                "gmail-get-legacy-v3",
+                purpose="dispatchSecret",
+                expected_credential_version=1,
+                expected_metadata_sha256=initial_metadata_sha256,
+            )
+            assert_status(
+                post_lease(legacy_controlled, "gmail-get-legacy-v3"),
+                409,
+                "legacy v3 controlled route",
+                "operation-bound credential lease v4",
+            )
+
+            omitted_authority = gmail_get_payload(
+                "gmail-get-omitted-authority"
+            )
+            omitted_authority.pop("requestAuthority")
+            assert_status(
+                post_lease(
+                    omitted_authority,
+                    "gmail-get-omitted-authority",
+                ),
+                422,
+                "v4 omitted request authority",
+                "requires exact requestAuthority",
+            )
+            omitted_release = gmail_get_payload(
+                "gmail-get-omitted-release"
+            )
+            omitted_release.pop("releaseAuthorization")
+            assert_status(
+                post_lease(
+                    omitted_release,
+                    "gmail-get-omitted-release",
+                ),
+                422,
+                "v4 omitted nullable release field",
+                "requires exact requestAuthority",
+            )
+
+            substituted_authorities = []
+            substituted_attempt = {
+                **gmail_get_authority,
+                "attemptId": "sha256:" + "8" * 64,
+            }
+            substituted_attempt["reservationId"] = db.release_reservation_id(
+                substituted_attempt["attemptId"],
+                substituted_attempt["bindingDigest"],
+            )
+            substituted_authorities.append(
+                ("attempt", substituted_attempt)
+            )
+            substituted_binding = {
+                **gmail_get_authority,
+                "bindingDigest": "sha256:" + "9" * 64,
+            }
+            substituted_binding["reservationId"] = db.release_reservation_id(
+                substituted_binding["attemptId"],
+                substituted_binding["bindingDigest"],
+            )
+            substituted_authorities.extend(
+                [
+                    ("binding", substituted_binding),
+                    (
+                        "request-digest",
+                        {
+                            **gmail_get_authority,
+                            "requestDigest": "sha256:" + "a" * 64,
+                        },
+                    ),
+                    (
+                        "operation-digest",
+                        {
+                            **gmail_get_authority,
+                            "operationDigest": "sha256:" + "b" * 64,
+                        },
+                    ),
+                    (
+                        "operation",
+                        {
+                            **gmail_get_authority,
+                            "operationContext": {
+                                "operation": "gmail.message.list"
+                            },
+                        },
+                    ),
+                    (
+                        "expiry",
+                        {
+                            **gmail_get_authority,
+                            "reservationExpiresAtEpochMs": 1,
+                        },
+                    ),
+                ]
+            )
+            for label, substituted_authority in substituted_authorities:
+                substituted_payload = gmail_get_payload(
+                    f"gmail-get-substituted-{label}",
+                    authority=substituted_authority,
+                )
+                if (
+                    credential_lease_request_binding(substituted_payload)
+                    == credential_lease_request_binding(
+                        gmail_get_payload(
+                            f"gmail-get-binding-baseline-{label}"
+                        )
+                    )
+                    or sha256_prefixed(
+                        canonical_json_bytes(substituted_authority)
+                    )
+                    == sha256_prefixed(
+                        canonical_json_bytes(gmail_get_authority)
+                    )
+                ):
+                    raise AssertionError(
+                        "request authority substitution did not isolate "
+                        f"credential lease identity: {label}"
+                    )
+                assert_status(
+                    post_lease(
+                        substituted_payload,
+                        f"gmail-get-substituted-{label}",
+                    ),
+                    409,
+                    f"v4 substituted {label}",
+                )
+
+            crossed_release = gmail_get_payload(
+                "gmail-get-crossed-release",
+                release=atomic_release_authorization,
+            )
+            assert_status(
+                post_lease(
+                    crossed_release,
+                    "gmail-get-crossed-release",
+                ),
+                409,
+                "decision-bound crossed release authority",
+                "must omit durable release authorization",
+            )
+
+            gmail_list_attempt_id = "sha256:" + "c" * 64
+            gmail_list_request_digest = "sha256:" + "d" * 64
+            gmail_list_operation_digest = "sha256:" + "e" * 64
+            gmail_list_operation = {"operation": "gmail.message.list"}
+            gmail_list_expected = (
+                runtime.expected_release_authorization_identity(
+                    attempt_id=gmail_list_attempt_id,
+                    flow_id=gmail_list_attempt_id,
+                    principal_id=PRINCIPAL_ID,
+                    route_id=ROUTE_ID,
+                    credential_ref=CREDENTIAL_ID,
+                    credential_version=1,
+                    policy_hash=snapshot.hash,
+                    request_digest=gmail_list_request_digest,
+                    operation_digest=gmail_list_operation_digest,
+                    operation_context=gmail_list_operation,
+                    shared_quotas=[],
+                    require_jit_grant=False,
+                )
+            )
+            gmail_list_reserved = (
+                runtime._normalized_direct_release_authorization_response(
+                    db.reserve_release_authorization(
+                        attempt_id=gmail_list_attempt_id,
+                        flow_id=gmail_list_attempt_id,
+                        principal_id=PRINCIPAL_ID,
+                        route_id=ROUTE_ID,
+                        credential_id=CREDENTIAL_ID,
+                        credential_version=1,
+                        policy_hash=snapshot.hash,
+                        request_digest=gmail_list_request_digest,
+                        operation_digest=gmail_list_operation_digest,
+                        operation_context=gmail_list_operation,
+                        shared_quotas=[],
+                        require_jit_grant=False,
+                        reservation_ttl_seconds=60,
+                        actor_id=(
+                            "spiffe://test.serverware/decision-gate/"
+                            "credential-lease"
+                        ),
+                    )
+                )
+            )
+            gmail_list_authority = credential_request_authority(
+                attempt_id=gmail_list_attempt_id,
+                reservation_id=db.release_reservation_id(
+                    gmail_list_attempt_id,
+                    gmail_list_expected.binding_digest,
+                ),
+                binding_digest=gmail_list_expected.binding_digest,
+                request_digest=gmail_list_request_digest,
+                operation_digest=gmail_list_operation_digest,
+                operation_context=gmail_list_operation,
+                reservation_expires_at_epoch_ms=gmail_list_reserved[
+                    "reservation_expires_at_epoch_ms"
+                ],
+            )
+            gmail_list_v1_payload = lease_payload(
+                recipient_public_key_raw,
+                snapshot.hash,
+                "gmail-list-v1-denied",
+                purpose="dispatchSecret",
+                expected_credential_version=1,
+                expected_metadata_sha256=initial_metadata_sha256,
+                request_authority=gmail_list_authority,
+                release_authorization=None,
+            )
+            assert_status(
+                post_lease(
+                    gmail_list_v1_payload,
+                    "gmail-list-v1-denied",
+                ),
+                409,
+                "Gmail list without v2 durable authority",
+                "lacks exact durable release authority",
+            )
+
+            gmail_get_payload_value = gmail_get_payload(
+                "gmail-get-decision-bound"
+            )
+            gmail_get_response = post_lease(
+                gmail_get_payload_value,
+                "gmail-get-decision-bound",
+            )
+            assert_status(
+                gmail_get_response,
+                200,
+                "Gmail get decision-bound credential lease",
+            )
+            gmail_get_plaintext = decrypt_lease(
+                gmail_get_response.json(),
+                recipient_private_key=recipient_private_key,
+                recipient_nonce_raw=recipient_nonce(
+                    "gmail-get-decision-bound"
+                ),
+                request_payload=gmail_get_payload_value,
+            )
+            if (
+                gmail_get_plaintext["releaseAuthorization"] is not None
+                or gmail_get_plaintext["requestAuthority"]
+                != gmail_get_authority
+                or gmail_get_plaintext["credentials"]
+                != [expected_initial_secret]
+            ):
+                raise AssertionError(
+                    "Gmail get decision-bound lease lost its exact authority"
+                )
+        finally:
+            app_module.ATOMIC_RELEASE_AUTHORIZATION_ENABLED = (
+                original_atomic_release_enabled
+            )
+            app_module._active_route_by_id = original_active_route_by_id
+
+        durable_constraint = {
+            "id": "credential-lease-durable-fixture",
+            "type": "slidingWindowLimit",
+            "store": "shared",
+            "windowSeconds": 60,
+            "windowSemantics": "sliding",
+            "measure": "operationCount",
+            "reservationMode": "atomicReserveCommitRelease",
+            "onOverflow": "deny",
+            "max": 2,
+            "key": {
+                "scope": [
+                    "principal",
+                    "route",
+                    "credential",
+                    "credentialVersion",
+                    "operation",
+                ]
+            },
+        }
+        durable_route = replace(
+            base_route,
+            jit={"required": False},
+            constraints=(durable_constraint,),
+        )
+        durable_attempt_id = "sha256:" + "2" * 64
+        durable_request_digest = "sha256:" + "3" * 64
+        durable_operation_digest = "sha256:" + "4" * 64
+        durable_actor = (
+            "spiffe://test.serverware/decision-gate/credential-lease"
+        )
+        durable_claims = shared_durable_budget_claims(
+            durable_route,
+            principal_id=PRINCIPAL_ID,
+            credential_ref=CREDENTIAL_ID,
+            credential_version=1,
+            policy_hash=snapshot.hash,
+            operation_fields={"operation": "demo.echo"},
+        )
+        durable_claim_digest = sha256_prefixed(
+            canonical_json_bytes(durable_claims)
+        )
+        durable_reserved = db.reserve_release_authorization_v2(
+            attempt_id=durable_attempt_id,
+            flow_id=durable_attempt_id,
+            principal_id=PRINCIPAL_ID,
+            route_id=ROUTE_ID,
+            credential_id=CREDENTIAL_ID,
+            credential_version=1,
+            policy_hash=snapshot.hash,
+            request_digest=durable_request_digest,
+            operation_digest=durable_operation_digest,
+            operation_context={"operation": "demo.echo"},
+            shared_quotas=[],
+            require_jit_grant=False,
+            reservation_ttl_seconds=60,
+            durable_policy_binding={
+                "actorId": durable_actor,
+                "claimDigest": durable_claim_digest,
+                "claims": durable_claims,
+            },
+            actor_id=durable_actor,
+        )
+        durable_state = durable_reserved["durable_policy"]
+        durable_release_authorization = {
+            "apiVersion": (
+                "serverware.credentialLeaseReleaseAuthorization/v2"
+            ),
+            "kind": "atomicReservation",
+            "state": "reserved",
+            "attemptId": durable_attempt_id,
+            "reservationId": db.release_reservation_id(
+                durable_attempt_id,
+                durable_reserved["binding_digest"],
+            ),
+            "bindingDigest": durable_reserved["binding_digest"],
+            "principalId": PRINCIPAL_ID,
+            "routeId": ROUTE_ID,
+            "credentialId": CREDENTIAL_ID,
+            "credentialVersion": 1,
+            "policyHash": snapshot.hash,
+            "requestDigest": durable_request_digest,
+            "operationDigest": durable_operation_digest,
+            "quotaClaims": [],
+            "durablePolicy": {
+                "reservationId": durable_state["reservation_id"],
+                "actorId": durable_state["actor_id"],
+                "claimDigest": durable_state["claim_digest"],
+                "reservationDeadlineAtEpochMs": durable_state[
+                    "reservation_deadline_at_epoch_ms"
+                ],
+                "releaseBindingDigest": durable_reserved[
+                    "binding_digest"
+                ],
+            },
+            "grantId": None,
+            "approvalRequestId": None,
+            "reservationExpiresAtEpochMs": durable_reserved[
+                "reservation_expires_at_epoch_ms"
+            ],
+        }
+        durable_request_authority = credential_request_authority(
+            attempt_id=durable_release_authorization["attemptId"],
+            reservation_id=durable_release_authorization["reservationId"],
+            binding_digest=durable_release_authorization["bindingDigest"],
+            request_digest=durable_release_authorization["requestDigest"],
+            operation_digest=durable_release_authorization[
+                "operationDigest"
+            ],
+            operation_context={"operation": "demo.echo"},
+            reservation_expires_at_epoch_ms=durable_release_authorization[
+                "reservationExpiresAtEpochMs"
+            ],
+        )
+        durable_payload = lease_payload(
+            recipient_public_key_raw,
+            snapshot.hash,
+            "durable-dispatch",
+            purpose="dispatchSecret",
+            expected_credential_version=1,
+            expected_metadata_sha256=initial_metadata_sha256,
+            request_authority=durable_request_authority,
+            release_authorization=durable_release_authorization,
+        )
+        app_module.CredentialLeaseRequest.model_validate(
+            durable_payload
+        )
+        for mixed_release in (
+            {
+                **durable_release_authorization,
+                "apiVersion": (
+                    "serverware.credentialLeaseReleaseAuthorization/v1"
+                ),
+            },
+            {
+                **atomic_release_authorization,
+                "durablePolicy": None,
+            },
+            {
+                **durable_release_authorization,
+                "attemptId": "legacy-attempt-id",
+            },
+            {
+                **durable_release_authorization,
+                "reservationId": "sha256:" + "9" * 64,
+            },
+            {
+                **durable_release_authorization,
+                "credentialVersion": "1",
+            },
+        ):
+            mixed_payload = lease_payload(
+                recipient_public_key_raw,
+                snapshot.hash,
+                "durable-mixed",
+                purpose="dispatchSecret",
+                expected_credential_version=1,
+                expected_metadata_sha256=initial_metadata_sha256,
+                request_authority=durable_request_authority,
+                release_authorization=mixed_release,
+            )
+            try:
+                app_module.CredentialLeaseRequest.model_validate(
+                    mixed_payload
+                )
+            except Exception:
+                pass
+            else:
+                raise AssertionError(
+                    "credential lease accepted mixed v1/v2 durable authority"
+                )
+        app_module._active_route_by_id = (
+            lambda route_id, *, snapshot=None: (
+                durable_route
+                if route_id == ROUTE_ID
+                else original_active_route_by_id(
+                    route_id,
+                    snapshot=snapshot,
+                )
+            )
+        )
+        app_module.ATOMIC_RELEASE_AUTHORIZATION_ENABLED = True
+        try:
+            durable_response = post_lease(
+                durable_payload,
+                "durable-dispatch",
+            )
+            assert_status(
+                durable_response,
+                200,
+                "durable v2 credential lease",
+            )
+            durable_plaintext = decrypt_lease(
+                durable_response.json(),
+                recipient_private_key=recipient_private_key,
+                recipient_nonce_raw=recipient_nonce(
+                    "durable-dispatch"
+                ),
+                request_payload=durable_payload,
+            )
+            if durable_plaintext["credentials"] != [
+                expected_initial_secret
+            ]:
+                raise AssertionError(
+                    "durable v2 credential lease returned wrong material"
+                )
+        finally:
+            app_module.ATOMIC_RELEASE_AUTHORIZATION_ENABLED = (
+                original_atomic_release_enabled
+            )
+            app_module._active_route_by_id = (
+                original_active_route_by_id
+            )
+
+        jit_attempt_id = "sha256:" + "f" * 64
+        jit_binding_digest = "sha256:" + "a" * 64
+        jit_request_digest = "sha256:" + "b" * 64
+        jit_operation_digest = "sha256:" + "c" * 64
+        jit_expires_at_epoch_ms = int(time.time() * 1000) + 4_500
+        jit_request_authority = credential_request_authority(
+            attempt_id=jit_attempt_id,
+            reservation_id=db.release_reservation_id(
+                jit_attempt_id,
+                jit_binding_digest,
+            ),
+            binding_digest=jit_binding_digest,
+            request_digest=jit_request_digest,
+            operation_digest=jit_operation_digest,
+            operation_context={"operation": "demo.echo"},
+            reservation_expires_at_epoch_ms=jit_expires_at_epoch_ms,
+        )
         jit_release_authorization = {
             "apiVersion": "serverware.credentialLeaseReleaseAuthorization/v1",
+            "kind": "jitGrant",
             "state": "reserved",
-            "attemptId": "attempt:credential-lease-ordering",
-            "bindingDigest": "sha256:" + "a" * 64,
+            "attemptId": jit_attempt_id,
+            "reservationId": jit_request_authority["reservationId"],
+            "bindingDigest": jit_binding_digest,
+            "principalId": PRINCIPAL_ID,
+            "routeId": ROUTE_ID,
+            "credentialId": CREDENTIAL_ID,
+            "credentialVersion": 1,
+            "policyHash": snapshot.hash,
+            "requestDigest": jit_request_digest,
+            "operationDigest": jit_operation_digest,
+            "quotaClaims": [],
             "grantId": "grant:credential-lease-ordering",
             "approvalRequestId": "approval:credential-lease-ordering",
-            "reservationExpiresAtEpochMs": int(time.time() * 1000) + 4_500,
+            "reservationExpiresAtEpochMs": jit_expires_at_epoch_ms,
         }
         jit_payload = lease_payload(
             recipient_public_key_raw,
@@ -1012,6 +2110,7 @@ def main() -> None:
             purpose="dispatchSecret",
             expected_credential_version=1,
             expected_metadata_sha256=initial_metadata_sha256,
+            request_authority=jit_request_authority,
             release_authorization=jit_release_authorization,
         )
         original_active_route_by_id = app_module._active_route_by_id
@@ -1036,19 +2135,58 @@ def main() -> None:
 
         def accept_release(payload: Any, *, route: Any) -> dict[str, Any]:
             del route
+            assert payload.request_authority is not None
             assert payload.release_authorization is not None
-            return payload.release_authorization.model_dump(by_alias=True)
+            request_authority_wire = payload.request_authority.model_dump(
+                by_alias=True,
+                exclude_unset=True,
+            )
+            return {
+                "controlled": True,
+                "issuanceKind": "jitGrant",
+                "requestAuthority": request_authority_wire,
+                "requestAuthoritySha256": sha256_prefixed(
+                    canonical_json_bytes(request_authority_wire)
+                ),
+                "releaseAuthorization": (
+                    payload.release_authorization.model_dump(
+                        by_alias=True,
+                        exclude_unset=True,
+                    )
+                ),
+                "authoritySnapshot": {"state": "reserved"},
+            }
 
         def claim_release(
             payload: Any,
             *,
             route: Any,
+            dispatch_authority: dict[str, Any],
             request_binding_sha256: str,
             recipient_nonce_sha256: str,
         ) -> dict[str, Any]:
-            del payload, route, request_binding_sha256, recipient_nonce_sha256
+            del route
             ordering.append("claim")
-            return {"claimed": True}
+            assert payload.request_authority is not None
+            authority = dispatch_authority["requestAuthority"]
+            return {
+                "release_kind": dispatch_authority["issuanceKind"],
+                "attempt_id": authority["attemptId"],
+                "reservation_id": authority["reservationId"],
+                "binding_digest": authority["bindingDigest"],
+                "request_digest": authority["requestDigest"],
+                "operation_digest": authority["operationDigest"],
+                "request_binding_sha256": request_binding_sha256,
+                "request_authority_sha256": dispatch_authority[
+                    "requestAuthoritySha256"
+                ],
+                "recipient_key_id": payload.recipient_key_id,
+                "recipient_nonce_sha256": recipient_nonce_sha256,
+                "reservation_expires_at_epoch_ms": authority[
+                    "reservationExpiresAtEpochMs"
+                ],
+                "claimed_at_epoch_ms": int(time.time() * 1000),
+            }
 
         def refresh_after_claim(credential_id: str) -> dict[str, Any] | None:
             if ordering != ["claim"]:
@@ -1237,7 +2375,14 @@ def main() -> None:
             ("missing purpose", missing_purpose, 422, "Field required", DATA_PLANE_TOKEN)
         )
         missing_release_mode = lease_payload(
-            recipient_public_key_raw, snapshot.hash, "missing-release-mode"
+            recipient_public_key_raw,
+            snapshot.hash,
+            "missing-release-mode",
+            purpose="dispatchSecret",
+            expected_credential_version=1,
+            expected_metadata_sha256=initial_metadata_sha256,
+            request_authority=gmail_get_authority,
+            release_authorization=None,
         )
         missing_release_mode.pop("releaseAuthorization")
         rejection_cases.append(
@@ -1245,7 +2390,7 @@ def main() -> None:
                 "missing release mode",
                 missing_release_mode,
                 422,
-                "Field required",
+                "requires exact requestAuthority",
                 DATA_PLANE_TOKEN,
             )
         )

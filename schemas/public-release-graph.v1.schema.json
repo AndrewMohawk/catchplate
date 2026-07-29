@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/public-release-graph.v1.schema.json",
+  "title": "Serverware public release graph v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "releaseIdentity",
+    "releaseIdentitySha256",
+    "releaseConfigSha256",
+    "stableReleaseStatementSha256",
+    "trustRootBundleSha256"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "serverware.publicReleaseGraph/v1"
+    },
+    "releaseIdentity": {
+      "$ref": "release-identity.v1.schema.json"
+    },
+    "releaseIdentitySha256": {"$ref": "#/$defs/sha256"},
+    "releaseConfigSha256": {"$ref": "#/$defs/sha256"},
+    "stableReleaseStatementSha256": {"$ref": "#/$defs/sha256"},
+    "trustRootBundleSha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  }
+}

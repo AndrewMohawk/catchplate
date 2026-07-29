@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import base64
+import copy
 import fcntl
 import hmac
 import html
@@ -17,7 +19,7 @@ import tempfile
 import threading
 import time
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -46,16 +48,30 @@ from pydantic import (
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from serverware import __version__
 from serverware.attestation import (
+    AttestationContractError,
+    TRUSTED_TLS_SCOPE_EXTENSION,
+    _load_public_evidence_producer_descriptor,
     attestation_document,
+    canonical_json as attestation_canonical_json,
+    finalize_attestation_challenge,
     image_signatures_digest,
     image_signatures_document,
+    issue_attestation_challenge,
+    production_attestation_response,
+    production_attestation_state,
+    production_public_evidence_response,
+    release_attestation_challenge,
     release_provenance_digest,
     release_provenance_document,
     runtime_manifest_digest,
     source_tree_digest,
+    trusted_public_tls_scope_from_asgi,
+    trusted_tls_scope_from_asgi,
+    reserve_attestation_challenge,
 )
 from serverware.config import (
     ATOMIC_RELEASE_AUTHORIZATION_ENABLED,
@@ -92,8 +108,6 @@ from serverware.config import (
     POLICY_CANARY_MIN_OBSERVATION_SECONDS,
     POLICY_CANARY_REQUIRED,
     POLICY_CANARY_STATE_PATH,
-    POLICY_MIN_ROLLBACK_EPOCH,
-    POLICY_MIN_SEQUENCE,
     POLICY_PUBLISH_DRY_RUN_REQUIRED,
     PUBLIC_URL,
     RELEASE_CHANNEL,
@@ -165,16 +179,38 @@ from serverware.operator_oidc import (
     start_operator_login,
 )
 from serverware.policy_bundle import (
+    MAX_POLICY_BUNDLE_BYTES,
     PolicyBundleError,
+    _atomic_write_policy,
+    _atomic_write_secure_file,
+    _policy_publication_lock,
+    _read_stable_policy_file,
+    _read_stable_secure_file,
+    _secure_path_exists,
+    _stage_policy_bundle_for_transaction,
+    _unlink_secure_file,
+    _write_policy_bundle_in_transaction,
+    adapter_operation_query_fields,
     compile_policy_bundle,
+    credential_injection_target,
     demo_policy_bundle,
     get_policy_snapshot,
     policy_public_key_hash,
     policy_public_key_pem,
     sign_policy_bundle,
+    strict_json_loads,
+    validate_discard_headers,
     write_policy_bundle,
 )
-from serverware.response_identity import response_signature_headers, response_statement
+from serverware.constraints import (
+    shared_durable_budget_claims,
+    traversal_budget_claims,
+)
+from serverware.response_identity import (
+    response_signature_headers,
+    response_statement,
+    validate_response_nonce,
+)
 from serverware.setup_receipt_service import (
     SetupReceiptTrustConfigurationError,
     setup_receipt_trust_profile,
@@ -227,7 +263,8 @@ from serverware.webauthn_trust import (
 )
 
 
-app = FastAPI(title="Serverware", version=__version__)
+_fastapi_app = FastAPI(title="Serverware", version=__version__)
+app = _fastapi_app
 _OAUTH_REVOCATION_RECONCILE_BATCH_SIZE = 8
 _OAUTH_REVOCATION_RECONCILE_INTERVAL_SECONDS = 15
 _oauth_revocation_worker_lock = threading.Lock()
@@ -236,10 +273,17 @@ _credential_lease_audit_lock = threading.Lock()
 _credential_lease_audit_last: dict[tuple[str, ...], float] = {}
 _CREDENTIAL_LEASE_AUDIT_INTERVAL_SECONDS = 60.0
 _CREDENTIAL_LEASE_REQUEST_MAX_BYTES = 96 * 1024
+_RELEASE_AUTHORIZATION_REQUEST_MAX_BYTES = 512 * 1024
 _CREDENTIAL_LEASE_PLAINTEXT_MAX_BYTES = 4 * 1024 * 1024
 _CREDENTIAL_LEASE_RESPONSE_MAX_BYTES = 8 * 1024 * 1024
 _SIGNED_RESPONSE_MAX_BYTES = 8 * 1024 * 1024
 _CONTROL_PLANE_REQUEST_MAX_BYTES = 2 * 1024 * 1024
+_PUBLIC_EVIDENCE_REQUEST_MAX_BYTES = 4 * 1024
+_PUBLIC_EVIDENCE_ROUTE_SLOTS = asyncio.BoundedSemaphore(1)
+_METADATA_AUDIT_OUTBOX_DRAIN_SLOTS = asyncio.BoundedSemaphore(1)
+_SIGNED_RESPONSE_WORKER_SLOTS = asyncio.BoundedSemaphore(4)
+_SIGNED_RESPONSE_BUFFER_SLOTS = asyncio.BoundedSemaphore(16)
+_SIGNED_RESPONSE_BUFFER_ADMISSION_SECONDS = 1.0
 _RECIPIENT_ATTESTATION_MAX_BYTES = 64 * 1024
 _SETUP_RECEIPT_MAX_BYTES = 64 * 1024
 _SETUP_HARDWARE_ASSURANCE_MAX_BYTES = 512 * 1024
@@ -269,6 +313,40 @@ _OIDC_SETUP_TARGET_ID_RE = re.compile(
 )
 
 
+def _finish_bounded_blocking_worker(
+    worker: asyncio.Task[Any],
+    *,
+    slots: asyncio.BoundedSemaphore,
+) -> None:
+    slots.release()
+    if not worker.cancelled():
+        worker.exception()
+
+
+async def _run_bounded_blocking(
+    slots: asyncio.BoundedSemaphore,
+    function: Callable[..., Any],
+    /,
+    *args: Any,
+    **kwargs: Any,
+) -> Any:
+    await slots.acquire()
+    try:
+        worker = asyncio.create_task(
+            asyncio.to_thread(function, *args, **kwargs)
+        )
+    except BaseException:
+        slots.release()
+        raise
+    worker.add_done_callback(
+        lambda completed, worker_slots=slots: _finish_bounded_blocking_worker(
+            completed,
+            slots=worker_slots,
+        )
+    )
+    return await asyncio.shield(worker)
+
+
 @app.middleware("http")
 async def csrf_middleware(request: Request, call_next):
     try:
@@ -282,7 +360,11 @@ async def csrf_middleware(request: Request, call_next):
     response = await call_next(request)
     if request.method not in {"GET", "HEAD", "OPTIONS"}:
         try:
-            db.drain_metadata_audit_outbox(limit=100)
+            await _run_bounded_blocking(
+                _METADATA_AUDIT_OUTBOX_DRAIN_SLOTS,
+                db.drain_metadata_audit_outbox,
+                limit=100,
+            )
         except Exception:
             pass
     return response
@@ -290,6 +372,28 @@ async def csrf_middleware(request: Request, call_next):
 
 @app.middleware("http")
 async def bounded_control_plane_request_middleware(request: Request, call_next):
+    public_evidence_request = (
+        request.method == "POST"
+        and request.scope.get("path") == "/attestation/public-evidence"
+    )
+    if public_evidence_request:
+        raw_query = request.scope.get("query_string", b"")
+        if type(raw_query) is not bytes or raw_query:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "detail":
+                    "public attestation evidence does not accept a query string"
+                },
+            )
+        if request.headers.get("content-type") != "application/json":
+            return JSONResponse(
+                status_code=415,
+                content={
+                    "detail":
+                    "public attestation evidence requires application/json"
+                },
+            )
     raw_content_length = request.headers.get("content-length")
     if raw_content_length is not None:
         try:
@@ -302,60 +406,484 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
             return JSONResponse(
                 status_code=400, content={"detail": "invalid Content-Length"}
             )
-        if content_length > _CONTROL_PLANE_REQUEST_MAX_BYTES:
+        request_limit = (
+            _PUBLIC_EVIDENCE_REQUEST_MAX_BYTES
+            if public_evidence_request
+            else _CONTROL_PLANE_REQUEST_MAX_BYTES
+        )
+        if content_length > request_limit:
             return JSONResponse(
                 status_code=413,
-                content={"detail": "control-plane request exceeds 2 MiB"},
+                content={
+                    "detail": (
+                        "public attestation request exceeds 4 KiB"
+                        if public_evidence_request
+                        else "control-plane request exceeds 2 MiB"
+                    )
+                },
             )
+    if public_evidence_request:
+        return await call_next(request)
     if request.method not in {"GET", "HEAD", "OPTIONS"}:
+        request_limit = (
+            _PUBLIC_EVIDENCE_REQUEST_MAX_BYTES
+            if public_evidence_request
+            else _CONTROL_PLANE_REQUEST_MAX_BYTES
+        )
         body = bytearray()
         async for chunk in request.stream():
             body.extend(chunk)
-            if len(body) > _CONTROL_PLANE_REQUEST_MAX_BYTES:
+            if len(body) > request_limit:
                 return JSONResponse(
                     status_code=413,
-                    content={"detail": "control-plane request exceeds 2 MiB"},
+                    content={
+                        "detail": (
+                            "public attestation request exceeds 4 KiB"
+                            if public_evidence_request
+                            else "control-plane request exceeds 2 MiB"
+                        )
+                    },
                 )
         request._body = bytes(body)
         request._stream_consumed = False
     return await call_next(request)
 
 
-@app.middleware("http")
-async def signed_response_middleware(request: Request, call_next):
-    response = await call_next(request)
-    body_buffer = bytearray()
-    async for chunk in response.body_iterator:
-        if len(chunk) > _SIGNED_RESPONSE_MAX_BYTES - len(body_buffer):
-            synthetic = JSONResponse(
-                status_code=503,
-                content={"detail": "signed response exceeds 8 MiB"},
+class _BufferedHttpResponse:
+    def __init__(self, *, max_body_bytes: int) -> None:
+        self.max_body_bytes = max_body_bytes
+        self.status_code: int | None = None
+        self.headers: list[tuple[bytes, bytes]] = []
+        self.body = bytearray()
+        self.complete = False
+        self.too_large = False
+
+    async def send(self, message: Message) -> None:
+        message_type = message.get("type")
+        if message_type == "http.response.start":
+            self._start(message)
+            return
+        if message_type == "http.response.body":
+            self._body(message)
+            return
+        raise RuntimeError(
+            "downstream HTTP response used an unsupported ASGI message"
+        )
+
+    def _start(self, message: Message) -> None:
+        if self.status_code is not None or self.complete:
+            raise RuntimeError("downstream HTTP response started more than once")
+        status_code = message.get("status")
+        if type(status_code) is not int or not 100 <= status_code <= 599:
+            raise RuntimeError("downstream HTTP response status is invalid")
+        if message.get("trailers", False):
+            raise RuntimeError(
+                "downstream HTTP response trailers cannot be signed"
             )
-            return _signed_control_plane_response(
-                request=request,
-                response=synthetic,
-                body=synthetic.body,
+        raw_headers = message.get("headers", [])
+        if not isinstance(raw_headers, list):
+            raise RuntimeError("downstream HTTP response headers are invalid")
+        copied_headers: list[tuple[bytes, bytes]] = []
+        for header in raw_headers:
+            if (
+                not isinstance(header, tuple)
+                or len(header) != 2
+                or type(header[0]) is not bytes
+                or type(header[1]) is not bytes
+            ):
+                raise RuntimeError(
+                    "downstream HTTP response header is invalid"
+                )
+            copied_headers.append((bytes(header[0]), bytes(header[1])))
+        for name, value in copied_headers:
+            if name.lower() in {
+                b"connection",
+                b"keep-alive",
+                b"proxy-authenticate",
+                b"proxy-authorization",
+                b"te",
+                b"trailer",
+                b"transfer-encoding",
+                b"upgrade",
+            }:
+                raise RuntimeError(
+                    "downstream HTTP response used a hop-by-hop header"
+                )
+            if name.lower() != b"content-length":
+                continue
+            try:
+                content_length = int(value.decode("ascii"))
+            except (UnicodeDecodeError, ValueError) as exc:
+                raise RuntimeError(
+                    "downstream HTTP response Content-Length is invalid"
+                ) from exc
+            if content_length < 0:
+                raise RuntimeError(
+                    "downstream HTTP response Content-Length is invalid"
+                )
+            if content_length > self.max_body_bytes:
+                self.too_large = True
+                raise RuntimeError(
+                    "downstream HTTP response exceeds the signing bound"
+                )
+        self.status_code = status_code
+        self.headers = copied_headers
+
+    def _body(self, message: Message) -> None:
+        if self.status_code is None:
+            raise RuntimeError(
+                "downstream HTTP response body preceded response start"
             )
-        body_buffer.extend(chunk)
-    body = bytes(body_buffer)
-    return _signed_control_plane_response(
-        request=request,
-        response=response,
-        body=body,
+        if self.complete:
+            raise RuntimeError(
+                "downstream HTTP response continued after completion"
+            )
+        chunk = message.get("body", b"")
+        if type(chunk) is not bytes:
+            raise RuntimeError("downstream HTTP response body is invalid")
+        if len(chunk) > self.max_body_bytes - len(self.body):
+            self.too_large = True
+            self.body.clear()
+            raise RuntimeError(
+                "downstream HTTP response exceeds the signing bound"
+            )
+        more_body = message.get("more_body", False)
+        if type(more_body) is not bool:
+            raise RuntimeError(
+                "downstream HTTP response continuation flag is invalid"
+            )
+        self.body.extend(chunk)
+        if not more_body:
+            self.complete = True
+
+
+def _request_signature_inputs(
+    scope: Scope,
+) -> tuple[str, str, str, str | None, bool, bool]:
+    method = scope.get("method")
+    path = scope.get("path")
+    query_string = scope.get("query_string", b"")
+    raw_headers = scope.get("headers", [])
+    if (
+        not isinstance(method, str)
+        or not isinstance(path, str)
+        or type(query_string) is not bytes
+        or not isinstance(raw_headers, list)
+    ):
+        raise RuntimeError("HTTP request ASGI scope is invalid")
+    nonce = None
+    invalid_nonce = False
+    for header in raw_headers:
+        if (
+            not isinstance(header, tuple)
+            or len(header) != 2
+            or type(header[0]) is not bytes
+            or type(header[1]) is not bytes
+        ):
+            raise RuntimeError("HTTP request ASGI headers are invalid")
+        if header[0].lower() == b"x-serverware-response-nonce":
+            if nonce is not None:
+                invalid_nonce = True
+                nonce = None
+                continue
+            if not invalid_nonce:
+                nonce = header[1].decode("latin-1")
+    if nonce is not None:
+        try:
+            nonce = validate_response_nonce(nonce)
+        except ValueError:
+            invalid_nonce = True
+            nonce = None
+    return (
+        method,
+        path,
+        query_string.decode("latin-1"),
+        nonce,
+        scope.get("scheme") == "https",
+        invalid_nonce,
     )
 
 
-def _signed_control_plane_response(
-    *, request: Request, response: Response, body: bytes
-) -> Response:
+def _synthetic_signed_response_source(
+    *, status_code: int, detail: str
+) -> tuple[int, list[tuple[bytes, bytes]], bytes]:
+    response = JSONResponse(
+        status_code=status_code,
+        content={"detail": detail},
+    )
+    return status_code, list(response.raw_headers), response.body
+
+
+_SIGNED_RESPONSE_OWNED_HEADERS = frozenset(
+    {
+        b"cache-control",
+        b"pragma",
+        b"x-content-type-options",
+        b"x-frame-options",
+        b"referrer-policy",
+        b"cross-origin-opener-policy",
+        b"cross-origin-resource-policy",
+        b"permissions-policy",
+        b"content-security-policy",
+        b"strict-transport-security",
+    }
+)
+
+
+def _response_signer_owns_header(name: bytes) -> bool:
+    lowered = name.lower()
+    return (
+        lowered in _SIGNED_RESPONSE_OWNED_HEADERS
+        or lowered.startswith(b"x-serverware-response-")
+    )
+
+
+def _control_plane_security_headers(
+    *, request_is_https: bool
+) -> dict[str, str]:
+    headers = {
+        "Cache-Control": "no-store",
+        "Pragma": "no-cache",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY",
+        "Referrer-Policy": "no-referrer",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Cross-Origin-Resource-Policy": "same-origin",
+        "Permissions-Policy": (
+            "camera=(), geolocation=(), microphone=(), payment=(), usb=(), "
+            "publickey-credentials-create=(self), "
+            "publickey-credentials-get=(self)"
+        ),
+        "Content-Security-Policy": (
+            "default-src 'none'; base-uri 'none'; frame-ancestors 'none'; "
+            "form-action 'self'; object-src 'none'; connect-src 'self'; "
+            "img-src 'self' data:; font-src 'self'; "
+            "style-src 'unsafe-inline'; script-src 'unsafe-inline'"
+        ),
+    }
+    if request_is_https:
+        headers["Strict-Transport-Security"] = (
+            "max-age=31536000; includeSubDomains"
+        )
+    return headers
+
+
+def _unsigned_wire_headers(
+    *,
+    source_headers: list[tuple[bytes, bytes]],
+    request_is_https: bool,
+    response_status_code: int,
+    representation_body_length: int,
+) -> list[tuple[bytes, bytes]]:
+    preserved = [
+        (name, value)
+        for name, value in source_headers
+        if name.lower() != b"content-length"
+        and not _response_signer_owns_header(name)
+    ]
+    merged = list(preserved)
+    if not (
+        100 <= response_status_code < 200
+        or response_status_code in {204, 304}
+    ):
+        merged.append(
+            (
+                b"content-length",
+                str(representation_body_length).encode("ascii"),
+            )
+        )
+    for name, value in _control_plane_security_headers(
+        request_is_https=request_is_https
+    ).items():
+        merged.append((name.encode("ascii"), value.encode("latin-1")))
+    return merged
+
+
+def _proof_wire_headers(
+    *,
+    unsigned_headers: list[tuple[bytes, bytes]],
+    proof_headers: dict[str, str],
+) -> list[tuple[bytes, bytes]]:
+    unsigned_names = {name.lower() for name, _value in unsigned_headers}
+    result: list[tuple[bytes, bytes]] = []
+    for name, value in proof_headers.items():
+        encoded_name = name.encode("ascii")
+        lowered = encoded_name.lower()
+        if not lowered.startswith(b"x-serverware-response-"):
+            raise RuntimeError(
+                "response signer returned a non-proof header"
+            )
+        if lowered in unsigned_names:
+            raise RuntimeError(
+                "response proof header conflicts with an authenticated header"
+            )
+        result.append((encoded_name, value.encode("latin-1")))
+    return result
+
+
+class _SignedControlPlaneASGI:
+    def __init__(self, application: ASGIApp) -> None:
+        self.application = application
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.application, name)
+
+    async def __call__(
+        self,
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+    ) -> None:
+        if scope["type"] != "http":
+            await self.application(scope, receive, send)
+            return
+        (
+            request_method,
+            request_path,
+            request_query,
+            request_nonce,
+            request_is_https,
+            invalid_request_nonce,
+        ) = _request_signature_inputs(scope)
+        acquired_buffer_slot = False
+        try:
+            try:
+                await asyncio.wait_for(
+                    _SIGNED_RESPONSE_BUFFER_SLOTS.acquire(),
+                    timeout=_SIGNED_RESPONSE_BUFFER_ADMISSION_SECONDS,
+                )
+            except TimeoutError as exc:
+                raise RuntimeError(
+                    "signed response buffering capacity is unavailable"
+                ) from exc
+            acquired_buffer_slot = True
+            buffered = _BufferedHttpResponse(
+                max_body_bytes=_SIGNED_RESPONSE_MAX_BYTES
+            )
+            downstream_error: Exception | None = None
+            if invalid_request_nonce:
+                response_status_code, response_raw_headers, body = (
+                    _synthetic_signed_response_source(
+                        status_code=400,
+                        detail="response nonce header is invalid or repeated",
+                    )
+                )
+            else:
+                try:
+                    # This includes ServerErrorMiddleware and response background work.
+                    await self.application(scope, receive, buffered.send)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    downstream_error = exc
+
+            if not invalid_request_nonce and buffered.too_large:
+                response_status_code, response_raw_headers, body = (
+                    _synthetic_signed_response_source(
+                        status_code=503,
+                        detail="signed response exceeds 8 MiB",
+                    )
+                )
+                downstream_error = None
+            elif not invalid_request_nonce and downstream_error is not None:
+                response_status_code, response_raw_headers, body = (
+                    _synthetic_signed_response_source(
+                        status_code=500,
+                        detail="internal server error",
+                    )
+                )
+            elif (
+                not invalid_request_nonce
+                and (buffered.status_code is None or not buffered.complete)
+            ):
+                downstream_error = RuntimeError(
+                    "downstream HTTP response did not complete"
+                )
+                response_status_code, response_raw_headers, body = (
+                    _synthetic_signed_response_source(
+                        status_code=500,
+                        detail="internal server error",
+                    )
+                )
+            elif not invalid_request_nonce:
+                response_status_code = buffered.status_code
+                response_raw_headers = list(buffered.headers)
+                body = bytes(buffered.body)
+            buffered.body.clear()
+
+            if (
+                100 <= response_status_code < 200
+                or (
+                    response_status_code in {204, 205, 304}
+                    and len(body) != 0
+                )
+            ):
+                downstream_error = RuntimeError(
+                    "downstream HTTP response used invalid no-body framing"
+                )
+                response_status_code, response_raw_headers, body = (
+                    _synthetic_signed_response_source(
+                        status_code=500,
+                        detail="internal server error",
+                    )
+                )
+
+            wire_body = b"" if request_method.upper() == "HEAD" else body
+            unsigned_headers = _unsigned_wire_headers(
+                source_headers=response_raw_headers,
+                request_is_https=request_is_https,
+                response_status_code=response_status_code,
+                representation_body_length=len(body),
+            )
+            proof_headers: dict[str, str] = {}
+            if request_nonce is not None:
+                proof_headers = await _run_bounded_blocking(
+                    _SIGNED_RESPONSE_WORKER_SLOTS,
+                    _signed_control_plane_response_headers,
+                    request_method=request_method,
+                    request_path=request_path,
+                    request_query=request_query,
+                    request_nonce=request_nonce,
+                    response_status_code=response_status_code,
+                    response_headers=unsigned_headers,
+                    body=wire_body,
+                )
+            response = Response(
+                content=wire_body,
+                status_code=response_status_code,
+                media_type=None,
+            )
+            response.raw_headers = unsigned_headers + _proof_wire_headers(
+                unsigned_headers=unsigned_headers,
+                proof_headers=proof_headers,
+            )
+            await response(scope, receive, send)
+            if downstream_error is not None:
+                raise downstream_error
+        finally:
+            if acquired_buffer_slot:
+                _SIGNED_RESPONSE_BUFFER_SLOTS.release()
+
+
+def _signed_control_plane_response_headers(
+    *,
+    request_method: str,
+    request_path: str,
+    request_query: str,
+    request_nonce: str,
+    response_status_code: int,
+    response_headers: list[tuple[bytes, bytes]],
+    body: bytes,
+) -> dict[str, str]:
     snapshot = get_policy_snapshot()
     statement = response_statement(
-        method=request.method,
-        path=request.url.path,
-        query=request.url.query,
-        status_code=response.status_code,
+        method=request_method,
+        path=request_path,
+        query=request_query,
+        status_code=response_status_code,
         body=body,
-        nonce=request.headers.get("X-Serverware-Response-Nonce"),
+        response_headers=response_headers,
+        nonce=request_nonce,
         context={
             "runtime_manifest_digest": runtime_manifest_digest(),
             "policy_bundle_digest": snapshot.hash if snapshot else None,
@@ -364,40 +892,7 @@ def _signed_control_plane_response(
             "source_tree_digest": source_tree_digest(),
         },
     )
-    headers = dict(response.headers)
-    headers.pop("content-length", None)
-    headers.update(
-        {
-            "Cache-Control": "no-store",
-            "Pragma": "no-cache",
-            "X-Content-Type-Options": "nosniff",
-            "X-Frame-Options": "DENY",
-            "Referrer-Policy": "no-referrer",
-            "Cross-Origin-Opener-Policy": "same-origin",
-            "Cross-Origin-Resource-Policy": "same-origin",
-            "Permissions-Policy": (
-                "camera=(), geolocation=(), microphone=(), payment=(), usb=(), "
-                "publickey-credentials-create=(self), "
-                "publickey-credentials-get=(self)"
-            ),
-            "Content-Security-Policy": (
-                "default-src 'none'; base-uri 'none'; frame-ancestors 'none'; "
-                "form-action 'self'; object-src 'none'; connect-src 'self'; "
-                "img-src 'self' data:; font-src 'self'; "
-                "style-src 'unsafe-inline'; script-src 'unsafe-inline'"
-            ),
-        }
-    )
-    if request.url.scheme == "https":
-        headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
-    headers.update(response_signature_headers(statement))
-    return Response(
-        content=body,
-        status_code=response.status_code,
-        headers=headers,
-        media_type=response.media_type,
-        background=response.background,
-    )
+    return response_signature_headers(statement)
 
 
 class CredentialCreate(BaseModel):
@@ -829,68 +1324,363 @@ def _data_plane_audit_secret_path(
     return None
 
 
+class CredentialLeaseReleaseQuotaClaim(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid", validate_by_alias=True, validate_by_name=False
+    )
+
+    counter_key: str = Field(
+        alias="counterKey", pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    constraint_id: str = Field(alias="constraintId", min_length=1, max_length=256)
+    operation: str | None = Field(default=None, min_length=1, max_length=256)
+    window_kind: Literal["fixed", "utcDay", "utcIsoWeek", "utcMonth"] = Field(
+        alias="windowKind"
+    )
+    window_seconds: int | None = Field(
+        alias="windowSeconds", ge=1, le=31_536_000, strict=True
+    )
+    window_start_epoch_ms: int = Field(
+        alias="windowStartEpochMs",
+        ge=0,
+        le=18_446_744_073_709_551_615,
+        strict=True,
+    )
+    window_end_epoch_ms: int = Field(
+        alias="windowEndEpochMs",
+        ge=1,
+        le=18_446_744_073_709_551_615,
+        strict=True,
+    )
+    max_count: int = Field(alias="max", ge=1, le=1_000_000_000, strict=True)
+    count: int = Field(ge=1, le=1_000_000_000, strict=True)
+    remaining: int = Field(ge=0, le=1_000_000_000, strict=True)
+    reservation_state: Literal["reserved"] = Field(alias="reservationState")
+
+    @model_validator(mode="after")
+    def validate_window(self) -> CredentialLeaseReleaseQuotaClaim:
+        if self.window_end_epoch_ms <= self.window_start_epoch_ms:
+            raise ValueError("quota claim window is empty")
+        if self.window_kind == "fixed":
+            if self.window_seconds is None or (
+                self.window_end_epoch_ms - self.window_start_epoch_ms
+                != self.window_seconds * 1000
+            ):
+                raise ValueError("fixed quota claim window is inconsistent")
+        elif self.window_seconds is not None:
+            raise ValueError("calendar quota claim cannot carry windowSeconds")
+        if self.count + self.remaining != self.max_count:
+            raise ValueError("quota claim count is inconsistent")
+        return self
+
+
+class CredentialLeaseDurablePolicyClaim(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid", validate_by_alias=True, validate_by_name=False
+    )
+
+    reservation_id: str = Field(
+        alias="reservationId", pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    actor_id: str = Field(alias="actorId", min_length=1, max_length=256)
+    claim_digest: str = Field(
+        alias="claimDigest", pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    reservation_deadline_at_epoch_ms: int = Field(
+        alias="reservationDeadlineAtEpochMs",
+        ge=1,
+        le=18_446_744_073_709_551_615,
+        strict=True,
+    )
+    release_binding_digest: str = Field(
+        alias="releaseBindingDigest", pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+
+
 class CredentialLeaseReleaseAuthorization(BaseModel):
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", validate_by_alias=True, validate_by_name=False
+    )
 
     api_version: Literal[
-        "serverware.credentialLeaseReleaseAuthorization/v1"
+        "serverware.credentialLeaseReleaseAuthorization/v1",
+        "serverware.credentialLeaseReleaseAuthorization/v2",
     ] = Field(alias="apiVersion")
+    kind: Literal["jitGrant", "atomicReservation"]
     state: Literal["reserved"]
     attempt_id: str = Field(
         alias="attemptId", min_length=1, max_length=256
     )
+    reservation_id: str = Field(
+        alias="reservationId", pattern=r"^sha256:[0-9a-f]{64}$"
+    )
     binding_digest: str = Field(
         alias="bindingDigest", pattern=r"^sha256:[0-9a-f]{64}$"
     )
-    grant_id: str | None = Field(alias="grantId", max_length=512)
+    principal_id: str = Field(alias="principalId", min_length=1, max_length=256)
+    route_id: str = Field(alias="routeId", min_length=1, max_length=256)
+    credential_id: str = Field(alias="credentialId", min_length=1, max_length=256)
+    credential_version: int = Field(
+        alias="credentialVersion",
+        ge=1,
+        le=18_446_744_073_709_551_615,
+        strict=True,
+    )
+    policy_hash: str = Field(
+        alias="policyHash", pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    request_digest: str = Field(
+        alias="requestDigest", pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    operation_digest: str | None = Field(
+        alias="operationDigest", pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    quota_claims: list[CredentialLeaseReleaseQuotaClaim] = Field(
+        alias="quotaClaims", max_length=64
+    )
+    durable_policy: CredentialLeaseDurablePolicyClaim | None = Field(
+        default=None, alias="durablePolicy"
+    )
+    grant_id: str | None = Field(
+        alias="grantId", min_length=1, max_length=512
+    )
     approval_request_id: str | None = Field(
-        alias="approvalRequestId", max_length=512
+        alias="approvalRequestId", min_length=1, max_length=512
     )
     reservation_expires_at_epoch_ms: int = Field(
-        alias="reservationExpiresAtEpochMs", ge=1
+        alias="reservationExpiresAtEpochMs",
+        ge=1,
+        le=18_446_744_073_709_551_615,
+        strict=True,
     )
+
+    @model_validator(mode="after")
+    def validate_kind(self) -> CredentialLeaseReleaseAuthorization:
+        durable_present = "durable_policy" in self.model_fields_set
+        if self.api_version == "serverware.credentialLeaseReleaseAuthorization/v1":
+            if durable_present:
+                raise ValueError(
+                    "credential release v1 must omit durablePolicy"
+                )
+        elif not durable_present or self.durable_policy is None:
+            raise ValueError(
+                "credential release v2 requires durablePolicy"
+            )
+        elif re.fullmatch(r"sha256:[0-9a-f]{64}", self.attempt_id) is None:
+            raise ValueError(
+                "credential release v2 attemptId must be a lowercase sha256 digest"
+            )
+        elif not hmac.compare_digest(
+            self.reservation_id,
+            db.release_reservation_id(self.attempt_id, self.binding_digest),
+        ):
+            raise ValueError(
+                "credential release v2 reservationId does not match its binding"
+            )
+        counter_keys = [claim.counter_key for claim in self.quota_claims]
+        if counter_keys != sorted(set(counter_keys)):
+            raise ValueError("release quota claims are not canonical")
+        if self.kind == "jitGrant":
+            if self.grant_id is None or self.approval_request_id is None:
+                raise ValueError("jitGrant requires paired grant authority")
+        elif (
+            self.grant_id is not None
+            or self.approval_request_id is not None
+            or (
+                not self.quota_claims
+                and self.durable_policy is None
+            )
+        ):
+            raise ValueError(
+                "atomicReservation requires quota or durable authority and forbids JIT authority"
+            )
+        if self.durable_policy is not None and (
+            self.durable_policy.reservation_deadline_at_epoch_ms
+            != self.reservation_expires_at_epoch_ms
+            or not hmac.compare_digest(
+                self.durable_policy.release_binding_digest,
+                self.binding_digest,
+            )
+        ):
+            raise ValueError(
+                "durable credential release binding is inconsistent"
+            )
+        return self
+
+
+def _validate_credential_lease_operation_context(
+    operation_context: dict[str, Any],
+) -> None:
+    def validate_json_value(value: Any, *, depth: int = 0) -> None:
+        if depth > 32:
+            raise ValueError("credential lease operationContext is too deep")
+        if value is None or isinstance(value, (str, bool)):
+            return
+        if isinstance(value, int) and not isinstance(value, bool):
+            if not 0 <= value <= 18_446_744_073_709_551_615:
+                raise ValueError(
+                    "credential lease operationContext integer is outside u64"
+                )
+            return
+        if isinstance(value, list):
+            for item in value:
+                validate_json_value(item, depth=depth + 1)
+            return
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if (
+                    not isinstance(key, str)
+                    or len(key.encode("utf-8")) > 1024
+                ):
+                    raise ValueError(
+                        "credential lease operationContext key is invalid"
+                    )
+                validate_json_value(item, depth=depth + 1)
+            return
+        raise ValueError(
+            "credential lease operationContext contains a non-canonical value"
+        )
+
+    validate_json_value(operation_context)
+    operation = operation_context.get("operation")
+    if (
+        not isinstance(operation, str)
+        or not operation
+        or len(operation.encode("utf-8")) > 256
+    ):
+        raise ValueError(
+            "credential lease operationContext requires a bounded operation"
+        )
+    try:
+        encoded = json.dumps(
+            operation_context,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        ).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "credential lease operationContext must be canonical JSON"
+        ) from exc
+    if len(encoded) > 64 * 1024:
+        raise ValueError(
+            "credential lease operationContext exceeds 64 KiB"
+        )
+
+
+class CredentialLeaseRequestAuthority(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid", validate_by_alias=True, validate_by_name=False
+    )
+
+    api_version: Literal[
+        "serverware.credentialLeaseRequestAuthority/v1"
+    ] = Field(alias="apiVersion")
+    attempt_id: str = Field(
+        alias="attemptId", pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    reservation_id: str = Field(
+        alias="reservationId", pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    binding_digest: str = Field(
+        alias="bindingDigest", pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    request_digest: str = Field(
+        alias="requestDigest", pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    operation_digest: str = Field(
+        alias="operationDigest", pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    operation_context: dict[str, Any] = Field(alias="operationContext")
+    reservation_expires_at_epoch_ms: int = Field(
+        alias="reservationExpiresAtEpochMs",
+        ge=1,
+        le=18_446_744_073_709_551_615,
+        strict=True,
+    )
+
+    @model_validator(mode="after")
+    def validate_request_authority(
+        self,
+    ) -> CredentialLeaseRequestAuthority:
+        if not hmac.compare_digest(
+            self.reservation_id,
+            db.release_reservation_id(self.attempt_id, self.binding_digest),
+        ):
+            raise ValueError(
+                "request authority reservationId does not match its binding"
+            )
+        _validate_credential_lease_operation_context(
+            self.operation_context
+        )
+        return self
 
 
 class CredentialLeaseRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
-
-    api_version: Literal["serverware.credentialLeaseRequest/v3"] = Field(
-        alias="apiVersion"
+    model_config = ConfigDict(
+        extra="forbid", validate_by_alias=True, validate_by_name=False
     )
+
+    api_version: Literal[
+        "serverware.credentialLeaseRequest/v3",
+        "serverware.credentialLeaseRequest/v4",
+    ] = Field(alias="apiVersion")
     purpose: Literal["generationMetadata", "dispatchSecret"]
     principal_id: str = Field(alias="principalId", min_length=1, max_length=256)
     route_id: str = Field(alias="routeId", min_length=1, max_length=256)
     credential_id: str = Field(alias="credentialId", min_length=1, max_length=256)
     expected_credential_version: int | None = Field(
-        alias="expectedCredentialVersion", ge=1
+        default=None,
+        alias="expectedCredentialVersion",
+        ge=1,
+        le=18_446_744_073_709_551_615,
+        strict=True,
     )
     expected_metadata_sha256: str | None = Field(
-        alias="expectedMetadataSha256", pattern=r"^sha256:[0-9a-f]{64}$"
+        default=None,
+        alias="expectedMetadataSha256",
+        pattern=r"^sha256:[0-9a-f]{64}$",
+    )
+    request_authority: CredentialLeaseRequestAuthority | None = Field(
+        default=None, alias="requestAuthority"
     )
     release_authorization: CredentialLeaseReleaseAuthorization | None = Field(
-        alias="releaseAuthorization"
+        default=None, alias="releaseAuthorization"
     )
     recipient_public_key: str = Field(
         alias="recipientPublicKey", min_length=1, max_length=43
     )
-    recipient_key_id: str = Field(alias="recipientKeyId", min_length=1, max_length=71)
-    recipient_nonce: str = Field(alias="recipientNonce", min_length=1, max_length=43)
-    policy_hash: str = Field(alias="policyHash", min_length=1, max_length=71)
-    data_plane_binary_digest: str = Field(
-        alias="dataPlaneBinaryDigest", min_length=1, max_length=71
+    recipient_key_id: str = Field(
+        alias="recipientKeyId", pattern=r"^sha256:[0-9a-f]{64}$"
     )
-    max_ttl_seconds: int = Field(alias="maxTtlSeconds", ge=1, le=5)
+    recipient_nonce: str = Field(alias="recipientNonce", min_length=1, max_length=43)
+    policy_hash: str = Field(
+        alias="policyHash", pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    data_plane_binary_digest: str = Field(
+        alias="dataPlaneBinaryDigest", pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    max_ttl_seconds: int = Field(
+        alias="maxTtlSeconds", ge=1, le=5, strict=True
+    )
     recipient_attestation: dict[str, Any] | None = Field(
         default=None, alias="recipientAttestation"
     )
 
     @model_validator(mode="after")
     def validate_recipient_attestation_size(self) -> CredentialLeaseRequest:
+        request_authority_present = "request_authority" in self.model_fields_set
+        release_authorization_present = (
+            "release_authorization" in self.model_fields_set
+        )
         if self.purpose == "generationMetadata":
             if (
-                self.expected_credential_version is not None
+                self.api_version != "serverware.credentialLeaseRequest/v3"
+                or self.expected_credential_version is not None
                 or self.expected_metadata_sha256 is not None
-                or self.release_authorization is not None
+                or request_authority_present
+                or release_authorization_present
             ):
                 raise ValueError(
                     "generationMetadata requests must not include dispatch bindings"
@@ -901,6 +1691,19 @@ class CredentialLeaseRequest(BaseModel):
         ):
             raise ValueError(
                 "dispatchSecret requests require expected credential metadata bindings"
+            )
+        elif self.api_version == "serverware.credentialLeaseRequest/v3":
+            if request_authority_present or release_authorization_present:
+                raise ValueError(
+                    "credential lease v3 dispatch cannot carry request authority"
+                )
+        elif (
+            not request_authority_present
+            or self.request_authority is None
+            or not release_authorization_present
+        ):
+            raise ValueError(
+                "credential lease v4 dispatch requires exact requestAuthority and releaseAuthorization fields"
             )
         if self.recipient_attestation is None:
             return self
@@ -950,16 +1753,12 @@ class DataPlaneRateLimitConsume(BaseModel):
     counter_key: str = Field(alias="counterKey", pattern=r"^sha256:[0-9a-f]{64}$")
     principal_id: str = Field(alias="principalId", min_length=1, max_length=256)
     route_id: str = Field(alias="routeId", min_length=1, max_length=256)
-    credential_ref: str | None = Field(
-        default=None, alias="credentialRef", max_length=256
-    )
+    credential_ref: str | None = Field(alias="credentialRef", max_length=256)
     credential_version: int = Field(alias="credentialVersion", ge=0)
     policy_hash: str = Field(alias="policyHash", pattern=r"^sha256:[0-9a-f]{64}$")
     constraint_id: str = Field(alias="constraintId", min_length=1, max_length=256)
     operation: str | None = Field(default=None, max_length=256)
-    operation_context: dict[str, Any] = Field(
-        default_factory=dict, alias="operationContext"
-    )
+    operation_context: dict[str, Any] = Field(alias="operationContext")
     max_count: int = Field(alias="max", ge=1, le=1_000_000_000)
     window_seconds: int | None = Field(
         default=None, alias="windowSeconds", ge=1, le=31_536_000
@@ -990,10 +1789,113 @@ class DataPlaneRateLimitConsume(BaseModel):
         return self
 
 
-class DataPlaneReleaseAuthorizationReserve(BaseModel):
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+class DataPlaneReleaseAuthorizationDurablePolicyReserve(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid", validate_by_alias=True, validate_by_name=False
+    )
 
-    api_version: Literal["serverware.releaseAuthorizationReserve/v1"] = Field(
+    actor_id: str = Field(alias="actorId", min_length=1, max_length=256)
+    claim_digest: str = Field(
+        alias="claimDigest", pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    claims: list[dict[str, Any]] = Field(min_length=1, max_length=64)
+
+    @model_validator(mode="after")
+    def validate_claims_size(
+        self,
+    ) -> DataPlaneReleaseAuthorizationDurablePolicyReserve:
+        try:
+            encoded = json.dumps(
+                self.claims,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+                allow_nan=False,
+            ).encode("utf-8")
+        except (TypeError, ValueError) as exc:
+            raise ValueError("durablePolicy claims must be canonical JSON") from exc
+        if len(encoded) > 256 * 1024:
+            raise ValueError("durablePolicy claims exceed 256 KiB")
+        expected_digest = "sha256:" + hashlib.sha256(encoded).hexdigest()
+        if not hmac.compare_digest(self.claim_digest, expected_digest):
+            raise ValueError("durablePolicy claimDigest does not match claims")
+        return self
+
+
+class DataPlaneReleaseAuthorizationDurablePolicyTransition(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid", validate_by_alias=True, validate_by_name=False
+    )
+
+    actor_id: str = Field(alias="actorId", min_length=1, max_length=256)
+    attempt_id: str = Field(
+        alias="attemptId", pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    claim_digest: str = Field(
+        alias="claimDigest", pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    reservation_id: str = Field(
+        alias="reservationId", pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    dispatch_deadline_at_epoch_ms: int | None = Field(
+        default=None,
+        alias="dispatchDeadlineAtEpochMs",
+        ge=1,
+        le=18_446_744_073_709_551_615,
+        strict=True,
+    )
+    response_evidence: list[dict[str, Any]] | None = Field(
+        default=None, alias="responseEvidence", max_length=64
+    )
+    response_evidence_digest: str | None = Field(
+        default=None,
+        alias="responseEvidenceDigest",
+        pattern=r"^sha256:[0-9a-f]{64}$",
+    )
+    failure_reason: str | None = Field(
+        default=None, alias="failureReason", min_length=1, max_length=256
+    )
+    response_body_sha256: str | None = Field(
+        default=None,
+        alias="responseBodySha256",
+        pattern=r"^sha256:[0-9a-f]{64}$",
+    )
+    uncertainty: str | None = Field(
+        default=None, min_length=1, max_length=256
+    )
+
+    @model_validator(mode="after")
+    def validate_evidence_size(
+        self,
+    ) -> DataPlaneReleaseAuthorizationDurablePolicyTransition:
+        if self.response_evidence is None:
+            return self
+        try:
+            encoded = json.dumps(
+                self.response_evidence,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+                allow_nan=False,
+            ).encode("utf-8")
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "durablePolicy responseEvidence must be canonical JSON"
+            ) from exc
+        if len(encoded) > 256 * 1024:
+            raise ValueError("durablePolicy responseEvidence exceeds 256 KiB")
+        return self
+
+
+class DataPlaneReleaseAuthorizationReserve(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid", validate_by_alias=True, validate_by_name=False
+    )
+
+    api_version: Literal[
+        "serverware.releaseAuthorizationReserve/v1",
+        "serverware.releaseAuthorizationReserve/v2",
+    ] = Field(
         alias="apiVersion"
     )
     attempt_id: str = Field(alias="attemptId", min_length=1, max_length=256)
@@ -1001,39 +1903,79 @@ class DataPlaneReleaseAuthorizationReserve(BaseModel):
     principal_id: str = Field(alias="principalId", min_length=1, max_length=256)
     route_id: str = Field(alias="routeId", min_length=1, max_length=256)
     credential_ref: str | None = Field(
-        default=None, alias="credentialRef", max_length=256
+        alias="credentialRef", max_length=256
     )
-    credential_version: int = Field(alias="credentialVersion", ge=0)
+    credential_version: int = Field(
+        alias="credentialVersion",
+        ge=0,
+        le=18_446_744_073_709_551_615,
+        strict=True,
+    )
     policy_hash: str = Field(
         alias="policyHash", pattern=r"^sha256:[0-9a-f]{64}$"
     )
     request_digest: str = Field(
         alias="requestDigest", pattern=r"^sha256:[0-9a-f]{64}$"
     )
-    operation_digest: str | None = Field(
-        default=None,
+    operation_digest: str = Field(
         alias="operationDigest",
         pattern=r"^sha256:[0-9a-f]{64}$",
     )
     operation_context: dict[str, Any] = Field(
-        default_factory=dict, alias="operationContext"
+        alias="operationContext"
     )
-    canonical_request: dict[str, Any] | None = Field(
-        default=None, alias="canonicalRequest"
+    canonical_request: dict[str, Any] = Field(alias="canonicalRequest")
+    durable_policy: DataPlaneReleaseAuthorizationDurablePolicyReserve | None = Field(
+        default=None, alias="durablePolicy"
     )
 
     @model_validator(mode="after")
     def validate_canonical_payload_sizes(
         self,
     ) -> DataPlaneReleaseAuthorizationReserve:
+        base_fields = {
+            "api_version",
+            "attempt_id",
+            "flow_id",
+            "principal_id",
+            "route_id",
+            "credential_ref",
+            "credential_version",
+            "policy_hash",
+            "request_digest",
+            "operation_digest",
+            "operation_context",
+            "canonical_request",
+        }
+        expected_fields = (
+            base_fields
+            if self.api_version
+            == "serverware.releaseAuthorizationReserve/v1"
+            else base_fields | {"durable_policy"}
+        )
+        if self.model_fields_set != expected_fields or (
+            self.api_version
+            == "serverware.releaseAuthorizationReserve/v2"
+            and self.durable_policy is None
+        ):
+            raise ValueError(
+                "release authorization reserve fields do not match its version"
+            )
+        if self.durable_policy is not None and re.fullmatch(
+            r"sha256:[0-9a-f]{64}", self.attempt_id
+        ) is None:
+            raise ValueError(
+                "release authorization v2 attemptId must be a lowercase sha256 digest"
+            )
         if not hmac.compare_digest(self.flow_id, self.attempt_id):
             raise ValueError("flowId must equal attemptId for atomic release authorization")
+        _validate_credential_lease_operation_context(
+            self.operation_context
+        )
         for name, value in (
             ("operationContext", self.operation_context),
             ("canonicalRequest", self.canonical_request),
         ):
-            if value is None:
-                continue
             try:
                 encoded = json.dumps(
                     value,
@@ -1050,21 +1992,81 @@ class DataPlaneReleaseAuthorizationReserve(BaseModel):
 
 
 class DataPlaneReleaseAuthorizationDispatch(BaseModel):
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", validate_by_alias=True, validate_by_name=False
+    )
 
-    api_version: Literal["serverware.releaseAuthorizationDispatch/v1"] = Field(
+    api_version: Literal[
+        "serverware.releaseAuthorizationDispatch/v1",
+        "serverware.releaseAuthorizationDispatch/v2",
+    ] = Field(
         alias="apiVersion"
     )
     attempt_id: str = Field(alias="attemptId", min_length=1, max_length=256)
     binding_digest: str = Field(
         alias="bindingDigest", pattern=r"^sha256:[0-9a-f]{64}$"
     )
+    durable_policy: DataPlaneReleaseAuthorizationDurablePolicyTransition | None = Field(
+        default=None, alias="durablePolicy"
+    )
+
+    @model_validator(mode="after")
+    def validate_versioned_dispatch(
+        self,
+    ) -> DataPlaneReleaseAuthorizationDispatch:
+        base_fields = {
+            "api_version",
+            "attempt_id",
+            "binding_digest",
+        }
+        expected_fields = (
+            base_fields
+            if self.api_version
+            == "serverware.releaseAuthorizationDispatch/v1"
+            else base_fields | {"durable_policy"}
+        )
+        if self.model_fields_set != expected_fields or (
+            self.api_version
+            == "serverware.releaseAuthorizationDispatch/v2"
+            and self.durable_policy is None
+        ):
+            raise ValueError(
+                "release authorization dispatch fields do not match its version"
+            )
+        if self.durable_policy is not None:
+            if re.fullmatch(
+                r"sha256:[0-9a-f]{64}", self.attempt_id
+            ) is None:
+                raise ValueError(
+                    "release authorization v2 attemptId must be a lowercase sha256 digest"
+                )
+            required = {
+                "actor_id",
+                "attempt_id",
+                "claim_digest",
+                "reservation_id",
+                "dispatch_deadline_at_epoch_ms",
+            }
+            if self.durable_policy.model_fields_set != required:
+                raise ValueError(
+                    "release authorization v2 dispatch durablePolicy fields are not exact"
+                )
+            if self.durable_policy.dispatch_deadline_at_epoch_ms is None:
+                raise ValueError(
+                    "release authorization v2 dispatch deadline cannot be null"
+                )
+        return self
 
 
 class DataPlaneReleaseAuthorizationComplete(BaseModel):
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", validate_by_alias=True, validate_by_name=False
+    )
 
-    api_version: Literal["serverware.releaseAuthorizationComplete/v1"] = Field(
+    api_version: Literal[
+        "serverware.releaseAuthorizationComplete/v1",
+        "serverware.releaseAuthorizationComplete/v2",
+    ] = Field(
         alias="apiVersion"
     )
     attempt_id: str = Field(alias="attemptId", min_length=1, max_length=256)
@@ -1072,6 +2074,94 @@ class DataPlaneReleaseAuthorizationComplete(BaseModel):
         alias="bindingDigest", pattern=r"^sha256:[0-9a-f]{64}$"
     )
     outcome: Literal["forwarded", "not_forwarded", "unknown"]
+    durable_policy: DataPlaneReleaseAuthorizationDurablePolicyTransition | None = Field(
+        default=None, alias="durablePolicy"
+    )
+
+    @model_validator(mode="after")
+    def validate_versioned_completion(
+        self,
+    ) -> DataPlaneReleaseAuthorizationComplete:
+        base_fields = {
+            "api_version",
+            "attempt_id",
+            "binding_digest",
+            "outcome",
+        }
+        expected_fields = (
+            base_fields
+            if self.api_version
+            == "serverware.releaseAuthorizationComplete/v1"
+            else base_fields | {"durable_policy"}
+        )
+        if self.model_fields_set != expected_fields or (
+            self.api_version
+            == "serverware.releaseAuthorizationComplete/v2"
+            and self.durable_policy is None
+        ):
+            raise ValueError(
+                "release authorization completion fields do not match its version"
+            )
+        if self.durable_policy is None:
+            return self
+        if re.fullmatch(
+            r"sha256:[0-9a-f]{64}", self.attempt_id
+        ) is None:
+            raise ValueError(
+                "release authorization v2 attemptId must be a lowercase sha256 digest"
+            )
+        base = {
+            "actor_id",
+            "attempt_id",
+            "claim_digest",
+            "reservation_id",
+        }
+        required = {
+            "not_forwarded": base,
+            "forwarded": base
+            | {
+                "dispatch_deadline_at_epoch_ms",
+                "response_evidence",
+                "response_evidence_digest",
+                "response_body_sha256",
+            },
+            "unknown": base
+            | {
+                "response_evidence",
+                "response_evidence_digest",
+                "failure_reason",
+                "response_body_sha256",
+                "uncertainty",
+            },
+        }[self.outcome]
+        actual_fields = self.durable_policy.model_fields_set
+        if self.outcome == "unknown":
+            fields_exact = actual_fields in (
+                required,
+                required | {"dispatch_deadline_at_epoch_ms"},
+            )
+        else:
+            fields_exact = actual_fields == required
+        if not fields_exact:
+            raise ValueError(
+                "release authorization v2 completion durablePolicy fields are not exact"
+            )
+        if (
+            "dispatch_deadline_at_epoch_ms" in actual_fields
+            and self.durable_policy.dispatch_deadline_at_epoch_ms is None
+        ):
+            raise ValueError(
+                "release authorization v2 completion deadline cannot be null"
+            )
+        if self.outcome == "unknown" and (
+            self.durable_policy.failure_reason
+            != "provider_outcome_or_response_validation_uncertain"
+            or self.durable_policy.uncertainty != "charged_fail_closed"
+        ):
+            raise ValueError(
+                "release authorization v2 uncertainty semantics are invalid"
+            )
+        return self
 
 
 class AgentEnrollmentCreate(BaseModel):
@@ -1203,6 +2293,14 @@ class KeyReleaseVerify(BaseModel):
 
 @app.on_event("startup")
 def startup() -> None:
+    if RELEASE_CHANNEL.strip().lower() not in {
+        "dev",
+        "development",
+        "local",
+        "test",
+    }:
+        with _policy_publication_lock():
+            pass
     if control_plane_startup_required():
         validate_control_plane_startup()
     _drain_setup_session_audit_outbox()
@@ -1978,17 +3076,25 @@ def _decode_unpadded_base64url(
     return decoded
 
 
-async def _bounded_credential_lease_request(request: Request) -> CredentialLeaseRequest:
+async def _bounded_exact_data_plane_model(
+    request: Request,
+    *,
+    model_type: type[BaseModel],
+    expected_token: str,
+    maximum_bytes: int,
+    label: str,
+) -> BaseModel:
     _require_data_plane_token(
         request.headers.get("X-Serverware-Data-Plane-Token"),
-        DATA_PLANE_CREDENTIAL_LEASE_TOKEN,
+        expected_token,
     )
     content_length = request.headers.get("content-length")
     if content_length is not None:
         try:
-            if int(content_length) > _CREDENTIAL_LEASE_REQUEST_MAX_BYTES:
+            if int(content_length) > maximum_bytes:
                 raise HTTPException(
-                    status_code=413, detail="credential lease request exceeds 96 KiB"
+                    status_code=413,
+                    detail=f"{label} exceeds {maximum_bytes // 1024} KiB",
                 )
         except ValueError as exc:
             raise HTTPException(
@@ -1997,19 +3103,94 @@ async def _bounded_credential_lease_request(request: Request) -> CredentialLease
     body = bytearray()
     async for chunk in request.stream():
         body.extend(chunk)
-        if len(body) > _CREDENTIAL_LEASE_REQUEST_MAX_BYTES:
+        if len(body) > maximum_bytes:
             body.clear()
             raise HTTPException(
-                status_code=413, detail="credential lease request exceeds 96 KiB"
+                status_code=413,
+                detail=f"{label} exceeds {maximum_bytes // 1024} KiB",
             )
+
+    def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        value: dict[str, Any] = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError(f"duplicate {label} field")
+            value[key] = item
+        return value
+
+    def reject_non_finite_number(_value: str) -> None:
+        raise ValueError("non-finite JSON number")
+
     try:
-        return CredentialLeaseRequest.model_validate_json(body)
+        parsed = json.loads(
+            body,
+            object_pairs_hook=reject_duplicate_keys,
+            parse_constant=reject_non_finite_number,
+        )
+        return model_type.model_validate(parsed)
     except ValidationError as exc:
         detail = [
             {key: error[key] for key in ("type", "loc", "msg") if key in error}
             for error in exc.errors(include_url=False, include_input=False)
         ]
         raise HTTPException(status_code=422, detail=detail) from exc
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=[
+                {
+                    "type": "json_invalid",
+                    "loc": ["body"],
+                    "msg": f"{label} must be exact JSON",
+                }
+            ],
+        ) from exc
+
+
+async def _bounded_credential_lease_request(request: Request) -> CredentialLeaseRequest:
+    return await _bounded_exact_data_plane_model(
+        request,
+        model_type=CredentialLeaseRequest,
+        expected_token=DATA_PLANE_CREDENTIAL_LEASE_TOKEN,
+        maximum_bytes=_CREDENTIAL_LEASE_REQUEST_MAX_BYTES,
+        label="credential lease request",
+    )
+
+
+async def _bounded_release_authorization_reserve_request(
+    request: Request,
+) -> DataPlaneReleaseAuthorizationReserve:
+    return await _bounded_exact_data_plane_model(
+        request,
+        model_type=DataPlaneReleaseAuthorizationReserve,
+        expected_token=DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN,
+        maximum_bytes=_RELEASE_AUTHORIZATION_REQUEST_MAX_BYTES,
+        label="release authorization reserve request",
+    )
+
+
+async def _bounded_release_authorization_dispatch_request(
+    request: Request,
+) -> DataPlaneReleaseAuthorizationDispatch:
+    return await _bounded_exact_data_plane_model(
+        request,
+        model_type=DataPlaneReleaseAuthorizationDispatch,
+        expected_token=DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN,
+        maximum_bytes=_RELEASE_AUTHORIZATION_REQUEST_MAX_BYTES,
+        label="release authorization dispatch request",
+    )
+
+
+async def _bounded_release_authorization_complete_request(
+    request: Request,
+) -> DataPlaneReleaseAuthorizationComplete:
+    return await _bounded_exact_data_plane_model(
+        request,
+        model_type=DataPlaneReleaseAuthorizationComplete,
+        expected_token=DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN,
+        maximum_bytes=_RELEASE_AUTHORIZATION_REQUEST_MAX_BYTES,
+        label="release authorization complete request",
+    )
 
 
 def _verify_credential_lease_recipient_attestation(
@@ -2017,6 +3198,7 @@ def _verify_credential_lease_recipient_attestation(
     *,
     purpose: Literal["generationMetadata", "dispatchSecret"],
     request_binding_sha256: str,
+    request_authority_sha256: str | None,
     recipient_key_id: str,
     recipient_nonce: str,
     policy_hash_value: str,
@@ -2067,6 +3249,8 @@ def _verify_credential_lease_recipient_attestation(
         "routeId": route_id,
         "credentialId": credential_id,
     }
+    if request_authority_sha256 is not None:
+        verifier_input["requestAuthoritySha256"] = request_authority_sha256
     if not _recipient_attestation_verifier_slots.acquire(timeout=1.0):
         raise HTTPException(
             status_code=503, detail="recipient attestation verifier is at capacity"
@@ -2168,6 +3352,23 @@ def _verify_credential_lease_recipient_attestation(
     ):
         raise HTTPException(
             status_code=403, detail="recipient attestation binding mismatch"
+        )
+    if request_authority_sha256 is None:
+        if verified.get("requestAuthoritySha256") is not None:
+            raise HTTPException(
+                status_code=403,
+                detail="recipient attestation request authority binding mismatch",
+            )
+    elif (
+        not isinstance(verified.get("requestAuthoritySha256"), str)
+        or not hmac.compare_digest(
+            verified["requestAuthoritySha256"],
+            request_authority_sha256,
+        )
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="recipient attestation request authority binding mismatch",
         )
     if (
         RELEASE_CHANNEL.strip().lower() not in {"dev", "development"}
@@ -2708,8 +3909,51 @@ def _policy_candidate_report(
         )
     except PolicyBundleError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    current_hash = current.hash if current else None
+    if enforce_monotonic and current is None:
+        high_water = db.get_policy_high_water()
+        if high_water is not None:
+            publication = db.get_policy_publication(candidate.hash)
+            metadata = signed.get("metadata") or {}
+            exact_metadata = bool(
+                publication
+                and publication.get("scope") == "active"
+                and publication.get("policy_id") == metadata.get("id")
+                and publication.get("sequence") == metadata.get("sequence")
+                and publication.get("rollback_epoch")
+                == metadata.get("rollbackEpoch")
+            )
+            pending_recovery = bool(
+                exact_metadata
+                and publication.get("status") == "pending"
+                and publication.get("previous_policy_hash")
+                == high_water["policy_hash"]
+            )
+            committed_recovery = bool(
+                exact_metadata
+                and publication.get("status") == "committed"
+                and publication.get("policy_hash")
+                == high_water["policy_hash"]
+            )
+            if not (pending_recovery or committed_recovery):
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        "active policy is unavailable; only an exact durable "
+                        "publication recovery may proceed"
+                    ),
+                )
+            current_hash = str(high_water["policy_hash"])
+            current_raw = {
+                "metadata": {
+                    "id": high_water["policy_id"],
+                    "sequence": high_water["sequence"],
+                    "rollbackEpoch": high_water["rollback_epoch"],
+                }
+            }
     if enforce_monotonic:
-        _assert_policy_publish_monotonic(current_raw, signed)
+        if current_hash != candidate.hash:
+            _assert_policy_publish_monotonic(current_raw, signed)
     _assert_policy_candidate_credential_bindings(candidate)
     dry_run_result = _run_policy_dry_runs(candidate, dry_run)
     if POLICY_PUBLISH_DRY_RUN_REQUIRED and not dry_run:
@@ -2743,7 +3987,7 @@ def _policy_candidate_report(
             "credentials": len(candidate.credentials),
         },
         "current": {
-            "policyHash": current.hash if current else None,
+            "policyHash": current_hash,
             "sequence": current_metadata.get("sequence"),
             "rollbackEpoch": current_metadata.get("rollbackEpoch"),
         },
@@ -2751,6 +3995,17 @@ def _policy_candidate_report(
         "dryRun": dry_run_result,
         "signedBundle": signed,
     }
+
+
+def _completed_policy_publish_report(
+    report: dict[str, Any],
+    snapshot: Any,
+) -> dict[str, Any]:
+    response = dict(report)
+    response["published"] = True
+    response["policyHash"] = snapshot.hash
+    response.pop("signedBundle", None)
+    return response
 
 
 def _policy_publish_payload_digest(payload: PolicyPublishRequest) -> str:
@@ -2765,10 +4020,14 @@ def _policy_publish_payload_digest(payload: PolicyPublishRequest) -> str:
 
 def _policy_canary_activate_payload_digest(
     payload: PolicyCanaryActivationRequest,
+    state: dict[str, Any],
 ) -> str:
     return _control_plane_payload_digest(
         {
             "canaryId": payload.canary_id,
+            "candidatePolicyHash": state.get("candidate_policy_hash"),
+            "previousPolicyHash": state.get("previous_policy_hash"),
+            "candidateBundleSha256": state.get("candidate_bundle_sha256"),
             "minObservationSeconds": payload.min_observation_seconds,
             "minAuditEvents": payload.min_audit_events,
             "maxDenials": payload.max_denials,
@@ -3321,130 +4580,297 @@ def _bind_enrollment_session_packet(session_id: str, packet: dict[str, Any]) -> 
         _write_ca_install_sessions(state)
 
 
-def _read_policy_canary_state() -> dict[str, Any] | None:
-    if not POLICY_CANARY_STATE_PATH.exists():
-        return None
+_POLICY_CANARY_STATE_MAX_BYTES = 4 * 1024 * 1024
+
+
+def _read_policy_canary_json(
+    path: Path,
+    *,
+    label: str,
+    maximum_size: int,
+    missing_ok: bool,
+) -> dict[str, Any] | None:
     try:
-        state = json.loads(POLICY_CANARY_STATE_PATH.read_text())
-    except (OSError, json.JSONDecodeError) as exc:
+        payload, _ = _read_stable_secure_file(
+            path,
+            label=label,
+            expected_mode=0o600,
+            maximum_size=maximum_size,
+        )
+    except PolicyBundleError as exc:
+        try:
+            missing = not _secure_path_exists(path, label=label)
+        except PolicyBundleError:
+            missing = False
+        if missing:
+            if missing_ok:
+                return None
+        raise HTTPException(status_code=503, detail=f"{label} is unreadable") from exc
+    try:
+        value = strict_json_loads(payload.decode("utf-8"))
+    except (UnicodeError, ValueError, TypeError, json.JSONDecodeError) as exc:
         raise HTTPException(
-            status_code=503, detail="policy canary state is unreadable"
+            status_code=503, detail=f"{label} is invalid"
         ) from exc
-    if not isinstance(state, dict):
-        raise HTTPException(status_code=503, detail="policy canary state is invalid")
-    return state
+    if not isinstance(value, dict):
+        raise HTTPException(status_code=503, detail=f"{label} is invalid")
+    return value
+
+
+def _read_policy_canary_state() -> dict[str, Any] | None:
+    return _read_policy_canary_json(
+        POLICY_CANARY_STATE_PATH,
+        label="policy canary state",
+        maximum_size=_POLICY_CANARY_STATE_MAX_BYTES,
+        missing_ok=True,
+    )
+
+
+def _read_policy_canary_bundle() -> dict[str, Any]:
+    value = _read_policy_canary_json(
+        POLICY_CANARY_BUNDLE_PATH,
+        label="policy canary bundle",
+        maximum_size=MAX_POLICY_BUNDLE_BYTES,
+        missing_ok=False,
+    )
+    if value is None:
+        raise HTTPException(
+            status_code=503, detail="policy canary bundle is missing"
+        )
+    return value
+
+
+def _write_policy_canary_json(
+    path: Path,
+    value: dict[str, Any],
+    *,
+    label: str,
+    maximum_size: int,
+) -> None:
+    payload = (json.dumps(value, indent=2, sort_keys=True) + "\n").encode(
+        "utf-8"
+    )
+    if not 1 <= len(payload) <= maximum_size:
+        raise HTTPException(
+            status_code=503, detail=f"{label} exceeds its size bound"
+        )
+    try:
+        _atomic_write_secure_file(
+            path,
+            payload,
+            label=label,
+            mode=0o600,
+        )
+        persisted, _ = _read_stable_secure_file(
+            path,
+            label=label,
+            expected_mode=0o600,
+            maximum_size=maximum_size,
+        )
+    except PolicyBundleError as exc:
+        raise HTTPException(status_code=503, detail=f"{label} write failed") from exc
+    if persisted != payload:
+        raise HTTPException(
+            status_code=503, detail=f"{label} changed during write"
+        )
 
 
 def _write_policy_canary_state(state: dict[str, Any]) -> None:
-    POLICY_CANARY_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    temporary = POLICY_CANARY_STATE_PATH.with_suffix(
-        POLICY_CANARY_STATE_PATH.suffix + ".tmp"
+    _write_policy_canary_json(
+        POLICY_CANARY_STATE_PATH,
+        state,
+        label="policy canary state",
+        maximum_size=_POLICY_CANARY_STATE_MAX_BYTES,
     )
-    temporary.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n")
-    temporary.replace(POLICY_CANARY_STATE_PATH)
 
 
 def _write_policy_canary_bundle(signed_bundle: dict[str, Any]) -> None:
-    POLICY_CANARY_BUNDLE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    temporary = POLICY_CANARY_BUNDLE_PATH.with_suffix(
-        POLICY_CANARY_BUNDLE_PATH.suffix + ".tmp"
+    _write_policy_canary_json(
+        POLICY_CANARY_BUNDLE_PATH,
+        signed_bundle,
+        label="policy canary bundle",
+        maximum_size=MAX_POLICY_BUNDLE_BYTES,
     )
-    temporary.write_text(json.dumps(signed_bundle, indent=2, sort_keys=True) + "\n")
-    temporary.replace(POLICY_CANARY_BUNDLE_PATH)
-
-
-_POLICY_PUBLICATION_THREAD_LOCK = threading.RLock()
 
 
 @contextmanager
 def _policy_publication_file_lock():
-    lock_path = Path(str(POLICY_BUNDLE_PATH) + ".publish.lock")
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with (
-        _POLICY_PUBLICATION_THREAD_LOCK,
-        lock_path.open("a+b") as lock_file,
-    ):
-        os.chmod(lock_path, 0o600)
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+    with _policy_publication_lock():
+        yield
 
 
 @contextmanager
-def _restore_files_on_error(*paths: Path):
-    previous = {
-        path: path.read_bytes() if path.exists() else None
-        for path in paths
-    }
+def _restore_files_on_error(
+    *paths: Path,
+    authoritative_policy: Any = None,
+):
+    previous: dict[Path, bytes | None] = {}
+    for path in paths:
+        if path == POLICY_BUNDLE_PATH:
+            try:
+                previous[path], _ = _read_stable_policy_file(path)
+            except PolicyBundleError:
+                if not _secure_path_exists(path, label="policy bundle"):
+                    previous[path] = None
+                else:
+                    raise
+        else:
+            maximum_size = (
+                MAX_POLICY_BUNDLE_BYTES
+                if path == POLICY_CANARY_BUNDLE_PATH
+                else _POLICY_CANARY_STATE_MAX_BYTES
+            )
+            label = (
+                "policy canary bundle"
+                if path == POLICY_CANARY_BUNDLE_PATH
+                else "policy canary state"
+            )
+            try:
+                previous[path], _ = _read_stable_secure_file(
+                    path,
+                    label=label,
+                    expected_mode=0o600,
+                    maximum_size=maximum_size,
+                )
+            except PolicyBundleError:
+                if not _secure_path_exists(path, label=label):
+                    previous[path] = None
+                else:
+                    raise
     try:
         yield
-    except BaseException:
+    except Exception:
+        candidate = (
+            authoritative_policy()
+            if callable(authoritative_policy)
+            else None
+        )
+        authoritative = None
+        if candidate is not None:
+            try:
+                authoritative = get_policy_snapshot()
+            except Exception:
+                pass
+            if (
+                authoritative is not None
+                and authoritative.hash == candidate.hash
+            ):
+                return
         for path, content in previous.items():
-            if content is None:
-                path.unlink(missing_ok=True)
+            if path == POLICY_BUNDLE_PATH and authoritative is not None:
+                # A fresh exact authority read proves that some publication
+                # committed. Never overwrite that winner with this operation's
+                # predecessor; only an exact candidate match suppresses the
+                # ambiguous acknowledgement error above.
                 continue
-            path.parent.mkdir(parents=True, exist_ok=True)
-            with tempfile.NamedTemporaryFile(
-                mode="wb",
-                dir=path.parent,
-                prefix=f".{path.name}.",
-                suffix=".rollback",
-                delete=False,
-            ) as handle:
-                temporary = Path(handle.name)
-                os.fchmod(handle.fileno(), 0o600)
-                handle.write(content)
-                handle.flush()
-                os.fsync(handle.fileno())
-            temporary.replace(path)
+            if content is None:
+                label = (
+                    "policy bundle"
+                    if path == POLICY_BUNDLE_PATH
+                    else (
+                        "policy canary bundle"
+                        if path == POLICY_CANARY_BUNDLE_PATH
+                        else "policy canary state"
+                    )
+                )
+                _unlink_secure_file(
+                    path,
+                    label=label,
+                    expected_mode=0o600,
+                    maximum_size=(
+                        MAX_POLICY_BUNDLE_BYTES
+                        if path
+                        in {POLICY_BUNDLE_PATH, POLICY_CANARY_BUNDLE_PATH}
+                        else _POLICY_CANARY_STATE_MAX_BYTES
+                    ),
+                )
+                continue
+            if path == POLICY_BUNDLE_PATH:
+                _atomic_write_policy(path, content.decode("utf-8"))
+            else:
+                _atomic_write_secure_file(
+                    path,
+                    content,
+                    label=(
+                        "policy canary bundle"
+                        if path == POLICY_CANARY_BUNDLE_PATH
+                        else "policy canary state"
+                    ),
+                    mode=0o600,
+                )
         if POLICY_BUNDLE_PATH in previous:
             get_policy_snapshot()
         raise
 
 
-def _advance_policy_high_water_in_transaction(
-    snapshot: Any, *, connection: Any
-) -> dict[str, Any]:
-    metadata = snapshot.raw.get("metadata")
-    if not isinstance(metadata, dict):
-        raise PolicyBundleError("policy metadata is missing")
-    policy_id = metadata.get("id")
-    sequence = metadata.get("sequence")
-    rollback_epoch = metadata.get("rollbackEpoch")
-    if not isinstance(policy_id, str) or not policy_id:
-        raise PolicyBundleError("policy metadata id is invalid")
-    if not isinstance(sequence, int) or isinstance(sequence, bool):
-        raise PolicyBundleError("policy metadata sequence is invalid")
-    if not isinstance(rollback_epoch, int) or isinstance(rollback_epoch, bool):
-        raise PolicyBundleError("policy metadata rollbackEpoch is invalid")
-    if sequence < POLICY_MIN_SEQUENCE:
-        raise PolicyBundleError(
-            f"policy sequence {sequence} is below configured floor {POLICY_MIN_SEQUENCE}"
-        )
-    if rollback_epoch < POLICY_MIN_ROLLBACK_EPOCH:
-        raise PolicyBundleError(
-            "policy rollbackEpoch "
-            f"{rollback_epoch} is below configured floor {POLICY_MIN_ROLLBACK_EPOCH}"
-        )
-    try:
-        return db.advance_policy_high_water(
-            policy_id=policy_id,
-            sequence=sequence,
-            rollback_epoch=rollback_epoch,
-            policy_hash=snapshot.hash,
-            _connection=connection,
-        )
-    except db.MetadataStoreError as exc:
-        raise PolicyBundleError(
-            f"policy rollback protection rejected bundle: {exc}"
-        ) from exc
+def _policy_canary_id(
+    policy_hash_value: str,
+    sequence: Any,
+    predecessor_hash: str | None,
+) -> str:
+    binding = _canonical_json(
+        {
+            "candidatePolicyHash": policy_hash_value,
+            "candidateSequence": sequence,
+            "previousPolicyHash": predecessor_hash,
+        }
+    ).encode("utf-8")
+    return "policy-canary-sha256-" + hashlib.sha256(binding).hexdigest()
 
 
-def _policy_canary_id(policy_hash_value: str, sequence: Any) -> str:
-    digest = str(policy_hash_value).removeprefix("sha256:")[:16] or "unknown"
-    return f"policy-canary-{sequence}-{digest}"
+def _policy_canary_bundle_digest(bundle: dict[str, Any]) -> str:
+    return "sha256:" + hashlib.sha256(
+        _canonical_json(bundle).encode("utf-8")
+    ).hexdigest()
+
+
+def _policy_canary_start_payload_digest(
+    payload: PolicyPublishRequest,
+    *,
+    candidate_policy_hash: str,
+    previous_policy_hash: str | None,
+    candidate_bundle_sha256: str,
+) -> str:
+    return _policy_publication_ceremony_payload_digest(
+        payload,
+        candidate_policy_hash=candidate_policy_hash,
+        previous_policy_hash=previous_policy_hash,
+        candidate_bundle_sha256=candidate_bundle_sha256,
+    )
+
+
+def _policy_publication_ceremony_payload_digest(
+    payload: PolicyPublishRequest,
+    *,
+    candidate_policy_hash: str,
+    previous_policy_hash: str | None,
+    candidate_bundle_sha256: str,
+) -> str:
+    return _control_plane_payload_digest(
+        {
+            "requestDigest": _policy_publish_payload_digest(payload),
+            "candidatePolicyHash": candidate_policy_hash,
+            "previousPolicyHash": previous_policy_hash,
+            "candidateBundleSha256": candidate_bundle_sha256,
+        }
+    )
+
+
+def _verified_policy_canary_bundle(state: dict[str, Any]) -> dict[str, Any]:
+    bundle = _read_policy_canary_bundle()
+    expected_digest = state.get("candidate_bundle_sha256")
+    if (
+        not isinstance(expected_digest, str)
+        or not hmac.compare_digest(
+            _policy_canary_bundle_digest(bundle),
+            expected_digest,
+        )
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="policy canary bundle no longer matches state",
+        )
+    return bundle
 
 
 def _policy_canary_public(state: dict[str, Any]) -> dict[str, Any]:
@@ -3468,6 +4894,22 @@ def _policy_canary_public(state: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _policy_canary_authority_hash(connection: Any | None = None) -> str | None:
+    if connection is None:
+        high_water = db.get_policy_high_water()
+        return (
+            str(high_water["policy_hash"])
+            if isinstance(high_water, dict)
+            and isinstance(high_water.get("policy_hash"), str)
+            else None
+        )
+    row = connection.execute(
+        "SELECT policy_hash FROM policy_high_water WHERE scope = ?",
+        ("active",),
+    ).fetchone()
+    return str(row["policy_hash"]) if row else None
+
+
 def _audit_event_route_id(event: dict[str, Any]) -> str | None:
     for key in ("route_id", "routeId", "route"):
         value = event.get(key)
@@ -3481,35 +4923,6 @@ def _audit_event_route_id(event: dict[str, Any]) -> str | None:
     return None
 
 
-def _audit_event_decision(event_type: str, event: dict[str, Any]) -> str:
-    for key in ("decision", "result", "action"):
-        value = event.get(key)
-        if value:
-            return str(value).lower()
-    if "denied" in event_type or "deny" in event_type:
-        return "deny"
-    return ""
-
-
-def _audit_event_latency(event: dict[str, Any]) -> float | None:
-    for key in (
-        "latency_ms",
-        "latencyMs",
-        "duration_ms",
-        "durationMs",
-        "upstream_latency_ms",
-        "upstreamLatencyMs",
-    ):
-        value = event.get(key)
-        if value is None:
-            continue
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            return None
-    return None
-
-
 def _policy_canary_route_filter(state: dict[str, Any]) -> set[str]:
     diff = state.get("diff") if isinstance(state.get("diff"), dict) else {}
     routes = diff.get("routes") if isinstance(diff.get("routes"), dict) else {}
@@ -3517,22 +4930,93 @@ def _policy_canary_route_filter(state: dict[str, Any]) -> set[str]:
     for key in ("added", "changed", "removed"):
         route_ids.update(str(item) for item in routes.get(key) or [])
     if not route_ids:
-        signed_bundle = state.get("signed_bundle")
-        if isinstance(signed_bundle, dict):
-            route_ids.update(
-                str(item["id"])
-                for item in (signed_bundle.get("routes") or [])
-                if isinstance(item, dict) and isinstance(item.get("id"), str)
-            )
+        route_ids.update(
+            str(item) for item in state.get("candidate_route_ids") or []
+        )
     return route_ids
 
 
 _POLICY_CANARY_EVIDENCE_EVENT_TYPES = {
-    "data_plane.request.denied",
-    "data_plane.request.streamed",
-    "data_plane.response.blocked",
-    "data_plane.response.released",
+    "policy.canary.shadow.evaluated",
 }
+
+
+def _policy_canary_evidence_identity(event: dict[str, Any]) -> str:
+    identity_fields = {
+        key: event.get(key)
+        for key in (
+            "provenance_version",
+            "canary_id",
+            "evaluation_mode",
+            "candidate_evaluated",
+            "active_policy_hash",
+            "candidate_policy_hash",
+            "route_id",
+            "request_digest",
+            "active_decision",
+            "candidate_decision",
+            "candidate_latency_ms",
+            "measurement_digest",
+        )
+    }
+    return "sha256:" + hashlib.sha256(
+        _canonical_json(identity_fields).encode("utf-8")
+    ).hexdigest()
+
+
+def _policy_canary_evidence_row_is_well_formed(
+    state: dict[str, Any],
+    item: dict[str, Any],
+    *,
+    route_filter: set[str],
+    started_at: datetime,
+) -> tuple[str, str] | None:
+    created = _parse_iso_datetime(item.get("created_at"))
+    if created is None or created < started_at:
+        return None
+    event = item.get("event") if isinstance(item.get("event"), dict) else {}
+    if (
+        str(item.get("event_type") or "")
+        not in _POLICY_CANARY_EVIDENCE_EVENT_TYPES
+        or item.get("actor_id") != "decision-gate-rs"
+        or event.get("evaluation_mode") != "candidate_shadow"
+        or event.get("candidate_evaluated") is not True
+        or event.get("canary_id") != state.get("id")
+        or event.get("candidate_policy_hash")
+        != state.get("candidate_policy_hash")
+        or event.get("active_policy_hash") != state.get("previous_policy_hash")
+        or event.get("provenance_version")
+        != "serverware.candidate-shadow/v1"
+    ):
+        return None
+    evidence_id = event.get("evidence_id")
+    measurement_digest = event.get("measurement_digest")
+    if not (
+        isinstance(evidence_id, str)
+        and re.fullmatch(r"sha256:[0-9a-f]{64}", evidence_id)
+        and isinstance(measurement_digest, str)
+        and re.fullmatch(r"sha256:[0-9a-f]{64}", measurement_digest)
+        and isinstance(event.get("request_digest"), str)
+        and re.fullmatch(
+            r"sha256:[0-9a-f]{64}",
+            str(event.get("request_digest")),
+        )
+        and event.get("active_decision") in {"allow", "deny"}
+        and event.get("candidate_decision") in {"allow", "deny"}
+        and isinstance(event.get("candidate_latency_ms"), (int, float))
+        and not isinstance(event.get("candidate_latency_ms"), bool)
+        and math.isfinite(float(event["candidate_latency_ms"]))
+        and float(event["candidate_latency_ms"]) >= 0
+        and hmac.compare_digest(
+            evidence_id,
+            _policy_canary_evidence_identity(event),
+        )
+    ):
+        return None
+    route_id = _audit_event_route_id(event)
+    if route_id is None or (route_filter and route_id not in route_filter):
+        return None
+    return evidence_id, route_id
 
 
 def _policy_canary_monitor(
@@ -3543,48 +5027,50 @@ def _policy_canary_monitor(
     )
     route_filter = _policy_canary_route_filter(state)
     baseline_policy_hash = state.get("previous_policy_hash")
+    candidate_policy_hash = state.get("candidate_policy_hash")
     events = db.list_audit_events(limit=limit)
-    matched = 0
-    denials = 0
-    latencies: list[float] = []
-    newest_event_at: str | None = None
+    shaped_untrusted = 0
+    duplicate_untrusted = 0
+    untrusted_ids: set[str] = set()
     for item in events:
-        created = _parse_iso_datetime(item.get("created_at"))
-        if created and created < started_at:
+        shaped = _policy_canary_evidence_row_is_well_formed(
+            state,
+            item,
+            route_filter=route_filter,
+            started_at=started_at,
+        )
+        if shaped is None:
             continue
-        event = item.get("event") if isinstance(item.get("event"), dict) else {}
-        event_type = str(item.get("event_type") or "")
-        if event_type not in _POLICY_CANARY_EVIDENCE_EVENT_TYPES:
+        evidence_id, _ = shaped
+        if evidence_id in untrusted_ids:
+            duplicate_untrusted += 1
             continue
-        if event.get("policy_hash") != baseline_policy_hash:
-            continue
-        route_id = _audit_event_route_id(event)
-        if route_filter and route_id not in route_filter:
-            continue
-        matched += 1
-        newest_event_at = newest_event_at or item.get("created_at")
-        decision = _audit_event_decision(event_type, event)
-        if decision in {"deny", "denied", "block", "blocked", "reject", "rejected"}:
-            denials += 1
-        latency = _audit_event_latency(event)
-        if latency is not None:
-            latencies.append(latency)
-    sorted_latencies = sorted(latencies)
-    p95 = None
-    if sorted_latencies:
-        p95 = sorted_latencies[(len(sorted_latencies) - 1) * 95 // 100]
+        untrusted_ids.add(evidence_id)
+        shaped_untrusted += 1
+    # No authenticated Rust candidate-shadow emitter/verifier exists. Database
+    # rows are caller-writable audit material, not activation authority.
+    accepted_evidence_ids: set[str] = set()
+    covered_routes: set[str] = set()
     return {
         "startedAt": state.get("started_at"),
-        "newestEventAt": newest_event_at,
+        "newestEventAt": None,
         "observationSeconds": max(
             0, int((datetime.now(timezone.utc) - started_at).total_seconds())
         ),
-        "policyHash": baseline_policy_hash,
+        "policyHash": candidate_policy_hash,
+        "activePolicyHash": baseline_policy_hash,
+        "candidateShadowEvaluationImplemented": False,
         "routeFilter": sorted(route_filter),
-        "auditEvents": matched,
-        "denials": denials,
-        "latencySamples": len(sorted_latencies),
-        "latencyMsP95": p95,
+        "requiredRouteCoverage": sorted(route_filter),
+        "coveredRoutes": sorted(covered_routes),
+        "routeCoverageComplete": bool(route_filter)
+        and covered_routes == route_filter,
+        "auditEvents": len(accepted_evidence_ids),
+        "untrustedEvidenceRows": shaped_untrusted,
+        "duplicateEvidenceRows": duplicate_untrusted,
+        "denials": 0,
+        "latencySamples": 0,
+        "latencyMsP95": None,
         "complete": len(events) < limit,
     }
 
@@ -3593,6 +5079,9 @@ def _start_policy_canary(
     *,
     payload: PolicyPublishRequest,
     payload_digest: str,
+    approved_candidate_policy_hash: str,
+    approved_previous_policy_hash: str | None,
+    approved_candidate_bundle_sha256: str,
     identity: AdminIdentity,
     mfa: dict[str, Any] | None,
 ) -> dict[str, Any]:
@@ -3609,8 +5098,42 @@ def _start_policy_canary(
             dry_run=payload.dry_run,
             enforce_monotonic=True,
         )
+        signed_bundle = report["signedBundle"]
+        locked_candidate_hash = report["candidate"]["policyHash"]
+        locked_previous_hash = report["current"]["policyHash"]
+        locked_bundle_digest = _policy_canary_bundle_digest(signed_bundle)
+        locked_payload_digest = _policy_canary_start_payload_digest(
+            payload,
+            candidate_policy_hash=locked_candidate_hash,
+            previous_policy_hash=locked_previous_hash,
+            candidate_bundle_sha256=locked_bundle_digest,
+        )
+        if not (
+            hmac.compare_digest(
+                locked_candidate_hash,
+                approved_candidate_policy_hash,
+            )
+            and locked_previous_hash == approved_previous_policy_hash
+            and hmac.compare_digest(
+                locked_bundle_digest,
+                approved_candidate_bundle_sha256,
+            )
+            and hmac.compare_digest(locked_payload_digest, payload_digest)
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="policy candidate or predecessor changed before canary staging",
+            )
+        if locked_candidate_hash == locked_previous_hash:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "policy_canary_candidate_already_active",
+                    "candidatePolicyHash": locked_candidate_hash,
+                },
+            )
         existing = _read_policy_canary_state()
-        if existing and existing.get("status") == "running":
+        if existing and existing.get("status") in {"running", "activating"}:
             raise HTTPException(
                 status_code=409,
                 detail={
@@ -3619,19 +5142,20 @@ def _start_policy_canary(
                     "candidatePolicyHash": existing.get("candidate_policy_hash"),
                 },
             )
-        signed_bundle = report["signedBundle"]
         metadata = (
             signed_bundle.get("metadata")
             if isinstance(signed_bundle.get("metadata"), dict)
             else {}
         )
         canary_id = _policy_canary_id(
-            report["candidate"]["policyHash"], metadata.get("sequence")
+            locked_candidate_hash,
+            metadata.get("sequence"),
+            locked_previous_hash,
         )
         approval_request = {
             "policy_id": metadata.get("id"),
-            "previous_policy_hash": report["current"]["policyHash"],
-            "candidate_policy_hash": report["candidate"]["policyHash"],
+            "previous_policy_hash": locked_previous_hash,
+            "candidate_policy_hash": locked_candidate_hash,
             "previous_sequence": report["current"]["sequence"],
             "new_sequence": metadata.get("sequence"),
             "previous_rollback_epoch": report["current"]["rollbackEpoch"],
@@ -3650,13 +5174,18 @@ def _start_policy_canary(
         )
         started_at = _now_iso()
         _write_policy_canary_bundle(signed_bundle)
+        candidate_route_ids = sorted(
+            str(route["id"])
+            for route in signed_bundle.get("routes") or []
+            if isinstance(route, dict) and isinstance(route.get("id"), str)
+        )
         state = {
             "version": "serverware.policyCanary/v1",
             "id": canary_id,
             "status": "running",
             "policy_id": metadata.get("id"),
-            "previous_policy_hash": report["current"]["policyHash"],
-            "candidate_policy_hash": report["candidate"]["policyHash"],
+            "previous_policy_hash": locked_previous_hash,
+            "candidate_policy_hash": locked_candidate_hash,
             "candidate_sequence": metadata.get("sequence"),
             "candidate_rollback_epoch": metadata.get("rollbackEpoch"),
             "started_at": started_at,
@@ -3665,7 +5194,8 @@ def _start_policy_canary(
             "diff": report["diff"],
             "dry_run": report["dryRun"],
             "payload_digest": payload_digest,
-            "signed_bundle": signed_bundle,
+            "candidate_bundle_sha256": locked_bundle_digest,
+            "candidate_route_ids": candidate_route_ids,
             "control_plane_mfa": mfa,
             "control_plane_approval": two_person,
         }
@@ -3678,8 +5208,8 @@ def _start_policy_canary(
             event={
                 "canary_id": canary_id,
                 "policy_id": metadata.get("id"),
-                "previous_policy_hash": report["current"]["policyHash"],
-                "candidate_policy_hash": report["candidate"]["policyHash"],
+                "previous_policy_hash": locked_previous_hash,
+                "candidate_policy_hash": locked_candidate_hash,
                 "candidate_sequence": metadata.get("sequence"),
                 "candidate_rollback_epoch": metadata.get("rollbackEpoch"),
                 "canary_bundle_path": str(POLICY_CANARY_BUNDLE_PATH),
@@ -3703,6 +5233,14 @@ def _require_policy_canary_activation_thresholds(
     monitor: dict[str, Any],
     payload: PolicyCanaryActivationRequest,
 ) -> dict[str, int]:
+    if monitor.get("candidateShadowEvaluationImplemented") is not True:
+        raise HTTPException(
+            status_code=412,
+            detail={
+                "error": "policy_canary_shadow_evaluation_unavailable",
+                "canaryId": state.get("id"),
+            },
+        )
     required_observation = max(
         POLICY_CANARY_MIN_OBSERVATION_SECONDS, payload.min_observation_seconds or 0
     )
@@ -3730,6 +5268,16 @@ def _require_policy_canary_activation_thresholds(
                 "canaryId": state.get("id"),
                 "requiredAuditEvents": required_events,
                 "observedAuditEvents": monitor["auditEvents"],
+            },
+        )
+    if monitor.get("routeCoverageComplete") is not True:
+        raise HTTPException(
+            status_code=412,
+            detail={
+                "error": "policy_canary_route_coverage_incomplete",
+                "canaryId": state.get("id"),
+                "requiredRoutes": monitor.get("requiredRouteCoverage") or [],
+                "coveredRoutes": monitor.get("coveredRoutes") or [],
             },
         )
     if monitor["complete"] is not True:
@@ -4037,9 +5585,244 @@ def _approval_review_document(approval: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+@app.post("/attestation/challenge")
+def attestation_challenge(request: Request) -> Response:
+    try:
+        production_state = production_attestation_state()
+        tls_scope = trusted_tls_scope_from_asgi(
+            request.scope, production_state=production_state
+        )
+        document = issue_attestation_challenge(tls_scope)
+    except AttestationContractError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="attestation challenge service is unavailable",
+        ) from exc
+    return Response(
+        content=attestation_canonical_json(document).encode("ascii"),
+        media_type="application/json",
+        headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
+    )
+
+
+def _produce_public_evidence_from_scope(
+    *,
+    raw_request_body: bytes,
+    scope: Mapping[str, Any],
+) -> Any:
+    descriptor = _load_public_evidence_producer_descriptor()
+    tls_scope = trusted_public_tls_scope_from_asgi(
+        scope,
+        descriptor=descriptor,
+    )
+    return production_public_evidence_response(
+        raw_request_body=raw_request_body,
+        tls_scope=tls_scope,
+        descriptor=descriptor,
+    )
+
+
+def _finish_public_evidence_worker(
+    worker: asyncio.Task[Any],
+    *,
+    route_slots: asyncio.BoundedSemaphore,
+) -> None:
+    route_slots.release()
+    if not worker.cancelled():
+        worker.exception()
+
+
+@app.post("/attestation/public-evidence")
+async def attestation_public_evidence(request: Request) -> Response:
+    if request.headers.get("content-type") != "application/json":
+        raise HTTPException(
+            status_code=415,
+            detail="public attestation evidence requires application/json",
+        )
+    raw_query = request.scope.get("query_string", b"")
+    if type(raw_query) is not bytes or raw_query:
+        raise HTTPException(
+            status_code=400,
+            detail="public attestation evidence does not accept a query string",
+        )
+    raw_content_length = request.headers.get("content-length")
+    if raw_content_length is not None:
+        try:
+            content_length = int(raw_content_length)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail="invalid Content-Length",
+            ) from exc
+        if (
+            content_length < 0
+            or content_length > _PUBLIC_EVIDENCE_REQUEST_MAX_BYTES
+        ):
+            raise HTTPException(
+                status_code=413,
+                detail="public attestation request exceeds 4 KiB",
+            )
+    try:
+        extensions = request.scope.get("extensions")
+        if (
+            not isinstance(extensions, Mapping)
+            or TRUSTED_TLS_SCOPE_EXTENSION not in extensions
+        ):
+            raise AttestationContractError(
+                "trusted enclave TLS extension is unavailable"
+            )
+        bounded_body = bytearray()
+        async for chunk in request.stream():
+            if (
+                len(chunk)
+                > _PUBLIC_EVIDENCE_REQUEST_MAX_BYTES - len(bounded_body)
+            ):
+                raise HTTPException(
+                    status_code=413,
+                    detail="public attestation request exceeds 4 KiB",
+                )
+            bounded_body.extend(chunk)
+        raw_request_body = bytes(bounded_body)
+        if not raw_request_body:
+            raise AttestationContractError(
+                "public evidence request body is empty"
+            )
+        route_slots = _PUBLIC_EVIDENCE_ROUTE_SLOTS
+        try:
+            await asyncio.wait_for(
+                route_slots.acquire(),
+                timeout=0.05,
+            )
+        except TimeoutError as exc:
+            raise AttestationContractError(
+                "public evidence producer is at its concurrency limit"
+            ) from exc
+        try:
+            worker = asyncio.create_task(
+                asyncio.to_thread(
+                    _produce_public_evidence_from_scope,
+                    raw_request_body=raw_request_body,
+                    scope=request.scope,
+                )
+            )
+        except Exception:
+            route_slots.release()
+            raise
+        worker.add_done_callback(
+            lambda completed, slots=route_slots: _finish_public_evidence_worker(
+                completed,
+                route_slots=slots,
+            )
+        )
+        result = await asyncio.shield(worker)
+        response = Response(
+            content=result.body,
+            status_code=result.status_code,
+            media_type=None,
+        )
+        response.raw_headers = list(result.raw_headers)
+    except AttestationContractError as exc:
+        message = str(exc)
+        unavailable = (
+            "unavailable" in message
+            or "configured" in message
+            or "ordinary host TLS" in message
+            or "enclave TLS extension" in message
+            or "producer" in message
+            or "single-worker" in message
+        )
+        raise HTTPException(
+            status_code=503 if unavailable else 403,
+            detail=(
+                "public attestation evidence is unavailable from this TLS stack"
+                if unavailable
+                else "public attestation evidence request was rejected"
+            ),
+        ) from exc
+    return response
+
+
 @app.get("/attestation")
-def attestation(nonce: str | None = None) -> dict[str, Any]:
-    return attestation_document(nonce)
+def attestation(
+    request: Request,
+    nonce: str | None = None,
+    challenge_id: str | None = Query(default=None, alias="challengeId"),
+    challenge: str | None = None,
+) -> Response | dict[str, Any]:
+    production = RELEASE_CHANNEL.strip().lower() not in {
+        "dev",
+        "development",
+        "local",
+        "test",
+    }
+    if not production:
+        return attestation_document(nonce)
+    if nonce is not None or challenge_id is None or challenge is None:
+        raise HTTPException(
+            status_code=400,
+            detail="production attestation requires one issued challenge",
+        )
+    raw_query_value = request.scope.get("query_string", b"")
+    if (
+        type(raw_query_value) is not bytes
+        or len(raw_query_value) > 4096
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="attestation request query is invalid",
+        )
+    try:
+        raw_query = raw_query_value.decode("ascii", errors="strict")
+        production_state = production_attestation_state()
+        tls_scope = trusted_tls_scope_from_asgi(
+            request.scope, production_state=production_state
+        )
+        reservation = reserve_attestation_challenge(
+            challenge_id,
+            challenge,
+            tls_scope,
+        )
+        try:
+            result = production_attestation_response(
+                challenge=reservation.challenge,
+                tls_scope=tls_scope,
+                method=request.method,
+                path=request.url.path,
+                raw_query=raw_query,
+                production_state=production_state,
+            )
+            response = Response(
+                content=result.body,
+                status_code=result.status_code,
+                media_type=None,
+            )
+            response.raw_headers = list(result.raw_headers)
+            finalize_attestation_challenge(reservation)
+        except Exception:
+            release_attestation_challenge(reservation)
+            raise
+    except UnicodeDecodeError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="attestation request query is invalid",
+        ) from exc
+    except AttestationContractError as exc:
+        message = str(exc)
+        unavailable = (
+            "unavailable" in message
+            or "configured" in message
+            or "ordinary host TLS" in message
+            or "enclave TLS extension" in message
+        )
+        raise HTTPException(
+            status_code=503 if unavailable else 403,
+            detail=(
+                "production attestation is unavailable from this TLS stack"
+                if unavailable
+                else "production attestation request was rejected"
+            ),
+        ) from exc
+    return response
 
 
 @app.post("/api/ca/install-sessions")
@@ -4681,19 +6464,6 @@ def policy_publish(
             status_code=412,
             detail="policy canary activation is required before full publish",
         )
-    submitted_metadata = (
-        payload.bundle.get("metadata")
-        if isinstance(payload.bundle.get("metadata"), dict)
-        else {}
-    )
-    policy_id = submitted_metadata.get("id")
-    mfa = _require_control_plane_mutation_mfa(
-        action="policy.publish",
-        resource_id=policy_id,
-        payload_digest=payload_digest,
-        mfa=payload.mfa,
-        identity=identity,
-    )
     if payload.activation_mode == "canary":
         report = _policy_candidate_report(
             bundle=payload.bundle,
@@ -4706,10 +6476,36 @@ def policy_publish(
             else {}
         )
         policy_id = metadata.get("id")
+        candidate_hash = report["candidate"]["policyHash"]
+        previous_hash = report["current"]["policyHash"]
+        if candidate_hash == previous_hash:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "policy_canary_candidate_already_active",
+                    "candidatePolicyHash": candidate_hash,
+                },
+            )
+        candidate_bundle_digest = _policy_canary_bundle_digest(
+            report["signedBundle"]
+        )
+        payload_digest = _policy_canary_start_payload_digest(
+            payload,
+            candidate_policy_hash=candidate_hash,
+            previous_policy_hash=previous_hash,
+            candidate_bundle_sha256=candidate_bundle_digest,
+        )
+        mfa = _require_control_plane_mutation_mfa(
+            action="policy.publish",
+            resource_id=policy_id,
+            payload_digest=payload_digest,
+            mfa=payload.mfa,
+            identity=identity,
+        )
         approval_request = {
             "policy_id": policy_id,
-            "previous_policy_hash": report["current"]["policyHash"],
-            "candidate_policy_hash": report["candidate"]["policyHash"],
+            "previous_policy_hash": previous_hash,
+            "candidate_policy_hash": candidate_hash,
             "previous_sequence": report["current"]["sequence"],
             "new_sequence": metadata.get("sequence"),
             "previous_rollback_epoch": report["current"]["rollbackEpoch"],
@@ -4732,35 +6528,64 @@ def policy_publish(
         return _start_policy_canary(
             payload=payload,
             payload_digest=payload_digest,
+            approved_candidate_policy_hash=candidate_hash,
+            approved_previous_policy_hash=previous_hash,
+            approved_candidate_bundle_sha256=candidate_bundle_digest,
             identity=identity,
             mfa=mfa,
         )
 
+    report = _policy_candidate_report(
+        bundle=payload.bundle,
+        dry_run=payload.dry_run,
+        enforce_monotonic=True,
+    )
+    idempotent_snapshot = get_policy_snapshot()
+    if (
+        idempotent_snapshot is not None
+        and idempotent_snapshot.hash
+        == report["candidate"]["policyHash"]
+        == report["current"]["policyHash"]
+    ):
+        return _completed_policy_publish_report(report, idempotent_snapshot)
+    approved_candidate_hash = report["candidate"]["policyHash"]
+    approved_previous_hash = report["current"]["policyHash"]
+    approved_bundle_digest = _policy_canary_bundle_digest(
+        report["signedBundle"]
+    )
+    payload_digest = _policy_publication_ceremony_payload_digest(
+        payload,
+        candidate_policy_hash=approved_candidate_hash,
+        previous_policy_hash=approved_previous_hash,
+        candidate_bundle_sha256=approved_bundle_digest,
+    )
+    metadata = (
+        report["signedBundle"].get("metadata")
+        if isinstance(report["signedBundle"].get("metadata"), dict)
+        else {}
+    )
+    policy_id = metadata.get("id")
+    mfa = _require_control_plane_mutation_mfa(
+        action="policy.publish",
+        resource_id=policy_id,
+        payload_digest=payload_digest,
+        mfa=payload.mfa,
+        identity=identity,
+    )
+    approval_request = {
+        "policy_id": policy_id,
+        "previous_policy_hash": approved_previous_hash,
+        "candidate_policy_hash": approved_candidate_hash,
+        "previous_sequence": report["current"]["sequence"],
+        "new_sequence": metadata.get("sequence"),
+        "previous_rollback_epoch": report["current"]["rollbackEpoch"],
+        "new_rollback_epoch": metadata.get("rollbackEpoch"),
+        "diff": report["diff"],
+        "dry_run": report["dryRun"],
+    }
     if _control_plane_two_person_required("policy.publish") and not (
         _control_plane_approval_id(payload.mfa)
     ):
-        report = _policy_candidate_report(
-            bundle=payload.bundle,
-            dry_run=payload.dry_run,
-            enforce_monotonic=True,
-        )
-        metadata = (
-            report["signedBundle"].get("metadata")
-            if isinstance(report["signedBundle"].get("metadata"), dict)
-            else {}
-        )
-        policy_id = metadata.get("id")
-        approval_request = {
-            "policy_id": policy_id,
-            "previous_policy_hash": report["current"]["policyHash"],
-            "candidate_policy_hash": report["candidate"]["policyHash"],
-            "previous_sequence": report["current"]["sequence"],
-            "new_sequence": metadata.get("sequence"),
-            "previous_rollback_epoch": report["current"]["rollbackEpoch"],
-            "new_rollback_epoch": metadata.get("rollbackEpoch"),
-            "diff": report["diff"],
-            "dry_run": report["dryRun"],
-        }
         _require_control_plane_two_person(
             action="policy.publish",
             resource_id=policy_id,
@@ -4771,73 +6596,144 @@ def policy_publish(
         )
         raise AssertionError("policy approval request unexpectedly returned")
 
-    with (
-        _policy_publication_file_lock(),
-        _restore_files_on_error(POLICY_BUNDLE_PATH),
-        db.connect() as connection,
-    ):
-        db.lock_policy_publication(connection)
-        report = _policy_candidate_report(
+    publication_recovery: dict[str, Any] = {"snapshot": None}
+    with _policy_publication_file_lock():
+        locked_report = _policy_candidate_report(
             bundle=payload.bundle,
             dry_run=payload.dry_run,
             enforce_monotonic=True,
         )
+        locked_candidate_hash = locked_report["candidate"]["policyHash"]
+        locked_previous_hash = locked_report["current"]["policyHash"]
+        locked_bundle_digest = _policy_canary_bundle_digest(
+            locked_report["signedBundle"]
+        )
+        locked_payload_digest = _policy_publication_ceremony_payload_digest(
+            payload,
+            candidate_policy_hash=locked_candidate_hash,
+            previous_policy_hash=locked_previous_hash,
+            candidate_bundle_sha256=locked_bundle_digest,
+        )
+        if not (
+            hmac.compare_digest(
+                locked_candidate_hash,
+                approved_candidate_hash,
+            )
+            and locked_previous_hash == approved_previous_hash
+            and hmac.compare_digest(
+                locked_bundle_digest,
+                approved_bundle_digest,
+            )
+            and hmac.compare_digest(
+                locked_payload_digest,
+                payload_digest,
+            )
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="policy candidate or predecessor changed before publication",
+            )
+        locked_snapshot = get_policy_snapshot()
+        if (
+            locked_snapshot is not None
+            and locked_snapshot.hash
+            == locked_candidate_hash
+            == locked_previous_hash
+        ):
+            return _completed_policy_publish_report(
+                locked_report,
+                locked_snapshot,
+            )
+        expected_previous_policy_hash = locked_previous_hash
+        if (
+            locked_snapshot is None
+            and expected_previous_policy_hash == locked_candidate_hash
+        ):
+            committed_publication = db.get_policy_publication(
+                locked_candidate_hash
+            )
+            if (
+                committed_publication is not None
+                and committed_publication.get("status") == "committed"
+            ):
+                expected_previous_policy_hash = committed_publication.get(
+                    "previous_policy_hash"
+                )
+        staged_publication = _stage_policy_bundle_for_transaction(
+            locked_report["signedBundle"],
+            expected_previous_policy_hash=expected_previous_policy_hash,
+        )
         metadata = (
-            report["signedBundle"].get("metadata")
-            if isinstance(report["signedBundle"].get("metadata"), dict)
+            locked_report["signedBundle"].get("metadata")
+            if isinstance(locked_report["signedBundle"].get("metadata"), dict)
             else {}
         )
         policy_id = metadata.get("id")
         approval_request = {
             "policy_id": policy_id,
-            "previous_policy_hash": report["current"]["policyHash"],
-            "candidate_policy_hash": report["candidate"]["policyHash"],
-            "previous_sequence": report["current"]["sequence"],
+            "previous_policy_hash": locked_previous_hash,
+            "candidate_policy_hash": locked_candidate_hash,
+            "previous_sequence": locked_report["current"]["sequence"],
             "new_sequence": metadata.get("sequence"),
-            "previous_rollback_epoch": report["current"]["rollbackEpoch"],
+            "previous_rollback_epoch": locked_report["current"][
+                "rollbackEpoch"
+            ],
             "new_rollback_epoch": metadata.get("rollbackEpoch"),
-            "diff": report["diff"],
-            "dry_run": report["dryRun"],
+            "diff": locked_report["diff"],
+            "dry_run": locked_report["dryRun"],
         }
-        two_person = _require_control_plane_two_person(
-            action="policy.publish",
-            resource_id=policy_id,
-            payload_digest=payload_digest,
-            mfa=payload.mfa,
-            identity=identity,
-            request=approval_request,
-            connection=connection,
+        with (
+            _restore_files_on_error(
+                POLICY_BUNDLE_PATH,
+                authoritative_policy=lambda: publication_recovery["snapshot"],
+            ),
+            db.connect() as connection,
+        ):
+            db.lock_policy_publication(connection)
+            two_person = _require_control_plane_two_person(
+                action="policy.publish",
+                resource_id=policy_id,
+                payload_digest=payload_digest,
+                mfa=payload.mfa,
+                identity=identity,
+                request=approval_request,
+                connection=connection,
+            )
+            snapshot = _write_policy_bundle_in_transaction(
+                staged_publication,
+                connection=connection,
+            )
+            publication_recovery["snapshot"] = snapshot
+            db.append_audit_event(
+                connection,
+                event_type="policy.published",
+                actor_type="admin",
+                actor_id=identity.user_id,
+                event={
+                    "activation_mode": "full",
+                    "policy_id": policy_id,
+                    "previous_policy_hash": locked_previous_hash,
+                    "new_policy_hash": snapshot.hash,
+                    "previous_sequence": locked_report["current"]["sequence"],
+                    "new_sequence": metadata.get("sequence"),
+                    "previous_rollback_epoch": locked_report["current"][
+                        "rollbackEpoch"
+                    ],
+                    "new_rollback_epoch": metadata.get("rollbackEpoch"),
+                    "diff": locked_report["diff"],
+                    "dry_run": locked_report["dryRun"],
+                    "control_plane_mfa": mfa,
+                    "control_plane_approval": two_person,
+                    "payload_digest": payload_digest,
+                },
+            )
+    committed_snapshot = get_policy_snapshot()
+    if committed_snapshot is None or committed_snapshot.hash != snapshot.hash:
+        raise HTTPException(
+            status_code=503,
+            detail="committed policy publication is not readable",
         )
-        snapshot = write_policy_bundle(
-            report["signedBundle"], enforce_high_water=False
-        )
-        _advance_policy_high_water_in_transaction(snapshot, connection=connection)
-        db.append_audit_event(
-            connection,
-            event_type="policy.published",
-            actor_type="admin",
-            actor_id=identity.user_id,
-            event={
-                "activation_mode": "full",
-                "policy_id": policy_id,
-                "previous_policy_hash": report["current"]["policyHash"],
-                "new_policy_hash": snapshot.hash,
-                "previous_sequence": report["current"]["sequence"],
-                "new_sequence": metadata.get("sequence"),
-                "previous_rollback_epoch": report["current"]["rollbackEpoch"],
-                "new_rollback_epoch": metadata.get("rollbackEpoch"),
-                "diff": report["diff"],
-                "dry_run": report["dryRun"],
-                "control_plane_mfa": mfa,
-                "control_plane_approval": two_person,
-                "payload_digest": payload_digest,
-            },
-        )
-    report = dict(report)
-    report["published"] = True
-    report["policyHash"] = snapshot.hash
-    report.pop("signedBundle", None)
-    return report
+    return _completed_policy_publish_report(locked_report, committed_snapshot)
 
 
 @app.get("/api/policy/canary/status")
@@ -4861,232 +6757,85 @@ def policy_canary_activate(
     payload: PolicyCanaryActivationRequest,
     identity: AdminIdentity = Depends(require_role("policy_publisher")),
 ) -> dict[str, Any]:
-    state = _read_policy_canary_state()
-    if not state or state.get("id") != payload.canary_id:
-        raise HTTPException(status_code=404, detail="policy canary not found")
-    if state.get("status") != "running":
-        raise HTTPException(
-            status_code=409, detail=f"policy canary is {state.get('status')}"
-        )
-    signed_bundle = state.get("signed_bundle")
-    if not isinstance(signed_bundle, dict):
-        raise HTTPException(
-            status_code=503, detail="policy canary signed bundle is missing"
-        )
-    try:
-        candidate = compile_policy_bundle(
-            signed_bundle, verify_signature=True, validate_schema=True
-        )
-    except PolicyBundleError as exc:
-        raise HTTPException(
-            status_code=409, detail=f"policy canary bundle is invalid: {exc}"
-        ) from exc
-    if candidate.hash != state.get("candidate_policy_hash"):
-        raise HTTPException(
-            status_code=409, detail="policy canary bundle hash no longer matches state"
-        )
-    _assert_policy_candidate_credential_bindings(candidate)
-    current = get_policy_snapshot()
-    current_hash = current.hash if current else None
-    if current_hash != state.get("previous_policy_hash"):
-        raise HTTPException(
-            status_code=409, detail="active policy changed after canary start"
-        )
-    _assert_policy_publish_monotonic(current.raw if current else None, signed_bundle)
-    monitor = _policy_canary_monitor(state)
-    thresholds = _require_policy_canary_activation_thresholds(state, monitor, payload)
-    payload_digest = _policy_canary_activate_payload_digest(payload)
-    metadata = (
-        signed_bundle.get("metadata")
-        if isinstance(signed_bundle.get("metadata"), dict)
-        else {}
-    )
-    policy_id = metadata.get("id")
-    mfa = _require_control_plane_mutation_mfa(
-        action="policy.publish",
-        resource_id=policy_id,
-        payload_digest=payload_digest,
-        mfa=payload.mfa,
-        identity=identity,
-    )
-    approval_request = {
-        "canary_id": state.get("id"),
-        "policy_id": policy_id,
-        "previous_policy_hash": state.get("previous_policy_hash"),
-        "candidate_policy_hash": state.get("candidate_policy_hash"),
-        "candidate_sequence": state.get("candidate_sequence"),
-        "candidate_rollback_epoch": state.get("candidate_rollback_epoch"),
-        "monitoring": monitor,
-        "thresholds": thresholds,
-    }
-    if _control_plane_two_person_required("policy.publish") and not (
-        _control_plane_approval_id(payload.mfa)
-    ):
-        _require_control_plane_two_person(
-            action="policy.publish",
-            resource_id=policy_id,
-            payload_digest=payload_digest,
-            mfa=payload.mfa,
-            identity=identity,
-            request=approval_request,
-        )
-        raise AssertionError("policy canary approval request unexpectedly returned")
-    with (
-        _policy_publication_file_lock(),
-        _restore_files_on_error(POLICY_BUNDLE_PATH, POLICY_CANARY_STATE_PATH),
-        db.connect() as connection,
-    ):
-        db.lock_policy_publication(connection)
-        locked_state = _read_policy_canary_state()
-        if not locked_state or locked_state.get("id") != payload.canary_id:
+    del identity
+    with _policy_publication_file_lock():
+        state = _read_policy_canary_state()
+        if not state or state.get("id") != payload.canary_id:
             raise HTTPException(status_code=404, detail="policy canary not found")
-        if locked_state.get("status") != "running":
+        if state.get("status") != "running":
             raise HTTPException(
                 status_code=409,
-                detail=f"policy canary is {locked_state.get('status')}",
+                detail=f"policy canary is {state.get('status')}",
             )
-        locked_signed_bundle = locked_state.get("signed_bundle")
-        if not isinstance(locked_signed_bundle, dict):
-            raise HTTPException(
-                status_code=503, detail="policy canary signed bundle is missing"
-            )
+        signed_bundle = _verified_policy_canary_bundle(state)
         try:
-            locked_candidate = compile_policy_bundle(
-                locked_signed_bundle,
+            candidate = compile_policy_bundle(
+                signed_bundle,
                 verify_signature=True,
                 validate_schema=True,
             )
         except PolicyBundleError as exc:
             raise HTTPException(
-                status_code=409, detail=f"policy canary bundle is invalid: {exc}"
+                status_code=409,
+                detail=f"policy canary bundle is invalid: {exc}",
             ) from exc
-        if locked_candidate.hash != locked_state.get("candidate_policy_hash"):
-            raise HTTPException(
-                status_code=409,
-                detail="policy canary bundle hash no longer matches state",
-            )
-        _assert_policy_candidate_credential_bindings(locked_candidate)
-        locked_current = get_policy_snapshot()
-        locked_current_hash = locked_current.hash if locked_current else None
-        if locked_current_hash != locked_state.get("previous_policy_hash"):
-            raise HTTPException(
-                status_code=409,
-                detail="active policy changed after canary start",
-            )
-        _assert_policy_publish_monotonic(
-            locked_current.raw if locked_current else None,
-            locked_signed_bundle,
-        )
-        state = locked_state
-        signed_bundle = locked_signed_bundle
-        candidate = locked_candidate
-        current = locked_current
-        monitor = _policy_canary_monitor(state)
-        thresholds = _require_policy_canary_activation_thresholds(
-            state, monitor, payload
-        )
         metadata = (
             signed_bundle.get("metadata")
             if isinstance(signed_bundle.get("metadata"), dict)
             else {}
         )
-        policy_id = metadata.get("id")
-        approval_request = {
-            "canary_id": state.get("id"),
-            "policy_id": policy_id,
-            "previous_policy_hash": state.get("previous_policy_hash"),
-            "candidate_policy_hash": state.get("candidate_policy_hash"),
-            "candidate_sequence": state.get("candidate_sequence"),
-            "candidate_rollback_epoch": state.get("candidate_rollback_epoch"),
-            "monitoring": monitor,
-            "thresholds": thresholds,
-        }
-        with _restore_files_on_error(
-            POLICY_BUNDLE_PATH, POLICY_CANARY_STATE_PATH
+        predecessor_hash = state.get("previous_policy_hash")
+        expected_canary_id = _policy_canary_id(
+            candidate.hash,
+            metadata.get("sequence"),
+            predecessor_hash,
+        )
+        if not (
+            candidate.hash == state.get("candidate_policy_hash")
+            and hmac.compare_digest(expected_canary_id, payload.canary_id)
+            and hmac.compare_digest(
+                _policy_canary_bundle_digest(signed_bundle),
+                str(state.get("candidate_bundle_sha256") or ""),
+            )
         ):
-            two_person = _require_control_plane_two_person(
-                action="policy.publish",
-                resource_id=policy_id,
-                payload_digest=payload_digest,
-                mfa=payload.mfa,
-                identity=identity,
-                request=approval_request,
-                connection=connection,
+            raise HTTPException(
+                status_code=409,
+                detail="policy canary identity no longer matches its locked candidate",
             )
-            snapshot = write_policy_bundle(
-                signed_bundle, enforce_high_water=False
+        _assert_policy_candidate_credential_bindings(candidate)
+        current = get_policy_snapshot()
+        current_hash = current.hash if current else None
+        durable_authority_hash = (
+            _policy_canary_authority_hash() if current is None else None
+        )
+        if current_hash == candidate.hash or (
+            current is None and durable_authority_hash == candidate.hash
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "policy_canary_candidate_already_active",
+                    "candidatePolicyHash": candidate.hash,
+                },
             )
-            _advance_policy_high_water_in_transaction(
-                snapshot, connection=connection
+        if current_hash != predecessor_hash and not (
+            current is None
+            and durable_authority_hash == predecessor_hash
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="active policy changed after canary start",
             )
-            activated_at = _now_iso()
-            state.update(
-                {
-                    "status": "activated",
-                    "activated_at": activated_at,
-                    "activated_by": identity.user_id,
-                    "activation_payload_digest": payload_digest,
-                    "activation_monitoring": monitor,
-                    "activation_thresholds": thresholds,
-                    "activation_control_plane_mfa": mfa,
-                    "activation_control_plane_approval": two_person,
-                }
-            )
-            _write_policy_canary_state(state)
-            audit_payload = {
-                "activation_mode": "canary",
-                "canary_id": state.get("id"),
-                "policy_id": policy_id,
-                "previous_policy_hash": state.get("previous_policy_hash"),
-                "new_policy_hash": snapshot.hash,
-                "previous_sequence": (current.raw.get("metadata") or {}).get(
-                    "sequence"
-                )
-                if current
-                else None,
-                "new_sequence": metadata.get("sequence"),
-                "previous_rollback_epoch": (
-                    current.raw.get("metadata") or {}
-                ).get("rollbackEpoch")
-                if current
-                else None,
-                "new_rollback_epoch": metadata.get("rollbackEpoch"),
-                "diff": state.get("diff"),
-                "dry_run": state.get("dry_run"),
-                "canary_monitoring": monitor,
-                "canary_thresholds": thresholds,
-                "control_plane_mfa": mfa,
-                "control_plane_approval": two_person,
-                "payload_digest": payload_digest,
-            }
-            for event_type in ("policy.canary.activated", "policy.published"):
-                db.append_audit_event(
-                    connection,
-                    event_type=event_type,
-                    actor_type="admin",
-                    actor_id=identity.user_id,
-                    event=audit_payload,
-                )
-    return {
-        "ok": True,
-        "published": True,
-        "policyHash": snapshot.hash,
-        "candidate": {
-            "policyHash": candidate.hash,
-            "signingKeyId": metadata.get("signingKeyId"),
-            "signature": metadata.get("signature"),
-            "sequence": metadata.get("sequence"),
-            "rollbackEpoch": metadata.get("rollbackEpoch"),
-            "routes": len(candidate.routes),
-            "principals": len(candidate.principals),
-            "credentials": len(candidate.credentials),
-        },
-        "canary": _policy_canary_public(state),
-        "monitoring": monitor,
-        "thresholds": thresholds,
-        "diff": state.get("diff"),
-        "dryRun": state.get("dry_run"),
-    }
+        if current is not None:
+            _assert_policy_publish_monotonic(current.raw, signed_bundle)
+        monitor = _policy_canary_monitor(state)
+        _policy_canary_activate_payload_digest(payload, state)
+        _require_policy_canary_activation_thresholds(
+            state,
+            monitor,
+            payload,
+        )
+    raise AssertionError("unavailable candidate-shadow evaluation was accepted")
 
 
 @app.post("/api/policy/canary/cancel")
@@ -7555,13 +9304,9 @@ def setup_session_bind_canary(
     state = _read_policy_canary_state()
     if not state or state.get("id") != payload.canary_id:
         raise HTTPException(status_code=404, detail="policy canary not found")
-    if state.get("status") not in {"running", "activated"}:
+    if state.get("status") != "running":
         raise HTTPException(status_code=409, detail="policy canary is not usable")
-    signed_bundle = state.get("signed_bundle")
-    if not isinstance(signed_bundle, dict):
-        raise HTTPException(
-            status_code=503, detail="policy canary signed bundle is missing"
-        )
+    signed_bundle = _verified_policy_canary_bundle(state)
     try:
         candidate = compile_policy_bundle(
             signed_bundle, verify_signature=True, validate_schema=True
@@ -7570,10 +9315,24 @@ def setup_session_bind_canary(
         raise HTTPException(
             status_code=409, detail=f"policy canary bundle is invalid: {exc}"
         ) from exc
-    if candidate.hash != state.get("candidate_policy_hash"):
+    metadata = (
+        signed_bundle.get("metadata")
+        if isinstance(signed_bundle.get("metadata"), dict)
+        else {}
+    )
+    expected_canary_id = _policy_canary_id(
+        candidate.hash,
+        metadata.get("sequence"),
+        state.get("previous_policy_hash"),
+    )
+    if not (
+        candidate.hash == state.get("candidate_policy_hash")
+        and hmac.compare_digest(expected_canary_id, payload.canary_id)
+        and candidate.hash != state.get("previous_policy_hash")
+    ):
         raise HTTPException(
             status_code=409,
-            detail="policy canary hash does not match its signed bundle",
+            detail="policy canary identity does not match its signed candidate",
         )
     route, raw_route, route_digest = _setup_active_route(
         candidate, str(item.get("route_id") or "")
@@ -7777,36 +9536,8 @@ def setup_session_verify(
     )
     current = item
     try:
-        if current["phase"] == "ca_installed":
-            canary = _read_policy_canary_state()
-            if (
-                canary
-                and canary.get("id") == current.get("canary_id")
-                and canary.get("status") == "activated"
-                and canary.get("candidate_policy_hash") == current.get("policy_hash")
-            ):
-                monitoring = canary.get("activation_monitoring")
-                if not isinstance(monitoring, dict):
-                    monitoring = _policy_canary_monitor(canary)
-                if monitoring.get("complete") is True:
-                    current = db.transition_setup_session(
-                        session_id,
-                        expected_revision=current["revision"],
-                        transition="record_canary_evidence",
-                        actor_id=identity.user_id,
-                        evidence=[
-                            {
-                                "kind": "canary_result",
-                                "document": {
-                                    "canaryId": current["canary_id"],
-                                    "policyHash": current["policy_hash"],
-                                    "monitoring": monitoring,
-                                },
-                                "verifier_key_id": "serverware-audit-chain",
-                                "observed_at": result["checkedAt"],
-                            }
-                        ],
-                    )
+        # Candidate-shadow provenance is not implemented, so setup cannot
+        # manufacture the canary_result evidence needed for this transition.
         if (
             current["phase"] == "canaries_verified"
             and result["runtimeVerified"] is True
@@ -10010,12 +11741,15 @@ def approval_webauthn_options(
             status_code=412,
             detail="open or refresh the approval review before requesting WebAuthn",
         )
-    return approval_options(
-        approval,
-        identity.user_id,
-        _approval_authn_policy(jit),
-        review_receipt,
-    )
+    try:
+        return approval_options(
+            approval,
+            identity.user_id,
+            _approval_authn_policy(jit),
+            review_receipt,
+        )
+    except WebAuthnError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 def _redacted_webauthn_credential(item: dict[str, Any]) -> dict[str, Any]:
@@ -10641,12 +12375,47 @@ def _record_credential_lease_audit(
         "release_attempt_id": (
             payload.release_authorization.attempt_id
             if payload.release_authorization is not None
+            else payload.request_authority.attempt_id
+            if payload.request_authority is not None
             else None
         ),
         "release_binding_digest": (
             payload.release_authorization.binding_digest
             if payload.release_authorization is not None
+            else payload.request_authority.binding_digest
+            if payload.request_authority is not None
             else None
+        ),
+        "release_kind": (
+            payload.release_authorization.kind
+            if payload.release_authorization is not None
+            else None
+        ),
+        "release_reservation_id": (
+            payload.release_authorization.reservation_id
+            if payload.release_authorization is not None
+            else payload.request_authority.reservation_id
+            if payload.request_authority is not None
+            else None
+        ),
+        "release_request_digest": (
+            payload.release_authorization.request_digest
+            if payload.release_authorization is not None
+            else payload.request_authority.request_digest
+            if payload.request_authority is not None
+            else None
+        ),
+        "release_operation_digest": (
+            payload.release_authorization.operation_digest
+            if payload.release_authorization is not None
+            else payload.request_authority.operation_digest
+            if payload.request_authority is not None
+            else None
+        ),
+        "release_quota_claim_count": (
+            len(payload.release_authorization.quota_claims)
+            if payload.release_authorization is not None
+            else 0
         ),
         "principal_id": payload.principal_id,
         "route_id": payload.route_id,
@@ -10692,11 +12461,27 @@ def _should_record_credential_lease_issuance(
         (
             payload.release_authorization.attempt_id
             if payload.release_authorization is not None
+            else payload.request_authority.attempt_id
+            if payload.request_authority is not None
             else ""
         ),
         (
             payload.release_authorization.binding_digest
             if payload.release_authorization is not None
+            else payload.request_authority.binding_digest
+            if payload.request_authority is not None
+            else ""
+        ),
+        (
+            payload.release_authorization.kind
+            if payload.release_authorization is not None
+            else ""
+        ),
+        (
+            payload.release_authorization.reservation_id
+            if payload.release_authorization is not None
+            else payload.request_authority.reservation_id
+            if payload.request_authority is not None
             else ""
         ),
         state_digest,
@@ -11203,8 +12988,19 @@ _CREDENTIAL_LEASE_PUBLIC_METADATA_STRING_FIELDS = (
 def _credential_lease_request_binding_sha256(
     payload: CredentialLeaseRequest,
 ) -> str:
+    request_authority = (
+        payload.request_authority.model_dump(
+            by_alias=True,
+            exclude_unset=True,
+        )
+        if payload.request_authority is not None
+        else None
+    )
     release_authorization = (
-        payload.release_authorization.model_dump(by_alias=True)
+        payload.release_authorization.model_dump(
+            by_alias=True,
+            exclude_unset=True,
+        )
         if payload.release_authorization is not None
         else None
     )
@@ -11218,6 +13014,7 @@ def _credential_lease_request_binding_sha256(
                 "credentialId": payload.credential_id,
                 "expectedCredentialVersion": payload.expected_credential_version,
                 "expectedMetadataSha256": payload.expected_metadata_sha256,
+                "requestAuthority": request_authority,
                 "releaseAuthorization": release_authorization,
                 "recipientKeyId": payload.recipient_key_id,
                 "recipientNonce": payload.recipient_nonce,
@@ -11225,6 +13022,16 @@ def _credential_lease_request_binding_sha256(
                 "dataPlaneBinaryDigest": payload.data_plane_binary_digest,
                 "maxTtlSeconds": payload.max_ttl_seconds,
             }
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _credential_lease_request_authority_sha256(
+    authority: CredentialLeaseRequestAuthority,
+) -> str:
+    return "sha256:" + hashlib.sha256(
+        _canonical_json(
+            authority.model_dump(by_alias=True, exclude_unset=True)
         ).encode("utf-8")
     ).hexdigest()
 
@@ -11347,134 +13154,343 @@ def _assert_credential_lease_release_authorization(
     payload: CredentialLeaseRequest,
     *,
     route: Any,
-) -> dict[str, Any] | None:
+) -> dict[str, Any]:
     release = payload.release_authorization
     jit = route.jit if isinstance(route.jit, dict) else {}
     jit_required = jit.get("required") is True
     if payload.purpose == "generationMetadata":
-        if release is not None:
+        return {
+            "controlled": False,
+            "issuanceKind": None,
+            "requestAuthority": None,
+            "requestAuthoritySha256": None,
+            "releaseAuthorization": None,
+        }
+    shared_route_present = any(
+        isinstance(constraint, dict)
+        and constraint.get("type") == "rateLimit"
+        and constraint.get("store", "local") == "shared"
+        and constraint.get("phase", "request") == "request"
+        for constraint in route.constraints
+    )
+    durable_policy_route_present = any(
+        isinstance(constraint, dict)
+        and constraint.get("type")
+        in {
+            "slidingWindowLimit",
+            "weightedBudget",
+            "traversalBudget",
+        }
+        for constraint in route.constraints
+    )
+    route_controlled = (
+        jit_required or shared_route_present or durable_policy_route_present
+    )
+    if not route_controlled:
+        if (
+            payload.api_version != "serverware.credentialLeaseRequest/v3"
+            or payload.request_authority is not None
+            or release is not None
+        ):
             raise HTTPException(
                 status_code=409,
-                detail="generation metadata cannot carry release authorization",
+                detail="uncontrolled route requires legacy authority-free credential dispatch",
             )
-        return None
-    if not jit_required:
-        if release is not None:
-            raise HTTPException(
-                status_code=409,
-                detail="non-JIT credential dispatch cannot carry JIT release authorization",
-            )
-        return None
+        return {
+            "controlled": False,
+            "issuanceKind": None,
+            "requestAuthority": None,
+            "requestAuthoritySha256": None,
+            "releaseAuthorization": None,
+        }
+    if (
+        payload.api_version != "serverware.credentialLeaseRequest/v4"
+        or payload.request_authority is None
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="controlled route requires operation-bound credential lease v4",
+        )
     if not ATOMIC_RELEASE_AUTHORIZATION_ENABLED:
         raise HTTPException(
             status_code=503,
-            detail="credential-bearing JIT requires atomic release authorization",
+            detail="controlled credential dispatch requires atomic request authority",
         )
-    if release is None:
-        raise HTTPException(
-            status_code=409,
-            detail="JIT dispatch secret requires exact release authorization",
-        )
-    if release.grant_id is None or release.approval_request_id is None:
-        raise HTTPException(
-            status_code=409,
-            detail="JIT dispatch secret requires paired grant and approval authority",
-        )
-
+    authority = payload.request_authority
+    authority_wire = authority.model_dump(
+        by_alias=True,
+        exclude_unset=True,
+    )
+    authority_sha256 = _credential_lease_request_authority_sha256(authority)
     now_epoch_ms = time.time_ns() // 1_000_000
     try:
-        with db.connect() as conn:
-            row = db._release_attempt_row(conn, release.attempt_id)
-            if row is None:
-                raise HTTPException(
-                    status_code=409,
-                    detail="credential lease release authorization was not found",
-                )
-            expected = {
-                "attempt_id": release.attempt_id,
-                "binding_digest": release.binding_digest,
-                "state": "reserved",
-                "principal_id": payload.principal_id,
-                "route_id": payload.route_id,
-                "credential_id": payload.credential_id,
-                "credential_version": payload.expected_credential_version,
-                "policy_hash": payload.policy_hash,
-                "grant_id": release.grant_id,
-                "approval_request_id": release.approval_request_id,
-                "reservation_expires_at_epoch_ms": (
-                    release.reservation_expires_at_epoch_ms
-                ),
-            }
-            for field, expected_value in expected.items():
-                actual = row[field]
-                if field in {
-                    "credential_version",
-                    "reservation_expires_at_epoch_ms",
-                }:
-                    actual = int(actual)
-                if isinstance(expected_value, str):
-                    if not isinstance(actual, str) or not hmac.compare_digest(
-                        actual, expected_value
-                    ):
-                        raise HTTPException(
-                            status_code=409,
-                            detail="credential lease release authorization binding mismatch",
-                        )
-                elif actual != expected_value:
-                    raise HTTPException(
-                        status_code=409,
-                        detail="credential lease release authorization binding mismatch",
-                    )
-            if int(row["reservation_expires_at_epoch_ms"]) <= now_epoch_ms:
-                raise HTTPException(
-                    status_code=409,
-                    detail="credential lease release authorization expired",
-                )
-            authority_reason = db._release_attempt_authority_reason(
-                conn,
-                row,
-                now_epoch_ms=now_epoch_ms,
-                required_approver_roles={"approver"},
-                allowed_approver_ids=(
-                    set((jit.get("approvers") or {}).get("users") or []) or None
-                ),
-                require_approver_webauthn=_webauthn_required(
-                    _approval_authn_policy(jit)
-                ),
-            )
-            if authority_reason is not None:
-                raise HTTPException(
-                    status_code=409,
-                    detail="credential lease release authorization is no longer active",
-                )
-    except HTTPException:
-        raise
+        authority_snapshot = db.release_credential_request_authority_snapshot(
+            attempt_id=authority.attempt_id,
+            reservation_id=authority.reservation_id,
+            binding_digest=authority.binding_digest,
+            request_digest=authority.request_digest,
+            operation_digest=authority.operation_digest,
+            operation_context=authority.operation_context,
+            reservation_expires_at_epoch_ms=(
+                authority.reservation_expires_at_epoch_ms
+            ),
+            principal_id=payload.principal_id,
+            route_id=payload.route_id,
+            credential_id=payload.credential_id,
+            credential_version=int(payload.expected_credential_version or 0),
+            policy_hash=payload.policy_hash,
+            now_epoch_ms=now_epoch_ms,
+            required_approver_roles=({"approver"} if jit_required else set()),
+            allowed_approver_ids=(
+                set((jit.get("approvers") or {}).get("users") or []) or None
+                if jit_required
+                else None
+            ),
+            require_approver_webauthn=(
+                _webauthn_required(_approval_authn_policy(jit))
+                if jit_required
+                else False
+            ),
+        )
+    except db.ReleaseAuthorizationConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except db.ReleaseAuthorizationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(
             status_code=503,
-            detail="credential lease release authorization is unavailable",
+            detail="credential lease request authority is unavailable",
         ) from exc
-    return release.model_dump(by_alias=True)
+    if not hmac.compare_digest(
+        authority_snapshot["request_authority_sha256"],
+        authority_sha256,
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="credential lease request authority digest mismatch",
+        )
+
+    committed_operation = authority_snapshot["operation_context"].get(
+        "operation"
+    )
+    durable_required = False
+    for constraint in route.constraints:
+        if not isinstance(constraint, dict):
+            raise HTTPException(
+                status_code=503,
+                detail="active route constraint is invalid",
+            )
+        constraint_type = constraint.get("type")
+        if constraint_type in {"slidingWindowLimit", "weightedBudget"}:
+            durable_required = True
+        elif constraint_type == "traversalBudget":
+            operations = constraint.get("operations")
+            if operations is None:
+                durable_required = True
+            elif (
+                not isinstance(operations, list)
+                or any(
+                    not isinstance(item, str) or not item
+                    for item in operations
+                )
+            ):
+                raise HTTPException(
+                    status_code=503,
+                    detail="active traversal operation scope is invalid",
+                )
+            elif committed_operation in operations:
+                durable_required = True
+    quota_claims = authority_snapshot["quota_claims"]
+    expected_shared_quotas = _expected_release_authorization_shared_quotas(
+        route=route,
+        principal_id=payload.principal_id,
+        credential_version=int(payload.expected_credential_version or 0),
+        operation_context=authority_snapshot["operation_context"],
+    )
+    actual_shared_quotas = sorted(
+        (
+            {
+                "counter_key": claim["counterKey"],
+                "constraint_id": claim["constraintId"],
+                "operation": claim["operation"],
+                "window_kind": claim["windowKind"],
+                "window_seconds": claim["windowSeconds"],
+                "max_count": claim["max"],
+            }
+            for claim in quota_claims
+        ),
+        key=lambda item: item["counter_key"],
+    )
+    if not hmac.compare_digest(
+        _canonical_json(actual_shared_quotas),
+        _canonical_json(expected_shared_quotas),
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="request authority shared quota claims conflict with active policy",
+        )
+    durable_snapshot = authority_snapshot["durable_policy"]
+    if durable_required:
+        if (
+            authority_snapshot["release_protocol"] != "v2"
+            or not isinstance(durable_snapshot, dict)
+            or durable_snapshot.get("state") != "reserved"
+            or durable_snapshot.get("actorId") != DATA_PLANE_INSTANCE_ID
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="committed operation lacks exact durable release authority",
+            )
+        expected_durable = {
+            key: durable_snapshot[key]
+            for key in (
+                "reservationId",
+                "actorId",
+                "claimDigest",
+                "reservationDeadlineAtEpochMs",
+                "releaseBindingDigest",
+            )
+        }
+    else:
+        if (
+            authority_snapshot["release_protocol"] != "v1"
+            or durable_snapshot is not None
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="request authority carries inapplicable durable release state",
+            )
+        expected_durable = None
+
+    grant_id = authority_snapshot["grant_id"]
+    approval_request_id = authority_snapshot["approval_request_id"]
+    grant_pair_present = (
+        isinstance(grant_id, str)
+        and bool(grant_id)
+        and isinstance(approval_request_id, str)
+        and bool(approval_request_id)
+    )
+    if (
+        (grant_id is None) != (approval_request_id is None)
+        or jit_required != grant_pair_present
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="request authority JIT grant state conflicts with active policy",
+        )
+    expected_kind = (
+        "jitGrant"
+        if jit_required
+        else "atomicReservation"
+        if quota_claims or durable_required
+        else "decisionBound"
+    )
+    if expected_kind == "decisionBound":
+        if release is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="decision-bound operation must omit durable release authorization",
+            )
+        release_wire = None
+    else:
+        if release is None:
+            raise HTTPException(
+                status_code=409,
+                detail="controlled operation requires exact release authorization",
+            )
+        expected_release = {
+            "apiVersion": (
+                "serverware.credentialLeaseReleaseAuthorization/v2"
+                if durable_required
+                else "serverware.credentialLeaseReleaseAuthorization/v1"
+            ),
+            "kind": expected_kind,
+            "state": "reserved",
+            "attemptId": authority.attempt_id,
+            "reservationId": authority.reservation_id,
+            "bindingDigest": authority.binding_digest,
+            "principalId": payload.principal_id,
+            "routeId": payload.route_id,
+            "credentialId": payload.credential_id,
+            "credentialVersion": payload.expected_credential_version,
+            "policyHash": payload.policy_hash,
+            "requestDigest": authority.request_digest,
+            "operationDigest": authority.operation_digest,
+            "quotaClaims": quota_claims,
+            "grantId": grant_id,
+            "approvalRequestId": approval_request_id,
+            "reservationExpiresAtEpochMs": (
+                authority.reservation_expires_at_epoch_ms
+            ),
+        }
+        if expected_durable is not None:
+            expected_release["durablePolicy"] = expected_durable
+        release_wire = release.model_dump(
+            by_alias=True,
+            exclude_unset=True,
+        )
+        if not hmac.compare_digest(
+            _canonical_json(release_wire),
+            _canonical_json(expected_release),
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="credential release authorization does not match request authority",
+            )
+    return {
+        "controlled": True,
+        "issuanceKind": expected_kind,
+        "requestAuthority": authority_wire,
+        "requestAuthoritySha256": authority_sha256,
+        "releaseAuthorization": release_wire,
+        "authoritySnapshot": authority_snapshot,
+    }
 
 
 def _claim_credential_lease_release_authorization(
     payload: CredentialLeaseRequest,
     *,
     route: Any,
+    dispatch_authority: dict[str, Any],
     request_binding_sha256: str,
     recipient_nonce_sha256: str,
 ) -> dict[str, Any] | None:
     release = payload.release_authorization
-    if payload.purpose != "dispatchSecret" or release is None:
+    request_authority = payload.request_authority
+    if (
+        payload.purpose != "dispatchSecret"
+        or not dispatch_authority["controlled"]
+    ):
         return None
+    if request_authority is None:
+        raise HTTPException(
+            status_code=409,
+            detail="controlled credential issuance is missing request authority",
+        )
     jit = route.jit if isinstance(route.jit, dict) else {}
-    if jit.get("required") is not True:
-        return None
     try:
         return db.claim_release_credential_issuance(
-            attempt_id=release.attempt_id,
-            binding_digest=release.binding_digest,
+            release_kind=str(dispatch_authority["issuanceKind"]),
+            attempt_id=request_authority.attempt_id,
+            reservation_id=request_authority.reservation_id,
+            binding_digest=request_authority.binding_digest,
+            request_digest=request_authority.request_digest,
+            operation_digest=request_authority.operation_digest,
+            operation_context=request_authority.operation_context,
+            quota_claims=[
+                claim.model_dump(by_alias=True)
+                for claim in (release.quota_claims if release is not None else [])
+            ],
+            durable_policy=(
+                release.durable_policy.model_dump(by_alias=True)
+                if release is not None and release.durable_policy is not None
+                else None
+            ),
+            actor_id=DATA_PLANE_INSTANCE_ID,
             request_binding_sha256=request_binding_sha256,
+            request_authority_sha256=str(
+                dispatch_authority["requestAuthoritySha256"]
+            ),
             recipient_key_id=payload.recipient_key_id,
             recipient_nonce_sha256=recipient_nonce_sha256,
             principal_id=payload.principal_id,
@@ -11482,17 +13498,27 @@ def _claim_credential_lease_release_authorization(
             credential_id=payload.credential_id,
             credential_version=int(payload.expected_credential_version or 0),
             policy_hash=payload.policy_hash,
-            grant_id=str(release.grant_id or ""),
-            approval_request_id=str(release.approval_request_id or ""),
-            reservation_expires_at_epoch_ms=(
-                release.reservation_expires_at_epoch_ms
+            grant_id=release.grant_id if release is not None else None,
+            approval_request_id=(
+                release.approval_request_id if release is not None else None
             ),
-            required_approver_roles={"approver"},
+            reservation_expires_at_epoch_ms=(
+                request_authority.reservation_expires_at_epoch_ms
+            ),
+            required_approver_roles=(
+                {"approver"}
+                if dispatch_authority["issuanceKind"] == "jitGrant"
+                else set()
+            ),
             allowed_approver_ids=(
                 set((jit.get("approvers") or {}).get("users") or []) or None
+                if dispatch_authority["issuanceKind"] == "jitGrant"
+                else None
             ),
-            require_approver_webauthn=_webauthn_required(
-                _approval_authn_policy(jit)
+            require_approver_webauthn=(
+                _webauthn_required(_approval_authn_policy(jit))
+                if dispatch_authority["issuanceKind"] == "jitGrant"
+                else False
             ),
         )
     except db.ReleaseAuthorizationConflictError as exc:
@@ -11514,9 +13540,14 @@ def data_plane_credential_leases(
             )
         credential_policy = _assert_credential_lease_route_binding(payload, snapshot)
         route = _active_route_by_id(payload.route_id, snapshot=snapshot)
-        release_authorization = _assert_credential_lease_release_authorization(
+        dispatch_authority = _assert_credential_lease_release_authorization(
             payload, route=route
         )
+        release_authorization = dispatch_authority["releaseAuthorization"]
+        request_authority = dispatch_authority["requestAuthority"]
+        request_authority_sha256 = dispatch_authority[
+            "requestAuthoritySha256"
+        ]
         request_binding_sha256 = _credential_lease_request_binding_sha256(payload)
         if not EXPECTED_DATA_PLANE_BINARY_DIGEST:
             raise HTTPException(
@@ -11563,6 +13594,7 @@ def data_plane_credential_leases(
             payload.recipient_attestation,
             purpose=payload.purpose,
             request_binding_sha256=request_binding_sha256,
+            request_authority_sha256=request_authority_sha256,
             recipient_key_id=expected_recipient_key_id,
             recipient_nonce=payload.recipient_nonce,
             policy_hash_value=snapshot.hash,
@@ -11593,6 +13625,7 @@ def data_plane_credential_leases(
             _claim_credential_lease_release_authorization(
                 payload,
                 route=route,
+                dispatch_authority=dispatch_authority,
                 request_binding_sha256=request_binding_sha256,
                 recipient_nonce_sha256=recipient_nonce_sha256,
             )
@@ -11634,21 +13667,50 @@ def data_plane_credential_leases(
             payload, current_snapshot
         )
         current_route = _active_route_by_id(payload.route_id, snapshot=current_snapshot)
-        current_release_authorization = (
+        current_dispatch_authority = (
             _assert_credential_lease_release_authorization(
                 payload, route=current_route
             )
         )
-        if current_release_authorization != release_authorization:
+        if current_dispatch_authority != dispatch_authority:
             raise HTTPException(
                 status_code=409,
-                detail="credential lease release authorization changed during issuance",
+                detail="credential lease request authority changed during issuance",
             )
-        if release_authorization is not None and claimed_release_authorization is None:
+        if dispatch_authority["controlled"] and claimed_release_authorization is None:
             raise HTTPException(
                 status_code=409,
-                detail="JIT credential issuance has no atomic recipient claim",
+                detail="controlled credential issuance has no atomic recipient claim",
             )
+        if claimed_release_authorization is not None:
+            expected_claim = {
+                "release_kind": dispatch_authority["issuanceKind"],
+                "attempt_id": request_authority["attemptId"],
+                "reservation_id": request_authority["reservationId"],
+                "binding_digest": request_authority["bindingDigest"],
+                "request_digest": request_authority["requestDigest"],
+                "operation_digest": request_authority["operationDigest"],
+                "request_binding_sha256": request_binding_sha256,
+                "request_authority_sha256": request_authority_sha256,
+                "recipient_key_id": payload.recipient_key_id,
+                "recipient_nonce_sha256": recipient_nonce_sha256,
+                "reservation_expires_at_epoch_ms": request_authority[
+                    "reservationExpiresAtEpochMs"
+                ],
+            }
+            for field, expected in expected_claim.items():
+                actual = claimed_release_authorization.get(field)
+                if isinstance(expected, str):
+                    matches = isinstance(actual, str) and hmac.compare_digest(
+                        actual, expected
+                    )
+                else:
+                    matches = actual == expected
+                if not matches:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="controlled credential issuance claim binding mismatch",
+                    )
 
         issued_at_epoch_ms = time.time_ns() // 1_000_000
         ttl_ms = max(
@@ -11659,10 +13721,10 @@ def data_plane_credential_leases(
             ),
         )
         expires_at_epoch_ms = issued_at_epoch_ms + ttl_ms
-        if release_authorization is not None:
+        if request_authority is not None:
             expires_at_epoch_ms = min(
                 expires_at_epoch_ms,
-                int(release_authorization["reservationExpiresAtEpochMs"]),
+                int(request_authority["reservationExpiresAtEpochMs"]),
             )
         if expires_at_epoch_ms <= issued_at_epoch_ms:
             raise HTTPException(
@@ -11715,8 +13777,16 @@ def data_plane_credential_leases(
                 )
             credentials = [credential_entry]
 
+            v4_dispatch = (
+                payload.api_version
+                == "serverware.credentialLeaseRequest/v4"
+            )
             aad = {
-                "apiVersion": "serverware.credentialLeaseEnvelope/v2",
+                "apiVersion": (
+                    "serverware.credentialLeaseEnvelope/v3"
+                    if v4_dispatch
+                    else "serverware.credentialLeaseEnvelope/v2"
+                ),
                 "algorithm": "X25519-HKDF-SHA256-AES-256-GCM",
                 "recipientKeyId": payload.recipient_key_id,
                 "recipientNonce": payload.recipient_nonce,
@@ -11728,8 +13798,20 @@ def data_plane_credential_leases(
                 "issuedAtEpochMs": issued_at_epoch_ms,
                 "expiresAtEpochMs": expires_at_epoch_ms,
             }
+            if v4_dispatch:
+                aad.update(
+                    {
+                        "purpose": payload.purpose,
+                        "requestBindingSha256": request_binding_sha256,
+                        "requestAuthoritySha256": request_authority_sha256,
+                    }
+                )
             plaintext = {
-                "apiVersion": "serverware.credentialLeaseSet/v3",
+                "apiVersion": (
+                    "serverware.credentialLeaseSet/v4"
+                    if v4_dispatch
+                    else "serverware.credentialLeaseSet/v3"
+                ),
                 "purpose": payload.purpose,
                 "requestBindingSha256": request_binding_sha256,
                 "releaseAuthorization": release_authorization,
@@ -11744,6 +13826,18 @@ def data_plane_credential_leases(
                 "expiresAtEpochMs": expires_at_epoch_ms,
                 "credentials": credentials,
             }
+            if v4_dispatch:
+                plaintext.update(
+                    {
+                        "requestAuthority": request_authority,
+                        "requestAuthoritySha256": request_authority_sha256,
+                    }
+                )
+            elif release_authorization is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="legacy credential lease cannot carry release authorization",
+                )
             if (
                 len(_canonical_json(plaintext).encode("utf-8"))
                 > _CREDENTIAL_LEASE_PLAINTEXT_MAX_BYTES
@@ -11768,7 +13862,7 @@ def data_plane_credential_leases(
                 raise HTTPException(
                     status_code=503, detail="credential lease response exceeds 8 MiB"
                 )
-        if release_authorization is not None:
+        if dispatch_authority["controlled"]:
             final_snapshot = get_policy_snapshot()
             if final_snapshot is None:
                 raise HTTPException(
@@ -11778,15 +13872,15 @@ def data_plane_credential_leases(
             final_route = _active_route_by_id(
                 payload.route_id, snapshot=final_snapshot
             )
-            final_release_authorization = (
+            final_dispatch_authority = (
                 _assert_credential_lease_release_authorization(
                     payload, route=final_route
                 )
             )
-            if final_release_authorization != release_authorization:
+            if final_dispatch_authority != dispatch_authority:
                 raise HTTPException(
                     status_code=409,
-                    detail="credential lease release authorization changed after encryption",
+                    detail="credential lease request authority changed after encryption",
                 )
             now_epoch_ms = time.time_ns() // 1_000_000
             if (
@@ -12089,7 +14183,8 @@ def data_plane_rate_limit_consume(
             detail="data-plane credential reference does not match active route",
         )
     if expected_credential_ref:
-        credential = db.get_credential(expected_credential_ref)
+        with db.credential_generation_snapshot(expected_credential_ref) as credential:
+            credential = dict(credential) if credential is not None else None
         if (
             not credential
             or int(credential.get("credential_version") or 0)
@@ -12214,9 +14309,78 @@ def _rate_limit_counter_key(
     )
 
 
+def _expected_release_authorization_shared_quotas(
+    *,
+    route: Any,
+    principal_id: str,
+    credential_version: int,
+    operation_context: dict[str, Any],
+) -> list[dict[str, Any]]:
+    operation_name = operation_context.get("operation")
+    expected: list[dict[str, Any]] = []
+    for constraint in route.constraints:
+        if (
+            not isinstance(constraint, dict)
+            or constraint.get("type") != "rateLimit"
+            or constraint.get("store", "local") != "shared"
+            or constraint.get("phase", "request") != "request"
+        ):
+            continue
+        key_policy = constraint.get("key") or {}
+        scope = key_policy.get("scope") or [
+            "principal",
+            "credential",
+            "route",
+            "operation",
+        ]
+        required_operation_fields = set(
+            key_policy.get("operationFields") or []
+        )
+        if "operation" in scope:
+            required_operation_fields.add("operation")
+        invalid_fields = sorted(
+            field
+            for field in required_operation_fields
+            if not isinstance(operation_context.get(field), str)
+            or not operation_context.get(field)
+            or len(str(operation_context[field]).encode("utf-8")) > 256
+        )
+        if invalid_fields:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "release authorization is missing bounded operation fields: "
+                    + ", ".join(invalid_fields)
+                ),
+            )
+        window_kind = str(constraint.get("calendarWindow") or "fixed")
+        expected.append(
+            {
+                "counter_key": _rate_limit_counter_key(
+                    constraint=constraint,
+                    route_id=route.id,
+                    principal_id=principal_id,
+                    credential_ref=route.credential_ref,
+                    credential_version=credential_version,
+                    operation_context=operation_context,
+                ),
+                "constraint_id": str(constraint["id"]),
+                "operation": operation_name,
+                "window_kind": window_kind,
+                "window_seconds": (
+                    int(constraint["windowSeconds"])
+                    if window_kind == "fixed"
+                    else None
+                ),
+                "max_count": int(constraint["max"]),
+            }
+        )
+    return sorted(expected, key=lambda item: item["counter_key"])
+
+
 def _require_data_plane_token(
     x_serverware_data_plane_token: str | None, expected_token: str
-) -> None:
+) -> str:
     if not expected_token or not DATA_PLANE_INSTANCE_ID:
         raise HTTPException(
             status_code=503, detail="data-plane authentication is not configured"
@@ -12227,9 +14391,50 @@ def _require_data_plane_token(
         raise HTTPException(
             status_code=401, detail="data-plane authentication required"
         )
+    if (
+        DATA_PLANE_INSTANCE_ID != DATA_PLANE_INSTANCE_ID.strip()
+        or len(DATA_PLANE_INSTANCE_ID.encode("utf-8")) > 256
+        or any(
+            ord(character) < 32 or ord(character) == 127
+            for character in DATA_PLANE_INSTANCE_ID
+        )
+    ):
+        raise HTTPException(
+            status_code=503, detail="data-plane actor identity is invalid"
+        )
+    return DATA_PLANE_INSTANCE_ID
 
 
-def _release_authorization_api_response(result: dict[str, Any]) -> dict[str, Any]:
+def _release_authorization_durable_response(
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "state": result.get("state"),
+        "attemptId": result.get("attempt_id"),
+        "claimDigest": result.get("claim_digest"),
+        "reservationId": result.get("reservation_id"),
+        "actorId": result.get("actor_id"),
+        "reservationDeadlineAtEpochMs": result.get(
+            "reservation_deadline_at_epoch_ms"
+        ),
+        "dispatchDeadlineAtEpochMs": result.get(
+            "dispatch_deadline_at_epoch_ms"
+        ),
+        "responseEvidenceDigest": result.get("response_evidence_digest"),
+        "failureReason": result.get("failure_reason"),
+        "responseBodySha256": result.get("response_body_sha256"),
+        "uncertainty": result.get("uncertainty"),
+    }
+
+
+def _release_authorization_api_response(
+    result: dict[str, Any],
+    *,
+    api_version: Literal[
+        "serverware.releaseAuthorization/v1",
+        "serverware.releaseAuthorization/v2",
+    ] = "serverware.releaseAuthorization/v1",
+) -> dict[str, Any]:
     quotas = []
     for item in result.get("quotas") or []:
         window_kind = str(item.get("window_kind") or "")
@@ -12251,7 +14456,7 @@ def _release_authorization_api_response(result: dict[str, Any]) -> dict[str, Any
             quota["calendarWindow"] = window_kind
         quotas.append(quota)
     response = {
-        "apiVersion": "serverware.releaseAuthorization/v1",
+        "apiVersion": api_version,
         "ok": True,
         "authorized": bool(result.get("authorized")),
         "state": result.get("state"),
@@ -12282,7 +14487,348 @@ def _release_authorization_api_response(result: dict[str, Any]) -> dict[str, Any
                 "approvalCreated": bool(result.get("approval_created")),
             }
         )
+    if api_version == "serverware.releaseAuthorization/v2":
+        durable = result.get("durable_policy")
+        if not isinstance(durable, dict):
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "durable_policy_response_missing",
+                    "detail": "release authorization v2 result lacks durable policy state",
+                },
+            )
+        response["durablePolicy"] = _release_authorization_durable_response(
+            durable
+        )
     return response
+
+
+_RELEASE_AUTHORIZATION_V2_DENIAL_REASONS = frozenset(
+    {
+        "jit_grant_unavailable",
+        "jit_grant_expired",
+        "shared_quota_denied",
+        "shared_quota_window_expired",
+        "durable_policy_denied",
+        "release_authorization_busy",
+    }
+)
+
+
+def _assert_release_authorization_v2_reserve_result(
+    result: dict[str, Any],
+) -> None:
+    if result.get("authorized") or (
+        result.get("reason") in _RELEASE_AUTHORIZATION_V2_DENIAL_REASONS
+    ):
+        return
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "error": "release_authorization_v2_denial_unrepresentable",
+            "detail": "release authority changed while the v2 reservation was being created",
+        },
+    )
+
+
+def _release_authorization_durable_claims(
+    payload: DataPlaneReleaseAuthorizationReserve,
+    route: Any,
+    *,
+    authenticated_actor_id: str,
+) -> dict[str, Any] | None:
+    operation_fields = dict(payload.operation_context)
+    operation = operation_fields.get("operation")
+    durable_constraints = [
+        constraint
+        for constraint in route.constraints
+        if (
+            constraint.get("type")
+            in {"slidingWindowLimit", "weightedBudget"}
+            or (
+                constraint.get("type") == "traversalBudget"
+                and (
+                    constraint.get("operations") is None
+                    or operation in constraint.get("operations")
+                )
+            )
+        )
+    ]
+    if payload.durable_policy is None:
+        if durable_constraints:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "durable_policy_v2_required",
+                    "detail": "active route requires release authorization v2",
+                },
+            )
+        return None
+    if not durable_constraints:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "durable_policy_v2_not_applicable",
+                "detail": "active route has no durable policy constraints",
+            },
+        )
+    if not hmac.compare_digest(
+        payload.durable_policy.actor_id, authenticated_actor_id
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "data_plane_actor_mismatch",
+                "detail": "durablePolicy actorId does not match authenticated ingress",
+            },
+        )
+    supplied_claims = copy.deepcopy(payload.durable_policy.claims)
+    try:
+        expected_claims = shared_durable_budget_claims(
+            route,
+            principal_id=payload.principal_id,
+            credential_ref=payload.credential_ref,
+            credential_version=payload.credential_version,
+            policy_hash=payload.policy_hash,
+            operation_fields=operation_fields,
+        )
+        request = payload.canonical_request["request"]
+        query_pairs = [
+            (str(item[0]), str(item[1]))
+            for item in request["query"]
+        ]
+        headers = dict(request["headers"])
+        for constraint in route.constraints:
+            if constraint.get("type") != "traversalBudget":
+                continue
+            operations = constraint.get("operations")
+            if operations is not None and operation not in operations:
+                continue
+            traversal = constraint["traversal"]
+            cursor = traversal["cursor"]
+            admitted_query_fields = adapter_operation_query_fields(
+                route.adapter_type,
+                route.adapter_config,
+                str(operation or ""),
+            )
+            if admitted_query_fields is None:
+                raise ValueError(
+                    "traversal operation query catalog is unavailable"
+                )
+            cursor_query_field = (
+                str(cursor["requestField"])
+                if cursor["requestSource"] == "query"
+                else None
+            )
+            expected_lineage_fields = admitted_query_fields - (
+                {cursor_query_field}
+                if cursor_query_field is not None
+                else set()
+            )
+            configured_lineage_fields = set(
+                traversal["lineage"]["queryFields"]
+            )
+            if configured_lineage_fields != expected_lineage_fields:
+                raise ValueError("traversal query lineage is incomplete")
+            actual_query_fields = {key for key, _ in query_pairs}
+            allowed_query_fields = set(expected_lineage_fields)
+            if cursor_query_field is not None:
+                allowed_query_fields.add(cursor_query_field)
+            if not actual_query_fields.issubset(allowed_query_fields):
+                raise ValueError(
+                    "traversal request has an unbound shaping query"
+                )
+            canonical_query_fields: dict[str, str | None] = {}
+            for field_name in sorted(expected_lineage_fields):
+                values = [
+                    value
+                    for key, value in query_pairs
+                    if key == field_name
+                ]
+                if len(values) > 1:
+                    raise ValueError(
+                        "traversal query lineage is ambiguous"
+                    )
+                canonical_query_fields[field_name] = (
+                    values[0] if values else None
+                )
+            source = str(cursor["requestSource"])
+            field_name = str(cursor["requestField"])
+            cursor_value: str | None
+            if source == "query":
+                values = [
+                    value for key, value in query_pairs if key == field_name
+                ]
+                if len(values) > 1:
+                    raise ValueError("traversal request cursor is ambiguous")
+                cursor_value = values[0] if values else None
+            elif source == "header":
+                cursor_value = headers.get(field_name.lower())
+            elif source == "jsonBody":
+                raise ValueError(
+                    "traversal JSON cursor evidence is not present in the closed v2 reserve body"
+                )
+            else:
+                raise ValueError("traversal cursor source is unsupported")
+            isolated_route = type(
+                "_ReleaseTraversalClaimRoute",
+                (),
+                {"id": route.id, "constraints": (constraint,)},
+            )()
+            generated = traversal_budget_claims(
+                isolated_route,
+                principal_id=payload.principal_id,
+                credential_ref=payload.credential_ref,
+                credential_version=payload.credential_version,
+                policy_hash=payload.policy_hash,
+                operation_fields=operation_fields,
+                canonical_query_fields=canonical_query_fields,
+                request_cursor_values=(
+                    {field_name: cursor_value}
+                    if cursor_value is not None
+                    else {}
+                ),
+            )
+            if len(generated) != 1:
+                raise ValueError(
+                    "traversal policy did not yield one exact claim"
+                )
+            expected = generated[0]
+            expected_claims.append(expected)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "durable_policy_claims_invalid",
+                "detail": str(exc),
+            },
+        ) from exc
+    if expected_claims != supplied_claims:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "durable_policy_claim_substitution",
+                "detail": "durablePolicy claims do not match the active request policy",
+            },
+        )
+    expected_digest = "sha256:" + hashlib.sha256(
+        _canonical_json(expected_claims).encode("utf-8")
+    ).hexdigest()
+    if not hmac.compare_digest(
+        payload.durable_policy.claim_digest, expected_digest
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "durable_policy_claim_digest_mismatch",
+                "detail": "durablePolicy claimDigest is not authoritative",
+            },
+        )
+    return {
+        "actorId": authenticated_actor_id,
+        "claimDigest": expected_digest,
+        "claims": expected_claims,
+    }
+
+
+def _release_authorization_transition(
+    payload: (
+        DataPlaneReleaseAuthorizationDispatch
+        | DataPlaneReleaseAuthorizationComplete
+    ),
+    *,
+    authenticated_actor_id: str,
+) -> dict[str, Any] | None:
+    durable = payload.durable_policy
+    if durable is None:
+        return None
+    if not hmac.compare_digest(durable.actor_id, authenticated_actor_id):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "data_plane_actor_mismatch",
+                "detail": "durablePolicy actorId does not match authenticated ingress",
+            },
+        )
+    if not hmac.compare_digest(durable.attempt_id, payload.attempt_id):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "durable_policy_attempt_substitution",
+                "detail": "durablePolicy attemptId does not match outer attemptId",
+            },
+        )
+    transition = durable.model_dump(
+        by_alias=True,
+        exclude_unset=True,
+    )
+    if isinstance(payload, DataPlaneReleaseAuthorizationComplete) and (
+        payload.outcome in {"forwarded", "unknown"}
+    ):
+        evidence = durable.response_evidence
+        if evidence is None:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "durable_policy_evidence_missing",
+                    "detail": "durable policy completion evidence is required",
+                },
+            )
+        evidence_digest = "sha256:" + hashlib.sha256(
+            _canonical_json(evidence).encode("utf-8")
+        ).hexdigest()
+        if not hmac.compare_digest(
+            durable.response_evidence_digest or "", evidence_digest
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "durable_policy_evidence_digest_mismatch",
+                    "detail": "responseEvidenceDigest does not match responseEvidence",
+                },
+            )
+        body_digest = durable.response_body_sha256
+        if payload.outcome == "forwarded":
+            evidence_matches_body = all(
+                isinstance(item, dict)
+                and item.get("response_digest") == body_digest
+                for item in evidence
+            )
+        else:
+            evidence_matches_body = all(
+                isinstance(item, dict)
+                and item.get("response_body_sha256") == body_digest
+                for item in evidence
+            )
+        if not evidence_matches_body:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "durable_policy_response_substitution",
+                    "detail": "response evidence is not bound to responseBodySha256",
+                },
+            )
+    return transition
+
+
+def _release_authorization_db_error(
+    exc: Exception,
+    *,
+    operation: Literal["reserve", "dispatch", "complete"],
+) -> HTTPException:
+    if isinstance(exc, db.ReleaseAuthorizationConflictError):
+        status_code = 409
+        error = "release_authorization_conflict"
+    elif isinstance(exc, getattr(db, "PolicyStateBundleStoreError", ())):
+        status_code = 409
+        error = "durable_policy_transition_rejected"
+    else:
+        status_code = 503 if operation == "reserve" else 409
+        error = f"release_authorization_{operation}_failed"
+    return HTTPException(
+        status_code=status_code,
+        detail={"error": error, "detail": str(exc)},
+    )
 
 
 _RELEASE_CANONICAL_TOP_LEVEL_FIELDS = {
@@ -12296,7 +14842,7 @@ _RELEASE_CANONICAL_TOP_LEVEL_FIELDS = {
     "request",
     "operation",
 }
-_RELEASE_CANONICAL_REQUEST_FIELDS = {
+_RELEASE_CANONICAL_REQUEST_V1_FIELDS = {
     "method",
     "scheme",
     "authority",
@@ -12305,6 +14851,11 @@ _RELEASE_CANONICAL_REQUEST_FIELDS = {
     "headers",
     "body_sha256",
 }
+_RELEASE_CANONICAL_REQUEST_V2_FIELDS = (
+    _RELEASE_CANONICAL_REQUEST_V1_FIELDS | {"discard_headers"}
+)
+# Rolling upgrades install this dual-version consumer before any route enables
+# discardHeaders and before gates begin emitting v2 for those routes.
 _RELEASE_SENSITIVE_QUERY_KEYS = {
     "access_token",
     "api_key",
@@ -12341,29 +14892,43 @@ def _release_canonical_text(
 
 def _release_authorization_approval_review(
     payload: DataPlaneReleaseAuthorizationReserve,
+    snapshot: Any,
     route: Any,
 ) -> tuple[str, str, dict[str, Any], dict[str, Any]]:
     canonical = payload.canonical_request
     if not isinstance(canonical, dict):
         raise HTTPException(
             status_code=409,
-            detail="JIT release authorization requires canonicalRequest",
+            detail="release authorization requires canonicalRequest",
         )
-    if set(canonical) != _RELEASE_CANONICAL_TOP_LEVEL_FIELDS or canonical.get("v") != 1:
+    canonical_version = canonical.get("v")
+    if (
+        set(canonical) != _RELEASE_CANONICAL_TOP_LEVEL_FIELDS
+        or type(canonical_version) is not int
+        or canonical_version not in {1, 2}
+    ):
         raise HTTPException(
             status_code=409,
-            detail="canonicalRequest does not match the v1 request shape",
+            detail="canonicalRequest does not match a supported request shape",
         )
     request = canonical.get("request")
     operation = canonical.get("operation")
+    expected_request_fields = (
+        _RELEASE_CANONICAL_REQUEST_V1_FIELDS
+        if canonical_version == 1
+        else _RELEASE_CANONICAL_REQUEST_V2_FIELDS
+    )
     if (
         not isinstance(request, dict)
-        or set(request) != _RELEASE_CANONICAL_REQUEST_FIELDS
+        or set(request) != expected_request_fields
         or not isinstance(operation, dict)
     ):
         raise HTTPException(
             status_code=409,
-            detail="canonicalRequest does not match the v1 request shape",
+            detail=(
+                f"canonicalRequest does not match the v{canonical_version} "
+                "request shape"
+            ),
         )
     client_ip = canonical.get("client_ip")
     if client_ip is not None:
@@ -12456,12 +15021,150 @@ def _release_authorization_approval_review(
             status_code=409,
             detail="canonicalRequest request.body_sha256 is invalid",
         )
+    snapshot_principals = getattr(snapshot, "principals", None)
+    principal_policy = (
+        snapshot_principals.get(payload.principal_id)
+        if isinstance(snapshot_principals, dict)
+        else None
+    )
+    if principal_policy is None or not isinstance(
+        getattr(principal_policy, "required_headers", None), dict
+    ) or any(
+        not isinstance(name, str) for name in principal_policy.required_headers
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="active principal request-header policy is invalid",
+        )
+    credential_policy = None
+    if route.credential_ref:
+        snapshot_credentials = getattr(snapshot, "credentials", None)
+        credential_policy = (
+            snapshot_credentials.get(route.credential_ref)
+            if isinstance(snapshot_credentials, dict)
+            else None
+        )
+        if credential_policy is None or not isinstance(
+            getattr(credential_policy, "injection", None), dict
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="active credential injection policy is invalid",
+            )
+    adapter_config = getattr(route, "adapter_config", None)
+    request_config = (
+        adapter_config.get("request")
+        if isinstance(adapter_config, dict)
+        else None
+    )
+    if not isinstance(request_config, dict):
+        raise HTTPException(
+            status_code=409,
+            detail="active route request-header policy is invalid",
+        )
+    raw_allowed_headers = request_config.get("allowedHeaders", [])
+    raw_required_headers = request_config.get("requiredHeaders", {})
+    if not isinstance(raw_allowed_headers, list) or not isinstance(
+        raw_required_headers, dict
+    ) or any(not isinstance(name, str) for name in raw_allowed_headers) or any(
+        not isinstance(name, str) for name in raw_required_headers
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="active route request-header policy is invalid",
+        )
+    credential_target = (
+        credential_injection_target(credential_policy.injection)
+        if credential_policy is not None
+        else None
+    )
+    if credential_policy is not None and credential_target is None:
+        raise HTTPException(
+            status_code=409,
+            detail="active credential injection policy is invalid",
+        )
+    try:
+        expected_discard_headers = list(
+            validate_discard_headers(
+                route.id,
+                request_config,
+                allowed_headers={
+                    str(name).lower() for name in raw_allowed_headers
+                },
+                required_headers={
+                    str(name).lower() for name in raw_required_headers
+                },
+                credential_header=(
+                    credential_target[1]
+                    if credential_target is not None
+                    and credential_target[0] == "header"
+                    else None
+                ),
+                principal_identity_headers={
+                    str(name).lower()
+                    for name in principal_policy.required_headers
+                },
+            )
+        )
+    except PolicyBundleError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="active route discard-header policy is invalid",
+        ) from exc
+    discard_headers: list[str]
+    if canonical_version == 1:
+        discard_headers = []
+        if expected_discard_headers:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "canonicalRequest v1 is not valid for an active route with "
+                    "discard headers"
+                ),
+            )
+    else:
+        raw_discard_headers = request.get("discard_headers")
+        discard_headers_invalid = (
+            not isinstance(raw_discard_headers, list)
+            or not raw_discard_headers
+            or len(raw_discard_headers) > 16
+        )
+        if not discard_headers_invalid:
+            discard_headers_invalid = any(
+                not isinstance(name, str)
+                or len(name.encode("utf-8")) > 128
+                or _RELEASE_HTTP_FIELD_NAME_RE.fullmatch(name) is None
+                for name in raw_discard_headers
+            )
+        if not discard_headers_invalid:
+            discard_headers_invalid = (
+                raw_discard_headers != sorted(raw_discard_headers)
+                or len(raw_discard_headers) != len(set(raw_discard_headers))
+            )
+        if (
+            discard_headers_invalid
+            or raw_discard_headers != expected_discard_headers
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="canonicalRequest request.discard_headers is invalid",
+            )
+        discard_headers = [str(name) for name in raw_discard_headers]
+    if canonical_version == 2 and not expected_discard_headers:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "canonicalRequest v2 is not valid for an active route without "
+                "discard headers"
+            ),
+        )
     headers = request.get("headers")
     if not isinstance(headers, dict) or any(
         not isinstance(name, str)
         or not isinstance(value, str)
+        or name != name.lower()
         or _RELEASE_HTTP_FIELD_NAME_RE.fullmatch(name) is None
-        or len(name.encode("utf-8")) > 256
+        or len(name.encode("utf-8")) > 128
         or len(value.encode("utf-8")) > 16 * 1024
         or any(
             ord(character) < 32 or ord(character) == 127
@@ -12481,6 +15184,12 @@ def _release_authorization_approval_review(
         raise HTTPException(
             status_code=409,
             detail="canonicalRequest request host does not match authority",
+        )
+    discard_aliases = {name.replace("_", "-") for name in discard_headers}
+    if any(name.replace("_", "-") in discard_aliases for name in headers):
+        raise HTTPException(
+            status_code=409,
+            detail="canonicalRequest retained a declared discarded header",
         )
     raw_query = request.get("query")
     if not isinstance(raw_query, list):
@@ -12528,11 +15237,6 @@ def _release_authorization_approval_review(
         raise HTTPException(
             status_code=409,
             detail="canonicalRequest does not hash to requestDigest",
-        )
-    if payload.operation_digest is None:
-        raise HTTPException(
-            status_code=409,
-            detail="canonicalRequest requires operationDigest",
         )
     operation_view = {
         "principal": canonical["principal"],
@@ -12616,7 +15320,7 @@ def _release_authorization_approval_review(
 
 def _release_authorization_route_claims(
     payload: DataPlaneReleaseAuthorizationReserve,
-) -> tuple[Any, list[dict[str, Any]], bool]:
+) -> tuple[Any, Any, list[dict[str, Any]], bool]:
     snapshot = get_policy_snapshot()
     if not snapshot:
         raise HTTPException(status_code=503, detail="policy bundle missing")
@@ -12637,11 +15341,15 @@ def _release_authorization_route_claims(
             detail="data-plane credential reference does not match active route",
         )
     if expected_credential_ref:
-        credential = db.get_credential(expected_credential_ref)
+        with db.credential_generation_snapshot(expected_credential_ref) as credential:
+            credential_version = (
+                credential.get("credential_version")
+                if isinstance(credential, dict)
+                else None
+            )
         if (
-            not credential
-            or int(credential.get("credential_version") or 0)
-            != payload.credential_version
+            type(credential_version) is not int
+            or credential_version != payload.credential_version
         ):
             raise HTTPException(
                 status_code=409, detail="data-plane credential version is not current"
@@ -12665,66 +15373,16 @@ def _release_authorization_route_claims(
         )
     jit = route.jit or {}
     require_jit_grant = jit.get("required") is True
-    if (
-        require_jit_grant
-        and (jit.get("binding") or {}).get("type") == "operationDigest"
-        and payload.operation_digest is None
-    ):
-        raise HTTPException(
-            status_code=409,
-            detail="active route requires an operation-bound JIT grant",
-        )
-
-    shared_quotas: list[dict[str, Any]] = []
-    for constraint in route.constraints:
-        if (
-            constraint.get("type") != "rateLimit"
-            or constraint.get("store", "local") != "shared"
-        ):
-            continue
-        key_policy = constraint.get("key") or {}
-        scope = key_policy.get("scope") or [
-            "principal",
-            "credential",
-            "route",
-            "operation",
-        ]
-        required_operation_fields = set(key_policy.get("operationFields") or [])
-        if "operation" in scope:
-            required_operation_fields.add("operation")
-        invalid_fields = sorted(
-            field
-            for field in required_operation_fields
-            if not isinstance(operation_context.get(field), str)
-            or not operation_context.get(field)
-            or len(str(operation_context[field]).encode("utf-8")) > 256
-        )
-        if invalid_fields:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    "release authorization is missing bounded operation fields: "
-                    + ", ".join(invalid_fields)
-                ),
-            )
-        quota_claim = {
-            "counter_key": _rate_limit_counter_key(
-                constraint=constraint,
-                route_id=route.id,
-                principal_id=payload.principal_id,
-                credential_ref=route.credential_ref,
-                credential_version=payload.credential_version,
-                operation_context=operation_context,
-            ),
-            "constraint_id": str(constraint["id"]),
-            "operation": operation_name,
-            "window_kind": str(constraint.get("calendarWindow") or "fixed"),
-            "max_count": int(constraint["max"]),
-        }
-        if quota_claim["window_kind"] == "fixed":
-            quota_claim["window_seconds"] = int(constraint["windowSeconds"])
-        shared_quotas.append(quota_claim)
-    return route, shared_quotas, require_jit_grant
+    shared_quotas = _expected_release_authorization_shared_quotas(
+        route=route,
+        principal_id=payload.principal_id,
+        credential_version=payload.credential_version,
+        operation_context=operation_context,
+    )
+    for quota_claim in shared_quotas:
+        if quota_claim["window_seconds"] is None:
+            quota_claim.pop("window_seconds")
+    return snapshot, route, shared_quotas, require_jit_grant
 
 
 def _release_authorization_maintenance() -> None:
@@ -12743,28 +15401,32 @@ def _release_authorization_maintenance() -> None:
 
 @app.post("/api/data-plane/release-authorizations/reserve")
 def data_plane_release_authorization_reserve(
-    payload: DataPlaneReleaseAuthorizationReserve,
+    payload: DataPlaneReleaseAuthorizationReserve = Depends(
+        _bounded_release_authorization_reserve_request
+    ),
     x_serverware_data_plane_token: str | None = Header(
         default=None, alias="X-Serverware-Data-Plane-Token"
     ),
 ) -> dict[str, Any]:
-    _require_data_plane_token(
+    authenticated_actor_id = _require_data_plane_token(
         x_serverware_data_plane_token, DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN
     )
-    route, shared_quotas, require_jit_grant = (
+    snapshot, route, shared_quotas, require_jit_grant = (
         _release_authorization_route_claims(payload)
     )
-    approval_review = None
+    approval_review = _release_authorization_approval_review(
+        payload,
+        snapshot,
+        route,
+    )
+    durable_policy = _release_authorization_durable_claims(
+        payload,
+        route,
+        authenticated_actor_id=authenticated_actor_id,
+    )
     jit = route.jit or {}
-    if require_jit_grant or payload.canonical_request is not None:
-        approval_review = _release_authorization_approval_review(payload, route)
     jit_approval_request = None
     if require_jit_grant:
-        if approval_review is None:
-            raise HTTPException(
-                status_code=409,
-                detail="JIT release authorization requires canonicalRequest",
-            )
         method, url, canonical_request, redacted_display = approval_review
         jit_approval_request = {
             "method": method,
@@ -12781,92 +15443,166 @@ def data_plane_release_authorization_reserve(
         }
     _release_authorization_maintenance()
     try:
-        result = db.reserve_release_authorization(
-            attempt_id=payload.attempt_id,
-            flow_id=payload.flow_id,
-            principal_id=payload.principal_id,
-            route_id=payload.route_id,
-            credential_id=payload.credential_ref or "",
-            credential_version=payload.credential_version,
-            policy_hash=payload.policy_hash,
-            request_digest=payload.request_digest,
-            operation_digest=payload.operation_digest,
-            operation_context=dict(payload.operation_context),
-            shared_quotas=shared_quotas,
-            require_jit_grant=require_jit_grant,
-            reservation_ttl_seconds=RELEASE_AUTHORIZATION_RESERVATION_TTL_SECONDS,
-            jit_approval_request=jit_approval_request,
-            actor_id=DATA_PLANE_INSTANCE_ID,
-            authority_policy_hash=payload.policy_hash,
-            authority_route_id=route.id,
-            required_approver_roles={"approver"} if require_jit_grant else None,
-            allowed_approver_ids=(
-                set((jit.get("approvers") or {}).get("users") or []) or None
+        reserve = (
+            db.reserve_release_authorization_v2
+            if durable_policy is not None
+            else db.reserve_release_authorization
+        )
+        reserve_arguments = {
+            "attempt_id": payload.attempt_id,
+            "flow_id": payload.flow_id,
+            "principal_id": payload.principal_id,
+            "route_id": payload.route_id,
+            "credential_id": payload.credential_ref or "",
+            "credential_version": payload.credential_version,
+            "policy_hash": payload.policy_hash,
+            "request_digest": payload.request_digest,
+            "operation_digest": payload.operation_digest,
+            "operation_context": dict(payload.operation_context),
+            "shared_quotas": shared_quotas,
+            "require_jit_grant": require_jit_grant,
+            "reservation_ttl_seconds": (
+                RELEASE_AUTHORIZATION_RESERVATION_TTL_SECONDS
+            ),
+            "jit_approval_request": jit_approval_request,
+            "actor_id": authenticated_actor_id,
+            "authority_policy_hash": payload.policy_hash,
+            "authority_route_id": route.id,
+            "required_approver_roles": (
+                {"approver"} if require_jit_grant else None
+            ),
+            "allowed_approver_ids": (
+                set((jit.get("approvers") or {}).get("users") or [])
+                or None
             )
             if require_jit_grant
             else None,
-            require_approver_webauthn=(
+            "require_approver_webauthn": (
                 require_jit_grant
                 and _webauthn_required(_approval_authn_policy(jit))
             ),
-        )
-    except db.ReleaseAuthorizationConflictError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except db.ReleaseAuthorizationError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        }
+        if durable_policy is not None:
+            reserve_arguments["durable_policy_binding"] = durable_policy
+        result = reserve(**reserve_arguments)
+    except (db.ReleaseAuthorizationError, db.PolicyStateBundleStoreError) as exc:
+        raise _release_authorization_db_error(
+            exc, operation="reserve"
+        ) from exc
+    if durable_policy is not None:
+        _assert_release_authorization_v2_reserve_result(result)
     _release_authorization_maintenance()
-    return _release_authorization_api_response(result)
+    return _release_authorization_api_response(
+        result,
+        api_version=(
+            "serverware.releaseAuthorization/v2"
+            if durable_policy is not None
+            else "serverware.releaseAuthorization/v1"
+        ),
+    )
 
 
 @app.post("/api/data-plane/release-authorizations/dispatch")
 def data_plane_release_authorization_dispatch(
-    payload: DataPlaneReleaseAuthorizationDispatch,
+    payload: DataPlaneReleaseAuthorizationDispatch = Depends(
+        _bounded_release_authorization_dispatch_request
+    ),
     x_serverware_data_plane_token: str | None = Header(
         default=None, alias="X-Serverware-Data-Plane-Token"
     ),
 ) -> dict[str, Any]:
-    _require_data_plane_token(
+    authenticated_actor_id = _require_data_plane_token(
         x_serverware_data_plane_token, DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN
     )
+    durable_policy = _release_authorization_transition(
+        payload,
+        authenticated_actor_id=authenticated_actor_id,
+    )
     try:
-        result = db.dispatch_release_authorization(
-            attempt_id=payload.attempt_id,
-            binding_digest=payload.binding_digest,
-            dispatch_ttl_seconds=RELEASE_AUTHORIZATION_DISPATCH_TTL_SECONDS,
-            actor_id=DATA_PLANE_INSTANCE_ID,
-            required_approver_roles={"approver"},
-        )
-    except db.ReleaseAuthorizationConflictError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except db.ReleaseAuthorizationError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if durable_policy is None:
+            result = db.dispatch_release_authorization(
+                attempt_id=payload.attempt_id,
+                binding_digest=payload.binding_digest,
+                dispatch_ttl_seconds=(
+                    RELEASE_AUTHORIZATION_DISPATCH_TTL_SECONDS
+                ),
+                actor_id=authenticated_actor_id,
+                required_approver_roles={"approver"},
+            )
+        else:
+            result = db.dispatch_release_authorization_v2(
+                attempt_id=payload.attempt_id,
+                binding_digest=payload.binding_digest,
+                durable_policy_transition=durable_policy,
+                actor_id=authenticated_actor_id,
+                required_approver_roles={"approver"},
+            )
+    except (db.ReleaseAuthorizationError, db.PolicyStateBundleStoreError) as exc:
+        raise _release_authorization_db_error(
+            exc, operation="dispatch"
+        ) from exc
     _release_authorization_maintenance()
-    return _release_authorization_api_response(result)
+    return _release_authorization_api_response(
+        result,
+        api_version=(
+            "serverware.releaseAuthorization/v2"
+            if durable_policy is not None
+            else "serverware.releaseAuthorization/v1"
+        ),
+    )
 
 
 @app.post("/api/data-plane/release-authorizations/complete")
 def data_plane_release_authorization_complete(
-    payload: DataPlaneReleaseAuthorizationComplete,
+    payload: DataPlaneReleaseAuthorizationComplete = Depends(
+        _bounded_release_authorization_complete_request
+    ),
     x_serverware_data_plane_token: str | None = Header(
         default=None, alias="X-Serverware-Data-Plane-Token"
     ),
 ) -> dict[str, Any]:
-    _require_data_plane_token(
+    authenticated_actor_id = _require_data_plane_token(
         x_serverware_data_plane_token, DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN
     )
+    durable_policy = _release_authorization_transition(
+        payload,
+        authenticated_actor_id=authenticated_actor_id,
+    )
     try:
-        result = db.complete_release_authorization(
-            attempt_id=payload.attempt_id,
-            binding_digest=payload.binding_digest,
-            outcome=payload.outcome,
-            actor_id=DATA_PLANE_INSTANCE_ID,
-        )
-    except db.ReleaseAuthorizationConflictError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except db.ReleaseAuthorizationError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if durable_policy is not None:
+            result = db.complete_release_authorization_v2(
+                attempt_id=payload.attempt_id,
+                binding_digest=payload.binding_digest,
+                outcome=payload.outcome,
+                durable_policy_transition=durable_policy,
+                actor_id=authenticated_actor_id,
+            )
+        elif payload.outcome == "not_forwarded":
+            result = db.cancel_release_authorization_if_present(
+                attempt_id=payload.attempt_id,
+                binding_digest=payload.binding_digest,
+                actor_id=authenticated_actor_id,
+            )
+        else:
+            result = db.complete_release_authorization(
+                attempt_id=payload.attempt_id,
+                binding_digest=payload.binding_digest,
+                outcome=payload.outcome,
+                actor_id=authenticated_actor_id,
+            )
+    except (db.ReleaseAuthorizationError, db.PolicyStateBundleStoreError) as exc:
+        raise _release_authorization_db_error(
+            exc, operation="complete"
+        ) from exc
     _release_authorization_maintenance()
-    return _release_authorization_api_response(result)
+    return _release_authorization_api_response(
+        result,
+        api_version=(
+            "serverware.releaseAuthorization/v2"
+            if durable_policy is not None
+            else "serverware.releaseAuthorization/v1"
+        ),
+    )
 
 
 @app.get("/api/audit/verify")
@@ -12988,7 +15724,7 @@ def seed_demo(_: AdminIdentity = Depends(require_role("admin"))) -> dict[str, An
         )
     bundle["metadata"]["sequence"] = next_sequence
     bundle["metadata"]["rollbackEpoch"] = next_rollback_epoch
-    policy_snapshot = write_policy_bundle(bundle, enforce_high_water=True)
+    policy_snapshot = write_policy_bundle(bundle)
     credential = db.upsert_credential_with_id(
         "cred-demo-bearer",
         "Demo bearer token",
@@ -13968,7 +16704,7 @@ UI_HTML = r"""
         requiredScopes: ['https://www.googleapis.com/auth/gmail.readonly'],
         injection: {type: 'bearer', field: 'access_token'},
         match: {scheme: 'https', host: 'gmail.googleapis.com', port: 443, methods: ['GET'], paths: ['/gmail/v1/users/{user}/messages', '/gmail/v1/users/{user}/messages/{message_id}']},
-        adapter: {type: 'gmail.v1', config: {maxAgeDays: 30, maxResults: 10, forceQuery: true, allowMessageGetOnlyFromPriorSearch: true, cacheTtlSeconds: 1800, denyEquivalentEndpoints: ['threads', 'history', 'attachments', 'imap'], request: {allowedHeaders: ['accept', 'accept-encoding', 'content-type', 'user-agent', 'x-goog-api-client', 'x-goog-request-params', 'x-goog-user-project'], allowedQueryKeys: ['$.xgafv', 'alt', 'fields', 'format', 'includeSpamTrash', 'labelIds', 'maxResults', 'metadataHeaders', 'pageToken', 'prettyPrint', 'q', 'quotaUser'], allowedMediaTypes: [], maxBodyBytes: 0}, response: {validateInternalDate: true, validateListByMetadataFetch: true, metadataFetch: {maxMessages: 10, perRequestTimeoutMs: 1500, totalTimeoutMs: 8000, maxBodyBytes: 4096}, maxBodyBytes: 1048576, allowedFields: ['id', 'threadId', 'labelIds', 'snippet', 'internalDate', 'payload.headers'], allowedHeaders: [], allowedMessageHeaderNames: ['From', 'Subject', 'Date'], error: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['error.code', 'error.status', 'error.message', 'error.errors.reason', 'error.errors.domain'], allowedHeaders: ['retry-after', 'www-authenticate'], onInvalid: 'block'}, onViolation: 'block'}}},
+        adapter: {type: 'gmail.v1', config: {maxAgeDays: 30, maxResults: 10, forceQuery: true, allowMessageGetOnlyFromPriorSearch: true, cacheTtlSeconds: 1800, denyEquivalentEndpoints: ['threads', 'history', 'attachments', 'imap'], request: {allowedHeaders: ['accept', 'accept-encoding', 'content-type', 'user-agent', 'x-goog-api-client', 'x-goog-request-params', 'x-goog-user-project'], discardHeaders: [], allowedQueryKeys: ['$.xgafv', 'alt', 'fields', 'format', 'includeSpamTrash', 'labelIds', 'maxResults', 'metadataHeaders', 'pageToken', 'prettyPrint', 'q', 'quotaUser'], allowedMediaTypes: [], maxBodyBytes: 0}, response: {validateInternalDate: true, validateListByMetadataFetch: true, metadataFetch: {maxMessages: 10, perRequestTimeoutMs: 1500, totalTimeoutMs: 8000, maxBodyBytes: 4096}, maxBodyBytes: 1048576, allowedFields: ['id', 'threadId', 'labelIds', 'snippet', 'internalDate', 'payload.headers'], allowedHeaders: [], allowedMessageHeaderNames: ['From', 'Subject', 'Date'], error: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['error.code', 'error.status', 'error.message', 'error.errors.reason', 'error.errors.domain'], allowedHeaders: ['retry-after', 'www-authenticate'], onInvalid: 'block'}, onViolation: 'block'}}},
         constraints: [
           {id: 'gmail-max-page-size', type: 'queryNumericBounds', parameters: ['maxResults'], min: 1, max: 10, integer: true},
           {id: 'gmail-response-last-30-days', type: 'responseDateWindow', phase: 'response', operations: ['gmail.messages.list'], items: ['messages'], dateFields: ['internalDate'], formats: ['epochMillis'], maxAgeDays: 30, required: true}
@@ -13981,7 +16717,7 @@ UI_HTML = r"""
         requiredScopes: ['tweet.read', 'users.read'],
         injection: {type: 'bearer', field: 'access_token'},
         match: {scheme: 'https', host: 'api.x.com', port: 443, methods: ['GET'], paths: ['/2/tweets/search/recent']},
-        adapter: {type: 'x.v2', config: {mode: 'recentSearchOnly', blockWrites: true, allowedReadOperations: ['search.read'], request: {allowedHeaders: ['accept', 'accept-encoding', 'content-type', 'user-agent'], allowedQueryKeys: ['end_time', 'expansions', 'granularity', 'max_results', 'media.fields', 'next_token', 'pagination_token', 'place.fields', 'poll.fields', 'query', 'search_count.fields', 'since_id', 'sort_order', 'start_time', 'tweet.fields', 'until_id', 'user.fields'], allowedMediaTypes: [], maxBodyBytes: 0}, response: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['data.id', 'data.text', 'data.created_at', 'meta.result_count'], allowedHeaders: [], error: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['title', 'detail', 'type', 'status', 'errors.title', 'errors.detail', 'errors.type', 'errors.value'], allowedHeaders: ['retry-after'], onInvalid: 'block'}}}},
+        adapter: {type: 'x.v2', config: {mode: 'recentSearchOnly', blockWrites: true, allowedReadOperations: ['search.read'], request: {allowedHeaders: ['accept', 'accept-encoding', 'content-type', 'user-agent'], discardHeaders: [], allowedQueryKeys: ['end_time', 'expansions', 'granularity', 'max_results', 'media.fields', 'next_token', 'pagination_token', 'place.fields', 'poll.fields', 'query', 'search_count.fields', 'since_id', 'sort_order', 'start_time', 'tweet.fields', 'until_id', 'user.fields'], allowedMediaTypes: [], maxBodyBytes: 0}, response: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['data.id', 'data.text', 'data.created_at', 'meta.result_count'], allowedHeaders: [], error: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['title', 'detail', 'type', 'status', 'errors.title', 'errors.detail', 'errors.type', 'errors.value'], allowedHeaders: ['retry-after'], onInvalid: 'block'}}}},
         constraints: [
           {id: 'x-search-last-7-days', type: 'queryDateWindow', parameters: ['start_time', 'end_time'], maxAgeDays: 7, formats: ['rfc3339', 'date'], required: false},
           {id: 'x-search-page-cap', type: 'queryNumericBounds', parameters: ['max_results'], min: 1, max: 100, integer: true},
@@ -13998,6 +16734,7 @@ UI_HTML = r"""
         adapter: {type: 'x.v2', config: {
           request: {
             allowedHeaders: ['accept', 'accept-encoding', 'content-type', 'user-agent'],
+            discardHeaders: [],
             allowedQueryKeys: ['analytics.fields', 'chat_conversation.fields', 'chat_message_event.fields', 'command', 'community.fields', 'compliance_job.fields', 'connection.fields', 'days', 'dm_event.fields', 'end_time', 'endpoints', 'engagement.fields', 'event_types', 'exclude', 'expansions', 'granularity', 'ids', 'list.fields', 'max_age_hours', 'max_results', 'max_trends', 'media.fields', 'media_analytics.fields', 'media_id', 'media_keys', 'news.fields', 'next_token', 'note.fields', 'pagination_token', 'personalized_trend.fields', 'place.fields', 'poll.fields', 'post_selection', 'public_key.fields', 'query', 'requested_metrics', 'search_count.fields', 'since_id', 'sort_order', 'space.fields', 'start_time', 'state', 'status', 'test_mode', 'topic.fields', 'trend.fields', 'tweet.fields', 'tweet_ids', 'type', 'until_id', 'usage.fields', 'user.fields', 'user_ids', 'usernames', 'webhook_config.fields'],
             allowedMediaTypes: [],
             maxBodyBytes: 0
@@ -14018,7 +16755,7 @@ UI_HTML = r"""
         requiredScopes: ['tweet.read', 'tweet.write', 'users.read', 'offline.access'],
         injection: {type: 'bearer', field: 'access_token'},
         match: {scheme: 'https', host: 'api.x.com', port: 443, methods: ['POST'], paths: ['/2/tweets']},
-        adapter: {type: 'x.v2', config: {mode: 'controlledWrite', blockWrites: false, request: {allowedHeaders: ['accept', 'accept-encoding', 'content-type', 'user-agent'], allowedQueryKeys: [], allowedMediaTypes: ['application/json'], maxBodyBytes: 65536}, response: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['data.id', 'data.text'], allowedHeaders: [], error: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['title', 'detail', 'type', 'status', 'errors.title', 'errors.detail', 'errors.type', 'errors.value'], allowedHeaders: ['retry-after'], onInvalid: 'block'}}}},
+        adapter: {type: 'x.v2', config: {mode: 'controlledWrite', blockWrites: false, request: {allowedHeaders: ['accept', 'accept-encoding', 'content-type', 'user-agent'], discardHeaders: [], allowedQueryKeys: [], allowedMediaTypes: ['application/json'], maxBodyBytes: 65536}, response: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['data.id', 'data.text'], allowedHeaders: [], error: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['title', 'detail', 'type', 'status', 'errors.title', 'errors.detail', 'errors.type', 'errors.value'], allowedHeaders: ['retry-after'], onInvalid: 'block'}}}},
         constraints: [
           {id: 'x-only-tweet-create', type: 'operationPolicy', allowedOperations: ['tweets.write']},
           {id: 'x-one-post-per-day', type: 'rateLimit', max: 1, calendarWindow: 'utcDay', store: 'shared', key: {scope: ['route', 'operation'], operationFields: ['providerAccount']}},
@@ -14031,7 +16768,7 @@ UI_HTML = r"""
         provider: 'npm',
         injection: {type: 'bearer'},
         match: {scheme: 'https', host: 'registry.npmjs.org', port: 443, methods: ['PUT', 'POST', 'DELETE'], paths: ['/{package}', '/{package}/-rev/{revision}', '/{package}/-/{tarball}/-rev/{revision}', '/-/package/{package}/dist-tags/{tag}', '/-/package/{package}/access', '/-/npm/v1/tokens', '/-/npm/v1/tokens/token/{token}', '/-/npm/v1/user', '/-/team/{scope}/{team}/package']},
-        adapter: {type: 'npm.registry', config: {request: {allowedHeaders: ['accept', 'accept-encoding', 'content-type', 'npm-auth-type', 'npm-command', 'npm-in-ci', 'npm-otp', 'npm-scope', 'npm-session', 'user-agent'], allowedQueryKeys: [], allowedMediaTypes: ['application/json'], maxBodyBytes: 16777216}, operations: ['publish', 'unpublish', 'distTagWrite', 'tokenWrite', 'metadataWrite'], publishResponseContract: 'npm-public-registry-receipt-v1', response: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['ok', 'published'], allowedHeaders: [], error: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['error', 'reason', 'code'], allowedHeaders: ['retry-after', 'www-authenticate'], onInvalid: 'block'}}}},
+        adapter: {type: 'npm.registry', config: {request: {allowedHeaders: ['accept', 'accept-encoding', 'content-type', 'npm-auth-type', 'npm-command', 'npm-in-ci', 'npm-otp', 'npm-scope', 'user-agent'], discardHeaders: ['npm-session'], allowedQueryKeys: [], allowedMediaTypes: ['application/json'], maxBodyBytes: 16777216}, operations: ['publish', 'unpublish', 'distTagWrite', 'tokenWrite', 'metadataWrite'], publishResponseContract: 'npm-public-registry-receipt-v1', response: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['ok', 'published'], allowedHeaders: [], error: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['error', 'reason', 'code'], allowedHeaders: ['retry-after', 'www-authenticate'], onInvalid: 'block'}}}},
         constraints: [{id: 'npm-common-writes-require-jit', type: 'operationPolicy', allowedOperations: ['npm.publish', 'npm.unpublish', 'npm.distTagWrite', 'npm.tokenWrite', 'npm.metadataWrite']}],
         jit: {required: true, mode: 'perOperation', ttlSeconds: 30, maxUses: 1, consumeOn: 'forwardStart', binding: {type: 'operationDigest', fields: ['principal', 'routeId', 'credentialRef', 'credentialVersion', 'policyHash', 'method', 'authority', 'path', 'query', 'selectedHeaders', 'bodySha256', 'operation', 'packageName', 'packageVersion', 'tarballIntegrity']}, approvers: {quorum: 1, users: [], authn: {webauthnRequired: true, userVerification: 'required', allowedAuthenticatorClasses: ['yubikey', 'hardware'], requireHardwareAttestation: true}}}
       },
@@ -16805,3 +19542,6 @@ UI_HTML = r"""
 </body>
 </html>
 """
+
+
+app = _SignedControlPlaneASGI(_fastapi_app)

@@ -2,27 +2,55 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://serverware.local/schemas/policy-bundle.v1.schema.json",
   "title": "Serverware PolicyBundle v1",
+  "$comment": "Structural validation is necessary but not sufficient. Fail-closed admission must also enforce unique IDs and references; exact credential-to-adapter provider, subject, client-ID, scope, injection, and app binding; canonical CIDR round trips; safe bounded pattern compilation; requestValue-to-adapter field membership; response-header rule membership; minimum/maximum ordering; atomic shared-budget semantics; and cursor lineage/replay invariants. Any unavailable or unknown semantic check denies the bundle.",
   "type": "object",
   "required": ["apiVersion", "kind", "metadata", "defaults", "principals", "credentials", "routes"],
   "additionalProperties": false,
   "$defs": {
+    "boundedScalar": {
+      "anyOf": [
+        {"type": "string", "maxLength": 4096},
+        {"type": "number", "minimum": -9007199254740991, "maximum": 9007199254740991},
+        {"type": "boolean"},
+        {"type": "null"}
+      ]
+    },
     "fieldRule": {
       "type": "object",
+      "minProperties": 1,
       "additionalProperties": false,
       "properties": {
         "required": {"type": "boolean"},
         "type": {"enum": ["string", "number", "integer", "boolean", "object", "array", "null"]},
-        "minLength": {"type": "integer", "minimum": 0},
-        "maxLength": {"type": "integer", "minimum": 0},
+        "minLength": {"type": "integer", "minimum": 0, "maximum": 4096},
+        "maxLength": {"type": "integer", "minimum": 0, "maximum": 4096},
         "pattern": {"type": "string", "maxLength": 256},
-        "min": {"type": "number"},
-        "max": {"type": "number"},
-        "minItems": {"type": "integer", "minimum": 0},
-        "maxItems": {"type": "integer", "minimum": 0},
-        "enum": {"type": "array", "minItems": 1, "uniqueItems": true},
-        "equals": {}
+        "min": {"type": "number", "minimum": -9007199254740991, "maximum": 9007199254740991},
+        "max": {"type": "number", "minimum": -9007199254740991, "maximum": 9007199254740991},
+        "minItems": {"type": "integer", "minimum": 0, "maximum": 1000000},
+        "maxItems": {"type": "integer", "minimum": 0, "maximum": 1000000},
+        "enum": {"type": "array", "minItems": 1, "maxItems": 64, "uniqueItems": true, "items": {"$ref": "#/$defs/boundedScalar"}},
+        "equals": {"$ref": "#/$defs/boundedScalar"}
       },
       "allOf": [
+        {
+          "anyOf": [
+            {"required": ["type"]},
+            {"required": ["minLength"]},
+            {"required": ["maxLength"]},
+            {"required": ["pattern"]},
+            {"required": ["min"]},
+            {"required": ["max"]},
+            {"required": ["minItems"]},
+            {"required": ["maxItems"]},
+            {"required": ["enum"]},
+            {"required": ["equals"]},
+            {
+              "required": ["required"],
+              "properties": {"required": {"const": true}}
+            }
+          ]
+        },
         {
           "if": {
             "anyOf": [
@@ -49,6 +77,32 @@
           "then": {"required": ["maxLength"], "properties": {"maxLength": {"maximum": 4096}}}
         }
       ]
+    },
+    "responseJsonFieldRule": {
+      "allOf": [
+        {"$ref": "#/$defs/fieldRule"},
+        {
+          "required": ["required", "type"],
+          "properties": {"required": {"const": true}},
+          "anyOf": [
+            {"required": ["equals"]},
+            {"required": ["enum"]},
+            {
+              "required": ["type", "maxLength"],
+              "properties": {"type": {"const": "string"}}
+            },
+            {
+              "required": ["type", "min", "max"],
+              "properties": {"type": {"enum": ["number", "integer"]}}
+            },
+            {
+              "required": ["type", "maxItems"],
+              "properties": {"type": {"const": "array"}}
+            }
+          ]
+        }
+      ],
+      "$comment": "Response proof fields are mandatory and must carry a finite value set or an explicit upper and lower bound appropriate to their type. Optional or type-only response assertions cannot prove safe release."
     },
     "credentialInjectionField": {
       "type": "string",
@@ -95,6 +149,176 @@
       "allOf": [
         {"$ref": "#/$defs/credentialInjectionHeaderName"},
         {"not": {"pattern": "^[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]$"}}
+      ]
+    },
+    "requestAdmissionSelectorHeaderName": {
+      "allOf": [
+        {"$ref": "#/$defs/credentialInjectionTargetName"},
+        {
+          "not": {
+            "anyOf": [
+              {"pattern": "^[Cc][Oo][Nn][Tt][Ee][Nn][Tt]-[Ee][Nn][Cc][Oo][Dd][Ii][Nn][Gg]$"},
+              {"pattern": "^[Cc][Oo][Nn][Tt][Ee][Nn][Tt]-[Ll][Ee][Nn][Gg][Tt][Hh]$"},
+              {"pattern": "^[Tt][Rr][Aa][Nn][Ss][Ff][Ee][Rr]-[Ee][Nn][Cc][Oo][Dd][Ii][Nn][Gg]$"}
+            ]
+          }
+        }
+      ]
+    },
+    "canonicalRouteHost": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 253,
+      "$comment": "The standard v1 policy contract intentionally admits only canonical lowercase DNS and exact dotted-decimal IPv4. Canonical IPv6 wire authorities are parsed by the data plane but require a future versioned policy extension.",
+      "anyOf": [
+        {
+          "pattern": "^(?![0-9.]+$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$"
+        },
+        {
+          "pattern": "^(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])(?:\\.(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){3}$"
+        }
+      ]
+    },
+    "canonicalDnsName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 253,
+      "pattern": "^(?![0-9.]+$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$"
+    },
+    "canonicalIpv4Cidr": {
+      "type": "string",
+      "minLength": 9,
+      "maxLength": 18,
+      "pattern": "^(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])(?:\\.(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){3}/(?:3[0-2]|[12]?[0-9])$",
+      "$comment": "Admission must additionally parse this value and reject host bits, non-minimal text, and any value whose canonical network string is not byte-for-byte identical."
+    },
+    "canonicalIpv6Cidr": {
+      "type": "string",
+      "minLength": 4,
+      "maxLength": 43,
+      "pattern": "^(?:(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}|(?:[0-9a-f]{1,4}:){1,7}:|(?:[0-9a-f]{1,4}:){1,6}:[0-9a-f]{1,4}|(?:[0-9a-f]{1,4}:){1,5}(?::[0-9a-f]{1,4}){1,2}|(?:[0-9a-f]{1,4}:){1,4}(?::[0-9a-f]{1,4}){1,3}|(?:[0-9a-f]{1,4}:){1,3}(?::[0-9a-f]{1,4}){1,4}|(?:[0-9a-f]{1,4}:){1,2}(?::[0-9a-f]{1,4}){1,5}|[0-9a-f]{1,4}:(?:(?::[0-9a-f]{1,4}){1,6})|:(?:(?::[0-9a-f]{1,4}){1,7}|:))/(?:12[0-8]|1[01][0-9]|[1-9]?[0-9])$",
+      "$comment": "Admission must additionally require RFC 5952 lowercase shortest-form text, a canonical network address with host bits cleared, and byte-for-byte canonical round trip."
+    },
+    "canonicalCidr": {
+      "oneOf": [
+        {"$ref": "#/$defs/canonicalIpv4Cidr"},
+        {"$ref": "#/$defs/canonicalIpv6Cidr"}
+      ]
+    },
+    "lowercaseContentType": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 127,
+      "pattern": "^[a-z0-9!#$&^_.+-]+/[a-z0-9!#$&^_.+-]+$"
+    },
+    "lowercaseHeaderName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z0-9!#$%&'*+.^_`|~-]+$"
+    },
+    "adapterRequestHeaderName": {
+      "allOf": [
+        {"$ref": "#/$defs/lowercaseHeaderName"},
+        {
+          "not": {
+            "anyOf": [
+              {
+                "enum": [
+                  "authorization",
+                  "connection",
+                  "content-encoding",
+                  "content-length",
+                  "content-type",
+                  "cookie",
+                  "host",
+                  "keep-alive",
+                  "proxy-authenticate",
+                  "proxy-authorization",
+                  "te",
+                  "trailer",
+                  "transfer-encoding",
+                  "upgrade"
+                ]
+              },
+              {"pattern": "^x-serverware-"}
+            ]
+          }
+        }
+      ]
+    },
+    "responsePolicyHeaderName": {
+      "allOf": [
+        {"$ref": "#/$defs/lowercaseHeaderName"},
+        {
+          "not": {
+            "enum": [
+              "authorization",
+              "connection",
+              "content-encoding",
+              "content-length",
+              "content-type",
+              "cookie",
+              "keep-alive",
+              "proxy-authenticate",
+              "proxy-authorization",
+              "set-cookie",
+              "te",
+              "trailer",
+              "transfer-encoding",
+              "upgrade"
+            ]
+          }
+        }
+      ]
+    },
+    "mtlsIdentity": {
+      "type": "object",
+      "required": ["verifiedByTrustedIngress"],
+      "additionalProperties": false,
+      "properties": {
+        "verifiedByTrustedIngress": {"const": true},
+        "sanSpiffeIds": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 10,
+            "maxLength": 2048,
+            "pattern": "^spiffe://[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?(?:/[A-Za-z0-9._~!$&'()*+,;=:@%-]+)*$"
+          }
+        },
+        "sanDnsNames": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/canonicalDnsName"}
+        },
+        "sanUris": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 2048,
+            "pattern": "^[a-z][a-z0-9+.-]*:[^\\s\\u0000-\\u001F\\u007F]+$"
+          }
+        },
+        "certificateSha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "spkiSha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "issuerSpkiSha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+      },
+      "anyOf": [
+        {"required": ["sanSpiffeIds"]},
+        {"required": ["sanDnsNames"]},
+        {"required": ["sanUris"]},
+        {"required": ["certificateSha256"]},
+        {"required": ["spkiSha256"]}
       ]
     },
     "credentialBasicUsername": {
@@ -156,8 +380,8 @@
           "additionalProperties": false,
           "properties": {
             "kind": {"const": "numeric"},
-            "min": {"type": "number"},
-            "max": {"type": "number"},
+            "min": {"type": "number", "minimum": -9007199254740991, "maximum": 9007199254740991},
+            "max": {"type": "number", "minimum": -9007199254740991, "maximum": 9007199254740991},
             "integer": {"type": "boolean"}
           },
           "anyOf": [{"required": ["min"]}, {"required": ["max"]}],
@@ -191,10 +415,144 @@
       "required": ["source", "name", "predicate"],
       "additionalProperties": false,
       "properties": {
-        "source": {"enum": ["pathParam", "query", "header"]},
-        "name": {"type": "string", "minLength": 1, "maxLength": 256},
+        "source": {"enum": ["pathParam", "query", "header", "jsonBody", "formBody", "operationField"]},
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[A-Za-z0-9_-]+(?:\\.[A-Za-z0-9_-]+)*$"
+        },
         "predicate": {"$ref": "#/$defs/requestValuePredicate"},
         "capture": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,127}$"}
+      },
+      "$comment": "Admission must bind query/header rules to the adapter allowlist and body rules to a typed parsed body profile. Unknown sources, ambiguous duplicate values, and unbounded parsing deny."
+    },
+    "responseHeaderRule": {
+      "type": "object",
+      "required": ["name", "required", "predicate"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {"$ref": "#/$defs/responsePolicyHeaderName"},
+        "required": {"type": "boolean"},
+        "predicate": {
+          "allOf": [
+            {"$ref": "#/$defs/requestValuePredicate"},
+            {
+              "type": "object",
+              "required": ["kind"],
+              "properties": {"kind": {"enum": ["equals", "enum", "pattern"]}}
+            }
+          ]
+        }
+      },
+      "$comment": "Admission must reject duplicate rule names and require every rule name to occur in allowedResponseHeaderNames. Header comparison uses the exact validated wire value without whitespace or case normalization."
+    },
+    "budgetWeight": {
+      "type": "object",
+      "required": ["source", "field", "representation", "unit", "minimumPerOperation", "maximumPerOperation"],
+      "additionalProperties": false,
+      "properties": {
+        "source": {"enum": ["requestValue", "operationField"]},
+        "field": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[A-Za-z0-9_-]+(?:\\.[A-Za-z0-9_-]+)*$"
+        },
+        "representation": {"const": "canonicalNonNegativeInteger"},
+        "unit": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32,
+          "pattern": "^[a-z][a-z0-9._-]{0,31}$"
+        },
+        "minimumPerOperation": {"type": "integer", "minimum": 0, "maximum": 9007199254740991},
+        "maximumPerOperation": {"type": "integer", "minimum": 1, "maximum": 9007199254740991}
+      },
+      "$comment": "Admission must prove the named field is captured by an exact requestValue rule or typed adapter operation field and reject noncanonical, fractional, negative, repeated, missing, overflowed, or coerced values."
+    },
+    "traversalPolicy": {
+      "type": "object",
+      "required": ["store", "phases", "cursor", "lineage", "limits", "accounting", "onReplay", "onCrossLineage", "onMissingEvidence"],
+      "additionalProperties": false,
+      "properties": {
+        "store": {"const": "shared"},
+        "phases": {"const": ["request", "response"]},
+        "cursor": {
+          "type": "object",
+          "required": ["requestSource", "requestField", "responseField", "digest", "firstPageMayOmit"],
+          "additionalProperties": false,
+          "properties": {
+            "requestSource": {"enum": ["query", "header"]},
+            "requestField": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "pattern": "^[A-Za-z0-9_-]+(?:\\.[A-Za-z0-9_-]+)*$"
+            },
+            "responseField": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "pattern": "^[A-Za-z0-9_-]+(?:\\.[A-Za-z0-9_-]+)*$"
+            },
+            "digest": {"const": "sha256"},
+            "firstPageMayOmit": {"const": true}
+          }
+        },
+        "lineage": {
+          "type": "object",
+          "required": ["scope", "queryFields", "queryDigest"],
+          "additionalProperties": false,
+          "properties": {
+            "scope": {
+              "type": "array",
+              "const": ["principal", "route", "credential", "credentialVersion"]
+            },
+            "queryFields": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 32,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "^[A-Za-z0-9_-]+(?:\\.[A-Za-z0-9_-]+)*$"
+              }
+            },
+            "queryDigest": {"const": "sha256"}
+          }
+        },
+        "limits": {
+          "type": "object",
+          "required": ["maxPages", "maxLifetimeSeconds", "maxRecords", "maxDecodedBytes"],
+          "additionalProperties": false,
+          "properties": {
+            "maxPages": {"type": "integer", "minimum": 1, "maximum": 10000},
+            "maxLifetimeSeconds": {"type": "integer", "minimum": 1, "maximum": 86400},
+            "maxRecords": {"type": "integer", "minimum": 1, "maximum": 10000000},
+            "maxDecodedBytes": {"type": "integer", "minimum": 1, "maximum": 1073741824}
+          }
+        },
+        "accounting": {
+          "type": "object",
+          "required": ["recordCountField", "byteSource", "commit"],
+          "additionalProperties": false,
+          "properties": {
+            "recordCountField": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "pattern": "^[A-Za-z0-9_-]+(?:\\.[A-Za-z0-9_-]+)*$"
+            },
+            "byteSource": {"const": "validatedDecodedResponseBytes"},
+            "commit": {"const": "atomicAfterResponseValidation"}
+          }
+        },
+        "onReplay": {"const": "deny"},
+        "onCrossLineage": {"const": "deny"},
+        "onMissingEvidence": {"const": "deny"}
       }
     },
     "credentialConstraint": {
@@ -202,11 +560,14 @@
       "required": ["id", "type"],
       "additionalProperties": false,
       "properties": {
-        "id": {"type": "string", "minLength": 1},
-        "description": {"type": "string"},
+        "id": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,127}$"},
+        "description": {"type": "string", "maxLength": 1024},
         "type": {
           "enum": [
             "rateLimit",
+            "slidingWindowLimit",
+            "weightedBudget",
+            "traversalBudget",
             "operationPolicy",
             "queryDateWindow",
             "queryNumericBounds",
@@ -216,15 +577,20 @@
             "formBody",
             "responseDateWindow",
             "responseJson",
-            "responseBinding"
+            "responseBinding",
+            "responseEnvelope"
           ]
         },
         "phase": {"enum": ["request", "response"]},
         "statusCode": {"type": "integer", "minimum": 400, "maximum": 599},
         "store": {"enum": ["local", "shared"]},
-        "max": {"type": "number"},
+        "max": {"type": "number", "minimum": -9007199254740991, "maximum": 9007199254740991},
         "windowSeconds": {"type": "integer", "minimum": 1, "maximum": 31536000},
         "calendarWindow": {"enum": ["utcDay", "utcIsoWeek", "utcMonth"]},
+        "windowSemantics": {"enum": ["fixedFromFirstUse", "calendarUTC", "sliding"]},
+        "measure": {"enum": ["operationCount", "weightedCanonicalInteger"]},
+        "reservationMode": {"const": "atomicReserveCommitRelease"},
+        "onOverflow": {"const": "deny"},
         "key": {
           "type": "object",
           "additionalProperties": false,
@@ -244,19 +610,20 @@
             }
           }
         },
-        "allowedOperations": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}},
-        "deniedOperations": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}},
-        "parameters": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}},
+        "allowedOperations": {"type": "array", "minItems": 1, "maxItems": 128, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,127}$"}},
+        "deniedOperations": {"type": "array", "minItems": 1, "maxItems": 128, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,127}$"}},
+        "parameters": {"type": "array", "minItems": 1, "maxItems": 64, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 256}},
         "required": {"type": "boolean"},
         "formats": {
           "type": "array",
           "minItems": 1,
+          "maxItems": 4,
           "uniqueItems": true,
           "items": {"enum": ["rfc3339", "date", "epochSeconds", "epochMillis"]}
         },
-        "maxAgeDays": {"type": "integer", "minimum": 1},
-        "allowFutureSkewSeconds": {"type": "integer", "minimum": 0},
-        "min": {"type": "number"},
+        "maxAgeDays": {"type": "integer", "minimum": 1, "maximum": 36500},
+        "allowFutureSkewSeconds": {"type": "integer", "minimum": 0, "maximum": 86400},
+        "min": {"type": "number", "minimum": -9007199254740991, "maximum": 9007199254740991},
         "integer": {"type": "boolean"},
         "timezone": {"const": "UTC"},
         "notBefore": {"type": "string", "format": "date-time"},
@@ -264,12 +631,14 @@
         "weekdays": {
           "type": "array",
           "minItems": 1,
+          "maxItems": 7,
           "uniqueItems": true,
           "items": {"enum": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]}
         },
         "dailyWindows": {
           "type": "array",
           "minItems": 1,
+          "maxItems": 8,
           "uniqueItems": true,
           "items": {
             "type": "object",
@@ -285,9 +654,16 @@
           "type": "array",
           "minItems": 1,
           "maxItems": 16,
+          "uniqueItems": true,
           "items": {"$ref": "#/$defs/requestValueRule"}
         },
-        "contentTypes": {"type": "array", "items": {"type": "string"}},
+        "contentTypes": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 4,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/lowercaseContentType"}
+        },
         "successStatusCodes": {
           "type": "array",
           "minItems": 1,
@@ -295,18 +671,54 @@
           "uniqueItems": true,
           "items": {"type": "integer", "minimum": 200, "maximum": 299}
         },
-        "allowedFields": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}},
-        "requiredFields": {"type": "array", "items": {"type": "string"}},
-        "deniedFields": {"type": "array", "items": {"type": "string"}},
+        "statusCodes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": {"type": "integer", "minimum": 100, "maximum": 599}
+        },
+        "bodyPresence": {"enum": ["required", "forbidden"]},
+        "allowedResponseHeaderNames": {
+          "type": "array",
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/responsePolicyHeaderName"}
+        },
+        "responseHeaderRules": {
+          "type": "array",
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/responseHeaderRule"}
+        },
+        "allowedFields": {"type": "array", "minItems": 1, "maxItems": 128, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[A-Za-z0-9_-]+(?:\\.[A-Za-z0-9_-]+)*$"}},
+        "requiredFields": {"type": "array", "maxItems": 128, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[A-Za-z0-9_-]+(?:\\.[A-Za-z0-9_-]+)*$"}},
+        "deniedFields": {"type": "array", "maxItems": 128, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[A-Za-z0-9_-]+(?:\\.[A-Za-z0-9_-]+)*$"}},
         "fields": {
           "type": "object",
+          "minProperties": 1,
+          "maxProperties": 128,
           "additionalProperties": {"$ref": "#/$defs/fieldRule"}
         },
-        "items": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Za-z0-9_-]+(?:\\.[A-Za-z0-9_-]+)*$"}},
-        "dateFields": {"type": "array", "items": {"type": "string"}},
+        "items": {"type": "array", "minItems": 1, "maxItems": 64, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[A-Za-z0-9_-]+(?:\\.[A-Za-z0-9_-]+)*$"}},
+        "dateFields": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^[A-Za-z0-9_-]+(?:\\.[A-Za-z0-9_-]+)*$"
+          }
+        },
+        "weight": {"$ref": "#/$defs/budgetWeight"},
+        "traversal": {"$ref": "#/$defs/traversalPolicy"},
         "operations": {
           "type": "array",
           "minItems": 1,
+          "maxItems": 128,
           "uniqueItems": true,
           "items": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,127}$"}
         },
@@ -314,6 +726,7 @@
           "type": "array",
           "minItems": 1,
           "maxItems": 8,
+          "uniqueItems": true,
           "items": {
             "type": "object",
             "required": ["id", "operationField", "responseField", "comparison"],
@@ -332,7 +745,7 @@
         {
           "if": {
             "required": ["type"],
-            "properties": {"type": {"enum": ["responseDateWindow", "responseJson", "responseBinding"]}}
+            "properties": {"type": {"enum": ["responseDateWindow", "responseJson", "responseBinding", "responseEnvelope"]}}
           },
           "then": {
             "required": ["phase"],
@@ -351,15 +764,61 @@
             },
             "oneOf": [
               {
-                "required": ["windowSeconds"],
-                "not": {"required": ["calendarWindow"]}
+                "required": ["windowSeconds", "windowSemantics"],
+                "not": {"required": ["calendarWindow"]},
+                "properties": {"windowSemantics": {"const": "fixedFromFirstUse"}}
               },
               {
-                "required": ["calendarWindow", "store"],
+                "required": ["calendarWindow", "store", "windowSemantics"],
                 "not": {"required": ["windowSeconds"]},
-                "properties": {"store": {"const": "shared"}}
+                "properties": {
+                  "store": {"const": "shared"},
+                  "windowSemantics": {"const": "calendarUTC"}
+                }
               }
             ]
+          }
+        },
+        {
+          "if": {"properties": {"type": {"const": "slidingWindowLimit"}}, "required": ["type"]},
+          "then": {
+            "required": ["store", "max", "windowSeconds", "windowSemantics", "measure", "reservationMode", "onOverflow", "key"],
+            "properties": {
+              "store": {"const": "shared"},
+              "max": {"type": "integer", "minimum": 1, "maximum": 1000000000},
+              "windowSemantics": {"const": "sliding"},
+              "measure": {"const": "operationCount"},
+              "key": {"required": ["scope"]}
+            },
+            "not": {"required": ["calendarWindow"]}
+          }
+        },
+        {
+          "if": {"properties": {"type": {"const": "weightedBudget"}}, "required": ["type"]},
+          "then": {
+            "required": ["store", "max", "windowSeconds", "windowSemantics", "measure", "reservationMode", "onOverflow", "key", "weight"],
+            "properties": {
+              "store": {"const": "shared"},
+              "max": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+              "windowSemantics": {"const": "sliding"},
+              "measure": {"const": "weightedCanonicalInteger"},
+              "key": {"required": ["scope"]}
+            },
+            "not": {"required": ["calendarWindow"]}
+          }
+        },
+        {
+          "if": {"properties": {"type": {"const": "traversalBudget"}}, "required": ["type"]},
+          "then": {
+            "required": ["traversal"],
+            "not": {
+              "anyOf": [
+                {"required": ["phase"]},
+                {"required": ["store"]},
+                {"required": ["windowSeconds"]},
+                {"required": ["calendarWindow"]}
+              ]
+            }
           }
         },
         {
@@ -406,11 +865,47 @@
         },
         {
           "if": {"properties": {"type": {"const": "responseJson"}}, "required": ["type"]},
-          "then": {"required": ["phase", "fields"]}
+          "then": {
+            "required": ["phase", "fields"],
+            "properties": {
+              "fields": {
+                "type": "object",
+                "minProperties": 1,
+                "maxProperties": 128,
+                "additionalProperties": {
+                  "$ref": "#/$defs/responseJsonFieldRule"
+                }
+              }
+            }
+          }
         },
         {
           "if": {"properties": {"type": {"const": "responseBinding"}}, "required": ["type"]},
-          "then": {"required": ["phase", "successStatusCodes", "contentTypes", "bindings"]}
+          "then": {
+            "required": ["phase", "successStatusCodes", "contentTypes", "bindings"],
+            "properties": {"contentTypes": {"minItems": 1}}
+          }
+        },
+        {
+          "if": {"properties": {"type": {"const": "responseEnvelope"}}, "required": ["type"]},
+          "then": {
+            "required": ["phase", "statusCodes", "bodyPresence", "contentTypes", "allowedResponseHeaderNames", "responseHeaderRules"],
+            "$comment": "Semantic admission requires responseHeaderRules names to equal allowedResponseHeaderNames exactly, with one rule per name. Runtime rejects every duplicate physical occurrence.",
+            "oneOf": [
+              {
+                "properties": {
+                  "bodyPresence": {"const": "required"},
+                  "contentTypes": {"minItems": 1}
+                }
+              },
+              {
+                "properties": {
+                  "bodyPresence": {"const": "forbidden"},
+                  "contentTypes": {"const": []}
+                }
+              }
+            ]
+          }
         }
       ]
     }
@@ -423,12 +918,12 @@
       "required": ["id", "sequence", "rollbackEpoch"],
       "additionalProperties": false,
       "properties": {
-        "id": {"type": "string", "minLength": 1},
+        "id": {"type": "string", "minLength": 1, "maxLength": 128},
         "sequence": {"type": "integer", "minimum": 1},
         "rollbackEpoch": {"type": "integer", "minimum": 1},
         "validFrom": false,
         "signingKeyId": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
-        "signature": {"type": "string"}
+        "signature": {"type": "string", "minLength": 1, "maxLength": 16384}
       }
     },
     "defaults": {
@@ -453,29 +948,95 @@
         "additionalProperties": false,
         "anyOf": [
           {"required": ["sourceCidrs"]},
-          {"required": ["requiredHeaders"]},
+          {"required": ["mtls"]},
           {"required": ["proxyAuthorization"]}
         ],
+        "allOf": [
+          {
+            "if": {"required": ["requiredHeaders"]},
+            "then": {
+              "anyOf": [
+                {
+                  "required": ["sourceCidrs"],
+                  "properties": {
+                    "sourceCidrs": {
+                      "items": {
+                        "not": {
+                          "enum": ["0.0.0.0/0", "::/0"]
+                        }
+                      }
+                    }
+                  }
+                },
+                {"required": ["mtls"]},
+                {
+                  "required": ["proxyAuthorization"],
+                  "properties": {
+                    "proxyAuthorization": {
+                      "type": "object",
+                      "required": ["sourceCidrs"],
+                      "properties": {
+                        "sourceCidrs": {
+                          "items": {
+                            "not": {
+                              "enum": ["0.0.0.0/0", "::/0"]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ],
         "properties": {
-          "id": {"type": "string", "minLength": 1},
-          "sourceCidrs": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+          "id": {"type": "string", "minLength": 1, "maxLength": 128},
+          "sourceCidrs": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 64,
+            "uniqueItems": true,
+            "items": {"$ref": "#/$defs/canonicalCidr"}
+          },
+          "mtls": {"$ref": "#/$defs/mtlsIdentity"},
           "requiredHeaders": {
             "type": "object",
             "minProperties": 1,
-            "additionalProperties": {"type": "string"}
+            "maxProperties": 16,
+            "propertyNames": {"$ref": "#/$defs/requestAdmissionSelectorHeaderName"},
+            "additionalProperties": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096,
+              "pattern": "^[^\\r\\n\\u0000-\\u001F\\u007F]+$"
+            },
+            "$comment": "These values are trusted only after the same principal has matched sourceCidrs, a verified mTLS identity, or a nonlegacy proxyAuthorization token bound to sourceCidrs; headers alone never identify a principal."
           },
           "proxyAuthorization": {
             "oneOf": [
-              {"type": "string", "minLength": 1},
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096,
+                "pattern": "^[^\\r\\n\\u0000-\\u001F\\u007F]+$"
+              },
               {
                 "type": "object",
                 "required": ["scheme", "tokenSha256"],
                 "additionalProperties": false,
                 "properties": {
                   "scheme": {"enum": ["Bearer"]},
-                  "tokenId": {"type": "string", "minLength": 1},
+                  "tokenId": {"type": "string", "minLength": 1, "maxLength": 128},
                   "tokenSha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
-                  "sourceCidrs": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+                  "sourceCidrs": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 64,
+                    "uniqueItems": true,
+                    "items": {"$ref": "#/$defs/canonicalCidr"}
+                  },
                   "expiresAtEpochMs": {"type": "integer", "minimum": 1}
                 }
               }
@@ -489,29 +1050,66 @@
       "maxItems": 1024,
       "items": {
         "type": "object",
-        "required": ["id", "injection"],
+        "required": ["id", "credentialType", "provider", "providerSubject", "injection"],
         "additionalProperties": false,
         "allOf": [
           {
-            "if": {"required": ["providerSubject"]},
+            "if": {
+              "required": ["credentialType"],
+              "properties": {"credentialType": {"const": "oauth2"}}
+            },
             "then": {
-              "required": ["provider"],
+              "required": ["oauthClientId", "scopes"],
               "properties": {
-                "provider": {"type": "string", "minLength": 1, "not": {"const": "generic"}}
+                "injection": {
+                  "properties": {"type": {"const": "bearer"}},
+                  "required": ["type"]
+                }
+              }
+            },
+            "else": {
+              "not": {
+                "anyOf": [
+                  {"required": ["oauthClientId"]},
+                  {"required": ["scopes"]}
+                ]
               }
             }
           }
         ],
         "properties": {
-          "id": {"type": "string", "minLength": 1},
-          "provider": {"type": "string"},
+          "id": {"type": "string", "minLength": 1, "maxLength": 128},
+          "credentialType": {"enum": ["oauth2", "static"]},
+          "provider": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[a-z][a-z0-9.-]{0,63}$"
+          },
           "providerSubject": {
             "type": "string",
             "minLength": 1,
             "maxLength": 512,
             "pattern": "^(?!\\s)(?!.*\\s$)[^\\u0000-\\u001F\\u007F]+$"
           },
-          "scopes": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+          "oauthClientId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "pattern": "^(?!\\s)(?!.*\\s$)[^\\u0000-\\u001F\\u007F]+$"
+          },
+          "scopes": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 64,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512,
+              "pattern": "^(?!\\s)(?!.*\\s$)[^\\u0000-\\u001F\\u007F]+$"
+            }
+          },
           "injection": {
             "oneOf": [
               {
@@ -581,39 +1179,88 @@
         "required": ["id", "principals", "match", "adapter"],
         "additionalProperties": false,
         "properties": {
-          "id": {"type": "string", "minLength": 1},
-          "principals": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}},
+          "id": {"type": "string", "minLength": 1, "maxLength": 128},
+          "principals": {"type": "array", "minItems": 1, "maxItems": 64, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 128}},
           "match": {
             "type": "object",
             "required": ["scheme", "host", "port", "methods", "paths"],
             "additionalProperties": false,
             "properties": {
               "scheme": {"enum": ["https"]},
-              "host": {"type": "string", "minLength": 1},
+              "host": {"$ref": "#/$defs/canonicalRouteHost"},
               "port": {"type": "integer", "minimum": 1, "maximum": 65535},
-              "methods": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}},
-              "paths": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^/"}},
+              "methods": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 16,
+                "uniqueItems": true,
+                "items": {"type": "string", "pattern": "^[A-Z]+$", "maxLength": 16}
+              },
+              "paths": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 128,
+                "uniqueItems": true,
+                "items": {"type": "string", "minLength": 1, "maxLength": 2048, "pattern": "^/"}
+              },
               "resolvedCidrs": {
                 "type": "array",
                 "minItems": 1,
                 "maxItems": 32,
                 "uniqueItems": true,
-                "items": {"type": "string", "minLength": 3, "maxLength": 43}
+                "items": {"$ref": "#/$defs/canonicalCidr"}
               }
             }
           },
-          "credentialRef": {"type": "string"},
+          "credentialRef": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "$comment": "Admission must resolve this ID exactly once and prove that the referenced credential's type, provider, subject, OAuth client ID, and scopes satisfy the selected adapter config credentialBinding."
+          },
           "adapter": {
-            "type": "object",
-            "required": ["type", "config"],
-            "additionalProperties": false,
-            "properties": {
-              "type": {"enum": ["generic.rest", "gmail.v1", "x.v2", "npm.registry"]},
-              "config": {"type": "object"}
-            }
+            "oneOf": [
+              {
+                "type": "object",
+                "required": ["type", "config"],
+                "additionalProperties": false,
+                "properties": {
+                  "type": {"const": "gmail.v1"},
+                  "config": {"$ref": "https://serverware.local/schemas/adapters/gmail.v1.schema.json"}
+                }
+              },
+              {
+                "type": "object",
+                "required": ["type", "config"],
+                "additionalProperties": false,
+                "properties": {
+                  "type": {"const": "x.v2"},
+                  "config": {"$ref": "https://serverware.local/schemas/adapters/x.v2.schema.json"}
+                }
+              },
+              {
+                "type": "object",
+                "required": ["type", "config"],
+                "additionalProperties": false,
+                "properties": {
+                  "type": {"const": "npm.registry"},
+                  "config": {"$ref": "https://serverware.local/schemas/adapters/npm.registry.schema.json"}
+                }
+              },
+              {
+                "type": "object",
+                "required": ["type", "config"],
+                "additionalProperties": false,
+                "properties": {
+                  "type": {"const": "generic.rest"},
+                  "config": {"$ref": "https://serverware.local/schemas/adapters/generic.rest.schema.json"}
+                }
+              }
+            ]
           },
           "constraints": {
             "type": "array",
+            "maxItems": 128,
             "uniqueItems": true,
             "items": {"$ref": "#/$defs/credentialConstraint"}
           },
@@ -636,6 +1283,8 @@
                   "fields": {
                     "type": "array",
                     "minItems": 1,
+                    "maxItems": 32,
+                    "uniqueItems": true,
                     "items": {
                       "enum": [
                         "principal",
@@ -685,6 +1334,9 @@
                       "userVerification": {"enum": ["required", "preferred", "discouraged"]},
                       "allowedAuthenticatorClasses": {
                         "type": "array",
+                        "minItems": 1,
+                        "maxItems": 5,
+                        "uniqueItems": true,
                         "items": {"enum": ["yubikey", "hardware", "platform", "dev", "unknown"]}
                       },
                       "requireHardwareAttestation": {"type": "boolean"}
@@ -696,6 +1348,54 @@
           }
         },
         "allOf": [
+          {
+            "if": {
+              "properties": {
+                "adapter": {
+                  "required": ["type"],
+                  "properties": {"type": {"enum": ["gmail.v1", "x.v2", "npm.registry"]}}
+                }
+              },
+              "required": ["adapter"]
+            },
+            "then": {"required": ["credentialRef"]}
+          },
+          {
+            "if": {
+              "properties": {
+                "adapter": {
+                  "required": ["type", "config"],
+                  "properties": {
+                    "type": {"const": "generic.rest"},
+                    "config": {
+                      "required": ["credentialMode"],
+                      "properties": {"credentialMode": {"const": "required"}}
+                    }
+                  }
+                }
+              },
+              "required": ["adapter"]
+            },
+            "then": {"required": ["credentialRef"]}
+          },
+          {
+            "if": {
+              "properties": {
+                "adapter": {
+                  "required": ["type", "config"],
+                  "properties": {
+                    "type": {"const": "generic.rest"},
+                    "config": {
+                      "required": ["credentialMode"],
+                      "properties": {"credentialMode": {"const": "none"}}
+                    }
+                  }
+                }
+              },
+              "required": ["adapter"]
+            },
+            "then": {"not": {"required": ["credentialRef"]}}
+          },
           {
             "if": {
               "required": ["jit", "constraints"],

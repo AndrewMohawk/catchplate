@@ -1,0 +1,165 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/launch-authorization.v2.schema.json",
+  "title": "Serverware Production Launch Authorization v2",
+  "$comment": "This time-bounded capability covers trusted-host readiness only. It is idempotent for one operation/request binding and makes no unsupported one-use redemption or secure TEE time claim.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "statement", "signature"],
+  "properties": {
+    "apiVersion": {"const": "serverware.launchAuthorization/v2"},
+    "kind": {"const": "ProductionLaunchAuthorization"},
+    "statement": {"$ref": "#/$defs/statement"},
+    "signature": {"$ref": "#/$defs/signature"}
+  },
+  "$defs": {
+    "hex64": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "signature": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{85}[AQgw]$"
+    },
+    "statement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authorizationId",
+        "authorityKeyId",
+        "requestSha256",
+        "issuedAtUnixSeconds",
+        "expiresAtUnixSeconds",
+        "authorizationScope",
+        "freshnessAuthority",
+        "capabilitySemantics",
+        "globalRoleRegistrySha256",
+        "monotonicWitness"
+      ],
+      "properties": {
+        "authorizationId": {"$ref": "#/$defs/hex64"},
+        "authorityKeyId": {"$ref": "#/$defs/sha256"},
+        "requestSha256": {"$ref": "#/$defs/sha256"},
+        "issuedAtUnixSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "expiresAtUnixSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "authorizationScope": {"const": "trusted-host-readiness"},
+        "freshnessAuthority": {"const": "trusted-host-wall-clock"},
+        "capabilitySemantics": {
+          "const": "time-bounded-idempotent-readiness-authorization"
+        },
+        "globalRoleRegistrySha256": {"$ref": "#/$defs/sha256"},
+        "monotonicWitness": {"$ref": "#/$defs/monotonicWitness"}
+      }
+    },
+    "monotonicWitness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["apiVersion", "kind", "statement", "signature"],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.launchAuthorityWitnessTransition/v1"
+        },
+        "kind": {"const": "LaunchAuthorityWitnessTransition"},
+        "statement": {"$ref": "#/$defs/monotonicWitnessStatement"},
+        "signature": {"$ref": "#/$defs/signature"}
+      }
+    },
+    "monotonicWitnessStatement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation",
+        "operationId",
+        "authorizationId",
+        "requestSha256",
+        "challenge",
+        "issuedAtUnixSeconds",
+        "expiresAtUnixSeconds",
+        "authorityKeyId",
+        "witnessKeyId",
+        "witnessIdentitySha256",
+        "witnessAdministrativeDomainSha256",
+        "storeAssuranceSha256",
+        "registryGeneration",
+        "registrySha256",
+        "predecessorStateSha256",
+        "successorStateSha256",
+        "deploymentAudience",
+        "deploymentIdentitySha256",
+        "releaseSequence",
+        "rollbackEpoch",
+        "authorizationScope",
+        "stateTransitionCommitted",
+        "checkpointSequence"
+      ],
+      "properties": {
+        "operation": {"const": "authorize-trusted-host-readiness"},
+        "operationId": {"$ref": "#/$defs/hex64"},
+        "authorizationId": {"$ref": "#/$defs/hex64"},
+        "requestSha256": {"$ref": "#/$defs/sha256"},
+        "challenge": {"$ref": "#/$defs/hex64"},
+        "issuedAtUnixSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "expiresAtUnixSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "authorityKeyId": {"$ref": "#/$defs/sha256"},
+        "witnessKeyId": {"$ref": "#/$defs/sha256"},
+        "witnessIdentitySha256": {"$ref": "#/$defs/sha256"},
+        "witnessAdministrativeDomainSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "storeAssuranceSha256": {"$ref": "#/$defs/sha256"},
+        "registryGeneration": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "registrySha256": {"$ref": "#/$defs/sha256"},
+        "predecessorStateSha256": {"$ref": "#/$defs/sha256"},
+        "successorStateSha256": {"$ref": "#/$defs/sha256"},
+        "deploymentAudience": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-z0-9][a-z0-9._:-]{0,127}$"
+        },
+        "deploymentIdentitySha256": {"$ref": "#/$defs/sha256"},
+        "releaseSequence": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "rollbackEpoch": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "authorizationScope": {"const": "trusted-host-readiness"},
+        "stateTransitionCommitted": {"const": true},
+        "checkpointSequence": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      }
+    }
+  }
+}

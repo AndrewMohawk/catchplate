@@ -22,6 +22,7 @@ os.environ["SERVERWARE_AUDIT_STORE_BACKEND"] = "sqlite"
 os.environ["SERVERWARE_GRANT_STORE_BACKEND"] = "sqlite"
 
 from serverware import control_plane_runner, control_plane_startup  # noqa: E402
+from serverware.signed_http import SignedOnlyHttpToolsProtocol  # noqa: E402
 
 
 _SERVICE_CREDENTIALS = (
@@ -622,11 +623,21 @@ class ControlPlaneStartupTests(unittest.TestCase):
     def test_runner_uses_the_shared_startup_gate(self) -> None:
         with (
             patch.object(control_plane_runner, "validate_control_plane_startup") as preflight,
+            patch.object(
+                control_plane_runner,
+                "validate_signed_http_protocol",
+            ) as protocol_preflight,
             patch.object(control_plane_runner.uvicorn, "run") as uvicorn_run,
         ):
             control_plane_runner.main()
         preflight.assert_called_once_with()
+        protocol_preflight.assert_called_once_with()
         uvicorn_run.assert_called_once()
+        runner_kwargs = uvicorn_run.call_args.kwargs
+        self.assertIs(runner_kwargs["http"], SignedOnlyHttpToolsProtocol)
+        self.assertEqual(runner_kwargs["ws"], "none")
+        self.assertFalse(runner_kwargs["server_header"])
+        self.assertFalse(runner_kwargs["date_header"])
 
     def test_fastapi_startup_uses_gate_before_workers(self) -> None:
         from serverware import app as app_module

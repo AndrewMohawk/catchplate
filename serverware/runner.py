@@ -23,6 +23,10 @@ from serverware.config import (
     ensure_data_dirs,
 )
 from serverware.db import init_db
+from serverware.signed_http import (
+    SignedOnlyHttpToolsProtocol,
+    validate_signed_http_protocol,
+)
 
 
 _DEVELOPMENT_RELEASE_CHANNELS = {"dev", "development", "local", "test"}
@@ -98,6 +102,7 @@ def publish_decision_gate_ca_cert() -> None:
 
 def main() -> None:
     _require_development_release_channel()
+    validate_signed_http_protocol()
     ensure_data_dirs()
     ensure_mitm_ca_material()
     init_db()
@@ -115,7 +120,16 @@ def main() -> None:
     signal.signal(signal.SIGINT, stop)
 
     try:
-        uvicorn.run("serverware.app:app", host=WEB_HOST, port=WEB_PORT, log_level="info")
+        uvicorn.run(
+            "serverware.app:app",
+            host=WEB_HOST,
+            port=WEB_PORT,
+            log_level="info",
+            http=SignedOnlyHttpToolsProtocol,
+            ws="none",
+            server_header=False,
+            date_header=False,
+        )
     finally:
         mitm.terminate()
         try:

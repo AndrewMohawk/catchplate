@@ -1,0 +1,169 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/live-session-proof.v1.schema.json",
+  "title": "Serverware live session proof v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "callerNonceSha256",
+    "evidenceBodySha256",
+    "expiresAtUnix",
+    "producedAtUnix",
+    "releaseIdentity",
+    "releaseIdentitySha256",
+    "request",
+    "responseSigningKeyId",
+    "tlsBinding",
+    "tlsBindingSha256",
+    "witness"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "serverware.liveSessionProof/v1"
+    },
+    "callerNonceSha256": {"$ref": "#/$defs/sha256"},
+    "evidenceBodySha256": {"$ref": "#/$defs/sha256"},
+    "producedAtUnix": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 18446744073709551615
+    },
+    "expiresAtUnix": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 18446744073709551615
+    },
+    "releaseIdentity": {
+      "$ref": "release-identity.v1.schema.json"
+    },
+    "releaseIdentitySha256": {"$ref": "#/$defs/sha256"},
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bodySha256", "method", "path"],
+      "properties": {
+        "bodySha256": {"$ref": "#/$defs/sha256"},
+        "method": {"const": "POST"},
+        "path": {"const": "/attestation/public-evidence"}
+      }
+    },
+    "responseSigningKeyId": {"$ref": "#/$defs/sha256"},
+    "tlsBindingSha256": {"$ref": "#/$defs/sha256"},
+    "tlsBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "bindingSha256",
+        "connectionId",
+        "connectionNonceSha256",
+        "enclaveBootId",
+        "enclaveInstanceId",
+        "expiresAtUnix",
+        "exporterLabel",
+        "exporterSha256",
+        "issuedAtUnix",
+        "leafCertificateSha256",
+        "leafSpkiSha256",
+        "peerCertificateSha256",
+        "peerIdentity",
+        "peerSpkiSha256",
+        "provider",
+        "tlsKeyGeneration",
+        "tlsScopeEnvelopeSha256",
+        "tlsScopeKeyGeneration",
+        "tlsScopeKeySpkiSha256",
+        "tlsStackMeasurementSha256"
+      ],
+      "properties": {
+        "apiVersion": {"const": "serverware.enclaveTlsScope/v2"},
+        "bindingSha256": {"$ref": "#/$defs/sha256"},
+        "connectionId": {"$ref": "#/$defs/identifier"},
+        "connectionNonceSha256": {"$ref": "#/$defs/sha256"},
+        "enclaveBootId": {"$ref": "#/$defs/identifier"},
+        "enclaveInstanceId": {"$ref": "#/$defs/identifier"},
+        "expiresAtUnix": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 18446744073709551615
+        },
+        "exporterLabel": {
+          "const": "EXPORTER-Serverware-Attestation-v1"
+        },
+        "exporterSha256": {"$ref": "#/$defs/sha256"},
+        "issuedAtUnix": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 18446744073709551615
+        },
+        "leafCertificateSha256": {"$ref": "#/$defs/sha256"},
+        "leafSpkiSha256": {"$ref": "#/$defs/sha256"},
+        "peerCertificateSha256": {"$ref": "#/$defs/sha256"},
+        "peerIdentity": {"$ref": "#/$defs/identifier"},
+        "peerSpkiSha256": {"$ref": "#/$defs/sha256"},
+        "provider": {
+          "type": "string",
+          "pattern": "^enclave-[A-Za-z0-9._:@+-]{1,120}$"
+        },
+        "tlsKeyGeneration": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 18446744073709551615
+        },
+        "tlsScopeEnvelopeSha256": {"$ref": "#/$defs/sha256"},
+        "tlsScopeKeyGeneration": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 18446744073709551615
+        },
+        "tlsScopeKeySpkiSha256": {"$ref": "#/$defs/sha256"},
+        "tlsStackMeasurementSha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "witness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "generation",
+        "headSha256",
+        "rollbackEpoch",
+        "sequence",
+        "treeSize"
+      ],
+      "properties": {
+        "generation": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 18446744073709551615
+        },
+        "headSha256": {"$ref": "#/$defs/sha256"},
+        "rollbackEpoch": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 18446744073709551615
+        },
+        "treeSize": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 18446744073709551615
+        }
+      }
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,255}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  }
+}

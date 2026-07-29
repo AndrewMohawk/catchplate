@@ -1,0 +1,357 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/public-attestation-bundle.v3.schema.json",
+  "title": "Serverware public attestation bundle v3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "bundle",
+    "bundleSha256",
+    "liveWitnessHead",
+    "nonceAuthorityVerifierStateTransition",
+    "producerBinding",
+    "protectedLiveWitnessState"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "serverware.publicAttestationBundle/v3"
+    },
+    "bundle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifacts",
+        "generatedAtUnix",
+        "releaseGraph",
+        "schemaVersions"
+      ],
+      "properties": {
+        "artifacts": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "uniqueItems": true,
+          "prefixItems": [
+            {
+              "allOf": [
+                {"$ref": "#/$defs/stableArtifact"},
+                {
+                  "properties": {
+                    "name": {"const": "nitro-trust-roots"}
+                  }
+                }
+              ]
+            },
+            {
+              "allOf": [
+                {"$ref": "#/$defs/stableArtifact"},
+                {
+                  "properties": {
+                    "name": {"const": "release-config"}
+                  }
+                }
+              ]
+            },
+            {
+              "allOf": [
+                {"$ref": "#/$defs/stableArtifact"},
+                {
+                  "properties": {
+                    "name": {"const": "stable-release-statement"}
+                  }
+                }
+              ]
+            }
+          ],
+          "items": false
+        },
+        "generatedAtUnix": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 18446744073709551615
+        },
+        "releaseGraph": {
+          "$ref": "public-release-graph.v1.schema.json"
+        },
+        "schemaVersions": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "endpointBundle",
+            "liveSessionProof",
+            "liveWitnessHead",
+            "nonceAuthorityVerifierStateTransition",
+            "protectedLiveWitnessState",
+            "releaseConfig",
+            "releaseIdentity",
+            "stableReleaseStatement",
+            "trustRoots"
+          ],
+          "properties": {
+            "endpointBundle": {
+              "const": "serverware.publicAttestationBundle/v3"
+            },
+            "liveSessionProof": {
+              "const": "serverware.liveSessionProof/v1"
+            },
+            "liveWitnessHead": {
+              "const": "serverware.liveWitnessHead/v1"
+            },
+            "nonceAuthorityVerifierStateTransition": {
+              "const": "serverware.nonceAuthorityVerifierStateTransition/v3"
+            },
+            "protectedLiveWitnessState": {
+              "const": "serverware.protectedLiveWitnessState/v2"
+            },
+            "releaseConfig": {
+              "const": "serverware.publicAttestationConfig/v2"
+            },
+            "releaseIdentity": {
+              "const": "serverware.releaseIdentity/v1"
+            },
+            "stableReleaseStatement": {
+              "const": "serverware.stableReleaseStatement/v1"
+            },
+            "trustRoots": {
+              "const": "serverware.publicNitroTrustRoots/v4"
+            }
+          }
+        }
+      }
+    },
+    "bundleSha256": {"$ref": "#/$defs/sha256"},
+    "liveWitnessHead": {
+      "$ref": "live-witness-head.v1.schema.json"
+    },
+    "nonceAuthorityVerifierStateTransition": {
+      "$ref": "public-attestation-producer-request.v2.schema.json#/$defs/verifierStateTransition"
+    },
+    "protectedLiveWitnessState": {
+      "$ref": "protected-live-witness-state.v2.schema.json"
+    },
+    "producerBinding": {"$ref": "#/$defs/signedProducerBinding"}
+  },
+  "$defs": {
+    "base64url64": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{85}[AQgw]$"
+    },
+    "base64url32": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$"
+    },
+    "ed25519Spki": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{58}[AEIMQUYcgkosw048]$"
+    },
+    "positiveU64": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 18446744073709551615
+    },
+    "producerBindingPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "callerNonceSha256",
+        "descriptorSha256",
+        "executableSha256",
+        "expiresAtUnix",
+        "immutableConfigSha256",
+        "issuedAtUnix",
+        "nonceAuthorityAssuranceEvidenceSha256",
+        "nonceAuthorityAssuranceSha256",
+        "nonceAuthorityVerifierChallengeSha256",
+        "nonceAuthorityVerifierStateAuthorizationSha256",
+        "nonceAuthorityVerifierStateCommitReceiptSha256",
+        "nonceAuthorityVerifierStateCommitRequestSha256",
+        "nonceAuthorityVerifierStateCommittedStateReadSha256",
+        "nonceAuthorityVerifierStateCommittedStateSha256",
+        "nonceAuthorityVerifierStateOperationIdBase64url",
+        "nonceAuthorityVerifierStatePriorStateReadSha256",
+        "nonceAuthorityVerifierStatePriorStateSha256",
+        "nonceAuthorityVerifierStateServiceConfigurationSha256",
+        "nonceAuthorityVerifierStateSigningKeySpkiSha256",
+        "nonceAuthorityVerifierStateStoreAdministrativeDomainSha256",
+        "nonceAuthorityVerifierStateStoreAssuranceEvidenceSha256",
+        "nonceAuthorityVerifierStateRoleSeparationEvidenceSha256",
+        "nonceAuthorityVerifierStateStoreAttestationKeySpkiSha256",
+        "nonceAuthorityVerifierStateStoreCommitProofSha256",
+        "nonceAuthorityVerifierStateStoreConfigurationSha256",
+        "nonceAuthorityVerifierStateStoreIdentitySha256",
+        "nonceAuthorityVerifierStateStoreMinimumCommitIndex",
+        "nonceAuthorityVerifierStateStoreMinimumGeneration",
+        "nonceAuthorityVerifierStateTransitionSha256",
+        "nonceConsumptionReceiptSha256",
+        "nonceConsumptionSha256",
+        "nonceStoreIdentitySha256",
+        "nonceStoreKeySpkiSha256",
+        "producerEphemeralKeySpkiSha256",
+        "producerInvocationSha256",
+        "producerRequestSchemaSha256",
+        "producerRequestSha256",
+        "requestBodySha256",
+        "sandboxDescriptorSha256",
+        "sandboxLauncherSha256",
+        "tlsBindingSha256",
+        "transactionIdBase64url",
+        "trustRootsSha256",
+        "witnessCurrentRequestSha256",
+        "witnessStoreIdentitySha256",
+        "witnessStoreKeySpkiSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.publicAttestationProducerBinding/v3"
+        },
+        "callerNonceSha256": {"$ref": "#/$defs/sha256"},
+        "descriptorSha256": {"$ref": "#/$defs/sha256"},
+        "executableSha256": {"$ref": "#/$defs/sha256"},
+        "expiresAtUnix": {"$ref": "#/$defs/positiveU64"},
+        "immutableConfigSha256": {"$ref": "#/$defs/sha256"},
+        "issuedAtUnix": {"$ref": "#/$defs/positiveU64"},
+        "nonceAuthorityAssuranceEvidenceSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "nonceAuthorityAssuranceSha256": {"$ref": "#/$defs/sha256"},
+        "nonceAuthorityVerifierChallengeSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "nonceAuthorityVerifierStateAuthorizationSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "nonceAuthorityVerifierStateCommitReceiptSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "nonceAuthorityVerifierStateCommitRequestSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "nonceAuthorityVerifierStateCommittedStateReadSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "nonceAuthorityVerifierStateCommittedStateSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "nonceAuthorityVerifierStateOperationIdBase64url": {
+          "$ref": "#/$defs/base64url32"
+        },
+        "nonceAuthorityVerifierStatePriorStateReadSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "nonceAuthorityVerifierStatePriorStateSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "nonceAuthorityVerifierStateServiceConfigurationSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "nonceAuthorityVerifierStateSigningKeySpkiSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "nonceAuthorityVerifierStateStoreAdministrativeDomainSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "nonceAuthorityVerifierStateStoreAssuranceEvidenceSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "nonceAuthorityVerifierStateRoleSeparationEvidenceSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "nonceAuthorityVerifierStateStoreAttestationKeySpkiSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "nonceAuthorityVerifierStateStoreCommitProofSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "nonceAuthorityVerifierStateStoreConfigurationSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "nonceAuthorityVerifierStateStoreIdentitySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "nonceAuthorityVerifierStateStoreMinimumCommitIndex": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "nonceAuthorityVerifierStateStoreMinimumGeneration": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "nonceAuthorityVerifierStateTransitionSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "nonceConsumptionReceiptSha256": {"$ref": "#/$defs/sha256"},
+        "nonceConsumptionSha256": {"$ref": "#/$defs/sha256"},
+        "nonceStoreIdentitySha256": {"$ref": "#/$defs/sha256"},
+        "nonceStoreKeySpkiSha256": {"$ref": "#/$defs/sha256"},
+        "producerEphemeralKeySpkiSha256": {"$ref": "#/$defs/sha256"},
+        "producerInvocationSha256": {"$ref": "#/$defs/sha256"},
+        "producerRequestSchemaSha256": {"$ref": "#/$defs/sha256"},
+        "producerRequestSha256": {"$ref": "#/$defs/sha256"},
+        "requestBodySha256": {"$ref": "#/$defs/sha256"},
+        "sandboxDescriptorSha256": {"$ref": "#/$defs/sha256"},
+        "sandboxLauncherSha256": {"$ref": "#/$defs/sha256"},
+        "tlsBindingSha256": {"$ref": "#/$defs/sha256"},
+        "transactionIdBase64url": {"$ref": "#/$defs/base64url32"},
+        "trustRootsSha256": {"$ref": "#/$defs/sha256"},
+        "witnessCurrentRequestSha256": {"$ref": "#/$defs/sha256"},
+        "witnessStoreIdentitySha256": {"$ref": "#/$defs/sha256"},
+        "witnessStoreKeySpkiSha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "signedProducerBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "payload",
+        "payloadSha256",
+        "signatureAlgorithm",
+        "signatureBase64url",
+        "signingKeySpkiDerBase64url",
+        "signingKeySpkiSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.signedPublicAttestationProducerBinding/v1"
+        },
+        "payload": {"$ref": "#/$defs/producerBindingPayload"},
+        "payloadSha256": {"$ref": "#/$defs/sha256"},
+        "signatureAlgorithm": {"const": "Ed25519"},
+        "signatureBase64url": {"$ref": "#/$defs/base64url64"},
+        "signingKeySpkiDerBase64url": {"$ref": "#/$defs/ed25519Spki"},
+        "signingKeySpkiSha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "stableArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contentBase64url",
+        "mediaType",
+        "name",
+        "sha256"
+      ],
+      "properties": {
+        "contentBase64url": {
+          "type": "string",
+          "pattern": "^(?:[A-Za-z0-9_-]{4})*(?:[A-Za-z0-9_-][AQgw]|[A-Za-z0-9_-]{2}[AEIMQUYcgkosw048])?$",
+          "minLength": 2,
+          "maxLength": 5592406
+        },
+        "mediaType": {"const": "application/json"},
+        "name": {
+          "enum": [
+            "nitro-trust-roots",
+            "release-config",
+            "stable-release-statement"
+          ]
+        },
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  }
+}

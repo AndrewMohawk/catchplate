@@ -54,6 +54,8 @@ const MAX_OBSERVATION_BODY_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_OBSERVATION_HEADER_COUNT: u64 = 65_535;
 const MAX_AUTHORIZATION_RECEIPT_BODY_BYTES: usize = 32 * 1024;
 const MAX_SIGNED_RESPONSE_STATEMENT_BYTES: usize = 8 * 1024;
+const MAX_SIGNED_RESPONSE_HEADER_COUNT: usize = 128;
+const MAX_SIGNED_RESPONSE_HEADER_BYTES: usize = 64 * 1024;
 const MAX_RELEASE_AUTHORIZATION_BINDING_BYTES: usize = 64 * 1024;
 const MAX_CONTROL_PLANE_RESPONSE_PUBLIC_KEY_BYTES: usize = 1024;
 const MAX_CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ID_FILE_BYTES: usize = 72;
@@ -74,6 +76,11 @@ pub const RESPONSE_OBSERVATION_NONCE_CLIENT_LIFETIME_SECONDS: u64 = 300;
 pub const RESPONSE_OBSERVATION_NONCE_MAX_LIFETIME_SECONDS: u64 = 330;
 const MAX_RELEASE_AUTHORIZATION_LIFETIME_MS: u64 = 300_000;
 const AUTHORIZATION_RECEIPT_API_VERSION: &str = "serverware.controlPlaneAuthorizationReceipt/v1";
+const RELEASE_AUTHORIZATION_BINDING_V2: &str = "serverware.releaseAuthorizationBinding/v2";
+const RELEASE_AUTHORIZATION_DISPATCH_V1: &str = "serverware.releaseAuthorizationDispatch/v1";
+const RELEASE_AUTHORIZATION_DISPATCH_V2: &str = "serverware.releaseAuthorizationDispatch/v2";
+const RELEASE_AUTHORIZATION_RESPONSE_V1: &str = "serverware.releaseAuthorization/v1";
+const RELEASE_AUTHORIZATION_RESPONSE_V2: &str = "serverware.releaseAuthorization/v2";
 const RELEASE_AUTHORIZATION_DISPATCH_PATH: &str = "/api/data-plane/release-authorizations/dispatch";
 const CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ENV: &str =
     "SERVERWARE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY";
@@ -638,10 +645,18 @@ pub struct ControlPlaneAuthorizationReceiptResponse {
     pub status: u16,
     pub body_b64: String,
     pub body_sha256: String,
+    pub response_headers: Vec<ControlPlaneAuthorizationReceiptResponseHeader>,
     pub response_signing_key_id: String,
     pub statement_b64: String,
     pub statement_sha256: String,
     pub signature: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ControlPlaneAuthorizationReceiptResponseHeader {
+    pub name: String,
+    pub value_b64: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -665,6 +680,12 @@ pub struct ReleaseAuthority {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 struct ReleaseAuthorizationBinding {
+    #[serde(
+        default,
+        deserialize_with = "deserialize_present_optional",
+        skip_serializing_if = "Option::is_none"
+    )]
+    api_version: Option<String>,
     attempt_id: String,
     flow_id: String,
     principal_id: String,
@@ -677,6 +698,28 @@ struct ReleaseAuthorizationBinding {
     operation_context: Value,
     require_jit_grant: bool,
     shared_quotas: Vec<ReleaseAuthorizationBindingQuota>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_present_optional",
+        skip_serializing_if = "Option::is_none"
+    )]
+    durable_policy: Option<ReleaseAuthorizationDurablePolicyBinding>,
+}
+
+fn deserialize_present_optional<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ReleaseAuthorizationDurablePolicyBinding {
+    actor_id: String,
+    claim_digest: String,
+    claims: Vec<Value>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -752,6 +795,18 @@ struct DispatchRequestBody {
     api_version: String,
     attempt_id: String,
     binding_digest: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    durable_policy: Option<DispatchDurablePolicyTransition>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DispatchDurablePolicyTransition {
+    actor_id: String,
+    attempt_id: String,
+    claim_digest: String,
+    reservation_id: String,
+    dispatch_deadline_at_epoch_ms: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -767,16 +822,30 @@ struct DispatchResponseBody {
     idempotent_replay: bool,
     grant_id: Option<String>,
     approval_request_id: Option<String>,
-    approval_status: Option<String>,
-    approval_expires_at: Option<String>,
-    approval_created: Option<bool>,
     reservation_expires_at_epoch_ms: Option<u64>,
     dispatch_started_at_epoch_ms: Option<u64>,
     dispatch_expires_at_epoch_ms: Option<u64>,
     completion_outcome: Option<String>,
     retry_after_seconds: u64,
     quotas: Vec<DispatchQuota>,
-    store: DispatchStore,
+    store: AuthenticatedDispatchStoreAssertion,
+    durable_policy: Option<DispatchDurablePolicyResponse>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DispatchDurablePolicyResponse {
+    state: String,
+    attempt_id: String,
+    claim_digest: String,
+    reservation_id: Option<String>,
+    actor_id: String,
+    reservation_deadline_at_epoch_ms: Option<u64>,
+    dispatch_deadline_at_epoch_ms: Option<u64>,
+    response_evidence_digest: Option<String>,
+    failure_reason: Option<String>,
+    response_body_sha256: Option<String>,
+    uncertainty: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -800,9 +869,12 @@ struct DispatchQuota {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[allow(dead_code)]
-struct DispatchStore {
-    backend: Option<String>,
-    ha: bool,
+// This signed control-plane claim is not an independently signed durable-store receipt.
+struct AuthenticatedDispatchStoreAssertion {
+    #[serde(rename = "backend")]
+    asserted_backend: Option<String>,
+    #[serde(rename = "ha")]
+    asserts_ha: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -813,6 +885,8 @@ struct SignedResponseStatement {
     request: SignedResponseRequest,
     status_code: u16,
     body_sha256: String,
+    response_headers_sha256: String,
+    response_header_count: u64,
     nonce: Option<String>,
     response_signing_key_id: String,
     context: SignedResponseContext,
@@ -1187,15 +1261,11 @@ impl CustodyRuntime {
                 })?;
                 let validation_epoch_ms = current_epoch_ms()?;
                 let validated = (|| {
-                    validate_response_statement_with_control_plane_response_key_at(
+                    validate_response_statement_authenticated_at(
                         &params.statement,
                         control_plane_response_verifying_key,
-                        validation_epoch_ms,
-                    )?;
-                    let authority_view = ResponseStatementAuthorityView::from(&params.statement);
-                    validate_release_authorization_binding(
-                        &authority_view,
                         &params.authorization_binding,
+                        validation_epoch_ms,
                     )?;
                     let canonical_statement = canonical_json_bytes(&params.statement)?;
                     let statement_digest = sha256_prefixed(&canonical_statement);
@@ -3190,38 +3260,42 @@ where
     Option::<T>::deserialize(deserializer)
 }
 
-pub fn validate_response_statement(
-    statement: &ProxyResponseStatement,
-) -> Result<(), ProtocolError> {
-    validate_response_statement_inner(statement, None, current_epoch_ms()?)
-}
-
-pub fn validate_response_statement_with_control_plane_response_key(
+#[cfg(test)]
+fn validate_response_statement_authenticated(
     statement: &ProxyResponseStatement,
     control_plane_response_verifying_key: &VerifyingKey,
+    authorization_binding: &ReleaseAuthorizationBinding,
 ) -> Result<(), ProtocolError> {
-    validate_response_statement_with_control_plane_response_key_at(
+    validate_response_statement_authenticated_at(
         statement,
         control_plane_response_verifying_key,
+        authorization_binding,
         current_epoch_ms()?,
     )
 }
 
-fn validate_response_statement_with_control_plane_response_key_at(
+fn validate_response_statement_authenticated_at(
     statement: &ProxyResponseStatement,
     control_plane_response_verifying_key: &VerifyingKey,
+    authorization_binding: &ReleaseAuthorizationBinding,
     now_epoch_ms: u64,
 ) -> Result<(), ProtocolError> {
     validate_response_statement_inner(
         statement,
-        Some(control_plane_response_verifying_key),
+        control_plane_response_verifying_key,
+        authorization_binding,
         now_epoch_ms,
+    )?;
+    validate_release_authorization_binding(
+        &ResponseStatementAuthorityView::from(statement),
+        authorization_binding,
     )
 }
 
 fn validate_response_statement_inner(
     statement: &ProxyResponseStatement,
-    control_plane_response_verifying_key: Option<&VerifyingKey>,
+    control_plane_response_verifying_key: &VerifyingKey,
+    authorization_binding: &ReleaseAuthorizationBinding,
     now_epoch_ms: u64,
 ) -> Result<(), ProtocolError> {
     if statement.api_version != RESPONSE_STATEMENT_API_VERSION {
@@ -3313,6 +3387,7 @@ fn validate_response_statement_inner(
     validate_control_plane_authorization_receipt(
         &authority_view,
         control_plane_response_verifying_key,
+        authorization_binding,
         now_epoch_ms,
     )?;
     if statement.upstream_response.status != statement.response.status {
@@ -3936,7 +4011,8 @@ fn validate_observation_authorization(
     validate_release_authority(&authority_view)?;
     validate_control_plane_authorization_receipt(
         &authority_view,
-        Some(verifying_key),
+        verifying_key,
+        binding,
         now_epoch_ms,
     )?;
     validate_release_authorization_binding(&authority_view, binding)
@@ -4058,7 +4134,8 @@ fn validate_streaming_response_statement_with_control_plane_response_key_at(
     validate_streaming_release_identifiers(statement, authorization_binding)?;
     validate_control_plane_authorization_receipt(
         &authority_view,
-        Some(control_plane_response_verifying_key),
+        control_plane_response_verifying_key,
+        authorization_binding,
         now_epoch_ms,
     )?;
     let receipt_digest = sha256_prefixed(&canonical_json_bytes(
@@ -4397,6 +4474,35 @@ fn validate_release_authorization_binding(
     binding: &ReleaseAuthorizationBinding,
 ) -> Result<(), ProtocolError> {
     let authority = &statement.release_authority;
+    match (&binding.api_version, &binding.durable_policy) {
+        (None, None) => {},
+        (Some(api_version), Some(durable))
+            if api_version == RELEASE_AUTHORIZATION_BINDING_V2 =>
+        {
+            validate_bounded_identity(
+                "release authorization durable policy actor_id",
+                &durable.actor_id,
+            )?;
+            validate_sha256_digest(
+                "release authorization durable policy claim_digest",
+                &durable.claim_digest,
+            )?;
+            if !(1..=64).contains(&durable.claims.len())
+                || durable.claims.iter().any(|claim| !claim.is_object())
+                || durable.claim_digest
+                    != sha256_prefixed(&canonical_json_ensure_ascii_bytes(&durable.claims)?)
+            {
+                return Err(invalid_statement(
+                    "release authorization durable policy binding is invalid",
+                ));
+            }
+        },
+        _ => {
+            return Err(invalid_statement(
+                "release authorization binding protocol is inconsistent",
+            ))
+        }
+    };
     let expected_credential_id = authority.credential_ref.as_deref().unwrap_or("");
     if binding.attempt_id != authority.attempt_id
         || binding.flow_id != authority.attempt_id
@@ -4464,6 +4570,295 @@ fn validate_release_authorization_binding(
         ));
     }
     Ok(())
+}
+
+fn json_object_has_exact_fields(value: &Value, expected_fields: &[&str]) -> bool {
+    value.as_object().is_some_and(|object| {
+        object.len() == expected_fields.len()
+            && expected_fields
+                .iter()
+                .all(|field| object.contains_key(*field))
+    })
+}
+
+fn validate_dispatch_quota_object_fields(
+    response: &Value,
+    durable_v2: bool,
+) -> Result<(), ProtocolError> {
+    const LEGACY_V1_FIXED_FIELDS: [&str; 9] = [
+        "counterKey",
+        "constraintId",
+        "operation",
+        "windowStartEpochMs",
+        "windowSeconds",
+        "max",
+        "count",
+        "remaining",
+        "reservationState",
+    ];
+    const CURRENT_FIXED_FIELDS: [&str; 11] = [
+        "counterKey",
+        "constraintId",
+        "operation",
+        "windowKind",
+        "windowStartEpochMs",
+        "windowEndEpochMs",
+        "windowSeconds",
+        "max",
+        "count",
+        "remaining",
+        "reservationState",
+    ];
+    const CURRENT_CALENDAR_FIELDS: [&str; 11] = [
+        "counterKey",
+        "constraintId",
+        "operation",
+        "windowKind",
+        "windowStartEpochMs",
+        "windowEndEpochMs",
+        "calendarWindow",
+        "max",
+        "count",
+        "remaining",
+        "reservationState",
+    ];
+
+    let quotas = response
+        .get("quotas")
+        .and_then(Value::as_array)
+        .ok_or_else(|| invalid_statement("dispatch response quotas are invalid"))?;
+    for quota in quotas {
+        let expected_fields = match quota.get("windowKind") {
+            None if !durable_v2 => &LEGACY_V1_FIXED_FIELDS[..],
+            None => {
+                return Err(invalid_statement(
+                    "dispatch v2 quota is missing its explicit window kind",
+                ))
+            }
+            Some(Value::String(kind)) if kind == "fixed" => &CURRENT_FIXED_FIELDS[..],
+            Some(Value::String(kind))
+                if matches!(kind.as_str(), "utcDay" | "utcIsoWeek" | "utcMonth") =>
+            {
+                &CURRENT_CALENDAR_FIELDS[..]
+            }
+            _ => {
+                return Err(invalid_statement(
+                    "dispatch quota window contract is invalid",
+                ))
+            }
+        };
+        if !json_object_has_exact_fields(quota, expected_fields) {
+            return Err(invalid_statement(
+                "dispatch quota fields do not match the versioned window contract",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn parse_dispatch_request_body(
+    request_body: &[u8],
+    binding: &ReleaseAuthorizationBinding,
+    authority: &ReleaseAuthority,
+) -> Result<DispatchRequestBody, ProtocolError> {
+    const V1_FIELDS: [&str; 3] = ["apiVersion", "attemptId", "bindingDigest"];
+    const V2_FIELDS: [&str; 4] = [
+        "apiVersion",
+        "attemptId",
+        "bindingDigest",
+        "durablePolicy",
+    ];
+    const DURABLE_FIELDS: [&str; 5] = [
+        "actorId",
+        "attemptId",
+        "claimDigest",
+        "reservationId",
+        "dispatchDeadlineAtEpochMs",
+    ];
+
+    let value = parse_json_without_duplicate_keys(request_body)
+        .map_err(|_| invalid_statement("dispatch request body is invalid"))?;
+    let canonical = canonical_json_ensure_ascii_bytes(&value)
+        .map_err(|_| invalid_statement("dispatch request body is invalid"))?;
+    if canonical != request_body {
+        return Err(invalid_statement(
+            "dispatch request body is not canonical JSON",
+        ));
+    }
+    let durable_binding = binding.durable_policy.as_ref();
+    let expected_fields = if durable_binding.is_some() {
+        &V2_FIELDS[..]
+    } else {
+        &V1_FIELDS[..]
+    };
+    if !json_object_has_exact_fields(&value, expected_fields) {
+        return Err(invalid_statement(
+            "dispatch request fields do not match the authorization binding version",
+        ));
+    }
+    if durable_binding.is_some()
+        && !value
+            .get("durablePolicy")
+            .is_some_and(|durable| json_object_has_exact_fields(durable, &DURABLE_FIELDS))
+    {
+        return Err(invalid_statement(
+            "dispatch durable policy request fields are invalid",
+        ));
+    }
+    let request: DispatchRequestBody = serde_json::from_value(value)
+        .map_err(|_| invalid_statement("dispatch request body contract is invalid"))?;
+    let expected_api_version = if durable_binding.is_some() {
+        RELEASE_AUTHORIZATION_DISPATCH_V2
+    } else {
+        RELEASE_AUTHORIZATION_DISPATCH_V1
+    };
+    if request.api_version != expected_api_version
+        || request.attempt_id != authority.attempt_id
+        || request.binding_digest != authority.consumption_identity_digest
+    {
+        return Err(invalid_statement("dispatch request binding mismatch"));
+    }
+    match (&request.durable_policy, durable_binding) {
+        (None, None) => {}
+        (Some(request_durable), Some(binding_durable))
+            if request_durable.actor_id == binding_durable.actor_id
+                && request_durable.attempt_id == authority.attempt_id
+                && request_durable.claim_digest == binding_durable.claim_digest
+                && request_durable.dispatch_deadline_at_epoch_ms
+                    == authority.dispatch_expires_at_epoch_ms =>
+        {
+            validate_bounded_identity(
+                "dispatch durable policy reservation_id",
+                &request_durable.reservation_id,
+            )?;
+        }
+        _ => {
+            return Err(invalid_statement(
+                "dispatch durable policy request binding mismatch",
+            ))
+        }
+    }
+    Ok(request)
+}
+
+fn parse_dispatch_response_body(
+    response_body: &[u8],
+    binding: &ReleaseAuthorizationBinding,
+) -> Result<DispatchResponseBody, ProtocolError> {
+    const STORE_FIELDS: [&str; 2] = ["backend", "ha"];
+    const V1_FIELDS: [&str; 17] = [
+        "apiVersion",
+        "ok",
+        "authorized",
+        "state",
+        "reason",
+        "attemptId",
+        "bindingDigest",
+        "idempotentReplay",
+        "grantId",
+        "approvalRequestId",
+        "reservationExpiresAtEpochMs",
+        "dispatchStartedAtEpochMs",
+        "dispatchExpiresAtEpochMs",
+        "completionOutcome",
+        "retryAfterSeconds",
+        "quotas",
+        "store",
+    ];
+    const V2_FIELDS: [&str; 18] = [
+        "apiVersion",
+        "ok",
+        "authorized",
+        "state",
+        "reason",
+        "attemptId",
+        "bindingDigest",
+        "idempotentReplay",
+        "grantId",
+        "approvalRequestId",
+        "reservationExpiresAtEpochMs",
+        "dispatchStartedAtEpochMs",
+        "dispatchExpiresAtEpochMs",
+        "completionOutcome",
+        "retryAfterSeconds",
+        "quotas",
+        "store",
+        "durablePolicy",
+    ];
+    const DURABLE_FIELDS: [&str; 11] = [
+        "state",
+        "attemptId",
+        "claimDigest",
+        "reservationId",
+        "actorId",
+        "reservationDeadlineAtEpochMs",
+        "dispatchDeadlineAtEpochMs",
+        "responseEvidenceDigest",
+        "failureReason",
+        "responseBodySha256",
+        "uncertainty",
+    ];
+
+    let value = parse_json_without_duplicate_keys(response_body)
+        .map_err(|_| invalid_statement("dispatch response body is invalid"))?;
+    let durable_binding = binding.durable_policy.as_ref();
+    let expected_fields = if durable_binding.is_some() {
+        &V2_FIELDS[..]
+    } else {
+        &V1_FIELDS[..]
+    };
+    if !json_object_has_exact_fields(&value, expected_fields) {
+        return Err(invalid_statement(
+            "dispatch response fields do not match the authorization binding version",
+        ));
+    }
+    if durable_binding.is_some()
+        && !value
+            .get("durablePolicy")
+            .is_some_and(|durable| json_object_has_exact_fields(durable, &DURABLE_FIELDS))
+    {
+        return Err(invalid_statement(
+            "dispatch durable policy response fields are invalid",
+        ));
+    }
+    if !value
+        .get("store")
+        .is_some_and(|store| json_object_has_exact_fields(store, &STORE_FIELDS))
+    {
+        return Err(invalid_statement(
+            "dispatch authorization store fields are invalid",
+        ));
+    }
+    validate_dispatch_quota_object_fields(&value, durable_binding.is_some())?;
+    let response: DispatchResponseBody = serde_json::from_value(value)
+        .map_err(|_| invalid_statement("dispatch response body contract is invalid"))?;
+    let expected_api_version = if durable_binding.is_some() {
+        RELEASE_AUTHORIZATION_RESPONSE_V2
+    } else {
+        RELEASE_AUTHORIZATION_RESPONSE_V1
+    };
+    if response.api_version != expected_api_version
+        || response.durable_policy.is_some() != durable_binding.is_some()
+    {
+        return Err(invalid_statement(
+            "dispatch response protocol is inconsistent",
+        ));
+    }
+    let asserted_store_backend = response
+        .store
+        .asserted_backend
+        .as_deref()
+        .ok_or_else(|| invalid_statement("dispatch authorization store backend is missing"))?;
+    validate_bounded_identity(
+        "dispatch authenticated store backend assertion",
+        asserted_store_backend,
+    )?;
+    if !response.store.asserts_ha {
+        return Err(invalid_statement(
+            "dispatch authenticated HA store assertion is false; the current contract carries no independently signed durable store receipt",
+        ));
+    }
+    Ok(response)
 }
 
 fn custody_utc_epoch_ms(timestamp: OffsetDateTime) -> Result<u64, ProtocolError> {
@@ -4539,10 +4934,7 @@ fn validate_dispatch_quotas_against_binding(
             .body_b64,
         MAX_AUTHORIZATION_RECEIPT_BODY_BYTES,
     )?;
-    let response_value = parse_json_without_duplicate_keys(&response_body)
-        .map_err(|error| invalid_statement(format!("dispatch response body: {error}")))?;
-    let dispatch_response: DispatchResponseBody = serde_json::from_value(response_value)
-        .map_err(|error| invalid_statement(format!("dispatch response body: {error}")))?;
+    let dispatch_response = parse_dispatch_response_body(&response_body, binding)?;
     if dispatch_response.quotas.len() != binding.shared_quotas.len() {
         return Err(invalid_statement(
             "dispatch quota set does not match the release binding",
@@ -4554,6 +4946,7 @@ fn validate_dispatch_quotas_against_binding(
     let dispatch_started_at_epoch_ms = dispatch_response
         .dispatch_started_at_epoch_ms
         .ok_or_else(|| invalid_statement("dispatch response is missing dispatch start"))?;
+    let durable_v2 = dispatch_response.api_version == RELEASE_AUTHORIZATION_RESPONSE_V2;
     let mut previous_counter_key: Option<&str> = None;
     for actual in &dispatch_response.quotas {
         let counter_key = actual
@@ -4575,6 +4968,11 @@ fn validate_dispatch_quotas_against_binding(
             .window_kind
             .as_ref()
             .unwrap_or(&RateLimitWindowKind::Fixed);
+        if durable_v2 && actual.window_kind.is_none() {
+            return Err(invalid_statement(
+                "dispatch v2 quota is missing its explicit window kind",
+            ));
+        }
         if counter_key != expected.counter_key
             || actual.constraint_id.as_deref() != Some(expected.constraint_id.as_str())
             || actual.operation != expected.operation
@@ -4597,9 +4995,11 @@ fn validate_dispatch_quotas_against_binding(
                 let calculated = window_start_epoch_ms
                     .checked_add(expected.window_seconds.unwrap_or_default() * 1000)
                     .ok_or_else(|| invalid_statement("dispatch fixed quota window overflows"))?;
-                if actual
-                    .window_end_epoch_ms
-                    .is_some_and(|window_end| window_end != calculated)
+                if (actual.window_kind.is_some()
+                    && actual.window_end_epoch_ms != Some(calculated))
+                    || actual
+                        .window_end_epoch_ms
+                        .is_some_and(|window_end| window_end != calculated)
                 {
                     return Err(invalid_statement(
                         "dispatch fixed quota window end is inconsistent",
@@ -4665,7 +5065,8 @@ fn decode_receipt_base64url(
 
 fn validate_control_plane_authorization_receipt(
     statement: &ResponseStatementAuthorityView<'_>,
-    control_plane_response_verifying_key: Option<&VerifyingKey>,
+    control_plane_response_verifying_key: &VerifyingKey,
+    authorization_binding: &ReleaseAuthorizationBinding,
     now_epoch_ms: u64,
 ) -> Result<(), ProtocolError> {
     let receipt = &statement.control_plane_authorization_receipt;
@@ -4699,17 +5100,11 @@ fn validate_control_plane_authorization_receipt(
             "control-plane authorization receipt request body digest mismatch",
         ));
     }
-    let dispatch_request: DispatchRequestBody = decode_canonical_json(&request_body)
-        .map_err(|error| invalid_statement(format!("dispatch request body: {error}")))?;
-    if dispatch_request.api_version != "serverware.releaseAuthorizationDispatch/v1"
-        || dispatch_request.attempt_id != statement.release_authority.attempt_id
-        || dispatch_request.binding_digest
-            != statement.release_authority.consumption_identity_digest
-    {
-        return Err(invalid_statement(
-            "control-plane authorization receipt dispatch request mismatch",
-        ));
-    }
+    let dispatch_request = parse_dispatch_request_body(
+        &request_body,
+        authorization_binding,
+        statement.release_authority,
+    )?;
     let response = &receipt.response;
     if response.status != 200 {
         return Err(invalid_statement(
@@ -4721,14 +5116,12 @@ fn validate_control_plane_authorization_receipt(
         "receipt.response.response_signing_key_id",
         &response.response_signing_key_id,
     )?;
-    if let Some(control_plane_response_verifying_key) = control_plane_response_verifying_key {
-        if response.response_signing_key_id
-            != control_plane_response_key_id(control_plane_response_verifying_key)
-        {
-            return Err(invalid_statement(
-                "control-plane authorization receipt response key does not match the pinned control-plane response public key",
-            ));
-        }
+    if response.response_signing_key_id
+        != control_plane_response_key_id(control_plane_response_verifying_key)
+    {
+        return Err(invalid_statement(
+            "control-plane authorization receipt response key does not match the pinned control-plane response public key",
+        ));
     }
     validate_sha256_digest(
         "receipt.response.statement_sha256",
@@ -4744,10 +5137,8 @@ fn validate_control_plane_authorization_receipt(
             "control-plane authorization receipt response body digest mismatch",
         ));
     }
-    let response_value = parse_json_without_duplicate_keys(&response_body)
-        .map_err(|error| invalid_statement(format!("dispatch response body: {error}")))?;
-    let dispatch_response: DispatchResponseBody = serde_json::from_value(response_value)
-        .map_err(|error| invalid_statement(format!("dispatch response body: {error}")))?;
+    let dispatch_response =
+        parse_dispatch_response_body(&response_body, authorization_binding)?;
     let dispatch_started_at_epoch_ms = dispatch_response
         .dispatch_started_at_epoch_ms
         .ok_or_else(|| invalid_statement("dispatch response is missing dispatch start"))?;
@@ -4757,16 +5148,12 @@ fn validate_control_plane_authorization_receipt(
     let reservation_expires_at_epoch_ms = dispatch_response
         .reservation_expires_at_epoch_ms
         .ok_or_else(|| invalid_statement("dispatch response is missing reservation expiry"))?;
-    if dispatch_response.api_version != "serverware.releaseAuthorization/v1"
-        || !dispatch_response.ok
+    if !dispatch_response.ok
         || !dispatch_response.authorized
         || dispatch_response.state != "dispatching"
         || dispatch_response.reason != "dispatching"
         || dispatch_response.completion_outcome.is_some()
         || dispatch_response.retry_after_seconds != 0
-        || dispatch_response.approval_status.is_some()
-        || dispatch_response.approval_expires_at.is_some()
-        || dispatch_response.approval_created.is_some()
         || dispatch_response.grant_id != statement.release_authority.grant_id
         || dispatch_response.approval_request_id != statement.release_authority.approval_id
         || dispatch_response.attempt_id != statement.release_authority.attempt_id
@@ -4786,10 +5173,53 @@ fn validate_control_plane_authorization_receipt(
             "control-plane authorization receipt body and authority mismatch",
         ));
     }
+    match (
+        &dispatch_request.durable_policy,
+        &dispatch_response.durable_policy,
+        authorization_binding.durable_policy.as_ref(),
+    ) {
+        (None, None, None) => {}
+        (Some(request_durable), Some(response_durable), Some(binding_durable))
+            if response_durable.state == "dispatched"
+                && response_durable.attempt_id == statement.release_authority.attempt_id
+                && response_durable.attempt_id == request_durable.attempt_id
+                && response_durable.actor_id == binding_durable.actor_id
+                && response_durable.actor_id == request_durable.actor_id
+                && response_durable.claim_digest == binding_durable.claim_digest
+                && response_durable.claim_digest == request_durable.claim_digest
+                && response_durable.reservation_id.as_deref()
+                    == Some(request_durable.reservation_id.as_str())
+                && response_durable.reservation_deadline_at_epoch_ms
+                    == statement
+                        .release_authority
+                        .reservation_expires_at_epoch_ms
+                && response_durable.dispatch_deadline_at_epoch_ms
+                    == Some(statement.release_authority.dispatch_expires_at_epoch_ms)
+                && response_durable.dispatch_deadline_at_epoch_ms
+                    == Some(request_durable.dispatch_deadline_at_epoch_ms)
+                && response_durable.response_evidence_digest.is_none()
+                && response_durable.failure_reason.is_none()
+                && response_durable.response_body_sha256.is_none()
+                && response_durable.uncertainty.is_none() =>
+        {
+            validate_bounded_identity(
+                "dispatch durable policy response reservation_id",
+                response_durable
+                    .reservation_id
+                    .as_deref()
+                    .expect("durable reservation ID was matched above"),
+            )?;
+        }
+        _ => {
+            return Err(invalid_statement(
+                "control-plane authorization receipt durable policy lifecycle mismatch",
+            ))
+        }
+    }
     let _bounded_nested_contract = (
         dispatch_response.idempotent_replay,
         dispatch_response.quotas.len(),
-        dispatch_response.store.ha,
+        dispatch_response.store.asserts_ha,
     );
 
     let statement_bytes = decode_receipt_base64url(
@@ -4804,7 +5234,7 @@ fn validate_control_plane_authorization_receipt(
     }
     let signed_statement: SignedResponseStatement = decode_canonical_json(&statement_bytes)
         .map_err(|error| invalid_statement(format!("signed dispatch statement: {error}")))?;
-    if signed_statement.version != "serverware.responseSignature/v2"
+    if signed_statement.version != "serverware.responseSignature/v3"
         || signed_statement.nonce.as_deref() != Some(request.nonce.as_str())
         || signed_statement.request.method != request.method
         || signed_statement.request.path != request.path
@@ -4815,6 +5245,22 @@ fn validate_control_plane_authorization_receipt(
     {
         return Err(invalid_statement(
             "control-plane authorization receipt signed statement mismatch",
+        ));
+    }
+    validate_sha256_digest(
+        "receipt.response.response_headers_sha256",
+        &signed_statement.response_headers_sha256,
+    )?;
+    let response_headers = validate_signed_response_headers(
+        &response.response_headers,
+    )?;
+    if signed_statement.response_header_count as usize
+        != response.response_headers.len()
+        || signed_statement.response_headers_sha256
+            != sha256_prefixed(&response_headers)
+    {
+        return Err(invalid_statement(
+            "control-plane authorization receipt response header binding mismatch",
         ));
     }
     for (name, digest) in [
@@ -4885,15 +5331,13 @@ fn validate_control_plane_authorization_receipt(
     let signature_bytes: [u8; Signature::BYTE_SIZE] = signature_bytes
         .try_into()
         .map_err(|_| invalid_statement("receipt response signature must be 64 bytes"))?;
-    if let Some(control_plane_response_verifying_key) = control_plane_response_verifying_key {
-        control_plane_response_verifying_key
-            .verify_strict(&statement_bytes, &Signature::from_bytes(&signature_bytes))
-            .map_err(|_| {
-                invalid_statement(
-                    "control-plane authorization receipt response signature verification failed",
-                )
-            })?;
-    }
+    control_plane_response_verifying_key
+        .verify_strict(&statement_bytes, &Signature::from_bytes(&signature_bytes))
+        .map_err(|_| {
+            invalid_statement(
+                "control-plane authorization receipt response signature verification failed",
+            )
+        })?;
     Ok(())
 }
 
@@ -5069,6 +5513,117 @@ fn validate_sha256_digest(name: &str, value: &str) -> Result<(), ProtocolError> 
         )));
     }
     Ok(())
+}
+
+fn validate_signed_response_headers(
+    headers: &[ControlPlaneAuthorizationReceiptResponseHeader],
+) -> Result<Vec<u8>, ProtocolError> {
+    if headers.is_empty() || headers.len() > MAX_SIGNED_RESPONSE_HEADER_COUNT {
+        return Err(invalid_statement(
+            "control-plane response header count is invalid",
+        ));
+    }
+    let mut previous_name: Option<&str> = None;
+    let mut total_bytes = 0usize;
+    for (index, header) in headers.iter().enumerate() {
+        let valid_name = !header.name.is_empty()
+            && header.name.len() <= 256
+            && header.name.bytes().all(|byte| {
+                byte.is_ascii_lowercase()
+                    || byte.is_ascii_digit()
+                    || matches!(
+                        byte,
+                        b'!' | b'#'
+                            | b'$'
+                            | b'%'
+                            | b'&'
+                            | b'\''
+                            | b'*'
+                            | b'+'
+                            | b'-'
+                            | b'.'
+                            | b'^'
+                            | b'_'
+                            | b'`'
+                            | b'|'
+                            | b'~'
+                    )
+            });
+        if !valid_name
+            || header.name.starts_with("x-serverware-response-")
+            || [
+                "authorization",
+                "cookie",
+                "secret",
+                "token",
+                "password",
+                "passwd",
+                "api-key",
+                "apikey",
+                "private-key",
+            ]
+            .iter()
+            .any(|marker| header.name.contains(marker))
+            || matches!(
+                header.name.as_str(),
+                "connection"
+                    | "keep-alive"
+                    | "proxy-authenticate"
+                    | "proxy-authorization"
+                    | "te"
+                    | "trailer"
+                    | "transfer-encoding"
+                    | "upgrade"
+            )
+        {
+            return Err(invalid_statement(format!(
+                "control-plane response header {index} name is invalid"
+            )));
+        }
+        if let Some(previous) = previous_name {
+            if header.name.as_str() < previous {
+                return Err(invalid_statement(
+                    "control-plane response headers are not canonically ordered",
+                ));
+            }
+            if header.name == previous
+                && !matches!(
+                    header.name.as_str(),
+                    "link" | "set-cookie" | "warning" | "www-authenticate"
+                )
+            {
+                return Err(invalid_statement(
+                    "control-plane response contains a duplicate singleton header",
+                ));
+            }
+        }
+        let decoded = decode_receipt_base64url(
+            &format!("receipt.response.response_headers[{index}].value_b64"),
+            &header.value_b64,
+            MAX_SIGNED_RESPONSE_HEADER_BYTES,
+        )?;
+        if decoded
+            .iter()
+            .any(|byte| *byte <= 0x08 || (0x0a..=0x1f).contains(byte) || *byte == 0x7f)
+        {
+            return Err(invalid_statement(
+                "control-plane response header value is invalid",
+            ));
+        }
+        total_bytes = total_bytes
+            .checked_add(header.name.len())
+            .and_then(|value| value.checked_add(decoded.len()))
+            .ok_or_else(|| {
+                invalid_statement("control-plane response headers exceed their bound")
+            })?;
+        if total_bytes > MAX_SIGNED_RESPONSE_HEADER_BYTES {
+            return Err(invalid_statement(
+                "control-plane response headers exceed their bound",
+            ));
+        }
+        previous_name = Some(&header.name);
+    }
+    canonical_json_bytes(&headers)
 }
 
 fn validate_request_id(request_id: &str) -> Result<(), ProtocolError> {
@@ -5275,11 +5830,26 @@ pub fn write_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ed25519_dalek::Verifier;
     use serde_json::json;
     use std::os::unix::fs::PermissionsExt;
 
     const CONTROL_PLANE_RESPONSE_SIGNING_SEED: [u8; 32] = [19u8; 32];
+
+    #[test]
+    fn custody_proof_verification_rejects_small_order_ed25519_identity_vector() {
+        let mut identity_encoding = [0u8; 32];
+        identity_encoding[0] = 1;
+        let weak_key = VerifyingKey::from_bytes(&identity_encoding)
+            .expect("Ed25519 identity encoding is a decodable hostile test key");
+        let mut identity_signature = [0u8; 64];
+        identity_signature[0] = 1;
+        assert!(weak_key
+            .verify_strict(
+                b"serverware custody hostile strict-verification vector",
+                &Signature::from_bytes(&identity_signature),
+            )
+            .is_err());
+    }
 
     fn control_plane_response_signing_key() -> SigningKey {
         SigningKey::from_bytes(&CONTROL_PLANE_RESPONSE_SIGNING_SEED)
@@ -5302,9 +5872,11 @@ mod tests {
     }
 
     fn validate_test_statement(statement: &ProxyResponseStatement) -> Result<(), ProtocolError> {
-        validate_response_statement_with_control_plane_response_key(
+        let authorization_binding = authorization_binding_for_statement(statement);
+        validate_response_statement_authenticated(
             statement,
             &pinned_control_plane_response_verifying_key(),
+            &authorization_binding,
         )
     }
 
@@ -5377,6 +5949,7 @@ mod tests {
         let principal_id = "agent:custody-test".to_string();
         let route_id = "route:custody-test".to_string();
         let authorization_binding = ReleaseAuthorizationBinding {
+            api_version: None,
             attempt_id: attempt_id.clone(),
             flow_id: attempt_id.clone(),
             principal_id: principal_id.clone(),
@@ -5389,6 +5962,7 @@ mod tests {
             operation_context: json!({"operation":"custody.test"}),
             require_jit_grant: true,
             shared_quotas: Vec::new(),
+            durable_policy: None,
         };
         let binding_digest = sha256_prefixed(
             &canonical_json_ensure_ascii_bytes(&authorization_binding)
@@ -5475,14 +6049,27 @@ mod tests {
             "completionOutcome":null,
             "retryAfterSeconds":0,
             "quotas":[],
-            "store":{"backend":"sqlite","ha":false},
+            "store":{"backend":"sqlite","ha":true},
         }))
         .expect("dispatch body");
         let response_nonce = general_purpose::URL_SAFE_NO_PAD.encode([13u8; 32]);
+        validate_base64url("fixture response nonce", &response_nonce, 32, 32)
+            .expect("canonical fixture response nonce");
         let response_signing_key_id =
             control_plane_response_key_id(&response_signing_key.verifying_key());
+        let response_headers = vec![
+            ControlPlaneAuthorizationReceiptResponseHeader {
+                name: "content-type".to_string(),
+                value_b64: general_purpose::URL_SAFE_NO_PAD
+                    .encode(b"application/json"),
+            },
+        ];
+        let response_headers_sha256 = sha256_prefixed(
+            &canonical_json_bytes(&response_headers)
+                .expect("canonical response headers"),
+        );
         let signed_response_statement = SignedResponseStatement {
-            version: "serverware.responseSignature/v2".to_string(),
+            version: "serverware.responseSignature/v3".to_string(),
             issued_at_ms: dispatch_started_at_epoch_ms,
             request: SignedResponseRequest {
                 method: "POST".to_string(),
@@ -5491,6 +6078,8 @@ mod tests {
             },
             status_code: 200,
             body_sha256: sha256_prefixed(&dispatch_body),
+            response_headers_sha256,
+            response_header_count: response_headers.len() as u64,
             nonce: Some(response_nonce.clone()),
             response_signing_key_id: response_signing_key_id.clone(),
             context: SignedResponseContext {
@@ -5508,6 +6097,7 @@ mod tests {
             api_version: "serverware.releaseAuthorizationDispatch/v1".to_string(),
             attempt_id: release_authority.attempt_id.clone(),
             binding_digest: release_authority.consumption_identity_digest.clone(),
+            durable_policy: None,
         })
         .expect("dispatch request body");
         let control_plane_authorization_receipt = ControlPlaneAuthorizationReceipt {
@@ -5528,6 +6118,7 @@ mod tests {
                 status: 200,
                 body_b64: general_purpose::URL_SAFE_NO_PAD.encode(&dispatch_body),
                 body_sha256: sha256_prefixed(&dispatch_body),
+                response_headers,
                 response_signing_key_id,
                 statement_b64: general_purpose::URL_SAFE_NO_PAD.encode(&signed_response_statement),
                 statement_sha256: sha256_prefixed(&signed_response_statement),
@@ -5617,6 +6208,7 @@ mod tests {
         statement: &ProxyResponseStatement,
     ) -> ReleaseAuthorizationBinding {
         ReleaseAuthorizationBinding {
+            api_version: None,
             attempt_id: statement.release_authority.attempt_id.clone(),
             flow_id: statement.release_authority.attempt_id.clone(),
             principal_id: statement.principal_id.clone(),
@@ -5633,7 +6225,145 @@ mod tests {
             operation_context: json!({"operation":"custody.test"}),
             require_jit_grant: statement.release_authority.grant_id.is_some(),
             shared_quotas: Vec::new(),
+            durable_policy: None,
         }
+    }
+
+    fn replace_dispatch_response_body_and_resign(
+        statement: &mut ProxyResponseStatement,
+        dispatch_body: &Value,
+    ) {
+        let dispatch_body =
+            canonical_json_ensure_ascii_bytes(dispatch_body).expect("canonical dispatch body");
+        let response = &mut statement.control_plane_authorization_receipt.response;
+        response.body_b64 = general_purpose::URL_SAFE_NO_PAD.encode(&dispatch_body);
+        response.body_sha256 = sha256_prefixed(&dispatch_body);
+        let signed_statement = general_purpose::URL_SAFE_NO_PAD
+            .decode(&response.statement_b64)
+            .expect("decode signed dispatch statement");
+        let mut signed_statement: SignedResponseStatement =
+            decode_canonical_json(&signed_statement).expect("decode signed dispatch statement");
+        signed_statement.body_sha256 = response.body_sha256.clone();
+        let signed_statement =
+            canonical_json_bytes(&signed_statement).expect("encode signed dispatch statement");
+        let signature = control_plane_response_signing_key().sign(&signed_statement);
+        response.statement_b64 = general_purpose::URL_SAFE_NO_PAD.encode(&signed_statement);
+        response.statement_sha256 = sha256_prefixed(&signed_statement);
+        response.signature = format!(
+            "ed25519:{}",
+            general_purpose::URL_SAFE_NO_PAD.encode(signature.to_bytes())
+        );
+    }
+
+    fn replace_dispatch_request_body(
+        statement: &mut ProxyResponseStatement,
+        dispatch_body: &Value,
+    ) {
+        let dispatch_body =
+            canonical_json_ensure_ascii_bytes(dispatch_body).expect("canonical dispatch request");
+        let request = &mut statement.control_plane_authorization_receipt.request;
+        request.body_b64 = general_purpose::URL_SAFE_NO_PAD.encode(&dispatch_body);
+        request.body_sha256 = sha256_prefixed(&dispatch_body);
+    }
+
+    fn replace_receipt_response_nonce_and_resign(
+        statement: &mut ProxyResponseStatement,
+        nonce: String,
+    ) {
+        statement
+            .control_plane_authorization_receipt
+            .request
+            .nonce = nonce.clone();
+        let response = &mut statement.control_plane_authorization_receipt.response;
+        let signed_statement = general_purpose::URL_SAFE_NO_PAD
+            .decode(&response.statement_b64)
+            .expect("decode signed dispatch statement");
+        let mut signed_statement: SignedResponseStatement =
+            decode_canonical_json(&signed_statement).expect("decode signed dispatch statement");
+        signed_statement.nonce = Some(nonce);
+        let signed_statement =
+            canonical_json_bytes(&signed_statement).expect("encode signed dispatch statement");
+        let signature = control_plane_response_signing_key().sign(&signed_statement);
+        response.statement_b64 = general_purpose::URL_SAFE_NO_PAD.encode(&signed_statement);
+        response.statement_sha256 = sha256_prefixed(&signed_statement);
+        response.signature = format!(
+            "ed25519:{}",
+            general_purpose::URL_SAFE_NO_PAD.encode(signature.to_bytes())
+        );
+    }
+
+    fn durable_statement() -> (ProxyResponseStatement, ReleaseAuthorizationBinding) {
+        let mut statement = statement();
+        let mut binding = authorization_binding_for_statement(&statement);
+        let claims = vec![json!({
+            "constraint_id":"durable:custody-test",
+            "type":"traversalBudget",
+        })];
+        let actor_id = "spiffe://serverware/data-plane/custody-test".to_string();
+        let claim_digest = sha256_prefixed(
+            &canonical_json_ensure_ascii_bytes(&claims).expect("canonical durable claims"),
+        );
+        binding.api_version = Some(RELEASE_AUTHORIZATION_BINDING_V2.to_string());
+        binding.durable_policy = Some(ReleaseAuthorizationDurablePolicyBinding {
+            actor_id: actor_id.clone(),
+            claim_digest: claim_digest.clone(),
+            claims,
+        });
+        let binding_digest = sha256_prefixed(
+            &canonical_json_ensure_ascii_bytes(&binding)
+                .expect("canonical durable authorization binding"),
+        );
+        statement.release_authority.consumption_identity_digest = binding_digest.clone();
+        statement
+            .control_plane_authorization_receipt
+            .release_authority = statement.release_authority.clone();
+
+        let reservation_id = "reservation:durable-custody-test".to_string();
+        let dispatch_deadline_at_epoch_ms =
+            statement.release_authority.dispatch_expires_at_epoch_ms;
+        let dispatch_request = DispatchRequestBody {
+            api_version: RELEASE_AUTHORIZATION_DISPATCH_V2.to_string(),
+            attempt_id: statement.release_authority.attempt_id.clone(),
+            binding_digest: binding_digest.clone(),
+            durable_policy: Some(DispatchDurablePolicyTransition {
+                actor_id: actor_id.clone(),
+                attempt_id: statement.release_authority.attempt_id.clone(),
+                claim_digest: claim_digest.clone(),
+                reservation_id: reservation_id.clone(),
+                dispatch_deadline_at_epoch_ms,
+            }),
+        };
+        let dispatch_request = canonical_json_ensure_ascii_bytes(&dispatch_request)
+            .expect("canonical durable dispatch request");
+        let receipt_request = &mut statement.control_plane_authorization_receipt.request;
+        receipt_request.body_b64 =
+            general_purpose::URL_SAFE_NO_PAD.encode(&dispatch_request);
+        receipt_request.body_sha256 = sha256_prefixed(&dispatch_request);
+
+        let response = &statement.control_plane_authorization_receipt.response;
+        let response_body = general_purpose::URL_SAFE_NO_PAD
+            .decode(&response.body_b64)
+            .expect("decode dispatch response");
+        let mut response_body: Value =
+            decode_canonical_json(&response_body).expect("decode canonical dispatch response");
+        response_body["apiVersion"] = Value::String(RELEASE_AUTHORIZATION_RESPONSE_V2.to_string());
+        response_body["bindingDigest"] = Value::String(binding_digest);
+        response_body["durablePolicy"] = json!({
+            "state":"dispatched",
+            "attemptId":statement.release_authority.attempt_id.clone(),
+            "claimDigest":claim_digest,
+            "reservationId":reservation_id,
+            "actorId":actor_id,
+            "reservationDeadlineAtEpochMs":
+                statement.release_authority.reservation_expires_at_epoch_ms,
+            "dispatchDeadlineAtEpochMs":dispatch_deadline_at_epoch_ms,
+            "responseEvidenceDigest":null,
+            "failureReason":null,
+            "responseBodySha256":null,
+            "uncertainty":null,
+        });
+        replace_dispatch_response_body_and_resign(&mut statement, &response_body);
+        (statement, binding)
     }
 
     fn streaming_statement() -> (StreamingResponseStatement, ReleaseAuthorizationBinding) {
@@ -6087,7 +6817,7 @@ mod tests {
                 "remaining":4,
                 "reservationState":"reserved"
             }],
-            "store":{"backend":"sqlite","ha":false}
+            "store":{"backend":"sqlite","ha":true}
         }))
         .expect("calendar dispatch body");
         statement
@@ -6118,6 +6848,127 @@ mod tests {
         .expect_err("calendar proof must require the exact window end")
         .message
         .contains("window end is missing"));
+    }
+
+    #[test]
+    fn durable_v2_dispatch_rejects_legacy_fixed_quota_shape() {
+        let (mut statement, mut binding) = durable_statement();
+        let quota = ReleaseAuthorizationBindingQuota {
+            counter_key: digest(22),
+            constraint_id: "quota:durable-fixed".to_string(),
+            operation: Some("custody.test".to_string()),
+            window_kind: RateLimitWindowKind::Fixed,
+            window_seconds: Some(60),
+            max_count: 5,
+        };
+        binding.shared_quotas = vec![quota.clone()];
+        let binding_digest = sha256_prefixed(
+            &canonical_json_ensure_ascii_bytes(&binding)
+                .expect("durable quota binding digest"),
+        );
+        statement.release_authority.consumption_identity_digest = binding_digest.clone();
+        let response = &statement.control_plane_authorization_receipt.response;
+        let response_body = general_purpose::URL_SAFE_NO_PAD
+            .decode(&response.body_b64)
+            .expect("decode durable quota dispatch body");
+        let mut response_body: Value =
+            decode_canonical_json(&response_body).expect("decode durable quota dispatch JSON");
+        response_body["bindingDigest"] = Value::String(binding_digest);
+        response_body["quotas"] = json!([{
+            "counterKey":quota.counter_key,
+            "constraintId":quota.constraint_id,
+            "operation":quota.operation,
+            "windowStartEpochMs":
+                statement.release_authority.authorization_state_observed_at_epoch_ms,
+            "windowSeconds":60,
+            "max":5,
+            "count":1,
+            "remaining":4,
+            "reservationState":"reserved"
+        }]);
+        statement
+            .control_plane_authorization_receipt
+            .response
+            .body_b64 = general_purpose::URL_SAFE_NO_PAD.encode(
+            canonical_json_ensure_ascii_bytes(&response_body)
+                .expect("canonical legacy durable quota response"),
+        );
+        let error = validate_release_authorization_binding(
+            &ResponseStatementAuthorityView::from(&statement),
+            &binding,
+        )
+        .expect_err("durable v2 must reject the legacy v1 fixed quota shape");
+        assert!(error.message.contains("explicit window kind"));
+    }
+
+    #[test]
+    fn durable_v2_dispatch_quota_requires_nullable_operation_field_presence() {
+        let (statement, binding) = durable_statement();
+        let response = &statement.control_plane_authorization_receipt.response;
+        let response_body = general_purpose::URL_SAFE_NO_PAD
+            .decode(&response.body_b64)
+            .expect("decode durable nullable quota dispatch body");
+        let mut response_body: Value =
+            decode_canonical_json(&response_body).expect("decode durable nullable quota JSON");
+        let window_start_epoch_ms = statement
+            .release_authority
+            .authorization_state_observed_at_epoch_ms;
+        response_body["quotas"] = json!([{
+            "counterKey":digest(23),
+            "constraintId":"quota:durable-nullable",
+            "windowKind":"fixed",
+            "windowStartEpochMs":window_start_epoch_ms,
+            "windowEndEpochMs":window_start_epoch_ms + 60_000,
+            "windowSeconds":60,
+            "max":5,
+            "count":1,
+            "remaining":4,
+            "reservationState":"reserved"
+        }]);
+        let response_body = canonical_json_ensure_ascii_bytes(&response_body)
+            .expect("canonical durable nullable quota response");
+        let error = parse_dispatch_response_body(&response_body, &binding)
+            .expect_err("durable v2 quota must include operation even when it is null");
+        assert!(error
+            .message
+            .contains("fields do not match the versioned window contract"));
+    }
+
+    #[test]
+    fn durable_v2_dispatch_requires_exact_authenticated_store_assertion_shape() {
+        let (statement, binding) = durable_statement();
+        let response = &statement.control_plane_authorization_receipt.response;
+        let response_body = general_purpose::URL_SAFE_NO_PAD
+            .decode(&response.body_b64)
+            .expect("decode durable store dispatch body");
+        let mut response_body: Value =
+            decode_canonical_json(&response_body).expect("decode durable store dispatch JSON");
+        response_body["store"]
+            .as_object_mut()
+            .expect("dispatch store object")
+            .remove("backend");
+        let response_body = canonical_json_ensure_ascii_bytes(&response_body)
+            .expect("canonical durable store response");
+        let error = parse_dispatch_response_body(&response_body, &binding)
+            .expect_err("durable v2 store must contain the exact closed field set");
+        assert!(error
+            .message
+            .contains("authorization store fields are invalid"));
+
+        let mut response_body: Value =
+            decode_canonical_json(&response_body).expect("decode missing-backend store JSON");
+        response_body["store"]["backend"] = Value::String("sqlite".to_string());
+        response_body["store"]["ha"] = Value::Bool(false);
+        let response_body = canonical_json_ensure_ascii_bytes(&response_body)
+            .expect("canonical non-HA store response");
+        let error = parse_dispatch_response_body(&response_body, &binding)
+            .expect_err("durable v2 store must carry a true authenticated HA assertion");
+        assert!(error
+            .message
+            .contains("authenticated HA store assertion is false"));
+        assert!(error
+            .message
+            .contains("no independently signed durable store receipt"));
     }
 
     fn request_bytes(
@@ -6510,7 +7361,7 @@ mod tests {
             .expect("signature length");
         let verifying_key = VerifyingKey::from(&SigningKey::from_bytes(&[7u8; 32]));
         verifying_key
-            .verify(
+            .verify_strict(
                 &canonical_statement,
                 &Signature::from_bytes(&signature_bytes),
             )
@@ -6551,7 +7402,7 @@ mod tests {
             .try_into()
             .expect("signature length");
         VerifyingKey::from(&SigningKey::from_bytes(&[7u8; 32]))
-            .verify(
+            .verify_strict(
                 &canonical_statement,
                 &Signature::from_bytes(&signature_bytes),
             )
@@ -7251,19 +8102,213 @@ mod tests {
         let statement = statement();
         let expiry = statement.release_authority.dispatch_expires_at_epoch_ms;
         let verifying_key = pinned_control_plane_response_verifying_key();
-        validate_response_statement_with_control_plane_response_key_at(
+        let binding = authorization_binding_for_statement(&statement);
+        validate_response_statement_authenticated_at(
             &statement,
             &verifying_key,
+            &binding,
             expiry - 1,
         )
         .expect("receipt remains valid immediately before dispatch expiry");
-        let error = validate_response_statement_with_control_plane_response_key_at(
+        let error = validate_response_statement_authenticated_at(
             &statement,
             &verifying_key,
+            &binding,
             expiry,
         )
         .expect_err("receipt must fail exactly at dispatch expiry");
         assert!(error.message.contains("temporal relation"));
+    }
+
+    #[test]
+    fn durable_v2_dispatch_receipt_requires_the_exact_authorization_binding() {
+        let (statement, binding) = durable_statement();
+        let validation_epoch_ms = statement
+            .release_authority
+            .authorization_state_observed_at_epoch_ms
+            .saturating_add(1);
+        let verifying_key = pinned_control_plane_response_verifying_key();
+        validate_response_statement_authenticated_at(
+            &statement,
+            &verifying_key,
+            &binding,
+            validation_epoch_ms,
+        )
+        .expect("durable v2 receipt must pass with its exact authorization binding");
+
+        let mut mixed_binding = binding.clone();
+        mixed_binding.api_version = None;
+        let mixed = validate_response_statement_authenticated_at(
+            &statement,
+            &verifying_key,
+            &mixed_binding,
+            validation_epoch_ms,
+        )
+        .expect_err("partial durable binding shape must fail closed");
+        assert!(mixed.message.contains("authorization binding version")
+            || mixed.message.contains("protocol is inconsistent"));
+    }
+
+    #[test]
+    fn durable_v2_dispatch_receipt_rejects_request_side_substitutions() {
+        let (statement, binding) = durable_statement();
+        let request = &statement.control_plane_authorization_receipt.request;
+        let request_body = general_purpose::URL_SAFE_NO_PAD
+            .decode(&request.body_b64)
+            .expect("decode durable dispatch request");
+        let request_body: Value =
+            decode_canonical_json(&request_body).expect("decode durable dispatch request");
+        let validation_epoch_ms = statement
+            .release_authority
+            .authorization_state_observed_at_epoch_ms
+            .saturating_add(1);
+        let verifying_key = pinned_control_plane_response_verifying_key();
+        let reject = |label: &str, mutated_body: Value| {
+            let mut mutated = statement.clone();
+            replace_dispatch_request_body(&mut mutated, &mutated_body);
+            validate_response_statement_authenticated_at(
+                &mutated,
+                &verifying_key,
+                &binding,
+                validation_epoch_ms,
+            )
+            .expect_err(label);
+        };
+
+        for (field, replacement) in [
+            (
+                "actorId",
+                Value::String("spiffe://serverware/data-plane/substituted".to_string()),
+            ),
+            ("attemptId", Value::String(digest(90))),
+            ("claimDigest", Value::String(digest(91))),
+            (
+                "reservationId",
+                Value::String("reservation:substituted".to_string()),
+            ),
+            (
+                "dispatchDeadlineAtEpochMs",
+                Value::from(
+                    statement
+                        .release_authority
+                        .dispatch_expires_at_epoch_ms
+                        .saturating_sub(1),
+                ),
+            ),
+        ] {
+            let mut mutated = request_body.clone();
+            mutated["durablePolicy"][field] = replacement;
+            reject("durable request substitution must fail closed", mutated);
+        }
+
+        let mut mixed_version = request_body.clone();
+        mixed_version["apiVersion"] =
+            Value::String(RELEASE_AUTHORIZATION_DISPATCH_V1.to_string());
+        reject("mixed durable request version must fail closed", mixed_version);
+
+        let mut missing_field = request_body.clone();
+        missing_field["durablePolicy"]
+            .as_object_mut()
+            .expect("durable request object")
+            .remove("reservationId");
+        reject("missing durable request field must fail closed", missing_field);
+
+        for completion_value in [Value::Null, Value::String(digest(92))] {
+            let mut completion_field = request_body.clone();
+            completion_field["durablePolicy"]["responseEvidenceDigest"] =
+                completion_value;
+            reject(
+                "completion-only durable request field must fail closed",
+                completion_field,
+            );
+        }
+    }
+
+    #[test]
+    fn receipt_response_signature_nonce_requires_exact_canonical_32_bytes() {
+        let statement = statement();
+        let binding = authorization_binding_for_statement(&statement);
+        let validation_epoch_ms = statement
+            .release_authority
+            .authorization_state_observed_at_epoch_ms
+            .saturating_add(1);
+        let canonical = general_purpose::URL_SAFE_NO_PAD.encode([13u8; 32]);
+        let alphabet =
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+        let final_index = alphabet
+            .find(canonical.chars().last().expect("nonce final character"))
+            .expect("nonce uses base64url alphabet");
+        let alias_index = if final_index % 4 == 3 {
+            final_index - 1
+        } else {
+            final_index + 1
+        };
+        let mut noncanonical = canonical.clone();
+        noncanonical.pop();
+        noncanonical.push(
+            alphabet
+                .chars()
+                .nth(alias_index)
+                .expect("noncanonical nonce alias"),
+        );
+        for nonce in [
+            general_purpose::URL_SAFE_NO_PAD.encode([13u8; 31]),
+            format!("{canonical}="),
+            noncanonical,
+            general_purpose::URL_SAFE_NO_PAD.encode([13u8; 33]),
+        ] {
+            let mut mutated = statement.clone();
+            replace_receipt_response_nonce_and_resign(&mut mutated, nonce);
+            validate_response_statement_authenticated_at(
+                &mutated,
+                &pinned_control_plane_response_verifying_key(),
+                &binding,
+                validation_epoch_ms,
+            )
+            .expect_err("invalid responseSignature/v3 nonce must fail closed");
+        }
+    }
+
+    #[test]
+    fn v1_authorization_binding_rejects_explicit_null_version_aliases() {
+        let binding = authorization_binding_for_statement(&statement());
+        let mut explicit_api_version =
+            serde_json::to_value(&binding).expect("serialize v1 authorization binding");
+        explicit_api_version["api_version"] = Value::Null;
+        assert!(serde_json::from_value::<ReleaseAuthorizationBinding>(explicit_api_version)
+            .is_err());
+
+        let mut explicit_durable_policy =
+            serde_json::to_value(&binding).expect("serialize v1 authorization binding");
+        explicit_durable_policy["durable_policy"] = Value::Null;
+        assert!(serde_json::from_value::<ReleaseAuthorizationBinding>(explicit_durable_policy)
+            .is_err());
+    }
+
+    #[test]
+    fn durable_v2_dispatch_receipt_rejects_a_resigned_lifecycle_substitution() {
+        let (mut statement, binding) = durable_statement();
+        let response = &statement.control_plane_authorization_receipt.response;
+        let response_body = general_purpose::URL_SAFE_NO_PAD
+            .decode(&response.body_b64)
+            .expect("decode durable dispatch response");
+        let mut response_body: Value =
+            decode_canonical_json(&response_body).expect("decode durable dispatch body");
+        response_body["durablePolicy"]["state"] = Value::String("committed".to_string());
+        replace_dispatch_response_body_and_resign(&mut statement, &response_body);
+
+        let validation_epoch_ms = statement
+            .release_authority
+            .authorization_state_observed_at_epoch_ms
+            .saturating_add(1);
+        let error = validate_response_statement_authenticated_at(
+            &statement,
+            &pinned_control_plane_response_verifying_key(),
+            &binding,
+            validation_epoch_ms,
+        )
+        .expect_err("signed durable lifecycle substitution must fail closed");
+        assert!(error.message.contains("durable policy lifecycle mismatch"));
     }
 
     #[test]

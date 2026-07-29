@@ -1,14 +1,13 @@
 [Unit]
-Description=Serverware closed production release proof
+Description=Serverware legacy Docker NSM production-readiness proof
 Documentation=https://github.com/example/private-deployment
 After=network-online.target docker.service serverware-launch-authority-relay.socket
 Wants=network-online.target serverware-launch-authority-relay.socket
 Requires=docker.service serverware-launch-authority-relay.socket
-ConditionFileIsExecutable=/opt/serverware/launchers/sha256-<launcher-sha256>/serverware-production-launcher
-ConditionPathIsReadWrite=/var/lib/serverware/production-proof
 
 [Service]
 Type=oneshot
+RemainAfterExit=yes
 User=root
 Group=root
 UMask=0077
@@ -19,7 +18,8 @@ StandardError=journal
 
 # The launcher discards the service manager environment and constructs its
 # closed child environment. Keep this service free of environment imports,
-# preparatory commands, shells, and additional launcher arguments.
+# preparatory commands, shells, skip-capable Condition directives, and
+# additional launcher arguments. Missing prerequisites must fail ExecStart.
 NoNewPrivileges=yes
 CapabilityBoundingSet=
 AmbientCapabilities=
@@ -41,8 +41,8 @@ RestrictNamespaces=yes
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 RestrictRealtime=yes
 
-# AWS Nitro Secure Module access is the only device exception. Remove both
-# NSM lines on non-Nitro hosts; no other device may be added to this unit.
+# This legacy readiness pipeline exposes NSM to a host Docker workload. It is
+# intentionally incompatible with Manifest v6 final-completion evidence.
 DevicePolicy=closed
 DeviceAllow=/dev/nsm rw
 BindReadOnlyPaths=-/dev/nsm

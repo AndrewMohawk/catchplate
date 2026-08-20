@@ -26,7 +26,9 @@ MAX_ARCHIVE_MEMBERS = 250_000
 MAX_ARCHIVE_EXPANDED_BYTES = 8 * 1024 * 1024 * 1024
 MAX_ARCHIVE_EXPANSION_RATIO = 200
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
-SAFE_ARCHIVE_PATH_RE = re.compile(r"\A[A-Za-z0-9._@+/-]+\Z")
+# Cargo vendor fixtures legitimately use names such as `repr(C)`. Traversal
+# safety is enforced separately by the rooted component checks below.
+SAFE_ARCHIVE_PATH_RE = re.compile(r"\A[A-Za-z0-9._@+()/\-]+\Z")
 
 PYTHON_ARCHIVE = "cache/python-wheelhouse-linux-amd64.tar.gz"
 CARGO_ARCHIVE = "cache/cargo-vendor.tar.gz"

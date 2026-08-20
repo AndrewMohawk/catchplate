@@ -44,6 +44,12 @@ PYTHON_SLIM_BASE = (
     "python:3.11-slim-bookworm"
     "@sha256:0030323c9ce4d6dfab5f0812577cb0abd13c806f86b3a1f5b5d8f200ebb1421c"
 )
+MUSL_APK = ROOT / "production-dependencies/cache/musl-1.2.5-r12.apk"
+MUSL_DEV_APK = ROOT / "production-dependencies/cache/musl-dev-1.2.5-r12.apk"
+OFFLINE_APK_SHA256 = {
+    MUSL_APK: "4990a5e0ba312e478f94cfe431a70efef1538004eb361c8ae424516848be45bb",
+    MUSL_DEV_APK: "1c2068d910cfdbbcb4eb107a5a478f8b48edf3a6311953c8fa5180c5190efab3",
+}
 BUILDER_NAME_RE = re.compile(
     r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z"
 )
@@ -3040,7 +3046,11 @@ def dockerfile() -> str:
         ENV SOURCE_DATE_EPOCH=${{SOURCE_DATE_EPOCH}} \\
             RUSTFLAGS="-C link-arg=-Wl,--build-id=none"
         WORKDIR /src
-        RUN command -v cc >/dev/null \\
+        COPY musl-1.2.5-r12.apk musl-dev-1.2.5-r12.apk /dependency-cache/
+        RUN apk --no-network --repositories-file /dev/null add \\
+                /dependency-cache/musl-1.2.5-r12.apk \\
+                /dependency-cache/musl-dev-1.2.5-r12.apk \\
+            && command -v cc >/dev/null \\
             && command -v readelf >/dev/null \\
             && test -f /usr/lib/libc.a
         COPY decision-gate-rs/Cargo.toml ./Cargo.toml
@@ -3361,6 +3371,8 @@ def write_context(context: Path, public_key_hex: str, authority_key_id: str) -> 
         public_key_hex + "\n", encoding="ascii"
     )
     shutil.copyfile(GENERATOR, context / "generate_production_launch_manifest.py")
+    shutil.copyfile(MUSL_APK, context / MUSL_APK.name)
+    shutil.copyfile(MUSL_DEV_APK, context / MUSL_DEV_APK.name)
     files = {
         "Dockerfile": dockerfile(),
         "hostile.c": HOSTILE_C,
@@ -3605,6 +3617,17 @@ def build_fixture_image(
         raise RuntimeError(f"production launch authority trust root is missing: {PRODUCTION_TRUST}")
     if not GENERATOR.is_file():
         raise RuntimeError(f"manifest generator is missing: {GENERATOR}")
+    for dependency, expected_sha256 in OFFLINE_APK_SHA256.items():
+        if not dependency.is_file():
+            raise RuntimeError(
+                f"offline launcher build dependency is missing: {dependency}"
+            )
+        observed_sha256 = hashlib.sha256(dependency.read_bytes()).hexdigest()
+        if observed_sha256 != expected_sha256:
+            raise RuntimeError(
+                "offline launcher build dependency digest mismatch: "
+                f"{dependency}"
+            )
     production_trust_before = PRODUCTION_TRUST.read_bytes()
     require_success(
         run(["docker", "version", "--format", "{{.Server.Os}}/{{.Server.Arch}}"], 30),

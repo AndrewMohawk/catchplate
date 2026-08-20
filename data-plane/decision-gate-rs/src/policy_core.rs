@@ -105,15 +105,11 @@ fn finish_custody_call(
     custody: &dyn PolicyShadowCustodyRpcSupervisor,
     context: PolicyShadowCustodyCallContext,
 ) -> bool {
-    let operation_id_sha256 = context.operation_id_sha256().clone();
-    let operation_deadline = context.operation_deadline().clone();
+    let completion_binding = context.completion_binding();
     custody
         .finish_call(context)
         .is_ok_and(|completion| {
-            completion.validates(
-                &operation_id_sha256,
-                &operation_deadline,
-            )
+            completion.validates_binding(&completion_binding)
         })
 }
 

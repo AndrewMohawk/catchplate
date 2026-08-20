@@ -4901,6 +4901,12 @@ pub(crate) struct PolicyShadowCustodyCallContext {
     operation_handle: policy_custody::OpaqueOperationHandle,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PolicyShadowCustodyCallCompletionBinding {
+    operation_id_sha256: Sha256Digest,
+    operation_deadline: ProductionCustodyOperationDeadline,
+}
+
 impl PolicyShadowCustodyCallContext {
     pub(crate) fn from_supervisor(
         operation_id_sha256: Sha256Digest,
@@ -4940,7 +4946,16 @@ impl PolicyShadowCustodyCallContext {
         &self.request_binding_sha256
     }
 
-    pub(crate) fn operation_deadline(
+    pub(crate) fn completion_binding(
+        &self,
+    ) -> PolicyShadowCustodyCallCompletionBinding {
+        PolicyShadowCustodyCallCompletionBinding {
+            operation_id_sha256: self.operation_id_sha256.clone(),
+            operation_deadline: self.operation_deadline.clone(),
+        }
+    }
+
+    pub(in crate::policy_shadow) fn operation_deadline(
         &self,
     ) -> &ProductionCustodyOperationDeadline {
         &self.operation_deadline
@@ -4995,6 +5010,16 @@ impl PolicyShadowCustodyCallCompletion {
                 operation_id_sha256,
                 operation_deadline,
             )
+    }
+
+    pub(crate) fn validates_binding(
+        &self,
+        binding: &PolicyShadowCustodyCallCompletionBinding,
+    ) -> bool {
+        self.validates(
+            &binding.operation_id_sha256,
+            &binding.operation_deadline,
+        )
     }
 
     pub(crate) fn receipt_releasable(&self) -> bool {

@@ -23,6 +23,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CRATE = ROOT / "data-plane/decision-gate-rs"
+SCHEMAS = ROOT / "schemas"
 LAUNCHER_SOURCE = (
     CRATE / "src/bin/serverware-production-launcher.rs"
 )
@@ -3057,6 +3058,7 @@ def dockerfile() -> str:
         COPY decision-gate-rs/Cargo.lock ./Cargo.lock
         COPY decision-gate-rs/src ./src
         COPY decision-gate-rs/trust ./trust
+        COPY schemas /schemas
         RUN cargo build --release --locked --bin serverware-production-launcher \\
             && test "$(readelf -l /src/target/release/serverware-production-launcher | grep -c INTERP)" -eq 0 \\
             && test "$(readelf -d /src/target/release/serverware-production-launcher | grep -c NEEDED)" -eq 0
@@ -3367,6 +3369,7 @@ def write_context(context: Path, public_key_hex: str, authority_key_id: str) -> 
     shutil.copyfile(CRATE / "Cargo.toml", crate / "Cargo.toml")
     shutil.copyfile(CRATE / "Cargo.lock", crate / "Cargo.lock")
     shutil.copytree(CRATE / "src", crate / "src")
+    shutil.copytree(SCHEMAS, context / "schemas")
     (crate / "trust/launch-authority-root.ed25519.hex").write_text(
         public_key_hex + "\n", encoding="ascii"
     )

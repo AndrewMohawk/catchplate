@@ -31,8 +31,8 @@ pub(super) fn start_response_observation_v2_health_probe(
                             client
                                 .proof_pins_root_sha256
                                 .clone(),
-                        tee_verify_command:
-                            client.tee_verify_command.clone(),
+                        tee_verifier:
+                            client.tee_verifier.clone(),
                         tee_topology_profile:
                             client.tee_topology_profile,
                         transparency_trust_pin:

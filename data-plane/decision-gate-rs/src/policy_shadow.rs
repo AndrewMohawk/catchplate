@@ -12222,6 +12222,10 @@ impl AuthenticatedSpoolCompactionRequest {
             expected_new_spool_root_sha256,
         })
     }
+
+    pub(crate) fn old_spool_head_sha256(&self) -> &Sha256Digest {
+        &self.old_spool_head_sha256
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

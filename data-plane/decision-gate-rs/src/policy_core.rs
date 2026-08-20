@@ -5,11 +5,7 @@
 //! contains compiled policy metadata only; effect execution remains in the
 //! existing active decision path in `main.rs`.
 
-use super::{
-    now_epoch_ms, same_exact_snapshot_identity, DecisionRequest, Snapshot,
-    RESPONSE_OBSERVATION_NONCE_HEADER, RESPONSE_PROOF_NONCE_HEADER,
-    STREAM_RESPONSE_PROOF_NONCE_HEADER,
-};
+use super::*;
 use super::policy_shadow::{
     ActiveEffectCommitState, ActiveEffectIntent, ActiveEffectPreparation,
     ActiveEffectRequirement, ActiveEffectRequirements,
@@ -55,7 +51,7 @@ use std::sync::{Arc, Condvar, Mutex, OnceLock, RwLock};
 use std::thread;
 use std::time::Duration;
 use url::Url;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 const SHADOW_QUEUE_ITEMS: usize = 1_024;
 const SHADOW_QUEUE_BYTES: usize = 128 * 1024 * 1024;
@@ -210,6 +206,7 @@ impl PolicyPlanSnapshot {
             policy_sequence: snapshot.policy_sequence,
             rollback_epoch: snapshot.rollback_epoch,
             trust_generation: snapshot.trust_generation,
+            compiled_behavior_sha256: snapshot.compiled_behavior_sha256.clone(),
             policy_signing_key_id: snapshot.policy_signing_key_id.clone(),
             response_verifying_key: None,
             response_signing_key_id: None,
@@ -1126,7 +1123,7 @@ fn effect_conditions(
     if let Some(credential_id) = route.credential_ref.as_ref() {
         let credential = snapshot
             .credentials
-            .get(credential_id)
+            .get(credential_id.as_str())
             .ok_or("compiled route credential is missing")?;
         conditions.push(ConditionalIntent::MaterializeCredential {
             credential_slot: credential_id.clone(),
@@ -4406,6 +4403,7 @@ impl AccountingLedger {
                             .signed_receipt_sha256()
                             .matches_digest(receipt.signed_receipt_sha256())
                 })
+                .copied()
             {
                 if terminal_phase
                     && cached.event_ordinal() == receipt.event_ordinal()
@@ -4528,6 +4526,9 @@ impl AccountingLedger {
                     cached_receipt_items.saturating_sub(1),
                 )
                 .map(ImmutableSpillReceiptRef::event_ordinal);
+            if spool_unavailable {
+                state.hard_unready = true;
+            }
             let accounting = &mut state.generations[index];
             accounting.last_spill_event_ordinal = contiguous_ordinal;
             accounting.last_spill_head_sha256 = contiguous_head;
@@ -4536,7 +4537,6 @@ impl AccountingLedger {
             if spool_unavailable {
                 accounting.spool_backpressure = true;
                 accounting.permanent_readiness_invalid = true;
-                state.hard_unready = true;
             }
             accounting.compaction_requested |=
                 !accounting.local_ordering_gap
@@ -8901,7 +8901,7 @@ impl ShadowRuntime {
         else {
             return false;
         };
-        for entry in &mut ledger_guard.generations {
+        for entry in ledger_guard.generations.iter_mut() {
             entry.live = false;
         }
         let prepared_entry = &mut ledger_guard.generations[prepared_index];

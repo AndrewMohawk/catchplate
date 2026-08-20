@@ -56,7 +56,9 @@ use serverware_decision_gate::{
     V2ArchiveVerifyParams, V2AttemptState, V2AttestParams,
     V2AttestResult, V2AttestationMode, V2AttestationSignerKeyV1,
     V2AttestationTrustArtifactV1,
-    V2AuthorityParams, V2AuthorityResult, V2ControlResponse,
+    V2AppendReleaseTransparencyParams,
+    V2AppendReleaseTransparencyResult, V2AuthorityParams,
+    V2AuthorityResult, V2ControlResponse,
     V2CrossBootRecoveryStatementV1,
     V2CanonicalControlResponseEncoding,
     V2DispatchParams, V2DispatchResult,
@@ -168,7 +170,7 @@ use std::os::unix::process::CommandExt;
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
 use std::sync::{Arc, Condvar, Mutex, OnceLock, RwLock, RwLockReadGuard};
 use std::thread;
@@ -3313,7 +3315,7 @@ impl RateLimitWindow {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ReleaseAuthorizationBindingQuota {
     counter_key: String,
@@ -4375,6 +4377,14 @@ impl CredentialLeaseScope {
     }
 }
 
+fn credential_lease_scope_commitment(scope: &CredentialLeaseScope) -> Value {
+    json!({
+        "principalId":scope.principal_id.as_str(),
+        "routeId":scope.route_id.as_str(),
+        "credentialId":scope.credential_id.as_str(),
+    })
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 enum CredentialLeasePurpose {
@@ -4573,7 +4583,7 @@ impl<'a> CredentialLeaseRequestCleanup<'a> {
                 &json!({
                     "domain":"serverware.policyShadowCredentialCleanupPreparedState/v1",
                     "leaseKeySha256":digest_json_ensure_ascii(&json!({
-                        "scope":cache_key.scope,
+                        "scope":credential_lease_scope_commitment(&cache_key.scope),
                         "releaseAuthorization":cache_key.release_authorization,
                     })),
                 }),
@@ -4600,7 +4610,7 @@ impl<'a> CredentialLeaseRequestCleanup<'a> {
         let removed = leases.remove(&cache_key);
         let removed_sha256 = removed.as_ref().map(|lease| {
             digest_json_ensure_ascii(&json!({
-                "scope":lease.scope,
+                "scope":credential_lease_scope_commitment(&lease.scope),
                 "version":lease.version,
                 "metadataSha256":lease.metadata_sha256,
                 "policySha256":lease.policy_hash,
@@ -5525,6 +5535,33 @@ struct ValidatedDurablePolicyReservation {
     reservation_id: String,
     reservation_deadline_at_epoch_ms: u64,
     dispatch_deadline_at_epoch_ms: Option<u64>,
+}
+
+fn validated_durable_policy_claim_commitment(
+    reservation: Option<&ValidatedDurablePolicyReservation>,
+) -> Value {
+    reservation.map_or(Value::Null, |reservation| {
+        json!({
+            "actorId":reservation.actor_id.as_str(),
+            "claimDigest":reservation.claim_digest.as_str(),
+            "claims":&reservation.claims,
+        })
+    })
+}
+
+fn validated_durable_policy_result_commitment(
+    reservation: Option<&ValidatedDurablePolicyReservation>,
+) -> Value {
+    reservation.map_or(Value::Null, |reservation| {
+        json!({
+            "actorId":reservation.actor_id.as_str(),
+            "claimDigest":reservation.claim_digest.as_str(),
+            "claims":&reservation.claims,
+            "reservationId":reservation.reservation_id.as_str(),
+            "reservationDeadlineAtEpochMs":reservation.reservation_deadline_at_epoch_ms,
+            "dispatchDeadlineAtEpochMs":reservation.dispatch_deadline_at_epoch_ms,
+        })
+    })
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -12644,7 +12681,7 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                 }
             }
             if matches!(constraint_type, "slidingWindowLimit" | "weightedBudget") {
-                if response_mode == "stream" {
+                if response_mode == Some("stream") {
                     return Err(format!(
                         "route {route_id} {constraint_type} {constraint_id} requires buffered terminal authority evidence"
                     ));
@@ -12831,7 +12868,7 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                 }
             }
             if constraint_type == "traversalBudget" {
-                if response_mode == "stream" {
+                if response_mode == Some("stream") {
                     return Err(format!(
                         "route {route_id} traversalBudget {constraint_id} requires buffered response validation"
                     ));
@@ -17590,13 +17627,14 @@ fn response_observation_emitted_response(
     parsed: &ParsedBufferedResponse<'_>,
     wire_headers: &BTreeMap<String, SensitiveString>,
 ) -> Value {
-    let wire_headers = SensitiveJsonValue::new(
+    let wire_header_count = wire_headers.len();
+    let wire_headers_value = SensitiveJsonValue::new(
         serde_json::to_value(wire_headers).expect("response observation headers serialize"),
     );
     let mut response = json!({
         "status":parsed.status,
-        "headers_digest":digest_json(&wire_headers),
-        "header_count":wire_headers.len() as u64,
+        "headers_digest":digest_json(&wire_headers_value),
+        "header_count":wire_header_count as u64,
         "body_digest":sha256_prefixed(parsed.body),
         "body_bytes":parsed.body.len() as u64,
     });
@@ -19884,7 +19922,7 @@ fn validate_credential_lease_release_authorization(
 fn validate_credential_lease_release_scope(
     snapshot: &Snapshot,
     scope: &CredentialLeaseScope,
-    expected_generation: &CredentialLeaseGeneration,
+    expected_credential_version: u64,
     authorization: &CredentialLeaseReleaseAuthorization,
 ) -> Result<(), String> {
     validate_credential_lease_release_authorization(authorization)?;
@@ -19898,7 +19936,7 @@ fn validate_credential_lease_release_scope(
         || authorization.principal_id != scope.principal_id
         || authorization.route_id != scope.route_id
         || authorization.credential_id != scope.credential_id
-        || authorization.credential_version != expected_generation.version
+        || authorization.credential_version != expected_credential_version
         || authorization.policy_hash != snapshot.hash
     {
         return Err(
@@ -19960,7 +19998,7 @@ fn fetch_scoped_credential_lease(
                 validate_credential_lease_release_scope(
                     snapshot,
                     scope,
-                    generation,
+                    generation.version,
                     authorization,
                 )?;
             }
@@ -20906,7 +20944,7 @@ fn ensure_scoped_credential_lease_bound(
         validate_credential_lease_release_scope(
             snapshot,
             scope,
-            &generation,
+            generation.version,
             authorization,
         )?;
     }
@@ -20950,7 +20988,7 @@ fn ensure_scoped_credential_lease_bound(
         validate_credential_lease_release_scope(
             snapshot,
             scope,
-            &generation,
+            generation.version,
             authorization,
         )?;
     }
@@ -23834,13 +23872,15 @@ fn post_dispatch_release_authorization(
                 .map(|deadline| deadline.min(durable.reservation_deadline_at_epoch_ms))
                 .filter(|deadline| *deadline > now)
                 .ok_or("durable policy reservation expires before dispatch")?;
-            Ok(ReleaseAuthorizationDispatchDurablePolicyTransition {
-                actor_id: durable.actor_id.clone(),
-                attempt_id: reservation.attempt_id.clone(),
-                claim_digest: durable.claim_digest.clone(),
-                reservation_id: durable.reservation_id.clone(),
-                dispatch_deadline_at_epoch_ms: dispatch_deadline,
-            })
+            Ok::<ReleaseAuthorizationDispatchDurablePolicyTransition, String>(
+                ReleaseAuthorizationDispatchDurablePolicyTransition {
+                    actor_id: durable.actor_id.clone(),
+                    attempt_id: reservation.attempt_id.clone(),
+                    claim_digest: durable.claim_digest.clone(),
+                    reservation_id: durable.reservation_id.clone(),
+                    dispatch_deadline_at_epoch_ms: dispatch_deadline,
+                },
+            )
         })
         .transpose()?;
     let payload = serde_json::to_value(ReleaseAuthorizationDispatchRequestBody {
@@ -25664,7 +25704,7 @@ where
             json!({
                 "domain":"serverware.policyShadowCredentialEffectResult/v1",
                 "version":info.version,
-                "metadataSha256":digest_json_ensure_ascii(&info.metadata),
+                "metadataSha256":credential_lease_metadata_sha256(&info.metadata),
                 "secretAvailable":info.secret_available,
             }),
         ),
@@ -26821,7 +26861,9 @@ impl<'a> ReleaseAuthorizationGuard<'a> {
                     "attemptId":self.reservation.attempt_id.as_str(),
                     "bindingDigest":self.reservation.binding_digest.as_str(),
                     "claimSha256":digest_json_ensure_ascii(
-                        &json!(self.reservation.durable_policy)
+                        &validated_durable_policy_claim_commitment(
+                            self.reservation.durable_policy.as_ref()
+                        )
                     ),
                     "outcome":retained.outcome.as_str(),
                 }),
@@ -33966,7 +34008,11 @@ fn decide_internal_with_mode_and_shadow<'a>(
                     "credential_secret_available":credential_ref.is_none() || secret_available,
                     "jit_resolved":!jit_required || reservation.grant_id.is_some(),
                     "quota_results_sha256":digest_json_ensure_ascii(&json!(reservation.shared_quotas)),
-                    "durable_budget_results_sha256":digest_json_ensure_ascii(&json!(reservation.durable_policy)),
+                    "durable_budget_results_sha256":digest_json_ensure_ascii(
+                        &validated_durable_policy_result_commitment(
+                            reservation.durable_policy.as_ref()
+                        )
+                    ),
                     "snapshot_active_at_final_barrier":true,
                 },
                 "canonical_request":canonical,
@@ -38175,7 +38221,10 @@ fn write_json_bytes<W: Write>(out: &mut W, bytes: &[u8]) -> Result<(), io::Error
     out.write_all(bytes)
 }
 
-fn write_json_value<W: Write, T: Serialize>(out: &mut W, value: &T) -> Result<(), io::Error> {
+fn write_json_value<W: Write, T: Serialize + ?Sized>(
+    out: &mut W,
+    value: &T,
+) -> Result<(), io::Error> {
     serde_json::to_writer(out, value).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
 }
 
@@ -44398,13 +44447,12 @@ fn forward_absolute_streaming_request_to(
                 json!({"error":"provider_request_binding_mismatch"}),
             )),
         };
-    let Some(prepared_upstream) = prepared_upstream.as_ref() else {
-        write_buffered!(json_status_response(
-            StatusCode::SERVICE_UNAVAILABLE,
-            json!({"error":"upstream_transport_preparation_failed"}),
-        ));
-    };
-    if !validate_prepared_upstream_binding(prepared_upstream, snapshot, &decision, &upstream_url) {
+    if !validate_prepared_upstream_binding(
+        &prepared_upstream,
+        snapshot,
+        &decision,
+        &upstream_url,
+    ) {
         write_buffered!(json_status_response(
             StatusCode::SERVICE_UNAVAILABLE,
             json!({"error":"upstream_transport_preparation_failed"}),
@@ -44866,7 +44914,7 @@ fn forward_intercepted_streaming_request_to<R: Read + Write + TerminalDeadlineWr
 ) -> bool {
     let mut shadow_finalization: Option<policy_core::ShadowRequestHandle> = None;
     let mut shadow_active_decision: Option<Value> = None;
-    let shadow_dispatch_barrier_crossed =
+    let shadow_dispatch_barrier_crossed: Arc<AtomicBool> =
         Arc::new(AtomicBool::new(false));
     macro_rules! write_buffered {
         ($response:expr) => {{
@@ -45055,13 +45103,12 @@ fn forward_intercepted_streaming_request_to<R: Read + Write + TerminalDeadlineWr
                 json!({"error":"provider_request_binding_mismatch"}),
             )),
         };
-    let Some(prepared_upstream) = prepared_upstream.as_ref() else {
-        write_buffered!(json_status_response(
-            StatusCode::SERVICE_UNAVAILABLE,
-            json!({"error":"upstream_transport_preparation_failed"}),
-        ));
-    };
-    if !validate_prepared_upstream_binding(prepared_upstream, snapshot, &decision, &upstream_url) {
+    if !validate_prepared_upstream_binding(
+        &prepared_upstream,
+        snapshot,
+        &decision,
+        &upstream_url,
+    ) {
         write_buffered!(json_status_response(
             StatusCode::SERVICE_UNAVAILABLE,
             json!({"error":"upstream_transport_preparation_failed"}),
@@ -76336,7 +76383,7 @@ mod tests {
         assert!(validate_credential_lease_release_scope(
             &snapshot,
             &scope,
-            &generation,
+            generation.version,
             &wrong_scope,
         )
         .is_err());

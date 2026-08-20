@@ -38,8 +38,7 @@ pub(super) fn response_observation_v2_preverify_nested_authority_semantics(
 
 fn verify_nested_authority_semantics(
     client: &ResponseObservationV2Client,
-    body: &serverware_decision_gate::state_authority::rpc::
-        CanonicalFinalEnvelopeBody,
+    body: &serverware_decision_gate::CanonicalFinalEnvelopeBody,
     artifacts: &[serverware_decision_gate::SignedAuthorityArtifact],
     public_envelope: &V2CanonicalFinalEnvelopeV1,
     finalization_id: &str,

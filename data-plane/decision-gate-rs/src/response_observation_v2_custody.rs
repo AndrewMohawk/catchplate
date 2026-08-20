@@ -66,7 +66,9 @@ pub use protocol::{
     CANONICAL_AUTHORITY_ENVELOPE_API_VERSION,
     PRE_RELEASE_AUTHORITY_ARTIFACT_COUNT, PUBLIC_CUSTODY_API_VERSION,
 };
-pub use super::state_authority::rpc::SignedAuthorityArtifact;
+pub use super::state_authority::rpc::{
+    CanonicalFinalEnvelopeBody, SignedAuthorityArtifact,
+};
 pub use attestation::{
     verify_custody_attestation, verify_custody_error,
     verify_custody_recovery, verify_final_envelope_verification,

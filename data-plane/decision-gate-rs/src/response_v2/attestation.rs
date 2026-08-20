@@ -665,7 +665,8 @@ where
             if expected_operation
                 == V2_CONSUME_AND_RETRIEVE_EXACT_OPERATION =>
         {
-            V2_EXACT_RELEASE_CONSUMPTION_SIGNATURE_DOMAIN
+            serverware_decision_gate::
+                V2_EXACT_RELEASE_CONSUMPTION_SIGNATURE_DOMAIN
         }
         "public-release-consumption" => {
             V2_RELEASE_CONSUMPTION_SIGNATURE_DOMAIN

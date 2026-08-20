@@ -59,7 +59,7 @@ pub(super) fn execute_response_observation_v2_transaction(
     decision: &Value,
     request: &IncomingRequest,
     upstream_url: &Url,
-    provider_headers: &BTreeMap<String, String>,
+    provider_headers: &HeaderMap,
     injection_plan: &Value,
     release_authorization: &mut Option<ReleaseAuthorizationGuard<'_>>,
     execution: &ResponseObservationV2Execution<'_>,
@@ -69,13 +69,27 @@ pub(super) fn execute_response_observation_v2_transaction(
     SensitiveResponseBytes,
     ResponseObservationV2TransactionError,
 > {
+    let mut canonical_provider_headers = BTreeMap::new();
+    for (name, value) in provider_headers {
+        let value = value.to_str().map_err(|_| {
+            ResponseObservationV2TransactionError::InvalidResponse
+        })?;
+        if canonical_provider_headers
+            .insert(name.as_str().to_owned(), value.to_owned())
+            .is_some()
+        {
+            return Err(
+                ResponseObservationV2TransactionError::InvalidResponse,
+            );
+        }
+    }
     transaction::execute_response_observation_v2_transaction(
         state,
         snapshot,
         decision,
         request,
         upstream_url,
-        provider_headers,
+        &canonical_provider_headers,
         injection_plan,
         release_authorization,
         execution,

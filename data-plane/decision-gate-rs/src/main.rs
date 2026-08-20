@@ -50796,7 +50796,7 @@ mod tests {
         GateState {
             upstream_dispatch_authority: UpstreamDispatchAuthority::new(),
             upstream_send_credential_lock_contentions: AtomicU64::new(0),
-            policy_shadow: ShadowRuntime::new(),
+            policy_shadow: ShadowRuntime::new_inactive_for_forwarding_tests(),
             policy_shadow_generation_control: None,
             snapshot: RwLock::new(snapshot),
             policy_path: "/unused/test-policy.json".to_string(),

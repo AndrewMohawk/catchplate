@@ -8095,6 +8095,8 @@ pub(crate) struct ShadowRuntime {
     authoritative_publication_revision: AtomicU64,
     activation_publication_gate:
         RwLock<Option<ShadowActivationPublicationGate>>,
+    #[cfg(test)]
+    inactive_for_forwarding_tests: bool,
 }
 
 struct ShadowInstallationGuard<'a> {
@@ -8130,7 +8132,16 @@ impl ShadowRuntime {
             publication_reconciliation_required: AtomicBool::new(true),
             authoritative_publication_revision: AtomicU64::new(0),
             activation_publication_gate: RwLock::new(None),
+            #[cfg(test)]
+            inactive_for_forwarding_tests: false,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_inactive_for_forwarding_tests() -> Self {
+        let mut runtime = Self::new();
+        runtime.inactive_for_forwarding_tests = true;
+        runtime
     }
 
     pub(crate) fn quarantine_for_cleanup_failure(&self) {
@@ -8930,6 +8941,10 @@ impl ShadowRuntime {
         _captured_at_epoch_ms: u128,
         raw_body: Option<&[u8]>,
     ) -> ShadowAdmission {
+        #[cfg(test)]
+        if self.inactive_for_forwarding_tests {
+            return ShadowAdmission::inactive(snapshot, ingress);
+        }
         if !ingress.is_shadow_coverage() {
             return ShadowAdmission::inactive(snapshot, ingress);
         }

@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.dev/schemas/coder-docker-network-membership.v12.schema.json",
+  "title": "Serverware Docker NetworkMembership V12",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contractVersion",
+    "membershipId",
+    "requestId",
+    "laneId",
+    "daemonGeneration",
+    "ownerNamespace",
+    "networkLogicalId",
+    "containerLogicalId",
+    "containerEngineId",
+    "endpointId",
+    "aliases",
+    "ipv4Address",
+    "ipv6Address",
+    "signerAuthorization",
+    "signature"
+  ],
+  "properties": {
+    "contractVersion": {
+      "const": "12"
+    },
+    "membershipId": {
+      "$ref": "coder-docker-runner-execution.v12.schema.json#/$defs/id"
+    },
+    "requestId": {
+      "$ref": "coder-docker-runner-execution.v12.schema.json#/$defs/id"
+    },
+    "laneId": {
+      "$ref": "coder-docker-runner-execution.v12.schema.json#/$defs/id"
+    },
+    "daemonGeneration": {
+      "$ref": "coder-docker-runner-execution.v12.schema.json#/$defs/id"
+    },
+    "ownerNamespace": {
+      "$ref": "coder-docker-runner-execution.v12.schema.json#/$defs/ownerNamespace"
+    },
+    "networkLogicalId": {
+      "$ref": "coder-docker-runner-execution.v12.schema.json#/$defs/id"
+    },
+    "containerLogicalId": {
+      "$ref": "coder-docker-runner-execution.v12.schema.json#/$defs/id"
+    },
+    "containerEngineId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "endpointId": {
+      "$ref": "coder-docker-runner-execution.v12.schema.json#/$defs/id"
+    },
+    "aliases": {
+      "$ref": "coder-docker-runner-execution.v12.schema.json#/$defs/aliases"
+    },
+    "ipv4Address": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "string",
+          "format": "ipv4"
+        }
+      ]
+    },
+    "ipv6Address": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "string",
+          "format": "ipv6"
+        }
+      ]
+    },
+    "signerAuthorization": {
+      "$ref": "coder-docker-runner-execution.v12.schema.json#/$defs/signerAuthorization"
+    },
+    "signature": {
+      "allOf": [
+        {
+          "$ref": "coder-docker-runner-execution.v12.schema.json#/$defs/signatureFields"
+        },
+        {
+          "properties": {
+            "domain": {
+              "const": "serverware/docker-network-membership/v12"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

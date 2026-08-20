@@ -55,6 +55,9 @@ PRODUCTION_CONTROL_HEALTHCHECK_SHA256 = (
 SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 PRODUCTION_PROVENANCE_VERSION = 2
 PRODUCTION_PROVENANCE_RECORD_TYPE = "release.provenance.v2"
+EXTERNAL_SIGNATURE_API_VERSION = "serverware.externalArtifactSignature/v1"
+EXTERNAL_SIGNATURE_KIND = "ExternalArtifactSignature"
+REPRODUCIBILITY_SIGNATURE_PURPOSE = "reproducible-build-verification"
 LOCK_REQUIREMENT_RE = re.compile(
     r"^(?P<name>[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?)"
     r"==(?P<version>[A-Za-z0-9][A-Za-z0-9._+!-]{0,127})\s+\\$"
@@ -150,7 +153,13 @@ def reject_non_finite_json_constant(value: str) -> Any:
     raise ValueError(f"non-finite JSON number is forbidden: {value}")
 
 
-def read_bounded_regular_file(path: Path, label: str, *, max_bytes: int) -> bytes:
+def read_bounded_regular_file(
+    path: Path,
+    label: str,
+    *,
+    max_bytes: int,
+    require_owner_only: bool = False,
+) -> bytes:
     if not hasattr(os, "O_NOFOLLOW"):
         raise ValueError(f"{label} cannot be opened safely on this platform")
     descriptor = os.open(
@@ -161,6 +170,8 @@ def read_bounded_regular_file(path: Path, label: str, *, max_bytes: int) -> byte
         metadata = os.fstat(descriptor)
         if not stat.S_ISREG(metadata.st_mode):
             raise ValueError(f"{label} must be a regular non-symlink file: {path}")
+        if require_owner_only and metadata.st_mode & 0o077:
+            raise ValueError(f"{label} must not be accessible by group or other users: {path}")
         if metadata.st_size < 1 or metadata.st_size > max_bytes:
             raise ValueError(
                 f"{label} must contain between 1 and {max_bytes} bytes: {path}"
@@ -177,6 +188,21 @@ def read_bounded_regular_file(path: Path, label: str, *, max_bytes: int) -> byte
         if len(data) > max_bytes:
             raise ValueError(f"{label} exceeds {max_bytes} bytes: {path}")
         if len(data) != metadata.st_size:
+            raise ValueError(f"{label} changed while it was being snapshotted: {path}")
+        after = os.fstat(descriptor)
+        if (
+            metadata.st_dev,
+            metadata.st_ino,
+            metadata.st_size,
+            metadata.st_mtime_ns,
+            metadata.st_ctime_ns,
+        ) != (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+            after.st_mtime_ns,
+            after.st_ctime_ns,
+        ):
             raise ValueError(f"{label} changed while it was being snapshotted: {path}")
         return data
     finally:
@@ -242,44 +268,70 @@ def load_release_key(
     allow_create: bool = True,
     require_owner_only: bool = False,
 ) -> Ed25519PrivateKey:
-    if require_owner_only:
-        if path.is_symlink() or not path.is_file():
-            raise ValueError(
-                "production release signing key must be an existing regular non-symlink file"
-            )
-        if path.stat().st_mode & 0o077:
-            raise ValueError(
-                "production release signing key must not be accessible by group or other users"
-            )
-    else:
-        path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists():
-        key = serialization.load_pem_private_key(path.read_bytes(), password=None)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        raw = read_bounded_regular_file(
+            path,
+            "production release signing key" if require_owner_only else "release signing key",
+            max_bytes=65536,
+            require_owner_only=require_owner_only,
+        )
+    except FileNotFoundError:
+        raw = None
+    except OSError as exc:
+        if not path.exists():
+            raw = None
+        else:
+            raise ValueError(f"could not read release signing key: {path}") from exc
+    if raw is not None:
+        key = serialization.load_pem_private_key(raw, password=None)
         if not isinstance(key, Ed25519PrivateKey):
             raise ValueError("release signing key must be Ed25519")
         return key
     if not allow_create:
         raise ValueError("production release signing key does not exist")
     key = Ed25519PrivateKey.generate()
-    path.write_bytes(
-        key.private_bytes(
-            serialization.Encoding.PEM,
-            serialization.PrivateFormat.PKCS8,
-            serialization.NoEncryption(),
-        )
+    encoded = key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
     )
-    os.chmod(path, 0o600)
+    descriptor = os.open(
+        path,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+        0o600,
+    )
+    try:
+        remaining = memoryview(encoded)
+        while remaining:
+            written = os.write(descriptor, remaining)
+            if written <= 0:
+                raise OSError("release signing key write made no progress")
+            remaining = remaining[written:]
+        os.fsync(descriptor)
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_size != len(encoded)
+            or metadata.st_mode & 0o077
+        ):
+            raise OSError("release signing key was not created as an owner-only regular file")
+    finally:
+        os.close(descriptor)
+    directory_descriptor = os.open(
+        path.parent,
+        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0),
+    )
+    try:
+        os.fsync(directory_descriptor)
+    finally:
+        os.close(directory_descriptor)
     return key
 
 
 def load_release_public_key(path: Path) -> Ed25519PublicKey:
-    if path.is_symlink() or not path.is_file():
-        raise ValueError(
-            "trusted release public key must be an existing regular non-symlink file"
-        )
-    if path.stat().st_size > 65536:
-        raise ValueError("trusted release public key exceeds 65536 bytes")
-    key = serialization.load_pem_public_key(path.read_bytes())
+    raw = read_bounded_regular_file(path, "trusted release public key", max_bytes=65536)
+    key = serialization.load_pem_public_key(raw)
     if not isinstance(key, Ed25519PublicKey):
         raise ValueError("trusted release public key must be Ed25519")
     return key
@@ -323,9 +375,107 @@ def public_key_info(key: Ed25519PrivateKey) -> dict[str, str]:
     return {"pem": pem, "spki_sha256": sha256_prefixed_bytes(der)}
 
 
-def source_tree() -> dict[str, Any]:
-    summary = serverware_source_tree.source_tree_summary(ROOT)
-    summary["git"] = git_source_info()
+def verify_external_report_signature(
+    *,
+    report_path: Path,
+    signature_path: Path,
+    trusted_public_key_path: Path,
+    expected_api_version: str,
+    expected_kind: str,
+    purpose: str,
+) -> dict[str, Any]:
+    report, report_bytes = load_json_snapshot(report_path, f"{purpose} report")
+    if (
+        report.get("apiVersion") != expected_api_version
+        or report.get("kind") != expected_kind
+        or report.get("ok") is not True
+    ):
+        raise ValueError(f"{purpose} report is not a successful {expected_api_version} artifact")
+    signature_document, signature_bytes = load_json_snapshot(
+        signature_path,
+        f"{purpose} detached signature",
+        max_bytes=65536,
+    )
+    expected_signature_fields = {
+        "apiVersion",
+        "kind",
+        "algorithm",
+        "purpose",
+        "artifactSha256",
+        "signerKeyId",
+        "signature",
+    }
+    if set(signature_document) != expected_signature_fields:
+        raise ValueError(f"{purpose} detached signature fields do not match the closed contract")
+    key_bytes = read_bounded_regular_file(
+        trusted_public_key_path,
+        f"{purpose} trusted public key",
+        max_bytes=65536,
+    )
+    if b"PRIVATE KEY" in key_bytes:
+        raise ValueError(f"{purpose} trusted key must contain public key material only")
+    try:
+        key = serialization.load_pem_public_key(key_bytes)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{purpose} trusted public key is invalid") from exc
+    if not isinstance(key, Ed25519PublicKey):
+        raise ValueError(f"{purpose} trusted public key must be Ed25519")
+    key_id = public_key_id(key)
+    report_sha256 = sha256_prefixed_bytes(report_bytes)
+    if (
+        signature_document.get("apiVersion") != EXTERNAL_SIGNATURE_API_VERSION
+        or signature_document.get("kind") != EXTERNAL_SIGNATURE_KIND
+        or signature_document.get("algorithm") != "Ed25519"
+        or signature_document.get("purpose") != purpose
+        or signature_document.get("artifactSha256") != report_sha256
+        or signature_document.get("signerKeyId") != key_id
+    ):
+        raise ValueError(f"{purpose} detached signature binding is invalid")
+    encoded_signature = signature_document.get("signature")
+    if not isinstance(encoded_signature, str) or re.fullmatch(
+        r"ed25519:[A-Za-z0-9_-]{86}", encoded_signature
+    ) is None:
+        raise ValueError(f"{purpose} detached signature encoding is invalid")
+    try:
+        signature = base64.urlsafe_b64decode(encoded_signature.split(":", 1)[1] + "==")
+        payload = canonical_json(
+            {
+                "apiVersion": EXTERNAL_SIGNATURE_API_VERSION,
+                "artifactSha256": report_sha256,
+                "purpose": purpose,
+            }
+        ).encode("utf-8")
+        key.verify(signature, payload)
+    except Exception as exc:
+        raise ValueError(f"{purpose} detached signature verification failed") from exc
+    return {
+        "report": report,
+        "reportBytes": report_bytes,
+        "reportSha256": report_sha256,
+        "signatureSha256": sha256_prefixed_bytes(signature_bytes),
+        "trustedPublicKeySha256": sha256_prefixed_bytes(key_bytes),
+        "signerKeyId": key_id,
+    }
+
+
+def source_tree(*, production: bool) -> dict[str, Any]:
+    summary = serverware_source_tree.source_tree_summary(
+        ROOT,
+        production=production,
+    )
+    if production:
+        if (
+            summary.get("identityMode")
+            != serverware_source_tree.PRODUCTION_IDENTITY_MODE
+            or summary.get("productionReleaseEligible") is not True
+            or not isinstance(summary.get("commit"), str)
+            or not isinstance(summary.get("gitTree"), str)
+        ):
+            raise ValueError(
+                "production provenance requires a clean commit-derived source archive contract"
+            )
+    else:
+        summary["gitDiagnosticOnly"] = git_source_info()
     return summary
 
 
@@ -832,12 +982,30 @@ def verify_development_image_identity(
         )
 
 
+def closed_production_service_map(value: Any, label: str) -> dict[str, dict[str, Any]]:
+    expected = {"serverware-control", "serverware-decision-gate"}
+    if not isinstance(value, list) or len(value) != len(expected):
+        raise ValueError(f"{label} must contain exactly both production services")
+    result: dict[str, dict[str, Any]] = {}
+    for index, item in enumerate(value):
+        if not isinstance(item, dict):
+            raise ValueError(f"{label}[{index}] must be a JSON object")
+        service = item.get("service")
+        if service not in expected or service in result:
+            raise ValueError(f"{label} contains an unexpected or duplicate service: {service!r}")
+        result[str(service)] = item
+    if set(result) != expected:
+        raise ValueError(f"{label} does not cover both production services")
+    return result
+
+
 def production_image_inventory(
     *,
     build_path: Path,
     published_path: Path,
     images_env_path: Path,
     expected_source_tree_digest: str,
+    expected_source_contract: dict[str, Any],
 ) -> dict[str, Any]:
     build = load_json(build_path, "production image build artifact")
     published = load_json(published_path, "published production image artifact")
@@ -865,6 +1033,27 @@ def production_image_inventory(
         raise ValueError(
             "production image build source tree does not match current release source tree"
         )
+    expected_contract_fields = {
+        "revision": expected_source_contract.get("commit"),
+        "source_tree_digest": expected_source_contract.get("digest"),
+        "source_archive_digest": (expected_source_contract.get("archive") or {}).get(
+            "sha256"
+        ),
+        "source_manifest_digest": (
+            expected_source_contract.get("manifest") or {}
+        ).get("sha256"),
+        "source_identity_mode": serverware_source_tree.PRODUCTION_IDENTITY_MODE,
+        "production_release_eligible": True,
+    }
+    for field, expected in expected_contract_fields.items():
+        if build_metadata.get(field) != expected:
+            raise ValueError(
+                f"production image build metadata {field} does not match the exact clean source contract"
+            )
+    if build_metadata.get("source_contract") != expected_source_contract:
+        raise ValueError(
+            "production image build embedded a different source archive contract"
+        )
     expected_launch_authority = launch_authority_binding(
         build_metadata, "production image build metadata"
     )
@@ -886,16 +1075,12 @@ def production_image_inventory(
             merge_production_images_env.DECISION_GATE_IMAGE_KEY
         ],
     }
-    build_by_service = {
-        str(item.get("service")): item
-        for item in build.get("images") or []
-        if isinstance(item, dict) and item.get("service")
-    }
-    published_by_service = {
-        str(item.get("service")): item
-        for item in published.get("images") or []
-        if isinstance(item, dict) and item.get("service")
-    }
+    build_by_service = closed_production_service_map(
+        build.get("images"), "production image build images"
+    )
+    published_by_service = closed_production_service_map(
+        published.get("images"), "published production images"
+    )
     if set(build_by_service) != set(expected_refs) or set(published_by_service) != set(
         expected_refs
     ):
@@ -931,6 +1116,30 @@ def production_image_inventory(
             raise ValueError(
                 f"published {service} digest ref does not match the immutable image fragment"
             )
+        run(["docker", "pull", expected_ref])
+        remeasured_remote_image_id = require_sha256(
+            run(["docker", "image", "inspect", "--format", "{{.Id}}", expected_ref]),
+            f"{service} independently remeasured remote image id",
+        )
+        if not hmac.compare_digest(remeasured_remote_image_id, local_image_id):
+            raise ValueError(
+                f"immutable registry image for {service} does not resolve to the authenticated build config"
+            )
+        build_production_images.verify_image_platform(expected_ref, build_production_images.PRODUCTION_PLATFORM)
+        inspected_repo_digests = json.loads(
+            run(
+                [
+                    "docker",
+                    "image",
+                    "inspect",
+                    "--format",
+                    "{{json .RepoDigests}}",
+                    expected_ref,
+                ]
+            )
+        )
+        if not isinstance(inspected_repo_digests, list) or expected_ref not in inspected_repo_digests:
+            raise ValueError(f"Docker did not bind {service} to the expected immutable registry digest")
         manifest_digest = require_sha256(
             expected_ref.rsplit("@", 1)[1], f"{service} registry manifest digest"
         )
@@ -940,6 +1149,7 @@ def production_image_inventory(
             "config_id": config_id,
             "local_build_image_id": local_image_id,
             "remote_image_id": remote_image_id,
+            "independently_remeasured_remote_image_id": remeasured_remote_image_id,
             "dockerfile": built.get("dockerfile"),
         }
         if service == "serverware-decision-gate":
@@ -953,6 +1163,14 @@ def production_image_inventory(
                 raise ValueError(
                     "published decision-gate executable does not match the measured build executable"
                 )
+            remeasured_binary = build_production_images.image_file_sha256(
+                expected_ref,
+                build_production_images.DECISION_GATE_BINARY_PATHS["binary_digest"],
+            )
+            if remeasured_binary != built_binary:
+                raise ValueError(
+                    "immutable registry decision-gate executable does not match the authenticated build"
+                )
             built_launcher = require_sha256(
                 built.get("launcher_binary_digest"),
                 "built production launcher binary digest",
@@ -964,6 +1182,16 @@ def production_image_inventory(
             if built_launcher != published_launcher:
                 raise ValueError(
                     "published production launcher does not match the measured build launcher"
+                )
+            remeasured_launcher = build_production_images.image_file_sha256(
+                expected_ref,
+                build_production_images.DECISION_GATE_BINARY_PATHS[
+                    "launcher_binary_digest"
+                ],
+            )
+            if remeasured_launcher != built_launcher:
+                raise ValueError(
+                    "immutable registry launcher does not match the authenticated build"
                 )
             built_launch_authority = launch_authority_binding(
                 built, "built decision-gate launch authority"
@@ -981,21 +1209,37 @@ def production_image_inventory(
                 )
             entry["binary_digest"] = built_binary
             entry["launcher_binary_digest"] = built_launcher
+            entry["independently_remeasured_binary_digest"] = remeasured_binary
+            entry["independently_remeasured_launcher_binary_digest"] = remeasured_launcher
             entry.update(expected_launch_authority)
         inventory[service] = entry
+    independent_no_shell = build_production_images.verify_no_shell(
+        [expected_refs[service] for service in sorted(expected_refs)]
+    )
+    for entry in inventory.values():
+        entry["independent_remote_no_shell_verification_sha256"] = sha256_prefixed_json(
+            independent_no_shell
+        )
     return inventory
 
 
 def production_reproducibility_binding(
     path: Path,
     *,
+    signature_path: Path,
+    trusted_public_key_path: Path,
     expected_source_tree_digest: str,
     expected_images: dict[str, Any],
 ) -> dict[str, Any]:
-    verification, verification_bytes = load_json_snapshot(
-        path,
-        "reproducible build verification",
+    authenticated = verify_external_report_signature(
+        report_path=path,
+        signature_path=signature_path,
+        trusted_public_key_path=trusted_public_key_path,
+        expected_api_version=verify_reproducible_builds.VERIFICATION_API_VERSION,
+        expected_kind=verify_reproducible_builds.VERIFICATION_KIND,
+        purpose=REPRODUCIBILITY_SIGNATURE_PURPOSE,
     )
+    verification = authenticated["report"]
     if (
         verification.get("apiVersion")
         != verify_reproducible_builds.VERIFICATION_API_VERSION
@@ -1075,20 +1319,9 @@ def production_reproducibility_binding(
         )
 
     images = verification.get("images")
-    if not isinstance(images, list):
-        raise ValueError("reproducible build verification images must be a list")
-    by_service = {
-        str(item.get("service")): item
-        for item in images
-        if isinstance(item, dict) and item.get("service")
-    }
-    if (
-        set(by_service) != {"serverware-control", "serverware-decision-gate"}
-        or len(images) != 2
-    ):
-        raise ValueError(
-            "reproducible build verification must bind exactly both production images"
-        )
+    by_service = closed_production_service_map(
+        images, "reproducible build verification images"
+    )
     if set(expected_images) != {"serverware-control", "serverware-decision-gate"}:
         raise ValueError(
             "release inventory must contain exactly both production images"
@@ -1164,7 +1397,12 @@ def production_reproducibility_binding(
     return {
         "apiVersion": verify_reproducible_builds.VERIFICATION_API_VERSION,
         "kind": verify_reproducible_builds.VERIFICATION_KIND,
-        "verification_sha256": sha256_prefixed_bytes(verification_bytes),
+        "verification_sha256": authenticated["reportSha256"],
+        "verification_signature_sha256": authenticated["signatureSha256"],
+        "verification_trusted_public_key_sha256": authenticated[
+            "trustedPublicKeySha256"
+        ],
+        "verification_signer_key_id": authenticated["signerKeyId"],
         "comparison_sha256": comparison_sha256,
         "source_tree_digest": source_tree_digest,
         "builders": builders,
@@ -1618,6 +1856,14 @@ def main() -> None:
         "--reproducible-build-verification",
         default=".tmp/reproducible-build-verification.json",
     )
+    parser.add_argument(
+        "--reproducible-build-signature",
+        default=os.getenv("SERVERWARE_REPRODUCIBLE_BUILD_VERIFICATION_SIGNATURE", ""),
+    )
+    parser.add_argument(
+        "--reproducible-build-trusted-public-key",
+        default=os.getenv("SERVERWARE_REPRODUCIBLE_BUILD_TRUSTED_PUBLIC_KEY", ""),
+    )
     parser.add_argument("--out", default=".tmp/release-provenance.json")
     parser.add_argument("--sbom-out", default=".tmp/sbom.cdx.json")
     parser.add_argument(
@@ -1633,7 +1879,7 @@ def main() -> None:
     created_at = datetime.now(timezone.utc).isoformat()
     nonce = f"release-provenance-{int(time.time() * 1000)}"
 
-    source = source_tree()
+    source = source_tree(production=args.production)
     development_compose_cli: list[str] | None = None
     if args.production:
         env_file = path_from_arg(args.env_file)
@@ -1701,15 +1947,28 @@ def main() -> None:
             raise ValueError(
                 "production release provenance requires SERVERWARE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY or --trusted-public-key"
             )
+        if not args.reproducible_build_signature:
+            raise ValueError(
+                "production release provenance requires --reproducible-build-signature"
+            )
+        if not args.reproducible_build_trusted_public_key:
+            raise ValueError(
+                "production release provenance requires --reproducible-build-trusted-public-key"
+            )
         validate_production_anchor(args.anchor, args.anchor_token)
         images = production_image_inventory(
             build_path=path_from_arg(args.production_images_build),
             published_path=path_from_arg(args.production_images_published),
             images_env_path=path_from_arg(args.production_images_env),
             expected_source_tree_digest=source["digest"],
+            expected_source_contract=source,
         )
         reproducible_build = production_reproducibility_binding(
             path_from_arg(args.reproducible_build_verification),
+            signature_path=path_from_arg(args.reproducible_build_signature),
+            trusted_public_key_path=path_from_arg(
+                args.reproducible_build_trusted_public_key
+            ),
             expected_source_tree_digest=source["digest"],
             expected_images=images,
         )
@@ -1867,6 +2126,11 @@ def main() -> None:
         "source_tree": source,
         "build_recipe": {
             "source_tree_digest": source["digest"],
+            "source_archive_sha256": (source.get("archive") or {}).get("sha256"),
+            "source_manifest_sha256": (source.get("manifest") or {}).get("sha256"),
+            "source_commit": source.get("commit"),
+            "source_git_tree": source.get("gitTree"),
+            "source_identity_mode": source.get("identityMode"),
             "compose_config_sha256": sha256_prefixed_bytes(
                 compose_config.encode("utf-8")
             ),

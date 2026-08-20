@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import copy
 import errno
 import fcntl
 import hashlib
@@ -69,7 +70,12 @@ from serverware.config import (
     WEB_TLS_CERT_FILE,
     ensure_data_dirs,
 )
-from serverware.policy_bundle import get_policy_snapshot, policy_public_key_hash, policy_public_key_pem
+from serverware.policy_bundle import (
+    get_policy_snapshot,
+    policy_public_key_hash,
+    policy_public_key_pem,
+    strict_json_loads,
+)
 from serverware.response_identity import (
     response_public_key_info,
     sign_statement as sign_response_statement,
@@ -17966,11 +17972,200 @@ def runtime_manifest_digest(manifest: dict[str, Any] | None = None) -> str:
     return sha256_prefixed(canonical_json(envelope).encode("ascii"))
 
 
+def _read_stable_regular_file(
+    path: Path,
+    *,
+    maximum_bytes: int,
+    missing_ok: bool = False,
+) -> bytes | None:
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    directory = getattr(os, "O_DIRECTORY", None)
+    if nofollow is None or directory is None:
+        raise RuntimeError(
+            "attestation file admission requires O_NOFOLLOW and O_DIRECTORY"
+        )
+    path = Path(path)
+    parts = path.parts
+    if not parts or path.name in {"", ".", ".."}:
+        raise ValueError(f"attestation input path is invalid: {path}")
+    parent_flags = (
+        os.O_RDONLY
+        | directory
+        | nofollow
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+    )
+    file_flags = (
+        os.O_RDONLY
+        | nofollow
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+    )
+    parent_descriptor = os.open("/" if path.is_absolute() else ".", parent_flags)
+    try:
+        parent_parts = parts[1:-1] if path.is_absolute() else parts[:-1]
+        for component in parent_parts:
+            if component in {"", ".", ".."}:
+                raise ValueError(
+                    f"attestation input path contains an unsafe component: {path}"
+                )
+            next_descriptor = os.open(
+                component,
+                parent_flags,
+                dir_fd=parent_descriptor,
+            )
+            os.close(parent_descriptor)
+            parent_descriptor = next_descriptor
+        try:
+            descriptor = os.open(
+                path.name,
+                file_flags,
+                dir_fd=parent_descriptor,
+            )
+        except FileNotFoundError:
+            if missing_ok:
+                return None
+            raise
+    except FileNotFoundError:
+        if missing_ok:
+            return None
+        raise
+    finally:
+        os.close(parent_descriptor)
+    try:
+        before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_size < 1
+            or before.st_size > maximum_bytes
+        ):
+            raise ValueError(f"attestation input is not a bounded regular file: {path}")
+        raw = bytearray()
+        while len(raw) < before.st_size:
+            chunk = os.read(descriptor, min(1024 * 1024, before.st_size - len(raw)))
+            if not chunk:
+                break
+            raw.extend(chunk)
+        trailing = os.read(descriptor, 1)
+        after = os.fstat(descriptor)
+        identity_before = (
+            before.st_dev,
+            before.st_ino,
+            before.st_mode,
+            before.st_uid,
+            before.st_gid,
+            before.st_size,
+            before.st_mtime_ns,
+            before.st_ctime_ns,
+        )
+        identity_after = (
+            after.st_dev,
+            after.st_ino,
+            after.st_mode,
+            after.st_uid,
+            after.st_gid,
+            after.st_size,
+            after.st_mtime_ns,
+            after.st_ctime_ns,
+        )
+        if (
+            len(raw) != before.st_size
+            or trailing
+            or identity_before != identity_after
+        ):
+            raise ValueError(f"attestation input changed while being measured: {path}")
+        return bytes(raw)
+    finally:
+        os.close(descriptor)
+
+
+def _attestation_json_artifact(
+    path: Path,
+    *,
+    digest_field: str,
+) -> tuple[dict[str, Any] | None, str | None]:
+    raw = _read_stable_regular_file(
+        path,
+        maximum_bytes=16 * 1024 * 1024,
+        missing_ok=True,
+    )
+    if raw is None:
+        return None, None
+    try:
+        value = strict_json_loads(raw)
+    except (UnicodeDecodeError, ValueError, json.JSONDecodeError):
+        return None, None
+    if not isinstance(value, dict):
+        return None, None
+    digest = value.get(digest_field)
+    if not isinstance(digest, str) or _SHA256_RE.fullmatch(digest) is None:
+        return None, None
+    if digest_field == "provenance_digest":
+        payload = value.get("provenance")
+    elif digest_field == "image_signature_bundle_digest":
+        payload = copy.deepcopy(value)
+        payload.pop("image_signature_bundle_digest", None)
+        payload.pop("bundle_signature", None)
+        metadata = payload.get("metadata")
+        if isinstance(metadata, dict):
+            metadata.pop("signature", None)
+            metadata.pop("transparency", None)
+            metadata.pop("bundleSigstore", None)
+    else:
+        return None, None
+    if not isinstance(payload, dict) or digest != sha256_prefixed(
+        canonical_json(payload).encode("utf-8")
+    ):
+        return None, None
+    return value, digest
+
+
+def attestation_artifact_digests() -> dict[str, str | None]:
+    provenance, provenance_digest = _attestation_json_artifact(
+        RELEASE_PROVENANCE_PATH,
+        digest_field="provenance_digest",
+    )
+    signature_bundle, signature_digest = _attestation_json_artifact(
+        IMAGE_SIGNATURES_PATH,
+        digest_field="image_signature_bundle_digest",
+    )
+    source_tree = ((provenance or {}).get("provenance") or {}).get("source_tree") or {}
+    source_digest = source_tree.get("digest") if isinstance(source_tree, dict) else None
+    if not isinstance(source_digest, str) or _SHA256_RE.fullmatch(source_digest) is None:
+        source_digest = None
+    signature_metadata = (
+        signature_bundle.get("metadata")
+        if isinstance(signature_bundle, dict)
+        and isinstance(signature_bundle.get("metadata"), dict)
+        else None
+    )
+    if signature_bundle is not None and (
+        signature_metadata is None
+        or signature_metadata.get("provenanceDigest") != provenance_digest
+        or signature_metadata.get("sourceTreeDigest") != source_digest
+    ):
+        return {
+            "provenance_digest": None,
+            "image_signatures_digest": None,
+            "source_tree_digest": None,
+        }
+    return {
+        "provenance_digest": provenance_digest,
+        "image_signatures_digest": signature_digest,
+        "source_tree_digest": source_digest,
+    }
+
+
 def ca_spki_hash() -> str | None:
     ca_path = MITMPROXY_CONF_DIR / "mitmproxy-ca-cert.pem"
-    if not ca_path.exists():
+    raw = _read_stable_regular_file(
+        ca_path,
+        maximum_bytes=1024 * 1024,
+        missing_ok=True,
+    )
+    if raw is None:
         return None
-    cert = x509.load_pem_x509_certificate(ca_path.read_bytes())
+    cert = x509.load_pem_x509_certificate(raw)
     der = cert.public_key().public_bytes(
         serialization.Encoding.DER,
         serialization.PublicFormat.SubjectPublicKeyInfo,
@@ -17982,9 +18177,10 @@ def service_tls_spki_hash() -> str | None:
     if not WEB_TLS_CERT_FILE:
         return None
     cert_path = Path(WEB_TLS_CERT_FILE)
-    if not cert_path.is_file():
+    raw = _read_stable_regular_file(cert_path, maximum_bytes=1024 * 1024)
+    if raw is None:
         raise ValueError("configured service TLS certificate is unavailable")
-    cert = x509.load_pem_x509_certificate(cert_path.read_bytes())
+    cert = x509.load_pem_x509_certificate(raw)
     der = cert.public_key().public_bytes(
         serialization.Encoding.DER,
         serialization.PublicFormat.SubjectPublicKeyInfo,
@@ -18008,7 +18204,9 @@ def _command_artifact_measurements(command: str) -> dict[str, Any] | None:
         if resolved in seen:
             continue
         seen.add(resolved)
-        raw = resolved.read_bytes()
+        raw = _read_stable_regular_file(resolved, maximum_bytes=256 * 1024 * 1024)
+        if raw is None:
+            raise ValueError(f"measured command artifact is unavailable: {resolved}")
         artifacts.append(
             {"path": str(resolved), "sha256": sha256_prefixed(raw), "size_bytes": len(raw)}
         )
@@ -18019,54 +18217,31 @@ def _command_artifact_measurements(command: str) -> dict[str, Any] | None:
 
 
 def release_provenance_digest() -> str | None:
-    if not RELEASE_PROVENANCE_PATH.exists():
-        return None
-    raw = RELEASE_PROVENANCE_PATH.read_bytes()
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        return sha256_prefixed(raw)
-    digest = data.get("provenance_digest") if isinstance(data, dict) else None
-    return digest if isinstance(digest, str) and digest.startswith("sha256:") else sha256_prefixed(raw)
+    return attestation_artifact_digests()["provenance_digest"]
 
 
 def image_signatures_digest() -> str | None:
-    if not IMAGE_SIGNATURES_PATH.exists():
-        return None
-    raw = IMAGE_SIGNATURES_PATH.read_bytes()
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        return sha256_prefixed(raw)
-    digest = data.get("image_signature_bundle_digest") if isinstance(data, dict) else None
-    return digest if isinstance(digest, str) and digest.startswith("sha256:") else sha256_prefixed(raw)
+    return attestation_artifact_digests()["image_signatures_digest"]
 
 
 def release_provenance_document() -> dict[str, Any] | None:
-    if not RELEASE_PROVENANCE_PATH.exists():
-        return None
-    try:
-        value = json.loads(RELEASE_PROVENANCE_PATH.read_text())
-    except (OSError, json.JSONDecodeError):
-        return None
-    return value if isinstance(value, dict) else None
+    value, _ = _attestation_json_artifact(
+        RELEASE_PROVENANCE_PATH,
+        digest_field="provenance_digest",
+    )
+    return value
 
 
 def image_signatures_document() -> dict[str, Any] | None:
-    if not IMAGE_SIGNATURES_PATH.exists():
-        return None
-    try:
-        value = json.loads(IMAGE_SIGNATURES_PATH.read_text())
-    except (OSError, json.JSONDecodeError):
-        return None
-    return value if isinstance(value, dict) else None
+    value, _ = _attestation_json_artifact(
+        IMAGE_SIGNATURES_PATH,
+        digest_field="image_signature_bundle_digest",
+    )
+    return value
 
 
 def source_tree_digest() -> str | None:
-    document = release_provenance_document()
-    source_tree = ((document or {}).get("provenance") or {}).get("source_tree") or {}
-    digest = source_tree.get("digest") if isinstance(source_tree, dict) else None
-    return digest if isinstance(digest, str) and digest.startswith("sha256:") else None
+    return attestation_artifact_digests()["source_tree_digest"]
 
 
 def _unsigned_quote(payload: dict[str, Any]) -> dict[str, Any]:
@@ -18778,9 +18953,7 @@ def attestation_document(nonce: str | None = None) -> dict[str, Any]:
         else None
     )
     ca_hash = ca_spki_hash()
-    provenance_digest = release_provenance_digest()
-    image_signature_digest = image_signatures_digest()
-    source_digest = source_tree_digest()
+    artifact_digests = attestation_artifact_digests()
     service_tls_spki = service_tls_spki_hash()
     response_key_info = response_public_key_info()
     data_plane_digest = EXPECTED_DATA_PLANE_BINARY_DIGEST
@@ -18795,9 +18968,7 @@ def attestation_document(nonce: str | None = None) -> dict[str, Any]:
         "data_plane_binary_digest": data_plane_digest,
         "service_tls_spki_sha256": service_tls_spki,
         "rollback_epoch": rollback_epoch,
-        "provenance_digest": provenance_digest,
-        "image_signatures_digest": image_signature_digest,
-        "source_tree_digest": source_digest,
+        **artifact_digests,
         "response_signing_key_id": response_key_info["spki_sha256"],
         "release_channel": RELEASE_CHANNEL,
         "debug": TEE_QUOTE_PROVIDER == "dev-signed-quote",
@@ -18835,9 +19006,7 @@ def attestation_document(nonce: str | None = None) -> dict[str, Any]:
         "data_plane_binary_digest": data_plane_digest,
         "service_tls_spki_sha256": service_tls_spki,
         "rollback_epoch": rollback_epoch,
-        "provenance_digest": provenance_digest,
-        "image_signatures_digest": image_signature_digest,
-        "source_tree_digest": source_digest,
+        **artifact_digests,
         "response_signing_key_id": response_key_info["spki_sha256"],
         "response_signing_public_key_pem": response_key_info["pem"],
         "release_channel": RELEASE_CHANNEL,

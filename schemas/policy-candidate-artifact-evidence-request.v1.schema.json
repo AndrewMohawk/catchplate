@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/policy-candidate-artifact-evidence-request.v1.schema.json",
+  "title": "Serverware Policy Candidate Artifact Evidence Request v1",
+  "$comment": "The request carries an externally signed, canonical candidate-artifact envelope. The server verifies the pinned Ed25519 signer and exact durable active predecessor; it does not sign candidate evidence.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "requestId", "record"],
+  "properties": {
+    "apiVersion": {
+      "const": "serverware.policyCandidateArtifactEvidenceRequest/v1"
+    },
+    "requestId": {"$ref": "#/$defs/uuidV4"},
+    "record": {"$ref": "#/$defs/record"}
+  },
+  "$defs": {
+    "uuidV4": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "positiveInteger": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9223372036854775807
+    },
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "canonicalJson": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 8388608
+    },
+    "signature": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{86}$"
+    },
+    "record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifact_envelope_digest",
+        "artifact_payload_digest",
+        "candidate_id",
+        "scope",
+        "policy_id",
+        "policy_sequence",
+        "rollback_epoch",
+        "policy_hash",
+        "predecessor_policy_sequence",
+        "predecessor_rollback_epoch",
+        "predecessor_policy_hash",
+        "compiler_digest",
+        "compiler_config_digest",
+        "policy_schema_digest",
+        "semantic_model_digest",
+        "evaluator_abi_digest",
+        "policy_bundle_digest",
+        "runtime_digest",
+        "artifact_envelope_json",
+        "artifact_payload_json",
+        "signature_algorithm",
+        "signing_key_id",
+        "signature",
+        "signature_digest",
+        "staged_by"
+      ],
+      "properties": {
+        "artifact_envelope_digest": {"$ref": "#/$defs/sha256"},
+        "artifact_payload_digest": {"$ref": "#/$defs/sha256"},
+        "candidate_id": {"$ref": "#/$defs/identifier"},
+        "scope": {"const": "active"},
+        "policy_id": {"$ref": "#/$defs/identifier"},
+        "policy_sequence": {"$ref": "#/$defs/positiveInteger"},
+        "rollback_epoch": {"$ref": "#/$defs/positiveInteger"},
+        "policy_hash": {"$ref": "#/$defs/sha256"},
+        "predecessor_policy_sequence": {"$ref": "#/$defs/positiveInteger"},
+        "predecessor_rollback_epoch": {"$ref": "#/$defs/positiveInteger"},
+        "predecessor_policy_hash": {"$ref": "#/$defs/sha256"},
+        "compiler_digest": {"$ref": "#/$defs/sha256"},
+        "compiler_config_digest": {"$ref": "#/$defs/sha256"},
+        "policy_schema_digest": {"$ref": "#/$defs/sha256"},
+        "semantic_model_digest": {"$ref": "#/$defs/sha256"},
+        "evaluator_abi_digest": {"$ref": "#/$defs/sha256"},
+        "policy_bundle_digest": {"$ref": "#/$defs/sha256"},
+        "runtime_digest": {"$ref": "#/$defs/sha256"},
+        "artifact_envelope_json": {"$ref": "#/$defs/canonicalJson"},
+        "artifact_payload_json": {"$ref": "#/$defs/canonicalJson"},
+        "signature_algorithm": {"const": "Ed25519"},
+        "signing_key_id": {"$ref": "#/$defs/sha256"},
+        "signature": {"$ref": "#/$defs/signature"},
+        "signature_digest": {"$ref": "#/$defs/sha256"},
+        "staged_by": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        }
+      }
+    }
+  }
+}

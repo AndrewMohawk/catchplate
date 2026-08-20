@@ -1,0 +1,712 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/policy-activation-readiness.v2.schema.json",
+  "title": "Serverware Policy Activation Readiness v2",
+  "$comment": "This is verification evidence, not an activation command. Native verification pins this envelope to the assignment's activation-readiness key, reconstructs and domain-hashes the immutable detached ReadinessCore, requires complete assigned-fleet coverage by previously verified final checkpoints, recomputes aggregate counters and latency percentiles, and enforces zero drops, errors, indeterminate outcomes, unavailable evidence, response divergence, gaps, or chain failures. Expansion classification comes only from a separately signed compiler-produced PolicyAuthorityAnalysis. Approved expansion is limited by exact semantic cells and pilot roots/limits and requires WebAuthn over the exact core. Pure verification exposes no activation side effect; activation requires one crate-private custody transaction that atomically revalidates current readiness/trust, consumes approval and assertion replay/counter state, and CAS-publishes the candidate.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "kind",
+    "canonicalProfile",
+    "signatureDomain",
+    "payload",
+    "payloadSha256",
+    "signatureAlgorithm",
+    "signingKeyId",
+    "signingKeySpkiSha256",
+    "signature"
+  ],
+  "properties": {
+    "apiVersion": {"const": "serverware.policyActivationReadiness/v2"},
+    "kind": {"const": "PolicyActivationReadiness"},
+    "canonicalProfile": {"const": "serverware.canonicalJson/ascii-integer-v1"},
+    "signatureDomain": {"const": "serverware.policyActivationReadiness/v2"},
+    "payload": {"$ref": "#/$defs/payload"},
+    "payloadSha256": {"$ref": "#/$defs/sha256"},
+    "signatureAlgorithm": {"const": "Ed25519"},
+    "signingKeyId": {"$ref": "#/$defs/sha256"},
+    "signingKeySpkiSha256": {"$ref": "#/$defs/sha256"},
+    "signature": {
+      "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/ed25519Signature"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/sha256"
+    },
+    "signedI64": {
+      "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/signedI64"
+    },
+    "unsignedI64": {
+      "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/unsignedI64"
+    },
+    "positiveI64": {
+      "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/positiveI64"
+    },
+    "identifier": {
+      "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/identifier"
+    },
+    "spiffeId": {
+      "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/spiffeId"
+    },
+    "asciiUri": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048,
+      "pattern": "^[\\x20-\\x7e]+$"
+    },
+    "nullableUnsignedI64": {
+      "oneOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/unsignedI64"}
+      ]
+    },
+    "semanticExpansionCell": {
+      "$ref": "policy-shadow-observation.v1.schema.json#/$defs/semanticExpansionCell"
+    },
+    "notApplicablePilot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode"],
+      "properties": {"mode": {"const": "not-applicable"}}
+    },
+    "constrainedPilot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "principalSetRootSha256",
+        "routeSetRootSha256",
+        "maximumRequests",
+        "maximumDurationNanos",
+        "maximumWriteRequests",
+        "cells"
+      ],
+      "properties": {
+        "mode": {"const": "constrained"},
+        "principalSetRootSha256": {"$ref": "#/$defs/sha256"},
+        "routeSetRootSha256": {"$ref": "#/$defs/sha256"},
+        "maximumRequests": {"$ref": "#/$defs/positiveI64"},
+        "maximumDurationNanos": {"$ref": "#/$defs/positiveI64"},
+        "maximumWriteRequests": {"$ref": "#/$defs/unsignedI64"},
+        "cells": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/semanticExpansionCell"}
+        }
+      }
+    },
+    "pilotRestrictions": {
+      "oneOf": [
+        {"$ref": "#/$defs/notApplicablePilot"},
+        {"$ref": "#/$defs/constrainedPilot"}
+      ]
+    },
+    "noExpansionAnalysis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "expansionCells"],
+      "properties": {
+        "mode": {"const": "no-expansion"},
+        "expansionCells": {
+          "type": "array",
+          "maxItems": 0,
+          "items": {"$ref": "#/$defs/semanticExpansionCell"}
+        }
+      }
+    },
+    "approvedExpansionAnalysis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "expansionCells",
+        "approvalMode"
+      ],
+      "properties": {
+        "mode": {"const": "approved-expansion"},
+        "expansionCells": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/semanticExpansionCell"}
+        },
+        "approvalMode": {
+          "enum": [
+            "single-person-hardware-webauthn",
+            "two-person-hardware-webauthn"
+          ]
+        }
+      }
+    },
+    "authorityAnalysis": {
+      "oneOf": [
+        {"$ref": "#/$defs/noExpansionAnalysis"},
+        {"$ref": "#/$defs/approvedExpansionAnalysis"}
+      ]
+    },
+    "policyAuthorityAnalysisPayload": {
+      "$ref": "policy-authority-analysis.v1.schema.json#/$defs/payload"
+    },
+    "policyAuthorityAnalysis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "kind",
+        "canonicalProfile",
+        "signatureDomain",
+        "payload",
+        "payloadSha256",
+        "signatureAlgorithm",
+        "signingKeyId",
+        "signingKeySpkiSha256",
+        "signature"
+      ],
+      "properties": {
+        "apiVersion": {"const": "serverware.policyAuthorityAnalysis/v1"},
+        "kind": {"const": "PolicyAuthorityAnalysis"},
+        "canonicalProfile": {"const": "serverware.canonicalJson/ascii-integer-v1"},
+        "signatureDomain": {"const": "serverware.policyAuthorityAnalysis/v1"},
+        "payload": {"$ref": "#/$defs/policyAuthorityAnalysisPayload"},
+        "payloadSha256": {"$ref": "#/$defs/sha256"},
+        "signatureAlgorithm": {"const": "Ed25519"},
+        "signingKeyId": {"$ref": "#/$defs/sha256"},
+        "signingKeySpkiSha256": {"$ref": "#/$defs/sha256"},
+        "signature": {
+          "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/ed25519Signature"
+        }
+      },
+      "$comment": "Native verification requires signingKeyId, signingKeySpkiSha256, and resolved public-key material to equal the assignment's compiler-analysis binding and requires exact equality with assignment policy, snapshot/compiler/configuration/schema/semantic-model, authority-root, custody evidence requirements, canary, issue, and expiry bindings."
+    },
+    "activationPrecondition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "expectedPredecessorPublicationRevision",
+        "expectedPredecessorPolicySha256",
+        "expectedPredecessorPolicySequence",
+        "expectedPredecessorRollbackEpoch",
+        "candidatePolicySha256",
+        "candidatePolicySequence",
+        "candidateRollbackEpoch",
+        "expectedPublicationKeyId",
+        "expectedPublicationKeySpkiSha256",
+        "expectedPublicationKeyMaterialSha256",
+        "activationDeadlineUnixNanos"
+      ],
+      "properties": {
+        "expectedPredecessorPublicationRevision": {"$ref": "#/$defs/positiveI64"},
+        "expectedPredecessorPolicySha256": {"$ref": "#/$defs/sha256"},
+        "expectedPredecessorPolicySequence": {"$ref": "#/$defs/positiveI64"},
+        "expectedPredecessorRollbackEpoch": {"$ref": "#/$defs/positiveI64"},
+        "candidatePolicySha256": {"$ref": "#/$defs/sha256"},
+        "candidatePolicySequence": {"$ref": "#/$defs/positiveI64"},
+        "candidateRollbackEpoch": {"$ref": "#/$defs/positiveI64"},
+        "expectedPublicationKeyId": {"$ref": "#/$defs/sha256"},
+        "expectedPublicationKeySpkiSha256": {"$ref": "#/$defs/sha256"},
+        "expectedPublicationKeyMaterialSha256": {"$ref": "#/$defs/sha256"},
+        "activationDeadlineUnixNanos": {"$ref": "#/$defs/signedI64"}
+      },
+      "$comment": "The predecessor fields are the expected publication CAS input. The candidate fields are the distinct publication target. The expected publication key fields must exactly equal the assignment custody-activation-publication authority binding and cannot be selected or replaced by custody. Native activation requires the custody receipt to prove that the exact predecessor was replaced by the exact candidate with a strictly advancing sequence; retaining or republishing the predecessor is invalid. The deadline is exclusive."
+    },
+    "activationPublicationReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "assignmentSha256",
+        "assignmentPayloadSha256",
+        "assignmentRevision",
+        "readinessCoreSha256",
+        "authorityKeyIndependenceSha256",
+        "transactionSha256",
+        "replacedPolicySha256",
+        "replacedPolicySequence",
+        "replacedRollbackEpoch",
+        "publishedPolicySha256",
+        "publishedPolicySequence",
+        "publishedRollbackEpoch",
+        "replacedPublicationRevision",
+        "publishedPublicationRevision",
+        "trustedObservedAtUnixNanos",
+        "trustedTimeCheckpointSha256",
+        "persistenceReceiptSha256",
+        "retrievalIdSha256",
+        "retrievalProofSha256",
+        "signingKeyId",
+        "signingKeySpkiSha256",
+        "signature",
+        "signedReceiptSha256"
+      ],
+      "properties": {
+        "assignmentSha256": {"$ref":"#/$defs/sha256"},
+        "assignmentPayloadSha256": {"$ref":"#/$defs/sha256"},
+        "assignmentRevision": {"$ref":"#/$defs/positiveI64"},
+        "readinessCoreSha256": {"$ref":"#/$defs/sha256"},
+        "authorityKeyIndependenceSha256": {"$ref":"#/$defs/sha256"},
+        "transactionSha256": {"$ref":"#/$defs/sha256"},
+        "replacedPolicySha256": {"$ref":"#/$defs/sha256"},
+        "replacedPolicySequence": {"$ref":"#/$defs/positiveI64"},
+        "replacedRollbackEpoch": {"$ref":"#/$defs/positiveI64"},
+        "publishedPolicySha256": {"$ref":"#/$defs/sha256"},
+        "publishedPolicySequence": {"$ref":"#/$defs/positiveI64"},
+        "publishedRollbackEpoch": {"$ref":"#/$defs/positiveI64"},
+        "replacedPublicationRevision": {"$ref":"#/$defs/positiveI64"},
+        "publishedPublicationRevision": {"$ref":"#/$defs/positiveI64"},
+        "trustedObservedAtUnixNanos": {"$ref":"#/$defs/positiveI64"},
+        "trustedTimeCheckpointSha256": {"$ref":"#/$defs/sha256"},
+        "persistenceReceiptSha256": {"$ref":"#/$defs/sha256"},
+        "retrievalIdSha256": {"$ref":"#/$defs/sha256"},
+        "retrievalProofSha256": {"$ref":"#/$defs/sha256"},
+        "signingKeyId": {"$ref":"#/$defs/sha256"},
+        "signingKeySpkiSha256": {"$ref":"#/$defs/sha256"},
+        "signature": {
+          "$ref":"policy-shadow-assignment.v1.schema.json#/$defs/ed25519Signature"
+        },
+        "signedReceiptSha256": {"$ref":"#/$defs/sha256"}
+      },
+      "$comment": "This is the exact unverified ActivationPublicationReceiptWire shape. Its signed canonical preimage inserts the fixed activation-publication role and the assignment/readiness bindings. At consumption, native code resolves only activationPrecondition.expectedPublicationKeyId from proof-independent assignment trust material, requires the resolved key's DER-SPKI and material digests to equal activationPrecondition and the assignment custody-activation-publication binding, and then requires receipt signingKeyId/signingKeySpkiSha256 to match; no custody-returned or receipt-selected key is trusted. Only the resulting nonconstructible VerifiedActivationPublicationReceipt capability can authorize publication after one current trust/revocation checkpoint, fresh trusted time, exact predecessor-to-candidate transition, immutable persistence and retrieval proof, and publishedPublicationRevision == replacedPublicationRevision + 1."
+    },
+    "memberReadinessEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "instanceId",
+        "spiffeId",
+        "bootIdSha256",
+        "generationId",
+        "generationEpoch",
+        "generationTombstoneEpoch",
+        "loadReceiptSha256",
+        "loadReceiptPayloadSha256",
+        "finalCheckpointSha256",
+        "finalCheckpointPayloadSha256",
+        "finalCheckpointSequence",
+        "lastObservationSequence",
+        "lastIngressSequence",
+        "observationCount",
+        "ingressCount",
+        "evaluatedObservationCount",
+        "comparableResponseCount",
+        "heartbeatCount",
+        "lastHeartbeatSequence",
+        "lastHeartbeatAtUnixNanos",
+        "maximumObservedHeartbeatGapNanos",
+        "cumulativeObservationRootSha256",
+        "cumulativeIngressRootSha256",
+        "cumulativeActiveDecisionRootSha256",
+        "cumulativePrincipalAuthorityRootSha256",
+        "cumulativeRouteAuthorityRootSha256",
+        "cumulativeCustodyEvidenceRootSha256",
+        "cumulativeAdmittedIngressReceiptRootSha256",
+        "cumulativeUnavailableIngressReceiptRootSha256",
+        "cumulativeDispatchBarrierReceiptRootSha256",
+        "cumulativeActiveEffectBarrierReceiptRootSha256",
+        "cumulativeActiveEffectCommitReceiptRootSha256",
+        "cumulativeTerminalReceiptCount",
+        "cumulativeTerminalReceiptRootSha256",
+        "cumulativePublicationReceiptCount",
+        "cumulativePublicationReceiptRootSha256",
+        "cumulativeSpillReceiptRootSha256",
+        "cumulativePersistenceReceiptRootSha256",
+        "cumulativeRetrievalProofRootSha256",
+        "cumulativeCompactionReceiptRootSha256",
+        "lastLedgerEventOrdinal",
+        "lastLedgerHeadSha256",
+        "lastSpoolRootSha256",
+        "publicationReconciliationReceiptSha256",
+        "publicationRevision",
+        "custodyReceiptEvidenceRequirementsSha256",
+        "cumulativeHeartbeatRootSha256",
+        "sealRootSha256",
+        "sealedAtUnixNanos"
+      ],
+      "properties": {
+        "instanceId": {"$ref": "#/$defs/identifier"},
+        "spiffeId": {"$ref": "#/$defs/spiffeId"},
+        "bootIdSha256": {"$ref": "#/$defs/sha256"},
+        "generationId": {"$ref": "#/$defs/sha256"},
+        "generationEpoch": {"$ref": "#/$defs/positiveI64"},
+        "generationTombstoneEpoch": {"$ref": "#/$defs/positiveI64"},
+        "loadReceiptSha256": {"$ref": "#/$defs/sha256"},
+        "loadReceiptPayloadSha256": {"$ref": "#/$defs/sha256"},
+        "finalCheckpointSha256": {"$ref": "#/$defs/sha256"},
+        "finalCheckpointPayloadSha256": {"$ref": "#/$defs/sha256"},
+        "finalCheckpointSequence": {"$ref": "#/$defs/positiveI64"},
+        "lastObservationSequence": {"$ref": "#/$defs/positiveI64"},
+        "lastIngressSequence": {"$ref": "#/$defs/positiveI64"},
+        "observationCount": {"$ref": "#/$defs/positiveI64"},
+        "ingressCount": {"$ref": "#/$defs/positiveI64"},
+        "evaluatedObservationCount": {"$ref": "#/$defs/positiveI64"},
+        "comparableResponseCount": {"$ref": "#/$defs/unsignedI64"},
+        "heartbeatCount": {"$ref": "#/$defs/positiveI64"},
+        "lastHeartbeatSequence": {"$ref": "#/$defs/positiveI64"},
+        "lastHeartbeatAtUnixNanos": {"$ref": "#/$defs/signedI64"},
+        "maximumObservedHeartbeatGapNanos": {"$ref": "#/$defs/unsignedI64"},
+        "cumulativeObservationRootSha256": {"$ref": "#/$defs/sha256"},
+        "cumulativeIngressRootSha256": {"$ref": "#/$defs/sha256"},
+        "cumulativeActiveDecisionRootSha256": {"$ref": "#/$defs/sha256"},
+        "cumulativePrincipalAuthorityRootSha256": {"$ref": "#/$defs/sha256"},
+        "cumulativeRouteAuthorityRootSha256": {"$ref": "#/$defs/sha256"},
+        "cumulativeCustodyEvidenceRootSha256": {"$ref": "#/$defs/sha256"},
+        "cumulativeAdmittedIngressReceiptRootSha256": {"$ref": "#/$defs/sha256"},
+        "cumulativeUnavailableIngressReceiptRootSha256": {"$ref": "#/$defs/sha256"},
+        "cumulativeDispatchBarrierReceiptRootSha256": {
+          "$ref": "#/$defs/sha256",
+          "$comment": "Must exactly equal the final verified checkpoint root over all primary and effect-dispatch barrier receipt roots."
+        },
+        "cumulativeActiveEffectBarrierReceiptRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "cumulativeActiveEffectCommitReceiptRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "cumulativeTerminalReceiptCount": {"$ref": "#/$defs/positiveI64"},
+        "cumulativeTerminalReceiptRootSha256": {"$ref": "#/$defs/sha256"},
+        "cumulativePublicationReceiptCount": {"$ref": "#/$defs/positiveI64"},
+        "cumulativePublicationReceiptRootSha256": {"$ref": "#/$defs/sha256"},
+        "cumulativeSpillReceiptRootSha256": {"$ref": "#/$defs/sha256"},
+        "cumulativePersistenceReceiptRootSha256": {"$ref": "#/$defs/sha256"},
+        "cumulativeRetrievalProofRootSha256": {"$ref": "#/$defs/sha256"},
+        "cumulativeCompactionReceiptRootSha256": {"$ref": "#/$defs/sha256"},
+        "lastLedgerEventOrdinal": {"$ref": "#/$defs/positiveI64"},
+        "lastLedgerHeadSha256": {"$ref": "#/$defs/sha256"},
+        "lastSpoolRootSha256": {"$ref": "#/$defs/sha256"},
+        "publicationReconciliationReceiptSha256": {"$ref": "#/$defs/sha256"},
+        "publicationRevision": {"$ref": "#/$defs/positiveI64"},
+        "custodyReceiptEvidenceRequirementsSha256": {"$ref": "#/$defs/sha256"},
+        "cumulativeHeartbeatRootSha256": {"$ref": "#/$defs/sha256"},
+        "sealRootSha256": {"$ref": "#/$defs/sha256"},
+        "sealedAtUnixNanos": {"$ref": "#/$defs/signedI64"}
+      },
+      "$comment": "Native verification requires exact equality with the final verified checkpoint. cumulativeTerminalReceiptCount is at least ingressCount and its root contains only terminal-append-role receipts. cumulativePublicationReceiptCount is positive and its root contains only publication-reconciliation-role receipts, including a verified published-state receipt for this generation. Both roots use the signed PolicyAuthorityAnalysis domains and requirements."
+    },
+    "fleetReadiness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fleetId",
+        "membershipRevision",
+        "membershipRootSha256",
+        "expectedMemberCount",
+        "coveredMemberCount",
+        "memberEvidence",
+        "memberEvidenceRootSha256",
+        "custodyAuthoritySha256",
+        "fleetCustodyEvidenceRootSha256",
+        "terminalReceiptCount",
+        "terminalReceiptRootSha256",
+        "publicationReceiptCount",
+        "publicationReceiptRootSha256",
+        "publicationRevisionRootSha256"
+      ],
+      "properties": {
+        "fleetId": {"$ref": "#/$defs/sha256"},
+        "membershipRevision": {"$ref": "#/$defs/positiveI64"},
+        "membershipRootSha256": {"$ref": "#/$defs/sha256"},
+        "expectedMemberCount": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4096
+        },
+        "coveredMemberCount": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4096
+        },
+        "memberEvidence": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4096,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/memberReadinessEvidence"}
+        },
+        "memberEvidenceRootSha256": {"$ref": "#/$defs/sha256"},
+        "custodyAuthoritySha256": {"$ref": "#/$defs/sha256"},
+        "fleetCustodyEvidenceRootSha256": {"$ref": "#/$defs/sha256"},
+        "terminalReceiptCount": {"$ref": "#/$defs/positiveI64"},
+        "terminalReceiptRootSha256": {"$ref": "#/$defs/sha256"},
+        "publicationReceiptCount": {"$ref": "#/$defs/positiveI64"},
+        "publicationReceiptRootSha256": {"$ref": "#/$defs/sha256"},
+        "publicationRevisionRootSha256": {"$ref": "#/$defs/sha256"}
+      },
+      "$comment": "Native verification requires expectedMemberCount == coveredMemberCount == the exact assignment member count and a one-to-one identity match with no uncovered-member representation. It sums member terminal/publication counts and recomputes distinct fixed-order fleet roots from the member terminal/publication roots; publicationReceiptCount must be at least coveredMemberCount."
+    },
+    "readinessRates": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidateEvaluationP99Nanos",
+        "shadowTotalP99Nanos"
+      ],
+      "properties": {
+        "candidateEvaluationP99Nanos": {"$ref": "#/$defs/unsignedI64"},
+        "shadowTotalP99Nanos": {"$ref": "#/$defs/unsignedI64"}
+      }
+    },
+    "trustCheckpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "checkpointId",
+        "asOfUnixNanos",
+        "revocationGeneration",
+        "revocationRootSha256"
+      ],
+      "properties": {
+        "checkpointId": {"$ref": "#/$defs/sha256"},
+        "asOfUnixNanos": {"$ref": "#/$defs/signedI64"},
+        "revocationGeneration": {"$ref": "#/$defs/positiveI64"},
+        "revocationRootSha256": {"$ref": "#/$defs/sha256"}
+      },
+      "$comment": "Every envelope signer and runtime attestation is re-resolved against this same atomic current checkpoint. Activation also obtains independent fresh TrustedTime, requires asOf <= now, bounds checkpoint age to five minutes, requires now < the exclusive activation deadline, and binds those values into the atomic custody consume-and-publish transaction."
+    },
+    "readinessCore": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "coreVersion",
+        "readinessRevision",
+        "assignmentSha256",
+        "assignmentPayloadSha256",
+        "assignmentRevision",
+        "authorityKeyIndependenceSha256",
+        "expectedReadinessKeyId",
+        "expectedReadinessKeySpkiSha256",
+        "expectedReadinessKeyMaterialSha256",
+        "canaryId",
+        "policyIdentity",
+        "trustCheckpoint",
+        "fleetReadiness",
+        "aggregateCounters",
+        "readinessThresholds",
+        "calculatedRates",
+        "policyAuthorityAnalysisSha256",
+        "policyAuthorityAnalysisPayloadSha256",
+        "authorityAnalysis",
+        "pilotRestrictions",
+        "custodyReceiptEvidenceRequirementsSha256",
+        "terminalReceiptCount",
+        "terminalReceiptRootSha256",
+        "publicationReceiptCount",
+        "publicationReceiptRootSha256",
+        "responseValidationObligationsRootSha256",
+        "activationPrecondition",
+        "evidenceRootSha256",
+        "issuedAtUnixNanos",
+        "expiresAtUnixNanos"
+      ],
+      "properties": {
+        "coreVersion": {"const": "serverware.policyReadinessCore/v2"},
+        "readinessRevision": {"$ref": "#/$defs/positiveI64"},
+        "assignmentSha256": {"$ref": "#/$defs/sha256"},
+        "assignmentPayloadSha256": {"$ref": "#/$defs/sha256"},
+        "assignmentRevision": {"$ref": "#/$defs/positiveI64"},
+        "authorityKeyIndependenceSha256": {"$ref": "#/$defs/sha256"},
+        "expectedReadinessKeyId": {"$ref": "#/$defs/sha256"},
+        "expectedReadinessKeySpkiSha256": {"$ref": "#/$defs/sha256"},
+        "expectedReadinessKeyMaterialSha256": {"$ref": "#/$defs/sha256"},
+        "canaryId": {"$ref": "#/$defs/sha256"},
+        "policyIdentity": {
+          "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/policyIdentity"
+        },
+        "trustCheckpoint": {"$ref": "#/$defs/trustCheckpoint"},
+        "fleetReadiness": {"$ref": "#/$defs/fleetReadiness"},
+        "aggregateCounters": {
+          "$ref": "policy-shadow-checkpoint.v1.schema.json#/$defs/cumulativeCounters"
+        },
+        "readinessThresholds": {
+          "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/readinessThresholds"
+        },
+        "calculatedRates": {"$ref": "#/$defs/readinessRates"},
+        "policyAuthorityAnalysisSha256": {"$ref": "#/$defs/sha256"},
+        "policyAuthorityAnalysisPayloadSha256": {"$ref": "#/$defs/sha256"},
+        "authorityAnalysis": {"$ref": "#/$defs/authorityAnalysis"},
+        "pilotRestrictions": {"$ref": "#/$defs/pilotRestrictions"},
+        "custodyReceiptEvidenceRequirementsSha256": {"$ref": "#/$defs/sha256"},
+        "terminalReceiptCount": {"$ref": "#/$defs/positiveI64"},
+        "terminalReceiptRootSha256": {"$ref": "#/$defs/sha256"},
+        "publicationReceiptCount": {"$ref": "#/$defs/positiveI64"},
+        "publicationReceiptRootSha256": {"$ref": "#/$defs/sha256"},
+        "responseValidationObligationsRootSha256": {"$ref": "#/$defs/sha256"},
+        "activationPrecondition": {"$ref": "#/$defs/activationPrecondition"},
+        "evidenceRootSha256": {
+          "$ref": "#/$defs/sha256",
+          "$comment": "SHA-256 over serverware.policyReadinessEvidenceRoot/v2 domain-separated length frames containing assignmentPayloadSha256 raw bytes, authorityKeyIndependenceSha256 raw bytes, memberEvidenceRootSha256 raw bytes, terminalReceiptCount and terminalReceiptRootSha256, publicationReceiptCount and publicationReceiptRootSha256, canonical aggregateCounters, canonical readinessThresholds, policyAuthorityAnalysisSha256 raw bytes, custodyReceiptEvidenceRequirementsSha256 raw bytes, responseValidationObligationsRootSha256 raw bytes, and canonical trustCheckpoint."
+        },
+        "issuedAtUnixNanos": {"$ref": "#/$defs/signedI64"},
+        "expiresAtUnixNanos": {"$ref": "#/$defs/signedI64"}
+      },
+      "$comment": "readinessCoreSha256 = SHA-256 domain frame over canonical readinessCore bytes using serverware.policyReadinessCore/v2. The expected readiness key fields exactly equal the assignment activation-readiness binding, and the enclosing envelope signer and independently resolved public-key material must match them. The core contains every activation-relevant candidate, predecessor, fleet, evidence, threshold, authority-cell, pilot, CAS, deadline, key-independence, terminal-evidence, and publication-evidence binding. Native verification requires the aggregate receipt counts/roots to equal fleetReadiness, satisfy the signed PolicyAuthorityAnalysis requirements, and include at least one verified publication receipt per covered member before activation can be ready."
+    },
+    "webauthnAssertion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "assertionEvidenceSha256",
+        "principalId",
+        "credentialId",
+        "readinessCoreChallengeSha256",
+        "assertionObjectSha256",
+        "authenticatorDataSha256",
+        "clientDataJsonSha256",
+        "assertionSignatureSha256",
+        "cosePublicKeySha256",
+        "rpId",
+        "origin",
+        "credentialStateRevision",
+        "expectedPreviousSignatureCounter",
+        "signatureCounter",
+        "replayStateSha256",
+        "approvedAtUnixNanos"
+      ],
+      "properties": {
+        "assertionEvidenceSha256": {"$ref": "#/$defs/sha256"},
+        "principalId": {"$ref": "#/$defs/identifier"},
+        "credentialId": {"$ref": "#/$defs/sha256"},
+        "readinessCoreChallengeSha256": {
+          "$ref": "#/$defs/sha256",
+          "$comment": "The WebAuthn clientData challenge is the exact raw 32-byte readinessCoreSha256 value encoded base64url without padding; native verification resolves and verifies the assertion bytes."
+        },
+        "assertionObjectSha256": {"$ref": "#/$defs/sha256"},
+        "authenticatorDataSha256": {"$ref": "#/$defs/sha256"},
+        "clientDataJsonSha256": {"$ref": "#/$defs/sha256"},
+        "assertionSignatureSha256": {"$ref": "#/$defs/sha256"},
+        "cosePublicKeySha256": {"$ref": "#/$defs/sha256"},
+        "rpId": {"$ref": "#/$defs/identifier"},
+        "origin": {"$ref": "#/$defs/asciiUri"},
+        "credentialStateRevision": {"$ref": "#/$defs/positiveI64"},
+        "expectedPreviousSignatureCounter": {
+          "$ref": "#/$defs/nullableUnsignedI64"
+        },
+        "signatureCounter": {"$ref": "#/$defs/unsignedI64"},
+        "replayStateSha256": {"$ref": "#/$defs/sha256"},
+        "approvedAtUnixNanos": {"$ref": "#/$defs/signedI64"}
+      },
+      "$comment": "assertionEvidenceSha256 commits the complete assertion object, authenticatorData, clientDataJSON, signature, challenge, RP/origin, credential state, counters, replay state, and approval time. Non-incrementing authenticators are supported by exactly-once durable assertionEvidenceSha256 consumption."
+    },
+    "activationApprovalPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "approvalId",
+        "assignmentPayloadSha256",
+        "authorityKeyIndependenceSha256",
+        "expectedApprovalKeyId",
+        "expectedApprovalKeySpkiSha256",
+        "expectedApprovalKeyMaterialSha256",
+        "readinessCoreSha256",
+        "activationContextSha256",
+        "approvalMode",
+        "expansionCells",
+        "assertions",
+        "useLimit",
+        "issuedAtUnixNanos",
+        "expiresAtUnixNanos"
+      ],
+      "properties": {
+        "approvalId": {"$ref": "#/$defs/sha256"},
+        "assignmentPayloadSha256": {"$ref": "#/$defs/sha256"},
+        "authorityKeyIndependenceSha256": {"$ref": "#/$defs/sha256"},
+        "expectedApprovalKeyId": {"$ref": "#/$defs/sha256"},
+        "expectedApprovalKeySpkiSha256": {"$ref": "#/$defs/sha256"},
+        "expectedApprovalKeyMaterialSha256": {"$ref": "#/$defs/sha256"},
+        "readinessCoreSha256": {"$ref": "#/$defs/sha256"},
+        "activationContextSha256": {
+          "$ref": "#/$defs/sha256",
+          "$comment": "Native verification requires exact equality with readinessCoreSha256; no digest indirection is accepted."
+        },
+        "approvalMode": {
+          "enum": [
+            "single-person-hardware-webauthn",
+            "two-person-hardware-webauthn"
+          ]
+        },
+        "expansionCells": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/sha256"},
+          "$comment": "Strictly sorted exact semantic cellSha256 values from the verified PolicyAuthorityAnalysis."
+        },
+        "assertions": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/webauthnAssertion"}
+        },
+        "useLimit": {"const": 1},
+        "issuedAtUnixNanos": {"$ref": "#/$defs/signedI64"},
+        "expiresAtUnixNanos": {"$ref": "#/$defs/signedI64"}
+      },
+      "$comment": "Native verification requires the expected approval key fields to exactly equal the assignment activation-approval binding and requires the enclosing activation-approval envelope signer to match that independently resolved key. It enforces exactly one assertion for single-person mode or two assertions for two-person mode, with distinct verified principals and distinct verified credentials. Hardware backing, presence, and verification come from the trusted WebAuthn verifier, never caller flags. useLimit is declarative; the crate-private custody adapter must atomically bind and consume approvalId, every complete assertion evidence digest and replay state, counter/state revision, current readiness and trust checkpoint, activation deadline, and publication CAS. A zero signatureCounter remains valid only through one-use assertion-evidence consumption."
+    },
+    "activationApproval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "kind",
+        "canonicalProfile",
+        "signatureDomain",
+        "payload",
+        "payloadSha256",
+        "signatureAlgorithm",
+        "signingKeyId",
+        "signingKeySpkiSha256",
+        "signature"
+      ],
+      "properties": {
+        "apiVersion": {"const": "serverware.policyActivationApproval/v2"},
+        "kind": {"const": "PolicyActivationApproval"},
+        "canonicalProfile": {"const": "serverware.canonicalJson/ascii-integer-v1"},
+        "signatureDomain": {"const": "serverware.policyActivationApproval/v2"},
+        "payload": {"$ref": "#/$defs/activationApprovalPayload"},
+        "payloadSha256": {"$ref": "#/$defs/sha256"},
+        "signatureAlgorithm": {"const": "Ed25519"},
+        "signingKeyId": {"$ref": "#/$defs/sha256"},
+        "signingKeySpkiSha256": {"$ref": "#/$defs/sha256"},
+        "signature": {
+          "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/ed25519Signature"
+        }
+      },
+      "$comment": "The envelope signingKeyId/signingKeySpkiSha256 and resolved public-key material must exactly match payload.expectedApprovalKeyId/expectedApprovalKeySpkiSha256/expectedApprovalKeyMaterialSha256 and the assignment activation-approval binding."
+    },
+    "nullableActivationApproval": {
+      "oneOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/activationApproval"}
+      ]
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "readinessId",
+        "readinessRevision",
+        "readinessCore",
+        "readinessCoreSha256",
+        "activationApproval",
+        "decision",
+        "issuedAtUnixNanos",
+        "expiresAtUnixNanos"
+      ],
+      "properties": {
+        "readinessId": {"$ref": "#/$defs/sha256"},
+        "readinessRevision": {"$ref": "#/$defs/positiveI64"},
+        "readinessCore": {"$ref": "#/$defs/readinessCore"},
+        "readinessCoreSha256": {"$ref": "#/$defs/sha256"},
+        "activationApproval": {"$ref": "#/$defs/nullableActivationApproval"},
+        "decision": {"const": "ready-for-atomic-activation"},
+        "issuedAtUnixNanos": {"$ref": "#/$defs/signedI64"},
+        "expiresAtUnixNanos": {"$ref": "#/$defs/signedI64"}
+      }
+    }
+  }
+}

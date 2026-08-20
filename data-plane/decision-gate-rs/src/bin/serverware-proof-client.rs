@@ -3,7 +3,7 @@ use ed25519_dalek::pkcs8::DecodePrivateKey;
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use ring::rand::{SecureRandom, SystemRandom};
 use rustls::pki_types::pem::PemObject;
-use rustls::pki_types::{CertificateDer, ServerName};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use serde_json::{json, Map, Value};
 use serverware_decision_gate::{
@@ -39,6 +39,8 @@ const MAX_RUNTIME_PROOF_BYTES: usize = 96 * 1024;
 const MAX_OBSERVATION_RUNTIME_PROOF_BYTES: usize = 128 * 1024;
 const MAX_OBSERVATION_PREPROOF_ERROR_BYTES: usize = 16 * 1024;
 const MAX_CA_BUNDLE_BYTES: usize = 4 * 1024 * 1024;
+const MAX_PROXY_CLIENT_CERTIFICATE_BYTES: usize = 1024 * 1024;
+const MAX_PROXY_CLIENT_PRIVATE_KEY_BYTES: usize = 64 * 1024;
 const MAX_TRUST_KEY_BYTES: usize = 64 * 1024;
 const OBSERVATION_NONCE_EXPIRY_BYTES: usize = 4;
 const OBSERVATION_NONCE_CLIENT_LIFETIME_SECONDS: u64 = 300;
@@ -66,6 +68,11 @@ struct Args {
     stream: bool,
     observation: bool,
     proxy: String,
+    proxy_raw_development: bool,
+    proxy_server_name: Option<String>,
+    proxy_ca: Option<PathBuf>,
+    proxy_client_cert: Option<PathBuf>,
+    proxy_client_key: Option<PathBuf>,
     method: String,
     url: Url,
     ca: PathBuf,
@@ -83,6 +90,41 @@ struct Args {
     max_age_seconds: u64,
     max_stream_bytes: u64,
     max_observation_body_bytes: u64,
+}
+
+struct ProxyEndpoint {
+    address: String,
+    server_name: String,
+}
+
+enum ProxyTransport {
+    DevelopmentRaw(TcpStream),
+    MutualTls(StreamOwned<ClientConnection, TcpStream>),
+}
+
+impl Read for ProxyTransport {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        match self {
+            Self::DevelopmentRaw(stream) => stream.read(buffer),
+            Self::MutualTls(stream) => stream.read(buffer),
+        }
+    }
+}
+
+impl Write for ProxyTransport {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        match self {
+            Self::DevelopmentRaw(stream) => stream.write(buffer),
+            Self::MutualTls(stream) => stream.write(buffer),
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        match self {
+            Self::DevelopmentRaw(stream) => stream.flush(),
+            Self::MutualTls(stream) => stream.flush(),
+        }
+    }
 }
 
 struct HttpResponse {
@@ -285,6 +327,11 @@ where
     let mut stream = false;
     let mut observation = false;
     let mut proxy = None;
+    let mut proxy_raw_development = false;
+    let mut proxy_server_name = None;
+    let mut proxy_ca = None;
+    let mut proxy_client_cert = None;
+    let mut proxy_client_key = None;
     let mut method = "GET".to_string();
     let mut url = None;
     let mut ca = None;
@@ -320,11 +367,22 @@ where
             observation = true;
             continue;
         }
+        if flag == "--proxy-raw-development" {
+            if proxy_raw_development {
+                return Err("--proxy-raw-development may be specified only once".to_string());
+            }
+            proxy_raw_development = true;
+            continue;
+        }
         let value = values
             .next()
             .ok_or_else(|| format!("{flag} requires a value"))?;
         match flag.as_str() {
             "--proxy" => proxy = Some(value),
+            "--proxy-server-name" => proxy_server_name = Some(value),
+            "--proxy-ca" => proxy_ca = Some(PathBuf::from(value)),
+            "--proxy-client-cert" => proxy_client_cert = Some(PathBuf::from(value)),
+            "--proxy-client-key" => proxy_client_key = Some(PathBuf::from(value)),
             "--method" => method = value,
             "--url" => url = Some(Url::parse(&value).map_err(|err| format!("parse --url: {err}"))?),
             "--ca" => ca = Some(PathBuf::from(value)),
@@ -501,10 +559,40 @@ where
             return Err("--expected-server-instance-id must be a non-empty SPIFFE ID".to_string());
         }
     }
+    let proxy = proxy.ok_or("--proxy is required")?;
+    let configured_proxy_tls_files = [
+        proxy_ca.is_some(),
+        proxy_client_cert.is_some(),
+        proxy_client_key.is_some(),
+    ];
+    if proxy_raw_development {
+        if configured_proxy_tls_files.into_iter().any(|configured| configured)
+            || proxy_server_name.is_some()
+        {
+            return Err(
+                "--proxy-raw-development cannot be combined with proxy TLS options"
+                    .to_string(),
+            );
+        }
+    } else if configured_proxy_tls_files
+        .into_iter()
+        .any(|configured| !configured)
+    {
+        return Err(
+            "mTLS proxy mode requires --proxy-ca, --proxy-client-cert, and --proxy-client-key"
+                .to_string(),
+        );
+    }
+    parse_proxy_endpoint(&proxy, proxy_raw_development, proxy_server_name.as_deref())?;
     Ok(Args {
         stream,
         observation,
-        proxy: proxy.ok_or("--proxy is required")?,
+        proxy,
+        proxy_raw_development,
+        proxy_server_name,
+        proxy_ca,
+        proxy_client_cert,
+        proxy_client_key,
         method,
         url,
         ca: ca.ok_or("--ca is required")?,
@@ -522,6 +610,62 @@ where
         max_age_seconds,
         max_stream_bytes,
         max_observation_body_bytes,
+    })
+}
+
+fn parse_proxy_endpoint(
+    raw: &str,
+    raw_development: bool,
+    configured_server_name: Option<&str>,
+) -> Result<ProxyEndpoint, String> {
+    if raw.is_empty() || raw != raw.trim() || raw.chars().any(char::is_control) {
+        return Err("--proxy is invalid".to_string());
+    }
+    let default_scheme = if raw_development { "http" } else { "https" };
+    let explicit_scheme = raw.contains("://");
+    let parsed = Url::parse(if explicit_scheme {
+        raw
+    } else {
+        &format!("{default_scheme}://{raw}")
+    })
+    .map_err(|err| format!("parse --proxy: {err}"))?;
+    if parsed.scheme() != default_scheme {
+        return Err(if raw_development {
+            "--proxy-raw-development requires an http:// proxy endpoint".to_string()
+        } else {
+            "mTLS proxy mode requires an https:// proxy endpoint".to_string()
+        });
+    }
+    if !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || !matches!(parsed.path(), "" | "/")
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+    {
+        return Err("--proxy must contain only a host and port, without credentials".to_string());
+    }
+    let host = parsed.host_str().ok_or("--proxy is missing a host")?;
+    let port = parsed
+        .port_or_known_default()
+        .ok_or("--proxy is missing a port")?;
+    let address = if host.contains(':') {
+        format!("[{host}]:{port}")
+    } else {
+        format!("{host}:{port}")
+    };
+    let server_name = configured_server_name.unwrap_or(host);
+    if server_name.is_empty()
+        || server_name != server_name.trim()
+        || server_name.len() > 253
+        || server_name.chars().any(char::is_control)
+    {
+        return Err("--proxy-server-name is invalid".to_string());
+    }
+    ServerName::try_from(server_name.to_string())
+        .map_err(|_| "--proxy-server-name is not a valid TLS server name".to_string())?;
+    Ok(ProxyEndpoint {
+        address,
+        server_name: server_name.to_string(),
     })
 }
 
@@ -2735,6 +2879,99 @@ fn load_roots(path: &Path) -> Result<RootCertStore, String> {
     Ok(roots)
 }
 
+fn load_proxy_client_certificate_chain(
+    path: &Path,
+) -> Result<Vec<CertificateDer<'static>>, String> {
+    let pem = read_trusted_input_snapshot(
+        path,
+        "proxy client certificate",
+        false,
+        MAX_PROXY_CLIENT_CERTIFICATE_BYTES,
+    )?;
+    let certificates = CertificateDer::pem_slice_iter(&pem)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| format!("parse proxy client certificate {}: {err}", path.display()))?;
+    if certificates.is_empty() || certificates.len() > 16 {
+        return Err("proxy client certificate must contain 1-16 certificates".to_string());
+    }
+    let total = certificates.iter().try_fold(0usize, |total, certificate| {
+        if certificate.is_empty() || certificate.len() > 256 * 1024 {
+            return Err("proxy client certificate chain contains an invalid certificate size");
+        }
+        total
+            .checked_add(certificate.len())
+            .ok_or("proxy client certificate chain size overflow")
+    })?;
+    if total > MAX_PROXY_CLIENT_CERTIFICATE_BYTES {
+        return Err("proxy client certificate chain is too large".to_string());
+    }
+    Ok(certificates)
+}
+
+fn load_proxy_client_private_key(path: &Path) -> Result<PrivateKeyDer<'static>, String> {
+    let pem = read_trusted_input_snapshot(
+        path,
+        "proxy client private key",
+        true,
+        MAX_PROXY_CLIENT_PRIVATE_KEY_BYTES,
+    )?;
+    PrivateKeyDer::from_pem_slice(&pem)
+        .map_err(|err| format!("parse proxy client private key {}: {err}", path.display()))
+}
+
+fn connect_proxy(args: &Args, timeout: Duration) -> Result<ProxyTransport, String> {
+    let endpoint = parse_proxy_endpoint(
+        &args.proxy,
+        args.proxy_raw_development,
+        args.proxy_server_name.as_deref(),
+    )?;
+    let mut tcp = TcpStream::connect(&endpoint.address)
+        .map_err(|err| format!("connect to proxy {}: {err}", endpoint.address))?;
+    tcp.set_read_timeout(Some(timeout))
+        .map_err(|err| format!("set proxy read timeout: {err}"))?;
+    tcp.set_write_timeout(Some(timeout))
+        .map_err(|err| format!("set proxy write timeout: {err}"))?;
+    if args.proxy_raw_development {
+        return Ok(ProxyTransport::DevelopmentRaw(tcp));
+    }
+    let roots = load_roots(
+        args.proxy_ca
+            .as_deref()
+            .ok_or("mTLS proxy mode is missing --proxy-ca")?,
+    )?;
+    let certificates = load_proxy_client_certificate_chain(
+        args.proxy_client_cert
+            .as_deref()
+            .ok_or("mTLS proxy mode is missing --proxy-client-cert")?,
+    )?;
+    let private_key = load_proxy_client_private_key(
+        args.proxy_client_key
+            .as_deref()
+            .ok_or("mTLS proxy mode is missing --proxy-client-key")?,
+    )?;
+    let mut config = ClientConfig::builder_with_protocol_versions(&[
+        &rustls::version::TLS13,
+    ])
+    .with_root_certificates(roots)
+    .with_client_auth_cert(certificates, private_key)
+    .map_err(|err| format!("build mTLS proxy client configuration: {err}"))?;
+    config.alpn_protocols = vec![b"http/1.1".to_vec()];
+    let server_name = ServerName::try_from(endpoint.server_name.clone())
+        .map_err(|_| "proxy TLS server name is invalid".to_string())?;
+    let connection = ClientConnection::new(Arc::new(config), server_name)
+        .map_err(|err| format!("create mTLS proxy client: {err}"))?;
+    let mut tls = StreamOwned::new(connection, tcp);
+    while tls.conn.is_handshaking() {
+        tls.conn
+            .complete_io(&mut tls.sock)
+            .map_err(|err| format!("complete mTLS proxy handshake: {err}"))?;
+    }
+    if tls.conn.protocol_version() != Some(rustls::ProtocolVersion::TLSv1_3) {
+        return Err("mTLS proxy did not negotiate TLS 1.3".to_string());
+    }
+    Ok(ProxyTransport::MutualTls(tls))
+}
+
 fn decode_public_key_pem(pem: &str) -> Result<(VerifyingKey, String), String> {
     let encoded = pem
         .lines()
@@ -3150,8 +3387,8 @@ where
     Ok(body_path)
 }
 
-fn peer_identity(
-    tls: &StreamOwned<ClientConnection, TcpStream>,
+fn peer_identity<T>(
+    tls: &StreamOwned<ClientConnection, T>,
 ) -> Result<(String, String), String> {
     let certificate = tls
         .conn
@@ -5861,9 +6098,9 @@ fn verify_observation_runtime_proof(
     }))
 }
 
-fn finish_stream_collection(
+fn finish_stream_collection<T: Read + Write>(
     args: &Args,
-    mut tls: StreamOwned<ClientConnection, TcpStream>,
+    mut tls: StreamOwned<ClientConnection, T>,
     pending: PendingStreamCollection,
 ) -> Result<Value, String> {
     let PendingStreamCollection {
@@ -5971,9 +6208,9 @@ fn finish_stream_collection(
     }))
 }
 
-fn finish_observation_collection(
+fn finish_observation_collection<T: Read + Write>(
     args: &Args,
-    mut tls: StreamOwned<ClientConnection, TcpStream>,
+    mut tls: StreamOwned<ClientConnection, T>,
     mut staged_body: StagedBody,
     proof_target: ResolvedOutputTarget,
     request: ObservationRequestCommitment,
@@ -6128,22 +6365,17 @@ fn collect(args: Args) -> Result<Value, String> {
         format!("{host}:{port}")
     };
     let timeout = Duration::from_secs(args.timeout_seconds);
-    let mut tcp = TcpStream::connect(&args.proxy)
-        .map_err(|err| format!("connect to proxy {}: {err}", args.proxy))?;
-    tcp.set_read_timeout(Some(timeout))
-        .map_err(|err| format!("set proxy read timeout: {err}"))?;
-    tcp.set_write_timeout(Some(timeout))
-        .map_err(|err| format!("set proxy write timeout: {err}"))?;
+    let mut proxy = connect_proxy(&args, timeout)?;
     let mut connect = format!("CONNECT {authority} HTTP/1.1\r\nHost: {authority}\r\n");
     for (name, value) in &args.proxy_headers {
         connect.push_str(&format!("{name}: {value}\r\n"));
     }
     connect.push_str("Connection: keep-alive\r\n\r\n");
-    tcp.write_all(connect.as_bytes())
+    proxy.write_all(connect.as_bytes())
         .map_err(|err| format!("write CONNECT request: {err}"))?;
-    tcp.flush()
+    proxy.flush()
         .map_err(|err| format!("flush CONNECT request: {err}"))?;
-    let connect_head = read_head(&mut tcp, 64 * 1024)?;
+    let connect_head = read_head(&mut proxy, 64 * 1024)?;
     let (connect_status, _, body_start) = parse_head(&connect_head)?;
     if connect_head.len() != body_start || connect_status != 200 {
         return Err(format!("proxy CONNECT failed with status {connect_status}"));
@@ -6157,7 +6389,7 @@ fn collect(args: Args) -> Result<Value, String> {
         .map_err(|_| format!("invalid TLS server name {host}"))?;
     let connection = ClientConnection::new(Arc::new(config), server_name)
         .map_err(|err| format!("create TLS client: {err}"))?;
-    let mut tls = StreamOwned::new(connection, tcp);
+    let mut tls = StreamOwned::new(connection, proxy);
     let rng = SystemRandom::new();
     let mut nonce_bytes = args.client_nonce.unwrap_or([0u8; 32]);
     if args.client_nonce.is_none() {
@@ -6411,6 +6643,7 @@ mod tests {
         [
             "--proxy",
             "127.0.0.1:8080",
+            "--proxy-raw-development",
             "--url",
             "https://example.test/resource",
             "--ca",

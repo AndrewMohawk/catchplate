@@ -655,13 +655,13 @@ def main() -> None:
             'id="policy-template-summary"',
             'id="setup-template-summary"',
             "const policyTemplates = {",
-            "gmail-response-last-30-days",
+            "gmail-list-response-30-days",
             "x-one-post-per-day",
             "calendarWindow",
             "utcDay",
-            "x.full-bounded-read",
-            "npm.common-writes.yubikey-jit",
-            "'query', 'selectedHeaders', 'bodySha256'",
+            "example.x.full_bounded_read",
+            "example.npm.publish.yubikey_jit",
+            '"query","selectedHeaders","bodySha256"',
             "example.slack.chat_post.hourly",
             "slack-response-binding",
             "example.stripe.customers.list",
@@ -676,6 +676,8 @@ def main() -> None:
             "function injectionShapesCompatible(actual, required)",
             "function oauthCredentialGrantedScopes(credential)",
             "function oauthCredentialProviderSubject(credential)",
+            "function policyCredentialBinding(credential, route)",
+            "function signedPolicyCredential(credential, injection)",
             "function policyCredentialInjection(credential, activeCredential, template)",
             "function policyConstraintLabel(constraint)",
             "function renderPolicyEffect(targetId, template)",
@@ -692,7 +694,7 @@ def main() -> None:
             "Custom route policy requires match and adapter objects",
             "belongs to ${providerId || 'an unknown provider'}, not ${template.provider}",
             "is missing required scopes:",
-            "is missing its OAuth app ID binding",
+            "has missing, malformed, or contradictory ${label} metadata",
             "route.adapter.config.appIds",
             "function renderPolicyCredentialOptions(preferredCredential = '')",
             "item.compatible ? '' : 'disabled'",
@@ -703,12 +705,9 @@ def main() -> None:
             "delete bundle.metadata.signature",
             "delete bundle.metadata.signingKeyId",
             "uses an injection shape that is incompatible with this template",
-            "bundle.credentials.push",
-            "...(grantedScopes ? {scopes: grantedScopes} : {})",
-            "...(providerSubject ? {providerSubject} : {})",
-            "activeCredential.scopes = grantedScopes",
-            "activeCredential.providerSubject = providerSubject",
-            "injection: candidateInjection",
+            "const candidateCredential = signedPolicyCredential(storedCredential, candidateInjection)",
+            "bundle.credentials[activeCredentialIndex] = candidateCredential",
+            "route.adapter.config.credentialBinding = credentialBinding",
             "expect: 'allow'",
             "expect: 'deny'",
             "api('/api/policy/candidate'",
@@ -728,7 +727,7 @@ def main() -> None:
             "function cancelPolicyCanary()",
             "policyCanary: policyCanaryResult.status === 'fulfilled'",
             "Active policy changed after preview",
-            "Signed candidate, diff, and dry-run",
+            "Signed candidate, diff, and route-match dry-run",
             "Local-only CRUD; not part of the signed production PolicyBundle",
             "Array.isArray(report?.dryRun?.results)",
             "report?.dryRun?.passed === true",
@@ -912,8 +911,8 @@ def main() -> None:
 
             try:
                 template_literal = ui_html.split("const policyTemplates = ", 1)[1].split(
-                    "\n    };\n\n    function adminToken()", 1
-                )[0] + "\n}"
+                    ";\n\n    function adminToken()", 1
+                )[0]
             except IndexError as exc:
                 raise AssertionError("could not isolate policyTemplates JavaScript object") from exc
             evaluated = subprocess.run(
@@ -1067,12 +1066,12 @@ const elements={
 };
 const $=(id)=>elements[id];
 const esc=(value)=>String(value??'').replace(/[&<>"']/g,'');
-const policyTemplates={gmail_recent:{provider:'google',injection:{type:'bearer',field:'access_token'},match:{scheme:'https',host:'gmail.googleapis.com',port:443,methods:['GET'],paths:['/gmail/v1/users/{user}/messages']},adapter:{type:'gmail.v1',config:{}},constraints:[]}};
+const policyTemplates={gmail_recent:{provider:'google',requiredScopes:['gmail.readonly'],injection:{type:'bearer',field:'access_token'},match:{scheme:'https',host:'gmail.googleapis.com',port:443,methods:['GET'],paths:['/gmail/v1/users/{user}/messages']},adapter:{type:'gmail.v1',config:{credentialBinding:{credentialType:'oauth2',provider:'google',subjects:['catalog-placeholder'],clientIds:['catalog-placeholder'],requiredScopes:['gmail.readonly']}}},constraints:[]}};
 let state={
   activePolicy:{ready:true,policy_hash:'base-hash',bundle:{metadata:{sequence:1},credentials:[],routes:[]}},
   credentials:[
-    {id:'cred-google',name:'Google fixture',kind:'oauth2',metadata:{oauth:true,provider_identity_verified:true,provider_id:'google',provider_account:'operator@example.com',provider_subject:'google-subject-123',scopes:['gmail.readonly']}},
-    {id:'cred-google-inactive',name:'Inactive Google fixture',kind:'oauth2',lifecycle_status:'revocation_pending',metadata:{oauth:true,provider_identity_verified:true,provider_id:'google',provider_account:'inactive@example.com',provider_subject:'google-subject-inactive',scopes:['gmail.readonly']}}
+    {id:'cred-google',name:'Google fixture',kind:'oauth2',metadata:{oauth:true,provider_identity_verified:true,provider_id:'google',provider_account:'operator@example.com',provider_subject:'google-subject-123',oauth_client_id:'google-client-123.apps.googleusercontent.com',scopes:['gmail.readonly']}},
+    {id:'cred-google-inactive',name:'Inactive Google fixture',kind:'oauth2',lifecycle_status:'revocation_pending',metadata:{oauth:true,provider_identity_verified:true,provider_id:'google',provider_account:'inactive@example.com',provider_subject:'google-subject-inactive',oauth_client_id:'google-client-123.apps.googleusercontent.com',scopes:['gmail.readonly']}}
   ],
   policyPrincipals:[{id:'agent:mail-reader',routeCount:2}],
   oauthProviders:[{id:'google',displayName:'Google',configured:true,defaultScopes:['openid','email'],redirectUri:'https://serverware.test/callback'}]
@@ -1110,6 +1109,18 @@ if(objectInjection.type!=='header'||objectInjection.name!=='X-Api-Key')process.e
 let bearerObjectAccepted=false;
 try{policyCredentialInjection({id:'wrong-object',kind:'bearer',metadata:{provider:'object-store'}},null,objectTemplate);bearerObjectAccepted=true}catch(_){}
 if(bearerObjectAccepted)process.exit(37);
+const npmCredential={id:'cred-npm',kind:'bearer',metadata:{provider:'npm',provider_subject:'npm-account-123',secret_class:'automationToken'}};
+const npmRoute={adapter:{config:{credentialBinding:{credentialType:'static',provider:'npm',subjects:['catalog-placeholder'],secretClass:'automationToken'}}}};
+const npmBinding=policyCredentialBinding(npmCredential,npmRoute);
+if(JSON.stringify(npmBinding)!==JSON.stringify({credentialType:'static',provider:'npm',subjects:['npm-account-123'],secretClass:'automationToken'}))process.exit(40);
+for(const metadata of [
+  {provider:'npm',secret_class:'automationToken'},
+  {provider:'npm',provider_subject:'replace-with-account',secret_class:'automationToken'},
+  {provider:'npm',provider_subject:'npm-account-123',secret_class:'legacyToken'}
+]){
+  let failed=false;try{policyCredentialBinding({id:'bad-npm',kind:'bearer',metadata},npmRoute)}catch(_){failed=true}
+  if(!failed)process.exit(41);
+}
 for(const credential of [
   {id:'unbound-stripe',kind:'bearer',metadata:{}},
   {id:'wrong-stripe',kind:'bearer',metadata:{provider:'github'}}
@@ -1144,11 +1155,14 @@ if(unverifiedSubjectAccepted)process.exit(31);
 global.FormData=class {get(name){return {template:'gmail_recent',routeId:'gmail.bound',principalId:'agent:mail-reader',credentialRef:'cred-google'}[name]??null;}};
 const newCandidate=buildPolicyCandidate();
 const newCredential=newCandidate.bundle.credentials.find((item)=>item.id==='cred-google');
-if(newCredential.providerSubject!=='google-subject-123'||JSON.stringify(newCredential.scopes)!=='["gmail.readonly"]')process.exit(29);
+const newBinding=newCandidate.bundle.routes.find((item)=>item.id==='gmail.bound').adapter.config.credentialBinding;
+if(newCredential.credentialType!=='oauth2'||newCredential.providerSubject!=='google-subject-123'||newCredential.oauthClientId!=='google-client-123.apps.googleusercontent.com'||JSON.stringify(newCredential.scopes)!=='["gmail.readonly"]')process.exit(29);
+if(JSON.stringify(newBinding)!==JSON.stringify({credentialType:'oauth2',provider:'google',subjects:['google-subject-123'],clientIds:['google-client-123.apps.googleusercontent.com'],requiredScopes:['gmail.readonly']}))process.exit(39);
+if(newCandidate.dryRun[0].expectedRouteId!=='gmail.bound')process.exit(41);
 state.activePolicy.bundle.credentials=[{id:'cred-google',provider:'google',providerSubject:'old-subject',scopes:['old.scope'],injection:{type:'bearer',field:'access_token'}}];
 const updatedCandidate=buildPolicyCandidate();
 const updatedCredential=updatedCandidate.bundle.credentials.find((item)=>item.id==='cred-google');
-if(updatedCredential.providerSubject!=='google-subject-123'||JSON.stringify(updatedCredential.scopes)!=='["gmail.readonly"]')process.exit(30);
+if(updatedCredential.credentialType!=='oauth2'||updatedCredential.providerSubject!=='google-subject-123'||updatedCredential.oauthClientId!=='google-client-123.apps.googleusercontent.com'||JSON.stringify(updatedCredential.scopes)!=='["gmail.readonly"]')process.exit(30);
 """,
                 ],
                 text=True,
@@ -1257,16 +1271,10 @@ function credentialToJson(value){return value;}
             canonical_routes = {
                 route["id"]: route for route in canonical_examples["routes"]
             }
-            canonical_credentials = {
-                credential["id"]: credential
-                for credential in canonical_examples["credentials"]
-            }
-
             def assert_exact_policy_parity(
                 template_id: str,
                 route_id: str,
                 *,
-                credential_derived_app_ids: bool = False,
                 operator_selected_approvers: bool = False,
             ) -> None:
                 template = templates[template_id]
@@ -1282,8 +1290,6 @@ function credentialToJson(value){return value;}
                     for key in policy_fields
                     if key in canonical_route
                 }
-                if credential_derived_app_ids:
-                    expected["adapter"]["config"].pop("appIds", None)
                 if operator_selected_approvers:
                     expected["jit"]["approvers"]["users"] = []
                 if actual != expected:
@@ -1293,20 +1299,50 @@ function credentialToJson(value){return value;}
                     )
 
             assert_exact_policy_parity(
+                "gmail_recent",
+                "example.gmail.last_30_days",
+            )
+            assert_exact_policy_parity(
+                "x_read_recent",
+                "example.x.search.seven_days",
+            )
+            assert_exact_policy_parity(
                 "x_full_bounded_read",
                 "example.x.full_bounded_read",
-                credential_derived_app_ids=True,
+            )
+            assert_exact_policy_parity(
+                "x_one_post_daily",
+                "example.x.tweet.one_per_day",
             )
             assert_exact_policy_parity(
                 "npm_write_mfa",
                 "example.npm.publish.yubikey_jit",
                 operator_selected_approvers=True,
             )
-            expected_x_read_scopes = [
-                scope
-                for scope in canonical_credentials["cred-x"]["scopes"]
-                if scope not in {"offline.access", "tweet.write"}
-            ]
+            assert_exact_policy_parity(
+                "slack_chat_post",
+                "example.slack.chat_post.hourly",
+            )
+            assert_exact_policy_parity(
+                "stripe_customers_list",
+                "example.stripe.customers.list",
+            )
+            assert_exact_policy_parity(
+                "stripe_customer_get",
+                "example.stripe.customers.get",
+            )
+            assert_exact_policy_parity(
+                "stripe_payment_intent_jit",
+                "example.stripe.payment_intent.tokenized_jit",
+                operator_selected_approvers=True,
+            )
+            assert_exact_policy_parity(
+                "object_store_put",
+                "example.object_store.small_puts",
+            )
+            expected_x_read_scopes = canonical_routes[
+                "example.x.full_bounded_read"
+            ]["adapter"]["config"]["credentialBinding"]["requiredScopes"]
             if (
                 templates["x_full_bounded_read"].get("requiredScopes")
                 != expected_x_read_scopes

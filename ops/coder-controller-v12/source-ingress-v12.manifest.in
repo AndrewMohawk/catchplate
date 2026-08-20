@@ -1,0 +1,9 @@
+document_version=12
+source_commit=@SOURCE_COMMIT@
+publication_modes=canonical-bundle,native-point-snapshot
+canonical_bundle_sha256=@CANONICAL_BUNDLE_SHA256@
+native_point_snapshot_sha256=@NATIVE_POINT_SNAPSHOT_SHA256@
+canonical_bundle_format=git-bundle-v2-or-newer
+native_snapshot_format=posix-ustar
+live_source_mounts=false
+publication=retained-dirfd-copy-fsync-auth-manifest-renameat2-noreplace

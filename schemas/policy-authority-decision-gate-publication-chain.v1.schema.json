@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/policy-authority-decision-gate-publication-chain.v1.schema.json",
+  "title": "Serverware Policy Authority Decision Gate Publication Chain v1",
+  "$comment": "Exact external-evidence statement consumed by the authority transition kernel. runtimeTeeEvidenceDigest binds startup evidence bytes; runtimeTeeMeasurementDigest independently binds the measured TEE identity.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "publicationRequestId", "replayId", "generationId", "predecessorGenerationDigest", "generationEpoch", "generationTombstoneEpoch",
+    "assignmentEnvelopeDigest", "assignmentPayloadDigest", "assignmentRevision", "loadReceiptEnvelopeDigest", "loadReceiptPayloadDigest",
+    "custodyPreparationReceiptDigest", "custodyPublicationReceiptDigest", "activationPublicationReceiptDigest",
+    "ingressEvidenceChainDigest", "ingressHighWaterDigest", "ingressRangeStartSequence", "ingressRangeEndSequence", "ingressRangePredecessorHeadDigest",
+    "activationMode", "activePolicyDigest", "activePolicySequence", "activeRollbackEpoch", "activeCompiledSnapshotDigest",
+    "candidatePolicyDigest", "candidatePolicySequence", "candidateRollbackEpoch", "candidateCompiledSnapshotDigest", "publicationRevision",
+    "policyHighWaterBeforeDigest", "policyHighWaterAfterDigest", "readinessCoreDigest", "authorityKeyIndependenceDigest", "activationTransactionDigest",
+    "runtimeExecutableDigest", "runtimeReleaseAttestationDigest", "runtimePolicyAttestationDigest", "runtimeConfigAttestationDigest", "runtimeTeeEvidenceDigest", "runtimeTeeMeasurementDigest",
+    "runtimeAttestationReceiptDigest", "runtimeEvidenceChainDigest", "bootIdDigest", "instanceId", "trustCheckpointDigest", "trustRevocationGeneration", "trustRevocationRootDigest",
+    "persistenceReceiptDigest", "retrievalIdDigest", "retrievalProofDigest", "authoritativeLedgerEventOrdinal", "authoritativeLedgerHeadDigest", "authoritativeSpoolRootDigest",
+    "issuedAtEpochNs", "expiresAtEpochNs", "generationPublicationEnvelope", "generationPublicationEnvelopeDigest", "activationPublicationEnvelope", "activationPublicationEnvelopeDigest",
+    "runtimeAttestationVerifierEnvelope", "runtimeAttestationVerifierEnvelopeDigest", "evidenceChainDigest"
+  ],
+  "properties": {
+    "schema": {"const": "serverware.policyAuthorityDecisionGatePublicationChain/v1"},
+    "publicationRequestId": {"type": "string", "minLength": 1, "maxLength": 256}, "replayId": {"type": "string", "minLength": 1, "maxLength": 256},
+    "generationId": {"$ref": "#/$defs/sha256"}, "predecessorGenerationDigest": {"$ref": "#/$defs/sha256"}, "generationEpoch": {"$ref": "#/$defs/positiveI64"}, "generationTombstoneEpoch": {"$ref": "#/$defs/positiveI64"},
+    "assignmentEnvelopeDigest": {"$ref": "#/$defs/sha256"}, "assignmentPayloadDigest": {"$ref": "#/$defs/sha256"}, "assignmentRevision": {"$ref": "#/$defs/positiveI64"},
+    "loadReceiptEnvelopeDigest": {"$ref": "#/$defs/sha256"}, "loadReceiptPayloadDigest": {"$ref": "#/$defs/sha256"},
+    "custodyPreparationReceiptDigest": {"$ref": "#/$defs/sha256"}, "custodyPublicationReceiptDigest": {"$ref": "#/$defs/sha256"}, "activationPublicationReceiptDigest": {"$ref": "#/$defs/sha256"},
+    "ingressEvidenceChainDigest": {"$ref": "#/$defs/sha256"}, "ingressHighWaterDigest": {"$ref": "#/$defs/sha256"}, "ingressRangeStartSequence": {"$ref": "#/$defs/positiveI64"}, "ingressRangeEndSequence": {"$ref": "#/$defs/positiveI64"}, "ingressRangePredecessorHeadDigest": {"$ref": "#/$defs/sha256"},
+    "activationMode": {"enum": ["forward", "authorized-rollback"]},
+    "activePolicyDigest": {"$ref": "#/$defs/sha256"}, "activePolicySequence": {"$ref": "#/$defs/positiveI64"}, "activeRollbackEpoch": {"$ref": "#/$defs/nonnegativeI64"}, "activeCompiledSnapshotDigest": {"$ref": "#/$defs/sha256"},
+    "candidatePolicyDigest": {"$ref": "#/$defs/sha256"}, "candidatePolicySequence": {"$ref": "#/$defs/positiveI64"}, "candidateRollbackEpoch": {"$ref": "#/$defs/nonnegativeI64"}, "candidateCompiledSnapshotDigest": {"$ref": "#/$defs/sha256"},
+    "publicationRevision": {"$ref": "#/$defs/positiveI64"}, "policyHighWaterBeforeDigest": {"$ref": "#/$defs/sha256"}, "policyHighWaterAfterDigest": {"$ref": "#/$defs/sha256"},
+    "readinessCoreDigest": {"$ref": "#/$defs/sha256"}, "authorityKeyIndependenceDigest": {"$ref": "#/$defs/sha256"}, "activationTransactionDigest": {"$ref": "#/$defs/sha256"},
+    "runtimeExecutableDigest": {"$ref": "#/$defs/sha256"}, "runtimeReleaseAttestationDigest": {"$ref": "#/$defs/sha256"}, "runtimePolicyAttestationDigest": {"$ref": "#/$defs/sha256"}, "runtimeConfigAttestationDigest": {"$ref": "#/$defs/sha256"},
+    "runtimeTeeEvidenceDigest": {"$ref": "#/$defs/sha256"}, "runtimeTeeMeasurementDigest": {"$ref": "#/$defs/sha256"}, "runtimeAttestationReceiptDigest": {"$ref": "#/$defs/sha256"}, "runtimeEvidenceChainDigest": {"$ref": "#/$defs/sha256"},
+    "bootIdDigest": {"$ref": "#/$defs/sha256"}, "instanceId": {"type": "string", "minLength": 1, "maxLength": 256}, "trustCheckpointDigest": {"$ref": "#/$defs/sha256"}, "trustRevocationGeneration": {"$ref": "#/$defs/positiveI64"}, "trustRevocationRootDigest": {"$ref": "#/$defs/sha256"},
+    "persistenceReceiptDigest": {"$ref": "#/$defs/sha256"}, "retrievalIdDigest": {"$ref": "#/$defs/sha256"}, "retrievalProofDigest": {"$ref": "#/$defs/sha256"},
+    "authoritativeLedgerEventOrdinal": {"$ref": "#/$defs/positiveI64"}, "authoritativeLedgerHeadDigest": {"$ref": "#/$defs/sha256"}, "authoritativeSpoolRootDigest": {"$ref": "#/$defs/sha256"},
+    "issuedAtEpochNs": {"$ref": "#/$defs/nonnegativeI64"}, "expiresAtEpochNs": {"$ref": "#/$defs/positiveI64"},
+    "generationPublicationEnvelope": {"$ref": "policy-shadow-generation-activation-response.v1.schema.json#/$defs/generationEnvelope"}, "generationPublicationEnvelopeDigest": {"$ref": "#/$defs/sha256"},
+    "activationPublicationEnvelope": {"$ref": "policy-shadow-generation-activation-response.v1.schema.json#/$defs/activationReceipt"}, "activationPublicationEnvelopeDigest": {"$ref": "#/$defs/sha256"},
+    "runtimeAttestationVerifierEnvelope": {"$ref": "policy-shadow-generation-activation-request.v1.schema.json#/$defs/runtimeVerification"}, "runtimeAttestationVerifierEnvelopeDigest": {"$ref": "#/$defs/sha256"}, "evidenceChainDigest": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "positiveI64": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+    "nonnegativeI64": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807}
+  }
+}

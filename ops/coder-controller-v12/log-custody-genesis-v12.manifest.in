@@ -1,0 +1,9 @@
+document_version=12
+log_id=serverware-coder-controller-v12
+genesis_kind=binary-fixed-empty-root-v12
+checkpoint_sequence=0
+tree_size=0
+tree_root_sha256=@LOG_EMPTY_TREE_ROOT_SHA256@
+previous_signed_tree_head_envelope_sha256=0000000000000000000000000000000000000000000000000000000000000000
+integrity_mode=UserspaceDigestOnly
+runtime_continuity=state-root-high-water-and-ledger

@@ -1,0 +1,28 @@
+{
+  "version": "serverware/coder-plan-executor-config/v12",
+  "controller_generation": @CONTROLLER_GENERATION@,
+  "executor_uid": @EXECUTOR_UID@,
+  "controller_uid": @CONTROLLER_UID@,
+  "lane_proxy_uid": @DOCKER_PROXY_UID@,
+  "readiness_trust": {
+    "version": "serverware/readiness-trust/v12",
+    "controller_generation": @CONTROLLER_GENERATION@,
+    "fixture_assets_sha256": "@DERIVED_READINESS_ASSETS_SHA256@",
+    "fixture_key_id": "@READINESS_FIXTURE_KEY_ID@",
+    "fixture_public_key_b64": "@READINESS_FIXTURE_PUBLIC_KEY_B64@"
+  },
+  "runtime_observer_policy": {
+    "version": "serverware/runtime-observer-policy/v12",
+    "expected_observer_executable_sha256": @RUNTIME_OBSERVER_EXECUTABLE_SHA256_JSON@,
+    "authorized_observer_keys_b64": @RUNTIME_OBSERVER_KEYS_JSON@,
+    "revoked_observer_keys": @REVOKED_RUNTIME_OBSERVER_KEYS_JSON@
+  },
+  "inherited_proxy_executable_sha256": @DOCKER_PROXY_EXECUTABLE_SHA256_JSON@,
+  "lifecycle_root_signer_spki_sha256": "@LIFECYCLE_PRIVILEGED_AUTHORITY_SPKI_SHA256@",
+  "full_signed_readiness_before_repository_work_every_invocation": true,
+  "cleanup_reserve_alias": "svc-@CLEANUP_RESERVE_ALIAS_HEX@",
+  "durable_operation_ledger_root": "/var/lib/serverware/coder-controller-v12/executor/operation-ledger",
+  "durable_operation_ledger_key_id": "@DURABLE_OPERATION_LEDGER_KEY_ID@",
+  "durable_operation_ledger_public_key_b64": "@DURABLE_OPERATION_LEDGER_PUBLIC_KEY_B64@",
+  "operation_query_poll_interval_ms": 25
+}

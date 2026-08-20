@@ -4,16 +4,250 @@ endif
 ifneq ($(filter command line environment environment override,$(origin .SHELLFLAGS)),)
 $(error Coder Makefile rejects externally supplied .SHELLFLAGS)
 endif
+ifneq ($(filter command line override,$(origin SERVERWARE_CONTROLLER_ARTIFACT_ROOT)),)
+$(error Coder Makefile rejects command-line SERVERWARE_CONTROLLER_ARTIFACT_ROOT)
+endif
+ifneq ($(filter command line override,$(origin SERVERWARE_CONTROLLER_DOCKER_PROXY_SOCKET)),)
+$(error Coder Makefile rejects command-line SERVERWARE_CONTROLLER_DOCKER_PROXY_SOCKET)
+endif
 SHELL := /bin/sh
 .SHELLFLAGS := -eu -c
 
-.PHONY: up down logs e2e bench bench-gate-rs decision-gate-bench-evidence release-provenance production-release-provenance image-signatures sign-production-images build-agent-enrollment-wheel build-portal-browser-artifacts build-consolidated-test-artifacts verify-consolidated-no-build verify-consolidated verify-agent-trust-same-journey verify-agent-enrollment-wheel-clean-room verify-portal-browser-oauth verify-portal-browser-oauth-no-build fetch-production-dependency-cache refresh-production-dependency-cache verify-production-dependency-cache build-production-images publish-production-images merge-production-images-env production-handoff production-release-input-preflight validate-production-policy-identity verify-production-agent-enrollment-evidence production-host-preflight deploy-production build-production-python-runtime build-production-launcher install-production-launcher generate-production-launch-manifest run-production-readiness-final prepare-production-final-v1 finalize-production-final-v1 _production-final-v1-input-preflight production-release-proof capture-reproducible-build validate-reproducible-builds validate-policy-activation-evidence prepare-aws-kms-materials install-apparmor verify-apparmor-contract verify-apparmor-runtime verify-cosign-sigstore verify-release-image-signing verify-production-image-publish verify-production-images-env-merge verify-production-handoff verify-production-release-input-preflight verify-production-policy-identity verify-production-host-preflight verify-production-python-runtime verify-production-launch-assets verify-launch-authorization verify-production-release-proof verify-credential-policy-contracts verify-control-plane-startup verify-onboarding-evidence-tooling verify-custody-response-proof verify-reproducible-builds verify-policy-activation-evidence verify-transparency-checkpoint verify-nitro-nsm-attest verify-aws-kms-recipient-release verify-aws-nitro-kms-unseal verify-prepare-aws-kms-materials verify-ca-install-sessions verify-control-plane-csrf verify-control-plane-oidc verify-webauthn-recovery verify-oauth-credentials verify-credential-lease-delivery verify-control-plane-mutation-mfa verify-control-plane-two-person verify-control-plane-rbac-audit verify-break-glass-grants verify-approval-denial-reason verify-approval-review verify-policy-publish-workflow verify-policy-canary-workflow verify-audit-search verify-audit-export verify-agent-enrollment verify-setup-session-api verify-production-images-no-shell scan-production-images-no-shell verify-production-image-builds generate-production-readiness-claims verify-production-readiness-claims verify-production-readiness-runner verify-release-completion verify-production-config verify-production-readiness run-production-readiness collect-nitro-kms-evidence verify-nitro-kms-evidence verify-nitro-tee verify-decision-gate-attestation verify-codebase-attestation install-ca verify-attestation reset
+.PHONY: up down logs e2e bench bench-gate-rs decision-gate-bench-evidence release-provenance production-release-provenance image-signatures sign-production-images build-agent-enrollment-wheel build-portal-browser-artifacts build-consolidated-test-artifacts verify-consolidated-no-build verify-consolidated verify-agent-trust-same-journey verify-agent-enrollment-wheel-clean-room verify-portal-browser-oauth verify-portal-browser-oauth-no-build fetch-production-dependency-cache verify-production-dependency-cache build-production-images publish-production-images merge-production-images-env production-handoff production-release-input-preflight validate-production-policy-identity verify-production-agent-enrollment-evidence production-host-preflight deploy-production build-production-python-runtime build-production-launcher install-production-launcher generate-production-launch-manifest run-production-readiness-final prepare-production-final-v1 finalize-production-final-v1 _production-final-v1-input-preflight production-release-proof capture-reproducible-build validate-reproducible-builds validate-policy-activation-evidence prepare-aws-kms-materials install-apparmor verify-apparmor-contract verify-apparmor-runtime verify-cosign-sigstore verify-release-image-signing verify-production-image-publish verify-production-images-env-merge verify-production-handoff verify-production-release-input-preflight verify-production-policy-identity verify-production-host-preflight verify-production-python-runtime verify-production-launch-assets verify-launch-authorization verify-production-release-proof verify-credential-policy-contracts verify-control-plane-startup verify-onboarding-evidence-tooling verify-custody-response-proof verify-reproducible-builds verify-policy-activation-evidence verify-transparency-checkpoint verify-nitro-nsm-attest verify-aws-kms-recipient-release verify-aws-nitro-kms-unseal verify-prepare-aws-kms-materials verify-ca-install-sessions verify-control-plane-csrf verify-control-plane-oidc verify-webauthn-recovery verify-oauth-credentials verify-credential-lease-delivery verify-control-plane-mutation-mfa verify-control-plane-two-person verify-control-plane-rbac-audit verify-break-glass-grants verify-approval-denial-reason verify-approval-review verify-policy-publish-workflow verify-policy-canary-workflow verify-audit-search verify-audit-export verify-agent-enrollment verify-setup-session-api verify-production-images-no-shell scan-production-images-no-shell verify-production-image-builds generate-production-readiness-claims verify-production-readiness-claims verify-production-readiness-runner verify-release-completion verify-production-config verify-production-readiness run-production-readiness collect-nitro-kms-evidence verify-nitro-kms-evidence verify-nitro-tee verify-decision-gate-attestation verify-codebase-attestation install-ca verify-attestation reset
 
 .PHONY: _build-consolidated-test-artifacts-locked _verify-consolidated-source-snapshot-locked
 
 .PHONY: coder-build-all coder-test-no-build coder-ci _coder-build-all-locked _coder-test-no-build-locked _coder-ci-locked _coder-require-clean _coder-require-lock _coder-require-disposable-daemon _coder-cleanup
 
-.NOTPARALLEL: build-consolidated-test-artifacts verify-consolidated-no-build verify-consolidated _build-consolidated-test-artifacts-locked _verify-consolidated-source-snapshot-locked coder-build-all coder-test-no-build coder-ci _coder-build-all-locked _coder-test-no-build-locked _coder-ci-locked _coder-require-clean _coder-require-lock _coder-require-disposable-daemon _coder-cleanup
+.PHONY: coder-trusted-build coder-trusted-unit-no-build coder-trusted-integration-no-build coder-trusted-e2e-no-build coder-trusted-attestation-no-build coder-trusted-sequential coder-controller-static-assets coder-controller-build-execute coder-controller-unit-execute coder-controller-integration-execute coder-controller-e2e-execute coder-controller-attestation-execute
+.PHONY: coder-v12-sequential coder-v12-build coder-v12-unit-no-build coder-v12-integration-no-build coder-v12-e2e-no-build coder-v12-attestation-no-build
+.PHONY: coder-controller-v12-build-phase coder-controller-v12-unit-phase coder-controller-v12-integration-phase coder-controller-v12-e2e-phase coder-controller-v12-attestation-phase
+.PHONY: coder-controller-v12-package-prepare coder-controller-v12-provision coder-controller-v12-install coder-controller-v12-provision-local-trusted-host coder-controller-v12-provision-external-production
+.PHONY: render-policy-custody-assets verify-policy-custody-host-ready
+.PHONY: verify-production-proxy-ingress-materials
+
+.NOTPARALLEL: build-consolidated-test-artifacts verify-consolidated-no-build verify-consolidated _build-consolidated-test-artifacts-locked _verify-consolidated-source-snapshot-locked coder-build-all coder-test-no-build coder-ci _coder-build-all-locked _coder-test-no-build-locked _coder-ci-locked _coder-require-clean _coder-require-lock _coder-require-disposable-daemon _coder-cleanup coder-trusted-sequential coder-v12-sequential coder-v12-build coder-v12-unit-no-build coder-v12-integration-no-build coder-v12-e2e-no-build coder-v12-attestation-no-build coder-controller-v12-build-phase coder-controller-v12-unit-phase coder-controller-v12-integration-phase coder-controller-v12-e2e-phase coder-controller-v12-attestation-phase coder-controller-v12-package-prepare coder-controller-v12-provision coder-controller-v12-install coder-controller-v12-provision-local-trusted-host coder-controller-v12-provision-external-production
+
+# CONTROLLER V12 LOGICAL-LANE SUBMISSION.
+#
+# These targets submit fixed identifiers only. They never run Docker, Compose,
+# repository build/test bodies, or browsers. The root-owned v12 controller
+# validates the signed request-v12 envelope, enforces workflow ordering, and
+# delegates each phase to the separately privileged plan executor. The plan
+# root lifecycle helper owns private per-lane DinD, netns, nftables, mounts,
+# cgroups, and ownership ledgers. Unprivileged services receive only
+# capability-scoped proxy/listener FDs. Build performs exact signed operations;
+# no-build lanes import exact build outputs into fresh private daemons.
+
+override CODER_V12_CLIENT := /opt/serverware/coder-controller-v12/current/bin/serverware-coder-controller-client-v12
+override CODER_V12_PHASE_DRIVER := /opt/serverware/coder-controller-v12/current/bin/serverware-coder-plan-executor-v12
+override CODER_V12_WORKFLOW := serverware-coder-five-lane-v12
+override CODER_V12_DEADLINE_PROFILE := serverware-coder-five-lane-v12
+override CODER_CONTROLLER_V12_INSTALLER := scripts/install_coder_controller_v12.sh
+CODER_CONTROLLER_V12_SIGNED_BUNDLE_ROOT ?=
+CODER_CONTROLLER_V12_PINNED_RELEASE_SIGNER_PUBLIC_KEY ?=
+CODER_CONTROLLER_V12_BUNDLE_MANIFEST_SHA256 ?=
+CODER_CONTROLLER_V12_RELEASE_ID ?=
+CODER_CONTROLLER_V12_CLIENT_GROUP ?=
+CODER_CONTROLLER_V12_DEPLOYMENT_PROFILE ?= local-trusted-host
+CODER_CONTROLLER_V12_EXTERNAL_WITNESS_SOCKET ?= /run/serverware/coder/v12/external-witness/control.sock
+CODER_CONTROLLER_V12_PRIVATE_DIND_OUTPUT_ROOT ?=
+CODER_CONTROLLER_V12_DOCKERD ?=
+CODER_CONTROLLER_V12_CONTAINERD ?=
+CODER_CONTROLLER_V12_CONTAINERD_SHIM_RUNC_V2 ?=
+CODER_CONTROLLER_V12_RUNC ?=
+CODER_CONTROLLER_V12_PINNED_PULL_SET ?=
+CODER_CONTROLLER_V12_EXACT_BUILD_TUPLE_SET ?=
+CODER_V12_BUILD_DEADLINE_MS ?= 7200000
+CODER_V12_UNIT_DEADLINE_MS ?= 900000
+CODER_V12_INTEGRATION_DEADLINE_MS ?= 1800000
+CODER_V12_E2E_DEADLINE_MS ?= 2700000
+CODER_V12_ATTESTATION_DEADLINE_MS ?= 900000
+
+# Packaging is intentionally evidence-neutral. The signed bundle producer must
+# supply every binary, unit, credential, authorization, genesis/checkpoint,
+# witness, Docker schema, OCI archive, digest, and template listed by the
+# installer. These targets do not synthesize HSM, TPM, TEE, YubiKey, fs-verity,
+# measured-boot, or external-authority evidence.
+coder-controller-v12-package-prepare:
+	@test -n "$(CODER_CONTROLLER_V12_PRIVATE_DIND_OUTPUT_ROOT)"
+	@test -n "$(CODER_CONTROLLER_V12_DOCKERD)"
+	@test -n "$(CODER_CONTROLLER_V12_CONTAINERD)"
+	@test -n "$(CODER_CONTROLLER_V12_CONTAINERD_SHIM_RUNC_V2)"
+	@test -n "$(CODER_CONTROLLER_V12_RUNC)"
+	@test -n "$(CODER_CONTROLLER_V12_PINNED_PULL_SET)"
+	@test -n "$(CODER_CONTROLLER_V12_EXACT_BUILD_TUPLE_SET)"
+	@exec /bin/sh ops/coder-controller-v12/prepare-private-dind-assets-v12.sh \
+		"$(CODER_CONTROLLER_V12_PRIVATE_DIND_OUTPUT_ROOT)" \
+		"$(CODER_CONTROLLER_V12_DOCKERD)" \
+		"$(CODER_CONTROLLER_V12_CONTAINERD)" \
+		"$(CODER_CONTROLLER_V12_CONTAINERD_SHIM_RUNC_V2)" \
+		"$(CODER_CONTROLLER_V12_RUNC)" \
+		"$(CODER_CONTROLLER_V12_PINNED_PULL_SET)" \
+		"$(CODER_CONTROLLER_V12_EXACT_BUILD_TUPLE_SET)"
+
+coder-controller-v12-provision:
+	@test -n "$(CODER_CONTROLLER_V12_SIGNED_BUNDLE_ROOT)"
+	@test -n "$(CODER_CONTROLLER_V12_PINNED_RELEASE_SIGNER_PUBLIC_KEY)"
+	@test -n "$(CODER_CONTROLLER_V12_BUNDLE_MANIFEST_SHA256)"
+	@test -n "$(CODER_CONTROLLER_V12_RELEASE_ID)"
+	@test -n "$(CODER_CONTROLLER_V12_CLIENT_GROUP)"
+	@test -n "$(CODER_CONTROLLER_V12_EXTERNAL_WITNESS_SOCKET)"
+	@exec "$(CODER_CONTROLLER_V12_INSTALLER)" \
+		"$(CODER_CONTROLLER_V12_SIGNED_BUNDLE_ROOT)" \
+		"$(CODER_CONTROLLER_V12_PINNED_RELEASE_SIGNER_PUBLIC_KEY)" \
+		"$(CODER_CONTROLLER_V12_BUNDLE_MANIFEST_SHA256)" \
+		"$(CODER_CONTROLLER_V12_RELEASE_ID)" \
+		"$(CODER_CONTROLLER_V12_CLIENT_GROUP)" \
+		"$(CODER_CONTROLLER_V12_DEPLOYMENT_PROFILE)" \
+		"$(CODER_CONTROLLER_V12_EXTERNAL_WITNESS_SOCKET)"
+
+coder-controller-v12-install: coder-controller-v12-provision
+
+coder-controller-v12-provision-local-trusted-host:
+	@exec $(MAKE) --no-print-directory coder-controller-v12-provision \
+		CODER_CONTROLLER_V12_DEPLOYMENT_PROFILE=local-trusted-host
+
+coder-controller-v12-provision-external-production:
+	@printf '%s\n' \
+		'external-production is prerequisite-only and intentionally fail-closed.' \
+		'Provide external trust-generation, final-settlement, witness/checkpoint, HSM/TPM/TEE/YubiKey, and verified-boot adapters before enabling this target.' >&2
+	@exit 2
+
+coder-v12-sequential:
+	@exec "$(CODER_V12_CLIENT)" submit-workflow-v12 \
+		--workflow="$(CODER_V12_WORKFLOW)" \
+		--deadline-profile="$(CODER_V12_DEADLINE_PROFILE)"
+
+coder-v12-build:
+	@SERVERWARE_CONTROLLER_DEADLINE_MS='$(CODER_V12_BUILD_DEADLINE_MS)' \
+		exec "$(CODER_V12_CLIENT)" submit-fixed-v12 \
+			--workflow="$(CODER_V12_WORKFLOW)" --lane=build \
+			--deadline-profile="$(CODER_V12_DEADLINE_PROFILE)"
+
+coder-v12-unit-no-build:
+	@SERVERWARE_CONTROLLER_DEADLINE_MS='$(CODER_V12_UNIT_DEADLINE_MS)' \
+		exec "$(CODER_V12_CLIENT)" submit-fixed-v12 \
+			--workflow="$(CODER_V12_WORKFLOW)" --lane=unit \
+			--deadline-profile="$(CODER_V12_DEADLINE_PROFILE)"
+
+coder-v12-integration-no-build:
+	@SERVERWARE_CONTROLLER_DEADLINE_MS='$(CODER_V12_INTEGRATION_DEADLINE_MS)' \
+		exec "$(CODER_V12_CLIENT)" submit-fixed-v12 \
+			--workflow="$(CODER_V12_WORKFLOW)" --lane=integration \
+			--deadline-profile="$(CODER_V12_DEADLINE_PROFILE)"
+
+coder-v12-e2e-no-build:
+	@SERVERWARE_CONTROLLER_DEADLINE_MS='$(CODER_V12_E2E_DEADLINE_MS)' \
+		exec "$(CODER_V12_CLIENT)" submit-fixed-v12 \
+			--workflow="$(CODER_V12_WORKFLOW)" --lane=e2e \
+			--deadline-profile="$(CODER_V12_DEADLINE_PROFILE)"
+
+coder-v12-attestation-no-build:
+	@SERVERWARE_CONTROLLER_DEADLINE_MS='$(CODER_V12_ATTESTATION_DEADLINE_MS)' \
+		exec "$(CODER_V12_CLIENT)" submit-fixed-v12 \
+			--workflow="$(CODER_V12_WORKFLOW)" --lane=attestation \
+			--deadline-profile="$(CODER_V12_DEADLINE_PROFILE)"
+
+# Fixed logical phase shims. Internal prepare/body transitions are executor
+# details and are not caller-selectable. Each shim accepts one controller-owned
+# SOCK_SEQPACKET capability FD and one of the exact five phase identities.
+
+define _CODER_V12_RUN_PHASE
+	@set -eu; \
+		capability_fd="$${SERVERWARE_CODER_V12_PHASE_CAPABILITY_FD:-}"; \
+		case "$$capability_fd" in ""|*[!0-9]*) \
+			echo "controller-v12 phase capability FD is required" >&2; exit 2 ;; \
+		esac; \
+		test "$$capability_fd" -gt 2; \
+		test -r "/proc/self/fd/$$capability_fd"; \
+		config=/opt/serverware/coder-controller-v12/current/config/plan-executor-v12.conf; \
+		config_sha256="$$(sha256sum "$$config" | awk '{print $$1}')"; \
+		SERVERWARE_CODER_PLAN_EXECUTOR_CONFIG_SHA256="$$config_sha256" \
+		exec "$(CODER_V12_PHASE_DRIVER)" --config "$$config" \
+			run-fixed-phase-v12 \
+			--capability-fd="$$capability_fd" \
+			--logical-phase="$(1)"
+endef
+
+coder-controller-v12-build-phase:
+	$(call _CODER_V12_RUN_PHASE,BUILD)
+
+coder-controller-v12-unit-phase:
+	$(call _CODER_V12_RUN_PHASE,UNIT)
+
+coder-controller-v12-integration-phase:
+	$(call _CODER_V12_RUN_PHASE,INTEGRATION)
+
+coder-controller-v12-e2e-phase:
+	$(call _CODER_V12_RUN_PHASE,E2E)
+
+coder-controller-v12-attestation-phase:
+	$(call _CODER_V12_RUN_PHASE,ATTESTATION)
+
+# UNTRUSTED CONTROLLER SUBMISSION SHIMS.
+#
+# These five targets are convenience surfaces only. Like every other target in
+# this repository Makefile, they are outside the root-owned controller trust
+# boundary. Make and its recipe shell receive no request bytes, request or
+# capability descriptor, token, key, source descriptor, worker descriptor, or
+# trusted evidence. The controller never invokes or trusts any Make target.
+#
+# The fixed client authenticates to a peer-credential-checked root-owned
+# SOCK_SEQPACKET service and submits only a sealed, digest-bound fixed operation
+# and plan frame. The daemon returns the cryptographically signed receipt.
+
+CODER_TRUSTED_BUILD_DEADLINE_MS ?= 7200000
+CODER_TRUSTED_UNIT_DEADLINE_MS ?= 900000
+CODER_TRUSTED_INTEGRATION_DEADLINE_MS ?= 1800000
+CODER_TRUSTED_E2E_DEADLINE_MS ?= 2700000
+CODER_TRUSTED_ATTESTATION_DEADLINE_MS ?= 900000
+
+coder-trusted-build:
+	@SERVERWARE_CONTROLLER_DEADLINE_MS='$(CODER_TRUSTED_BUILD_DEADLINE_MS)' exec /usr/local/libexec/serverware-coder-controller-client submit-fixed-v11 --operation=build --plan=serverware-build-v1
+
+coder-trusted-unit-no-build:
+	@SERVERWARE_CONTROLLER_DEADLINE_MS='$(CODER_TRUSTED_UNIT_DEADLINE_MS)' exec /usr/local/libexec/serverware-coder-controller-client submit-fixed-v11 --operation=runNoBuild --plan=serverware-unit-no-build-v1
+
+coder-trusted-integration-no-build:
+	@SERVERWARE_CONTROLLER_DEADLINE_MS='$(CODER_TRUSTED_INTEGRATION_DEADLINE_MS)' exec /usr/local/libexec/serverware-coder-controller-client submit-fixed-v11 --operation=runNoBuild --plan=serverware-integration-no-build-v1
+
+coder-trusted-e2e-no-build:
+	@SERVERWARE_CONTROLLER_DEADLINE_MS='$(CODER_TRUSTED_E2E_DEADLINE_MS)' exec /usr/local/libexec/serverware-coder-controller-client submit-fixed-v11 --operation=runNoBuild --plan=serverware-e2e-no-build-v1
+
+coder-trusted-attestation-no-build:
+	@SERVERWARE_CONTROLLER_DEADLINE_MS='$(CODER_TRUSTED_ATTESTATION_DEADLINE_MS)' exec /usr/local/libexec/serverware-coder-controller-client submit-fixed-v11 --operation=runNoBuild --plan=serverware-attestation-no-build-v1
+
+coder-trusted-sequential:
+	@set -eu; \
+	SERVERWARE_CONTROLLER_DEADLINE_MS='$(CODER_TRUSTED_BUILD_DEADLINE_MS)' /usr/local/libexec/serverware-coder-controller-client submit-fixed-v11 --operation=build --plan=serverware-build-v1; \
+	SERVERWARE_CONTROLLER_DEADLINE_MS='$(CODER_TRUSTED_UNIT_DEADLINE_MS)' /usr/local/libexec/serverware-coder-controller-client submit-fixed-v11 --operation=runNoBuild --plan=serverware-unit-no-build-v1; \
+	SERVERWARE_CONTROLLER_DEADLINE_MS='$(CODER_TRUSTED_INTEGRATION_DEADLINE_MS)' /usr/local/libexec/serverware-coder-controller-client submit-fixed-v11 --operation=runNoBuild --plan=serverware-integration-no-build-v1; \
+	SERVERWARE_CONTROLLER_DEADLINE_MS='$(CODER_TRUSTED_E2E_DEADLINE_MS)' /usr/local/libexec/serverware-coder-controller-client submit-fixed-v11 --operation=runNoBuild --plan=serverware-e2e-no-build-v1; \
+	SERVERWARE_CONTROLLER_DEADLINE_MS='$(CODER_TRUSTED_ATTESTATION_DEADLINE_MS)' exec /usr/local/libexec/serverware-coder-controller-client submit-fixed-v11 --operation=runNoBuild --plan=serverware-attestation-no-build-v1
+
+coder-controller-build-execute:
+	@exec $(MAKE) --no-print-directory coder-build-all
+
+coder-controller-unit-execute coder-controller-integration-execute coder-controller-e2e-execute coder-controller-attestation-execute:
+	@set -eu; \
+		case "$@" in \
+			coder-controller-unit-execute) stage=unit ;; \
+			coder-controller-integration-execute) stage=integration ;; \
+			coder-controller-e2e-execute) stage=e2e ;; \
+			coder-controller-attestation-execute) stage=attestation ;; \
+			*) exit 2 ;; \
+		esac; \
+		lock_dir="$(CODER_LOCK_DIRECTORY)"; \
+		test -d "$$lock_dir" && test ! -L "$$lock_dir"; \
+		test "$$(stat -Lc '%u:%F' "$$lock_dir")" = "0:directory"; \
+		exec 9<"$$lock_dir"; \
+		flock --exclusive --nonblock 9; \
+		exec env \
+			CODER_LOCK_FD=9 \
+			CODER_LOCK_PATH="$$lock_dir" \
+			CODER_CONTROLLER_STAGE="$$stage" \
+			$(MAKE) --no-print-directory _coder-test-no-build-locked
 
 PRODUCTION_READINESS_CLAIMS_FILE ?= .tmp/production-readiness-claims.json
 override PRODUCTION_PLATFORM := linux/amd64
@@ -96,6 +330,11 @@ PRODUCTION_READINESS_OUT ?= .tmp/production-readiness.json
 PRODUCTION_READINESS_CONFIG_OUT ?= .tmp/production-readiness-config.json
 PRODUCTION_READINESS_ENV ?= ops/production-readiness.env
 PRODUCTION_READINESS_PREFLIGHT ?= 1
+POLICY_CUSTODY_RENDER_MANIFEST ?=
+POLICY_CUSTODY_RENDER_OUTPUT ?=
+POLICY_CUSTODY_SOCKET_ROOT ?= /run/serverware/policy-custody
+POLICY_CUSTODY_RUNTIME_CONFIG_ROOT ?= /run/serverware/policy-custody/runtime/current
+POLICY_CUSTODY_DRIVER_GROUP ?= swpc-driver
 PRODUCTION_COMPLETION_PROOF_OUT ?= .tmp/serverware-completion-proof.json
 PRODUCTION_COMPLETION_VERIFICATION_MODE ?= readiness
 PRODUCTION_HARDWARE_ASSURANCE ?=
@@ -242,11 +481,41 @@ PRODUCTION_AGENT_TRUST_PROFILE_SHA256 ?=
 PRODUCTION_AGENT_ENROLLMENT_VERIFICATION_OUT ?= .tmp/production-agent-enrollment-verification.json
 PRODUCTION_LAUNCHER_ADVERSARIAL_BUILDER ?=
 override CODER_COMPOSE_PROJECT_NAME := serverware-coder-ci
-override CODER_REPO_TMP_DIR := $(abspath .tmp)
-override CODER_OUTPUT_DIR := $(abspath .tmp/coder-ci)
+SERVERWARE_CONTROLLER_ARTIFACT_ROOT ?= $(abspath ../.serverware-coder-artifacts)
+SERVERWARE_CONTROLLER_DOCKER_PROXY_SOCKET ?= /run/serverware/controller-docker-proxy.sock
+override CODER_REPO_TMP_DIR := $(abspath $(SERVERWARE_CONTROLLER_ARTIFACT_ROOT))
+override CODER_OUTPUT_DIR := $(CODER_REPO_TMP_DIR)/coder-ci
 override CODER_DOCKER_CONFIG_DIR := $(CODER_REPO_TMP_DIR)/coder-docker-config
 override CODER_BUILDX_CONFIG_DIR := $(CODER_REPO_TMP_DIR)/coder-buildx-config
-override CODER_DOCKER_HOST := unix:///var/run/docker.sock
+override CODER_DOCKER_HOST := unix://$(SERVERWARE_CONTROLLER_DOCKER_PROXY_SOCKET)
+override CODER_CONTROLLER_STATIC_TARGET := x86_64-unknown-linux-musl
+override CODER_CONTROLLER_STATIC_ROOT := $(CODER_REPO_TMP_DIR)/controller-static-v11
+
+coder-controller-static-assets:
+	@set -eu; \
+		test "$(CODER_CONTROLLER_STATIC_ROOT)" = "$(CODER_REPO_TMP_DIR)/controller-static-v11"; \
+		rm -rf "$(CODER_CONTROLLER_STATIC_ROOT)"; \
+		(umask 077 && mkdir -p "$(CODER_CONTROLLER_STATIC_ROOT)/bin" "$(CODER_CONTROLLER_STATIC_ROOT)/plans"); \
+		CARGO_TARGET_DIR="$(CODER_CONTROLLER_STATIC_ROOT)/cargo-target" \
+			cargo build --locked --release --target "$(CODER_CONTROLLER_STATIC_TARGET)" \
+				--manifest-path data-plane/decision-gate-rs/Cargo.toml \
+					--bin serverware-coder-controller \
+					--bin serverware-coder-controller-client \
+					--bin serverware-coder-docker-proxy \
+					--bin serverware-coder-controller-launcher \
+					--bin serverware-coder-plan; \
+			for binary in serverware-coder-controller serverware-coder-controller-client serverware-coder-docker-proxy serverware-coder-controller-launcher serverware-coder-plan; do \
+			install -m 0500 \
+				"$(CODER_CONTROLLER_STATIC_ROOT)/cargo-target/$(CODER_CONTROLLER_STATIC_TARGET)/release/$$binary" \
+				"$(CODER_CONTROLLER_STATIC_ROOT)/bin/$$binary"; \
+		done; \
+		for plan in build-v1 unit-no-build-v1 integration-no-build-v1 e2e-no-build-v1 attestation-no-build-v1; do \
+			install -m 0500 \
+				"$(CODER_CONTROLLER_STATIC_ROOT)/bin/serverware-coder-plan" \
+				"$(CODER_CONTROLLER_STATIC_ROOT)/plans/$$plan"; \
+		done; \
+		sha256sum "$(CODER_CONTROLLER_STATIC_ROOT)"/bin/* "$(CODER_CONTROLLER_STATIC_ROOT)"/plans/* \
+			> "$(CODER_CONTROLLER_STATIC_ROOT)/SHA256SUMS"
 override CODER_DAEMON_DISPOSABLE_LABEL := com.serverware.coder-ci.disposable=true
 override CODER_DAEMON_NETWORK_LABEL := com.serverware.coder-ci.network=workspace-shared
 override CODER_DAEMON_ID_FILE := $(CODER_OUTPUT_DIR)/daemon-id.txt
@@ -475,7 +744,8 @@ override CODER_TEST_COMPOSE = $(CODER_COMPOSE_ENV) docker compose --ansi never -
 
 define CODER_MUTATION_GUARD_FUNCTIONS
 coder_require_mutation_daemon() { \
-	test "$(CODER_DOCKER_HOST)" = "unix:///var/run/docker.sock" || return 2; \
+	test "$(CODER_DOCKER_HOST)" = "unix://$(SERVERWARE_CONTROLLER_DOCKER_PROXY_SOCKET)" || return 2; \
+	test "$(SERVERWARE_CONTROLLER_DOCKER_PROXY_SOCKET)" = "/run/serverware/controller-docker-proxy.sock" || return 2; \
 	test -d "$(CODER_DOCKER_CONFIG_DIR)" && test ! -L "$(CODER_DOCKER_CONFIG_DIR)" || return 2; \
 	test "$$(stat -Lc '%u:%a:%F' "$(CODER_DOCKER_CONFIG_DIR)")" = "$$(id -u):700:directory" || return 2; \
 	test -d "$(CODER_BUILDX_CONFIG_DIR)" && test ! -L "$(CODER_BUILDX_CONFIG_DIR)" || return 2; \
@@ -729,7 +999,8 @@ _coder-require-clean:
 
 _coder-require-disposable-daemon: _coder-require-clean
 	@set -eu; \
-		test "$(CODER_DOCKER_HOST)" = "unix:///var/run/docker.sock"; \
+		test "$(CODER_DOCKER_HOST)" = "unix://$(SERVERWARE_CONTROLLER_DOCKER_PROXY_SOCKET)"; \
+		test "$(SERVERWARE_CONTROLLER_DOCKER_PROXY_SOCKET)" = "/run/serverware/controller-docker-proxy.sock"; \
 		test "$(CODER_PLATFORM)" = "linux/amd64"; \
 		if test ! -e "$(CODER_REPO_TMP_DIR)" && test ! -L "$(CODER_REPO_TMP_DIR)"; then \
 			(umask 077 && mkdir "$(CODER_REPO_TMP_DIR)"); \
@@ -852,7 +1123,9 @@ _coder-cleanup: _coder-require-lock
 		$(CODER_MUTATION_GUARD_FUNCTIONS) \
 		coder_require_mutation_daemon; \
 		ulimit -f "$(CODER_TEST_FILE_BLOCKS)"; \
-		test "$(CODER_REPO_TMP_DIR)" = "$(CURDIR)/.tmp"; \
+		case "$(CODER_REPO_TMP_DIR)" in /*) ;; *) echo "Coder artifact root must be absolute" >&2; exit 2 ;; esac; \
+		test "$(CODER_REPO_TMP_DIR)" != "$(CURDIR)"; \
+		case "$(CODER_REPO_TMP_DIR)/" in "$(CURDIR)/"*) echo "Coder artifact root must be outside the source tree" >&2; exit 2 ;; esac; \
 		test "$(CODER_OUTPUT_DIR)" = "$(CODER_REPO_TMP_DIR)/coder-ci"; \
 		test -d "$(CODER_REPO_TMP_DIR)" && test ! -L "$(CODER_REPO_TMP_DIR)"; \
 		test "$$(stat -Lc '%u:%F' "$(CODER_REPO_TMP_DIR)")" = "$$(id -u):directory"; \
@@ -872,6 +1145,7 @@ _coder-cleanup: _coder-require-lock
 				}; \
 				rm -rf "$$launcher_adversarial_build_tmp"; \
 			fi; \
+			if test "$$controller_stage" = unit || test "$$controller_stage" = all; then \
 			rm -f \
 				"$(CODER_OUTPUT_DIR)/cleanup.log" \
 			"$(CODER_OUTPUT_DIR)/builder-containers.txt" \
@@ -1763,7 +2037,9 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 		export PATH HOME XDG_RUNTIME_DIR; \
 		test "$${CODER_COMBINED_CI:-0}" = 0 || test "$${CODER_COMBINED_CI:-0}" = 1; \
 		test "$${CODER_PARENT_CLEANUP:-0}" = 0 || test "$${CODER_PARENT_CLEANUP:-0}" = 1; \
-		test "$(CODER_REPO_TMP_DIR)" = "$(CURDIR)/.tmp"; \
+		case "$(CODER_REPO_TMP_DIR)" in /*) ;; *) echo "Coder artifact root must be absolute" >&2; exit 2 ;; esac; \
+		test "$(CODER_REPO_TMP_DIR)" != "$(CURDIR)"; \
+		case "$(CODER_REPO_TMP_DIR)/" in "$(CURDIR)/"*) echo "Coder artifact root must be outside the source tree" >&2; exit 2 ;; esac; \
 		test "$(CODER_OUTPUT_DIR)" = "$(CODER_REPO_TMP_DIR)/coder-ci"; \
 		if test ! -e "$(CODER_REPO_TMP_DIR)" && test ! -L "$(CODER_REPO_TMP_DIR)"; then \
 			(umask 077 && mkdir "$(CODER_REPO_TMP_DIR)"); \
@@ -3477,13 +3753,28 @@ coder-test-no-build:
 
 _coder-test-no-build-locked: _coder-require-lock _coder-require-clean
 	@set -eu; \
+		controller_stage="$${CODER_CONTROLLER_STAGE:-all}"; \
+		case "$$controller_stage" in unit|integration|e2e|attestation|all) ;; *) echo "invalid fixed Coder stage" >&2; exit 2 ;; esac; \
+		stage_marker="$(CODER_OUTPUT_DIR)/controller-stage-$$controller_stage.passed"; \
+		test ! -L "$$stage_marker"; \
+		case "$$controller_stage" in \
+			integration) predecessor_marker="$(CODER_OUTPUT_DIR)/controller-stage-unit.passed" ;; \
+			e2e) predecessor_marker="$(CODER_OUTPUT_DIR)/controller-stage-integration.passed" ;; \
+			attestation) predecessor_marker="$(CODER_OUTPUT_DIR)/controller-stage-e2e.passed" ;; \
+			*) predecessor_marker="" ;; \
+		esac; \
+		if test -n "$$predecessor_marker"; then \
+			test -f "$$predecessor_marker" && test ! -L "$$predecessor_marker" || { echo "required predecessor stage is absent" >&2; exit 2; }; \
+		fi; \
 		unset DOCKER_API_VERSION DOCKER_CERT_PATH DOCKER_CONFIG DOCKER_CONTEXT DOCKER_CUSTOM_HEADERS DOCKER_HOST DOCKER_TLS_VERIFY BUILDX_BUILDER BUILDX_CONFIG; \
 		PATH=/usr/local/bin:/usr/bin:/bin; \
 		XDG_RUNTIME_DIR="$${XDG_RUNTIME_DIR:-/run/user/$$(id -u)}"; \
 			export PATH HOME XDG_RUNTIME_DIR; \
 			test "$${CODER_COMBINED_CI:-0}" = 0 || test "$${CODER_COMBINED_CI:-0}" = 1; \
 			test "$${CODER_PARENT_CLEANUP:-0}" = 0 || test "$${CODER_PARENT_CLEANUP:-0}" = 1; \
-		test "$(CODER_REPO_TMP_DIR)" = "$(CURDIR)/.tmp"; \
+		case "$(CODER_REPO_TMP_DIR)" in /*) ;; *) echo "Coder artifact root must be absolute" >&2; exit 2 ;; esac; \
+		test "$(CODER_REPO_TMP_DIR)" != "$(CURDIR)"; \
+		case "$(CODER_REPO_TMP_DIR)/" in "$(CURDIR)/"*) echo "Coder artifact root must be outside the source tree" >&2; exit 2 ;; esac; \
 		test "$(CODER_OUTPUT_DIR)" = "$(CODER_REPO_TMP_DIR)/coder-ci"; \
 		test -d "$(CODER_REPO_TMP_DIR)" && test ! -L "$(CODER_REPO_TMP_DIR)"; \
 		test "$$(stat -Lc '%u:%F' "$(CODER_REPO_TMP_DIR)")" = "$$(id -u):directory"; \
@@ -3910,6 +4201,13 @@ _coder-test-no-build-locked: _coder-require-lock _coder-require-clean
 			{ \
 				printf 'schema\tserverware.coder-ci.batch-coverage-results.v2\n'; \
 			} > "$(CODER_OUTPUT_DIR)/batch-coverage-results.tsv"; \
+			else \
+				test -f "$(CODER_OUTPUT_DIR)/batch-coverage-results.tsv" && \
+					test ! -L "$(CODER_OUTPUT_DIR)/batch-coverage-results.tsv" || { \
+						echo "prior no-build result ledger is absent" >&2; \
+						exit 2; \
+					}; \
+			fi; \
 			test -s "$(CODER_OUTPUT_DIR)/build-commit.txt" || { \
 			echo "build identity is absent; run coder-build-all first" >&2; \
 			exit 2; \
@@ -4939,6 +5237,7 @@ _coder-test-no-build-locked: _coder-require-lock _coder-require-clean
 				exit 2; \
 			}; \
 			rm -f "$$current_python_argv_bindings"; \
+				if test "$$controller_stage" = unit || test "$$controller_stage" = all; then \
 				printf '%s\n' "running production host preflight in its exact prebuilt socketless diagnostics image"; \
 				run_isolated_container_test \
 					"$(CODER_PRODUCTION_HOST_PREFLIGHT_TEST_SCRIPT)" \
@@ -5110,9 +5409,10 @@ _coder-test-no-build-locked: _coder-require-lock _coder-require-clean
 				tail -n 200 "$(CODER_OUTPUT_DIR)/rust-unit-tests.log" >&2 || true; \
 				exit "$$rust_test_status"; \
 			fi; \
-			printf 'passed\trust-unit-harnesses\n' \
-				>> "$(CODER_OUTPUT_DIR)/batch-coverage-results.tsv"; \
-		verify_compose_storage_ownership() { \
+				printf 'passed\trust-unit-harnesses\n' \
+					>> "$(CODER_OUTPUT_DIR)/batch-coverage-results.tsv"; \
+				fi; \
+			verify_compose_storage_ownership() { \
 			compose_network="$(CODER_COMPOSE_PROJECT_NAME)_default"; \
 			network_identity="$$( \
 				$(CODER_TIMEOUT) --kill-after="$(CODER_KILL_AFTER)" "$(CODER_INSPECT_TIMEOUT)" \
@@ -5484,6 +5784,9 @@ _coder-test-no-build-locked: _coder-require-lock _coder-require-clean
 				sh "$(CODER_FROZEN_SOURCE_DIR)"; \
 		verify_frozen_source; \
 		}; \
+		if test "$$controller_stage" = integration || test "$$controller_stage" = all; then \
+		: > "$(CODER_OUTPUT_DIR)/startup.log"; \
+		: > "$(CODER_OUTPUT_DIR)/compose.log"; \
 		create_and_start_compose_stack; \
 		for test_path in $(CODER_TEST_SCRIPTS); do \
 			test_name="$$(basename "$$test_path" .py)"; \
@@ -5501,8 +5804,11 @@ _coder-test-no-build-locked: _coder-require-lock _coder-require-clean
 				printf 'passed\t%s\n' "$$test_path" \
 					>> "$(CODER_OUTPUT_DIR)/batch-coverage-results.tsv"; \
 			done; \
+			if test "$$controller_stage" = integration; then destroy_owned_compose_stack; fi; \
+			fi; \
+			if test "$$controller_stage" = e2e || test "$$controller_stage" = all; then \
 			printf '%s\n' "recreating exact-image Compose services and volumes before the E2E group"; \
-			destroy_owned_compose_stack; \
+			if test "$$controller_stage" = all; then destroy_owned_compose_stack; fi; \
 			create_and_start_compose_stack; \
 			printf '%s\n' "running the existing end-to-end journey without an internal compose build; log: $(CODER_OUTPUT_DIR)/e2e.log"; \
 		verify_frozen_source; \
@@ -5541,6 +5847,8 @@ _coder-test-no-build-locked: _coder-require-lock _coder-require-clean
 			fi; \
 			printf 'passed\tscripts/e2e.sh\n' \
 				>> "$(CODER_OUTPUT_DIR)/batch-coverage-results.tsv"; \
+			fi; \
+			if test "$$controller_stage" = attestation || test "$$controller_stage" = all; then \
 		while read -r service image expected_image_id; do \
 			test -n "$$service" || continue; \
 			container_id="$$( \
@@ -5587,8 +5895,11 @@ _coder-test-no-build-locked: _coder-require-lock _coder-require-clean
 				echo "coverage results do not reconcile one-to-one with the canonical manifest" >&2; \
 				exit 2; \
 			}; \
-		$(MAKE) --no-print-directory _coder-require-clean; \
-		printf '%s\n' "all selected no-build tests passed; logs: $(CODER_OUTPUT_DIR)"
+			$(MAKE) --no-print-directory _coder-require-clean; \
+			printf '%s\n' "all selected no-build tests passed; logs: $(CODER_OUTPUT_DIR)"; \
+			fi; \
+			printf '%s\n' "$$controller_stage" > "$$stage_marker"; \
+			chmod 0600 "$$stage_marker"
 
 coder-ci: _coder-require-clean
 	@set -eu; \
@@ -5601,7 +5912,9 @@ coder-ci: _coder-require-clean
 
 _coder-ci-locked: _coder-require-lock _coder-require-clean
 	@set -eu; \
-		test "$(CODER_REPO_TMP_DIR)" = "$(CURDIR)/.tmp"; \
+		case "$(CODER_REPO_TMP_DIR)" in /*) ;; *) echo "Coder artifact root must be absolute" >&2; exit 2 ;; esac; \
+		test "$(CODER_REPO_TMP_DIR)" != "$(CURDIR)"; \
+		case "$(CODER_REPO_TMP_DIR)/" in "$(CURDIR)/"*) echo "Coder artifact root must be outside the source tree" >&2; exit 2 ;; esac; \
 		test "$(CODER_OUTPUT_DIR)" = "$(CODER_REPO_TMP_DIR)/coder-ci"; \
 		if test ! -e "$(CODER_REPO_TMP_DIR)" && test ! -L "$(CODER_REPO_TMP_DIR)"; then \
 			(umask 077 && mkdir "$(CODER_REPO_TMP_DIR)"); \
@@ -5860,6 +6173,8 @@ production-release-provenance:
 		--production-images-published "$(PRODUCTION_IMAGES_PUBLISHED_FILE)" \
 		--production-images-env "$(PRODUCTION_IMAGES_ENV_OUT)" \
 		--reproducible-build-verification "$(REPRODUCIBLE_BUILD_VERIFICATION_OUT)" \
+		--reproducible-build-signature "$(REPRODUCIBLE_BUILD_VERIFICATION_SIGNATURE)" \
+		--reproducible-build-trusted-public-key "$(REPRODUCIBLE_BUILD_VERIFICATION_TRUSTED_PUBLIC_KEY)" \
 		--out "$(RELEASE_PROVENANCE_FILE)" > "$(RELEASE_PROVENANCE_SUMMARY_FILE)"
 	cat "$(RELEASE_PROVENANCE_SUMMARY_FILE)"
 
@@ -6092,9 +6407,6 @@ verify-agent-enrollment-wheel-clean-room: verify-consolidated-no-build
 fetch-production-dependency-cache:
 	python3 production-dependencies/prefetch.py fetch
 
-refresh-production-dependency-cache:
-	python3 production-dependencies/prefetch.py refresh
-
 verify-production-dependency-cache:
 	python3 production-dependencies/prefetch.py verify
 
@@ -6197,6 +6509,77 @@ validate-production-policy-identity:
 		--bundle "$(PRODUCTION_POLICY_BUNDLE)" \
 		--trusted-public-key "$(PRODUCTION_POLICY_TRUSTED_PUBLIC_KEY)" \
 		--out "$(PRODUCTION_POLICY_IDENTITY_VERIFICATION_OUT)"
+
+# This convenience target is outside the production trust boundary. The root
+# launcher must supply a manifest measured from the live operation driver and
+# atomically install the resulting generation before starting the units.
+render-policy-custody-assets:
+	@test "$$(id -u)" = 0 || { echo "render-policy-custody-assets must run as the trusted root launcher" >&2; exit 2; }
+	@test -n "$(POLICY_CUSTODY_RENDER_MANIFEST)"
+	@test -n "$(POLICY_CUSTODY_RENDER_OUTPUT)"
+	@test -f "$(POLICY_CUSTODY_RENDER_MANIFEST)" && test ! -L "$(POLICY_CUSTODY_RENDER_MANIFEST)"
+	@test ! -e "$(POLICY_CUSTODY_RENDER_OUTPUT)"
+	python3 ops/policy-custody/render-assets.py \
+		"$(POLICY_CUSTODY_RENDER_MANIFEST)" \
+		"$(POLICY_CUSTODY_RENDER_OUTPUT)"
+
+verify-policy-custody-host-ready:
+	@test "$$(id -u)" = 0 || { echo "verify-policy-custody-host-ready must run as root on the production Linux host" >&2; exit 2; }
+	@set -eu; \
+		root="$(POLICY_CUSTODY_SOCKET_ROOT)"; \
+		config_root="$(POLICY_CUSTODY_RUNTIME_CONFIG_ROOT)"; \
+		test -d "$$root" && test ! -L "$$root"; \
+		test "$$(stat -Lc '%U:%G:%a' "$$root")" = "root:$(POLICY_CUSTODY_DRIVER_GROUP):750"; \
+		test -d "$$config_root"; \
+		if test -L "$$config_root"; then test "$$(stat -c '%U:%G' "$$config_root")" = root:root; fi; \
+		resolved_config_root=$$(readlink -f "$$config_root"); \
+		test -n "$$resolved_config_root" && test -d "$$resolved_config_root" && test ! -L "$$resolved_config_root"; \
+		test "$$(stat -Lc '%U:%G:%a' "$$resolved_config_root")" = root:root:700; \
+		for binding in \
+			'durable-recovery-store:swpc-store' \
+			'cleanup-authorization-consumer:swpc-consume' \
+			'recovery-target-provider:swpc-target' \
+			'current-signature-authority:swpc-signature' \
+			'bounded-cleanup-helper:swpc-cleanup'; do \
+			role=$${binding%%:*}; account=$${binding#*:}; \
+			service="serverware-policy-custody@$$role.service"; \
+			socket="serverware-policy-custody@$$role.socket"; \
+			path="$$root/$$role.sock"; \
+			config="$$resolved_config_root/serverware-policy-custody-$$role.json"; \
+			test -f "$$config" && test ! -L "$$config"; \
+			test "$$(stat -Lc '%U:%G:%a' "$$config")" = root:root:400; \
+			systemctl is-active --quiet "$$socket"; \
+			systemctl is-active --quiet "$$service"; \
+			test -S "$$path" && test ! -L "$$path"; \
+			test "$$(stat -Lc '%U:%G:%a' "$$path")" = "root:$(POLICY_CUSTODY_DRIVER_GROUP):660"; \
+			test "$$(systemctl show --property=User --value "$$service")" = "$$account"; \
+			test "$$(systemctl show --property=Group --value "$$service")" = "$$account"; \
+			test "$$(systemctl show --property=PrivateNetwork --value "$$service")" = yes; \
+			test "$$(systemctl show --property=NoNewPrivileges --value "$$service")" = yes; \
+			test "$$(systemctl show --property=ProtectSystem --value "$$service")" = strict; \
+			memory_max=$$(systemctl show --property=MemoryMax --value "$$service"); \
+			tasks_max=$$(systemctl show --property=TasksMax --value "$$service"); \
+			case "$$memory_max" in ''|infinity|*[!0-9]*) exit 2 ;; esac; \
+			case "$$tasks_max" in ''|infinity|*[!0-9]*) exit 2 ;; esac; \
+			test "$$memory_max" -gt 0 && test "$$tasks_max" -gt 0; \
+		done; \
+		systemctl is-active --quiet serverware-policy-custody-sockets.target; \
+		systemctl is-active --quiet serverware-policy-custody.target
+
+# Run on the production Linux host before Compose is allowed to create the
+# decision gate. The key remains root-owned but is group-readable by the
+# container's fixed primary GID; no ingress material may be writable.
+verify-production-proxy-ingress-materials:
+	@test "$$(id -u)" = 0 || { echo "verify-production-proxy-ingress-materials must run as root on the production Linux host" >&2; exit 2; }
+	@set -eu; \
+		test "$(SERVERWARE_PROXY_INGRESS_MODE)" = mtls; \
+		for path in "$(SERVERWARE_PROXY_TLS_CERT_FILE)" "$(SERVERWARE_PROXY_CLIENT_CA_BUNDLE_FILE)"; do \
+			test -n "$$path" && test -f "$$path" && test ! -L "$$path"; \
+			test "$$(stat -Lc '%u:%g:%a' "$$path")" = 0:0:444; \
+		done; \
+		key="$(SERVERWARE_PROXY_TLS_KEY_FILE)"; \
+		test -n "$$key" && test -f "$$key" && test ! -L "$$key"; \
+		test "$$(stat -Lc '%u:%g:%a' "$$key")" = 0:65532:440
 
 production-host-preflight:
 	python3 scripts/production_host_preflight.py \

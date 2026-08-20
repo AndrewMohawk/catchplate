@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/policy-shadow-startup-active-authorization.v1.schema.json",
+  "title": "Serverware Policy Shadow Startup Active Authorization v1",
+  "$comment": "Canonical root-owned startup gate. Activated records must be emitted by the same durable publication transaction that commits the active snapshot; a portal-side post-commit reconstruction is not atomic.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "authorizationKind", "activeSnapshotIdentitySha256", "activePolicySha256", "activePolicySequence", "activeRollbackEpoch", "activationTransactionSha256", "activationPublicationReceiptSha256", "activationPublicationRevision"],
+  "properties": {
+    "apiVersion": {"const": "serverware.policyShadowStartupActiveAuthorization/v1"},
+    "authorizationKind": {"enum": ["genesis", "activated"]},
+    "activeSnapshotIdentitySha256": {"$ref": "#/$defs/sha256"},
+    "activePolicySha256": {"$ref": "#/$defs/sha256"},
+    "activePolicySequence": {"$ref": "#/$defs/positiveI64"},
+    "activeRollbackEpoch": {"$ref": "#/$defs/positiveI64"},
+    "activationTransactionSha256": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]},
+    "activationPublicationReceiptSha256": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]},
+    "activationPublicationRevision": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/positiveI64"}]}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"authorizationKind": {"const": "genesis"}}, "required": ["authorizationKind"]},
+      "then": {"properties": {"activationTransactionSha256": {"type": "null"}, "activationPublicationReceiptSha256": {"type": "null"}, "activationPublicationRevision": {"type": "null"}}}
+    },
+    {
+      "if": {"properties": {"authorizationKind": {"const": "activated"}}, "required": ["authorizationKind"]},
+      "then": {"properties": {"activationTransactionSha256": {"$ref": "#/$defs/sha256"}, "activationPublicationReceiptSha256": {"$ref": "#/$defs/sha256"}, "activationPublicationRevision": {"$ref": "#/$defs/positiveI64"}}}
+    }
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "positiveI64": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807}
+  }
+}

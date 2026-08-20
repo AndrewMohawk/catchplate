@@ -3765,6 +3765,11 @@ def _claim_release_controlled_credential(
     ).hexdigest()
     recipient_nonce_sha256 = "sha256:" + hashlib.sha256(claim_nonce).hexdigest()
     jit = jit_policy if isinstance(jit_policy, dict) else {}
+    jit_authority = (
+        db.jit_approver_policy_arguments(jit)
+        if kind == "jitGrant"
+        else {}
+    )
     db.claim_release_credential_issuance(
         release_kind=str(kind),
         attempt_id=str(request_authority["attemptId"]),
@@ -3795,19 +3800,23 @@ def _claim_release_controlled_credential(
             request_authority["reservationExpiresAtEpochMs"]
         ),
         actor_id=_release_authorization_actor_id(),
-        required_approver_roles={"approver"} if kind == "jitGrant" else set(),
-        allowed_approver_ids=(
-            set((jit.get("approvers") or {}).get("users") or []) or None
-            if kind == "jitGrant"
-            else None
+        required_approver_roles=jit_authority.get(
+            "required_approver_roles", set()
         ),
-        require_approver_webauthn=(
-            ((jit.get("approvers") or {}).get("authn") or {}).get(
-                "webauthnRequired"
+        allowed_approver_ids=jit_authority.get(
+            "allowed_approver_ids"
+        ),
+        require_approver_webauthn=bool(
+            jit_authority.get(
+                "require_approver_webauthn",
+                False,
             )
-            is True
-            if kind == "jitGrant"
-            else False
+        ),
+        approval_threshold=int(
+            jit_authority.get("approval_threshold", 1)
+        ),
+        approver_credential_policy=jit_authority.get(
+            "approver_credential_policy"
         ),
     )
 

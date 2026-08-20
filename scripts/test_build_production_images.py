@@ -17,6 +17,32 @@ RFC8032_KEY_ID = "sha256:06e3fd8fda29bb60ab59557de61edb0aecdb231134be30e75b455f8
 RFC8032_FILE_SHA256 = "sha256:40d359139cfd8af4ff3ebfbf9c8845468ca7876582189c11d3293b832f660632"
 
 
+def build_metadata_fixture() -> dict[str, object]:
+    digest = "sha256:" + "2" * 64
+    return {
+        "source": "https://example.invalid/serverware",
+        "revision": "1" * 40,
+        "created": "2026-01-01T00:00:00Z",
+        "source_date_epoch": "1767225600",
+        "source_tree_digest": digest,
+        "source_archive_digest": digest,
+        "source_archive_path": "production-dependencies/cache/source-contract/source.tar",
+        "source_manifest_digest": digest,
+        "source_manifest_path": "production-dependencies/cache/source-contract/source.manifest.json",
+        "source_file_list_digest": digest,
+        "source_file_list_path": "production-dependencies/cache/source-contract/source.files",
+        "source_file_hashes_digest": digest,
+        "source_file_hashes_path": "production-dependencies/cache/source-contract/source.files.sha256",
+        "source_file_modes_digest": digest,
+        "source_file_modes_path": "production-dependencies/cache/source-contract/source.files.mode",
+        "source_identity_mode": "production-commit",
+        "production_release_eligible": True,
+        "image_title_suffix": "production test",
+        "launch_authority_key_id": RFC8032_KEY_ID,
+        "launch_authority_root_sha256": RFC8032_FILE_SHA256,
+    }
+
+
 def expect_invalid_trust_root(content: bytes) -> None:
     with tempfile.TemporaryDirectory(prefix="serverware-launch-authority-test-") as raw_tmp:
         path = Path(raw_tmp) / "launch-authority-root.ed25519.hex"
@@ -84,20 +110,13 @@ def assert_deterministic_launch_authority_metadata() -> None:
 
 
 def assert_launch_authority_is_not_a_build_arg() -> None:
-    metadata = {
-        "source": "https://example.invalid/serverware",
-        "revision": "1" * 40,
-        "created": "2026-01-01T00:00:00Z",
-        "source_date_epoch": "1767225600",
-        "source_tree_digest": "sha256:" + "2" * 64,
-        "launch_authority_key_id": RFC8032_KEY_ID,
-        "launch_authority_root_sha256": RFC8032_FILE_SHA256,
-    }
+    metadata = build_metadata_fixture()
     argv = build_production_images.build_command(
         "data-plane/decision-gate-rs/Dockerfile.production",
         "serverware/decision-gate:test",
         platform="linux/amd64",
         metadata=metadata,
+        context=ROOT,
     )
     serialized = "\0".join(argv).lower()
     if "launch_authority" in serialized or "launch-authority" in serialized:

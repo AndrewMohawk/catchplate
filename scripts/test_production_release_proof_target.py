@@ -16,6 +16,30 @@ import build_production_images
 ROOT = Path(__file__).resolve().parent.parent
 
 
+def build_metadata_fixture() -> dict[str, object]:
+    digest = "sha256:" + "0" * 64
+    return {
+        "source": "https://example.invalid/serverware",
+        "revision": "0" * 40,
+        "created": "2026-01-01T00:00:00Z",
+        "source_date_epoch": "0",
+        "source_tree_digest": digest,
+        "source_archive_digest": digest,
+        "source_archive_path": "production-dependencies/cache/source-contract/source.tar",
+        "source_manifest_digest": digest,
+        "source_manifest_path": "production-dependencies/cache/source-contract/source.manifest.json",
+        "source_file_list_digest": digest,
+        "source_file_list_path": "production-dependencies/cache/source-contract/source.files",
+        "source_file_hashes_digest": digest,
+        "source_file_hashes_path": "production-dependencies/cache/source-contract/source.files.sha256",
+        "source_file_modes_digest": digest,
+        "source_file_modes_path": "production-dependencies/cache/source-contract/source.files.mode",
+        "source_identity_mode": "production-commit",
+        "production_release_eligible": True,
+        "image_title_suffix": "production test",
+    }
+
+
 def target_body(makefile: str, target: str) -> str:
     lines = makefile.splitlines()
     declaration = re.compile(rf"^{re.escape(target)}\s*:")
@@ -412,13 +436,8 @@ def main() -> None:
             "Dockerfile.production",
             "serverware/control:test",
             platform="linux/arm64",
-            metadata={
-                "source": "https://example.invalid/serverware",
-                "revision": "0" * 40,
-                "created": "2026-01-01T00:00:00Z",
-                "source_tree_digest": "sha256:" + "0" * 64,
-                "source_date_epoch": "0",
-            },
+            metadata=build_metadata_fixture(),
+            context=ROOT,
         )
     except RuntimeError as exc:
         if "linux/amd64" not in str(exc):
@@ -434,13 +453,8 @@ def main() -> None:
         "Dockerfile.production",
         "serverware/control:test",
         platform="linux/amd64",
-        metadata={
-            "source": "https://example.invalid/serverware",
-            "revision": "0" * 40,
-            "created": "2026-01-01T00:00:00Z",
-            "source_tree_digest": "sha256:" + "0" * 64,
-            "source_date_epoch": "0",
-        },
+        metadata=build_metadata_fixture(),
+        context=ROOT,
     )
     if "--network=none" not in dry_run_command:
         raise AssertionError("production image helper does not disable build-step networking")

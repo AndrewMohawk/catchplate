@@ -1,5 +1,12 @@
 #![allow(clippy::too_many_arguments)]
 
+mod policy_core;
+mod policy_shadow;
+mod policy_shadow_generation;
+mod response_v2;
+
+use response_v2::*;
+
 use base64::{engine::general_purpose, Engine as _};
 use csv::{ByteRecord, ReaderBuilder, WriterBuilder};
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
@@ -15,13 +22,21 @@ use ring::{aead, hkdf, rand as ring_rand};
 use ring_rand::SecureRandom;
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
-use rustls::{ServerConfig, ServerConnection, StreamOwned};
+use rustls::server::WebPkiClientVerifier;
+use rustls::{RootCertStore, ServerConfig, ServerConnection, StreamOwned};
 use serde::de::{self, DeserializeOwned, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Map, Value};
 use serverware_decision_gate::{
     canonical_json_bytes as custody_canonical_json_bytes,
     decode_canonical_json as decode_canonical_custody_json, read_frame as read_custody_frame,
+    response_observation_v2_release_consume_binding_sha256,
+    response_observation_v2_release_request_commitment_sha256,
+    response_observation_v2_retrieval_evidence_sha256,
+    response_data_result_exact_object_descriptors,
+    response_observation_v2_stable_resume_id_sha256,
+    response_observation_v2_transition_evidence_sha256,
+    result_exact_object_descriptors as v2_result_exact_object_descriptors,
     write_frame as write_custody_frame, CustodyRequest, HELLO_OPERATION as CUSTODY_HELLO_OPERATION,
     IO_DEADLINE as CUSTODY_IO_DEADLINE,
     MAX_CONCURRENT_CONNECTIONS as CUSTODY_MAX_CONCURRENT_CONNECTIONS,
@@ -33,6 +48,106 @@ use serverware_decision_gate::{
     RESPONSE_OBSERVATION_PROOF_SIGN_OPERATION as CUSTODY_RESPONSE_OBSERVATION_PROOF_SIGN_OPERATION,
     RESPONSE_PROOF_SIGN_OPERATION as CUSTODY_RESPONSE_PROOF_SIGN_OPERATION,
     STREAMING_RESPONSE_PROOF_SIGN_OPERATION as CUSTODY_STREAMING_RESPONSE_PROOF_SIGN_OPERATION,
+    AttemptStateReference, CredentialReference, EvidenceReference,
+    ExactByteObjectDescriptor, ExactObjectMediaType,
+    ImmutableObjectReference, ImmutableObjectType, MemfdSealProfile,
+    PublicationTarget,
+    V2ArchiveVerifyParams, V2AttemptState, V2AttestParams,
+    V2AttestResult, V2AttestationMode, V2AttestationSignerKeyV1,
+    V2AttestationTrustArtifactV1,
+    V2AuthorityParams, V2AuthorityResult, V2ControlResponse,
+    V2CrossBootRecoveryStatementV1,
+    V2CanonicalControlResponseEncoding,
+    V2DispatchParams, V2DispatchResult,
+    V2DurableReplayCommitOrder,
+    V2DurableExactCanonicalResponseReferenceV1,
+    V2DurableReplayKeyV1, V2DurableReplayOperation,
+    V2DurableReplayOutcome,
+    V2EvidenceType, V2FinalizeParams, V2FinalizeResult,
+    V2FreshAttestationEvidenceFormat,
+    V2FreshAttestationSignatureAlgorithm,
+    V2FreshResponseAttestationV1, V2HelloParams,
+    V2MonotonicClockId, V2MonotonicDeadlineV1,
+    V2OperationBinding, V2OperationRequest, V2OperationResult,
+    V2Http11FramingResultV1, V2Http11TransferCodingV1,
+    V2ParsedHttp11ResponseCommitmentV1,
+    V2PublishParams, V2PublishReleaseIntentV1, V2PublishResult,
+    V2ProviderAuthorityScopeV1,
+    V2ReadBinding, V2ReleaseCasExpectationV1, V2ReserveParams,
+    V2RecoverParams, V2RecoverResult, V2RecoveryAuthorizationV1,
+    V2ReleaseAuthorizationConsumeOutcomeV1,
+    V2ReleaseAuthorityRole,
+    V2ReleaseConsumeAuthorityRole,
+    V2ReleaseRequestCommitmentCanonicalization,
+    V2ReleaseRequestCommitmentDigestAlgorithm,
+    V2ReleaseRequestCommitmentDigestV1,
+    V2ReleaseRequestCommitmentV1,
+    V2ReserveResult, V2RetrieveParams, V2RetrieveResult,
+    V2RetrievalEvidenceBindingV1,
+    V2StageParams, V2StageResult, V2TerminalKind,
+    V2TerminalParams, V2TerminalResult,
+    V2TransactionBindingV1,
+    V2_FRESH_RESPONSE_ATTESTATION_SIGNATURE_DOMAIN,
+    V2_FRESH_RESPONSE_ATTESTATION_VERSION,
+    V2_MONOTONIC_DEADLINE_VERSION,
+    V2_PUBLIC_RELEASE_AUTHORIZATION_VERSION,
+    V2_RELEASE_AUTHORIZATION_CONSUME_OUTCOME_VERSION,
+    V2_RELEASE_REQUEST_COMMITMENT_VERSION,
+    V2_RETRIEVAL_EVIDENCE_BINDING_VERSION,
+    V2_CROSS_BOOT_RECOVERY_OUTCOME_VERSION,
+    V2_DURABLE_REPLAY_RECORD_VERSION,
+    SignedPublicReleaseAuthorizationV1,
+    SignedV2DurableSettlementReceiptV1,
+    SignedV2ExactReleaseAuthorizationV2,
+    SignedV2ExactReleaseConsumptionV2,
+    SignedV2ExactReleasePreparationV1,
+    SignedV2ExactReplayResolutionV1,
+    SignedV2FinalEnvelopeVerificationV1,
+    SignedV2ImmutableResponseInspectionV1,
+    SignedV2ResponseDataErrorV1,
+    V2AuthorizeExactReleaseParams,
+    V2AuthorizeExactReleaseResult,
+    V2CanonicalFinalEnvelopeV1,
+    V2ConsumeAndRetrieveExactParams,
+    V2ConsumeAndRetrieveExactResult,
+    V2InspectImmutableResponseParams,
+    V2InspectImmutableResponseResult,
+    V2ResolveExactReplayParams,
+    V2ResolveExactReplayResult,
+    V2ResponseDataControlResponse,
+    V2ResponseDataOperation,
+    V2ResponseDataReplayKeyV1,
+    V2ResponseDataReplayPhaseV1,
+    V2ResponseDataRequest,
+    V2ResponseDataResult,
+    V2SettleAttemptParams,
+    V2SettleAttemptResult,
+    V2ValidateFinalEnvelopeParams,
+    V2ValidateFinalEnvelopeResult,
+    V2_DURABLE_SETTLEMENT_SIGNATURE_DOMAIN,
+    V2_DURABLE_SETTLEMENT_VERSION,
+    V2_EXACT_RELEASE_AUTHORIZATION_VERSION,
+    V2_EXACT_RELEASE_CONSUMPTION_VERSION,
+    V2_EXACT_RELEASE_PREPARATION_VERSION,
+    V2_EXACT_REPLAY_RESOLUTION_SIGNATURE_DOMAIN,
+    V2_EXACT_REPLAY_RESOLUTION_VERSION,
+    V2_FINAL_ENVELOPE_VERIFICATION_SIGNATURE_DOMAIN,
+    V2_FINAL_ENVELOPE_VERIFICATION_VERSION,
+    V2_IMMUTABLE_RESPONSE_INSPECTION_SIGNATURE_DOMAIN,
+    V2_IMMUTABLE_RESPONSE_INSPECTION_VERSION,
+    V2_INSPECT_IMMUTABLE_RESPONSE_OPERATION,
+    V2_VALIDATE_FINAL_ENVELOPE_OPERATION,
+    V2_AUTHORIZE_EXACT_RELEASE_OPERATION,
+    V2_CONSUME_AND_RETRIEVE_EXACT_OPERATION,
+    V2_RESOLVE_EXACT_REPLAY_OPERATION,
+    V2_SETTLE_ATTEMPT_OPERATION,
+    RESPONSE_OBSERVATION_V2_API_VERSION,
+    RESPONSE_OBSERVATION_V2_CAPABILITIES,
+    RESPONSE_OBSERVATION_V2_MAX_CONTROL_BYTES,
+    RESPONSE_OBSERVATION_V2_MAX_OBJECT_BYTES,
+    RESPONSE_OBSERVATION_V2_MAX_OBJECTS,
+    RESPONSE_OBSERVATION_V2_MAX_OPERATION_MS,
+    response_observation_v2_lifecycle_state_sha256,
 };
 use sha2::{Digest, Sha256, Sha512};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -40,8 +155,9 @@ use std::env;
 use std::error::Error;
 use std::ffi::OsString;
 use std::fs;
+use std::fs::File;
 use std::fs::OpenOptions;
-use std::io::{self, Cursor, Read, Write};
+use std::io::{self, Cursor, Read, Seek, SeekFrom, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
@@ -62,10 +178,25 @@ use url::{form_urlencoded, Url};
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519StaticSecret};
 use zeroize::{Zeroize, Zeroizing};
 
+use policy_core::{
+    ShadowActiveEffectPermit, ShadowAdmission, ShadowDispatchBarrierPermit,
+    ShadowIngressKind, ShadowRuntime,
+};
+use policy_shadow::{
+    ActiveEffectCommitState, ActiveMutableEffectKind, PolicyShadowTerminalReason,
+};
+use policy_shadow_generation::{
+    PolicyShadowGenerationControl,
+    ACTIVATION_CONTENT_TYPE as POLICY_SHADOW_ACTIVATION_CONTENT_TYPE,
+    ACTIVATION_PATH as POLICY_SHADOW_ACTIVATION_PATH,
+    INSTALL_CONTENT_TYPE as POLICY_SHADOW_INSTALL_CONTENT_TYPE,
+    INSTALL_PATH as POLICY_SHADOW_INSTALL_PATH,
+    MAX_ACTIVATION_BODY_BYTES as MAX_POLICY_SHADOW_ACTIVATION_BODY_BYTES,
+    MAX_INSTALL_BODY_BYTES as MAX_POLICY_SHADOW_INSTALL_BODY_BYTES,
+};
+
 #[cfg(target_os = "linux")]
 use std::ffi::CString;
-#[cfg(target_os = "linux")]
-use std::io::{Seek, SeekFrom};
 
 const MAX_CREDENTIAL_LEASE_RESPONSE_BYTES: u64 = 256 * 1024;
 const MAX_CONTROL_PLANE_ATTESTATION_BYTES: u64 = 64 * 1024;
@@ -76,6 +207,13 @@ const MAX_CONTROL_PLANE_AUTHORIZATION_RECEIPT_BODY_BYTES: usize = 32 * 1024;
 const MAX_CONTROL_PLANE_AUDIT_ACK_BODY_BYTES: u64 = 32 * 1024;
 const MAX_CONTROL_PLANE_AUDIT_BATCH_BODY_BYTES: usize = 1536 * 1024;
 const MAX_INTERNAL_SERVICE_TOKEN_FILE_BYTES: u64 = 4 * 1024;
+const MAX_PROXY_TLS_CERTIFICATE_CHAIN_BYTES: u64 = 1024 * 1024;
+const MAX_PROXY_TLS_PRIVATE_KEY_BYTES: u64 = 64 * 1024;
+const MAX_PROXY_TLS_CLIENT_CA_BUNDLE_BYTES: u64 = 4 * 1024 * 1024;
+const MAX_PROXY_TLS_PEER_CERTIFICATES: usize = 16;
+const MAX_PROXY_TLS_PEER_CERTIFICATE_BYTES: usize = 256 * 1024;
+const MAX_PROXY_TLS_PEER_CHAIN_BYTES: usize = 1024 * 1024;
+const MAX_PROXY_TLS_SAN_ENTRIES: usize = 128;
 const RESPONSE_OBSERVATION_NONCE_EXPIRY_BYTES: usize = 4;
 const RESPONSE_OBSERVATION_NONCE_MAX_LIFETIME_SECONDS: u64 = 330;
 const MAX_CONTROL_PLANE_RESPONSE_STATEMENT_BYTES: usize = 8 * 1024;
@@ -118,7 +256,7 @@ const MAX_REQUEST_HEADER_COUNT: usize = 128;
 const MAX_BUFFERED_REQUEST_BODY_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_MANAGEMENT_REQUEST_BODY_BYTES: u64 = 1024 * 1024;
 const MAX_BUFFERED_RESPONSE_BODY_BYTES: u64 = 16 * 1024 * 1024;
-const MAX_INJECTED_CREDENTIAL_BYTES: usize = 64 * 1024;
+const MAX_INJECTED_CREDENTIAL_BYTES: usize = 16 * 1024;
 const MAX_CREDENTIAL_GENERATION_METADATA_BYTES: usize = 64 * 1024;
 const MAX_CREDENTIAL_GENERATION_METADATA_STRING_BYTES: usize = 4 * 1024;
 const MAX_CREDENTIAL_GENERATION_METADATA_SCOPES: usize = 128;
@@ -180,6 +318,24 @@ const DEFAULT_RESPONSE_PROOF_CUSTODY_STARTUP_TIMEOUT_MS: u64 = 3_000;
 const MAX_RESPONSE_PROOF_CUSTODY_STARTUP_TIMEOUT_MS: u64 = 30_000;
 const RESPONSE_PROOF_CUSTODY_HEALTH_PROBE_INTERVAL: Duration = Duration::from_secs(1);
 const RESPONSE_PROOF_CUSTODY_HEALTH_MAX_STALENESS: Duration = Duration::from_secs(6);
+const RESPONSE_OBSERVATION_V2_SOCKET_ENV: &str =
+    "SERVERWARE_RESPONSE_OBSERVATION_V2_SOCKET";
+const RESPONSE_OBSERVATION_V2_EXPECTED_UID_ENV: &str =
+    "SERVERWARE_RESPONSE_OBSERVATION_V2_EXPECTED_UID";
+const RESPONSE_OBSERVATION_V2_STARTUP_TIMEOUT_MS_ENV: &str =
+    "SERVERWARE_RESPONSE_OBSERVATION_V2_STARTUP_TIMEOUT_MS";
+const RESPONSE_OBSERVATION_V2_ATTESTATION_MODE_ENV: &str =
+    "SERVERWARE_RESPONSE_OBSERVATION_V2_ATTESTATION_MODE";
+const RESPONSE_OBSERVATION_V2_SIGNER_KEY_SHA256_ENV: &str =
+    "SERVERWARE_RESPONSE_OBSERVATION_V2_SIGNER_KEY_SHA256";
+const RESPONSE_OBSERVATION_V2_ROLE_IDENTITY_ROOT_SHA256_ENV: &str =
+    "SERVERWARE_RESPONSE_OBSERVATION_V2_ROLE_IDENTITY_ROOT_SHA256";
+const RESPONSE_OBSERVATION_V2_PROOF_PINS_ROOT_SHA256_ENV: &str =
+    "SERVERWARE_RESPONSE_OBSERVATION_V2_PROOF_PINS_ROOT_SHA256";
+const RESPONSE_OBSERVATION_V2_TEE_VERIFY_COMMAND_ENV: &str =
+    "SERVERWARE_RESPONSE_OBSERVATION_V2_TEE_VERIFY_COMMAND";
+const DEFAULT_RESPONSE_OBSERVATION_V2_STARTUP_TIMEOUT_MS: u64 = 5_000;
+const MAX_RESPONSE_OBSERVATION_V2_STARTUP_TIMEOUT_MS: u64 = 30_000;
 const ENROLLMENT_SESSION_HEADER: &str = "x-serverware-enrollment-session";
 const SUPPORTED_ADAPTER_TYPES: [&str; 4] = ["generic.rest", "gmail.v1", "x.v2", "npm.registry"];
 const NPM_PUBLIC_REGISTRY_HOST: &str = "registry.npmjs.org";
@@ -574,6 +730,7 @@ struct Snapshot {
     policy_sequence: u64,
     rollback_epoch: u64,
     trust_generation: u64,
+    compiled_behavior_sha256: String,
     policy_signing_key_id: String,
     response_verifying_key: Option<VerifyingKey>,
     response_signing_key_id: Option<String>,
@@ -669,16 +826,57 @@ fn credential_injection_with_signed_identity(
     injection: &Value,
     credential: &Map<String, Value>,
 ) -> Result<Value, String> {
+    let credential_type = credential
+        .get("credentialType")
+        .and_then(Value::as_str)
+        .filter(|value| matches!(*value, "oauth2" | "static"))
+        .ok_or("credential credentialType is invalid")?;
+    let oauth_client_id = credential.get("oauthClientId");
+    let scopes = credential.get("scopes");
+    if credential_type == "oauth2" {
+        let client_id = oauth_client_id
+            .and_then(Value::as_str)
+            .filter(|value| {
+                !value.is_empty()
+                    && *value == value.trim()
+                    && value.len() <= 512
+                    && !value.chars().any(char::is_control)
+            })
+            .ok_or("OAuth credential oauthClientId is invalid")?;
+        let values = scopes
+            .and_then(Value::as_array)
+            .filter(|values| !values.is_empty() && values.len() <= 64)
+            .ok_or("OAuth credential scopes are invalid")?;
+        let mut seen = HashSet::with_capacity(values.len());
+        for value in values {
+            let scope = value.as_str().filter(|scope| {
+                !scope.is_empty()
+                    && scope.len() <= 512
+                    && *scope == scope.trim()
+                    && !scope.chars().any(char::is_whitespace)
+                    && !scope.chars().any(char::is_control)
+            });
+            if scope.is_none_or(|scope| !seen.insert(scope)) {
+                return Err(
+                    "OAuth credential scopes contain invalid or duplicate values"
+                        .to_string(),
+                );
+            }
+        }
+        debug_assert!(!client_id.is_empty());
+    } else if oauth_client_id.is_some() || scopes.is_some() {
+        return Err(
+            "static credential cannot declare OAuth client or scopes"
+                .to_string(),
+        );
+    }
     let mut injection = injection
         .as_object()
         .cloned()
         .ok_or("credential injection must be an object")?;
     injection.insert(
         "__serverwareCredentialType".to_string(),
-        credential
-            .get("credentialType")
-            .cloned()
-            .ok_or("credential credentialType missing")?,
+        Value::String(credential_type.to_string()),
     );
     if let Some(client_id) = credential.get("oauthClientId") {
         injection.insert("__serverwareOAuthClientId".to_string(), client_id.clone());
@@ -703,9 +901,8 @@ struct MtlsIdentityPolicy {
     issuer_spki_sha256: Option<String>,
 }
 
-/// This is private connection state, never deserialized from an agent request.
-/// The direct Rust TLS listener does not authenticate client certificates and
-/// therefore always supplies `None`; mTLS policies fail closed on that ingress.
+/// Private connection state derived only after rustls authenticates the peer.
+/// It is never deserialized from request headers or any agent-controlled body.
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct TrustedMtlsEvidence {
     verified_by_trusted_ingress: bool,
@@ -715,6 +912,44 @@ struct TrustedMtlsEvidence {
     certificate_sha256: Option<String>,
     spki_sha256: Option<String>,
     issuer_spki_sha256: Option<String>,
+}
+
+#[derive(Clone)]
+struct ProxyIngressTlsConfig {
+    server_config: Arc<ServerConfig>,
+    client_trust_certificates: Arc<Vec<CertificateDer<'static>>>,
+}
+
+#[derive(Clone)]
+enum ProxyIngressConfig {
+    DevelopmentRaw,
+    MutualTls(Arc<ProxyIngressTlsConfig>),
+}
+
+#[derive(Clone)]
+struct ProxyIngressAttestation {
+    mode: &'static str,
+    tls_protocol: Option<&'static str>,
+    client_authentication: &'static str,
+    server_leaf_certificate_sha256: Option<String>,
+    server_leaf_spki_sha256: Option<String>,
+    server_certificate_chain_sha256: Option<String>,
+    client_trust_bundle_sha256: Option<String>,
+}
+
+impl ProxyIngressAttestation {
+    fn value(&self) -> Value {
+        json!({
+            "mode":self.mode,
+            "tls_protocol":self.tls_protocol,
+            "client_authentication":self.client_authentication,
+            "server_leaf_certificate_sha256":self.server_leaf_certificate_sha256,
+            "server_leaf_spki_sha256":self.server_leaf_spki_sha256,
+            "server_certificate_chain_sha256":self.server_certificate_chain_sha256,
+            "client_trust_bundle_sha256":self.client_trust_bundle_sha256,
+            "request_headers_are_mtls_evidence":false,
+        })
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -749,6 +984,180 @@ struct Route {
     discard_headers: Vec<String>,
     constraints: Vec<Value>,
     jit: Value,
+    response_observation: Option<ResponseObservationRouteConfig>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ResponseObservationRouteVersion {
+    V1,
+    V2,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ResponseObservationRouteConfig {
+    version: ResponseObservationRouteVersion,
+    lifecycle_timeout: Duration,
+    publication_target_id: Option<String>,
+    publication_target_policy_sha256: Option<String>,
+}
+
+fn compiled_snapshot_behavior_sha256(
+    principals: &[Principal],
+    credentials: &HashMap<String, Credential>,
+    routes: &[Route],
+) -> String {
+    let principal_values = principals
+        .iter()
+        .map(|principal| {
+            let mut source_cidrs = principal
+                .source_cidrs
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>();
+            source_cidrs.sort();
+            let mtls = principal.mtls.as_ref().map(|policy| {
+                json!({
+                    "sanSpiffeIds":policy.san_spiffe_ids,
+                    "sanDnsNames":policy.san_dns_names,
+                    "sanUris":policy.san_uris,
+                    "certificateSha256":policy.certificate_sha256,
+                    "spkiSha256":policy.spki_sha256,
+                    "issuerSpkiSha256":policy.issuer_spki_sha256,
+                })
+            });
+            let proxy_authorization = principal
+                .proxy_authorization
+                .as_ref()
+                .map(|policy| match policy {
+                    ProxyAuthorizationPolicy::LegacyExact(secret) => {
+                        json!({
+                            "type":"legacy-exact",
+                            "secretSha256":sha256_prefixed(secret.as_bytes()),
+                        })
+                    }
+                    ProxyAuthorizationPolicy::BearerToken {
+                        token_sha256,
+                        source_cidrs,
+                        expires_at_ms,
+                    } => {
+                        let mut source_cidrs = source_cidrs
+                            .iter()
+                            .map(ToString::to_string)
+                            .collect::<Vec<_>>();
+                        source_cidrs.sort();
+                        json!({
+                            "type":"bearer-token",
+                            "tokenSha256":token_sha256,
+                            "sourceCidrs":source_cidrs,
+                            "expiresAtMs":expires_at_ms.map(|value| value.to_string()),
+                        })
+                    }
+                });
+            json!({
+                "id":principal.id,
+                "sourceCidrs":source_cidrs,
+                "mtls":mtls,
+                "requiredHeaders":principal.required_headers,
+                "proxyAuthorization":proxy_authorization,
+            })
+        })
+        .collect::<Vec<_>>();
+    let mut credential_values = credentials
+        .iter()
+        .map(|(id, credential)| {
+            (
+                id,
+                json!({
+                    "id":id,
+                    "provider":credential.provider,
+                    "providerSubjectSha256":credential.provider_subject.as_ref().map(|value| sha256_prefixed(value.as_bytes())),
+                    "injectionSha256":sha256_prefixed(canonical_json(&credential.injection).as_bytes()),
+                }),
+            )
+        })
+        .collect::<Vec<_>>();
+    credential_values.sort_by(|left, right| left.0.cmp(right.0));
+    let route_values = routes
+        .iter()
+        .map(|route| {
+            let mut methods =
+                route.methods.iter().cloned().collect::<Vec<_>>();
+            methods.sort();
+            let paths = route
+                .paths
+                .iter()
+                .map(|path| {
+                    path.segments
+                        .iter()
+                        .map(|segment| match segment {
+                            PathSegment::Literal(value) => {
+                                json!({"literal":value})
+                            }
+                            PathSegment::Variable(value) => {
+                                json!({"variable":value})
+                            }
+                            PathSegment::Wildcard => json!({"wildcard":true}),
+                            PathSegment::Glob => json!({"glob":true}),
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
+            let resolved_address_policy =
+                match &route.resolved_address_policy {
+                    ResolvedAddressPolicy::PublicOnly => {
+                        json!({"type":"public-only"})
+                    }
+                    ResolvedAddressPolicy::ExplicitCidrs(cidrs) => {
+                        let mut values = cidrs
+                            .iter()
+                            .map(ToString::to_string)
+                            .collect::<Vec<_>>();
+                        values.sort();
+                        json!({"type":"explicit-cidrs","cidrs":values})
+                    }
+                };
+            let response_observation =
+                route.response_observation.as_ref().map(|config| {
+                    json!({
+                        "version":match config.version {
+                            ResponseObservationRouteVersion::V1 => "v1",
+                            ResponseObservationRouteVersion::V2 => "v2",
+                        },
+                        "lifecycleTimeoutNanos":config.lifecycle_timeout.as_nanos().to_string(),
+                        "publicationTargetId":config.publication_target_id,
+                        "publicationTargetPolicySha256":config.publication_target_policy_sha256,
+                    })
+                });
+            json!({
+                "id":route.id,
+                "principals":route.principals,
+                "scheme":route.scheme,
+                "host":route.host,
+                "port":route.port,
+                "resolvedAddressPolicy":resolved_address_policy,
+                "methods":methods,
+                "paths":paths,
+                "credentialRef":route.credential_ref,
+                "adapterType":route.adapter_type,
+                "adapterConfig":route.adapter_config,
+                "discardHeaders":route.discard_headers,
+                "constraints":route.constraints,
+                "jit":route.jit,
+                "responseObservation":response_observation,
+            })
+        })
+        .collect::<Vec<_>>();
+    sha256_prefixed(
+        canonical_json(&json!({
+            "principals":principal_values,
+            "credentials":credential_values
+                .into_iter()
+                .map(|(_, value)| value)
+                .collect::<Vec<_>>(),
+            "routes":route_values,
+        }))
+        .as_bytes(),
+    )
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -2016,6 +2425,9 @@ struct GateState {
     upstream_dispatch_authority: UpstreamDispatchAuthority,
     #[cfg(test)]
     upstream_send_credential_lock_contentions: AtomicU64,
+    policy_shadow: ShadowRuntime,
+    policy_shadow_generation_control:
+        Option<Arc<PolicyShadowGenerationControl>>,
     snapshot: RwLock<Arc<Snapshot>>,
     policy_path: String,
     policy_trust_root_source: PolicyTrustRootSource,
@@ -2076,6 +2488,7 @@ struct GateState {
     request_head_deadline: Duration,
     request_body_deadline: Duration,
     response_write_deadline: Duration,
+    proxy_ingress_attestation: ProxyIngressAttestation,
     mitm_authority: Option<Mutex<MitmAuthority>>,
     leaf_configs: Mutex<HashMap<String, Arc<ServerConfig>>>,
     binary_digest: String,
@@ -2088,6 +2501,8 @@ struct GateState {
     response_proof_signing_key_id: String,
     response_proof_attestation_command: Option<String>,
     server_instance_id: Option<String>,
+    response_observation_v2_client:
+        Option<ResponseObservationV2Client>,
 }
 
 struct LocalResponseObservationReservation {
@@ -3074,6 +3489,7 @@ enum GmailMetadataChildAuthorizationPhase {
     Injecting,
     Injected,
     Dispatched,
+    Succeeded,
     ProviderOutcomeUnknown,
     Failed,
 }
@@ -3118,6 +3534,188 @@ impl GmailMetadataChildAuthorizationLedger {
         *phase = next;
         Ok(())
     }
+
+    fn phase(
+        &self,
+        authorization: &GmailMetadataChildAuthorization,
+    ) -> Result<GmailMetadataChildAuthorizationPhase, &'static str> {
+        self.phases
+            .lock()
+            .map_err(|_| "gmail_metadata_child_authorization_ledger_unavailable")?
+            .get(&authorization.authorization_digest)
+            .copied()
+            .ok_or("gmail_metadata_child_authorization_unregistered")
+    }
+}
+
+fn gmail_metadata_child_phase_label(
+    phase: GmailMetadataChildAuthorizationPhase,
+) -> &'static str {
+    match phase {
+        GmailMetadataChildAuthorizationPhase::Derived => "derived",
+        GmailMetadataChildAuthorizationPhase::Injecting => "injecting",
+        GmailMetadataChildAuthorizationPhase::Injected => "injected",
+        GmailMetadataChildAuthorizationPhase::Dispatched => "dispatched",
+        GmailMetadataChildAuthorizationPhase::Succeeded => "succeeded",
+        GmailMetadataChildAuthorizationPhase::ProviderOutcomeUnknown => {
+            "provider-outcome-unknown"
+        }
+        GmailMetadataChildAuthorizationPhase::Failed => "failed",
+    }
+}
+
+fn gmail_metadata_child_transition_effect_kind(
+    expected: GmailMetadataChildAuthorizationPhase,
+    next: GmailMetadataChildAuthorizationPhase,
+) -> Result<ActiveMutableEffectKind, String> {
+    match (expected, next) {
+        (
+            GmailMetadataChildAuthorizationPhase::Derived
+            | GmailMetadataChildAuthorizationPhase::Injecting
+            | GmailMetadataChildAuthorizationPhase::Injected
+            | GmailMetadataChildAuthorizationPhase::Dispatched,
+            GmailMetadataChildAuthorizationPhase::Failed,
+        ) => {
+            Ok(ActiveMutableEffectKind::GmailChildFailed)
+        }
+        (
+            GmailMetadataChildAuthorizationPhase::Dispatched,
+            GmailMetadataChildAuthorizationPhase::ProviderOutcomeUnknown,
+        ) => {
+            Ok(ActiveMutableEffectKind::GmailChildProviderOutcome)
+        }
+        (
+            GmailMetadataChildAuthorizationPhase::Dispatched,
+            GmailMetadataChildAuthorizationPhase::Succeeded,
+        ) => {
+            Ok(ActiveMutableEffectKind::GmailChildSucceeded)
+        }
+        (
+            GmailMetadataChildAuthorizationPhase::Derived,
+            GmailMetadataChildAuthorizationPhase::Injecting,
+        ) => Ok(ActiveMutableEffectKind::GmailChildInjecting),
+        (
+            GmailMetadataChildAuthorizationPhase::Injecting,
+            GmailMetadataChildAuthorizationPhase::Injected,
+        ) => Ok(ActiveMutableEffectKind::GmailChildInjected),
+        (
+            GmailMetadataChildAuthorizationPhase::Injected,
+            GmailMetadataChildAuthorizationPhase::Dispatched,
+        ) => Ok(ActiveMutableEffectKind::GmailChildDispatch),
+        _ => Err(
+            "gmail metadata child authorization transition has no effect class"
+                .to_string(),
+        ),
+    }
+}
+
+fn transition_gmail_metadata_child_authorization(
+    snapshot: &Arc<Snapshot>,
+    authorization: &GmailMetadataChildAuthorization,
+    ledger: &GmailMetadataChildAuthorizationLedger,
+    shadow_finalization: Option<&policy_core::ShadowRequestHandle>,
+    expected: GmailMetadataChildAuthorizationPhase,
+    next: GmailMetadataChildAuthorizationPhase,
+) -> Result<(), String> {
+    transition_gmail_metadata_child_authorization_with_result(
+        snapshot,
+        authorization,
+        ledger,
+        shadow_finalization,
+        expected,
+        next,
+        None,
+    )
+}
+
+fn transition_gmail_metadata_child_authorization_with_result(
+    snapshot: &Arc<Snapshot>,
+    authorization: &GmailMetadataChildAuthorization,
+    ledger: &GmailMetadataChildAuthorizationLedger,
+    shadow_finalization: Option<&policy_core::ShadowRequestHandle>,
+    expected: GmailMetadataChildAuthorizationPhase,
+    next: GmailMetadataChildAuthorizationPhase,
+    terminal_result_sha256: Option<&str>,
+) -> Result<(), String> {
+    let effect_kind =
+        gmail_metadata_child_transition_effect_kind(expected, next)?;
+    let permit = prepare_shadow_active_effect(
+        shadow_finalization,
+        snapshot,
+        effect_kind,
+        &json!({
+            "domain":"serverware.policyShadowGmailChildLedgerTransitionIntent/v1",
+            "authorizationSha256":authorization.authorization_digest.as_str(),
+            "childRequestSha256":
+                authorization.material.child_request_digest.as_str(),
+            "expectedPhase":gmail_metadata_child_phase_label(expected),
+            "nextPhase":gmail_metadata_child_phase_label(next),
+            "terminalResultSha256":terminal_result_sha256,
+        }),
+        &json!({
+            "domain":"serverware.policyShadowGmailChildLedgerTransitionPreparedState/v1",
+            "expectedPhase":gmail_metadata_child_phase_label(expected),
+        }),
+    )?;
+    let transition_result = ledger
+        .advance(authorization, expected, next)
+        .map_err(str::to_string);
+    let transition_error_sha256 = transition_result
+        .as_ref()
+        .err()
+        .map(|error| sha256_prefixed(error.as_bytes()));
+    let effect_state = if transition_result.is_ok() {
+        ActiveEffectCommitState::Committed
+    } else {
+        ActiveEffectCommitState::Aborted
+    };
+    commit_shadow_active_effect(
+        shadow_finalization,
+        permit,
+        effect_state,
+        &json!({
+            "domain":"serverware.policyShadowGmailChildLedgerTransitionResult/v1",
+            "expectedPhase":gmail_metadata_child_phase_label(expected),
+            "nextPhase":gmail_metadata_child_phase_label(next),
+            "transitioned":transition_result.is_ok(),
+            "transitionErrorSha256":transition_error_sha256,
+            "terminalResultSha256":terminal_result_sha256,
+        }),
+    )?;
+    transition_result
+}
+
+fn terminalize_gmail_metadata_child_authorization(
+    snapshot: &Arc<Snapshot>,
+    authorization: &GmailMetadataChildAuthorization,
+    ledger: &GmailMetadataChildAuthorizationLedger,
+    shadow_finalization: Option<&policy_core::ShadowRequestHandle>,
+    next: GmailMetadataChildAuthorizationPhase,
+    terminal_result_sha256: &str,
+) -> Result<(), String> {
+    let expected = ledger.phase(authorization).map_err(str::to_string)?;
+    if expected == next {
+        return Ok(());
+    }
+    if matches!(
+        expected,
+        GmailMetadataChildAuthorizationPhase::Succeeded
+            | GmailMetadataChildAuthorizationPhase::ProviderOutcomeUnknown
+            | GmailMetadataChildAuthorizationPhase::Failed
+    ) {
+        return Err(
+            "gmail metadata child authorization is already terminal".to_string(),
+        );
+    }
+    transition_gmail_metadata_child_authorization_with_result(
+        snapshot,
+        authorization,
+        ledger,
+        shadow_finalization,
+        expected,
+        next,
+        Some(terminal_result_sha256),
+    )
 }
 
 struct GmailMetadataFanoutExecution<'a> {
@@ -3126,6 +3724,7 @@ struct GmailMetadataFanoutExecution<'a> {
     upstream_send_deadlines: UpstreamSendDeadlines,
     prepared_upstream: &'a PreparedUpstream,
     child_authorizations: &'a GmailMetadataChildAuthorizationLedger,
+    shadow_finalization: Option<&'a policy_core::ShadowRequestHandle>,
 }
 
 struct CredentialLeaseFlight {
@@ -3498,6 +4097,81 @@ impl<T: ConfigureIoTimeout + Write> Write for DeadlineIo<T> {
     }
 }
 
+enum DirectProxyStream {
+    DevelopmentRaw(DeadlineIo<TcpStream>),
+    MutualTls(StreamOwned<ServerConnection, DeadlineIo<TcpStream>>),
+}
+
+impl DirectProxyStream {
+    fn reset_read_deadline(&mut self, budget: Duration) {
+        match self {
+            Self::DevelopmentRaw(stream) => stream.reset_read_deadline(budget),
+            Self::MutualTls(stream) => stream.sock.reset_read_deadline(budget),
+        }
+    }
+
+    fn reset_write_deadline(&mut self, budget: Duration) {
+        match self {
+            Self::DevelopmentRaw(stream) => stream.reset_write_deadline(budget),
+            Self::MutualTls(stream) => stream.sock.reset_write_deadline(budget),
+        }
+    }
+
+    fn clone_raw_reader(&self) -> io::Result<TcpStream> {
+        match self {
+            Self::DevelopmentRaw(stream) => stream.inner.try_clone(),
+            Self::MutualTls(_) => Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "outer TLS transport cannot be cloned for absolute-form streaming",
+            )),
+        }
+    }
+
+    fn is_mutual_tls(&self) -> bool {
+        matches!(self, Self::MutualTls(_))
+    }
+}
+
+impl Read for DirectProxyStream {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        match self {
+            Self::DevelopmentRaw(stream) => stream.read(buffer),
+            Self::MutualTls(stream) => stream.read(buffer),
+        }
+    }
+}
+
+impl Write for DirectProxyStream {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        match self {
+            Self::DevelopmentRaw(stream) => stream.write(buffer),
+            Self::MutualTls(stream) => stream.write(buffer),
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        match self {
+            Self::DevelopmentRaw(stream) => stream.flush(),
+            Self::MutualTls(stream) => stream.flush(),
+        }
+    }
+}
+
+impl TerminalDeadlineWrite for DirectProxyStream {
+    fn set_terminal_write_deadline(&mut self, deadline: Option<Instant>) {
+        match self {
+            Self::DevelopmentRaw(stream) => stream.set_terminal_write_deadline(deadline),
+            Self::MutualTls(stream) => stream.sock.set_terminal_write_deadline(deadline),
+        }
+    }
+}
+
+impl TerminalDeadlineWrite for StreamOwned<ServerConnection, DirectProxyStream> {
+    fn set_terminal_write_deadline(&mut self, deadline: Option<Instant>) {
+        self.sock.set_terminal_write_deadline(deadline);
+    }
+}
+
 #[derive(Clone, Debug)]
 struct PinnedVerifierCommand {
     executable: PathBuf,
@@ -3540,6 +4214,7 @@ struct AttestedResponseContext {
     source_tree_digest: Option<String>,
 }
 
+#[derive(Clone)]
 struct PolicyTrustRoot {
     verifying_key: VerifyingKey,
     key_id: String,
@@ -3819,6 +4494,8 @@ impl CredentialLeaseCacheKey {
 struct CredentialLeaseRequestCleanup<'a> {
     state: &'a GateState,
     cache_key: Option<CredentialLeaseCacheKey>,
+    shadow_finalization: Option<policy_core::ShadowRequestHandle>,
+    shadow_snapshot: Option<Arc<Snapshot>>,
 }
 
 impl<'a> CredentialLeaseRequestCleanup<'a> {
@@ -3826,7 +4503,18 @@ impl<'a> CredentialLeaseRequestCleanup<'a> {
         Self {
             state,
             cache_key: None,
+            shadow_finalization: None,
+            shadow_snapshot: None,
         }
+    }
+
+    fn bind_shadow_effects(
+        &mut self,
+        finalization: &policy_core::ShadowRequestHandle,
+        snapshot: &Arc<Snapshot>,
+    ) {
+        self.shadow_finalization = Some(finalization.clone());
+        self.shadow_snapshot = Some(Arc::clone(snapshot));
     }
 
     fn arm_bound(
@@ -3860,22 +4548,92 @@ impl<'a> CredentialLeaseRequestCleanup<'a> {
     }
 
     fn remove_now(&mut self) {
-        let Some(cache_key) = self.cache_key.as_ref() else {
+        let Some(cache_key) = self.cache_key.clone() else {
             return;
         };
+        let finalization = self.shadow_finalization.clone();
+        let snapshot = self.shadow_snapshot.clone();
+        let cleanup_permit = match (finalization.as_ref(), snapshot.as_ref()) {
+            (Some(finalization), Some(snapshot)) => prepare_shadow_active_effect(
+                Some(finalization),
+                snapshot,
+                ActiveMutableEffectKind::Cleanup,
+                &json!({
+                    "domain":"serverware.policyShadowCredentialCleanupIntent/v1",
+                    "principalIdSha256":
+                        sha256_prefixed(cache_key.scope.principal_id.as_bytes()),
+                    "routeIdSha256":
+                        sha256_prefixed(cache_key.scope.route_id.as_bytes()),
+                    "credentialIdSha256":
+                        sha256_prefixed(cache_key.scope.credential_id.as_bytes()),
+                    "requestAuthoritySha256":
+                        cache_key.request_authority_sha256.as_deref(),
+                }),
+                &json!({
+                    "domain":"serverware.policyShadowCredentialCleanupPreparedState/v1",
+                    "leaseKeySha256":digest_json_ensure_ascii(&json!({
+                        "scope":cache_key.scope,
+                        "releaseAuthorization":cache_key.release_authorization,
+                    })),
+                }),
+            )
+            .map_err(|_| ()),
+            _ => Err(()),
+        };
+        if cleanup_permit.is_err() {
+            self.state
+                .policy_shadow
+                .quarantine_for_cleanup_failure();
+            if let Some(finalization) = finalization.as_ref() {
+                finalization.record_unready_accounting(
+                    PolicyShadowTerminalReason::InternalError,
+                );
+            }
+        }
         // Keep the key armed until the exact cache owner has been removed and dropped.
         // SecretLease owns Zeroizing secret storage; transport-library allocations do not.
         let (mut leases, recovered_poison) = match self.state.credential_leases.lock() {
             Ok(leases) => (leases, false),
             Err(poisoned) => (poisoned.into_inner(), true),
         };
-        let removed = leases.remove(cache_key);
+        let removed = leases.remove(&cache_key);
+        let removed_sha256 = removed.as_ref().map(|lease| {
+            digest_json_ensure_ascii(&json!({
+                "scope":lease.scope,
+                "version":lease.version,
+                "metadataSha256":lease.metadata_sha256,
+                "policySha256":lease.policy_hash,
+            }))
+        });
         drop(removed);
-        self.cache_key = None;
         if recovered_poison {
             self.state.credential_leases.clear_poison();
         }
         drop(leases);
+        if let (Some(finalization), Ok(cleanup_permit)) =
+            (finalization.as_ref(), cleanup_permit)
+        {
+            if commit_shadow_active_effect(
+                Some(finalization),
+                cleanup_permit,
+                ActiveEffectCommitState::Committed,
+                &json!({
+                    "domain":"serverware.policyShadowCredentialCleanupResult/v1",
+                    "removedLeaseSha256":removed_sha256,
+                    "secretMaterialWiped":true,
+                }),
+            )
+            .is_err()
+            {
+                self.state
+                    .policy_shadow
+                    .quarantine_for_cleanup_failure();
+                finalization.record_unready_accounting(
+                    PolicyShadowTerminalReason::InternalError,
+                );
+            }
+        }
+        self.cache_key = None;
     }
 }
 
@@ -4912,6 +5670,8 @@ enum ReleaseAuthorizationStage {
 
 struct ReleaseAuthorizationGuard<'a> {
     state: &'a GateState,
+    shadow_finalization: Option<policy_core::ShadowRequestHandle>,
+    shadow_snapshot: Option<Arc<Snapshot>>,
     response_authentication: Option<AttestedResponseAuthenticationContext>,
     reservation: ReleaseAuthorizationReservation,
     stage: ReleaseAuthorizationStage,
@@ -5889,6 +6649,146 @@ impl TrustedMtlsEvidence {
     }
 }
 
+fn canonical_tls_uri_san(value: &str) -> bool {
+    if !valid_uri_san(value) {
+        return false;
+    }
+    Url::parse(value).is_ok_and(|url| {
+        url.as_str() == value
+            && url.username().is_empty()
+            && url.password().is_none()
+            && url.fragment().is_none()
+            && url.host_str().is_none_or(|host| {
+                host == host.to_ascii_lowercase() && !host.ends_with('.')
+            })
+    })
+}
+
+fn canonical_spiffe_id(value: &str) -> bool {
+    if !value.starts_with("spiffe://") || !canonical_tls_uri_san(value) {
+        return false;
+    }
+    Url::parse(value).is_ok_and(|url| {
+        url.scheme() == "spiffe"
+            && url.host_str().is_some_and(valid_dns_san)
+            && url.port().is_none()
+            && url.query().is_none()
+            && url.fragment().is_none()
+            && !url.path().contains("//")
+            && !url.path().split('/').any(|segment| matches!(segment, "." | ".."))
+    })
+}
+
+fn verified_leaf_issuer_spki_sha256(
+    leaf: &x509_parser::certificate::X509Certificate<'_>,
+    presented_chain: &[CertificateDer<'static>],
+    trust_certificates: &[CertificateDer<'static>],
+) -> Option<String> {
+    let mut issuer_digests = Vec::new();
+    for candidate_der in presented_chain
+        .iter()
+        .skip(1)
+        .chain(trust_certificates.iter())
+    {
+        let Ok(candidate) = parse_exact_x509_certificate(
+            candidate_der.as_ref(),
+            "verified client issuer candidate",
+        ) else {
+            continue;
+        };
+        if leaf.issuer().as_raw() != candidate.subject().as_raw()
+            || leaf.verify_signature(Some(candidate.public_key())).is_err()
+        {
+            continue;
+        }
+        issuer_digests.push(sha256_prefixed(
+            candidate.tbs_certificate.subject_pki.raw,
+        ));
+    }
+    issuer_digests.sort();
+    issuer_digests.dedup();
+    (issuer_digests.len() == 1).then(|| issuer_digests.remove(0))
+}
+
+fn trusted_mtls_evidence_from_verified_peer(
+    presented_chain: &[CertificateDer<'static>],
+    trust_certificates: &[CertificateDer<'static>],
+) -> Result<TrustedMtlsEvidence, String> {
+    validate_tls_certificate_vector(presented_chain, "verified proxy TLS peer chain")?;
+    let leaf_der = presented_chain
+        .first()
+        .ok_or("verified proxy TLS peer chain is empty")?;
+    let leaf = parse_exact_x509_certificate(
+        leaf_der.as_ref(),
+        "verified proxy TLS peer leaf certificate",
+    )?;
+    let mut san_dns_names = Vec::new();
+    let mut san_uris = Vec::new();
+    let mut san_spiffe_ids = Vec::new();
+    if let Some(subject_alternative_name) = leaf
+        .subject_alternative_name()
+        .map_err(|err| format!("parse verified proxy TLS peer subjectAltName: {err}"))?
+    {
+        if subject_alternative_name.value.general_names.len() > MAX_PROXY_TLS_SAN_ENTRIES {
+            return Err("verified proxy TLS peer has too many subjectAltName entries".to_string());
+        }
+        for name in &subject_alternative_name.value.general_names {
+            match name {
+                x509_parser::extensions::GeneralName::DNSName(value) => {
+                    let canonical = value.to_ascii_lowercase();
+                    if !valid_dns_san(&canonical) {
+                        return Err(
+                            "verified proxy TLS peer has a noncanonical DNS SAN".to_string(),
+                        );
+                    }
+                    san_dns_names.push(canonical);
+                }
+                x509_parser::extensions::GeneralName::URI(value) => {
+                    if !canonical_tls_uri_san(value) {
+                        return Err(
+                            "verified proxy TLS peer has a noncanonical URI SAN".to_string(),
+                        );
+                    }
+                    san_uris.push((*value).to_string());
+                    if value.starts_with("spiffe://") {
+                        if !canonical_spiffe_id(value) {
+                            return Err(
+                                "verified proxy TLS peer has a noncanonical SPIFFE ID"
+                                    .to_string(),
+                            );
+                        }
+                        san_spiffe_ids.push((*value).to_string());
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    for values in [&mut san_dns_names, &mut san_uris, &mut san_spiffe_ids] {
+        values.sort();
+        values.dedup();
+    }
+    let evidence = TrustedMtlsEvidence {
+        verified_by_trusted_ingress: true,
+        san_spiffe_ids,
+        san_dns_names,
+        san_uris,
+        certificate_sha256: Some(sha256_prefixed(leaf_der.as_ref())),
+        spki_sha256: Some(sha256_prefixed(
+            leaf.tbs_certificate.subject_pki.raw,
+        )),
+        issuer_spki_sha256: verified_leaf_issuer_spki_sha256(
+            &leaf,
+            presented_chain,
+            trust_certificates,
+        ),
+    };
+    if !evidence.is_canonical() {
+        return Err("verified proxy TLS peer identity is not canonical and bounded".to_string());
+    }
+    Ok(evidence)
+}
+
 fn bearer_token_from_proxy_authorization<'a>(header: &'a str, scheme: &str) -> Option<&'a str> {
     let (actual_scheme, token) = header.trim().split_once(' ')?;
     if token.is_empty() || !actual_scheme.eq_ignore_ascii_case(scheme) {
@@ -5978,8 +6878,7 @@ impl Principal {
     }
 
     fn matches(&self, client_ip: Option<&str>, headers: &BTreeMap<String, String>) -> bool {
-        // Direct listener boundary: it has no authenticated private-ingress
-        // channel for connection-bound certificate evidence.
+        // Non-ingress and explicit development callers do not have certificate evidence.
         self.matches_at(client_ip, headers, None, now_epoch_ms())
     }
 
@@ -6051,6 +6950,60 @@ fn canonical_cidr_strings(networks: &[IpNet]) -> Vec<String> {
 }
 
 impl ConnectAuthentication {
+    fn binding_sha256(&self) -> String {
+        let proxy_authorization = match
+            self.proxy_authorization_binding.as_ref()
+        {
+            Some(
+                ConnectProxyAuthorizationBinding::LegacyExactSha256(
+                    digest,
+                ),
+            ) => json!({
+                "kind":"LEGACY_EXACT_SHA256",
+                "sha256":digest,
+            }),
+            Some(
+                ConnectProxyAuthorizationBinding::BearerTokenSha256(
+                    digest,
+                ),
+            ) => json!({
+                "kind":"BEARER_TOKEN_SHA256",
+                "sha256":digest,
+            }),
+            None => Value::Null,
+        };
+        let trusted_mtls = self
+            .trusted_mtls_evidence
+            .as_ref()
+            .map(|evidence| {
+                json!({
+                    "verifiedByTrustedIngress":
+                        evidence.verified_by_trusted_ingress,
+                    "sanSpiffeIds":evidence.san_spiffe_ids,
+                    "sanDnsNames":evidence.san_dns_names,
+                    "sanUris":evidence.san_uris,
+                    "certificateSha256":
+                        evidence.certificate_sha256,
+                    "spkiSha256":evidence.spki_sha256,
+                    "issuerSpkiSha256":
+                        evidence.issuer_spki_sha256,
+                })
+            })
+            .unwrap_or(Value::Null);
+        digest_json_ensure_ascii(&json!({
+            "apiVersion":
+                "serverware.connectAuthenticationBinding/v1",
+            "principalId":self.principal_id,
+            "clientIp":self.client_ip,
+            "requiredHeaderDigests":
+                self.required_header_digests,
+            "proxyAuthorization":proxy_authorization,
+            "trustedMtls":trusted_mtls,
+            "identityPolicySha256":
+                self.identity_policy_digest,
+        }))
+    }
+
     fn capture(
         snapshot: &Snapshot,
         principal_id: &str,
@@ -6060,11 +7013,46 @@ impl ConnectAuthentication {
         Self::capture_at(snapshot, principal_id, client_ip, headers, now_epoch_ms())
     }
 
+    fn capture_with_mtls(
+        snapshot: &Snapshot,
+        principal_id: &str,
+        client_ip: Option<&str>,
+        headers: &BTreeMap<String, String>,
+        trusted_mtls_evidence: Option<&TrustedMtlsEvidence>,
+    ) -> Result<Self, ConnectAuthenticationError> {
+        Self::capture_at_with_mtls(
+            snapshot,
+            principal_id,
+            client_ip,
+            headers,
+            trusted_mtls_evidence,
+            now_epoch_ms(),
+        )
+    }
+
     fn capture_at(
         snapshot: &Snapshot,
         principal_id: &str,
         client_ip: Option<&str>,
         headers: &BTreeMap<String, String>,
+        now_epoch_ms: u128,
+    ) -> Result<Self, ConnectAuthenticationError> {
+        Self::capture_at_with_mtls(
+            snapshot,
+            principal_id,
+            client_ip,
+            headers,
+            None,
+            now_epoch_ms,
+        )
+    }
+
+    fn capture_at_with_mtls(
+        snapshot: &Snapshot,
+        principal_id: &str,
+        client_ip: Option<&str>,
+        headers: &BTreeMap<String, String>,
+        trusted_mtls_evidence: Option<&TrustedMtlsEvidence>,
         now_epoch_ms: u128,
     ) -> Result<Self, ConnectAuthenticationError> {
         let principal = snapshot
@@ -6073,7 +7061,7 @@ impl ConnectAuthentication {
             .find(|principal| principal.id == principal_id)
             .ok_or(ConnectAuthenticationError::PrincipalRevoked)?;
         let headers = lower_headers(headers);
-        if !principal.matches_at(client_ip, &headers, None, now_epoch_ms) {
+        if !principal.matches_at(client_ip, &headers, trusted_mtls_evidence, now_epoch_ms) {
             return Err(ConnectAuthenticationError::SelectorRejected);
         }
         let mut required_header_digests = BTreeMap::new();
@@ -6108,7 +7096,7 @@ impl ConnectAuthentication {
             client_ip: client_ip.map(ToString::to_string),
             required_header_digests,
             proxy_authorization_binding,
-            trusted_mtls_evidence: None,
+            trusted_mtls_evidence: trusted_mtls_evidence.cloned(),
             identity_policy_digest: principal.identity_policy_digest(),
         })
     }
@@ -6147,14 +7135,28 @@ impl ConnectAuthentication {
 }
 
 impl Snapshot {
+    fn identify_principal_with_mtls(
+        &self,
+        client_ip: Option<&str>,
+        headers: &BTreeMap<String, String>,
+        trusted_mtls_evidence: Option<&TrustedMtlsEvidence>,
+    ) -> Option<&Principal> {
+        self.principals.iter().find(|principal| {
+            principal.matches_at(
+                client_ip,
+                headers,
+                trusted_mtls_evidence,
+                now_epoch_ms(),
+            )
+        })
+    }
+
     fn identify_principal(
         &self,
         client_ip: Option<&str>,
         headers: &BTreeMap<String, String>,
     ) -> Option<&Principal> {
-        self.principals
-            .iter()
-            .find(|principal| principal.matches(client_ip, headers))
+        self.identify_principal_with_mtls(client_ip, headers, None)
     }
 
     fn match_route(&self, principal_id: &str, method: &str, url: &Url) -> Option<RouteMatch<'_>> {
@@ -7739,7 +8741,7 @@ fn validate_response_envelope_constraint(
     if statuses.iter().any(|status| {
         status
             .as_u64()
-            .is_none_or(|status| !(100..=599).contains(&status) || !seen_statuses.insert(status))
+            .is_none_or(|status| !(200..=599).contains(&status) || !seen_statuses.insert(status))
     }) {
         return Err(format!(
             "route {route_id} responseEnvelope {constraint_id} statuses are invalid or duplicated"
@@ -9569,9 +10571,9 @@ fn validate_route_credential_binding(
         .provider_subject
         .as_deref()
         .ok_or_else(|| format!("route {route_id} credential has no signed provider subject"))?;
-    if !subjects.contains(&provider_subject) {
+    if subjects.as_slice() != [provider_subject] {
         return Err(format!(
-            "route {route_id} credentialBinding does not admit its exact provider subject"
+            "route {route_id} credentialBinding must contain only its exact provider subject"
         ));
     }
     if credential.kind() == "oauth2" {
@@ -9580,7 +10582,7 @@ fn validate_route_credential_binding(
         let client_id = credential
             .oauth_client_id()
             .ok_or_else(|| format!("route {route_id} OAuth credential has no signed client ID"))?;
-        if !client_ids.contains(&client_id)
+        if client_ids.as_slice() != [client_id]
             || required_scopes
                 .iter()
                 .any(|scope| !credential.scopes().any(|granted| granted == *scope))
@@ -9908,12 +10910,41 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
             .get("provider")
             .and_then(Value::as_str)
             .ok_or_else(|| format!("credential {credential_id} provider missing"))?;
+        if provider.is_empty()
+            || provider.len() > 64
+            || normalized_credential_provider(provider) != provider
+            || !provider
+                .bytes()
+                .enumerate()
+                .all(|(index, value)| {
+                    value.is_ascii_lowercase()
+                        || (index > 0
+                            && (value.is_ascii_digit()
+                                || matches!(value, b'.' | b'-')))
+                })
+        {
+            return Err(format!(
+                "credential {credential_id} provider is noncanonical"
+            ));
+        }
         credential
             .get("credentialType")
             .and_then(Value::as_str)
             .ok_or_else(|| format!("credential {credential_id} credentialType missing"))?;
-        let provider_subject = credential.get("providerSubject").and_then(Value::as_str);
-        let provider_account = provider_account_scope_value(provider, provider_subject);
+        let provider_subject = credential
+            .get("providerSubject")
+            .and_then(Value::as_str)
+            .filter(|value| {
+                !value.is_empty()
+                    && *value == value.trim()
+                    && value.len() <= 512
+                    && !value.chars().any(char::is_control)
+            })
+            .ok_or_else(|| {
+                format!("credential {credential_id} providerSubject is invalid")
+            })?;
+        let provider_account =
+            provider_account_scope_value(provider, Some(provider_subject));
         let injection = credential.get("injection").unwrap_or(&Value::Null);
         validate_managed_oauth_injection(credential_id, provider, injection)?;
         let target = credential_injection_target(injection)
@@ -9927,7 +10958,7 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
         credential_provider_accounts.insert(credential_id.to_string(), provider_account);
         let policy = Credential {
             provider: provider.to_string(),
-            provider_subject: provider_subject.map(str::to_string),
+            provider_subject: Some(provider_subject.to_string()),
             injection: credential_injection_with_signed_identity(injection, credential)?,
         };
         if credential_policies
@@ -12260,9 +13291,9 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
             .get("maxUses")
             .and_then(Value::as_u64)
             .ok_or_else(|| format!("route {route_id} JIT maxUses must be an integer"))?;
-        if max_uses == 0 {
+        if !(1..=64).contains(&max_uses) {
             return Err(format!(
-                "route {route_id} JIT maxUses must be a positive integer"
+                "route {route_id} JIT maxUses must be between 1 and 64"
             ));
         }
         let consume_on = jit
@@ -12408,27 +13439,44 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
             .ok_or_else(|| {
                 format!("route {route_id} JIT authn allowedAuthenticatorClasses must be an array")
             })?;
-        if authenticator_classes.iter().any(|class| {
-            !matches!(
-                class.as_str(),
-                Some("yubikey" | "hardware" | "platform" | "dev" | "unknown")
-            )
-        }) {
+        if !(1..=5).contains(&authenticator_classes.len())
+            || authenticator_classes.iter().any(|class| {
+                !matches!(
+                    class.as_str(),
+                    Some("yubikey" | "hardware" | "platform" | "dev" | "unknown")
+                )
+            })
+        {
             return Err(format!(
                 "route {route_id} JIT authn allowedAuthenticatorClasses is invalid"
             ));
         }
-        if webauthn_required && authenticator_classes.is_empty() {
+        let mut unique_authenticator_classes = HashSet::new();
+        if authenticator_classes.iter().any(|class| {
+            !unique_authenticator_classes
+                .insert(class.as_str().unwrap_or_default())
+        }) {
             return Err(format!(
-                "route {route_id} WebAuthn JIT policy must define allowed authenticator classes"
+                "route {route_id} JIT authn allowedAuthenticatorClasses contains duplicates"
             ));
         }
-        authn
+        let require_hardware_attestation = authn
             .get("requireHardwareAttestation")
             .and_then(Value::as_bool)
             .ok_or_else(|| {
                 format!("route {route_id} JIT authn requireHardwareAttestation must be a boolean")
             })?;
+        if require_hardware_attestation
+            && (!webauthn_required
+                || user_verification != "required"
+                || authenticator_classes.iter().any(|class| {
+                    !matches!(class.as_str(), Some("yubikey" | "hardware"))
+                }))
+        {
+            return Err(format!(
+                "route {route_id} hardware-attested JIT requires WebAuthn, required user verification, and only yubikey/hardware authenticators"
+            ));
+        }
     }
 
     Ok(())
@@ -12943,6 +13991,63 @@ fn load_snapshot(
     let text = fs::read_to_string(path).map_err(|err| format!("read policy bundle: {err}"))?;
     let raw =
         strict_json_value_from_str(&text).map_err(|err| format!("parse policy bundle: {err}"))?;
+    let trust_root = load_policy_trust_root(trust_root_source)?;
+    compile_signed_snapshot(
+        raw,
+        trust_root,
+        running_binary_digest,
+        true,
+    )
+}
+
+fn load_shadow_snapshot_pair(
+    active_raw: Value,
+    candidate_raw: Value,
+    trust_root_source: &PolicyTrustRootSource,
+    running_binary_digest: &str,
+    is_production: bool,
+) -> Result<(Snapshot, Snapshot), String> {
+    if is_production
+        && !matches!(
+            trust_root_source,
+            PolicyTrustRootSource::AttestedControlPlane { .. }
+        )
+    {
+        return Err(
+            "production candidate-shadow compilation requires an attested policy trust root"
+                .to_string(),
+        );
+    }
+    let trust_root = load_policy_trust_root(trust_root_source)?;
+    let active = compile_signed_snapshot(
+        active_raw,
+        trust_root.clone(),
+        running_binary_digest,
+        true,
+    )?;
+    let candidate = compile_signed_snapshot(
+        candidate_raw,
+        trust_root,
+        running_binary_digest,
+        false,
+    )?;
+    if active.policy_signing_key_id
+        != candidate.policy_signing_key_id
+    {
+        return Err(
+            "active and candidate policies do not use one exact trust root"
+                .to_string(),
+        );
+    }
+    Ok((active, candidate))
+}
+
+fn compile_signed_snapshot(
+    raw: Value,
+    trust_root: PolicyTrustRoot,
+    running_binary_digest: &str,
+    require_attested_policy_hash: bool,
+) -> Result<Snapshot, String> {
     if raw.get("apiVersion").and_then(Value::as_str) != Some("serverware.policy/v1") {
         return Err("apiVersion must be serverware.policy/v1".to_string());
     }
@@ -12985,7 +14090,6 @@ fn load_snapshot(
     if signing_key_id.is_empty() {
         return Err("policy metadata.signingKeyId must be present for data-plane load".to_string());
     }
-    let trust_root = load_policy_trust_root(trust_root_source)?;
     if let Some(attested_binary_digest) = trust_root.attested_data_plane_binary_digest.as_deref() {
         if attested_binary_digest != running_binary_digest {
             return Err(format!(
@@ -13006,12 +14110,19 @@ fn load_snapshot(
     verify_policy_signature(&raw, &trust_root)?;
 
     let hash = sha256_prefixed(canonical_json(&signature_payload(&raw)).as_bytes());
-    if let Some(attested_hash) = trust_root.attested_policy_hash.as_ref() {
-        if attested_hash != &hash {
-            return Err(format!(
-                "policy bundle digest is not the attested control-plane policy: attestation has {attested_hash}, bundle has {hash}"
-            ));
+    if require_attested_policy_hash {
+        if let Some(attested_hash) = trust_root.attested_policy_hash.as_ref() {
+            if attested_hash != &hash {
+                return Err(format!(
+                    "policy bundle digest is not the attested control-plane policy: attestation has {attested_hash}, bundle has {hash}"
+                ));
+            }
         }
+    } else if trust_root.attested_policy_hash.as_ref() == Some(&hash) {
+        return Err(
+            "candidate policy must be distinct from the attested active policy"
+                .to_string(),
+        );
     }
     validate_policy_capabilities(&raw)?;
     validate_policy_schema(&raw)?;
@@ -13157,6 +14268,74 @@ fn load_snapshot(
                 .ok_or("route host missing")?,
         )
         .map_err(|error| format!("route {id} host is invalid: {error}"))?;
+        let response_observation = item
+            .get("responseObservation")
+            .map(|value| -> Result<ResponseObservationRouteConfig, String> {
+                let object = value.as_object().ok_or_else(|| {
+                    format!("route {id} responseObservation must be an object")
+                })?;
+                let version = match object
+                    .get("version")
+                    .and_then(Value::as_str)
+                {
+                    Some("v1") => ResponseObservationRouteVersion::V1,
+                    Some("v2") => ResponseObservationRouteVersion::V2,
+                    _ => {
+                        return Err(format!(
+                            "route {id} responseObservation.version must be v1 or v2"
+                        ))
+                    }
+                };
+                let lifecycle_timeout_ms = object
+                    .get("lifecycleTimeoutMs")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(
+                        RESPONSE_OBSERVATION_V2_MAX_OPERATION_MS,
+                    );
+                if lifecycle_timeout_ms == 0
+                    || lifecycle_timeout_ms
+                        > RESPONSE_OBSERVATION_V2_MAX_OPERATION_MS
+                {
+                    return Err(format!(
+                        "route {id} responseObservation.lifecycleTimeoutMs is out of bounds"
+                    ));
+                }
+                let publication_target =
+                    object.get("publicationTarget").and_then(Value::as_object);
+                let publication_target_id = publication_target
+                    .and_then(|target| target.get("id"))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                let publication_target_policy_sha256 = publication_target
+                    .and_then(|target| target.get("policySha256"))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                if version == ResponseObservationRouteVersion::V2
+                    && (publication_target_id.is_none()
+                        || publication_target_policy_sha256
+                            .as_deref()
+                            .is_none_or(|digest| !is_sha256_digest(digest)))
+                {
+                    return Err(format!(
+                        "route {id} v2 response observation requires a bound publication target"
+                    ));
+                }
+                if version == ResponseObservationRouteVersion::V1
+                    && publication_target.is_some()
+                {
+                    return Err(format!(
+                        "route {id} v1 response observation cannot configure a v2 publication target"
+                    ));
+                }
+                Ok(ResponseObservationRouteConfig {
+                    version,
+                    lifecycle_timeout:
+                        Duration::from_millis(lifecycle_timeout_ms),
+                    publication_target_id,
+                    publication_target_policy_sha256,
+                })
+            })
+            .transpose()?;
         routes.push(Route {
             id: id.clone(),
             principals: item
@@ -13196,12 +14375,22 @@ fn load_snapshot(
             discard_headers,
             constraints,
             jit: item.get("jit").cloned().unwrap_or_else(|| json!({})),
+            response_observation,
         });
     }
     validate_route_ambiguity(&routes)?;
     validate_x_recent_search_route_conflicts(&routes)?;
     routes.sort_by(|left, right| left.id.cmp(&right.id));
+    let compiled_behavior_sha256 =
+        compiled_snapshot_behavior_sha256(
+            &principals,
+            &credentials,
+            &routes,
+        );
 
+    let attested_response_context = trust_root
+        .attested_response_context
+        .filter(|context| context.policy_bundle_digest == hash);
     Ok(Snapshot {
         epoch: 0,
         hash,
@@ -13209,10 +14398,11 @@ fn load_snapshot(
         policy_sequence,
         rollback_epoch,
         trust_generation: 0,
+        compiled_behavior_sha256,
         policy_signing_key_id: signing_key_id,
         response_verifying_key: trust_root.response_verifying_key,
         response_signing_key_id: trust_root.response_signing_key_id,
-        attested_response_context: trust_root.attested_response_context,
+        attested_response_context,
         principals,
         credentials,
         routes,
@@ -13444,7 +14634,77 @@ fn same_signed_policy_identity(previous: &Snapshot, next: &Snapshot) -> bool {
         && previous.policy_id == next.policy_id
         && previous.policy_sequence == next.policy_sequence
         && previous.rollback_epoch == next.rollback_epoch
+        && previous.trust_generation == next.trust_generation
+        && previous.compiled_behavior_sha256
+            == next.compiled_behavior_sha256
         && previous.policy_signing_key_id == next.policy_signing_key_id
+        && previous.response_verifying_key == next.response_verifying_key
+        && previous.response_signing_key_id
+            == next.response_signing_key_id
+        && previous.attested_response_context
+            == next.attested_response_context
+}
+
+fn bind_shadow_active_runtime_identity(
+    mut compiled: Snapshot,
+    current: &Snapshot,
+) -> Result<Snapshot, String> {
+    if compiled.hash != current.hash
+        || compiled.policy_id != current.policy_id
+        || compiled.policy_sequence != current.policy_sequence
+        || compiled.rollback_epoch != current.rollback_epoch
+        || compiled.compiled_behavior_sha256
+            != current.compiled_behavior_sha256
+        || compiled.policy_signing_key_id
+            != current.policy_signing_key_id
+        || compiled.response_verifying_key
+            != current.response_verifying_key
+        || compiled.response_signing_key_id
+            != current.response_signing_key_id
+        || compiled.attested_response_context
+            != current.attested_response_context
+    {
+        return Err(
+            "compiled shadow active policy is not the current signed trust identity"
+                .to_string(),
+        );
+    }
+    compiled.epoch = current.epoch;
+    compiled.trust_generation = current.trust_generation;
+    Ok(compiled)
+}
+
+fn bind_next_active_runtime_identity(
+    mut compiled: Snapshot,
+    current: &Snapshot,
+) -> Result<Snapshot, String> {
+    let trust_changed = current.policy_signing_key_id
+        != compiled.policy_signing_key_id
+        || current.response_signing_key_id
+            != compiled.response_signing_key_id
+        || current.attested_response_context
+            != compiled.attested_response_context;
+    compiled.trust_generation = if trust_changed {
+        current
+            .trust_generation
+            .checked_add(1)
+            .ok_or("policy trust generation overflow")?
+    } else {
+        current.trust_generation
+    };
+    compiled.epoch = current
+        .epoch
+        .checked_add(1)
+        .ok_or("policy snapshot epoch overflow")?;
+    Ok(compiled)
+}
+
+fn same_exact_snapshot_identity(
+    previous: &Snapshot,
+    next: &Snapshot,
+) -> bool {
+    previous.epoch == next.epoch
+        && same_signed_policy_identity(previous, next)
 }
 
 fn clear_local_grants_if_signed_policy_changed(
@@ -13537,7 +14797,39 @@ fn refresh_policy_snapshot(state: &GateState, force: bool) -> Result<bool, Strin
                 );
                 return Err(err);
             }
+            let _active_policy_mutation =
+                state.upstream_dispatch_authority.begin_mutation();
             let previous = current_snapshot(state);
+            snapshot = bind_next_active_runtime_identity(
+                snapshot,
+                &previous,
+            )?;
+            if state.policy_shadow_generation_control.is_some()
+                && !same_signed_policy_identity(&previous, &snapshot)
+                && !state
+                    .policy_shadow
+                    .authorizes_new_active_snapshot(&snapshot)
+            {
+                let err =
+                    "changed policy lacks its exact retained activation publication"
+                        .to_string();
+                state
+                    .policy_reload_failed
+                    .fetch_add(1, Ordering::Relaxed);
+                enqueue_audit(
+                    state,
+                    "data_plane.policy.reload_failed",
+                    json!({
+                        "component":"serverware-decision-gate-rs",
+                        "error":err.clone(),
+                        "candidate_policy_id":snapshot.policy_id,
+                        "candidate_sequence":snapshot.policy_sequence,
+                        "candidate_rollback_epoch":snapshot.rollback_epoch,
+                        "candidate_policy_hash":snapshot.hash,
+                    }),
+                );
+                return Err(err);
+            }
             let high_water_update = (|| -> Result<(), String> {
                 let mut high_water = state
                     .policy_high_water
@@ -13568,15 +14860,6 @@ fn refresh_policy_snapshot(state: &GateState, force: bool) -> Result<bool, Strin
                 );
                 return Err(err);
             }
-            let trust_changed = previous.policy_signing_key_id != snapshot.policy_signing_key_id
-                || previous.response_signing_key_id != snapshot.response_signing_key_id
-                || previous.attested_response_context != snapshot.attested_response_context;
-            snapshot.trust_generation = if trust_changed {
-                previous.trust_generation.saturating_add(1)
-            } else {
-                previous.trust_generation
-            };
-            snapshot.epoch = previous.epoch.saturating_add(1);
             let next = Arc::new(snapshot);
             *state
                 .policy_trust_last_success
@@ -13612,7 +14895,6 @@ fn refresh_policy_snapshot(state: &GateState, force: bool) -> Result<bool, Strin
                 credential_generation_floors_pruned,
                 grants_cleared,
             ) = {
-                let _dispatch_authority = state.upstream_dispatch_authority.begin_mutation();
                 let mut current = state
                     .snapshot
                     .write()
@@ -15286,7 +16568,12 @@ fn response_observation_context(
     let Some(client_nonce) = lowered.get(RESPONSE_OBSERVATION_NONCE_HEADER) else {
         return Ok(None);
     };
-    if state.response_proof_attestation_command.is_none() || state.server_instance_id.is_none() {
+    let v1_configured =
+        state.response_proof_attestation_command.is_some()
+            && state.server_instance_id.is_some();
+    if !v1_configured
+        && state.response_observation_v2_client.is_none()
+    {
         return Err("response observation proof service is not configured".to_string());
     }
     if head.method != head.method.to_ascii_uppercase() {
@@ -17461,7 +18748,7 @@ fn validate_credential_generation_metadata(
             | "provider_id" | "provider_subject" | "account_subject" | "scope" | "subject"
             | "username" | "x_app_id" | "oauth_client_id" | "client_id" | "secret_class"
             | "token_class" | "provider_account" | "account" => validate_string(key, value)?,
-            "managed" | "oauth" => {
+            "managed" | "oauth" | "provider_identity_verified" => {
                 if !value.is_boolean() {
                     return Err(format!(
                         "credential generation metadata {key} must be a boolean"
@@ -17660,16 +18947,17 @@ fn validate_runtime_credential_binding(
             .get("subjects")
             .and_then(Value::as_array)
             .is_some_and(|subjects| {
-                subjects
-                    .iter()
-                    .any(|candidate| candidate.as_str() == Some(subject.as_str()))
+                subjects.len() == 1 && subjects[0].as_str() == Some(subject.as_str())
             })
     {
         return Err("runtime route credential binding is inconsistent".to_string());
     }
     if credential.kind() == "oauth2" {
         if metadata.get("oauth").and_then(Value::as_bool) != Some(true)
-            || metadata.get("managed").and_then(Value::as_bool) == Some(false)
+            || metadata
+                .get("provider_identity_verified")
+                .and_then(Value::as_bool)
+                != Some(true)
         {
             return Err(
                 "OAuth credential identity was not verified by the managed credential authority"
@@ -17688,14 +18976,13 @@ fn validate_runtime_credential_binding(
                 .get("clientIds")
                 .and_then(Value::as_array)
                 .is_some_and(|ids| {
-                    ids.iter()
-                        .any(|candidate| candidate.as_str() == Some(client_id.as_str()))
+                    ids.len() == 1 && ids[0].as_str() == Some(client_id.as_str())
                 })
         {
             return Err("OAuth client metadata does not match signed policy".to_string());
         }
         let stored_scopes = credential_metadata_scopes(metadata)?;
-        let signed_scopes = credential.scopes().collect::<HashSet<_>>();
+        let signed_scopes = credential.scopes().map(str::to_string).collect::<HashSet<_>>();
         if stored_scopes != signed_scopes
             || !binding
                 .get("requiredScopes")
@@ -17721,10 +19008,16 @@ fn validate_runtime_credential_binding(
             return Err("X application binding changed after admission".to_string());
         }
     } else {
-        if metadata.get("oauth").and_then(Value::as_bool) == Some(true)
-            || metadata.get("managed").and_then(Value::as_bool) == Some(true)
-        {
+        if metadata.get("oauth").and_then(Value::as_bool) == Some(true) {
             return Err("static credential metadata claims OAuth identity".to_string());
+        }
+        let stored_scopes = credential_metadata_scopes(metadata)?;
+        let signed_scopes = credential.scopes().map(str::to_string).collect::<HashSet<_>>();
+        if stored_scopes != signed_scopes {
+            return Err(
+                "static credential scopes metadata does not exactly match signed policy"
+                    .to_string(),
+            );
         }
         let secret_class = consistent_credential_metadata_alias(
             metadata,
@@ -17737,6 +19030,54 @@ fn validate_runtime_credential_binding(
             return Err(
                 "static credential class metadata does not match route binding".to_string(),
             );
+        }
+    }
+    let injection = credential
+        .injection
+        .as_object()
+        .ok_or("signed credential injection is not an object")?;
+    let injection_type = injection
+        .get("type")
+        .and_then(Value::as_str)
+        .ok_or("signed credential injection type is missing")?;
+    if credential.kind() == "oauth2"
+        && (injection_type != "bearer"
+            || injection
+                .get("header")
+                .and_then(Value::as_str)
+                .unwrap_or("Authorization")
+                .to_ascii_lowercase()
+                != "authorization"
+            || injection.get("field").and_then(Value::as_str) != Some("access_token")
+            || injection
+                .get("prefix")
+                .and_then(Value::as_str)
+                .unwrap_or("Bearer ")
+                != "Bearer ")
+    {
+        return Err("managed OAuth injection is not canonical".to_string());
+    }
+    if matches!(injection_type, "header" | "query" | "cookie")
+        && metadata.get("injection_name").and_then(Value::as_str)
+            != injection.get("name").and_then(Value::as_str)
+    {
+        return Err("credential injection name metadata does not match signed policy".to_string());
+    }
+    if injection_type == "basic"
+        && metadata.get("username").and_then(Value::as_str)
+            != injection.get("username").and_then(Value::as_str)
+    {
+        return Err("credential Basic username metadata does not match signed policy".to_string());
+    }
+    for (metadata_field, injection_field) in
+        [("injection_field", "field"), ("injection_prefix", "prefix")]
+    {
+        if let Some(value) = metadata.get(metadata_field).and_then(Value::as_str) {
+            if injection.get(injection_field).and_then(Value::as_str) != Some(value) {
+                return Err(format!(
+                    "credential {metadata_field} metadata does not match signed policy"
+                ));
+            }
         }
     }
     Ok(())
@@ -18807,6 +20148,27 @@ fn run_pinned_bounded_json_command(
     request: &Value,
     label: &str,
 ) -> Result<Value, String> {
+    run_pinned_bounded_json_command_with_output_limit(
+        command,
+        request,
+        label,
+        65_536,
+    )
+}
+
+fn run_pinned_bounded_json_command_with_output_limit(
+    command: &PinnedVerifierCommand,
+    request: &Value,
+    label: &str,
+    maximum_output_bytes: usize,
+) -> Result<Value, String> {
+    if maximum_output_bytes == 0
+        || maximum_output_bytes > 8 * 1024 * 1024
+    {
+        return Err(format!(
+            "{label}: output limit is outside the fixed 1-8388608 byte bound"
+        ));
+    }
     #[cfg(target_os = "linux")]
     {
         let snapshot = sealed_authenticated_verifier_snapshot(command)?;
@@ -18818,6 +20180,7 @@ fn run_pinned_bounded_json_command(
             Duration::from_secs(10),
             true,
             Some(snapshot.as_raw_fd()),
+            maximum_output_bytes,
         );
         drop(snapshot);
         result
@@ -18851,6 +20214,7 @@ fn run_bounded_json_command_with_timeout(
         timeout,
         false,
         None,
+        65_536,
     )
 }
 
@@ -18862,6 +20226,7 @@ fn run_bounded_json_program_with_timeout(
     timeout: Duration,
     restricted_environment: bool,
     authenticated_executable_fd: Option<RawFd>,
+    maximum_output_bytes: usize,
 ) -> Result<Value, String> {
     #[cfg(not(target_os = "linux"))]
     if authenticated_executable_fd.is_some() {
@@ -18951,9 +20316,10 @@ fn run_bounded_json_program_with_timeout(
     let (stdout_tx, stdout_rx) = mpsc::sync_channel(1);
     let reader_label = label.to_string();
     thread::spawn(move || {
-        let mut output = Zeroizing::new(Vec::with_capacity(65_537));
+        let read_limit = maximum_output_bytes.saturating_add(1);
+        let mut output = Zeroizing::new(Vec::with_capacity(read_limit));
         let result = stdout
-            .take(65_537)
+            .take(u64::try_from(read_limit).unwrap_or(u64::MAX))
             .read_to_end(&mut output)
             .map(|_| output)
             .map_err(|_| format!("read {reader_label} output"));
@@ -18974,7 +20340,7 @@ fn run_bounded_json_program_with_timeout(
         if output.is_none() {
             match stdout_rx.try_recv() {
                 Ok(Ok(value)) => {
-                    if value.len() > 65_536 {
+                    if value.len() > maximum_output_bytes {
                         terminate_child_process_group(&mut child);
                         return Err(format!("{label} output is too large"));
                     }
@@ -20068,6 +21434,7 @@ fn credential_lease_upstream_send_timeout(
 #[derive(Debug)]
 enum UpstreamSendError {
     CredentialAuthority(&'static str),
+    DispatchBarrier(String),
     RequestBuild(String),
     Request(String),
 }
@@ -20140,6 +21507,33 @@ fn send_upstream_request_with_current_lease(
     )
 }
 
+fn send_upstream_request_with_current_lease_finalized<F>(
+    state: &GateState,
+    snapshot: &Arc<Snapshot>,
+    binding: Option<&CredentialLeaseReleaseBinding>,
+    builder: reqwest::blocking::RequestBuilder,
+    deadlines: UpstreamSendDeadlines,
+    require_response_proof: bool,
+    observe_dispatch_barrier: F,
+) -> Result<reqwest::blocking::Response, UpstreamSendError>
+where
+    F: FnOnce(
+        &reqwest::blocking::Request,
+    ) -> Result<Option<ShadowDispatchBarrierPermit>, String>,
+{
+    send_upstream_request_with_current_lease_and_timeout_validated_and_finalized(
+        state,
+        snapshot,
+        binding,
+        builder,
+        None,
+        deadlines,
+        require_response_proof,
+        |_| Ok(()),
+        observe_dispatch_barrier,
+    )
+}
+
 fn send_upstream_request_with_current_lease_and_timeout(
     state: &GateState,
     snapshot: &Arc<Snapshot>,
@@ -20149,7 +21543,7 @@ fn send_upstream_request_with_current_lease_and_timeout(
     deadlines: UpstreamSendDeadlines,
     require_response_proof: bool,
 ) -> Result<reqwest::blocking::Response, UpstreamSendError> {
-    send_upstream_request_with_current_lease_and_timeout_validated(
+    send_upstream_request_with_current_lease_and_timeout_validated_and_finalized(
         state,
         snapshot,
         binding,
@@ -20158,6 +21552,7 @@ fn send_upstream_request_with_current_lease_and_timeout(
         deadlines,
         require_response_proof,
         |_| Ok(()),
+        |_| Ok(None),
     )
 }
 
@@ -20173,6 +21568,36 @@ fn send_upstream_request_with_current_lease_and_timeout_validated<F>(
 ) -> Result<reqwest::blocking::Response, UpstreamSendError>
 where
     F: FnOnce(&reqwest::blocking::Request) -> Result<(), &'static str>,
+{
+    send_upstream_request_with_current_lease_and_timeout_validated_and_finalized(
+        state,
+        snapshot,
+        binding,
+        builder,
+        maximum_timeout,
+        deadlines,
+        require_response_proof,
+        validate_request,
+        |_| Ok(None),
+    )
+}
+
+fn send_upstream_request_with_current_lease_and_timeout_validated_and_finalized<F, G>(
+    state: &GateState,
+    snapshot: &Arc<Snapshot>,
+    binding: Option<&CredentialLeaseReleaseBinding>,
+    builder: reqwest::blocking::RequestBuilder,
+    maximum_timeout: Option<Duration>,
+    deadlines: UpstreamSendDeadlines,
+    require_response_proof: bool,
+    validate_request: F,
+    observe_dispatch_barrier: G,
+) -> Result<reqwest::blocking::Response, UpstreamSendError>
+where
+    F: FnOnce(&reqwest::blocking::Request) -> Result<(), &'static str>,
+    G: FnOnce(
+        &reqwest::blocking::Request,
+    ) -> Result<Option<ShadowDispatchBarrierPermit>, String>,
 {
     let send = || {
         let (client, request) = builder.build_split();
@@ -20208,8 +21633,53 @@ where
             ));
         }
         validate_request(&request).map_err(UpstreamSendError::CredentialAuthority)?;
-        let result = client
-            .execute(request)
+        let shadow_dispatch_permit = observe_dispatch_barrier(&request)
+            .map_err(UpstreamSendError::DispatchBarrier)?;
+        let final_upstream_request_commitment =
+            shadow_final_upstream_request_commitment(&request)
+            .map_err(UpstreamSendError::DispatchBarrier)?;
+        if shadow_dispatch_permit
+                .as_ref()
+                .is_none_or(|permit| {
+                    !permit.authorizes_credentialed_send(
+                        &final_upstream_request_commitment,
+                    )
+                })
+        {
+            return Err(UpstreamSendError::DispatchBarrier(
+                "upstream dispatch lacks authoritative shadow effect evidence"
+                    .to_string(),
+            ));
+        }
+        let result = client.execute(request);
+        let (effect_state, effect_result_sha256) = match result.as_ref() {
+            Ok(response) => (
+                ActiveEffectCommitState::Committed,
+                digest_json_ensure_ascii(&json!({
+                    "domain":"serverware.policyShadowProviderSendResult/v1",
+                    "requestSha256":final_upstream_request_commitment.as_str(),
+                    "status":response.status().as_u16(),
+                    "outcome":"response-observed",
+                })),
+            ),
+            Err(_) => (
+                ActiveEffectCommitState::OutcomeUnknown,
+                digest_json_ensure_ascii(&json!({
+                    "domain":"serverware.policyShadowProviderSendResult/v1",
+                    "requestSha256":final_upstream_request_commitment.as_str(),
+                    "outcome":"provider-send-unknown",
+                })),
+            ),
+        };
+        shadow_dispatch_permit
+            .ok_or_else(|| {
+                UpstreamSendError::DispatchBarrier(
+                    "provider-send effect permit is unavailable".to_string(),
+                )
+            })?
+            .commit_provider_send(effect_state, &effect_result_sha256)
+            .map_err(UpstreamSendError::DispatchBarrier)?;
+        let result = result
             .map_err(redacted_reqwest_error)
             .map_err(UpstreamSendError::Request);
         drop(authority);
@@ -21879,7 +23349,7 @@ fn create_grant(state: &GateState, payload: GrantCreate) -> Value {
         "expires_at_ms": admitted_grant.expires_at_ms,
         "policy_hash": snapshot.hash,
         "idempotent_replay": !inserted,
-        "decision_us": started.elapsed().as_micros() as u64,
+        "decision_us": u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX),
     })
 }
 
@@ -24020,6 +25490,307 @@ fn validate_complete_release_authorization_transition(
     )
 }
 
+fn prepare_shadow_active_effect(
+    finalization: Option<&policy_core::ShadowRequestHandle>,
+    snapshot: &Arc<Snapshot>,
+    effect_kind: ActiveMutableEffectKind,
+    intent: &Value,
+    prepared_state: &Value,
+) -> Result<ShadowActiveEffectPermit, String> {
+    let finalization = finalization.ok_or_else(|| {
+        "active mutable effect lacks a policy-shadow lifecycle".to_string()
+    })?;
+    finalization.prepare_mutable_effect(
+        snapshot,
+        effect_kind,
+        &digest_json_ensure_ascii(intent),
+        &digest_json_ensure_ascii(prepared_state),
+    )
+}
+
+fn commit_shadow_active_effect(
+    finalization: Option<&policy_core::ShadowRequestHandle>,
+    permit: ShadowActiveEffectPermit,
+    terminal_state: ActiveEffectCommitState,
+    result: &Value,
+) -> Result<(), String> {
+    let finalization = finalization.ok_or_else(|| {
+        "active mutable effect lost its policy-shadow lifecycle".to_string()
+    })?;
+    finalization
+        .commit_mutable_effect(
+            permit,
+            terminal_state,
+            &digest_json_ensure_ascii(result),
+        )
+        .map(|_| ())
+}
+
+fn commit_shadow_release_effects(
+    finalization: Option<&policy_core::ShadowRequestHandle>,
+    permits: Vec<(ActiveMutableEffectKind, ShadowActiveEffectPermit)>,
+    terminal_state: ActiveEffectCommitState,
+    phase: &str,
+    provider_result: &Value,
+) -> Result<(), String> {
+    let provider_result_sha256 = digest_json_ensure_ascii(provider_result);
+    let mut first_error = None;
+    for (effect_kind, permit) in permits {
+        let result = json!({
+            "domain":"serverware.policyShadowReleaseLifecycleEffectResult/v1",
+            "effectKind":effect_kind,
+            "phase":phase,
+            "providerResultSha256":provider_result_sha256.as_str(),
+        });
+        if let Err(error) = commit_shadow_active_effect(
+            finalization,
+            permit,
+            terminal_state,
+            &result,
+        ) {
+            if first_error.is_none() {
+                first_error = Some(error);
+            }
+        }
+    }
+    match first_error {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
+}
+
+fn prepare_shadow_release_effect(
+    finalization: Option<&policy_core::ShadowRequestHandle>,
+    snapshot: &Arc<Snapshot>,
+    permits: &mut Vec<(ActiveMutableEffectKind, ShadowActiveEffectPermit)>,
+    effect_kind: ActiveMutableEffectKind,
+    phase: &str,
+    intent: &Value,
+    prepared_state: &Value,
+) -> Result<(), String> {
+    match prepare_shadow_active_effect(
+        finalization,
+        snapshot,
+        effect_kind,
+        intent,
+        prepared_state,
+    ) {
+        Ok(permit) => {
+            permits.push((effect_kind, permit));
+            Ok(())
+        }
+        Err(error) => {
+            let abort_error = commit_shadow_release_effects(
+                finalization,
+                std::mem::take(permits),
+                ActiveEffectCommitState::Aborted,
+                phase,
+                &json!({
+                    "domain":"serverware.policyShadowReleaseLifecyclePreparationFailed/v1",
+                    "failedEffectKind":effect_kind,
+                    "phase":phase,
+                }),
+            )
+            .err();
+            Err(match abort_error {
+                Some(abort_error) => format!(
+                    "release lifecycle effect preparation failed: {error}; sibling abort failed: {abort_error}"
+                ),
+                None => error,
+            })
+        }
+    }
+}
+
+fn execute_shadow_credential_effect<F>(
+    finalization: Option<&policy_core::ShadowRequestHandle>,
+    snapshot: &Arc<Snapshot>,
+    effect_kind: ActiveMutableEffectKind,
+    scope: &CredentialLeaseScope,
+    operation: F,
+) -> Result<CredentialLeaseInfo, String>
+where
+    F: FnOnce() -> Result<CredentialLeaseInfo, String>,
+{
+    let intent = json!({
+        "domain":"serverware.policyShadowCredentialEffectIntent/v1",
+        "effectKind":effect_kind,
+        "principalIdSha256":sha256_prefixed(scope.principal_id.as_bytes()),
+        "routeIdSha256":sha256_prefixed(scope.route_id.as_bytes()),
+        "credentialIdSha256":sha256_prefixed(scope.credential_id.as_bytes()),
+        "policySha256":snapshot.hash,
+    });
+    let prepared_state = json!({
+        "domain":"serverware.policyShadowCredentialPreparedState/v1",
+        "snapshotEpoch":snapshot.epoch,
+        "policySequence":snapshot.policy_sequence,
+        "rollbackEpoch":snapshot.rollback_epoch,
+    });
+    let mut permits = vec![prepare_shadow_active_effect(
+        finalization,
+        snapshot,
+        effect_kind,
+        &intent,
+        &prepared_state,
+    )?];
+    if effect_kind == ActiveMutableEffectKind::CredentialGeneration
+        && snapshot
+            .credentials
+            .get(&scope.credential_id)
+            .is_some_and(|credential| credential.kind() == "oauth2")
+    {
+        permits.push(prepare_shadow_active_effect(
+            finalization,
+            snapshot,
+            ActiveMutableEffectKind::OauthRotation,
+            &intent,
+            &prepared_state,
+        )?);
+    }
+    if effect_kind == ActiveMutableEffectKind::CredentialLease {
+        permits.push(prepare_shadow_active_effect(
+            finalization,
+            snapshot,
+            ActiveMutableEffectKind::CredentialDecrypt,
+            &intent,
+            &prepared_state,
+        )?);
+    }
+    let result = operation();
+    let (terminal_state, result_commitment) = match result.as_ref() {
+        Ok(info) => (
+            ActiveEffectCommitState::Committed,
+            json!({
+                "domain":"serverware.policyShadowCredentialEffectResult/v1",
+                "version":info.version,
+                "metadataSha256":digest_json_ensure_ascii(&info.metadata),
+                "secretAvailable":info.secret_available,
+            }),
+        ),
+        Err(_) => (
+            ActiveEffectCommitState::OutcomeUnknown,
+            json!({
+                "domain":"serverware.policyShadowCredentialEffectResult/v1",
+                "outcome":"credential-provider-outcome-unknown",
+            }),
+        ),
+    };
+    for permit in permits {
+        commit_shadow_active_effect(
+            finalization,
+            permit,
+            terminal_state,
+            &result_commitment,
+        )?;
+    }
+    result
+}
+
+fn execute_shadow_constraint_effects<F>(
+    finalization: Option<&policy_core::ShadowRequestHandle>,
+    snapshot: &Arc<Snapshot>,
+    intent: &Value,
+    operation: F,
+) -> Result<(), Value>
+where
+    F: FnOnce() -> Result<(), Value>,
+{
+    let prepared_state = json!({
+        "domain":"serverware.policyShadowConstraintPreparedState/v1",
+        "policySha256":snapshot.hash,
+        "policySequence":snapshot.policy_sequence,
+        "rollbackEpoch":snapshot.rollback_epoch,
+    });
+    let permit = prepare_shadow_active_effect(
+        finalization,
+        snapshot,
+        ActiveMutableEffectKind::QuotaCommit,
+        intent,
+        &prepared_state,
+    )
+    .map_err(|_| {
+        json!({
+            "status_code":503,
+            "error":"policy_shadow_effect_barrier_unavailable",
+        })
+    })?;
+    let result = operation();
+    let (terminal_state, result_commitment) = match result.as_ref() {
+        Ok(()) => (
+            ActiveEffectCommitState::Committed,
+            json!({
+                "domain":"serverware.policyShadowConstraintEffectResult/v1",
+                "outcome":"committed",
+            }),
+        ),
+        Err(payload) => (
+            ActiveEffectCommitState::OutcomeUnknown,
+            json!({
+                "domain":"serverware.policyShadowConstraintEffectResult/v1",
+                "outcome":"constraint-denied-or-provider-unknown",
+                "resultSha256":digest_json_ensure_ascii(payload),
+            }),
+        ),
+    };
+    commit_shadow_active_effect(
+        finalization,
+        permit,
+        terminal_state,
+        &result_commitment,
+    )
+    .map_err(|_| {
+        json!({
+            "status_code":503,
+            "error":"policy_shadow_effect_commit_unavailable",
+        })
+    })?;
+    result
+}
+
+fn execute_shadow_active_effect<T, F, R>(
+    finalization: Option<&policy_core::ShadowRequestHandle>,
+    snapshot: &Arc<Snapshot>,
+    effect_kind: ActiveMutableEffectKind,
+    intent: &Value,
+    prepared_state: &Value,
+    operation: F,
+    committed_result: R,
+) -> Result<T, String>
+where
+    F: FnOnce() -> Result<T, String>,
+    R: FnOnce(&T) -> Value,
+{
+    let permit = prepare_shadow_active_effect(
+        finalization,
+        snapshot,
+        effect_kind,
+        intent,
+        prepared_state,
+    )?;
+    let result = operation();
+    let (terminal_state, result_commitment) = match result.as_ref() {
+        Ok(value) => (
+            ActiveEffectCommitState::Committed,
+            committed_result(value),
+        ),
+        Err(_) => (
+            ActiveEffectCommitState::OutcomeUnknown,
+            json!({
+                "domain":"serverware.policyShadowActiveEffectResult/v1",
+                "effectKind":effect_kind,
+                "outcome":"provider-outcome-unknown",
+            }),
+        ),
+    };
+    commit_shadow_active_effect(
+        finalization,
+        permit,
+        terminal_state,
+        &result_commitment,
+    )?;
+    result
+}
+
 fn request_release_authorization<'a>(
     state: &'a GateState,
     snapshot: &Arc<Snapshot>,
@@ -24035,6 +25806,7 @@ fn request_release_authorization<'a>(
     canonical_request: &Value,
     req: &DecisionRequest,
     require_jit_grant: bool,
+    shadow_finalization: Option<&policy_core::ShadowRequestHandle>,
 ) -> Result<
     (
         RequestedReleaseAuthorization,
@@ -24105,7 +25877,7 @@ fn request_release_authorization<'a>(
         canonical_request,
         expected_durable_policy.as_ref(),
     );
-    let release_authorization = ReleaseAuthorizationGuard::new_authenticated(
+    let mut release_authorization = ReleaseAuthorizationGuard::new_authenticated(
         state,
         response_authentication.clone(),
         ReleaseAuthorizationReservation {
@@ -24128,13 +25900,122 @@ fn request_release_authorization<'a>(
             dispatch_expires_at_epoch_ms: None,
         },
     );
-    let response = post_release_authorization_http(
+    if let Some(finalization) = shadow_finalization {
+        release_authorization.bind_shadow_effects(finalization, snapshot);
+    }
+    let mut reserve_permits = Vec::new();
+    prepare_shadow_release_effect(
+        shadow_finalization,
+        snapshot,
+        &mut reserve_permits,
+        ActiveMutableEffectKind::ReleaseReserve,
+        "reserve",
+        &json!({
+            "domain":"serverware.policyShadowReleaseReserveIntent/v1",
+            "attemptId":attempt_id,
+            "bindingDigest":expected_binding_digest,
+            "requestDigest":request_digest,
+            "operationDigest":expected_operation_digest,
+        }),
+        &payload,
+    )?;
+    if require_jit_grant {
+        prepare_shadow_release_effect(
+            shadow_finalization,
+            snapshot,
+            &mut reserve_permits,
+            ActiveMutableEffectKind::JitGrantReserve,
+            "reserve",
+            &json!({
+                "domain":"serverware.policyShadowJitReserveIntent/v1",
+                "attemptId":attempt_id,
+                "bindingDigest":expected_binding_digest.as_str(),
+                "requestDigest":request_digest,
+                "operationDigest":expected_operation_digest,
+            }),
+            &json!({
+                "domain":"serverware.policyShadowJitReservePreparedState/v1",
+                "grantRequired":true,
+                "releasePayloadSha256":
+                    digest_json_ensure_ascii(&payload),
+            }),
+        )?;
+    }
+    if !expected_quotas.is_empty() {
+        prepare_shadow_release_effect(
+            shadow_finalization,
+            snapshot,
+            &mut reserve_permits,
+            ActiveMutableEffectKind::QuotaReserve,
+            "reserve",
+            &json!({
+                "domain":"serverware.policyShadowQuotaReserveIntent/v1",
+                "attemptId":attempt_id,
+                "bindingDigest":expected_binding_digest.as_str(),
+                "claimsSha256":
+                    digest_json_ensure_ascii(&json!(expected_quotas)),
+            }),
+            &json!({
+                "domain":"serverware.policyShadowQuotaReservePreparedState/v1",
+                "releasePayloadSha256":
+                    digest_json_ensure_ascii(&payload),
+            }),
+        )?;
+    }
+    if expected_durable_policy.is_some() {
+        prepare_shadow_release_effect(
+            shadow_finalization,
+            snapshot,
+            &mut reserve_permits,
+            ActiveMutableEffectKind::DurableBudgetReserve,
+            "reserve",
+            &json!({
+                "domain":"serverware.policyShadowBudgetReserveIntent/v1",
+                "attemptId":attempt_id,
+                "bindingDigest":expected_binding_digest.as_str(),
+                "claimSha256":digest_json_ensure_ascii(
+                    &json!(expected_durable_policy)
+                ),
+            }),
+            &json!({
+                "domain":"serverware.policyShadowBudgetReservePreparedState/v1",
+                "releasePayloadSha256":
+                    digest_json_ensure_ascii(&payload),
+            }),
+        )?;
+    }
+    let response_result = post_release_authorization_http(
         state,
         &response_authentication,
         "reserve",
         &payload,
         || {},
+    );
+    let (terminal_state, result_commitment) = match response_result.as_ref() {
+        Ok(response) => (
+            ActiveEffectCommitState::Committed,
+            json!({
+                "domain":"serverware.policyShadowReleaseReserveResult/v1",
+                "status":response.status.as_u16(),
+                "responseBodySha256":sha256_prefixed(&response.body),
+            }),
+        ),
+        Err(_) => (
+            ActiveEffectCommitState::OutcomeUnknown,
+            json!({
+                "domain":"serverware.policyShadowReleaseReserveResult/v1",
+                "outcome":"control-plane-outcome-unknown",
+            }),
+        ),
+    };
+    commit_shadow_release_effects(
+        shadow_finalization,
+        reserve_permits,
+        terminal_state,
+        "reserve",
+        &result_commitment,
     )?;
+    let response = response_result?;
     Ok((
         RequestedReleaseAuthorization {
             response,
@@ -24528,6 +26409,8 @@ impl<'a> ReleaseAuthorizationGuard<'a> {
             .ok();
         Self {
             state,
+            shadow_finalization: None,
+            shadow_snapshot: None,
             response_authentication,
             reservation,
             stage: ReleaseAuthorizationStage::Reserved,
@@ -24544,6 +26427,8 @@ impl<'a> ReleaseAuthorizationGuard<'a> {
     ) -> Self {
         Self {
             state,
+            shadow_finalization: None,
+            shadow_snapshot: None,
             response_authentication: Some(response_authentication),
             reservation,
             stage: ReleaseAuthorizationStage::Reserved,
@@ -24551,6 +26436,17 @@ impl<'a> ReleaseAuthorizationGuard<'a> {
             retained_completion: None,
             credential_lease_cleanup: CredentialLeaseRequestCleanup::new(state),
         }
+    }
+
+    fn bind_shadow_effects(
+        &mut self,
+        finalization: &policy_core::ShadowRequestHandle,
+        snapshot: &Arc<Snapshot>,
+    ) {
+        self.shadow_finalization = Some(finalization.clone());
+        self.shadow_snapshot = Some(Arc::clone(snapshot));
+        self.credential_lease_cleanup
+            .bind_shadow_effects(finalization, snapshot);
     }
 
     fn arm_credential_lease_cleanup(
@@ -24598,12 +26494,94 @@ impl<'a> ReleaseAuthorizationGuard<'a> {
                 "release authorization response authentication snapshot mismatch".to_string(),
             );
         }
-        let (response, evidence) = post_dispatch_release_authorization(
+        let shadow_finalization = self
+            .shadow_finalization
+            .clone()
+            .ok_or("release dispatch lacks policy-shadow authority")?;
+        let shadow_snapshot = self
+            .shadow_snapshot
+            .clone()
+            .ok_or("release dispatch lacks a bound policy snapshot")?;
+        let mut dispatch_permits = Vec::new();
+        prepare_shadow_release_effect(
+            Some(&shadow_finalization),
+            &shadow_snapshot,
+            &mut dispatch_permits,
+            ActiveMutableEffectKind::ReleaseDispatch,
+            "dispatch",
+            &json!({
+                "domain":"serverware.policyShadowReleaseDispatchIntent/v1",
+                "attemptId":self.reservation.attempt_id.as_str(),
+                "bindingDigest":self.reservation.binding_digest.as_str(),
+            }),
+            &json!({
+                "domain":"serverware.policyShadowReleaseDispatchPreparedState/v1",
+                "stage":"reserved",
+            }),
+        )?;
+        if self.reservation.grant_id.is_some() {
+            prepare_shadow_release_effect(
+                Some(&shadow_finalization),
+                &shadow_snapshot,
+                &mut dispatch_permits,
+                ActiveMutableEffectKind::JitGrantDispatch,
+                "dispatch",
+                &json!({
+                    "domain":"serverware.policyShadowJitDispatchIntent/v1",
+                    "attemptId":self.reservation.attempt_id.as_str(),
+                    "bindingDigest":self.reservation.binding_digest.as_str(),
+                    "grantIdSha256":self.reservation.grant_id.as_ref().map(
+                        |grant_id| sha256_prefixed(grant_id.as_bytes())
+                    ),
+                    "approvalIdSha256":
+                        self.reservation.approval_request_id.as_ref().map(
+                            |approval_id| {
+                                sha256_prefixed(approval_id.as_bytes())
+                            }
+                        ),
+                }),
+                &json!({
+                    "domain":"serverware.policyShadowJitDispatchPreparedState/v1",
+                    "stage":"reserved",
+                }),
+            )?;
+        }
+        let dispatch_result = post_dispatch_release_authorization(
             self.state,
             response_authentication,
             &self.reservation,
             &mut self.stage,
+        );
+        let (effect_state, result_commitment) =
+            match dispatch_result.as_ref() {
+                Ok((response, evidence)) => (
+                    ActiveEffectCommitState::Committed,
+                    json!({
+                        "domain":"serverware.policyShadowReleaseDispatchResult/v1",
+                        "dispatchStartedAtEpochMs":
+                            response.dispatch_started_at_epoch_ms,
+                        "dispatchExpiresAtEpochMs":
+                            response.dispatch_expires_at_epoch_ms,
+                        "receiptBodySha256":
+                            evidence.receipt.response.body_sha256.as_str(),
+                    }),
+                ),
+                Err(_) => (
+                    ActiveEffectCommitState::OutcomeUnknown,
+                    json!({
+                        "domain":"serverware.policyShadowReleaseDispatchResult/v1",
+                        "outcome":"dispatch-transition-unknown",
+                    }),
+                ),
+            };
+        commit_shadow_release_effects(
+            Some(&shadow_finalization),
+            dispatch_permits,
+            effect_state,
+            "dispatch",
+            &result_commitment,
         )?;
+        let (response, evidence) = dispatch_result?;
         self.stage = ReleaseAuthorizationStage::Dispatching;
         let observed_at_epoch_ms = response
             .dispatch_started_at_epoch_ms
@@ -24744,13 +26722,145 @@ impl<'a> ReleaseAuthorizationGuard<'a> {
             .response_authentication
             .as_ref()
             .ok_or("release authorization requires pinned response authentication")?;
-        let response = post_release_authorization(
+        let shadow_finalization = self
+            .shadow_finalization
+            .clone()
+            .ok_or("release completion lacks policy-shadow authority")?;
+        let shadow_snapshot = self
+            .shadow_snapshot
+            .clone()
+            .ok_or("release completion lacks a bound policy snapshot")?;
+        let release_effect_kind = if retained.outcome == "not_forwarded" {
+            ActiveMutableEffectKind::ReleaseAbort
+        } else {
+            ActiveMutableEffectKind::ReleaseComplete
+        };
+        let completion_phase = if retained.outcome == "not_forwarded" {
+            "abort"
+        } else {
+            "complete"
+        };
+        let mut completion_permits = Vec::new();
+        prepare_shadow_release_effect(
+            Some(&shadow_finalization),
+            &shadow_snapshot,
+            &mut completion_permits,
+            release_effect_kind,
+            completion_phase,
+            &json!({
+                "domain":"serverware.policyShadowReleaseCompletionIntent/v1",
+                "attemptId":self.reservation.attempt_id.as_str(),
+                "bindingDigest":self.reservation.binding_digest.as_str(),
+                "outcome":retained.outcome.as_str(),
+            }),
+            &retained.request_payload,
+        )?;
+        if self.reservation.grant_id.is_some() {
+            let jit_effect_kind = if retained.outcome == "not_forwarded" {
+                ActiveMutableEffectKind::JitGrantAbort
+            } else {
+                ActiveMutableEffectKind::JitGrantComplete
+            };
+            prepare_shadow_release_effect(
+                Some(&shadow_finalization),
+                &shadow_snapshot,
+                &mut completion_permits,
+                jit_effect_kind,
+                completion_phase,
+                &json!({
+                    "domain":"serverware.policyShadowJitCompletionIntent/v1",
+                    "attemptId":self.reservation.attempt_id.as_str(),
+                    "bindingDigest":self.reservation.binding_digest.as_str(),
+                    "grantIdSha256":self.reservation.grant_id.as_ref().map(
+                        |grant_id| sha256_prefixed(grant_id.as_bytes())
+                    ),
+                    "outcome":retained.outcome.as_str(),
+                }),
+                &retained.request_payload,
+            )?;
+        }
+        if !self.reservation.shared_quotas.is_empty() {
+            let quota_effect_kind = if retained.outcome == "not_forwarded" {
+                ActiveMutableEffectKind::QuotaCancel
+            } else {
+                ActiveMutableEffectKind::QuotaCommit
+            };
+            prepare_shadow_release_effect(
+                Some(&shadow_finalization),
+                &shadow_snapshot,
+                &mut completion_permits,
+                quota_effect_kind,
+                completion_phase,
+                &json!({
+                    "domain":"serverware.policyShadowQuotaCompletionIntent/v1",
+                    "attemptId":self.reservation.attempt_id.as_str(),
+                    "bindingDigest":self.reservation.binding_digest.as_str(),
+                    "claimsSha256":digest_json_ensure_ascii(
+                        &json!(self.reservation.shared_quotas)
+                    ),
+                    "outcome":retained.outcome.as_str(),
+                }),
+                &retained.request_payload,
+            )?;
+        }
+        if self.reservation.durable_policy.is_some() {
+            let budget_effect_kind = if retained.outcome == "not_forwarded" {
+                ActiveMutableEffectKind::DurableBudgetCancel
+            } else {
+                ActiveMutableEffectKind::DurableBudgetCommit
+            };
+            prepare_shadow_release_effect(
+                Some(&shadow_finalization),
+                &shadow_snapshot,
+                &mut completion_permits,
+                budget_effect_kind,
+                completion_phase,
+                &json!({
+                    "domain":"serverware.policyShadowBudgetCompletionIntent/v1",
+                    "attemptId":self.reservation.attempt_id.as_str(),
+                    "bindingDigest":self.reservation.binding_digest.as_str(),
+                    "claimSha256":digest_json_ensure_ascii(
+                        &json!(self.reservation.durable_policy)
+                    ),
+                    "outcome":retained.outcome.as_str(),
+                }),
+                &retained.request_payload,
+            )?;
+        }
+        let response_result = post_release_authorization(
             self.state,
             response_authentication,
             "complete",
             &retained.request_payload,
             expected_response_version,
+        );
+        let (effect_state, result_commitment) =
+            match response_result.as_ref() {
+                Ok(response) => (
+                    ActiveEffectCommitState::Committed,
+                    json!({
+                        "domain":"serverware.policyShadowReleaseCompletionResult/v1",
+                        "state":response.state.as_str(),
+                        "completionOutcome":
+                            response.completion_outcome.as_deref(),
+                    }),
+                ),
+                Err(_) => (
+                    ActiveEffectCommitState::OutcomeUnknown,
+                    json!({
+                        "domain":"serverware.policyShadowReleaseCompletionResult/v1",
+                        "outcome":"completion-transition-unknown",
+                    }),
+                ),
+            };
+        commit_shadow_release_effects(
+            Some(&shadow_finalization),
+            completion_permits,
+            effect_state,
+            completion_phase,
+            &result_commitment,
         )?;
+        let response = response_result?;
         let releasable = validate_complete_release_authorization_transition(
             &response,
             &self.reservation,
@@ -25097,7 +27207,7 @@ fn deny(status: u16, reason: &str, payload: Value, started: Instant) -> Value {
         "status_code": status,
         "reason": reason,
         "payload": payload,
-        "decision_us": started.elapsed().as_micros() as u64,
+        "decision_us": u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX),
         "hot_path": {"sqlite_calls": 0, "filesystem_calls": 0},
     })
 }
@@ -25169,6 +27279,7 @@ fn connect_preflight(
     client_ip: Option<&str>,
     target: &str,
     headers: &BTreeMap<String, String>,
+    trusted_mtls_evidence: Option<&TrustedMtlsEvidence>,
 ) -> Value {
     let started = Instant::now();
     let enrollment_session_id = match enrollment_session_id_from_headers(headers) {
@@ -25195,7 +27306,11 @@ fn connect_preflight(
         }
     };
     let authority = format!("{host}:{port}");
-    let Some(principal) = snapshot.identify_principal(client_ip, &headers) else {
+    let Some(principal) = snapshot.identify_principal_with_mtls(
+        client_ip,
+        &headers,
+        trusted_mtls_evidence,
+    ) else {
         return deny(
             403,
             "client principal denied",
@@ -25225,7 +27340,7 @@ fn connect_preflight(
             "snapshot_epoch":snapshot.epoch,
             "authority":authority,
             "route_ids":route_ids,
-            "decision_us":started.elapsed().as_micros() as u64,
+            "decision_us":u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX),
             "hot_path":{"sqlite_calls":0,"filesystem_calls":0},
         }),
         enrollment_session_id.as_deref(),
@@ -26559,11 +28674,12 @@ fn validate_required_request_headers(
     Ok(())
 }
 
-fn validate_adapter(
+fn validate_adapter_with_gmail_proof_mode(
     req: &DecisionRequest,
     forwarded_headers: &BTreeMap<String, String>,
     url: &Url,
     route_match: &RouteMatch<'_>,
+    enforce_gmail_prior_search_proof: bool,
 ) -> Result<(Value, Value), Value> {
     let route = route_match.route;
     let config = &route.adapter_config;
@@ -26712,7 +28828,8 @@ fn validate_adapter(
                     .get("message_id")
                     .filter(|value| canonical_gmail_message_id(value))
                     .ok_or_else(|| json!({"error":"gmail_message_id_invalid"}))?;
-                if config
+                if enforce_gmail_prior_search_proof
+                    && config
                     .get("allowMessageGetOnlyFromPriorSearch")
                     .and_then(Value::as_bool)
                     .unwrap_or(true)
@@ -26826,6 +28943,24 @@ fn validate_adapter(
         }
         _ => Err(json!({"error":"unsupported_adapter"})),
     }
+}
+
+fn validate_adapter(
+    req: &DecisionRequest,
+    forwarded_headers: &BTreeMap<String, String>,
+    url: &Url,
+    route_match: &RouteMatch<'_>,
+) -> Result<(Value, Value), Value> {
+    validate_adapter_with_gmail_proof_mode(req, forwarded_headers, url, route_match, true)
+}
+
+fn validate_adapter_deferred_gmail_proof(
+    req: &DecisionRequest,
+    forwarded_headers: &BTreeMap<String, String>,
+    url: &Url,
+    route_match: &RouteMatch<'_>,
+) -> Result<(Value, Value), Value> {
+    validate_adapter_with_gmail_proof_mode(req, forwarded_headers, url, route_match, false)
 }
 
 fn prepare_request_operation_context(
@@ -28040,7 +30175,10 @@ fn enforce_request_time_window_at_ms(constraint: &Value, now_ms: i128) -> Result
 }
 
 fn enforce_request_time_window(constraint: &Value) -> Result<(), Value> {
-    enforce_request_time_window_at_ms(constraint, now_epoch_ms() as i128)
+    enforce_request_time_window_at_ms(
+        constraint,
+        i128::try_from(now_epoch_ms()).unwrap_or(i128::MAX),
+    )
 }
 
 fn request_policy_deadline_epoch_ms(route: &Route, now_ms: u64) -> Result<Option<u64>, String> {
@@ -28147,12 +30285,13 @@ fn enforce_query_date_window(constraint: &Value, url: &Url) -> Result<(), Value>
             "query date-window constraint is invalid",
         ));
     }
-    let now = now_epoch_ms() as i128;
-    let cutoff = now - max_age_days as i128 * 86_400_000;
+    let now = i128::try_from(now_epoch_ms()).unwrap_or(i128::MAX);
+    let cutoff = now.saturating_sub(i128::from(max_age_days).saturating_mul(86_400_000));
     let future_skew = constraint
         .get("allowFutureSkewSeconds")
         .and_then(Value::as_u64)
-        .unwrap_or(300) as i128
+        .map(i128::from)
+        .unwrap_or(300)
         * 1000;
     let required = constraint
         .get("required")
@@ -29571,13 +31710,14 @@ fn validate_legacy_release_composition(route: &Route, jit_required: bool) -> Res
     Ok(())
 }
 
-fn evaluate_request_semantic_constraints(
+fn evaluate_request_semantic_constraints_at_ms(
     route: &Route,
     req: &DecisionRequest,
     headers: &BTreeMap<String, String>,
     url: &Url,
     route_params: &BTreeMap<String, String>,
     operation: &mut Value,
+    observed_at_epoch_ms: i128,
 ) -> Result<(), Value> {
     for constraint in &route.constraints {
         let Some(kind) = constraint.get("type").and_then(Value::as_str) else {
@@ -29601,7 +31741,9 @@ fn evaluate_request_semantic_constraints(
             "operationPolicy" => enforce_operation_policy(constraint, operation)?,
             "queryDateWindow" => enforce_query_date_window(constraint, url)?,
             "queryNumericBounds" => enforce_query_numeric_bounds(constraint, url)?,
-            "requestTimeWindow" => enforce_request_time_window(constraint)?,
+            "requestTimeWindow" => {
+                enforce_request_time_window_at_ms(constraint, observed_at_epoch_ms)?
+            }
             "requestValue" => {
                 enforce_request_value(constraint, req, headers, url, route_params, operation)?
             }
@@ -29635,12 +31777,13 @@ fn enforce_response_date_window(constraint: &Value, body: &[u8]) -> Result<(), V
             "response date-window constraint is invalid",
         ));
     }
-    let now = now_epoch_ms() as i128;
-    let cutoff = now - max_age_days as i128 * 86_400_000;
+    let now = i128::try_from(now_epoch_ms()).unwrap_or(i128::MAX);
+    let cutoff = now.saturating_sub(i128::from(max_age_days).saturating_mul(86_400_000));
     let future_skew = constraint
         .get("allowFutureSkewSeconds")
         .and_then(Value::as_u64)
-        .unwrap_or(300) as i128
+        .map(i128::from)
+        .unwrap_or(300)
         * 1000;
     let required = constraint
         .get("required")
@@ -30464,15 +32607,44 @@ fn decide_internal_for_forward<'a>(
     req: DecisionRequest,
     authenticated_principal_id: Option<&str>,
 ) -> (Value, Option<ReleaseAuthorizationGuard<'a>>) {
+    decide_internal_for_forward_with_shadow(
+        state,
+        snapshot,
+        req,
+        authenticated_principal_id,
+        None,
+    )
+}
+
+fn decide_internal_for_forward_with_shadow<'a>(
+    state: &'a GateState,
+    snapshot: &Arc<Snapshot>,
+    req: DecisionRequest,
+    authenticated_principal_id: Option<&str>,
+    shadow_admission: Option<ShadowAdmission>,
+) -> (Value, Option<ReleaseAuthorizationGuard<'a>>) {
+    let shadow_admission = shadow_admission.unwrap_or_else(|| {
+        state.policy_shadow.capture(
+            snapshot,
+            &req,
+            authenticated_principal_id,
+            ShadowIngressKind::ForwardedHttp,
+            now_epoch_ms(),
+            None,
+        )
+    });
+    let shadow_finalization = shadow_admission.finalization_handle();
     let mut release_authorization = None;
-    let decision = decide_internal_with_mode(
+    let decision = decide_internal_with_mode_and_shadow(
         state,
         snapshot,
         req,
         authenticated_principal_id,
         false,
         Some(&mut release_authorization),
+        Some(shadow_admission),
     );
+    let _ = shadow_finalization;
     (decision, release_authorization)
 }
 
@@ -30482,9 +32654,94 @@ fn decide_internal_with_mode<'a>(
     req: DecisionRequest,
     authenticated_principal_id: Option<&str>,
     preview: bool,
+    accepted_release_output: Option<&mut Option<ReleaseAuthorizationGuard<'a>>>,
+) -> Value {
+    let shadow_admission = state.policy_shadow.capture(
+        snapshot,
+        &req,
+        authenticated_principal_id,
+        if preview {
+            ShadowIngressKind::ManagementPreview
+        } else {
+            ShadowIngressKind::ForwardedHttp
+        },
+        now_epoch_ms(),
+        None,
+    );
+    let shadow_finalization = shadow_admission.finalization_handle();
+    let decision = decide_internal_with_mode_and_shadow(
+        state,
+        snapshot,
+        req,
+        authenticated_principal_id,
+        preview,
+        accepted_release_output,
+        Some(shadow_admission),
+    );
+    let _ = shadow_finalization;
+    decision
+}
+
+fn decide_internal_with_mode_and_shadow<'a>(
+    state: &'a GateState,
+    snapshot: &Arc<Snapshot>,
+    req: DecisionRequest,
+    authenticated_principal_id: Option<&str>,
+    preview: bool,
     mut accepted_release_output: Option<&mut Option<ReleaseAuthorizationGuard<'a>>>,
+    precomputed_shadow_admission: Option<ShadowAdmission>,
 ) -> Value {
     let started = Instant::now();
+    let shadow_admission = match precomputed_shadow_admission {
+        Some(admission) if admission.matches(snapshot, &req, authenticated_principal_id) => admission,
+        Some(_) => state.policy_shadow.capture(
+            snapshot,
+            &req,
+            authenticated_principal_id,
+            if preview {
+                ShadowIngressKind::ManagementPreview
+            } else {
+                ShadowIngressKind::ForwardedHttp
+            },
+            now_epoch_ms(),
+            None,
+        ),
+        None => state.policy_shadow.capture(
+            snapshot,
+            &req,
+            authenticated_principal_id,
+            if preview {
+                ShadowIngressKind::ManagementPreview
+            } else {
+                ShadowIngressKind::ForwardedHttp
+            },
+            now_epoch_ms(),
+            None,
+        ),
+    };
+    if shadow_admission.must_fail_closed() {
+        return deny(
+            503,
+            "policy shadow custody admission unavailable",
+            json!({"error":"policy_shadow_custody_unavailable"}),
+            started,
+        );
+    }
+    let shadow_finalization = shadow_admission.finalization_handle();
+    let shadow_admission = shadow_admission.bind_decision_time(
+        snapshot,
+        &req,
+        authenticated_principal_id,
+        now_epoch_ms(),
+    );
+    if shadow_admission.must_fail_closed() {
+        return deny(
+            503,
+            "policy shadow terminal accounting unavailable",
+            json!({"error":"policy_shadow_accounting_unavailable"}),
+            started,
+        );
+    }
     if validate_canonical_http_method(&req.method).is_err() {
         return deny(
             400,
@@ -30672,9 +32929,6 @@ fn decide_internal_with_mode<'a>(
     } else {
         json!(null)
     };
-    let credential_policy = credential_ref
-        .as_ref()
-        .and_then(|credential_id| snapshot.credentials.get(credential_id));
     let credential_scope = credential_ref
         .as_ref()
         .map(|credential_id| CredentialLeaseScope::new(&principal.id, &route.id, credential_id));
@@ -30718,7 +32972,13 @@ fn decide_internal_with_mode<'a>(
                 started,
             );
         };
-        let info = match ensure_scoped_credential_generation(state, snapshot, scope) {
+        let info = match execute_shadow_credential_effect(
+            shadow_finalization.as_ref(),
+            snapshot,
+            ActiveMutableEffectKind::CredentialGeneration,
+            scope,
+            || ensure_scoped_credential_generation(state, snapshot, scope),
+        ) {
             Ok(info) => info,
             Err(_) => {
                 return deny_for_route(
@@ -30771,13 +33031,47 @@ fn decide_internal_with_mode<'a>(
         } else {
             None
         };
-    let RequestOperationContext {
-        mut forwarded_headers,
-        client_request_digest,
-        mut operation,
-        rewrite,
-    } = match prepare_request_operation_context(&req, &headers, &url, &route_match, &injection) {
-        Ok(context) => context,
+    let body_length = match decision_request_body_length(&req) {
+        Ok(length) => length,
+        Err(_) => {
+            return deny_for_route(
+                400,
+                "request framing is invalid",
+                json!({"error":"invalid_request_framing"}),
+                route,
+                started,
+            )
+        }
+    };
+    let mut forwarded_headers =
+        match canonical_forwarded_request_headers(&req.headers, &url, body_length, &injection) {
+            Ok(headers) => headers,
+            Err(_) => {
+                return deny_for_route(
+                    400,
+                    "forwarding headers are invalid",
+                    json!({"error":"invalid_forwarding_headers"}),
+                    route,
+                    started,
+                )
+            }
+        };
+    let proof_requested = headers.contains_key(RESPONSE_PROOF_NONCE_HEADER)
+        || headers.contains_key(STREAM_RESPONSE_PROOF_NONCE_HEADER)
+        || headers.contains_key(RESPONSE_OBSERVATION_NONCE_HEADER);
+    if proof_requested != req.client_request_digest.is_some() {
+        return deny_for_route(
+            400,
+            "response proof request binding is invalid",
+            json!({"error":"invalid_response_proof_request_binding"}),
+            route,
+            started,
+        );
+    }
+    let client_request_digest = req.client_request_digest.clone();
+    let (mut operation, rewrite) =
+        match validate_adapter(&req, &forwarded_headers, &url, &route_match) {
+        Ok(semantics) => semantics,
         Err(payload) => {
             let status = payload
                 .get("status_code")
@@ -30786,7 +33080,7 @@ fn decide_internal_with_mode<'a>(
             let reason = payload
                 .get("error")
                 .and_then(Value::as_str)
-                .unwrap_or("adapter denied")
+                .unwrap_or("adapter request denied")
                 .to_string();
             return deny_for_route(status, &reason, payload, route, started);
         }
@@ -30845,40 +33139,6 @@ fn decide_internal_with_mode<'a>(
             .to_string();
         return deny_for_route(status, &reason, payload, route, started);
     }
-    let (revalidated_operation, revalidated_rewrite) =
-        match validate_adapter(
-            &req,
-            &forwarded_headers,
-            &provider_url,
-            &provider_route_match,
-        ) {
-            Ok(context) => context,
-            Err(payload) => {
-                let status = payload
-                    .get("status_code")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(403) as u16;
-                let reason = payload
-                    .get("error")
-                    .and_then(Value::as_str)
-                    .unwrap_or("rewritten adapter request denied")
-                    .to_string();
-                return deny_for_route(status, &reason, payload, route, started);
-            }
-        };
-    let mut converged_provider_url = provider_url.clone();
-    if apply_rewrite(&mut converged_provider_url, &revalidated_rewrite).is_err()
-        || converged_provider_url != provider_url
-        || revalidated_operation != operation
-    {
-        return deny_for_route(
-            500,
-            "adapter query rewrite did not converge deterministically",
-            json!({"error":"adapter_query_rewrite_not_deterministic"}),
-            route,
-            started,
-        );
-    }
     if let Err(payload) =
         reject_credential_injection_collision(&req.headers, &provider_url, &injection)
     {
@@ -30890,49 +33150,6 @@ fn decide_internal_with_mode<'a>(
             .get("error")
             .and_then(Value::as_str)
             .unwrap_or("credential injection collision")
-            .to_string();
-        return deny_for_route(status, &reason, payload, route, started);
-    }
-    if let Err(payload) = bind_provider_account_scope(route, credential_policy, &mut operation) {
-        let status = payload
-            .get("status_code")
-            .and_then(Value::as_u64)
-            .unwrap_or(500) as u16;
-        let reason = payload
-            .get("error")
-            .and_then(Value::as_str)
-            .unwrap_or("provider account identity unavailable")
-            .to_string();
-        return deny_for_route(status, &reason, payload, route, started);
-    }
-    if let Err(payload) = evaluate_request_semantic_constraints(
-        route,
-        &req,
-        &headers,
-        &provider_url,
-        &provider_route_match.params,
-        &mut operation,
-    ) {
-        let status = payload
-            .get("status_code")
-            .and_then(Value::as_u64)
-            .unwrap_or(403) as u16;
-        let reason = payload
-            .get("error")
-            .and_then(Value::as_str)
-            .unwrap_or("credential_constraint_denied")
-            .to_string();
-        return deny_for_route(status, &reason, payload, route, started);
-    }
-    if let Err(payload) = validate_response_binding_sources(route, &operation) {
-        let status = payload
-            .get("status_code")
-            .and_then(Value::as_u64)
-            .unwrap_or(403) as u16;
-        let reason = payload
-            .get("error")
-            .and_then(Value::as_str)
-            .unwrap_or("response_binding_source_invalid")
             .to_string();
         return deny_for_route(status, &reason, payload, route, started);
     }
@@ -30982,15 +33199,23 @@ fn decide_internal_with_mode<'a>(
         (credential_ref.as_ref(), credential_scope.as_ref())
     {
         let info = if !preview && !atomic_release {
-            ensure_scoped_credential_lease(state, snapshot, scope, None)
+            execute_shadow_credential_effect(
+                shadow_finalization.as_ref(),
+                snapshot,
+                ActiveMutableEffectKind::CredentialLease,
+                scope,
+                || ensure_scoped_credential_lease(state, snapshot, scope, None),
+            )
         } else if let Some(info) = preadmission_credential_info {
             Ok(info)
         } else {
-            if preview {
-                ensure_scoped_credential_generation(state, snapshot, scope)
-            } else {
-                ensure_scoped_credential_generation(state, snapshot, scope)
-            }
+            execute_shadow_credential_effect(
+                shadow_finalization.as_ref(),
+                snapshot,
+                ActiveMutableEffectKind::CredentialGeneration,
+                scope,
+                || ensure_scoped_credential_generation(state, snapshot, scope),
+            )
         };
         match info {
             Ok(info) => {
@@ -31130,7 +33355,7 @@ fn decide_internal_with_mode<'a>(
                 "release_authorization": json!({"mode":"preview","state":"not_reserved"}),
                 "canonical_request": canonical,
                 "redacted_display": redacted_display,
-                "decision_us": started.elapsed().as_micros() as u64,
+                "decision_us": u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX),
                 "hot_path": {"sqlite_calls": 0, "filesystem_calls": 0},
             }),
             enrollment_session_id.as_deref(),
@@ -31164,6 +33389,7 @@ fn decide_internal_with_mode<'a>(
             &canonical,
             &req,
             jit_required,
+            shadow_finalization.as_ref(),
         ) {
             Ok(requested) => requested,
             Err(_) => {
@@ -31542,12 +33768,20 @@ fn decide_internal_with_mode<'a>(
                     );
                 }
             }
-            match ensure_scoped_credential_lease_bound(
-                state,
+            match execute_shadow_credential_effect(
+                shadow_finalization.as_ref(),
                 snapshot,
+                ActiveMutableEffectKind::CredentialLease,
                 scope,
-                credential_request_authority.as_ref(),
-                credential_release_authorization.as_ref(),
+                || {
+                    ensure_scoped_credential_lease_bound(
+                        state,
+                        snapshot,
+                        scope,
+                        credential_request_authority.as_ref(),
+                        credential_release_authorization.as_ref(),
+                    )
+                },
             ) {
                 Ok(info) if info.version == credential_version => {
                     req.credential_metadata
@@ -31597,21 +33831,36 @@ fn decide_internal_with_mode<'a>(
                 }
             }
         }
-        if let Err(payload) = evaluate_request_constraints(
-            state,
-            route,
-            &req,
-            &headers,
-            &provider_url,
-            &provider_route_match.params,
-            &principal.id,
-            credential_ref.as_deref(),
-            credential_version,
-            &snapshot.hash,
-            &mut operation,
-            true,
-            true,
-            true,
+        if let Err(payload) = execute_shadow_constraint_effects(
+            shadow_finalization.as_ref(),
+            snapshot,
+            &json!({
+                "domain":"serverware.policyShadowConstraintEffectIntent/v1",
+                "principalId":principal.id.as_str(),
+                "routeId":route.id.as_str(),
+                "requestDigest":request_digest.as_str(),
+                "operationDigest":operation_digest.as_str(),
+                "reservationBindingSha256":
+                    release_authorization.reservation.binding_digest.as_str(),
+            }),
+            || {
+                evaluate_request_constraints(
+                    state,
+                    route,
+                    &req,
+                    &headers,
+                    &provider_url,
+                    &provider_route_match.params,
+                    &principal.id,
+                    credential_ref.as_deref(),
+                    credential_version,
+                    &snapshot.hash,
+                    &mut operation,
+                    true,
+                    true,
+                    true,
+                )
+            },
         ) {
             let status = payload
                 .get("status_code")
@@ -31709,9 +33958,19 @@ fn decide_internal_with_mode<'a>(
                     "credential_lease_request_authority":credential_request_authority,
                     "credential_lease_authorization":credential_release_authorization,
                 },
+                "policy_effect_results":{
+                    "trust_root_fresh":true,
+                    "gmail_prior_search_proof_resolved":precredential_gmail_version.is_some(),
+                    "credential_generation_resolved":credential_ref.is_none() || credential_version != 0,
+                    "credential_secret_available":credential_ref.is_none() || secret_available,
+                    "jit_resolved":!jit_required || reservation.grant_id.is_some(),
+                    "quota_results_sha256":digest_json_ensure_ascii(&json!(reservation.shared_quotas)),
+                    "durable_budget_results_sha256":digest_json_ensure_ascii(&json!(reservation.durable_policy)),
+                    "snapshot_active_at_final_barrier":true,
+                },
                 "canonical_request":canonical,
                 "redacted_display":redacted_display,
-                "decision_us":started.elapsed().as_micros() as u64,
+                "decision_us":u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX),
                 "hot_path":{"sqlite_calls":0,"filesystem_calls":0},
             }),
             enrollment_session_id.as_deref(),
@@ -31849,21 +34108,35 @@ fn decide_internal_with_mode<'a>(
     if grant_available {
         // LEGACY_IRREVERSIBLE_QUOTA_CONSUME: composition admission above guarantees that no
         // independently fallible authorization consume can follow this quota consume.
-        if let Err(payload) = evaluate_request_constraints(
-            state,
-            route,
-            &req,
-            &headers,
-            &provider_url,
-            &provider_route_match.params,
-            &principal.id,
-            credential_ref.as_deref(),
-            credential_version,
-            &snapshot.hash,
-            &mut operation,
-            true,
-            true,
-            false,
+        if let Err(payload) = execute_shadow_constraint_effects(
+            shadow_finalization.as_ref(),
+            snapshot,
+            &json!({
+                "domain":"serverware.policyShadowConstraintEffectIntent/v1",
+                "principalId":principal.id.as_str(),
+                "routeId":route.id.as_str(),
+                "requestDigest":request_digest.as_str(),
+                "operationDigest":operation_digest.as_str(),
+                "mode":"legacy",
+            }),
+            || {
+                evaluate_request_constraints(
+                    state,
+                    route,
+                    &req,
+                    &headers,
+                    &provider_url,
+                    &provider_route_match.params,
+                    &principal.id,
+                    credential_ref.as_deref(),
+                    credential_version,
+                    &snapshot.hash,
+                    &mut operation,
+                    true,
+                    true,
+                    false,
+                )
+            },
         ) {
             let status = payload
                 .get("status_code")
@@ -31880,22 +34153,58 @@ fn decide_internal_with_mode<'a>(
     let consumed_grant = if jit_required && grant_available {
         // LEGACY_IRREVERSIBLE_GRANT_CONSUME: snapshot activity and audit capacity are fixed before
         // this linearization point; delivery uncertainty after it cannot revoke authorization.
-        match consume_grant(
-            state,
-            &principal.id,
-            &route.id,
-            credential_ref.as_deref().unwrap_or_default(),
-            credential_version,
-            &snapshot.hash,
-            &request_digest,
-            &operation_digest,
-            &flow_id,
-            &grant_attempt_id,
-            &req.method,
-            provider_url.as_str(),
-            &canonical,
-            &redacted_display,
-            true,
+        match execute_shadow_active_effect(
+            shadow_finalization.as_ref(),
+            snapshot,
+            ActiveMutableEffectKind::JitGrantComplete,
+            &json!({
+                "domain":"serverware.policyShadowJitGrantCompleteIntent/v1",
+                "principalId":principal.id.as_str(),
+                "routeId":route.id.as_str(),
+                "credentialVersion":credential_version,
+                "requestDigest":request_digest.as_str(),
+                "operationDigest":operation_digest.as_str(),
+                "attemptId":grant_attempt_id.as_str(),
+            }),
+            &json!({
+                "domain":"serverware.policyShadowJitGrantPreparedState/v1",
+                "policySha256":snapshot.hash.as_str(),
+                "flowId":flow_id.as_str(),
+            }),
+            || {
+                consume_grant(
+                    state,
+                    &principal.id,
+                    &route.id,
+                    credential_ref.as_deref().unwrap_or_default(),
+                    credential_version,
+                    &snapshot.hash,
+                    &request_digest,
+                    &operation_digest,
+                    &flow_id,
+                    &grant_attempt_id,
+                    &req.method,
+                    provider_url.as_str(),
+                    &canonical,
+                    &redacted_display,
+                    true,
+                )
+                .map_err(|_| {
+                    "shared JIT grant store unavailable".to_string()
+                })
+            },
+            |(grant, store, pending)| {
+                json!({
+                    "domain":"serverware.policyShadowJitGrantCompleteResult/v1",
+                    "grantIdSha256":grant.as_ref().map(|grant| {
+                        sha256_prefixed(grant.id.as_bytes())
+                    }),
+                    "store":store,
+                    "pendingApprovalIdSha256":pending.as_ref().map(|approval| {
+                        sha256_prefixed(approval.id.as_bytes())
+                    }),
+                })
+            },
         ) {
             Ok((consumed, _, pending)) => {
                 if pending.is_some() {
@@ -32006,6 +34315,16 @@ fn decide_internal_with_mode<'a>(
         } else {
             Value::Null
         },
+        "policy_effect_results":{
+            "trust_root_fresh":true,
+            "gmail_prior_search_proof_resolved":precredential_gmail_version.is_some(),
+            "credential_generation_resolved":credential_ref.is_none() || credential_version != 0,
+            "credential_secret_available":credential_ref.is_none() || secret_available,
+            "jit_resolved":!jit_required || consumed_grant.is_some(),
+            "legacy_rate_limits_committed":allowed,
+            "durable_budget_results_sha256":Value::Null,
+            "snapshot_active_at_final_barrier":allowed,
+        },
         "approval_id": consumed_grant
             .as_ref()
             .and_then(|grant| grant.approval_id.clone())
@@ -32022,7 +34341,7 @@ fn decide_internal_with_mode<'a>(
             json!(null)
         },
         "canonical_request": canonical,
-        "decision_us": started.elapsed().as_micros() as u64,
+        "decision_us": u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX),
         "hot_path": {"sqlite_calls": 0, "filesystem_calls": 0},
     });
     if let (Some(object), Some(approval_url)) = (decision.as_object_mut(), pending_approval_url) {
@@ -32041,6 +34360,22 @@ fn http_response(status: &str, body: Value) -> Vec<u8> {
     let mut response = Vec::with_capacity(head.len().saturating_add(bytes.len()));
     response.extend_from_slice(head.as_bytes());
     response.extend_from_slice(&bytes);
+    response
+}
+
+fn http_canonical_json_response(
+    status: &str,
+    canonical_body: &[u8],
+) -> Vec<u8> {
+    let head = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        canonical_body.len()
+    );
+    let mut response = Vec::with_capacity(
+        head.len().saturating_add(canonical_body.len()),
+    );
+    response.extend_from_slice(head.as_bytes());
+    response.extend_from_slice(canonical_body);
     response
 }
 
@@ -32865,6 +35200,7 @@ fn insert_header(headers: &mut HeaderMap, name: &str, value: &str) -> Result<(),
     if is_serverware_internal_header(name) {
         return Err("credential_injection_header_reserved".to_string());
     }
+    validate_injected_header_value(value)?;
     let name = HeaderName::from_bytes(name.as_bytes())
         .map_err(|_| "credential_injection_header_invalid".to_string())?;
     let mut value =
@@ -32872,6 +35208,40 @@ fn insert_header(headers: &mut HeaderMap, name: &str, value: &str) -> Result<(),
     value.set_sensitive(true);
     headers.insert(name, value);
     Ok(())
+}
+
+fn validate_credential_component(value: &str, label: &str) -> Result<(), String> {
+    if value.is_empty() || value.len() > MAX_INJECTED_CREDENTIAL_BYTES {
+        return Err(format!(
+            "{label} is empty or exceeds the credential injection size limit"
+        ));
+    }
+    if value.chars().any(char::is_control) {
+        return Err(format!("{label} contains control characters"));
+    }
+    Ok(())
+}
+
+fn validate_injection_prefix(value: &str) -> Result<(), String> {
+    if value.len() > 128 || value.chars().any(char::is_control) {
+        return Err("credential injection prefix is invalid".to_string());
+    }
+    Ok(())
+}
+
+fn validate_injected_header_value(value: &str) -> Result<(), String> {
+    validate_credential_component(value, "credential injection header value")?;
+    if value.trim_matches(' ') != value || HeaderValue::from_str(value).is_err() {
+        return Err("credential_injection_value_invalid".to_string());
+    }
+    Ok(())
+}
+
+fn is_cookie_octet(byte: u8) -> bool {
+    matches!(
+        byte,
+        0x21 | 0x23..=0x2b | 0x2d..=0x3a | 0x3c..=0x5b | 0x5d..=0x7e
+    )
 }
 
 fn secret_field_path_parts(field: &str) -> Result<Vec<&str>, String> {
@@ -32929,9 +35299,7 @@ fn apply_credential_injection(
         .and_then(Value::as_str)
         .unwrap_or("bearer");
     let secret = secret_for_injection(lease, injection)?;
-    if secret.len() > MAX_INJECTED_CREDENTIAL_BYTES {
-        return Err("credential secret exceeds injection size limit".to_string());
-    }
+    validate_credential_component(secret.as_str(), "credential secret")?;
     let mut response_guard = ResponseSecretGuard::default();
     response_guard.add_text_encodings(secret.as_str());
     match injection_type {
@@ -32944,6 +35312,7 @@ fn apply_credential_injection(
                 .get("prefix")
                 .and_then(Value::as_str)
                 .unwrap_or("Bearer ");
+            validate_injection_prefix(prefix)?;
             let value = Zeroizing::new(format!("{prefix}{}", secret.as_str()));
             insert_header(headers, header, value.as_str())?;
             response_guard.add_text_encodings(value.as_str());
@@ -32957,6 +35326,7 @@ fn apply_credential_injection(
                 .get("prefix")
                 .and_then(Value::as_str)
                 .unwrap_or("");
+            validate_injection_prefix(prefix)?;
             let value = Zeroizing::new(format!("{prefix}{}", secret.as_str()));
             insert_header(headers, header, value.as_str())?;
             response_guard.add_text_encodings(value.as_str());
@@ -32978,6 +35348,9 @@ fn apply_credential_injection(
                 .get("name")
                 .and_then(Value::as_str)
                 .unwrap_or("serverware_token");
+            if !secret.as_bytes().iter().copied().all(is_cookie_octet) {
+                return Err("credential cookie value is not canonical cookie-octet".to_string());
+            }
             let mut value = Zeroizing::new(
                 headers
                     .get("cookie")
@@ -32999,8 +35372,17 @@ fn apply_credential_injection(
             let username = injection
                 .get("username")
                 .and_then(Value::as_str)
-                .or_else(|| lease.metadata.get("username").and_then(Value::as_str))
                 .ok_or("basic credential missing username")?;
+            if username.is_empty()
+                || username.len() > 256
+                || username.chars().any(|character| {
+                    character == ':'
+                        || character.is_whitespace()
+                        || character.is_control()
+                })
+            {
+                return Err("basic credential username is invalid".to_string());
+            }
             let raw = Zeroizing::new(format!("{username}:{}", secret.as_str()));
             let token = Zeroizing::new(general_purpose::STANDARD.encode(raw.as_bytes()));
             let value = Zeroizing::new(format!("Basic {}", token.as_str()));
@@ -33194,6 +35576,89 @@ fn validate_final_provider_url_binding(
 }
 
 fn apply_bound_credential_injection(
+    snapshot: &Arc<Snapshot>,
+    decision: &Value,
+    headers: &mut HeaderMap,
+    precredential_url: &Url,
+    final_url: &mut Url,
+    injection_plan: &Value,
+    lease: &SecretLease,
+    shadow_finalization: Option<&policy_core::ShadowRequestHandle>,
+) -> Result<ResponseSecretGuard, String> {
+    if final_url != precredential_url {
+        return Err("provider URL changed before credential injection".to_string());
+    }
+    let permit = prepare_shadow_active_effect(
+        shadow_finalization,
+        snapshot,
+        ActiveMutableEffectKind::CredentialInjection,
+        &json!({
+            "domain":"serverware.policyShadowCredentialInjectionIntent/v1",
+            "principalIdSha256":
+                sha256_prefixed(lease.scope.principal_id.as_bytes()),
+            "routeIdSha256":
+                sha256_prefixed(lease.scope.route_id.as_bytes()),
+            "credentialIdSha256":
+                sha256_prefixed(lease.scope.credential_id.as_bytes()),
+            "credentialVersion":lease.version,
+            "policySha256":lease.policy_hash.as_str(),
+            "injectionPlanSha256":
+                digest_json_ensure_ascii(injection_plan),
+        }),
+        &json!({
+            "domain":"serverware.policyShadowCredentialInjectionPreparedState/v1",
+            "precredentialUrlSha256":
+                sha256_prefixed(precredential_url.as_str().as_bytes()),
+            "precredentialHeaderCount":headers.len(),
+            "requestDigest":decision
+                .get("request_digest")
+                .and_then(Value::as_str),
+            "operationDigest":decision
+                .get("operation_digest")
+                .and_then(Value::as_str),
+        }),
+    )?;
+    let injection_result = (|| {
+        validate_and_apply_bound_credential_injection(
+            snapshot,
+            decision,
+            headers,
+            precredential_url,
+            final_url,
+            injection_plan,
+            lease,
+        )
+    })();
+    let (terminal_state, result_commitment) =
+        match injection_result.as_ref() {
+            Ok(_) => (
+                ActiveEffectCommitState::Committed,
+                json!({
+                    "domain":"serverware.policyShadowCredentialInjectionResult/v1",
+                    "outcome":"injected",
+                    "finalUrlSha256":
+                        sha256_prefixed(final_url.as_str().as_bytes()),
+                    "finalHeaderCount":headers.len(),
+                }),
+            ),
+            Err(_) => (
+                ActiveEffectCommitState::OutcomeUnknown,
+                json!({
+                    "domain":"serverware.policyShadowCredentialInjectionResult/v1",
+                    "outcome":"injection-state-unknown",
+                }),
+            ),
+        };
+    commit_shadow_active_effect(
+        shadow_finalization,
+        permit,
+        terminal_state,
+        &result_commitment,
+    )?;
+    injection_result
+}
+
+fn validate_and_apply_bound_credential_injection(
     snapshot: &Snapshot,
     decision: &Value,
     headers: &mut HeaderMap,
@@ -33202,12 +35667,10 @@ fn apply_bound_credential_injection(
     injection_plan: &Value,
     lease: &SecretLease,
 ) -> Result<ResponseSecretGuard, String> {
-    if final_url != precredential_url {
-        return Err("provider URL changed before credential injection".to_string());
-    }
     let (target, lease_secret) =
         active_credential_injection_binding(snapshot, decision, injection_plan, lease)?;
-    let response_guard = apply_credential_injection(headers, final_url, injection_plan, lease)?;
+    let response_guard =
+        apply_credential_injection(headers, final_url, injection_plan, lease)?;
     validate_final_provider_url_binding(
         precredential_url,
         final_url,
@@ -33245,7 +35708,7 @@ fn credential_lease_for_gmail_child(
 }
 
 fn apply_gmail_child_bound_credential_injection(
-    snapshot: &Snapshot,
+    snapshot: &Arc<Snapshot>,
     parent_decision: &Value,
     parent_url: &Url,
     child_headers: &mut HeaderMap,
@@ -33255,6 +35718,7 @@ fn apply_gmail_child_bound_credential_injection(
     lease: &SecretLease,
     authorization: &GmailMetadataChildAuthorization,
     ledger: &GmailMetadataChildAuthorizationLedger,
+    shadow_finalization: Option<&policy_core::ShadowRequestHandle>,
 ) -> Result<ResponseSecretGuard, String> {
     validate_gmail_metadata_child_authorization(
         snapshot,
@@ -33301,16 +35765,65 @@ fn apply_gmail_child_bound_credential_injection(
     if final_child_url != precredential_child_url {
         return Err("Gmail child URL changed before credential injection".to_string());
     }
-    ledger
-        .advance(
-            authorization,
-            GmailMetadataChildAuthorizationPhase::Derived,
-            GmailMetadataChildAuthorizationPhase::Injecting,
-        )
-        .map_err(str::to_string)?;
+    transition_gmail_metadata_child_authorization(
+        snapshot,
+        authorization,
+        ledger,
+        shadow_finalization,
+        GmailMetadataChildAuthorizationPhase::Derived,
+        GmailMetadataChildAuthorizationPhase::Injecting,
+    )?;
+    let injection_permit = match prepare_shadow_active_effect(
+        shadow_finalization,
+        snapshot,
+        ActiveMutableEffectKind::CredentialInjection,
+        &json!({
+            "domain":"serverware.policyShadowGmailChildCredentialInjectionIntent/v1",
+            "authorizationSha256":authorization.authorization_digest.as_str(),
+            "childRequestSha256":
+                authorization.material.child_request_digest.as_str(),
+            "credentialIdSha256":
+                sha256_prefixed(
+                    authorization.material.credential_ref.as_bytes()
+                ),
+            "credentialVersion":
+                authorization.material.credential_version,
+            "injectionPlanSha256":
+                digest_json_ensure_ascii(injection_plan),
+        }),
+        &json!({
+            "domain":"serverware.policyShadowGmailChildCredentialInjectionPreparedState/v1",
+            "precredentialChildUrlSha256":
+                sha256_prefixed(precredential_child_url.as_str().as_bytes()),
+            "precredentialHeaderCount":child_headers.len(),
+        }),
+    ) {
+        Ok(permit) => permit,
+        Err(error) => {
+            let terminal_error = transition_gmail_metadata_child_authorization(
+                snapshot,
+                authorization,
+                ledger,
+                shadow_finalization,
+                GmailMetadataChildAuthorizationPhase::Injecting,
+                GmailMetadataChildAuthorizationPhase::Failed,
+            )
+            .err();
+            return Err(match terminal_error {
+                Some(terminal_error) => format!(
+                    "Gmail child injection barrier failed: {error}; terminal transition failed: {terminal_error}"
+                ),
+                None => error,
+            });
+        }
+    };
     let injection_result = (|| {
-        let response_guard =
-            apply_credential_injection(child_headers, final_child_url, injection_plan, lease)?;
+        let response_guard = apply_credential_injection(
+            child_headers,
+            final_child_url,
+            injection_plan,
+            lease,
+        )?;
         validate_final_provider_url_binding(
             precredential_child_url,
             final_child_url,
@@ -33319,23 +35832,69 @@ fn apply_gmail_child_bound_credential_injection(
         )?;
         Ok::<_, String>(response_guard)
     })();
+    let (terminal_state, result_commitment) =
+        match injection_result.as_ref() {
+            Ok(_) => (
+                ActiveEffectCommitState::Committed,
+                json!({
+                    "domain":"serverware.policyShadowGmailChildCredentialInjectionResult/v1",
+                    "outcome":"injected",
+                    "finalChildUrlSha256":
+                        sha256_prefixed(final_child_url.as_str().as_bytes()),
+                    "finalHeaderCount":child_headers.len(),
+                }),
+            ),
+            Err(_) => (
+                ActiveEffectCommitState::OutcomeUnknown,
+                json!({
+                    "domain":"serverware.policyShadowGmailChildCredentialInjectionResult/v1",
+                    "outcome":"injection-state-unknown",
+                }),
+            ),
+        };
+    if let Err(error) = commit_shadow_active_effect(
+        shadow_finalization,
+        injection_permit,
+        terminal_state,
+        &result_commitment,
+    ) {
+        let terminal_error = transition_gmail_metadata_child_authorization(
+            snapshot,
+            authorization,
+            ledger,
+            shadow_finalization,
+            GmailMetadataChildAuthorizationPhase::Injecting,
+            GmailMetadataChildAuthorizationPhase::Failed,
+        )
+        .err();
+        return Err(match terminal_error {
+            Some(terminal_error) => format!(
+                "Gmail child injection commit failed: {error}; terminal transition failed: {terminal_error}"
+            ),
+            None => error,
+        });
+    }
     match injection_result {
         Ok(response_guard) => {
-            ledger
-                .advance(
-                    authorization,
-                    GmailMetadataChildAuthorizationPhase::Injecting,
-                    GmailMetadataChildAuthorizationPhase::Injected,
-                )
-                .map_err(str::to_string)?;
+            transition_gmail_metadata_child_authorization(
+                snapshot,
+                authorization,
+                ledger,
+                shadow_finalization,
+                GmailMetadataChildAuthorizationPhase::Injecting,
+                GmailMetadataChildAuthorizationPhase::Injected,
+            )?;
             Ok(response_guard)
         }
         Err(error) => {
-            let _ = ledger.advance(
+            transition_gmail_metadata_child_authorization(
+                snapshot,
                 authorization,
+                ledger,
+                shadow_finalization,
                 GmailMetadataChildAuthorizationPhase::Injecting,
                 GmailMetadataChildAuthorizationPhase::Failed,
-            );
+            )?;
             Err(error)
         }
     }
@@ -33351,6 +35910,7 @@ fn send_gmail_metadata_child_with_authorization(
     final_child_url: &Url,
     authorization: &GmailMetadataChildAuthorization,
     ledger: &GmailMetadataChildAuthorizationLedger,
+    shadow_finalization: Option<&policy_core::ShadowRequestHandle>,
 ) -> Result<reqwest::blocking::Response, UpstreamSendError> {
     let expected_scope = CredentialLeaseScope::new(
         &authorization.material.principal_id,
@@ -33421,7 +35981,7 @@ fn send_gmail_metadata_child_with_authorization(
         .ok_or(UpstreamSendError::CredentialAuthority(
             "gmail_metadata_child_authorization_invalid",
         ))?;
-    send_upstream_request_with_current_lease_and_timeout_validated(
+    send_upstream_request_with_current_lease_and_timeout_validated_and_finalized(
         state,
         snapshot,
         Some(binding),
@@ -33470,11 +36030,42 @@ fn send_gmail_metadata_child_with_authorization(
             {
                 return Err("gmail_metadata_child_dispatch_binding_mismatch");
             }
-            ledger.advance(
-                authorization,
-                GmailMetadataChildAuthorizationPhase::Injected,
-                GmailMetadataChildAuthorizationPhase::Dispatched,
-            )
+            Ok(())
+        },
+        |request| {
+            let permit = match shadow_finalization {
+                Some(finalization) => {
+                    let final_request_commitment =
+                        shadow_final_upstream_request_commitment(request)?;
+                    let effect_authority_commitment =
+                        digest_json_ensure_ascii(&json!({
+                            "domain":"serverware.policyShadowGmailMetadataChildDispatch/v1",
+                            "authorizationSha256":
+                                authorization.authorization_digest.as_str(),
+                            "childRequestSha256":
+                                authorization.material.child_request_digest.as_str(),
+                            "finalUpstreamRequestSha256":
+                                final_request_commitment.as_str(),
+                        }));
+                    Some(finalization.record_effect_dispatch_barrier(
+                        snapshot,
+                        effect_authority_commitment,
+                        final_request_commitment,
+                    )?)
+                }
+                None => None,
+            };
+            if permit.is_some() {
+                transition_gmail_metadata_child_authorization(
+                    snapshot,
+                    authorization,
+                    ledger,
+                    shadow_finalization,
+                    GmailMetadataChildAuthorizationPhase::Injected,
+                    GmailMetadataChildAuthorizationPhase::Dispatched,
+                )?;
+            }
+            Ok(permit)
         },
     )
 }
@@ -33548,22 +36139,24 @@ fn preflight_cached_credential_injection(
 
 fn internal_date_ms(value: &Value) -> Option<i128> {
     if let Some(number) = value.as_i64() {
-        return Some(number as i128);
+        return Some(i128::from(number));
     }
     value.as_str()?.parse::<i128>().ok()
 }
 
 fn gmail_cutoff_ms(days: u64) -> i128 {
-    now_epoch_ms() as i128 - (days as i128 * 86_400_000)
+    gmail_cutoff_ms_at(now_epoch_ms(), days)
 }
 
 fn gmail_cutoff_ms_at(now_ms: u128, days: u64) -> i128 {
-    now_ms as i128 - (days as i128 * 86_400_000)
+    i128::try_from(now_ms)
+        .unwrap_or(i128::MAX)
+        .saturating_sub(i128::from(days).saturating_mul(86_400_000))
 }
 
 fn gmail_cache_cutoff_epoch_ms(days: u64) -> u128 {
     const DAY_MS: u128 = 86_400_000;
-    let cutoff = now_epoch_ms().saturating_sub(days as u128 * DAY_MS);
+    let cutoff = now_epoch_ms().saturating_sub(u128::from(days).saturating_mul(DAY_MS));
     cutoff / DAY_MS * DAY_MS
 }
 
@@ -34077,51 +36670,154 @@ enum GmailMetadataChildResult {
     },
 }
 
+fn gmail_metadata_child_result_sha256(
+    result: &GmailMetadataChildResult,
+) -> String {
+    let binding = match result {
+        GmailMetadataChildResult::Hydrated { record, .. } => json!({
+            "domain":"serverware.gmailMetadataChildTerminalResult/v1",
+            "outcome":"hydrated",
+            "recordSha256":digest_json_ensure_ascii(record),
+        }),
+        GmailMetadataChildResult::Dropped { record } => json!({
+            "domain":"serverware.gmailMetadataChildTerminalResult/v1",
+            "outcome":"dropped",
+            "recordSha256":digest_json_ensure_ascii(record),
+        }),
+        GmailMetadataChildResult::Blocked { payload, record } => json!({
+            "domain":"serverware.gmailMetadataChildTerminalResult/v1",
+            "outcome":"blocked",
+            "payloadSha256":digest_json_ensure_ascii(payload),
+            "recordSha256":digest_json_ensure_ascii(record),
+        }),
+        GmailMetadataChildResult::Indeterminate { payload, record } => json!({
+            "domain":"serverware.gmailMetadataChildTerminalResult/v1",
+            "outcome":"indeterminate",
+            "payloadSha256":digest_json_ensure_ascii(payload),
+            "recordSha256":digest_json_ensure_ascii(record),
+        }),
+    };
+    digest_json_ensure_ascii(&binding)
+}
+
 fn classify_gmail_metadata_child_send_error(
+    snapshot: &Arc<Snapshot>,
     request_digest: String,
     error: UpstreamSendError,
     authorization: &GmailMetadataChildAuthorization,
     ledger: &GmailMetadataChildAuthorizationLedger,
+    shadow_finalization: Option<&policy_core::ShadowRequestHandle>,
 ) -> GmailMetadataChildResult {
+    let terminal_phase = if matches!(&error, UpstreamSendError::Request(_)) {
+        GmailMetadataChildAuthorizationPhase::ProviderOutcomeUnknown
+    } else {
+        GmailMetadataChildAuthorizationPhase::Failed
+    };
+    let result =
+        gmail_metadata_child_send_error_result(request_digest.clone(), error);
+    gmail_metadata_child_terminal_result(
+        snapshot,
+        &request_digest,
+        authorization,
+        ledger,
+        shadow_finalization,
+        terminal_phase,
+        result,
+    )
+}
+
+fn gmail_metadata_child_send_error_result(
+    request_digest: String,
+    error: UpstreamSendError,
+) -> GmailMetadataChildResult {
+    let error_sha256 = match &error {
+        UpstreamSendError::CredentialAuthority(detail) => {
+            sha256_prefixed(detail.as_bytes())
+        }
+        UpstreamSendError::DispatchBarrier(detail)
+        | UpstreamSendError::RequestBuild(detail)
+        | UpstreamSendError::Request(detail) => {
+            sha256_prefixed(detail.as_bytes())
+        }
+    };
     match error {
         UpstreamSendError::CredentialAuthority(_) => GmailMetadataChildResult::Blocked {
-            payload: json!({"error":"gmail_metadata_fetch_credential_authority_changed"}),
+            payload: json!({
+                "error":"gmail_metadata_fetch_credential_authority_changed",
+                "upstreamErrorSha256":error_sha256,
+            }),
             record: gmail_metadata_child_record(request_digest, None, "blocked_credential"),
         },
-        UpstreamSendError::RequestBuild(_) => {
-            let _ = ledger.advance(
-                authorization,
-                GmailMetadataChildAuthorizationPhase::Injected,
-                GmailMetadataChildAuthorizationPhase::Failed,
-            );
-            GmailMetadataChildResult::Blocked {
-                payload: json!({"error":"gmail_metadata_fetch_request_build_failed"}),
+        UpstreamSendError::DispatchBarrier(_) => GmailMetadataChildResult::Blocked {
+            payload: json!({
+                "error":"gmail_metadata_fetch_dispatch_evidence_unavailable",
+                "upstreamErrorSha256":error_sha256,
+            }),
+            record: gmail_metadata_child_record(
+                request_digest,
+                None,
+                "blocked_dispatch_barrier",
+            ),
+        },
+        UpstreamSendError::RequestBuild(_) => GmailMetadataChildResult::Blocked {
+                payload: json!({
+                    "error":"gmail_metadata_fetch_request_build_failed",
+                    "upstreamErrorSha256":error_sha256,
+                }),
                 record: gmail_metadata_child_record(
                     request_digest,
                     None,
                     "blocked_request_build",
                 ),
-            }
-        }
-        UpstreamSendError::Request(_) => {
-            let _ = ledger.advance(
-                authorization,
-                GmailMetadataChildAuthorizationPhase::Dispatched,
-                GmailMetadataChildAuthorizationPhase::ProviderOutcomeUnknown,
-            );
-            GmailMetadataChildResult::Indeterminate {
+            },
+        UpstreamSendError::Request(_) => GmailMetadataChildResult::Indeterminate {
                 payload: json!({
                     "error":"gmail_metadata_fetch_provider_outcome_unknown",
                     "providerOperationMayHaveCommitted":true,
                     "retryProviderRequest":false,
+                    "upstreamErrorSha256":error_sha256,
                 }),
                 record: gmail_metadata_child_record(
                     request_digest,
                     None,
                     "provider_outcome_unknown",
                 ),
-            }
-        }
+            },
+    }
+}
+
+fn gmail_metadata_child_terminal_result(
+    snapshot: &Arc<Snapshot>,
+    request_digest: &str,
+    authorization: &GmailMetadataChildAuthorization,
+    ledger: &GmailMetadataChildAuthorizationLedger,
+    shadow_finalization: Option<&policy_core::ShadowRequestHandle>,
+    terminal_phase: GmailMetadataChildAuthorizationPhase,
+    result: GmailMetadataChildResult,
+) -> GmailMetadataChildResult {
+    let terminal_result_sha256 =
+        gmail_metadata_child_result_sha256(&result);
+    match terminalize_gmail_metadata_child_authorization(
+        snapshot,
+        authorization,
+        ledger,
+        shadow_finalization,
+        terminal_phase,
+        &terminal_result_sha256,
+    ) {
+        Ok(()) => result,
+        Err(error) => GmailMetadataChildResult::Blocked {
+            payload: json!({
+                "error":"gmail_metadata_fetch_ledger_terminalization_failed",
+                "terminalizationErrorSha256":
+                    sha256_prefixed(error.as_bytes()),
+            }),
+            record: gmail_metadata_child_record(
+                request_digest.to_string(),
+                None,
+                "blocked_ledger_terminalization",
+            ),
+        },
     }
 }
 
@@ -34234,13 +36930,95 @@ fn fetch_gmail_metadata_child(
             };
         }
     };
-    if execution
+    let registration_permit = match prepare_shadow_active_effect(
+        execution.shadow_finalization,
+        snapshot,
+        ActiveMutableEffectKind::GmailChildRegister,
+        &json!({
+            "domain":"serverware.policyShadowGmailChildRegistrationIntent/v1",
+            "authorizationSha256":
+                child_authorization.authorization_digest.as_str(),
+            "childRequestSha256":
+                child_authorization.material.child_request_digest.as_str(),
+            "childOrdinal":child_ordinal,
+            "fanoutCount":fanout_count,
+        }),
+        &json!({
+            "domain":"serverware.policyShadowGmailChildRegistrationPreparedState/v1",
+            "phase":"unregistered",
+        }),
+    ) {
+        Ok(permit) => permit,
+        Err(error) => {
+            return GmailMetadataChildResult::Blocked {
+                payload: json!({
+                    "error":"gmail_metadata_fetch_effect_barrier_unavailable",
+                    "effectBarrierErrorSha256":
+                        sha256_prefixed(error.as_bytes()),
+                }),
+                record: gmail_metadata_child_record(
+                    request_digest,
+                    None,
+                    "blocked_effect_barrier",
+                ),
+            };
+        }
+    };
+    let registration_result = execution
         .child_authorizations
-        .register(&child_authorization)
-        .is_err()
-    {
+        .register(&child_authorization);
+    let registration_state = if registration_result.is_ok() {
+        ActiveEffectCommitState::Committed
+    } else {
+        ActiveEffectCommitState::Aborted
+    };
+    let registration_error_sha256 = registration_result
+        .as_ref()
+        .err()
+        .map(|error| sha256_prefixed(error.as_bytes()));
+    if let Err(error) = commit_shadow_active_effect(
+        execution.shadow_finalization,
+        registration_permit,
+        registration_state,
+        &json!({
+            "domain":"serverware.policyShadowGmailChildRegistrationResult/v1",
+            "registered":registration_result.is_ok(),
+            "registrationErrorSha256":registration_error_sha256,
+        }),
+    ) {
+        let result = GmailMetadataChildResult::Blocked {
+            payload: json!({
+                "error":"gmail_metadata_fetch_effect_commit_unavailable",
+                "effectCommitErrorSha256":
+                    sha256_prefixed(error.as_bytes()),
+            }),
+            record: gmail_metadata_child_record(
+                request_digest.clone(),
+                None,
+                "blocked_effect_commit",
+            ),
+        };
+        return if registration_result.is_ok() {
+            gmail_metadata_child_terminal_result(
+                snapshot,
+                &request_digest,
+                &child_authorization,
+                execution.child_authorizations,
+                execution.shadow_finalization,
+                GmailMetadataChildAuthorizationPhase::Failed,
+                result,
+            )
+        } else {
+            result
+        };
+    }
+    if let Err(error) = registration_result {
         return GmailMetadataChildResult::Blocked {
-            payload: json!({"error":"gmail_metadata_fetch_child_authorization_replayed"}),
+            payload: json!({
+                "error":"gmail_metadata_fetch_child_authorization_replayed",
+                "registrationErrorSha256":
+                    sha256_prefixed(error.as_bytes()),
+            }),
             record: gmail_metadata_child_record(
                 request_digest,
                 None,
@@ -34255,19 +37033,42 @@ fn fetch_gmail_metadata_child(
     ) {
         Ok(timeout) => timeout,
         Err("gmail_metadata_fetch_release_authority_expired") => {
-            return GmailMetadataChildResult::Blocked {
-                payload: json!({"error":"gmail_metadata_fetch_release_authority_expired"}),
-                record: gmail_metadata_child_record(
-                    request_digest,
-                    None,
-                    "blocked_release_authority",
-                ),
-            };
+            return gmail_metadata_child_terminal_result(
+                snapshot,
+                &request_digest,
+                &child_authorization,
+                execution.child_authorizations,
+                execution.shadow_finalization,
+                GmailMetadataChildAuthorizationPhase::Failed,
+                GmailMetadataChildResult::Blocked {
+                    payload: json!({
+                        "error":
+                            "gmail_metadata_fetch_release_authority_expired"
+                    }),
+                    record: gmail_metadata_child_record(
+                        request_digest.clone(),
+                        None,
+                        "blocked_release_authority",
+                    ),
+                },
+            );
         }
         Err(error) => {
-            return GmailMetadataChildResult::Dropped {
-                record: gmail_metadata_child_record(request_digest, None, error),
-            };
+            return gmail_metadata_child_terminal_result(
+                snapshot,
+                &request_digest,
+                &child_authorization,
+                execution.child_authorizations,
+                execution.shadow_finalization,
+                GmailMetadataChildAuthorizationPhase::Failed,
+                GmailMetadataChildResult::Dropped {
+                    record: gmail_metadata_child_record(
+                        request_digest.clone(),
+                        None,
+                        error,
+                    ),
+                },
+            );
         }
     };
     let lease = match credential_lease_for_gmail_child(
@@ -34281,17 +37082,46 @@ fn fetch_gmail_metadata_child(
     ) {
         Ok(lease) => lease,
         Err(_) => {
-            return GmailMetadataChildResult::Blocked {
-                payload: json!({"error":"gmail_metadata_fetch_credential_authority_changed"}),
-                record: gmail_metadata_child_record(request_digest, None, "blocked_credential"),
-            };
+            return gmail_metadata_child_terminal_result(
+                snapshot,
+                &request_digest,
+                &child_authorization,
+                execution.child_authorizations,
+                execution.shadow_finalization,
+                GmailMetadataChildAuthorizationPhase::Failed,
+                GmailMetadataChildResult::Blocked {
+                    payload: json!({
+                        "error":
+                            "gmail_metadata_fetch_credential_authority_changed"
+                    }),
+                    record: gmail_metadata_child_record(
+                        request_digest.clone(),
+                        None,
+                        "blocked_credential",
+                    ),
+                },
+            );
         }
     };
     let Some(parent_binding) = execution.parent_credential_binding else {
-        return GmailMetadataChildResult::Blocked {
-            payload: json!({"error":"gmail_metadata_fetch_credential_binding_missing"}),
-            record: gmail_metadata_child_record(request_digest, None, "blocked_credential"),
-        };
+        return gmail_metadata_child_terminal_result(
+            snapshot,
+            &request_digest,
+            &child_authorization,
+            execution.child_authorizations,
+            execution.shadow_finalization,
+            GmailMetadataChildAuthorizationPhase::Failed,
+            GmailMetadataChildResult::Blocked {
+                payload: json!({
+                    "error":"gmail_metadata_fetch_credential_binding_missing"
+                }),
+                record: gmail_metadata_child_record(
+                    request_digest.clone(),
+                    None,
+                    "blocked_credential",
+                ),
+            },
+        );
     };
     let mut child_binding = credential_lease_release_binding(&lease);
     if child_binding.scope != parent_binding.scope
@@ -34300,10 +37130,24 @@ fn fetch_gmail_metadata_child(
         || child_binding.metadata_sha256 != parent_binding.metadata_sha256
         || child_binding.release_authorization != parent_binding.release_authorization
     {
-        return GmailMetadataChildResult::Blocked {
-            payload: json!({"error":"gmail_metadata_fetch_credential_authority_changed"}),
-            record: gmail_metadata_child_record(request_digest, None, "blocked_credential"),
-        };
+        return gmail_metadata_child_terminal_result(
+            snapshot,
+            &request_digest,
+            &child_authorization,
+            execution.child_authorizations,
+            execution.shadow_finalization,
+            GmailMetadataChildAuthorizationPhase::Failed,
+            GmailMetadataChildResult::Blocked {
+                payload: json!({
+                    "error":"gmail_metadata_fetch_credential_authority_changed"
+                }),
+                record: gmail_metadata_child_record(
+                    request_digest.clone(),
+                    None,
+                    "blocked_credential",
+                ),
+            },
+        );
     }
     child_binding.expires_at_monotonic = child_binding
         .expires_at_monotonic
@@ -34313,27 +37157,48 @@ fn fetch_gmail_metadata_child(
         match gmail_metadata_child_canonical_request(&precredential_child_url, &headers) {
             Ok(request) => request,
             Err(_) => {
-                return GmailMetadataChildResult::Blocked {
-                    payload: json!({"error":"gmail_metadata_fetch_request_binding_changed"}),
-                    record: gmail_metadata_child_record(
-                        request_digest,
-                        None,
-                        "blocked_request_binding",
-                    ),
-                };
+                return gmail_metadata_child_terminal_result(
+                    snapshot,
+                    &request_digest,
+                    &child_authorization,
+                    execution.child_authorizations,
+                    execution.shadow_finalization,
+                    GmailMetadataChildAuthorizationPhase::Failed,
+                    GmailMetadataChildResult::Blocked {
+                        payload: json!({
+                            "error":
+                                "gmail_metadata_fetch_request_binding_changed"
+                        }),
+                        record: gmail_metadata_child_record(
+                            request_digest.clone(),
+                            None,
+                            "blocked_request_binding",
+                        ),
+                    },
+                );
             }
         };
     if final_child_canonical_request != child_canonical_request
         || digest_json_ensure_ascii(&final_child_canonical_request) != request_digest
     {
-        return GmailMetadataChildResult::Blocked {
-            payload: json!({"error":"gmail_metadata_fetch_request_binding_changed"}),
-            record: gmail_metadata_child_record(
-                request_digest,
-                None,
-                "blocked_request_binding",
-            ),
-        };
+        return gmail_metadata_child_terminal_result(
+            snapshot,
+            &request_digest,
+            &child_authorization,
+            execution.child_authorizations,
+            execution.shadow_finalization,
+            GmailMetadataChildAuthorizationPhase::Failed,
+            GmailMetadataChildResult::Blocked {
+                payload: json!({
+                    "error":"gmail_metadata_fetch_request_binding_changed"
+                }),
+                record: gmail_metadata_child_record(
+                    request_digest.clone(),
+                    None,
+                    "blocked_request_binding",
+                ),
+            },
+        );
     }
     let mut provider_request = TransientProviderRequest::new(headers, child_url);
     let (provider_headers, provider_url) = provider_request.injection_parts();
@@ -34348,13 +37213,28 @@ fn fetch_gmail_metadata_child(
         &lease,
         &child_authorization,
         execution.child_authorizations,
+        execution.shadow_finalization,
     ) {
         Ok(guard) => guard,
         Err(_) => {
-            return GmailMetadataChildResult::Blocked {
-                payload: json!({"error":"gmail_metadata_fetch_credential_injection_failed"}),
-                record: gmail_metadata_child_record(request_digest, None, "blocked_credential"),
-            };
+            return gmail_metadata_child_terminal_result(
+                snapshot,
+                &request_digest,
+                &child_authorization,
+                execution.child_authorizations,
+                execution.shadow_finalization,
+                GmailMetadataChildAuthorizationPhase::Failed,
+                GmailMetadataChildResult::Blocked {
+                    payload: json!({
+                        "error":"gmail_metadata_fetch_credential_injection_failed"
+                    }),
+                    record: gmail_metadata_child_record(
+                        request_digest.clone(),
+                        None,
+                        "blocked_credential",
+                    ),
+                },
+            );
         }
     };
     let final_child_url = provider_url.clone();
@@ -34372,14 +37252,17 @@ fn fetch_gmail_metadata_child(
         &final_child_url,
         &child_authorization,
         execution.child_authorizations,
+        execution.shadow_finalization,
     ) {
         Ok(response) => response,
         Err(error) => {
             return classify_gmail_metadata_child_send_error(
+                snapshot,
                 request_digest,
                 error,
                 &child_authorization,
                 execution.child_authorizations,
+                execution.shadow_finalization,
             )
         }
     };
@@ -34415,13 +37298,21 @@ fn fetch_gmail_metadata_child(
     if status != StatusCode::OK
         || !response_content_encoding_is_identity_or_absent(response.headers())
     {
-        return GmailMetadataChildResult::Dropped {
-            record: gmail_metadata_child_record(
-                request_digest,
-                Some(header_digest),
-                "dropped_status_or_encoding",
-            ),
-        };
+        return gmail_metadata_child_terminal_result(
+            snapshot,
+            &request_digest,
+            &child_authorization,
+            execution.child_authorizations,
+            execution.shadow_finalization,
+            GmailMetadataChildAuthorizationPhase::Failed,
+            GmailMetadataChildResult::Dropped {
+                record: gmail_metadata_child_record(
+                    request_digest.clone(),
+                    Some(header_digest),
+                    "dropped_status_or_encoding",
+                ),
+            },
+        );
     }
     let content_types = response
         .headers()
@@ -34436,34 +37327,58 @@ fn fetch_gmail_metadata_child(
             .as_deref()
             != Some("application/json")
     {
-        return GmailMetadataChildResult::Dropped {
-            record: gmail_metadata_child_record(
-                request_digest,
-                Some(header_digest),
-                "dropped_content_type",
-            ),
-        };
+        return gmail_metadata_child_terminal_result(
+            snapshot,
+            &request_digest,
+            &child_authorization,
+            execution.child_authorizations,
+            execution.shadow_finalization,
+            GmailMetadataChildAuthorizationPhase::Failed,
+            GmailMetadataChildResult::Dropped {
+                record: gmail_metadata_child_record(
+                    request_digest.clone(),
+                    Some(header_digest),
+                    "dropped_content_type",
+                ),
+            },
+        );
     }
     let declared_length = match strict_response_content_length(response.headers()) {
         Ok(length) => length,
         Err(()) => {
-            return GmailMetadataChildResult::Dropped {
-                record: gmail_metadata_child_record(
-                    request_digest,
-                    Some(header_digest),
-                    "dropped_content_length",
-                ),
-            };
+            return gmail_metadata_child_terminal_result(
+                snapshot,
+                &request_digest,
+                &child_authorization,
+                execution.child_authorizations,
+                execution.shadow_finalization,
+                GmailMetadataChildAuthorizationPhase::Failed,
+                GmailMetadataChildResult::Dropped {
+                    record: gmail_metadata_child_record(
+                        request_digest.clone(),
+                        Some(header_digest),
+                        "dropped_content_length",
+                    ),
+                },
+            );
         }
     };
     if declared_length.is_some_and(|length| length > config.max_body_bytes) {
-        return GmailMetadataChildResult::Dropped {
-            record: gmail_metadata_child_record(
-                request_digest,
-                Some(header_digest),
-                "dropped_body_too_large",
-            ),
-        };
+        return gmail_metadata_child_terminal_result(
+            snapshot,
+            &request_digest,
+            &child_authorization,
+            execution.child_authorizations,
+            execution.shadow_finalization,
+            GmailMetadataChildAuthorizationPhase::Failed,
+            GmailMetadataChildResult::Dropped {
+                record: gmail_metadata_child_record(
+                    request_digest.clone(),
+                    Some(header_digest),
+                    "dropped_body_too_large",
+                ),
+            },
+        );
     }
     let body_capacity = declared_length
         .unwrap_or(16 * 1024)
@@ -34478,95 +37393,163 @@ fn fetch_gmail_metadata_child(
         "body_sha256":sha256_prefixed(&body),
         "body_bytes":body.len(),
     }));
-    if read_result.is_err() {
-        let _ = execution.child_authorizations.advance(
+    if let Err(error) = read_result {
+        return gmail_metadata_child_terminal_result(
+            snapshot,
+            &request_digest,
             &child_authorization,
-            GmailMetadataChildAuthorizationPhase::Dispatched,
+            execution.child_authorizations,
+            execution.shadow_finalization,
             GmailMetadataChildAuthorizationPhase::ProviderOutcomeUnknown,
+            GmailMetadataChildResult::Indeterminate {
+                payload: json!({
+                    "error":"gmail_metadata_fetch_provider_response_indeterminate",
+                    "providerOperationMayHaveCommitted":true,
+                    "retryProviderRequest":false,
+                    "responseReadErrorSha256":
+                        sha256_prefixed(error.to_string().as_bytes()),
+                }),
+                record: gmail_metadata_child_record(
+                    request_digest.clone(),
+                    Some(response_digest),
+                    "provider_response_indeterminate",
+                ),
+            },
         );
-        return GmailMetadataChildResult::Indeterminate {
-            payload: json!({
-                "error":"gmail_metadata_fetch_provider_response_indeterminate",
-                "providerOperationMayHaveCommitted":true,
-                "retryProviderRequest":false,
-            }),
-            record: gmail_metadata_child_record(
-                request_digest,
-                Some(response_digest),
-                "provider_response_indeterminate",
-            ),
-        };
     }
     if body.len() as u64 > config.max_body_bytes
         || declared_length.is_some_and(|length| length != body.len() as u64)
         || response_secret_guard.detects(&body)
     {
-        return GmailMetadataChildResult::Dropped {
-            record: gmail_metadata_child_record(
-                request_digest,
-                Some(response_digest),
-                "dropped_body_invalid",
-            ),
-        };
+        return gmail_metadata_child_terminal_result(
+            snapshot,
+            &request_digest,
+            &child_authorization,
+            execution.child_authorizations,
+            execution.shadow_finalization,
+            GmailMetadataChildAuthorizationPhase::Failed,
+            GmailMetadataChildResult::Dropped {
+                record: gmail_metadata_child_record(
+                    request_digest.clone(),
+                    Some(response_digest),
+                    "dropped_body_invalid",
+                ),
+            },
+        );
     }
     let payload = match sensitive_json_value_from_slice(&body) {
         Ok(payload) if payload.is_object() => payload,
         _ => {
-            return GmailMetadataChildResult::Dropped {
-                record: gmail_metadata_child_record(
-                    request_digest,
-                    Some(response_digest),
-                    "dropped_json_invalid",
-                ),
-            };
+            return gmail_metadata_child_terminal_result(
+                snapshot,
+                &request_digest,
+                &child_authorization,
+                execution.child_authorizations,
+                execution.shadow_finalization,
+                GmailMetadataChildAuthorizationPhase::Failed,
+                GmailMetadataChildResult::Dropped {
+                    record: gmail_metadata_child_record(
+                        request_digest.clone(),
+                        Some(response_digest),
+                        "dropped_json_invalid",
+                    ),
+                },
+            );
         }
     };
     if payload.get("id").and_then(Value::as_str) != Some(message_id) {
-        return GmailMetadataChildResult::Dropped {
-            record: gmail_metadata_child_record(
-                request_digest,
-                Some(response_digest),
-                "dropped_id_mismatch",
-            ),
-        };
+        return gmail_metadata_child_terminal_result(
+            snapshot,
+            &request_digest,
+            &child_authorization,
+            execution.child_authorizations,
+            execution.shadow_finalization,
+            GmailMetadataChildAuthorizationPhase::Failed,
+            GmailMetadataChildResult::Dropped {
+                record: gmail_metadata_child_record(
+                    request_digest.clone(),
+                    Some(response_digest),
+                    "dropped_id_mismatch",
+                ),
+            },
+        );
     }
     let Some(internal_date) = payload.get("internalDate").and_then(Value::as_str) else {
-        return GmailMetadataChildResult::Dropped {
-            record: gmail_metadata_child_record(
-                request_digest,
-                Some(response_digest),
-                "dropped_internal_date_invalid",
-            ),
-        };
+        return gmail_metadata_child_terminal_result(
+            snapshot,
+            &request_digest,
+            &child_authorization,
+            execution.child_authorizations,
+            execution.shadow_finalization,
+            GmailMetadataChildAuthorizationPhase::Failed,
+            GmailMetadataChildResult::Dropped {
+                record: gmail_metadata_child_record(
+                    request_digest.clone(),
+                    Some(response_digest),
+                    "dropped_internal_date_invalid",
+                ),
+            },
+        );
     };
     if internal_date.is_empty()
         || !internal_date.bytes().all(|byte| byte.is_ascii_digit())
         || internal_date.parse::<i128>().is_err()
     {
-        return GmailMetadataChildResult::Dropped {
-            record: gmail_metadata_child_record(
-                request_digest,
-                Some(response_digest),
-                "dropped_internal_date_invalid",
-            ),
-        };
+        return gmail_metadata_child_terminal_result(
+            snapshot,
+            &request_digest,
+            &child_authorization,
+            execution.child_authorizations,
+            execution.shadow_finalization,
+            GmailMetadataChildAuthorizationPhase::Failed,
+            GmailMetadataChildResult::Dropped {
+                record: gmail_metadata_child_record(
+                    request_digest.clone(),
+                    Some(response_digest),
+                    "dropped_internal_date_invalid",
+                ),
+            },
+        );
     }
     let internal_date = SensitiveString::new(internal_date.to_string());
     if validate_gmail_internal_date_str_at_cutoff(&internal_date, days, cutoff_ms).is_err()
     {
-        return GmailMetadataChildResult::Blocked {
-            payload: json!({"error":"gmail_response_too_old","max_days":days}),
+        return gmail_metadata_child_terminal_result(
+            snapshot,
+            &request_digest,
+            &child_authorization,
+            execution.child_authorizations,
+            execution.shadow_finalization,
+            GmailMetadataChildAuthorizationPhase::Failed,
+            GmailMetadataChildResult::Blocked {
+                payload: json!({
+                    "error":"gmail_response_too_old",
+                    "max_days":days
+                }),
+                record: gmail_metadata_child_record(
+                    request_digest.clone(),
+                    Some(response_digest),
+                    "blocked_too_old",
+                ),
+            },
+        );
+    }
+    gmail_metadata_child_terminal_result(
+        snapshot,
+        &request_digest,
+        &child_authorization,
+        execution.child_authorizations,
+        execution.shadow_finalization,
+        GmailMetadataChildAuthorizationPhase::Succeeded,
+        GmailMetadataChildResult::Hydrated {
+            internal_date,
             record: gmail_metadata_child_record(
-                request_digest,
+                request_digest.clone(),
                 Some(response_digest),
-                "blocked_too_old",
+                "hydrated",
             ),
-        };
-    }
-    GmailMetadataChildResult::Hydrated {
-        internal_date,
-        record: gmail_metadata_child_record(request_digest, Some(response_digest), "hydrated"),
-    }
+        },
+    )
 }
 
 fn hydrate_gmail_list_metadata(
@@ -34849,7 +37832,10 @@ fn read_active_gmail_proofs(
 }
 
 fn gmail_proof_ttl_ms(route: &Route) -> u128 {
-    config_u64(&route.adapter_config, "cacheTtlSeconds", 1800).clamp(1, 86_400) as u128 * 1000
+    u128::from(
+        config_u64(&route.adapter_config, "cacheTtlSeconds", 1800).clamp(1, 86_400),
+    )
+    .saturating_mul(1000)
 }
 
 fn remember_gmail_proofs(
@@ -39396,6 +42382,40 @@ fn validate_public_npm_publish_receipt(
     Ok(())
 }
 
+fn finish_shadow_parsed_response_unavailable(
+    snapshot: &Arc<Snapshot>,
+    attempt: &mut Option<policy_core::ShadowResponseAttempt>,
+    returned_response: &[u8],
+    reason: policy_core::PolicyShadowTerminalReason,
+) {
+    let Some(attempt) = attempt.take() else {
+        return;
+    };
+    attempt.finish_parsed_unavailable(
+        snapshot,
+        returned_response,
+        reason,
+    );
+}
+
+fn finish_shadow_rejected_upstream_response(
+    snapshot: &Arc<Snapshot>,
+    attempt: &mut Option<policy_core::ShadowResponseAttempt>,
+    response: &mut reqwest::blocking::Response,
+    status: StatusCode,
+    returned_response: &[u8],
+    reason: policy_core::PolicyShadowTerminalReason,
+) {
+    let _ = response;
+    let _ = status;
+    finish_shadow_parsed_response_unavailable(
+        snapshot,
+        attempt,
+        returned_response,
+        reason,
+    );
+}
+
 fn finalize_upstream_response(
     state: &GateState,
     snapshot: &Arc<Snapshot>,
@@ -39404,6 +42424,7 @@ fn finalize_upstream_response(
     upstream_url: &Url,
     mut response: reqwest::blocking::Response,
     response_secret_guard: &ResponseSecretGuard,
+    shadow_response_hook: Option<&policy_core::ShadowResponseHook>,
     stream_writer: Option<&mut dyn TerminalDeadlineWrite>,
     response_proof_upstream_output: Option<&mut Option<ResponseProofUpstreamResponse>>,
     streaming_response_proof: Option<StreamingResponseProofExecution<'_>>,
@@ -39417,6 +42438,19 @@ fn finalize_upstream_response(
     _keep_alive: bool,
 ) -> ForwardResult {
     let status = response.status();
+    let mut shadow_response_attempt = match shadow_response_hook {
+        Some(hook) => match hook.begin(snapshot, status, response.headers()) {
+            Ok(attempt) => Some(attempt),
+            Err(error) => {
+                hook.record_unavailable(
+                    policy_core::PolicyShadowTerminalReason::ActiveResponseValidationUnavailable,
+                );
+                let _ = error;
+                None
+            }
+        },
+        None => None,
+    };
     if let Some(observation) = response_observation.as_deref_mut() {
         observation.observe_upstream_headers(status, response.headers());
     }
@@ -39426,37 +42460,44 @@ fn finalize_upstream_response(
         .and_then(|value| value.to_str().ok())
         .map(|value| Zeroizing::new(value.to_string()));
     let content_length = response_content_length(response.headers());
+    macro_rules! block_buffered_upstream {
+        ($payload:expr, $reason:expr) => {{
+            let _diagnostic_reason: &str = $reason;
+            let blocked = block_forward_response(
+                state,
+                decision,
+                request_method,
+                upstream_url,
+                status,
+                $payload,
+            );
+            finish_shadow_rejected_upstream_response(
+                snapshot,
+                &mut shadow_response_attempt,
+                &mut response,
+                status,
+                &blocked,
+                policy_core::PolicyShadowTerminalReason::ResponsePolicyRejected,
+            );
+            return ForwardResult::buffered(blocked);
+        }};
+    }
     if let Err(payload) =
         validate_response_release_context(state, snapshot, decision, request_method, upstream_url)
     {
-        return ForwardResult::buffered(block_forward_response(
-            state,
-            decision,
-            request_method,
-            upstream_url,
-            status,
-            payload,
-        ));
+        block_buffered_upstream!(payload, "response-release-context-denied");
     }
     if !response_content_encoding_is_identity_or_absent(response.headers()) {
-        return ForwardResult::buffered(block_forward_response(
-            state,
-            decision,
-            request_method,
-            upstream_url,
-            status,
+        block_buffered_upstream!(
             json!({"error":"response_content_encoding_forbidden"}),
-        ));
+            "response-content-encoding-forbidden"
+        );
     }
     if !response_secret_guard.is_empty() && status == StatusCode::PARTIAL_CONTENT {
-        return ForwardResult::buffered(block_forward_response(
-            state,
-            decision,
-            request_method,
-            upstream_url,
-            status,
+        block_buffered_upstream!(
             json!({"error":"credential_response_partial_content_forbidden"}),
-        ));
+            "credential-response-partial-content-forbidden"
+        );
     }
     let base_response_policy =
         response_policy_for_decision(snapshot, decision, request_method, upstream_url)
@@ -39469,25 +42510,14 @@ fn finalize_upstream_response(
     ) {
         Ok(route_match) => route_match,
         Err(payload) => {
-            return ForwardResult::buffered(block_forward_response(
-                state,
-                decision,
-                request_method,
-                upstream_url,
-                status,
-                payload,
-            ))
+            block_buffered_upstream!(payload, "response-route-context-denied")
         }
     };
     if validate_route_response_release_mode(response_route.route).is_err() {
-        return ForwardResult::buffered(block_forward_response(
-            state,
-            decision,
-            request_method,
-            upstream_url,
-            status,
+        block_buffered_upstream!(
             json!({"error":"response_release_mode_invalid"}),
-        ));
+            "response-release-mode-invalid"
+        );
     }
     if validate_durable_policy_authority_presence(
         response_route.route,
@@ -39496,40 +42526,25 @@ fn finalize_upstream_response(
     )
     .is_err()
     {
-        return ForwardResult::buffered(block_forward_response(
-            state,
-            decision,
-            request_method,
-            upstream_url,
-            status,
+        block_buffered_upstream!(
             json!({"error":"durable_policy_response_authority_mismatch"}),
-        ));
+            "durable-policy-response-authority-mismatch"
+        );
     }
     if base_response_policy.has_response_binding
         && status.is_success()
         && response.headers().get_all("content-type").iter().count() != 1
     {
-        return ForwardResult::buffered(block_forward_response(
-            state,
-            decision,
-            request_method,
-            upstream_url,
-            status,
+        block_buffered_upstream!(
             json!({"error":"response_binding_content_type_ambiguous"}),
-        ));
+            "response-binding-content-type-ambiguous"
+        );
     }
     let response_config =
         match response_config_for_status(&base_response_policy.response_config, status) {
             Ok(config) => config,
             Err(payload) => {
-                return ForwardResult::buffered(block_forward_response(
-                    state,
-                    decision,
-                    request_method,
-                    upstream_url,
-                    status,
-                    payload,
-                ))
+                block_buffered_upstream!(payload, "response-status-policy-denied")
             }
         };
     if let Err(payload) = validate_selected_json_response_content_type(
@@ -39537,54 +42552,29 @@ fn finalize_upstream_response(
         response.headers(),
         &base_response_policy.adapter_type,
     ) {
-        return ForwardResult::buffered(block_forward_response(
-            state,
-            decision,
-            request_method,
-            upstream_url,
-            status,
-            payload,
-        ));
+        block_buffered_upstream!(payload, "response-content-type-denied");
     }
     if let Some(payload) = credential_response_projection_error(
         base_response_policy.credential_bearing,
         &response_config,
         &base_response_policy.adapter_type,
     ) {
-        return ForwardResult::buffered(block_forward_response(
-            state,
-            decision,
-            request_method,
-            upstream_url,
-            status,
-            payload,
-        ));
+        block_buffered_upstream!(payload, "credential-response-projection-denied");
     }
     if selected_raw_policy_headers_detect_secret(
         &response_config,
         response.headers(),
         response_secret_guard,
     ) {
-        return ForwardResult::buffered(block_forward_response(
-            state,
-            decision,
-            request_method,
-            upstream_url,
-            status,
+        block_buffered_upstream!(
             json!({"error":"response_credential_reflection"}),
-        ));
+            "response-header-credential-reflection"
+        );
     }
     let released_headers = match released_response_headers(&response_config, response.headers()) {
         Ok(headers) => headers,
         Err(payload) => {
-            return ForwardResult::buffered(block_forward_response(
-                state,
-                decision,
-                request_method,
-                upstream_url,
-                status,
-                payload,
-            ))
+            block_buffered_upstream!(payload, "response-header-release-denied")
         }
     };
     let response_policy = ResponsePolicy {
@@ -39604,28 +42594,20 @@ fn finalize_upstream_response(
         .get("maxBodyBytes")
         .and_then(Value::as_u64)
     else {
-        return ForwardResult::buffered(block_forward_response(
-            state,
-            decision,
-            request_method,
-            upstream_url,
-            status,
+        block_buffered_upstream!(
             json!({"error":"response_body_limit_missing"}),
-        ));
+            "response-body-limit-missing"
+        );
     };
     if content_length.is_some_and(|length| length > response_body_limit) {
-        return ForwardResult::buffered(block_forward_response(
-            state,
-            decision,
-            request_method,
-            upstream_url,
-            status,
+        block_buffered_upstream!(
             json!({
                 "error":"response_body_too_large",
                 "maxBodyBytes":response_body_limit,
                 "contentLength":content_length,
             }),
-        ));
+            "response-body-declared-too-large"
+        );
     }
     let stream_policy = streaming_response_policy(&response_policy);
     if let Some(policy) = stream_policy {
@@ -39636,41 +42618,29 @@ fn finalize_upstream_response(
             content_length,
             decision.get("operation"),
         ) {
-            return ForwardResult::buffered(block_forward_response(
-                state,
-                decision,
-                request_method,
-                upstream_url,
-                status,
-                payload,
-            ));
+            block_buffered_upstream!(payload, "response-envelope-denied");
         }
         if let Some(max_body) = policy.max_body_bytes {
             match content_length {
                 Some(length) if length > max_body => {
-                    return ForwardResult::buffered(block_forward_response(
-                        state,
-                        decision,
-                        request_method,
-                        upstream_url,
-                        status,
+                    block_buffered_upstream!(
                         json!({"error":"response_body_too_large","maxBodyBytes":max_body,"contentLength":length}),
-                    ));
+                        "stream-response-body-declared-too-large"
+                    );
                 }
                 None if policy.mode == "stream" => {
-                    return ForwardResult::buffered(block_forward_response(
-                        state,
-                        decision,
-                        request_method,
-                        upstream_url,
-                        status,
+                    block_buffered_upstream!(
                         json!({"error":"streaming_response_requires_content_length","maxBodyBytes":max_body}),
-                    ));
+                        "stream-response-content-length-missing"
+                    );
                 }
                 _ => {}
             }
         }
         if let Some(writer) = stream_writer {
+            if let Some(attempt) = shadow_response_attempt.take() {
+                attempt.finish_streaming_unavailable();
+            }
             let streaming_proof_requested = streaming_response_proof.is_some();
             let streaming_response_proof = streaming_response_proof.filter(|_| status.is_success());
             match stream_forward_response(
@@ -39780,15 +42750,22 @@ fn finalize_upstream_response(
                         "response_envelope_denied",
                     ));
                 }
-                body.zeroize();
-                return ForwardResult::buffered(block_forward_response(
+                let blocked = block_forward_response(
                     state,
                     decision,
                     request_method,
                     upstream_url,
                     status,
                     payload,
-                ));
+                );
+                finish_shadow_parsed_response_unavailable(
+                    snapshot,
+                    &mut shadow_response_attempt,
+                    &blocked,
+                    policy_core::PolicyShadowTerminalReason::ResponsePolicyRejected,
+                );
+                body.zeroize();
+                return ForwardResult::buffered(blocked);
             }
             let durable_policy_evidence = match durable_policy_reservation {
                 Some(reservation) => {
@@ -39802,15 +42779,22 @@ fn finalize_upstream_response(
                                     "traversal_response_evidence_invalid",
                                 ));
                             }
-                            body.zeroize();
-                            return ForwardResult::buffered(block_forward_response(
+                            let blocked = block_forward_response(
                                 state,
                                 decision,
                                 request_method,
                                 upstream_url,
                                 status,
                                 payload,
-                            ));
+                            );
+                            finish_shadow_parsed_response_unavailable(
+                                snapshot,
+                                &mut shadow_response_attempt,
+                                &blocked,
+                                policy_core::PolicyShadowTerminalReason::ResponseEvidenceInvalid,
+                            );
+                            body.zeroize();
+                            return ForwardResult::buffered(blocked);
                         }
                     }
                 }
@@ -39828,15 +42812,22 @@ fn finalize_upstream_response(
                 if let Some(output) = durable_policy_completion_output.as_deref_mut() {
                     *output = durable_policy_indeterminate.clone();
                 }
-                body.zeroize();
-                return ForwardResult::buffered(block_forward_response(
+                let blocked = block_forward_response(
                     state,
                     decision,
                     request_method,
                     upstream_url,
                     status,
                     json!({"error":"response_credential_reflection"}),
-                ));
+                );
+                finish_shadow_parsed_response_unavailable(
+                    snapshot,
+                    &mut shadow_response_attempt,
+                    &blocked,
+                    policy_core::PolicyShadowTerminalReason::CredentialReflectionBlocked,
+                );
+                body.zeroize();
+                return ForwardResult::buffered(blocked);
             }
             let response = validate_forward_response(
                 state,
@@ -39857,9 +42848,19 @@ fn finalize_upstream_response(
                 gmail_metadata_fanout,
                 gmail_proof_commit_output,
             );
+            let released = parse_buffered_response(&response)
+                .is_ok_and(|parsed| parsed.headers.contains_key("x-serverware-policy-hash"));
+            finish_shadow_parsed_response_unavailable(
+                snapshot,
+                &mut shadow_response_attempt,
+                &response,
+                if released {
+                    policy_core::PolicyShadowTerminalReason::RawTransportCaptureUnavailableAfterRelease
+                } else {
+                    policy_core::PolicyShadowTerminalReason::RawTransportCaptureUnavailableAfterBlock
+                },
+            );
             if let Some(observation) = response_observation.as_deref_mut() {
-                let released = parse_buffered_response(&response)
-                    .is_ok_and(|parsed| parsed.headers.contains_key("x-serverware-policy-hash"));
                 observation.response_path = if released {
                     "complete-upstream-response-released"
                 } else {
@@ -39867,8 +42868,6 @@ fn finalize_upstream_response(
                 };
             }
             if let Some(output) = durable_policy_completion_output.as_deref_mut() {
-                let released = parse_buffered_response(&response)
-                    .is_ok_and(|parsed| parsed.headers.contains_key("x-serverware-policy-hash"));
                 *output = if released {
                     durable_policy_evidence
                 } else {
@@ -39959,53 +42958,393 @@ fn take_forwarder_post_decision_failure(branch: &str) -> bool {
     })
 }
 
-fn forward_absolute_request_inner_with_prepared<'a>(
-    state: &GateState,
-    snapshot: &Arc<Snapshot>,
-    mut request: IncomingRequest,
-    prepared_upstream: PreparedUpstream,
-    authenticated_principal_id: Option<&str>,
+fn buffered_forward_decision_request(
+    request: &IncomingRequest,
     client_request_digest: Option<&str>,
-    response_proof_authorization_output: Option<&mut Option<ResponseProofAuthorizationContext>>,
-    response_proof_upstream_output: Option<&mut Option<ResponseProofUpstreamResponse>>,
-    stream_writer: Option<&'a mut dyn TerminalDeadlineWrite>,
-    streaming_response_proof_request: Option<StreamingResponseProofRequest<'a>>,
-    mut response_observation: Option<&mut ResponseObservationTrace>,
-    keep_alive: bool,
-) -> ForwardResult {
-    macro_rules! buffered {
-        ($response:expr) => {
-            return ForwardResult::buffered($response)
-        };
-    }
-
-    let (_, target_url) = match parse_validated_absolute_target(&request.target) {
-        Ok(validated) => validated,
-        Err(detail) => {
-            buffered!(request_head_error_response(&format!(
-                "invalid request target: {detail}"
-            )))
-        }
-    };
-    let decision_request = DecisionRequest {
+) -> DecisionRequest {
+    let body = std::str::from_utf8(&request.body)
+        .map(str::to_owned)
+        .unwrap_or_default();
+    DecisionRequest {
         client_ip: request.client_ip.clone(),
         method: request.method.clone(),
         url: request.target.clone(),
         headers: request.headers.clone(),
-        body: String::from_utf8_lossy(&request.body).into_owned(),
+        body,
         body_sha256: Some(body_sha_bytes(&request.body)),
         forwarded_body_length: Some(request.body.len() as u64),
         forwarded_body_utf8_valid: Some(std::str::from_utf8(&request.body).is_ok()),
         credential_metadata: BTreeMap::new(),
         gmail_proofs: Vec::new(),
         client_request_digest: client_request_digest.map(ToString::to_string),
+    }
+}
+
+fn finalize_shadow_local_response(
+    snapshot: &Arc<Snapshot>,
+    finalization: Option<&policy_core::ShadowRequestHandle>,
+    active_decision: Option<&Value>,
+    response: &[u8],
+) {
+    let Some(finalization) = finalization else {
+        return;
     };
-    let (decision, mut release_authorization) = decide_internal_for_forward(
+    let Some(status) = parse_buffered_response(response)
+        .ok()
+        .map(|parsed| u64::from(parsed.status))
+    else {
+        finalization.record_unready_accounting(
+            policy_core::PolicyShadowTerminalReason::PreDispatchResponseParseUnavailable,
+        );
+        return;
+    };
+    let mut final_decision = active_decision.cloned().unwrap_or_else(|| json!({}));
+    final_decision["terminal_action"] =
+        Value::String("local-enforcement-result".to_string());
+    final_decision["allowed"] = Value::Bool(false);
+    final_decision["status_code"] = Value::Number(status.into());
+    final_decision["local_response_sha256"] =
+        Value::String(sha256_prefixed(response));
+    if final_decision
+        .get("policy_effect_results")
+        .and_then(Value::as_object)
+        .is_none()
+    {
+        final_decision["policy_effect_results"] = json!({});
+    }
+    if let Some(effect_results) = final_decision
+        .get_mut("policy_effect_results")
+        .and_then(Value::as_object_mut)
+    {
+        effect_results.insert(
+            "upstream_dispatch_authorized".to_string(),
+            Value::Bool(false),
+        );
+        effect_results.insert(
+            "local_response_returned_sha256".to_string(),
+            Value::String(sha256_prefixed(response)),
+        );
+    }
+    let Ok(status) = u16::try_from(status) else {
+        finalization.record_unready_accounting(
+            policy_core::PolicyShadowTerminalReason::PreDispatchResponseStatusInvalid,
+        );
+        return;
+    };
+    if finalization.finalize_pre_dispatch_local_response(
+        snapshot,
+        &final_decision,
+        now_epoch_ms(),
+        status,
+        response,
+    )
+    .is_err()
+    {
+        finalization.record_unready_accounting(
+            policy_core::PolicyShadowTerminalReason::PreDispatchFinalizationFailed,
+        );
+    }
+}
+
+fn finalize_shadow_post_dispatch_unknown(
+    snapshot: &Arc<Snapshot>,
+    finalization: Option<&policy_core::ShadowRequestHandle>,
+    active_decision: Option<&Value>,
+    response: &[u8],
+    reason: policy_core::PolicyShadowTerminalReason,
+) {
+    let Some(finalization) = finalization else {
+        return;
+    };
+    let Some(active_decision) = active_decision else {
+        finalization.record_unready_accounting(
+            policy_core::PolicyShadowTerminalReason::PostDispatchActiveDecisionUnavailable,
+        );
+        return;
+    };
+    let Some(status) = parse_buffered_response(response)
+        .ok()
+        .map(|parsed| parsed.status)
+    else {
+        finalization.record_unready_accounting(
+            policy_core::PolicyShadowTerminalReason::PostDispatchResponseParseUnavailable,
+        );
+        return;
+    };
+    if finalization.finalize_post_dispatch_unknown(
+        snapshot,
+        active_decision,
+        status,
+        response,
+        reason,
+    )
+    .is_err()
+    {
+        finalization.record_unready_accounting(
+            policy_core::PolicyShadowTerminalReason::PostDispatchFinalizationFailed,
+        );
+    }
+}
+
+fn finalize_shadow_buffered_terminal(
+    snapshot: &Arc<Snapshot>,
+    finalization: Option<&policy_core::ShadowRequestHandle>,
+    active_decision: Option<&Value>,
+    response: &[u8],
+    dispatch_barrier_crossed: bool,
+) {
+    if dispatch_barrier_crossed {
+        finalize_shadow_post_dispatch_unknown(
+            snapshot,
+            finalization,
+            active_decision,
+            response,
+            policy_core::PolicyShadowTerminalReason::BufferedLocalTerminal,
+        );
+    } else {
+        finalize_shadow_local_response(
+            snapshot,
+            finalization,
+            active_decision,
+            response,
+        );
+    }
+}
+
+fn shadow_final_upstream_request_commitment(
+    request: &reqwest::blocking::Request,
+) -> Result<String, String> {
+    let mut committed_headers = request
+        .headers()
+        .iter()
+        .map(|(name, value)| {
+            json!({
+                "name":name.as_str(),
+                "valueSha256":sha256_prefixed(value.as_bytes()),
+            })
+        })
+        .collect::<Vec<_>>();
+    committed_headers.sort_by(|left, right| {
+        left.get("name")
+            .and_then(Value::as_str)
+            .cmp(&right.get("name").and_then(Value::as_str))
+            .then_with(|| {
+                left.get("valueSha256")
+                    .and_then(Value::as_str)
+                    .cmp(&right.get("valueSha256").and_then(Value::as_str))
+            })
+    });
+    Ok(sha256_prefixed(
+        &custody_canonical_json_bytes(&json!({
+            "domain":"serverware.policyShadowFinalUpstreamRequest/v1",
+            "method":request.method().as_str(),
+            "urlSha256":sha256_prefixed(request.url().as_str().as_bytes()),
+            "headers":committed_headers,
+            "bodySha256":request
+                .body()
+                .and_then(|body| body.as_bytes())
+                .map(sha256_prefixed),
+        }))
+        .map_err(|_| "final upstream request commitment failed")?,
+    ))
+}
+
+fn record_shadow_dispatch_barrier(
+    snapshot: &Arc<Snapshot>,
+    finalization: Option<&policy_core::ShadowRequestHandle>,
+    decision: &Value,
+    response_proof_required: bool,
+    request: &reqwest::blocking::Request,
+) -> Result<Option<ShadowDispatchBarrierPermit>, String> {
+    let Some(finalization) = finalization else {
+        return Ok(None);
+    };
+    let mut final_decision = decision.clone();
+    if final_decision
+        .get("policy_effect_results")
+        .and_then(Value::as_object)
+        .is_none()
+    {
+        final_decision["policy_effect_results"] = json!({});
+    }
+    let effect_results = final_decision
+        .get_mut("policy_effect_results")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| "final policy effect results are not an object".to_string())?;
+    effect_results.insert(
+        "upstream_request_build_complete".to_string(),
+        Value::Bool(true),
+    );
+    effect_results.insert(
+        "credential_authority_revalidated".to_string(),
+        Value::Bool(true),
+    );
+    effect_results.insert(
+        "policy_trust_fresh_at_dispatch".to_string(),
+        Value::Bool(true),
+    );
+    effect_results.insert(
+        "release_authorization_current_at_dispatch".to_string(),
+        Value::Bool(true),
+    );
+    effect_results.insert(
+        "response_proof_dispatch_required".to_string(),
+        Value::Bool(response_proof_required),
+    );
+    effect_results.insert(
+        "response_proof_dispatch_gate_resolved".to_string(),
+        Value::Bool(true),
+    );
+    let final_request_commitment =
+        shadow_final_upstream_request_commitment(request)?;
+    record_shadow_dispatch_barrier_with_commitment(
+        snapshot,
+        finalization,
+        &final_decision,
+        response_proof_required,
+        final_request_commitment,
+    )
+}
+
+fn record_shadow_dispatch_barrier_with_commitment(
+    snapshot: &Arc<Snapshot>,
+    finalization: &policy_core::ShadowRequestHandle,
+    decision: &Value,
+    response_proof_required: bool,
+    final_request_commitment: String,
+) -> Result<Option<ShadowDispatchBarrierPermit>, String> {
+    let mut final_decision = decision.clone();
+    if final_decision
+        .get("policy_effect_results")
+        .and_then(Value::as_object)
+        .is_none()
+    {
+        final_decision["policy_effect_results"] = json!({});
+    }
+    let effect_results = final_decision
+        .get_mut("policy_effect_results")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| {
+            "final policy effect results are not an object".to_string()
+        })?;
+    effect_results.insert(
+        "upstream_request_build_complete".to_string(),
+        Value::Bool(true),
+    );
+    effect_results.insert(
+        "credential_authority_revalidated".to_string(),
+        Value::Bool(true),
+    );
+    effect_results.insert(
+        "policy_trust_fresh_at_dispatch".to_string(),
+        Value::Bool(true),
+    );
+    effect_results.insert(
+        "release_authorization_current_at_dispatch".to_string(),
+        Value::Bool(true),
+    );
+    effect_results.insert(
+        "response_proof_dispatch_required".to_string(),
+        Value::Bool(response_proof_required),
+    );
+    effect_results.insert(
+        "response_proof_dispatch_gate_resolved".to_string(),
+        Value::Bool(true),
+    );
+    effect_results.insert(
+        "final_upstream_request_commitment_sha256".to_string(),
+        Value::String(final_request_commitment.clone()),
+    );
+    if !is_sha256_digest(&final_request_commitment) {
+        return Err(
+            "final upstream request commitment is invalid".to_string(),
+        );
+    }
+    finalization
+        .record_dispatch_barrier(snapshot, &final_decision, now_epoch_ms())
+        .map(Some)
+}
+
+fn forward_absolute_request_inner_with_prepared<'a>(
+    state: &GateState,
+    snapshot: &Arc<Snapshot>,
+    mut request: IncomingRequest,
+    prepared_upstream: Option<PreparedUpstream>,
+    shadow_admission: Option<ShadowAdmission>,
+    precomputed_decision_request: Option<DecisionRequest>,
+    authenticated_principal_id: Option<&str>,
+    client_request_digest: Option<&str>,
+    response_proof_authorization_output: Option<&mut Option<ResponseProofAuthorizationContext>>,
+    response_proof_upstream_output: Option<&mut Option<ResponseProofUpstreamResponse>>,
+    stream_writer: Option<&'a mut dyn TerminalDeadlineWrite>,
+    streaming_response_proof_request: Option<StreamingResponseProofRequest<'a>>,
+    response_observation_v2:
+        Option<&ResponseObservationV2Execution<'_>>,
+    mut response_observation: Option<&mut ResponseObservationTrace>,
+    keep_alive: bool,
+) -> ForwardResult {
+    let mut shadow_finalization = shadow_admission
+        .as_ref()
+        .and_then(ShadowAdmission::finalization_handle);
+    let mut shadow_active_decision: Option<Value> = None;
+    let mut shadow_dispatch_barrier_crossed = false;
+    macro_rules! buffered {
+        ($response:expr) => {{
+            let response = $response;
+            finalize_shadow_buffered_terminal(
+                snapshot,
+                shadow_finalization.as_ref(),
+                shadow_active_decision.as_ref(),
+                &response,
+                shadow_dispatch_barrier_crossed,
+            );
+            return ForwardResult::buffered(response);
+        }};
+    }
+
+    let (_, target_url) = match parse_validated_absolute_target(&request.target) {
+        Ok(validated) => validated,
+        Err(detail) => {
+            state.policy_shadow.account_malformed_target(
+                snapshot,
+                &request.method,
+                &request.target,
+                now_epoch_ms(),
+            );
+            buffered!(request_head_error_response(&format!(
+                "invalid request target: {detail}"
+            )))
+        }
+    };
+    let decision_request = precomputed_decision_request.unwrap_or_else(|| {
+        buffered_forward_decision_request(&request, client_request_digest)
+    });
+    let shadow_admission = shadow_admission.unwrap_or_else(|| {
+        state.policy_shadow.capture(
+            snapshot,
+            &decision_request,
+            authenticated_principal_id,
+            ShadowIngressKind::ForwardedHttp,
+            now_epoch_ms(),
+            Some(&request.body),
+        )
+    });
+    if shadow_finalization.is_none() {
+        shadow_finalization = shadow_admission.finalization_handle();
+    }
+    let shadow_response_hook = shadow_finalization
+        .as_ref()
+        .map(|handle| handle.response_hook());
+    let (decision, mut release_authorization) = decide_internal_for_forward_with_shadow(
         state,
         snapshot,
         decision_request,
         authenticated_principal_id,
+        Some(shadow_admission),
     );
+    if shadow_finalization.is_some() {
+        shadow_active_decision = Some(decision.clone());
+    }
     if let Some(observation) = response_observation.as_deref_mut() {
         observation.observe_decision(&decision);
     }
@@ -40083,7 +43422,9 @@ fn forward_absolute_request_inner_with_prepared<'a>(
             json!({"error":"response_proof_request_binding_mismatch"}),
         ));
     }
-    let response_proof_kind = if response_observation.is_some() {
+    let response_proof_kind = if response_observation_v2.is_some()
+        || response_observation.is_some()
+    {
         Some(ResponseProofKind::Observation)
     } else if streaming_response_proof_request.is_some() {
         Some(ResponseProofKind::Streaming)
@@ -40116,11 +43457,24 @@ fn forward_absolute_request_inner_with_prepared<'a>(
             json!({"error":"provider_request_body_binding_mismatch"}),
         ));
     }
-    if !validate_prepared_upstream_binding(&prepared_upstream, snapshot, &decision, &upstream_url) {
-        buffered!(json_status_response(
-            StatusCode::SERVICE_UNAVAILABLE,
-            json!({"error":"upstream_transport_preparation_failed"}),
-        ));
+    if response_observation_v2.is_none() {
+        let Some(prepared) = prepared_upstream.as_ref() else {
+            buffered!(json_status_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!({"error":"upstream_transport_preparation_failed"}),
+            ));
+        };
+        if !validate_prepared_upstream_binding(
+            prepared,
+            snapshot,
+            &decision,
+            &upstream_url,
+        ) {
+            buffered!(json_status_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!({"error":"upstream_transport_preparation_failed"}),
+            ));
+        }
     }
     let route_streaming =
         response_policy_for_decision(snapshot, &decision, &request.method, &upstream_url)
@@ -40200,6 +43554,101 @@ fn forward_absolute_request_inner_with_prepared<'a>(
             json!({"error":"invalid_forwarding_headers"}),
         )),
     };
+    if let Some(execution) = response_observation_v2 {
+        if !snapshot_is_active(state, snapshot) {
+            return ForwardResult::Buffered(
+                ResponseObservationV2TransactionError::Unavailable
+                    .response(),
+            );
+        }
+        let response = match
+            execute_response_observation_v2_transaction(
+                state,
+                snapshot,
+                &decision,
+                &request,
+                &upstream_url,
+                &headers,
+                injection_plan,
+                &mut release_authorization,
+                execution,
+                shadow_finalization.as_ref(),
+                &mut shadow_dispatch_barrier_crossed,
+            )
+        {
+            Ok(response) => {
+                enqueue_audit(
+                    state,
+                    "data_plane.response_observation_v2.completed",
+                    decision_audit_event(
+                        &decision,
+                        &request.method,
+                        &upstream_url,
+                        "completed",
+                        json!({
+                            "stage":"consumed_exact",
+                            "observation_session_id":
+                                response_observation_id(
+                                    &execution
+                                        .context
+                                        .client_nonce,
+                                ),
+                        }),
+                    ),
+                );
+                response
+            }
+            Err(error) => {
+                let terminal = match &error {
+                    ResponseObservationV2TransactionError::Denied
+                    | ResponseObservationV2TransactionError::DeniedWithAttempt(_) => {
+                        "denied"
+                    }
+                    ResponseObservationV2TransactionError::OutcomeUnknown
+                    | ResponseObservationV2TransactionError::OutcomeUnknownWithAttempt(_) => {
+                        "outcome_unknown"
+                    }
+                    ResponseObservationV2TransactionError::Unavailable
+                    | ResponseObservationV2TransactionError::UnavailableWithAttempt(_) => {
+                        "role_unready"
+                    }
+                    ResponseObservationV2TransactionError::InvalidResponse
+                    | ResponseObservationV2TransactionError::InvalidResponseWithAttempt(_) => {
+                        "invalid_terminal"
+                    }
+                };
+                enqueue_audit(
+                    state,
+                    "data_plane.response_observation_v2.failed",
+                    decision_audit_event(
+                        &decision,
+                        &request.method,
+                        &upstream_url,
+                        "blocked",
+                        json!({
+                            "stage":terminal,
+                            "observation_session_id":
+                                response_observation_id(
+                                    &execution
+                                        .context
+                                        .client_nonce,
+                                ),
+                            "attempt_id":error.attempt_id(),
+                            "resume_id":error.stable_resume_id(),
+                        }),
+                    ),
+                );
+                error.response()
+            }
+        };
+        buffered!(response);
+    }
+    let Some(prepared_upstream) = prepared_upstream else {
+        buffered!(json_status_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"error":"upstream_transport_preparation_failed"}),
+        ));
+    };
     let mut provider_request =
         TransientProviderRequest::new(headers, upstream_url.clone());
     let mut response_secret_guard = ResponseSecretGuard::default();
@@ -40261,6 +43710,7 @@ fn forward_absolute_request_inner_with_prepared<'a>(
             provider_url,
             injection_plan,
             &lease,
+            shadow_finalization.as_ref(),
         ) {
             Ok(guard) => {
                 response_secret_guard = guard;
@@ -40424,13 +43874,24 @@ fn forward_absolute_request_inner_with_prepared<'a>(
         }
         completed_response_proof_authorization = Some(authorization_context);
     }
-    let response = match send_upstream_request_with_current_lease(
+    let response = match send_upstream_request_with_current_lease_finalized(
         state,
         snapshot,
         credential_release_binding.as_ref(),
         builder,
         send_deadlines,
         response_proof_requested,
+        |request| {
+            let permit = record_shadow_dispatch_barrier(
+                snapshot,
+                shadow_finalization.as_ref(),
+                &decision,
+                response_proof_requested,
+                request,
+            )?;
+            shadow_dispatch_barrier_crossed = permit.is_some();
+            Ok(permit)
+        },
     ) {
         Ok(response) => {
             if let Some(observation) = response_observation.as_deref_mut() {
@@ -40454,6 +43915,23 @@ fn forward_absolute_request_inner_with_prepared<'a>(
             buffered!(json_status_response(
                 StatusCode::SERVICE_UNAVAILABLE,
                 json!({"error":error}),
+            ));
+        }
+        Err(UpstreamSendError::DispatchBarrier(_)) => {
+            if let Some(observation) = response_observation.as_deref_mut() {
+                observation.response_path = "authorized-not-attempted";
+            }
+            if let Some(release) = release_authorization.as_mut() {
+                if release.complete_not_forwarded().is_err() {
+                    buffered!(json_status_response(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        json!({"error":"release_authorization_completion_failed"}),
+                    ));
+                }
+            }
+            buffered!(json_status_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!({"error":"dispatch_barrier_unavailable"}),
             ));
         }
         Err(UpstreamSendError::RequestBuild(_)) => {
@@ -40500,10 +43978,19 @@ fn forward_absolute_request_inner_with_prepared<'a>(
                     json!({"stage":"upstream_request","error":"upstream_request_failed"}),
                 ),
             );
-            buffered!(json_status_response(
+            let response = json_status_response(
                 StatusCode::CONFLICT,
                 provider_operation_outcome_unknown(),
-            ));
+            );
+            finalize_shadow_post_dispatch_unknown(
+                snapshot,
+                shadow_finalization.as_ref(),
+                shadow_active_decision.as_ref(),
+                &response,
+                policy_core::PolicyShadowTerminalReason::UpstreamOutcomeUnknown,
+            );
+            shadow_finalization = None;
+            buffered!(response);
         }
     };
     if !gmail_metadata_list {
@@ -40552,6 +44039,7 @@ fn forward_absolute_request_inner_with_prepared<'a>(
         upstream_send_deadlines: send_deadlines,
         prepared_upstream: &prepared_upstream,
         child_authorizations: &gmail_child_authorizations,
+        shadow_finalization: shadow_finalization.as_ref(),
     });
     let mut gmail_proof_commit = None;
     let durable_policy_reservation = release_authorization
@@ -40566,6 +44054,7 @@ fn forward_absolute_request_inner_with_prepared<'a>(
         &upstream_url,
         response,
         &response_secret_guard,
+        shadow_response_hook.as_ref(),
         stream_writer,
         response_proof_upstream_output,
         streaming_response_proof,
@@ -40652,41 +44141,58 @@ fn forward_absolute_request_inner<'a>(
     let (_, target_url) = match parse_validated_absolute_target(&request.target) {
         Ok(validated) => validated,
         Err(detail) => {
+            state.policy_shadow.account_malformed_target(
+                snapshot,
+                &request.method,
+                &request.target,
+                now_epoch_ms(),
+            );
             return ForwardResult::buffered(request_head_error_response(&format!(
                 "invalid request target: {detail}"
             )));
         }
     };
-    let prepared_upstream = match prepare_upstream_for_buffered_forward(
-        state,
+    let decision_request =
+        buffered_forward_decision_request(&request, client_request_digest);
+    let shadow_admission = state.policy_shadow.capture(
         snapshot,
-        &request,
-        &target_url,
+        &decision_request,
         authenticated_principal_id,
-    ) {
-        Ok(prepared) => prepared,
-        Err(error) => {
-            audit_upstream_preparation_error(state, &request.method, &target_url, &error);
-            return ForwardResult::buffered(upstream_preparation_error_response(&error));
+        ShadowIngressKind::ForwardedHttp,
+        now_epoch_ms(),
+        Some(&request.body),
+    );
+    let prepared_upstream = if shadow_admission.may_prepare_upstream() {
+        match prepare_upstream_for_buffered_forward(
+            state,
+            snapshot,
+            &request,
+            &target_url,
+            authenticated_principal_id,
+        ) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                audit_upstream_preparation_error(state, &request.method, &target_url, &error);
+                return ForwardResult::buffered(upstream_preparation_error_response(&error));
+            }
         }
-    };
-    let Some(prepared_upstream) = prepared_upstream else {
-        return ForwardResult::buffered(json_status_response(
-            StatusCode::SERVICE_UNAVAILABLE,
-            json!({"error":"upstream_transport_preparation_failed"}),
-        ));
+    } else {
+        None
     };
     forward_absolute_request_inner_with_prepared(
         state,
         snapshot,
         request,
         prepared_upstream,
+        Some(shadow_admission),
+        Some(decision_request),
         authenticated_principal_id,
         client_request_digest,
         response_proof_authorization_output,
         response_proof_upstream_output,
         stream_writer,
         streaming_response_proof_request,
+        None,
         response_observation,
         keep_alive,
     )
@@ -40703,9 +44209,19 @@ fn forward_absolute_streaming_request_to(
     keep_alive: bool,
     writer: &mut dyn TerminalDeadlineWrite,
 ) -> bool {
+    let mut shadow_finalization: Option<policy_core::ShadowRequestHandle> = None;
+    let mut shadow_active_decision: Option<Value> = None;
+    let mut shadow_dispatch_barrier_crossed = false;
     macro_rules! write_buffered {
         ($response:expr) => {{
             let response = override_response_connection($response, keep_alive);
+            finalize_shadow_buffered_terminal(
+                snapshot,
+                shadow_finalization.as_ref(),
+                shadow_active_decision.as_ref(),
+                &response,
+                shadow_dispatch_barrier_crossed,
+            );
             return writer.write_all(&response).is_ok() && writer.flush().is_ok();
         }};
     }
@@ -40719,12 +44235,24 @@ fn forward_absolute_streaming_request_to(
         authenticated_principal_id,
     );
     if streaming_request_authorization_disabled() {
+        state.policy_shadow.account_unsupported(
+            snapshot,
+            ShadowIngressKind::UnsupportedStreamingBody,
+            &request.method,
+            &request.target,
+        );
         write_buffered!(json_status_response(
             StatusCode::UNPROCESSABLE_ENTITY,
             json!({"error":"streaming_request_requires_buffered_authorization"}),
         ));
     }
     if request.content_length != 0 || !request.prefetched_body.is_empty() {
+        state.policy_shadow.account_unsupported(
+            snapshot,
+            ShadowIngressKind::UnsupportedStreamingBody,
+            &request.method,
+            &request.target,
+        );
         write_buffered!(json_status_response(
             StatusCode::UNPROCESSABLE_ENTITY,
             json!({"error":"unbuffered_request_body_authorization_forbidden"}),
@@ -40734,22 +44262,15 @@ fn forward_absolute_streaming_request_to(
     let (_, target_url) = match parse_validated_absolute_target(&request.target) {
         Ok(validated) => validated,
         Err(detail) => {
+            state.policy_shadow.account_malformed_target(
+                snapshot,
+                &request.method,
+                &request.target,
+                now_epoch_ms(),
+            );
             write_buffered!(request_head_error_response(&format!(
                 "invalid request target: {detail}"
             )))
-        }
-    };
-    let prepared_upstream = match prepare_upstream_for_forward(
-        state,
-        snapshot,
-        &request,
-        &target_url,
-        authenticated_principal_id,
-    ) {
-        Ok(prepared) => prepared,
-        Err(error) => {
-            audit_upstream_preparation_error(state, &request.method, &target_url, &error);
-            write_buffered!(upstream_preparation_error_response(&error));
         }
     };
     let decision_request = DecisionRequest {
@@ -40765,12 +44286,45 @@ fn forward_absolute_streaming_request_to(
         gmail_proofs: Vec::new(),
         client_request_digest: None,
     };
-    let (decision, mut release_authorization) = decide_internal_for_forward(
+    let shadow_admission = state.policy_shadow.capture(
+        snapshot,
+        &decision_request,
+        authenticated_principal_id,
+        ShadowIngressKind::ForwardedHttp,
+        now_epoch_ms(),
+        Some(&[]),
+    );
+    shadow_finalization = shadow_admission.finalization_handle();
+    let shadow_response_hook = shadow_finalization
+        .as_ref()
+        .map(|handle| handle.response_hook());
+    let prepared_upstream = if shadow_admission.may_prepare_upstream() {
+        match prepare_upstream_for_forward(
+            state,
+            snapshot,
+            &request,
+            &target_url,
+            authenticated_principal_id,
+        ) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                audit_upstream_preparation_error(state, &request.method, &target_url, &error);
+                write_buffered!(upstream_preparation_error_response(&error));
+            }
+        }
+    } else {
+        None
+    };
+    let (decision, mut release_authorization) = decide_internal_for_forward_with_shadow(
         state,
         snapshot,
         decision_request,
         authenticated_principal_id,
+        Some(shadow_admission),
     );
+    if shadow_finalization.is_some() {
+        shadow_active_decision = Some(decision.clone());
+    }
     if !decision
         .get("allowed")
         .and_then(Value::as_bool)
@@ -40806,6 +44360,12 @@ fn forward_absolute_streaming_request_to(
             json!({"error":"response_release_barrier_invalid"}),
         ));
     }
+    let Some(prepared_upstream) = prepared_upstream else {
+        write_buffered!(json_status_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"error":"upstream_transport_preparation_failed"}),
+        ));
+    };
     #[cfg(test)]
     if take_forwarder_post_decision_failure("streaming") {
         write_buffered!(json_status_response(
@@ -40926,6 +44486,7 @@ fn forward_absolute_streaming_request_to(
             provider_url,
             injection_plan,
             &lease,
+            shadow_finalization.as_ref(),
         ) {
             Ok(guard) => response_secret_guard = guard,
             Err(_) => {
@@ -41068,13 +44629,24 @@ fn forward_absolute_streaming_request_to(
         policy_expires_at_epoch_ms,
         release_dispatch_observation.as_ref(),
     );
-    let response = match send_upstream_request_with_current_lease(
+    let response = match send_upstream_request_with_current_lease_finalized(
         state,
         snapshot,
         credential_release_binding.as_ref(),
         builder,
         send_deadlines,
         false,
+        |request| {
+            let permit = record_shadow_dispatch_barrier(
+                snapshot,
+                shadow_finalization.as_ref(),
+                &decision,
+                false,
+                request,
+            )?;
+            shadow_dispatch_barrier_crossed = permit.is_some();
+            Ok(permit)
+        },
     ) {
         Ok(response) => response,
         Err(UpstreamSendError::CredentialAuthority(error)) => {
@@ -41089,6 +44661,20 @@ fn forward_absolute_streaming_request_to(
             write_buffered!(json_status_response(
                 StatusCode::SERVICE_UNAVAILABLE,
                 json!({"error":error}),
+            ));
+        }
+        Err(UpstreamSendError::DispatchBarrier(_)) => {
+            if let Some(release) = release_authorization.as_mut() {
+                if release.complete_not_forwarded().is_err() {
+                    write_buffered!(json_status_response(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        json!({"error":"release_authorization_completion_failed"}),
+                    ));
+                }
+            }
+            write_buffered!(json_status_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!({"error":"dispatch_barrier_unavailable"}),
             ));
         }
         Err(UpstreamSendError::RequestBuild(_)) => {
@@ -41160,10 +44746,19 @@ fn forward_absolute_streaming_request_to(
                     }),
                 ),
             );
-            write_buffered!(json_status_response(
+            let response = json_status_response(
                 StatusCode::CONFLICT,
-                provider_operation_outcome_unknown(),
-            ));
+                provider_operation_outcome_unknown()
+            );
+            finalize_shadow_post_dispatch_unknown(
+                snapshot,
+                shadow_finalization.as_ref(),
+                shadow_active_decision.as_ref(),
+                &response,
+                policy_core::PolicyShadowTerminalReason::StreamingUpstreamOutcomeUnknown,
+            );
+            shadow_finalization = None;
+            write_buffered!(response);
         }
     };
     if let Some(release) = release_authorization.as_mut() {
@@ -41240,6 +44835,7 @@ fn forward_absolute_streaming_request_to(
         &upstream_url,
         response,
         &response_secret_guard,
+        shadow_response_hook.as_ref(),
         Some(writer),
         None,
         None,
@@ -41267,9 +44863,20 @@ fn forward_intercepted_streaming_request_to<R: Read + Write + TerminalDeadlineWr
     authenticated_principal_id: Option<&str>,
     keep_alive: bool,
 ) -> bool {
+    let mut shadow_finalization: Option<policy_core::ShadowRequestHandle> = None;
+    let mut shadow_active_decision: Option<Value> = None;
+    let shadow_dispatch_barrier_crossed =
+        Arc::new(AtomicBool::new(false));
     macro_rules! write_buffered {
         ($response:expr) => {{
             let response = override_response_connection($response, keep_alive);
+            finalize_shadow_buffered_terminal(
+                snapshot,
+                shadow_finalization.as_ref(),
+                shadow_active_decision.as_ref(),
+                &response,
+                shadow_dispatch_barrier_crossed.load(Ordering::Acquire),
+            );
             return tls.write_all(&response).is_ok() && tls.flush().is_ok();
         }};
     }
@@ -41281,12 +44888,24 @@ fn forward_intercepted_streaming_request_to<R: Read + Write + TerminalDeadlineWr
         authenticated_principal_id,
     );
     if streaming_request_authorization_disabled() {
+        state.policy_shadow.account_unsupported(
+            snapshot,
+            ShadowIngressKind::UnsupportedStreamingBody,
+            &request.method,
+            &request.target,
+        );
         write_buffered!(json_status_response(
             StatusCode::UNPROCESSABLE_ENTITY,
             json!({"error":"streaming_request_requires_buffered_authorization"}),
         ));
     }
     if request.content_length != 0 || !request.prefetched_body.is_empty() {
+        state.policy_shadow.account_unsupported(
+            snapshot,
+            ShadowIngressKind::UnsupportedStreamingBody,
+            &request.method,
+            &request.target,
+        );
         write_buffered!(json_status_response(
             StatusCode::UNPROCESSABLE_ENTITY,
             json!({"error":"unbuffered_request_body_authorization_forbidden"}),
@@ -41297,22 +44916,15 @@ fn forward_intercepted_streaming_request_to<R: Read + Write + TerminalDeadlineWr
     let (_, target_url) = match parse_validated_absolute_target(&request.target) {
         Ok(validated) => validated,
         Err(detail) => {
+            state.policy_shadow.account_malformed_target(
+                snapshot,
+                &request.method,
+                &request.target,
+                now_epoch_ms(),
+            );
             write_buffered!(request_head_error_response(&format!(
                 "invalid request target: {detail}"
             )))
-        }
-    };
-    let prepared_upstream = match prepare_upstream_for_forward(
-        state,
-        snapshot,
-        &request,
-        &target_url,
-        authenticated_principal_id,
-    ) {
-        Ok(prepared) => prepared,
-        Err(error) => {
-            audit_upstream_preparation_error(state, &request.method, &target_url, &error);
-            write_buffered!(upstream_preparation_error_response(&error));
         }
     };
     let decision_request = DecisionRequest {
@@ -41328,12 +44940,45 @@ fn forward_intercepted_streaming_request_to<R: Read + Write + TerminalDeadlineWr
         gmail_proofs: Vec::new(),
         client_request_digest: None,
     };
-    let (decision, mut release_authorization) = decide_internal_for_forward(
+    let shadow_admission = state.policy_shadow.capture(
+        snapshot,
+        &decision_request,
+        authenticated_principal_id,
+        ShadowIngressKind::ForwardedHttp,
+        now_epoch_ms(),
+        Some(&[]),
+    );
+    shadow_finalization = shadow_admission.finalization_handle();
+    let shadow_response_hook = shadow_finalization
+        .as_ref()
+        .map(|handle| handle.response_hook());
+    let prepared_upstream = if shadow_admission.may_prepare_upstream() {
+        match prepare_upstream_for_forward(
+            state,
+            snapshot,
+            &request,
+            &target_url,
+            authenticated_principal_id,
+        ) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                audit_upstream_preparation_error(state, &request.method, &target_url, &error);
+                write_buffered!(upstream_preparation_error_response(&error));
+            }
+        }
+    } else {
+        None
+    };
+    let (decision, mut release_authorization) = decide_internal_for_forward_with_shadow(
         state,
         snapshot,
         decision_request,
         authenticated_principal_id,
+        Some(shadow_admission),
     );
+    if shadow_finalization.is_some() {
+        shadow_active_decision = Some(decision.clone());
+    }
     if !decision
         .get("allowed")
         .and_then(Value::as_bool)
@@ -41369,6 +45014,12 @@ fn forward_intercepted_streaming_request_to<R: Read + Write + TerminalDeadlineWr
             json!({"error":"response_release_barrier_invalid"}),
         ));
     }
+    let Some(prepared_upstream) = prepared_upstream else {
+        write_buffered!(json_status_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"error":"upstream_transport_preparation_failed"}),
+        ));
+    };
     #[cfg(test)]
     if take_forwarder_post_decision_failure("intercepted-connect") {
         write_buffered!(json_status_response(
@@ -41493,6 +45144,7 @@ fn forward_intercepted_streaming_request_to<R: Read + Write + TerminalDeadlineWr
             provider_url,
             injection_plan,
             &lease,
+            shadow_finalization.as_ref(),
         ) {
             Ok(guard) => response_secret_guard = guard,
             Err(_) => {
@@ -41620,6 +45272,12 @@ fn forward_intercepted_streaming_request_to<R: Read + Write + TerminalDeadlineWr
     let send_state = Arc::clone(state);
     let send_snapshot = Arc::clone(snapshot);
     let send_credential_release_binding = credential_release_binding.clone();
+    let send_shadow_context = shadow_finalization
+        .as_ref()
+        .map(|finalization| (finalization.clone(), decision.clone()));
+    let send_shadow_snapshot = Arc::clone(&send_snapshot);
+    let send_shadow_dispatch_barrier_crossed =
+        Arc::clone(&shadow_dispatch_barrier_crossed);
     let sender_thread = thread::spawn(move || {
         ready_sender.send(()).map_err(|_| {
             (
@@ -41633,16 +45291,37 @@ fn forward_intercepted_streaming_request_to<R: Read + Write + TerminalDeadlineWr
                 "upstream sender was cancelled before dispatch".to_string(),
             )
         })?;
-        send_upstream_request_with_current_lease(
+        send_upstream_request_with_current_lease_finalized(
             &send_state,
             &send_snapshot,
             send_credential_release_binding.as_ref(),
             builder,
             send_deadlines,
             false,
+            move |request| {
+                let permit = send_shadow_context.map_or(
+                    Ok(None),
+                    |(finalization, decision)| {
+                    record_shadow_dispatch_barrier(
+                        &send_shadow_snapshot,
+                        Some(&finalization),
+                        &decision,
+                        false,
+                        request,
+                    )
+                })?;
+                if permit.is_some() {
+                    send_shadow_dispatch_barrier_crossed
+                        .store(true, Ordering::Release);
+                }
+                Ok(permit)
+            },
         )
         .map_err(|error| match error {
             UpstreamSendError::CredentialAuthority(error) => (true, error.to_string()),
+            UpstreamSendError::DispatchBarrier(_) => {
+                (true, "dispatch_barrier_unavailable".to_string())
+            }
             UpstreamSendError::RequestBuild(_) => {
                 (true, "upstream_request_build_failed".to_string())
             }
@@ -41848,7 +45527,18 @@ fn forward_intercepted_streaming_request_to<R: Read + Write + TerminalDeadlineWr
                     json!({"error":"upstream_request_failed"}),
                 )
             };
-            write_buffered!(json_status_response(status, payload));
+            let response = json_status_response(status, payload);
+            if provider_operation_may_have_committed {
+                finalize_shadow_post_dispatch_unknown(
+                    snapshot,
+                    shadow_finalization.as_ref(),
+                    shadow_active_decision.as_ref(),
+                    &response,
+                    policy_core::PolicyShadowTerminalReason::InterceptedStreamOutcomeUnknown,
+                );
+                shadow_finalization = None;
+            }
+            write_buffered!(response);
         }
     };
     enqueue_audit(state, "data_plane.request.streamed", {
@@ -41892,6 +45582,7 @@ fn forward_intercepted_streaming_request_to<R: Read + Write + TerminalDeadlineWr
         &upstream_url,
         response,
         &response_secret_guard,
+        shadow_response_hook.as_ref(),
         Some(tls),
         None,
         None,
@@ -41918,10 +45609,17 @@ fn forward_absolute_request_to<W: TerminalDeadlineWrite>(
     keep_alive: bool,
     writer: &mut W,
     response_proof: Option<ResponseProofRequestContext<'_>>,
+    connection_identity_sha256: Option<&str>,
 ) -> bool {
     let (_, target_url) = match parse_validated_absolute_target(&request.target) {
         Ok(validated) => validated,
         Err(detail) => {
+            state.policy_shadow.account_malformed_target(
+                snapshot,
+                &request.method,
+                &request.target,
+                now_epoch_ms(),
+            );
             let response = request_head_error_response(&format!(
                 "invalid request target: {detail}"
             ));
@@ -41929,91 +45627,17 @@ fn forward_absolute_request_to<W: TerminalDeadlineWrite>(
             return false;
         }
     };
-    let prepared_upstream = match prepare_upstream_for_buffered_forward(
-        state,
-        snapshot,
-        &request,
-        &target_url,
-        authenticated_principal_id,
-    ) {
-        Ok(prepared) => prepared,
-        Err(error) => {
-            audit_upstream_preparation_error(state, &request.method, &target_url, &error);
-            let response = upstream_preparation_error_response(&error);
-            let _ = write_snapshot_guarded_response(state, snapshot, writer, &response);
-            return false;
-        }
-    };
-    let Some(prepared_upstream) = prepared_upstream else {
-        let response = json_status_response(
-            StatusCode::SERVICE_UNAVAILABLE,
-            json!({"error":"upstream_transport_preparation_failed"}),
-        );
-        let _ = write_snapshot_guarded_response(state, snapshot, writer, &response);
-        return false;
-    };
     let proof_kind = response_proof.as_ref().map(|proof| match proof {
         ResponseProofRequestContext::Buffered(_) => ResponseProofKind::Buffered,
         ResponseProofRequestContext::Streaming(_) => ResponseProofKind::Streaming,
         ResponseProofRequestContext::Observation(_) => ResponseProofKind::Observation,
     });
-    if let Some(proof_kind) = proof_kind {
-        if let Some(route_match) =
-            matched_response_proof_route(snapshot, &request, authenticated_principal_id)
-        {
-            if let Err(error) = validate_response_proof_route_preflight(&route_match, proof_kind) {
-                enqueue_audit(
-                    state,
-                    if proof_kind == ResponseProofKind::Streaming {
-                        "data_plane.streaming_response_proof.denied"
-                    } else {
-                        "data_plane.response_proof.denied"
-                    },
-                    json!({
-                        "component":"serverware-decision-gate-rs",
-                        "outcome":"denied",
-                        "stage":"pre_upstream",
-                        "error":error,
-                        "policy_hash":snapshot.hash,
-                    }),
-                );
-                let response =
-                    json_status_response(StatusCode::UNPROCESSABLE_ENTITY, json!({"error":error}));
-                return write_snapshot_guarded_response(state, snapshot, writer, &response);
-            }
-        }
-    }
     let observation_request = match response_proof.as_ref() {
         Some(ResponseProofRequestContext::Observation(context)) => {
             Some(response_observation_request(context, &request.body))
         }
         _ => None,
     };
-    if let (Some(ResponseProofRequestContext::Observation(context)), Some(observation_request)) =
-        (response_proof.as_ref(), observation_request.as_ref())
-    {
-        if reserve_response_observation_nonce(state, context, observation_request).is_err()
-        {
-            enqueue_audit(
-                state,
-                "data_plane.response_observation_proof.denied",
-                json!({
-                    "component":"serverware-decision-gate-rs",
-                    "outcome":"denied",
-                    "stage":"pre_upstream",
-                    "error":"response_observation_nonce_rejected",
-                    "client_nonce_sha256":sha256_prefixed(&context.client_nonce_bytes),
-                    "policy_hash":snapshot.hash,
-                }),
-            );
-            let response = json_status_response(
-                StatusCode::CONFLICT,
-                json!({"error":"response_observation_nonce_rejected"}),
-            );
-            let _ = write_snapshot_guarded_response(state, snapshot, writer, &response);
-            return false;
-        }
-    }
     let client_request_digest = if let Some(proof) = response_proof.as_ref() {
         let digest = match proof {
             ResponseProofRequestContext::Buffered(context) => {
@@ -42031,6 +45655,16 @@ fn forward_absolute_request_to<W: TerminalDeadlineWrite>(
         match digest {
             Ok(digest) => Some(digest),
             Err(_) => {
+                let malformed_decision_request =
+                    buffered_forward_decision_request(&request, None);
+                let _ = state.policy_shadow.capture(
+                    snapshot,
+                    &malformed_decision_request,
+                    authenticated_principal_id,
+                    ShadowIngressKind::ForwardedHttp,
+                    now_epoch_ms(),
+                    Some(&request.body),
+                );
                 enqueue_audit(
                     state,
                     if proof_kind == Some(ResponseProofKind::Streaming) {
@@ -42064,6 +45698,199 @@ fn forward_absolute_request_to<W: TerminalDeadlineWrite>(
     } else {
         None
     };
+    let decision_request =
+        buffered_forward_decision_request(&request, client_request_digest.as_deref());
+    let shadow_admission = state.policy_shadow.capture(
+        snapshot,
+        &decision_request,
+        authenticated_principal_id,
+        ShadowIngressKind::ForwardedHttp,
+        now_epoch_ms(),
+        Some(&request.body),
+    );
+    let matched_proof_route = proof_kind.and_then(|_| {
+        matched_response_proof_route(
+            snapshot,
+            &request,
+            authenticated_principal_id,
+        )
+    });
+    if let Some(proof_kind) = proof_kind {
+        if let Some(route_match) = matched_proof_route.as_ref() {
+            if let Err(error) = validate_response_proof_route_preflight(&route_match, proof_kind) {
+                enqueue_audit(
+                    state,
+                    if proof_kind == ResponseProofKind::Streaming {
+                        "data_plane.streaming_response_proof.denied"
+                    } else {
+                        "data_plane.response_proof.denied"
+                    },
+                    json!({
+                        "component":"serverware-decision-gate-rs",
+                        "outcome":"denied",
+                        "stage":"post_shadow_capture_pre_upstream",
+                        "error":error,
+                        "policy_hash":snapshot.hash,
+                    }),
+                );
+                let response =
+                    json_status_response(StatusCode::UNPROCESSABLE_ENTITY, json!({"error":error}));
+                return write_snapshot_guarded_response(state, snapshot, writer, &response);
+            }
+        }
+    }
+    let response_observation_route =
+        if proof_kind == Some(ResponseProofKind::Observation) {
+            let Some(route_match) = matched_proof_route.as_ref()
+            else {
+                let response = json_status_response(
+                    StatusCode::FORBIDDEN,
+                    json!({
+                        "error":
+                            "response_observation_route_not_authorized",
+                    }),
+                );
+                let _ = write_snapshot_guarded_response(
+                    state,
+                    snapshot,
+                    writer,
+                    &response,
+                );
+                return false;
+            };
+            let Some(config) =
+                route_match.route.response_observation.clone()
+            else {
+                let response = json_status_response(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    json!({
+                        "error":
+                            "response_observation_route_version_required",
+                    }),
+                );
+                let _ = write_snapshot_guarded_response(
+                    state,
+                    snapshot,
+                    writer,
+                    &response,
+                );
+                return false;
+            };
+            Some(config)
+        } else {
+            None
+        };
+    if let (Some(ResponseProofRequestContext::Observation(context)), Some(observation_request)) =
+        (response_proof.as_ref(), observation_request.as_ref())
+    {
+        let Some(route) = response_observation_route.as_ref()
+        else {
+            return false;
+        };
+        let reservation_error = match route.version {
+            ResponseObservationRouteVersion::V1 => {
+                reserve_response_observation_nonce(
+                    state,
+                    context,
+                    observation_request,
+                )
+                .err()
+                .map(|_| {
+                    (
+                        StatusCode::CONFLICT,
+                        "response_observation_nonce_rejected",
+                    )
+                })
+            }
+            ResponseObservationRouteVersion::V2 => {
+                let ready = state
+                    .response_observation_v2_client
+                    .as_ref()
+                    .is_some_and(|client| {
+                        client.healthy.load(Ordering::Acquire) == 1
+                    });
+                if !ready
+                    || connection_identity_sha256
+                        .is_none_or(|digest| {
+                            !is_sha256_digest(digest)
+                        })
+                {
+                    Some((
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "response_observation_v2_role_unready",
+                    ))
+                } else {
+                    None
+                }
+            }
+        };
+        if let Some((status, error)) = reservation_error {
+            enqueue_audit(
+                state,
+                "data_plane.response_observation_proof.denied",
+                json!({
+                    "component":"serverware-decision-gate-rs",
+                    "outcome":"denied",
+                    "stage":"post_shadow_capture_pre_upstream",
+                    "error":error,
+                    "client_nonce_sha256":sha256_prefixed(&context.client_nonce_bytes),
+                    "policy_hash":snapshot.hash,
+                }),
+            );
+            let response = json_status_response(
+                status,
+                json!({"error":error}),
+            );
+            let _ = write_snapshot_guarded_response(state, snapshot, writer, &response);
+            return false;
+        }
+    }
+    let response_observation_v2_execution = match (
+        response_observation_route.as_ref(),
+        response_proof.as_ref(),
+    ) {
+        (
+            Some(ResponseObservationRouteConfig {
+                version: ResponseObservationRouteVersion::V2,
+                ..
+            }),
+            Some(ResponseProofRequestContext::Observation(context)),
+        ) => Some(ResponseObservationV2Execution {
+            context,
+            route: response_observation_route
+                .as_ref()
+                .expect("v2 response observation route exists")
+                .clone(),
+            connection_identity_sha256:
+                connection_identity_sha256
+                    .expect(
+                        "v2 response observation connection binding was checked",
+                    )
+                    .to_owned(),
+        }),
+        _ => None,
+    };
+    let prepared_upstream = if shadow_admission.may_prepare_upstream()
+        && response_observation_v2_execution.is_none()
+    {
+        match prepare_upstream_for_buffered_forward(
+            state,
+            snapshot,
+            &request,
+            &target_url,
+            authenticated_principal_id,
+        ) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                audit_upstream_preparation_error(state, &request.method, &target_url, &error);
+                let response = upstream_preparation_error_response(&error);
+                let _ = write_snapshot_guarded_response(state, snapshot, writer, &response);
+                return false;
+            }
+        }
+    } else {
+        None
+    };
     let mut response_proof_authorization = None;
     let mut response_proof_upstream = None;
     let mut response_observation_trace = ResponseObservationTrace::new();
@@ -42074,10 +45901,13 @@ fn forward_absolute_request_to<W: TerminalDeadlineWrite>(
                 snapshot,
                 request,
                 prepared_upstream,
+                Some(shadow_admission),
+                Some(decision_request),
                 authenticated_principal_id,
                 client_request_digest.as_deref(),
                 Some(&mut response_proof_authorization),
                 Some(&mut response_proof_upstream),
+                None,
                 None,
                 None,
                 None,
@@ -42093,6 +45923,8 @@ fn forward_absolute_request_to<W: TerminalDeadlineWrite>(
                 snapshot,
                 request,
                 prepared_upstream,
+                Some(shadow_admission),
+                Some(decision_request),
                 authenticated_principal_id,
                 Some(expected_client_request_digest),
                 None,
@@ -42104,35 +45936,64 @@ fn forward_absolute_request_to<W: TerminalDeadlineWrite>(
                     writer,
                 }),
                 None,
+                None,
                 keep_alive,
             )
         }
         Some(ResponseProofRequestContext::Observation(_)) => {
-            forward_absolute_request_inner_with_prepared(
-                state,
-                snapshot,
-                request,
-                prepared_upstream,
-                authenticated_principal_id,
-                client_request_digest.as_deref(),
-                None,
-                None,
-                None,
-                None,
-                Some(&mut response_observation_trace),
-                false,
-            )
+            if let Some(execution) =
+                response_observation_v2_execution.as_ref()
+            {
+                forward_absolute_request_inner_with_prepared(
+                    state,
+                    snapshot,
+                    request,
+                    prepared_upstream,
+                    Some(shadow_admission),
+                    Some(decision_request),
+                    authenticated_principal_id,
+                    client_request_digest.as_deref(),
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(execution),
+                    None,
+                    false,
+                )
+            } else {
+                forward_absolute_request_inner_with_prepared(
+                    state,
+                    snapshot,
+                    request,
+                    prepared_upstream,
+                    Some(shadow_admission),
+                    Some(decision_request),
+                    authenticated_principal_id,
+                    client_request_digest.as_deref(),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(&mut response_observation_trace),
+                    false,
+                )
+            }
         }
         None => forward_absolute_request_inner_with_prepared(
             state,
             snapshot,
             request,
             prepared_upstream,
+            Some(shadow_admission),
+            Some(decision_request),
             authenticated_principal_id,
             None,
             None,
             None,
             Some(writer),
+            None,
             None,
             None,
             keep_alive,
@@ -42142,44 +46003,71 @@ fn forward_absolute_request_to<W: TerminalDeadlineWrite>(
         ForwardResult::Buffered(mut response) => {
             if let Some(ResponseProofRequestContext::Observation(context)) = response_proof.as_ref()
             {
-                let Some(request) = observation_request.as_ref() else {
-                    return false;
-                };
-                match write_response_observation_proof(
-                    state,
-                    snapshot,
-                    writer,
-                    context,
-                    request,
-                    &response_observation_trace,
-                    &response,
-                ) {
-                    Ok(runtime_proof_sha256) => enqueue_audit(
-                        state,
-                        "data_plane.response_observation_proof.emitted",
-                        json!({
-                            "component":"serverware-decision-gate-rs",
-                            "outcome":"emitted",
-                            "client_nonce_sha256":sha256_prefixed(&context.client_nonce_bytes),
-                            "client_request_digest":client_request_digest,
-                            "policy_hash":snapshot.hash,
-                            "response_path":response_observation_trace.response_path,
-                            "runtime_proof_sha256":runtime_proof_sha256,
-                            "response_signing_key_id":state.response_proof_signing_key_id,
-                        }),
-                    ),
-                    Err(_) => enqueue_audit(
-                        state,
-                        "data_plane.response_observation_proof.failed",
-                        json!({
-                            "component":"serverware-decision-gate-rs",
-                            "outcome":"incomplete",
-                            "error":"response_observation_proof_unavailable",
-                            "policy_hash":snapshot.hash,
-                        }),
-                    ),
+                match response_observation_route
+                    .as_ref()
+                    .map(|route| route.version)
+                {
+                    Some(ResponseObservationRouteVersion::V1) => {
+                        let Some(request) =
+                            observation_request.as_ref()
+                        else {
+                            return false;
+                        };
+                        match write_response_observation_proof(
+                            state,
+                            snapshot,
+                            writer,
+                            context,
+                            request,
+                            &response_observation_trace,
+                            &response,
+                        ) {
+                            Ok(runtime_proof_sha256) => enqueue_audit(
+                                state,
+                                "data_plane.response_observation_proof.emitted",
+                                json!({
+                                    "component":"serverware-decision-gate-rs",
+                                    "outcome":"emitted",
+                                    "client_nonce_sha256":sha256_prefixed(&context.client_nonce_bytes),
+                                    "client_request_digest":client_request_digest,
+                                    "policy_hash":snapshot.hash,
+                                    "response_path":response_observation_trace.response_path,
+                                    "runtime_proof_sha256":runtime_proof_sha256,
+                                    "response_signing_key_id":state.response_proof_signing_key_id,
+                                }),
+                            ),
+                            Err(_) => enqueue_audit(
+                                state,
+                                "data_plane.response_observation_proof.failed",
+                                json!({
+                                    "component":"serverware-decision-gate-rs",
+                                    "outcome":"incomplete",
+                                    "error":"response_observation_proof_unavailable",
+                                    "policy_hash":snapshot.hash,
+                                }),
+                            ),
+                        }
+                        return false;
+                    }
+                    Some(ResponseObservationRouteVersion::V2) => {
+                        let Ok(finalized_keep_alive) =
+                            response_observation_v2_finalized_keep_alive(
+                                &response,
+                            )
+                        else {
+                            return false;
+                        };
+                        let written =
+                            write_snapshot_guarded_response(
+                                state,
+                                snapshot,
+                                writer,
+                                &response,
+                            );
+                        return written && finalized_keep_alive;
+                    }
+                    None => return false,
                 }
-                return false;
             }
             let mut attached_proof = None;
             if let Some(ResponseProofRequestContext::Buffered(context)) = response_proof.as_ref() {
@@ -42737,6 +46625,7 @@ fn build_runtime_manifest(
         "jit_grant_store": if state.atomic_release_authorization_enabled {"atomic_release_authorization"} else if state.grant_consume_url.is_some() {"shared"} else {"local"},
         "shared_rate_limit_store": state.atomic_release_authorization_enabled || state.rate_limit_consume_url.is_some(),
         "release_authorization_mode": if state.atomic_release_authorization_enabled {"reserve_dispatch_complete"} else {"legacy"},
+        "proxy_ingress":state.proxy_ingress_attestation.value(),
         "absolute_form_forwarder":true,
         "absolute_form_request_body_streaming":REQUEST_BODY_STREAMING_AVAILABLE,
         "connect_request_body_streaming":REQUEST_BODY_STREAMING_AVAILABLE,
@@ -42828,6 +46717,7 @@ fn attestation(state: &GateState, nonce: Option<String>) -> Value {
         "response_proof_signer_boot_digest":state.response_proof_signer.custody_boot_digest(),
         "response_proof_signer_hardware_proof":state.response_proof_signer.hardware_proof(),
         "response_proof_custody_status":state.response_proof_signer.custody_status(),
+        "proxy_ingress":state.proxy_ingress_attestation.value(),
         "server_instance_id":state.server_instance_id,
         "credential_leases":state.credential_leases.lock().expect("credential lease mutex poisoned").len(),
         "credential_lease_earliest_expiry_epoch_ms":earliest_credential_lease_expiry_epoch_ms(state),
@@ -42901,11 +46791,26 @@ fn connect_inner_absolute_target(
 }
 
 fn handle_connect_request(
-    mut stream: DeadlineIo<TcpStream>,
+    mut stream: DirectProxyStream,
     state: Arc<GateState>,
     snapshot: Arc<Snapshot>,
     request: IncomingRequest,
+    trusted_mtls_evidence: Option<TrustedMtlsEvidence>,
 ) {
+    if !state.policy_shadow.account_unsupported(
+        &snapshot,
+        ShadowIngressKind::OuterConnect,
+        &request.method,
+        &request.target,
+    ) {
+        let response = json_status_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"error":"policy_shadow_custody_unavailable"}),
+        );
+        let _ = stream.write_all(&response);
+        let _ = stream.flush();
+        return;
+    }
     let client_ip = request.client_ip.clone();
     let connect_target = request.target.clone();
     let decision = connect_preflight(
@@ -42913,6 +46818,7 @@ fn handle_connect_request(
         request.client_ip.as_deref(),
         &request.target,
         &request.headers,
+        trusted_mtls_evidence.as_ref(),
     );
     if !decision
         .get("allowed")
@@ -42961,11 +46867,12 @@ fn handle_connect_request(
         let _ = stream.flush();
         return;
     };
-    let connect_authentication = match ConnectAuthentication::capture(
+    let connect_authentication = match ConnectAuthentication::capture_with_mtls(
         &snapshot,
         principal_id,
         request.client_ip.as_deref(),
         &request.headers,
+        trusted_mtls_evidence.as_ref(),
     ) {
         Ok(authentication) => authentication,
         Err(error) => {
@@ -42978,6 +46885,9 @@ fn handle_connect_request(
             return;
         }
     };
+    let connection_identity_sha256 = trusted_mtls_evidence
+        .as_ref()
+        .map(TrustedMtlsEvidence::identity_digest);
     let enrollment_session_id = decision
         .get("enrollment_session_id")
         .and_then(Value::as_str)
@@ -43249,6 +47159,12 @@ fn handle_connect_request(
                 ) {
                     RequestStreamingPreflight::Stream(policy) => {
                         if proof_kind.is_some() {
+                            state.policy_shadow.account_unsupported(
+                                &request_snapshot,
+                                ShadowIngressKind::UnsupportedStreamingBody,
+                                &head.method,
+                                &head.target,
+                            );
                             let response = json_status_response(
                                 StatusCode::BAD_REQUEST,
                                 json!({"error":"response_proof_requires_buffered_request_route"}),
@@ -43268,6 +47184,12 @@ fn handle_connect_request(
                         )
                     }
                     RequestStreamingPreflight::Reject(response) => {
+                        state.policy_shadow.account_unsupported(
+                            &request_snapshot,
+                            ShadowIngressKind::UnsupportedStreamingBody,
+                            &head.method,
+                            &head.target,
+                        );
                         let response = override_response_connection(response, false);
                         let _ = tls.write_all(&response);
                         let _ = tls.flush();
@@ -43318,6 +47240,7 @@ fn handle_connect_request(
                             !close_after,
                             &mut tls,
                             response_proof,
+                            connection_identity_sha256.as_deref(),
                         )
                     }
                 }
@@ -43371,14 +47294,28 @@ fn handle_connect_request(
 fn health_response(state: &GateState) -> Vec<u8> {
     let snapshot = current_snapshot(state);
     let (custody_healthy, custody_status) = state.response_proof_signer.custody_health_snapshot();
+    let response_observation_v2_healthy = state
+        .response_observation_v2_client
+        .as_ref()
+        .map(|client| {
+            client.healthy.load(Ordering::Acquire) == 1
+        })
+        .unwrap_or(!state.is_production);
+    let overall_healthy =
+        custody_healthy && response_observation_v2_healthy;
     http_response(
-        if custody_healthy {
+        if overall_healthy {
             "200 OK"
         } else {
             "503 Service Unavailable"
         },
         json!({
-            "ok":custody_healthy,
+            "ok":overall_healthy,
+            "response_observation_v2":{
+                "configured":state.response_observation_v2_client.is_some(),
+                "healthy":response_observation_v2_healthy,
+                "boot_id":state.response_observation_v2_client.as_ref().map(|client| client.boot_id.as_str()),
+            },
             "policy_hash":snapshot.hash,
             "policy_signing_key_id":snapshot.policy_signing_key_id,
             "policy_trust_root_source":state.policy_trust_root_source.label(),
@@ -43414,6 +47351,7 @@ fn health_response(state: &GateState) -> Vec<u8> {
                 "enabled":state.atomic_release_authorization_enabled,
                 "mode":if state.atomic_release_authorization_enabled {"reserve_dispatch_complete"} else {"legacy"},
             },
+            "proxy_ingress":state.proxy_ingress_attestation.value(),
             "leaf_config_cache":state.leaf_configs.lock().expect("leaf config cache mutex poisoned").len(),
             "connect_preflight":true,
             "connect_mitm_interceptor":state.mitm_authority.is_some(),
@@ -43437,18 +47375,72 @@ fn health_response(state: &GateState) -> Vec<u8> {
                 "success":state.policy_reload_success.load(Ordering::Relaxed),
                 "failed":state.policy_reload_failed.load(Ordering::Relaxed),
             },
+            "policy_shadow":state.policy_shadow.status(),
             "response_proof_custody_status":custody_status,
         }),
     )
 }
 
-fn handle_connection(stream: TcpStream, state: Arc<GateState>, management_listener: bool) {
-    let client_ip = stream.peer_addr().ok().map(|addr| addr.ip().to_string());
-    let mut stream = DeadlineIo::new(
+fn establish_direct_listener_stream(
+    stream: TcpStream,
+    state: &GateState,
+    management_listener: bool,
+    proxy_ingress: &ProxyIngressConfig,
+) -> Result<(DirectProxyStream, Option<TrustedMtlsEvidence>), String> {
+    let deadline_stream = DeadlineIo::new(
         stream,
         state.request_head_deadline,
         state.response_write_deadline,
     );
+    if management_listener || matches!(proxy_ingress, ProxyIngressConfig::DevelopmentRaw) {
+        return Ok((DirectProxyStream::DevelopmentRaw(deadline_stream), None));
+    }
+    let ProxyIngressConfig::MutualTls(config) = proxy_ingress else {
+        return Err("proxy ingress configuration is internally inconsistent".to_string());
+    };
+    let connection = ServerConnection::new(Arc::clone(&config.server_config))
+        .map_err(|_| "initialize outer proxy TLS connection".to_string())?;
+    let mut tls = StreamOwned::new(connection, deadline_stream);
+    while tls.conn.is_handshaking() {
+        tls.conn
+            .complete_io(&mut tls.sock)
+            .map_err(|_| "complete outer proxy TLS handshake".to_string())?;
+    }
+    if tls.conn.protocol_version() != Some(rustls::ProtocolVersion::TLSv1_3) {
+        return Err("outer proxy TLS did not negotiate TLS 1.3".to_string());
+    }
+    let peer_certificates = tls
+        .conn
+        .peer_certificates()
+        .ok_or("outer proxy TLS peer did not present a client certificate")?;
+    let evidence = trusted_mtls_evidence_from_verified_peer(
+        peer_certificates,
+        config.client_trust_certificates.as_ref(),
+    )?;
+    tls.sock.reset_read_deadline(state.request_head_deadline);
+    tls.sock.reset_write_deadline(state.response_write_deadline);
+    Ok((DirectProxyStream::MutualTls(tls), Some(evidence)))
+}
+
+fn handle_connection(
+    stream: TcpStream,
+    state: Arc<GateState>,
+    management_listener: bool,
+    proxy_ingress: ProxyIngressConfig,
+) {
+    let client_ip = stream.peer_addr().ok().map(|addr| addr.ip().to_string());
+    let (mut stream, trusted_mtls_evidence) = match establish_direct_listener_stream(
+        stream,
+        &state,
+        management_listener,
+        &proxy_ingress,
+    ) {
+        Ok(established) => established,
+        Err(error) => {
+            eprintln!("proxy ingress rejected before HTTP parsing: {error}");
+            return;
+        }
+    };
     let head = match read_request_head_from(&mut stream, client_ip) {
         Ok(head) => head,
         Err(err) => {
@@ -43462,8 +47454,16 @@ fn handle_connection(stream: TcpStream, state: Arc<GateState>, management_listen
     let (origin_path, _) = request_target_parts(&head.target);
     let public_read =
         head.method == "GET" && matches!(origin_path.as_str(), "/healthz" | "/attestation");
-    let management_post =
-        head.method == "POST" && matches!(head.target.as_str(), "/v1/decide" | "/v1/grants");
+    let policy_shadow_install_post =
+        head.method == "POST"
+            && head.target == POLICY_SHADOW_INSTALL_PATH;
+    let policy_shadow_activation_post =
+        head.method == "POST"
+            && head.target == POLICY_SHADOW_ACTIVATION_PATH;
+    let management_post = head.method == "POST"
+        && (matches!(head.target.as_str(), "/v1/decide" | "/v1/grants")
+            || policy_shadow_install_post
+            || policy_shadow_activation_post);
     let proxy_request = head.method == "CONNECT" || absolute_form_target(&head.target);
 
     if management_listener {
@@ -43481,6 +47481,77 @@ fn handle_connection(stream: TcpStream, state: Arc<GateState>, management_listen
             let _ = stream.write_all(&response);
             let _ = stream.flush();
             return;
+        }
+        if policy_shadow_install_post || policy_shadow_activation_post {
+            let (
+                required_content_type,
+                maximum_body_bytes,
+                content_type_error,
+                length_error,
+                empty_error,
+                body_too_large_error,
+            ) = if policy_shadow_activation_post {
+                (
+                    POLICY_SHADOW_ACTIVATION_CONTENT_TYPE,
+                    MAX_POLICY_SHADOW_ACTIVATION_BODY_BYTES,
+                    "policy_shadow_activation_content_type_required",
+                    "policy_shadow_activation_content_length_required",
+                    "policy_shadow_activation_body_required",
+                    "policy_shadow_activation_body_too_large",
+                )
+            } else {
+                (
+                    POLICY_SHADOW_INSTALL_CONTENT_TYPE,
+                    MAX_POLICY_SHADOW_INSTALL_BODY_BYTES,
+                    "policy_shadow_generation_content_type_required",
+                    "policy_shadow_generation_content_length_required",
+                    "policy_shadow_generation_body_required",
+                    "policy_shadow_generation_body_too_large",
+                )
+            };
+            let response = if state
+                .policy_shadow_generation_control
+                .is_none()
+            {
+                Some(http_response(
+                    "503 Service Unavailable",
+                    json!({"error":"policy_shadow_generation_unavailable"}),
+                ))
+            } else if head
+                .headers
+                .get("content-type")
+                .map(String::as_str)
+                != Some(required_content_type)
+            {
+                Some(http_response(
+                    "415 Unsupported Media Type",
+                    json!({"error":content_type_error}),
+                ))
+            } else if !head.has_content_length {
+                Some(http_response(
+                    "411 Length Required",
+                    json!({"error":length_error}),
+                ))
+            } else if head.content_length == 0 {
+                Some(http_response(
+                    "400 Bad Request",
+                    json!({"error":empty_error}),
+                ))
+            } else if head.content_length as u64
+                > maximum_body_bytes
+            {
+                Some(http_response(
+                    "413 Payload Too Large",
+                    json!({"error":body_too_large_error}),
+                ))
+            } else {
+                None
+            };
+            if let Some(response) = response {
+                let _ = stream.write_all(&response);
+                let _ = stream.flush();
+                return;
+            }
         }
     } else if management_post || (!proxy_request && !public_read) {
         let response = http_response("404 Not Found", json!({"error":"not_found"}));
@@ -43505,7 +47576,13 @@ fn handle_connection(stream: TcpStream, state: Arc<GateState>, management_listen
                 return;
             }
         };
-        handle_connect_request(stream, state, snapshot, request);
+        handle_connect_request(
+            stream,
+            state,
+            snapshot,
+            request,
+            trusted_mtls_evidence,
+        );
         return;
     }
     if absolute_form_target(&head.target) {
@@ -43534,11 +47611,46 @@ fn handle_connection(stream: TcpStream, state: Arc<GateState>, management_listen
             return;
         }
         let snapshot = current_snapshot(&state);
-        match request_streaming_preflight(&snapshot, &head, None) {
+        let physical_headers = lower_headers(&head.headers);
+        let Some(principal_id) = snapshot
+            .identify_principal_with_mtls(
+                head.client_ip.as_deref(),
+                &physical_headers,
+                trusted_mtls_evidence.as_ref(),
+            )
+            .map(|principal| principal.id.clone())
+        else {
+            let response = json_status_response(
+                StatusCode::FORBIDDEN,
+                json!({"error":"client_principal_denied"}),
+            );
+            let _ = stream.write_all(&response);
+            let _ = stream.flush();
+            return;
+        };
+        let connection_identity_sha256 = trusted_mtls_evidence
+            .as_ref()
+            .map(TrustedMtlsEvidence::identity_digest);
+        match request_streaming_preflight(&snapshot, &head, Some(&principal_id)) {
             RequestStreamingPreflight::Stream(policy) => {
+                if stream.is_mutual_tls() {
+                    state.policy_shadow.account_unsupported(
+                        &snapshot,
+                        ShadowIngressKind::UnsupportedStreamingBody,
+                        &head.method,
+                        &head.target,
+                    );
+                    let response = json_status_response(
+                        StatusCode::NOT_IMPLEMENTED,
+                        json!({"error":"outer_mtls_absolute_form_request_streaming_unsupported"}),
+                    );
+                    let _ = stream.write_all(&response);
+                    let _ = stream.flush();
+                    return;
+                }
                 let mut request = head;
                 let prefetched = std::mem::take(&mut request.prefetched_body);
-                let reader_stream = match stream.inner.try_clone() {
+                let reader_stream = match stream.clone_raw_reader() {
                     Ok(reader_stream) => reader_stream,
                     Err(_) => {
                         let response = json_status_response(
@@ -43568,20 +47680,26 @@ fn handle_connection(stream: TcpStream, state: Arc<GateState>, management_listen
                     body_stream,
                     stats,
                     policy,
-                    None,
+                    Some(&principal_id),
                     false,
                     &mut stream,
                 );
                 return;
             }
             RequestStreamingPreflight::Reject(response) => {
+                state.policy_shadow.account_unsupported(
+                    &snapshot,
+                    ShadowIngressKind::UnsupportedStreamingBody,
+                    &head.method,
+                    &head.target,
+                );
                 let _ = stream.write_all(&response);
                 let _ = stream.flush();
                 return;
             }
             RequestStreamingPreflight::Buffer => {}
         }
-        let body_limit = buffered_route_body_limit(&snapshot, &head, None);
+        let body_limit = buffered_route_body_limit(&snapshot, &head, Some(&principal_id));
         let request = match read_request_body_from_head(&mut stream, head, body_limit) {
             Ok(request) => request,
             Err(err) => {
@@ -43597,16 +47715,28 @@ fn handle_connection(stream: TcpStream, state: Arc<GateState>, management_listen
                 return;
             }
         };
-        let _ =
-            forward_absolute_request_to(&state, &snapshot, request, None, false, &mut stream, None);
+        let _ = forward_absolute_request_to(
+            &state,
+            &snapshot,
+            request,
+            Some(&principal_id),
+            false,
+            &mut stream,
+            None,
+            connection_identity_sha256.as_deref(),
+        );
         return;
     }
-    let body_limit = if management_post {
+    let body_limit = if policy_shadow_activation_post {
+        MAX_POLICY_SHADOW_ACTIVATION_BODY_BYTES
+    } else if policy_shadow_install_post {
+        MAX_POLICY_SHADOW_INSTALL_BODY_BYTES
+    } else if management_post {
         MAX_MANAGEMENT_REQUEST_BODY_BYTES
     } else {
         0
     };
-    let request = match read_request_body_from_head(&mut stream, head, body_limit) {
+    let mut request = match read_request_body_from_head(&mut stream, head, body_limit) {
         Ok(request) => request,
         Err(err) => {
             let response = http_response(
@@ -43645,6 +47775,90 @@ fn handle_connection(stream: TcpStream, state: Arc<GateState>, management_listen
                 "400 Bad Request",
                 json!({"error":"invalid_grant_request"}),
             ),
+        }
+    } else if request.method == "POST"
+        && request.target == POLICY_SHADOW_INSTALL_PATH
+    {
+        let result = state
+            .policy_shadow_generation_control
+            .as_ref()
+            .ok_or_else(|| {
+                policy_shadow_generation::GenerationInstallError::unavailable(
+                    "policy-shadow generation control is not configured",
+                )
+            })
+            .and_then(|control| control.install(&state, &request.body));
+        request.body.zeroize();
+        match result {
+            Ok(receipt) => {
+                let audit_identity = receipt.audit_identity();
+                enqueue_audit(
+                    &state,
+                    "data_plane.policy_shadow.generation_published",
+                    audit_identity,
+                );
+                http_canonical_json_response(
+                    "201 Created",
+                    receipt.canonical_envelope(),
+                )
+            }
+            Err(error) => {
+                enqueue_audit(
+                    &state,
+                    "data_plane.policy_shadow.generation_rejected",
+                    json!({
+                        "component":"serverware-decision-gate-rs",
+                        "error":error.code(),
+                        "error_sha256":error.detail_sha256(),
+                    }),
+                );
+                http_response(
+                    error.status(),
+                    json!({"error":error.code()}),
+                )
+            }
+        }
+    } else if request.method == "POST"
+        && request.target == POLICY_SHADOW_ACTIVATION_PATH
+    {
+        let result = state
+            .policy_shadow_generation_control
+            .as_ref()
+            .ok_or_else(|| {
+                policy_shadow_generation::GenerationInstallError::unavailable(
+                    "policy-shadow generation control is not configured",
+                )
+            })
+            .and_then(|control| control.activate(&state, &request.body));
+        request.body.zeroize();
+        match result {
+            Ok(receipt) => {
+                let audit_identity = receipt.audit_identity();
+                enqueue_audit(
+                    &state,
+                    "data_plane.policy_shadow.activation_published",
+                    audit_identity,
+                );
+                http_canonical_json_response(
+                    "201 Created",
+                    receipt.canonical_response(),
+                )
+            }
+            Err(error) => {
+                enqueue_audit(
+                    &state,
+                    "data_plane.policy_shadow.activation_rejected",
+                    json!({
+                        "component":"serverware-decision-gate-rs",
+                        "error":error.code(),
+                        "error_sha256":error.detail_sha256(),
+                    }),
+                );
+                http_response(
+                    error.status(),
+                    json!({"error":error.code()}),
+                )
+            }
         }
     } else {
         http_response("404 Not Found", json!({"error":"not_found"}))
@@ -43810,9 +48024,10 @@ fn attestation_verifier_digest_from_manifest(raw: Option<&str>) -> Result<Option
 }
 
 fn validate_pinned_verifier_path(command: &PinnedVerifierCommand) -> Result<(), String> {
-    if !command.executable.is_absolute() {
+    if !command.executable.is_absolute() || !command.arguments.is_empty() {
         return Err(
-            "production control-plane attestation verifier executable must be absolute".to_string(),
+            "production attestation verifier must be one absolute executable with no interpreter or command arguments"
+                .to_string(),
         );
     }
     if command.executable.components().any(|component| {
@@ -43824,6 +48039,120 @@ fn validate_pinned_verifier_path(command: &PinnedVerifierCommand) -> Result<(), 
         return Err(
             "production control-plane attestation verifier executable path must be normalized"
                 .to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn static_elf_u16(bytes: &[u8], offset: usize) -> Result<u16, String> {
+    let raw: [u8; 2] = bytes
+        .get(offset..offset.saturating_add(2))
+        .ok_or("production attestation verifier has a truncated ELF header")?
+        .try_into()
+        .map_err(|_| "production attestation verifier has an invalid ELF header")?;
+    Ok(u16::from_le_bytes(raw))
+}
+
+fn static_elf_u32(bytes: &[u8], offset: usize) -> Result<u32, String> {
+    let raw: [u8; 4] = bytes
+        .get(offset..offset.saturating_add(4))
+        .ok_or("production attestation verifier has a truncated ELF header")?
+        .try_into()
+        .map_err(|_| "production attestation verifier has an invalid ELF header")?;
+    Ok(u32::from_le_bytes(raw))
+}
+
+fn static_elf_u64(bytes: &[u8], offset: usize) -> Result<u64, String> {
+    let raw: [u8; 8] = bytes
+        .get(offset..offset.saturating_add(8))
+        .ok_or("production attestation verifier has a truncated ELF header")?
+        .try_into()
+        .map_err(|_| "production attestation verifier has an invalid ELF header")?;
+    Ok(u64::from_le_bytes(raw))
+}
+
+fn validate_static_amd64_elf_verifier(bytes: &[u8]) -> Result<(), String> {
+    const PT_LOAD: u32 = 1;
+    const PT_DYNAMIC: u32 = 2;
+    const PT_INTERP: u32 = 3;
+    const DT_NULL: u64 = 0;
+    const DT_NEEDED: u64 = 1;
+    if bytes.len() < 64
+        || &bytes[0..4] != b"\x7fELF"
+        || bytes[4] != 2
+        || bytes[5] != 1
+        || bytes[6] != 1
+        || !matches!(static_elf_u16(bytes, 16)?, 2 | 3)
+        || static_elf_u16(bytes, 18)? != 62
+        || static_elf_u32(bytes, 20)? != 1
+    {
+        return Err(
+            "production attestation verifier must be a little-endian static x86-64 ELF"
+                .to_string(),
+        );
+    }
+    let program_offset = usize::try_from(static_elf_u64(bytes, 32)?)
+        .map_err(|_| "production attestation verifier ELF program table is out of range")?;
+    let program_entry_bytes = usize::from(static_elf_u16(bytes, 54)?);
+    let program_entries = usize::from(static_elf_u16(bytes, 56)?);
+    if program_entry_bytes != 56 || !(1..=256).contains(&program_entries) {
+        return Err(
+            "production attestation verifier has an invalid ELF program table".to_string(),
+        );
+    }
+    let program_bytes = program_entry_bytes
+        .checked_mul(program_entries)
+        .and_then(|size| program_offset.checked_add(size))
+        .ok_or("production attestation verifier ELF program table overflows")?;
+    if program_bytes > bytes.len() {
+        return Err(
+            "production attestation verifier ELF program table is truncated".to_string(),
+        );
+    }
+    let mut load_segment_seen = false;
+    for index in 0..program_entries {
+        let offset = program_offset + index * program_entry_bytes;
+        let program_type = static_elf_u32(bytes, offset)?;
+        if program_type == PT_INTERP {
+            return Err(
+                "production attestation verifier must not use a runtime interpreter"
+                    .to_string(),
+            );
+        }
+        if program_type == PT_LOAD {
+            load_segment_seen = true;
+        }
+        if program_type != PT_DYNAMIC {
+            continue;
+        }
+        let dynamic_offset = usize::try_from(static_elf_u64(bytes, offset + 8)?)
+            .map_err(|_| "production attestation verifier dynamic segment is out of range")?;
+        let dynamic_bytes = usize::try_from(static_elf_u64(bytes, offset + 32)?)
+            .map_err(|_| "production attestation verifier dynamic segment is out of range")?;
+        let dynamic_end = dynamic_offset
+            .checked_add(dynamic_bytes)
+            .ok_or("production attestation verifier dynamic segment overflows")?;
+        if dynamic_bytes % 16 != 0 || dynamic_end > bytes.len() {
+            return Err(
+                "production attestation verifier dynamic segment is invalid".to_string(),
+            );
+        }
+        for entry in (dynamic_offset..dynamic_end).step_by(16) {
+            let tag = static_elf_u64(bytes, entry)?;
+            if tag == DT_NEEDED {
+                return Err(
+                    "production attestation verifier must not load shared libraries"
+                        .to_string(),
+                );
+            }
+            if tag == DT_NULL {
+                break;
+            }
+        }
+    }
+    if !load_segment_seen {
+        return Err(
+            "production attestation verifier ELF has no loadable segment".to_string(),
         );
     }
     Ok(())
@@ -43900,6 +48229,7 @@ fn read_authenticated_verifier_bytes(command: &PinnedVerifierCommand) -> Result<
             "production control-plane attestation verifier executable SHA-256 mismatch".to_string(),
         );
     }
+    validate_static_amd64_elf_verifier(&bytes)?;
     Ok(bytes)
 }
 
@@ -43992,6 +48322,271 @@ fn configure_control_plane_attestation_verifier(
     };
     verify_pinned_verifier_executable(&pinned)?;
     Ok(Some(ControlPlaneAttestationVerifier::Pinned(pinned)))
+}
+
+fn read_proxy_tls_file_snapshot(
+    path: &Path,
+    label: &str,
+    maximum_bytes: u64,
+    private_key: bool,
+) -> Result<Vec<u8>, String> {
+    if !path.is_absolute() {
+        return Err(format!("{label} must use an absolute path"));
+    }
+    let canonical = fs::canonicalize(path)
+        .map_err(|err| format!("resolve {label} {}: {err}", path.display()))?;
+    if canonical != path {
+        return Err(format!(
+            "{label} must use a canonical absolute path without symlink components"
+        ));
+    }
+    let path_metadata = fs::symlink_metadata(path)
+        .map_err(|err| format!("inspect {label} {}: {err}", path.display()))?;
+    if path_metadata.file_type().is_symlink() || !path_metadata.file_type().is_file() {
+        return Err(format!("{label} must be a regular non-symlink file"));
+    }
+    let mut file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
+        .open(path)
+        .map_err(|err| format!("open {label} without following symlinks: {err}"))?;
+    let before = file
+        .metadata()
+        .map_err(|err| format!("inspect opened {label}: {err}"))?;
+    if !before.file_type().is_file()
+        || before.dev() != path_metadata.dev()
+        || before.ino() != path_metadata.ino()
+    {
+        return Err(format!("{label} changed while it was opened"));
+    }
+    let effective_uid = unsafe { libc::geteuid() };
+    if before.uid() != 0 && before.uid() != effective_uid {
+        return Err(format!(
+            "{label} must be owned by root or the decision-gate process user"
+        ));
+    }
+    let mode = before.permissions().mode() & 0o7777;
+    if private_key {
+        if !matches!(mode, 0o400 | 0o440 | 0o600 | 0o640) {
+            return Err(format!(
+                "{label} must use mode 0400, 0440, 0600, or 0640"
+            ));
+        }
+    } else if mode & 0o133 != 0 {
+        return Err(format!(
+            "{label} must not be executable or writable by group or other"
+        ));
+    }
+    if before.len() == 0 || before.len() > maximum_bytes {
+        return Err(format!(
+            "{label} must contain 1-{maximum_bytes} bytes"
+        ));
+    }
+    let mut bytes = Vec::with_capacity(usize::try_from(before.len()).unwrap_or(0));
+    Read::by_ref(&mut file)
+        .take(maximum_bytes + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|err| format!("read {label}: {err}"))?;
+    let after = file
+        .metadata()
+        .map_err(|err| format!("reinspect opened {label}: {err}"))?;
+    let path_after = fs::symlink_metadata(path)
+        .map_err(|err| format!("reinspect {label} path: {err}"))?;
+    if bytes.len() as u64 != before.len()
+        || before.dev() != after.dev()
+        || before.ino() != after.ino()
+        || before.len() != after.len()
+        || before.mode() != after.mode()
+        || before.mtime() != after.mtime()
+        || before.mtime_nsec() != after.mtime_nsec()
+        || before.ctime() != after.ctime()
+        || before.ctime_nsec() != after.ctime_nsec()
+        || path_after.file_type().is_symlink()
+        || path_after.dev() != after.dev()
+        || path_after.ino() != after.ino()
+        || path_after.len() != after.len()
+        || path_after.mode() != after.mode()
+        || path_after.mtime() != after.mtime()
+        || path_after.mtime_nsec() != after.mtime_nsec()
+        || path_after.ctime() != after.ctime()
+        || path_after.ctime_nsec() != after.ctime_nsec()
+    {
+        return Err(format!("{label} changed while its startup snapshot was read"));
+    }
+    Ok(bytes)
+}
+
+fn parse_exact_x509_certificate<'a>(
+    bytes: &'a [u8],
+    label: &str,
+) -> Result<x509_parser::certificate::X509Certificate<'a>, String> {
+    let (remainder, certificate) = x509_parser::parse_x509_certificate(bytes)
+        .map_err(|err| format!("parse {label}: {err}"))?;
+    if !remainder.is_empty() {
+        return Err(format!("{label} contains trailing DER bytes"));
+    }
+    Ok(certificate)
+}
+
+fn validate_tls_certificate_vector(
+    certificates: &[CertificateDer<'static>],
+    label: &str,
+) -> Result<(), String> {
+    if certificates.is_empty() || certificates.len() > MAX_PROXY_TLS_PEER_CERTIFICATES {
+        return Err(format!(
+            "{label} must contain 1-{MAX_PROXY_TLS_PEER_CERTIFICATES} certificates"
+        ));
+    }
+    let mut total = 0usize;
+    for (index, certificate) in certificates.iter().enumerate() {
+        if certificate.is_empty() || certificate.len() > MAX_PROXY_TLS_PEER_CERTIFICATE_BYTES {
+            return Err(format!("{label} certificate {index} has an invalid size"));
+        }
+        total = total
+            .checked_add(certificate.len())
+            .ok_or_else(|| format!("{label} size overflow"))?;
+        if total > MAX_PROXY_TLS_PEER_CHAIN_BYTES {
+            return Err(format!("{label} exceeds the certificate-chain size limit"));
+        }
+        parse_exact_x509_certificate(certificate.as_ref(), label)?;
+    }
+    Ok(())
+}
+
+fn required_proxy_tls_path(name: &str) -> Result<PathBuf, String> {
+    let value = env::var(name)
+        .map_err(|_| format!("mTLS proxy ingress requires {name}"))?;
+    if value.is_empty() || value != value.trim() || value.chars().any(char::is_control) {
+        return Err(format!("{name} must be a non-empty canonical path"));
+    }
+    Ok(PathBuf::from(value))
+}
+
+fn load_proxy_ingress_config(
+    is_production: bool,
+) -> Result<(ProxyIngressConfig, ProxyIngressAttestation), String> {
+    let mode = env::var("SERVERWARE_PROXY_INGRESS_MODE")
+        .unwrap_or_else(|_| {
+            if is_production {
+                "mtls".to_string()
+            } else {
+                "development-raw".to_string()
+            }
+        });
+    if mode != mode.trim() || mode.chars().any(char::is_control) {
+        return Err("SERVERWARE_PROXY_INGRESS_MODE is not canonical".to_string());
+    }
+    if mode == "development-raw" {
+        if is_production {
+            return Err(
+                "production forbids development-raw proxy ingress and requires mTLS"
+                    .to_string(),
+            );
+        }
+        for name in [
+            "SERVERWARE_PROXY_TLS_CERT",
+            "SERVERWARE_PROXY_TLS_KEY",
+            "SERVERWARE_PROXY_CLIENT_CA_BUNDLE",
+        ] {
+            if env::var_os(name).is_some() {
+                return Err(format!(
+                    "{name} must be absent when SERVERWARE_PROXY_INGRESS_MODE=development-raw"
+                ));
+            }
+        }
+        return Ok((
+            ProxyIngressConfig::DevelopmentRaw,
+            ProxyIngressAttestation {
+                mode: "development-raw",
+                tls_protocol: None,
+                client_authentication: "none-development-only",
+                server_leaf_certificate_sha256: None,
+                server_leaf_spki_sha256: None,
+                server_certificate_chain_sha256: None,
+                client_trust_bundle_sha256: None,
+            },
+        ));
+    }
+    if mode != "mtls" {
+        return Err(
+            "SERVERWARE_PROXY_INGRESS_MODE must be mtls or development-raw".to_string(),
+        );
+    }
+
+    let certificate_path = required_proxy_tls_path("SERVERWARE_PROXY_TLS_CERT")?;
+    let private_key_path = required_proxy_tls_path("SERVERWARE_PROXY_TLS_KEY")?;
+    let client_ca_path = required_proxy_tls_path("SERVERWARE_PROXY_CLIENT_CA_BUNDLE")?;
+    let certificate_bytes = read_proxy_tls_file_snapshot(
+        &certificate_path,
+        "proxy TLS certificate chain",
+        MAX_PROXY_TLS_CERTIFICATE_CHAIN_BYTES,
+        false,
+    )?;
+    let private_key_bytes = Zeroizing::new(read_proxy_tls_file_snapshot(
+        &private_key_path,
+        "proxy TLS private key",
+        MAX_PROXY_TLS_PRIVATE_KEY_BYTES,
+        true,
+    )?);
+    let client_ca_bytes = read_proxy_tls_file_snapshot(
+        &client_ca_path,
+        "proxy TLS client CA bundle",
+        MAX_PROXY_TLS_CLIENT_CA_BUNDLE_BYTES,
+        false,
+    )?;
+    let certificate_chain = CertificateDer::pem_slice_iter(&certificate_bytes)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| format!("parse proxy TLS certificate chain: {err}"))?;
+    validate_tls_certificate_vector(&certificate_chain, "proxy TLS certificate chain")?;
+    let client_trust_certificates = CertificateDer::pem_slice_iter(&client_ca_bytes)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| format!("parse proxy TLS client CA bundle: {err}"))?;
+    validate_tls_certificate_vector(
+        &client_trust_certificates,
+        "proxy TLS client CA bundle",
+    )?;
+    let private_key = PrivateKeyDer::from_pem_slice(&private_key_bytes)
+        .map_err(|err| format!("parse proxy TLS private key: {err}"))?;
+    let mut client_roots = RootCertStore::empty();
+    for certificate in &client_trust_certificates {
+        client_roots
+            .add(certificate.clone())
+            .map_err(|err| format!("add proxy TLS client trust anchor: {err}"))?;
+    }
+    let verifier = WebPkiClientVerifier::builder(Arc::new(client_roots))
+        .build()
+        .map_err(|err| format!("build mandatory proxy client verifier: {err}"))?;
+    let mut server_config = ServerConfig::builder_with_protocol_versions(&[
+        &rustls::version::TLS13,
+    ])
+    .with_client_cert_verifier(verifier)
+    .with_single_cert(certificate_chain.clone(), private_key)
+    .map_err(|err| format!("build proxy TLS server configuration: {err}"))?;
+    server_config.alpn_protocols = vec![b"http/1.1".to_vec()];
+    let leaf = parse_exact_x509_certificate(
+        certificate_chain[0].as_ref(),
+        "proxy TLS leaf certificate",
+    )?;
+    let attestation = ProxyIngressAttestation {
+        mode: "mtls",
+        tls_protocol: Some("TLSv1.3"),
+        client_authentication: "mandatory-webpki",
+        server_leaf_certificate_sha256: Some(sha256_prefixed(
+            certificate_chain[0].as_ref(),
+        )),
+        server_leaf_spki_sha256: Some(sha256_prefixed(
+            leaf.tbs_certificate.subject_pki.raw,
+        )),
+        server_certificate_chain_sha256: Some(sha256_prefixed(&certificate_bytes)),
+        client_trust_bundle_sha256: Some(sha256_prefixed(&client_ca_bytes)),
+    };
+    Ok((
+        ProxyIngressConfig::MutualTls(Arc::new(ProxyIngressTlsConfig {
+            server_config: Arc::new(server_config),
+            client_trust_certificates: Arc::new(client_trust_certificates),
+        })),
+        attestation,
+    ))
 }
 
 fn read_service_token_file(name: &str, file_name: &str, path: &Path) -> Result<String, String> {
@@ -44181,10 +48776,8 @@ fn validate_distinct_internal_service_tokens(
 }
 
 fn management_bind_is_loopback(host: &str) -> bool {
-    host.eq_ignore_ascii_case("localhost")
-        || host
-            .parse::<IpAddr>()
-            .is_ok_and(|address| address.is_loopback())
+    host.parse::<IpAddr>()
+        .is_ok_and(|address| address.is_loopback())
 }
 
 fn bounded_duration_env(
@@ -44212,6 +48805,7 @@ fn serve_listener(
     listener: TcpListener,
     state: Arc<GateState>,
     management_listener: bool,
+    proxy_ingress: ProxyIngressConfig,
     worker_count: usize,
     queue_capacity: usize,
 ) -> Result<(), String> {
@@ -44225,6 +48819,7 @@ fn serve_listener(
     for worker_index in 0..worker_count {
         let receiver = Arc::clone(&receiver);
         let state = Arc::clone(&state);
+        let proxy_ingress = proxy_ingress.clone();
         thread::Builder::new()
             .name(format!("{listener_name}-worker-{worker_index}"))
             .spawn(move || loop {
@@ -44234,7 +48829,12 @@ fn serve_listener(
                     .recv();
                 match stream {
                     Ok(stream) => {
-                        handle_connection(stream, Arc::clone(&state), management_listener)
+                        handle_connection(
+                            stream,
+                            Arc::clone(&state),
+                            management_listener,
+                            proxy_ingress.clone(),
+                        )
                     }
                     Err(_) => break,
                 }
@@ -44246,6 +48846,12 @@ fn serve_listener(
             Ok(stream) => match sender.try_send(stream) {
                 Ok(()) => {}
                 Err(mpsc::TrySendError::Full(rejected)) => {
+                    if !management_listener
+                        && matches!(&proxy_ingress, ProxyIngressConfig::MutualTls(_))
+                    {
+                        drop(rejected);
+                        continue;
+                    }
                     let response = json_status_response(
                         StatusCode::SERVICE_UNAVAILABLE,
                         json!({"error":"connection_capacity_exhausted"}),
@@ -44291,6 +48897,8 @@ fn main() -> Result<(), String> {
         .unwrap_or_else(|_| "/data/policy-bundle.json".to_string());
     let release_channel = env::var("SERVERWARE_RELEASE_CHANNEL").ok();
     let is_production = production_mode(release_channel.as_deref());
+    let (proxy_ingress, proxy_ingress_attestation) =
+        load_proxy_ingress_config(is_production)?;
     let allow_insecure_dev_credential_leases =
         env::var("SERVERWARE_ALLOW_INSECURE_DEV_CREDENTIAL_LEASES").as_deref() == Ok("1");
     if is_production && allow_insecure_dev_credential_leases {
@@ -44342,6 +48950,14 @@ fn main() -> Result<(), String> {
                 .unwrap_or_else(|_| "/data/policy-signing-ed25519.pub.pem".to_string()),
         )
     };
+    let policy_shadow_generation_control =
+        PolicyShadowGenerationControl::from_env(
+            is_production,
+            matches!(
+                &policy_trust_root_source,
+                PolicyTrustRootSource::AttestedControlPlane { .. }
+            ),
+        )?;
     let credential_lease_url = env::var("SERVERWARE_CONTROL_PLANE_CREDENTIAL_LEASE_URL")
         .ok()
         .map(|value| value.trim().to_string())
@@ -44694,9 +49310,12 @@ fn main() -> Result<(), String> {
         .unwrap_or_else(|_| "127.0.0.1".to_string());
     let management_port =
         env::var("SERVERWARE_DECISION_GATE_MANAGEMENT_PORT").unwrap_or_else(|_| "9091".to_string());
-    if is_production && !management_bind_is_loopback(&management_host) {
+    if (is_production
+        || policy_shadow_generation_control.is_some())
+        && !management_bind_is_loopback(&management_host)
+    {
         return Err(format!(
-            "production management listener must bind to loopback, got {management_host}"
+            "policy-shadow/production management listener must bind to loopback, got {management_host}"
         ));
     }
     if response_proof_attestation_command.is_some() != server_instance_id.is_some() {
@@ -44798,6 +49417,11 @@ fn main() -> Result<(), String> {
         is_production,
         atomic_release_authorization_enabled,
     )?;
+    if let Some(control) =
+        policy_shadow_generation_control.as_ref()
+    {
+        control.authorize_startup_active_snapshot(&initial_snapshot)?;
+    }
     let response_proof_configured = response_proof_attestation_command.is_some()
         || initial_snapshot.response_signing_key_id.is_some();
     let ResponseProofSigningMaterial {
@@ -44805,6 +49429,12 @@ fn main() -> Result<(), String> {
         public_key_pem: response_proof_public_key_pem,
         key_id: response_proof_signing_key_id,
     } = configured_response_proof_signing_material(is_production, response_proof_configured)?;
+    let response_observation_v2_client =
+        initialize_response_observation_v2_client(
+            is_production,
+        )?;
+    let response_observation_v2_probe =
+        response_observation_v2_client.clone();
     let policy_high_water = initialize_policy_high_water_after_response_proof_binding(
         &initial_snapshot,
         &response_proof_signer,
@@ -44826,6 +49456,8 @@ fn main() -> Result<(), String> {
         upstream_dispatch_authority: UpstreamDispatchAuthority::new(),
         #[cfg(test)]
         upstream_send_credential_lock_contentions: AtomicU64::new(0),
+        policy_shadow: ShadowRuntime::new(),
+        policy_shadow_generation_control,
         snapshot: RwLock::new(snapshot),
         policy_path,
         policy_trust_root_source,
@@ -44890,6 +49522,7 @@ fn main() -> Result<(), String> {
         request_head_deadline,
         request_body_deadline,
         response_write_deadline,
+        proxy_ingress_attestation,
         mitm_authority: mitm_authority.map(Mutex::new),
         leaf_configs: Mutex::new(HashMap::new()),
         binary_digest,
@@ -44901,8 +49534,25 @@ fn main() -> Result<(), String> {
         response_proof_signing_key_id,
         response_proof_attestation_command,
         server_instance_id,
+        response_observation_v2_client,
     });
+    if let Some(control) =
+        state.policy_shadow_generation_control.as_ref()
+    {
+        if let Some(startup_request) = control.startup_request() {
+            control.install(&state, startup_request).map_err(|error| {
+                format!(
+                    "policy-shadow startup generation rejected: {} ({})",
+                    error.code(),
+                    error.detail_sha256(),
+                )
+            })?;
+        }
+    }
     start_response_proof_custody_health_probe(Arc::clone(&state))?;
+    start_response_observation_v2_health_probe(
+        response_observation_v2_probe,
+    );
     let policy_state = Arc::clone(&state);
     thread::spawn(move || {
         policy_worker(
@@ -44936,9 +49586,27 @@ fn main() -> Result<(), String> {
         .map_err(|err| format!("bind decision gate proxy listener: {err}"))?;
     let management_listener = TcpListener::bind(format!("{management_host}:{management_port}"))
         .map_err(|err| format!("bind decision gate management listener: {err}"))?;
+    if (is_production
+        || state.policy_shadow_generation_control.is_some())
+        && !management_listener
+            .local_addr()
+            .map_err(|err| {
+                format!(
+                    "inspect decision gate management listener: {err}"
+                )
+            })?
+            .ip()
+            .is_loopback()
+    {
+        return Err(
+            "policy-shadow/production management listener resolved outside loopback"
+                .to_string(),
+        );
+    }
     let snapshot = current_snapshot(&state);
     eprintln!(
-        "serverware decision gate listening proxy={host}:{port} management={management_host}:{management_port} policy_hash={} binary_digest={} routes={} leases={} credential_lease_protocol={} connect_mitm={} audit={}",
+        "serverware decision gate listening proxy={host}:{port} proxy_ingress={} management={management_host}:{management_port} policy_hash={} binary_digest={} routes={} leases={} credential_lease_protocol={} connect_mitm={} audit={}",
+        state.proxy_ingress_attestation.mode,
         snapshot.hash,
         state.binary_digest,
         snapshot.routes.len(),
@@ -44957,6 +49625,7 @@ fn main() -> Result<(), String> {
             management_listener,
             management_state,
             true,
+            ProxyIngressConfig::DevelopmentRaw,
             management_workers,
             management_queue_capacity,
         ) {
@@ -44967,6 +49636,7 @@ fn main() -> Result<(), String> {
         proxy_listener,
         state,
         false,
+        proxy_ingress,
         proxy_workers,
         proxy_queue_capacity,
     )
@@ -45697,6 +50367,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             false,
         ) {
             ForwardResult::Buffered(response) => {
@@ -45775,6 +50446,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             false,
         ) {
             ForwardResult::Buffered(response) => {
@@ -45831,6 +50503,8 @@ mod tests {
             policy_sequence: epoch.max(1),
             rollback_epoch: 1,
             trust_generation: 1,
+            compiled_behavior_sha256:
+                format!("sha256:{:064x}", epoch.max(1)),
             policy_signing_key_id: "sha256:policy-key".to_string(),
             response_verifying_key: None,
             response_signing_key_id: None,
@@ -45904,6 +50578,7 @@ mod tests {
                     "ttlSeconds":3600,
                     "maxUses":1,
                 }),
+                response_observation: None,
             }],
         })
     }
@@ -46072,6 +50747,8 @@ mod tests {
         GateState {
             upstream_dispatch_authority: UpstreamDispatchAuthority::new(),
             upstream_send_credential_lock_contentions: AtomicU64::new(0),
+            policy_shadow: ShadowRuntime::new(),
+            policy_shadow_generation_control: None,
             snapshot: RwLock::new(snapshot),
             policy_path: "/unused/test-policy.json".to_string(),
             policy_trust_root_source: PolicyTrustRootSource::File(
@@ -46137,6 +50814,15 @@ mod tests {
             request_head_deadline: Duration::from_secs(10),
             request_body_deadline: Duration::from_secs(120),
             response_write_deadline: Duration::from_secs(120),
+            proxy_ingress_attestation: ProxyIngressAttestation {
+                mode: "development-raw",
+                tls_protocol: None,
+                client_authentication: "none-development-only",
+                server_leaf_certificate_sha256: None,
+                server_leaf_spki_sha256: None,
+                server_certificate_chain_sha256: None,
+                client_trust_bundle_sha256: None,
+            },
             mitm_authority: None,
             leaf_configs: Mutex::new(HashMap::new()),
             binary_digest: "sha256:test-binary".to_string(),
@@ -46148,6 +50834,7 @@ mod tests {
             response_proof_signing_key_id,
             response_proof_attestation_command: None,
             server_instance_id: None,
+            response_observation_v2_client: None,
         }
     }
 
@@ -50418,6 +55105,8 @@ mod tests {
             .expect("test completion response authentication");
         let mut guard = ReleaseAuthorizationGuard {
             state: &state,
+            shadow_finalization: None,
+            shadow_snapshot: None,
             response_authentication: Some(response_authentication),
             reservation: ReleaseAuthorizationReservation {
                 attempt_id: "attempt-test".to_string(),
@@ -50552,6 +55241,8 @@ mod tests {
             .expect("test dispatch-loss response authentication");
         let mut guard = ReleaseAuthorizationGuard {
             state: &state,
+            shadow_finalization: None,
+            shadow_snapshot: None,
             response_authentication: Some(response_authentication),
             reservation: ReleaseAuthorizationReservation {
                 attempt_id: "attempt-test".to_string(),
@@ -50643,6 +55334,8 @@ mod tests {
             .expect("test completion replay response authentication");
         let mut guard = ReleaseAuthorizationGuard {
             state: &state,
+            shadow_finalization: None,
+            shadow_snapshot: None,
             response_authentication: Some(response_authentication),
             reservation: ReleaseAuthorizationReservation {
                 attempt_id: "attempt-test".to_string(),
@@ -50774,6 +55467,8 @@ mod tests {
             .expect("test durable completion response authentication");
         let mut guard = ReleaseAuthorizationGuard {
             state: &state,
+            shadow_finalization: None,
+            shadow_snapshot: None,
             response_authentication: Some(response_authentication),
             reservation: ReleaseAuthorizationReservation {
                 attempt_id: "attempt-test".to_string(),
@@ -50983,6 +55678,7 @@ mod tests {
             &canonical,
             &request,
             false,
+            None,
         )
         .expect("request release authorization");
         let release = validate_requested_release_authorization(
@@ -53668,7 +58364,7 @@ mod tests {
             .expect("prepared buffered forwarding core terminator")
             .0;
         let decision = core
-            .find("decide_internal_for_forward(")
+            .find("decide_internal_for_forward_with_shadow(")
             .expect("buffered policy decision");
         let prepared_binding = core
             .find("validate_prepared_upstream_binding(")
@@ -53678,7 +58374,7 @@ mod tests {
             .expect("exact prepared client dispatch");
         assert!(decision < prepared_binding);
         assert!(prepared_binding < pinned_builder);
-        assert!(core.contains("prepared_upstream: PreparedUpstream"));
+        assert!(core.contains("prepared_upstream: Option<PreparedUpstream>"));
         assert!(!core.contains("prepare_upstream_for_forward("));
         assert!(!core.contains("prepare_upstream_for_buffered_forward("));
         assert!(!core.contains("prepare_upstream(state"));
@@ -56317,6 +61013,7 @@ mod tests {
             canonical,
             request,
             jit_required,
+            None,
         )
         .expect("compiled policy reserve transport");
         let release = validate_requested_release_authorization(
@@ -56824,7 +61521,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("missing terminator for {name}"))
                 .0;
             let typed_guard = body
-                .find("let (decision, mut release_authorization) = decide_internal_for_forward(")
+                .find("let (decision, mut release_authorization) = decide_internal_for_forward_with_shadow(")
                 .unwrap_or_else(|| panic!("{name} does not receive the typed reservation guard"));
             let encoding_strip = body
                 .find("strip_identity_request_content_encoding(&request.headers)")
@@ -56834,8 +61531,390 @@ mod tests {
                 .unwrap_or_else(|| panic!("{name} does not validate provider-visible headers"));
             assert!(typed_guard < encoding_strip, "{name}");
             assert!(encoding_strip < principal_headers, "{name}");
+            let finalization = body
+                .find("record_shadow_dispatch_barrier(")
+                .unwrap_or_else(|| panic!("{name} lacks active dispatch-barrier evidence"));
+            let dispatch = body
+                .find("send_upstream_request_with_current_lease_finalized(")
+                .unwrap_or_else(|| panic!("{name} lacks finalized dispatch"));
+            assert!(typed_guard < dispatch, "{name}");
+            assert!(dispatch < finalization, "{name}");
+            assert!(
+                body.contains("finalize_shadow_post_dispatch_unknown("),
+                "{name} lacks typed post-dispatch unknown completion"
+            );
             assert!(!body.contains("ReleaseAuthorizationGuard::from_decision"));
         }
+        assert!(source.contains(
+            "finalization.finalize_pre_dispatch_local_response("
+        ));
+        assert!(!source.contains("finalization.finalize_local_response("));
+        let policy_core_source = include_str!("policy_core.rs");
+        assert!(policy_core_source.contains(
+            "ActiveEffectRequirements::from_plan(active_plan)"
+        ));
+        assert!(policy_core_source.contains(
+            "fn finalize_post_dispatch_state("
+        ));
+        assert!(policy_core_source.contains(
+            "authority.verify_transport_receipt("
+        ));
+        assert!(policy_core_source.contains(
+            "TransportCaptureReceiptWire::from_transport_adapter"
+        ) || policy_core_source.contains(
+            "pub(crate) fn from_transport_adapter("
+        ));
+        assert!(!policy_core_source.contains(
+            "serverware.policyShadowParsedActiveResponseValidation/v1"
+        ));
+        assert!(!policy_core_source.contains(
+            "serverware.policyShadowObservedGmailMetadataResponse/v1"
+        ));
+        let generation_source = policy_core_source
+            .split_once("struct ShadowGeneration {")
+            .expect("shadow generation source")
+            .1
+            .split_once("\n}")
+            .expect("shadow generation source terminator")
+            .0;
+        assert!(generation_source.contains(
+            "signed_identity: super::policy_shadow::ShadowGenerationIdentity"
+        ));
+        assert!(!generation_source.contains("generation_id: String"));
+        let finalized_send = source
+            .split_once(
+                "fn send_upstream_request_with_current_lease_and_timeout_validated_and_finalized",
+            )
+            .expect("finalized send helper")
+            .1
+            .split_once("\nfn earliest_credential_lease_expiry_epoch_ms")
+            .expect("finalized send helper terminator")
+            .0;
+        let finalization = finalized_send
+            .find("let shadow_dispatch_permit = observe_dispatch_barrier(&request)")
+            .expect("authoritative generation-bound shadow dispatch barrier");
+        let permit_check = finalized_send
+            .find("permit.authorizes_credentialed_send(")
+            .expect("exact final-request dispatch permit check");
+        let dispatch = finalized_send
+            .find(".execute(request)")
+            .expect("upstream dispatch");
+        assert!(finalization < dispatch);
+        assert!(permit_check < dispatch);
+        assert!(finalized_send.contains(
+            ".map_err(UpstreamSendError::DispatchBarrier)?"
+        ));
+        assert!(!finalized_send.contains(
+            "let _shadow_dispatch_accounting"
+        ));
+        assert!(policy_core_source.contains(
+            "struct PublicationReconcileCell"
+        ));
+        assert!(policy_core_source.contains(
+            "struct PublishedShadowGeneration"
+        ));
+        assert!(policy_core_source.contains(
+            ".recover_current_state(&recovery_context)"
+        ));
+        assert!(policy_core_source.contains(
+            "self.ledger.record_admission(&admission)"
+        ));
+        assert!(policy_core_source.contains(
+            ".commit_generation_publication("
+        ));
+        assert!(policy_core_source.contains(
+            "publication_reconciliation_required: AtomicBool"
+        ));
+        assert!(policy_core_source.contains(
+            "allow_blank_recovery:"
+        ));
+        assert!(policy_core_source.contains(
+            "(None, Some(_)) if prepared.allow_blank_recovery"
+        ));
+        assert!(policy_core_source.contains(
+            "Arc<OnceLock<Arc<dyn PolicyShadowCustodyRpcSupervisor>>>"
+        ));
+        assert!(policy_core_source.contains(
+            "PolicyShadowCustodyOperation::AppendActiveEffectBarrier"
+        ));
+        assert!(policy_core_source.contains(
+            "PolicyShadowCustodyOperation::CommitActiveEffect"
+        ));
+        assert!(policy_core_source.contains(
+            "PolicyShadowCustodyOperation::ReconcileActiveEffect"
+        ));
+        assert!(policy_core_source.contains(
+            "PolicyShadowCustodyOperation::AppendTerminal"
+        ));
+        assert!(policy_core_source.contains(
+            "pub(crate) use super::policy_shadow::PolicyShadowTerminalReason"
+        ));
+        let install_source = policy_core_source
+            .split_once("fn install_verified_generation(")
+            .expect("verified generation install")
+            .1
+            .split_once("\n    pub(crate) fn capture(")
+            .expect("verified generation install terminator")
+            .0;
+        let custody_commit = install_source
+            .find(".commit_generation_publication(")
+            .expect("durable publication commit");
+        let committed_marker = install_source[custody_commit..]
+            .find("PUBLICATION_COMMITTED")
+            .map(|offset| custody_commit + offset)
+            .expect("committed reconciliation marker");
+        let local_reconcile = install_source[committed_marker..]
+            .find("reconcile_committed_publication(")
+            .map(|offset| committed_marker + offset)
+            .expect("bounded local publication reconciliation");
+        assert!(custody_commit < committed_marker);
+        assert!(committed_marker < local_reconcile);
+        let custody_prefix = &install_source[..custody_commit];
+        assert!(custody_prefix.contains("drop(ledger_guard)"));
+        assert!(custody_prefix.contains("drop(hidden_guard)"));
+        assert!(policy_core_source.contains(
+            "fn publication_for_admission("
+        ));
+        assert!(policy_core_source.contains(
+            "custody.reserve_spool_append(&context, &event)"
+        ));
+        assert!(policy_core_source.contains(
+            "pub(crate) fn record_effect_dispatch_barrier("
+        ));
+        assert!(policy_core_source.contains(
+            "struct ImmutableSpillReceiptRef"
+        ));
+        assert!(policy_core_source.contains(
+            "const SHADOW_GLOBAL_RECEIPT_CACHE_BYTES: usize = 32 * 1024 * 1024"
+        ));
+        assert!(!policy_core_source.contains(
+            "VecDeque<VerifiedShadowSpillReceipt>"
+        ));
+        let dispatch_barrier_source = policy_core_source
+            .split_once("pub(crate) fn record_dispatch_barrier(")
+            .expect("dispatch barrier source")
+            .1
+            .split_once("\n    pub(crate) fn record_effect_dispatch_barrier(")
+            .expect("dispatch barrier source terminator")
+            .0;
+        let durable_barrier = dispatch_barrier_source
+            .find(".record_with_receipt(")
+            .expect("durable signed dispatch barrier append");
+        let lifecycle_publish = dispatch_barrier_source
+            .find("state.pending_active = Some(pending)")
+            .expect("dispatch lifecycle publication");
+        assert!(durable_barrier < lifecycle_publish);
+        assert!(dispatch_barrier_source.contains(
+            "dispatch_final_request_sha256"
+        ));
+        assert!(dispatch_barrier_source.contains(
+            "dispatch_effect_authority_sha256"
+        ));
+        assert!(policy_core_source.contains(
+            "ShadowRuntimeEvent::ResponseTerminalAppended"
+        ));
+        assert!(policy_core_source.contains(
+            "PolicyShadowTerminalReason::WorkerLost"
+        ));
+        let terminal_source = policy_core_source
+            .split_once("fn finalize_terminal(")
+            .expect("terminal finalization")
+            .1
+            .split_once("\n    pub(crate) fn")
+            .expect("terminal finalization terminator")
+            .0;
+        let terminal_append = terminal_source
+            .find(".ledger.record(")
+            .expect("custody terminal append");
+        let terminal_flag = terminal_source[terminal_append..]
+            .find(".finalization_consumed")
+            .map(|offset| terminal_append + offset)
+            .expect("terminal completion flag");
+        assert!(terminal_append < terminal_flag);
+        assert!(!policy_core_source.contains("fn next_sequence("));
+        assert!(!policy_core_source.contains("UnsignedShadowRecord"));
+        assert!(!policy_core_source.contains("record_missing_generation"));
+        assert!(!policy_core_source.contains(
+            "serverware.policyShadowDeterministicSampling/v2"
+        ));
+        assert!(policy_core_source.contains(
+            "decision_time_binding: Option<DecisionTimeBinding>"
+        ));
+        assert!(policy_core_source.contains(
+            "active_evaluation: PolicyEvaluation"
+        ));
+        assert!(policy_core_source.contains(
+            "persisted_sequence_range_sha256"
+        ));
+        assert!(policy_core_source.contains(
+            "request_commitment_sha256: String"
+        ));
+        assert!(policy_core_source.contains(
+            "SHADOW_SPOOL_COMPACTION_TRIGGER_ITEMS"
+        ));
+        assert!(policy_core_source.contains(
+            "apply_custody_compaction(custody.as_ref(), &request)"
+        ));
+        let shadow_source = include_str!("policy_shadow.rs");
+        assert!(shadow_source.contains(
+            "expected_predecessor_policy_sha256"
+        ));
+        assert!(shadow_source.contains(
+            "expected_predecessor_publication_revision"
+        ));
+        assert!(shadow_source.contains("candidate_policy_sha256"));
+        assert!(shadow_source.contains(
+            "published_publication_revision"
+        ));
+        assert!(shadow_source.contains(
+            "ingress_range_start_sequence"
+        ));
+        assert!(shadow_source.contains("HeartbeatIngressState"));
+        assert!(shadow_source.contains(
+            "trait PolicyShadowCustodyRpcSupervisor"
+        ));
+        assert!(shadow_source.contains("fn open_call("));
+        assert!(shadow_source.contains("fn finish_call("));
+        assert!(shadow_source.contains(
+            "struct ProductionPolicyShadowCustodyRpcSupervisor"
+        ));
+        assert!(shadow_source.contains(
+            "trait ProductionPolicyShadowCustodyProcess"
+        ));
+        assert!(shadow_source.contains(
+            "fn signer_backend_sha256(&self)"
+        ));
+        assert!(shadow_source.contains(
+            "fn persistence_backend_sha256(&self)"
+        ));
+        assert!(shadow_source.contains("provider_worker_terminated"));
+        assert!(shadow_source.contains("late_mutation_fence_closed"));
+        assert!(shadow_source.contains(
+            "struct VerifiedActiveEffectPermit"
+        ));
+        assert!(shadow_source.contains(
+            "struct ActivationPublicationReceiptWire"
+        ));
+        assert!(shadow_source.contains(
+            "struct VerifiedActivationPublicationReceipt"
+        ));
+        assert!(shadow_source.contains(
+            "expected_approval_key_material_sha256"
+        ));
+        assert!(shadow_source.contains("fn append_terminal("));
+        assert!(!shadow_source.contains(
+            "trait GenerationContinuityVerification"
+        ));
+        assert!(shadow_source.contains(
+            "fn verify_observation_custody_evidence("
+        ));
+        assert!(shadow_source.contains(
+            "fn verify_spool_append_reservation_receipt("
+        ));
+        assert!(shadow_source.contains(
+            "struct SignedUnavailableGenerationReceipt"
+        ));
+        assert!(shadow_source.contains(
+            "struct SignedShadowSpillReceipt"
+        ));
+        assert!(shadow_source.contains(
+            "request_commitment_sha256: Sha256Digest"
+        ));
+        assert!(shadow_source.contains(
+            ".checked_add(1)"
+        ));
+        assert!(shadow_source.contains(
+            "struct AuthenticatedSpoolCompactionReceipt"
+        ));
+        assert!(shadow_source.contains(
+            "first_observation_sequence: Option<u64>"
+        ));
+        assert!(shadow_source.contains(
+            "enum PolicyShadowTerminalReason"
+        ));
+        assert!(!shadow_source.contains("enum EvaluationTerminalPhase"));
+        assert!(!shadow_source.contains("validate_terminal_error_pair"));
+        let credential_injection = source
+            .split_once("fn apply_bound_credential_injection(")
+            .expect("credential injection effect wrapper")
+            .1
+            .split_once(
+                "\nfn validate_and_apply_bound_credential_injection(",
+            )
+            .expect("credential injection wrapper terminator")
+            .0;
+        let injection_barrier = credential_injection
+            .find("ActiveMutableEffectKind::CredentialInjection")
+            .expect("credential injection barrier");
+        let injection_mutation = credential_injection
+            .find("validate_and_apply_bound_credential_injection(")
+            .expect("credential injection mutation");
+        let injection_commit = credential_injection
+            .find("commit_shadow_active_effect(")
+            .expect("credential injection terminal receipt");
+        assert!(injection_barrier < injection_mutation);
+        assert!(injection_mutation < injection_commit);
+        for effect_kind in [
+            "ActiveMutableEffectKind::JitGrantReserve",
+            "ActiveMutableEffectKind::JitGrantDispatch",
+            "ActiveMutableEffectKind::JitGrantComplete",
+            "ActiveMutableEffectKind::JitGrantAbort",
+            "ActiveMutableEffectKind::ReleaseReserve",
+            "ActiveMutableEffectKind::ReleaseDispatch",
+            "ActiveMutableEffectKind::ReleaseComplete",
+            "ActiveMutableEffectKind::ReleaseAbort",
+            "ActiveMutableEffectKind::QuotaReserve",
+            "ActiveMutableEffectKind::QuotaCommit",
+            "ActiveMutableEffectKind::QuotaCancel",
+            "ActiveMutableEffectKind::DurableBudgetReserve",
+            "ActiveMutableEffectKind::DurableBudgetCommit",
+            "ActiveMutableEffectKind::DurableBudgetCancel",
+        ] {
+            assert!(
+                source.contains(effect_kind),
+                "missing phase-specific active effect {effect_kind}"
+            );
+        }
+        let gmail_transition = source
+            .split_once("fn transition_gmail_metadata_child_authorization(")
+            .expect("Gmail child ledger transition wrapper")
+            .1
+            .split_once("\nfn terminalize_gmail_metadata_child_authorization(")
+            .expect("Gmail child ledger transition wrapper terminator")
+            .0;
+        let gmail_transition_barrier = gmail_transition
+            .find("prepare_shadow_active_effect(")
+            .expect("Gmail child ledger transition barrier");
+        let gmail_transition_mutation = gmail_transition
+            .find(".advance(authorization, expected, next)")
+            .expect("Gmail child ledger mutation");
+        let gmail_transition_commit = gmail_transition
+            .find("commit_shadow_active_effect(")
+            .expect("Gmail child ledger transition commit");
+        assert!(gmail_transition_barrier < gmail_transition_mutation);
+        assert!(gmail_transition_mutation < gmail_transition_commit);
+        assert!(source.contains(
+            "GmailMetadataChildAuthorizationPhase::Succeeded"
+        ));
+        assert!(source.contains(
+            "gmail_metadata_child_terminal_result("
+        ));
+        let cleanup = source
+            .split_once("fn remove_now(&mut self) {")
+            .expect("credential cleanup")
+            .1
+            .split_once("\n    }\n}\n\nimpl Drop for CredentialLeaseRequestCleanup")
+            .expect("credential cleanup terminator")
+            .0;
+        let cleanup_barrier_failure = cleanup
+            .find("PolicyShadowTerminalReason::InternalError")
+            .expect("cleanup hard-unready accounting");
+        let cleanup_wipe = cleanup
+            .find("let removed = leases.remove(&cache_key)")
+            .expect("cleanup exact cache removal");
+        assert!(cleanup_barrier_failure < cleanup_wipe);
+        assert!(cleanup.contains("quarantine_for_cleanup_failure"));
+        assert!(cleanup.contains("\"secretMaterialWiped\":true"));
 
         let decision = source
             .split_once("fn decide_internal_with_mode")
@@ -56867,7 +61946,7 @@ mod tests {
             .expect("reserve transport terminator")
             .0;
         let guard = reserve_transport
-            .find("let release_authorization = ReleaseAuthorizationGuard::new_authenticated(")
+            .find("let mut release_authorization = ReleaseAuthorizationGuard::new_authenticated(")
             .expect("outbound binding guard");
         let send = reserve_transport
             .find("post_release_authorization_http(")
@@ -56892,21 +61971,17 @@ mod tests {
             .find("validate_identity_request_content_encoding(&req.headers)")
             .expect("initial Content-Encoding validation");
         let operation = decision
-            .find("prepare_request_operation_context(")
-            .expect("adapter operation admission");
-        let semantics = decision
-            .find("evaluate_request_semantic_constraints(")
-            .expect("provider semantic admission");
-        let response_sources = decision
-            .find("validate_response_binding_sources(route, &operation)")
-            .expect("response binding source admission");
+            .find("validate_adapter(&req, &forwarded_headers, &url, &route_match)")
+            .expect("active adapter operation admission");
         let strip = decision
             .find("strip_identity_request_content_encoding(&req.headers)")
             .expect("deferred Content-Encoding strip");
+        let semantics = decision
+            .find("evaluate_request_constraints(")
+            .expect("effect-bound provider semantic admission");
         assert!(validation < operation);
-        assert!(operation < semantics);
-        assert!(semantics < response_sources);
-        assert!(response_sources < strip);
+        assert!(operation < strip);
+        assert!(strip < semantics);
     }
 
     #[test]
@@ -57136,6 +62211,7 @@ mod tests {
             discard_headers: Vec::new(),
             constraints: Vec::new(),
             jit: json!({}),
+            response_observation: None,
         };
         let route_match = RouteMatch {
             route: &route,
@@ -59707,11 +64783,16 @@ mod tests {
             )
             .expect("mark child dispatched");
 
-        let result = classify_gmail_metadata_child_send_error(
+        ledger
+            .advance(
+                &authorization,
+                GmailMetadataChildAuthorizationPhase::Dispatched,
+                GmailMetadataChildAuthorizationPhase::ProviderOutcomeUnknown,
+            )
+            .expect("terminalize post-dispatch transport error");
+        let result = gmail_metadata_child_send_error_result(
             authorization.material.child_request_digest.clone(),
             UpstreamSendError::Request("connection reset after dispatch".to_string()),
-            &authorization,
-            &ledger,
         );
         let GmailMetadataChildResult::Indeterminate { payload, record } = result else {
             panic!("post-dispatch transport error was not indeterminate");
@@ -59760,11 +64841,16 @@ mod tests {
                 GmailMetadataChildAuthorizationPhase::Injected,
             )
             .expect("complete request-build child injection");
-        let build_result = classify_gmail_metadata_child_send_error(
+        ledger
+            .advance(
+                &build_authorization,
+                GmailMetadataChildAuthorizationPhase::Injected,
+                GmailMetadataChildAuthorizationPhase::Failed,
+            )
+            .expect("terminalize request-build failure");
+        let build_result = gmail_metadata_child_send_error_result(
             build_authorization.material.child_request_digest.clone(),
             UpstreamSendError::RequestBuild("request construction failed".to_string()),
-            &build_authorization,
-            &ledger,
         );
         let GmailMetadataChildResult::Blocked { payload, record } = build_result else {
             panic!("pre-dispatch request-build error was not blocked");
@@ -59829,6 +64915,7 @@ mod tests {
             upstream_send_deadlines: UpstreamSendDeadlines::default(),
             prepared_upstream: &prepared_upstream,
             child_authorizations: &child_authorizations,
+            shadow_finalization: None,
         };
         let error = hydrate_gmail_list_metadata(
             &state,
@@ -59877,6 +64964,7 @@ mod tests {
             upstream_send_deadlines: UpstreamSendDeadlines::default(),
             prepared_upstream: &prepared_upstream,
             child_authorizations: &child_authorizations,
+            shadow_finalization: None,
         };
         let error = hydrate_gmail_list_metadata(
             &state,
@@ -59968,6 +65056,7 @@ mod tests {
             upstream_send_deadlines: UpstreamSendDeadlines::default(),
             prepared_upstream: &prepared_upstream,
             child_authorizations: &child_authorizations,
+            shadow_finalization: None,
         };
         let parent_url = Url::parse(&format!("http://{address}/gmail/v1/users/me/messages"))
             .expect("parent URL");
@@ -60095,6 +65184,7 @@ mod tests {
             upstream_send_deadlines: UpstreamSendDeadlines::default(),
             prepared_upstream: &prepared_upstream,
             child_authorizations: &child_authorizations,
+            shadow_finalization: None,
         };
         let parent_url = Url::parse(&format!(
             "https://{metadata_address}/gmail/v1/users/me/messages"
@@ -60216,6 +65306,7 @@ mod tests {
             upstream_send_deadlines: UpstreamSendDeadlines::default(),
             prepared_upstream: &prepared_upstream,
             child_authorizations: &child_authorizations,
+            shadow_finalization: None,
         };
         let body = serde_json::to_vec(&json!({
             "messages":[{
@@ -61274,7 +66365,7 @@ mod tests {
 
         let mut final_url = precredential_url.clone();
         let mut headers = HeaderMap::new();
-        apply_bound_credential_injection(
+        validate_and_apply_bound_credential_injection(
             &snapshot,
             &decision,
             &mut headers,
@@ -61429,7 +66520,7 @@ mod tests {
         let mut substituted_plan = decision.clone();
         substituted_plan["injection"]["plan"]["name"] = json!("other_key");
         let mut substituted_plan_url = precredential_url.clone();
-        assert!(apply_bound_credential_injection(
+        assert!(validate_and_apply_bound_credential_injection(
             &snapshot,
             &substituted_plan,
             &mut HeaderMap::new(),
@@ -61445,7 +66536,7 @@ mod tests {
         let mut substituted_version = decision.clone();
         substituted_version["injection"]["credential_version"] = json!(8);
         let mut substituted_version_url = precredential_url.clone();
-        assert!(apply_bound_credential_injection(
+        assert!(validate_and_apply_bound_credential_injection(
             &snapshot,
             &substituted_version,
             &mut HeaderMap::new(),
@@ -63463,6 +68554,7 @@ mod tests {
             false,
             &mut wire,
             Some(ResponseProofRequestContext::Streaming(&context)),
+            None,
         );
         assert!(
             !kept_alive,
@@ -63962,6 +69054,7 @@ mod tests {
             false,
             &mut wire,
             Some(ResponseProofRequestContext::Buffered(&context)),
+            None,
         ));
         let response = String::from_utf8(wire).expect("HTTP response");
         assert!(response.starts_with("HTTP/1.1 403"));
@@ -64008,6 +69101,7 @@ mod tests {
             false,
             &mut wire,
             Some(ResponseProofRequestContext::Buffered(&context)),
+            None,
         ));
         let response = String::from_utf8(wire).expect("HTTP response");
         assert!(response.starts_with("HTTP/1.1 422"));
@@ -64052,6 +69146,7 @@ mod tests {
             false,
             &mut wire,
             Some(ResponseProofRequestContext::Streaming(&context)),
+            None,
         ));
         let response = String::from_utf8(wire).expect("HTTP response");
         assert!(response.starts_with("HTTP/1.1 422"));
@@ -70607,6 +75702,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
                 false,
             );
             let ForwardResult::Buffered(finalized) = finalized else {
@@ -72120,6 +77216,41 @@ mod tests {
 
     #[test]
     fn runtime_oauth_identity_rejects_alias_scope_and_x_application_substitution() {
+        let oversized_scopes = (0..65)
+            .map(|index| Value::String(format!("scope.{index}")))
+            .collect::<Vec<_>>();
+        assert!(credential_injection_with_signed_identity(
+            &json!({"type":"bearer"}),
+            json!({
+                "credentialType":"oauth2",
+                "oauthClientId":"client:x",
+                "scopes":oversized_scopes,
+            })
+            .as_object()
+            .expect("oversized OAuth definition"),
+        )
+        .is_err());
+        assert!(credential_injection_with_signed_identity(
+            &json!({"type":"bearer"}),
+            json!({
+                "credentialType":"oauth2",
+                "oauthClientId":"client:x",
+                "scopes":["tweet.read users.read"],
+            })
+            .as_object()
+            .expect("noncanonical OAuth definition"),
+        )
+        .is_err());
+        assert!(credential_injection_with_signed_identity(
+            &json!({"type":"bearer"}),
+            json!({
+                "credentialType":"static",
+                "scopes":["unexpected"],
+            })
+            .as_object()
+            .expect("invalid static definition"),
+        )
+        .is_err());
         let definition = json!({
             "credentialType":"oauth2",
             "oauthClientId":"client:x",
@@ -72167,6 +77298,32 @@ mod tests {
             &[json!("/2/tweets/search/recent")],
         )
         .expect("X operation scope catalog and exact application binding");
+        let mut expanded_subjects = snapshot.routes[0].adapter_config.clone();
+        expanded_subjects["credentialBinding"]["subjects"] =
+            json!(["account:x", "account:other"]);
+        assert!(validate_route_credential_binding(
+            "route:test",
+            "x.v2",
+            expanded_subjects
+                .as_object()
+                .expect("X adapter config"),
+            snapshot.credentials.get("credential:x"),
+            &[json!("/2/tweets/search/recent")],
+        )
+        .is_err());
+        let mut expanded_clients = snapshot.routes[0].adapter_config.clone();
+        expanded_clients["credentialBinding"]["clientIds"] =
+            json!(["client:x", "client:other"]);
+        assert!(validate_route_credential_binding(
+            "route:test",
+            "x.v2",
+            expanded_clients
+                .as_object()
+                .expect("X adapter config"),
+            snapshot.credentials.get("credential:x"),
+            &[json!("/2/tweets/search/recent")],
+        )
+        .is_err());
         let mut missing_operation_scope = snapshot.routes[0].adapter_config.clone();
         missing_operation_scope["credentialBinding"]["requiredScopes"] = json!(["tweet.read"]);
         assert!(validate_route_credential_binding(
@@ -72186,6 +77343,7 @@ mod tests {
             ("subject".to_string(), json!("account:x")),
             ("provider_account".to_string(), json!("account:x")),
             ("oauth".to_string(), json!(true)),
+            ("provider_identity_verified".to_string(), json!(true)),
             ("oauth_client_id".to_string(), json!("client:x")),
             ("x_app_id".to_string(), json!("client:x")),
             ("scopes".to_string(), json!(["tweet.read", "users.read"])),
@@ -72206,6 +77364,11 @@ mod tests {
         let mut unverified = metadata.clone();
         unverified.insert("oauth".to_string(), json!(false));
         assert!(validate_runtime_credential_binding(&snapshot, &scope, &unverified).is_err());
+        let mut unverified_identity = metadata.clone();
+        unverified_identity.insert("provider_identity_verified".to_string(), json!(false));
+        assert!(
+            validate_runtime_credential_binding(&snapshot, &scope, &unverified_identity).is_err()
+        );
         let mut scope_substitution = metadata.clone();
         scope_substitution.insert("scopes".to_string(), json!(["tweet.read"]));
         assert!(
@@ -72247,6 +77410,7 @@ mod tests {
             ("provider".to_string(), json!("google")),
             ("provider_subject".to_string(), json!("account:x")),
             ("oauth".to_string(), json!(true)),
+            ("provider_identity_verified".to_string(), json!(true)),
             ("oauth_client_id".to_string(), json!("client:google")),
             (
                 "scopes".to_string(),
@@ -72296,6 +77460,7 @@ mod tests {
                 json!("account:static"),
             ),
             ("secret_class".to_string(), json!("bearerToken")),
+            ("managed".to_string(), json!(true)),
         ]);
         validate_runtime_credential_binding(&snapshot, &scope, &metadata)
             .expect("signed lease proves the non-public static secret class");
@@ -73974,6 +79139,7 @@ mod tests {
             Duration::from_secs(10),
             true,
             Some(snapshot.as_raw_fd()),
+            65_536,
         );
         drop(snapshot);
         let output = result.expect("execute sealed verifier snapshot");

@@ -142,7 +142,7 @@ Each required adapter header must:
 
 At most 16 headers can be required. Duplicate normalized allowlist names, unsupported rule fields, unsafe patterns, non-forwardable names, and credential-injection collisions reject policy activation. For every principal that can select the route, including every principal selected through `routes[].principals: ["*"]`, policy admission also rejects a provider `allowedHeaders` or `requiredHeaders` name that collides with any principal `requiredHeaders` selector after case folding and underscore-to-hyphen alias normalization. After principal capture, Python and Rust remove the selected principal's selector fields before provider admission, canonicalization, JIT, quota, credential injection, or forwarding; the authenticated principal remains local state. At request time, both runtimes return a local denial for a missing or invalid provider-required value before JIT consumption or credential injection.
 
-The tokenized Stripe PaymentIntent template uses this contract for provider idempotency:
+The tokenized Stripe PaymentIntent template uses this contract for a provider-visible idempotency header and a Serverware-enforced replay barrier:
 
 ```json
 {
@@ -158,9 +158,9 @@ The tokenized Stripe PaymentIntent template uses this contract for provider idem
 }
 ```
 
-The agent must generate a policy-conforming `Idempotency-Key` for each intended PaymentIntent operation. Serverware validates and forwards it; Serverware does not synthesize the key or treat it as client identity.
+The agent must generate a policy-conforming `Idempotency-Key` for each intended PaymentIntent operation. Serverware validates and forwards it; Serverware does not synthesize the key or treat it as client identity. The example permits one use of that key per provider account in 86,400 seconds. A proven pre-dispatch cancellation refunds the reservation, but any dispatched or indeterminate attempt consumes it, so this policy is a strict replay barrier rather than transparent Stripe-style retry support.
 
-The example accepts Stripe's documented PaymentIntent state machine, including nonterminal states such as `requires_action`, but it does not expose `client_secret` or next-action payloads and cannot complete customer authentication. The agent must preserve the same idempotency key, stop on a nonterminal state, and hand the PaymentIntent ID and status to an operator-owned checkout/SCA workflow. The route accepts only pre-tokenized `pm_...` identifiers and rejects raw card/source fields; this is neither tokenization nor PCI certification.
+The example accepts a finite PaymentIntent state-machine contract, including nonterminal states such as `requires_action`, but it does not expose `client_secret` or next-action payloads and cannot complete customer authentication. The agent must not automatically retry a dispatched or uncertain operation through this route; it must stop on a nonterminal or uncertain result and hand the available PaymentIntent identity/status to an operator-owned checkout/SCA workflow. Supporting bounded retries only when both the key and canonical request digest are identical requires a dedicated typed idempotency primitive. The route accepts only pre-tokenized `pm_...` identifiers and rejects raw card/source fields; this is neither tokenization nor PCI certification or live Stripe validation.
 
 ## Provider Request Profiles
 
@@ -190,6 +190,8 @@ The four legacy fields remain required and no unknown sibling fields are accepte
 
 OAuth-backed provider profiles declare a closed `credentialBinding` with `credentialType: "oauth2"`, provider, `subjects`, `clientIds`, and `requiredScopes`. X additionally requires `appIds` to equal `credentialBinding.clientIds` byte for byte. These are not display metadata. Admission requires a policy credential with `credentialType: "oauth2"`, the exact provider, a callback-verified `providerSubject`, an `oauthClientId` in `clientIds`, and a stored granted-scope superset. Runtime release revalidates the stored OAuth metadata against the same declaration and the adapter's operation-to-scope table. An app/account/scope mismatch, a static bearer secret masquerading as OAuth, or an operation whose required scope is absent denies before credential release. Gmail and X examples use separate OAuth credentials; static API keys, Basic credentials, cookies, and opaque service tokens remain valid only on routes whose `credentialBinding` declares the matching static provider, subject, and secret class.
 
+The credential lease carries only the non-secret metadata needed to repeat that decision in the data plane: canonical provider aliases, provider/account subject aliases, OAuth client-ID aliases, granted scopes, managed/verified identity flags, and static secret-class aliases. The allowlist deliberately excludes access tokens, refresh tokens, client secrets, passwords, cookies, authorization values, and arbitrary metadata. Static credentials therefore require operator-declared `provider_subject` and `secret_class` values at creation; OAuth records get their subject and client binding only from the verified callback. Missing, contradictory, placeholder, or route-incompatible bindings deny candidate creation or credential release before upstream contact.
+
 The X query catalogs are frozen from the official `https://api.twitter.com/2/openapi.json` document. A provider expansion is denied until the constants, examples, schemas, both runtimes, and tests are deliberately updated.
 
 Python strips identity selectors after principal establishment, applies parser-free body, framing, encoding, and media preflight, and then applies the provider request profile after discard and deterministic adapter rewrite, establishing the exact provider-visible request and operation before credential-version lookup. Generic policy admission rejects `content-encoding` as a forwarded agent header; runtime admission allows only absent or exact identity encoding, enforces every raw-byte limit first, requires decoded access to preserve the raw buffer exactly, and removes the verified identity marker before canonicalization. Python then binds the credential version and already-validated request into the canonical request before JIT/grant handling, quota reservation, secret loading, injection, or upstream contact, and compares the final pre-send request back to that canonical material after excluding only the declared credential injection. Rust performs duplicate, discard-policy, identity-selector, credential-body-policy, and provider-profile admission, applies and revalidates deterministic query rewrites, and canonicalizes the resulting provider query before reservation, DNS resolution, or pinned-client cache access. The legacy shared-JIT compatibility lane uses the rewritten `provider_url` for both availability lookup and final consumption, so a rewrite cannot preview one URL and consume authority for another. Immediately after credential injection, every Rust forwarding path revalidates the active policy, route, principal, credential definition and version, canonical digests, lease scope, and exact injection envelope. Header, bearer, basic, and cookie injection must leave the canonical provider URL unchanged; query injection must yield exactly the canonical pre-credential query followed by one declared pair whose value is the lease-derived secret, with no substituted plan, existing key, duplicate pair, alternate serialization, or extra query. Caller-controlled unknown headers and query keys, ambiguous or invalid `Content-Type`, indeterminate or inconsistent body framing, unsupported content encoding, forbidden bodies, media mismatches, and oversized bodies fail locally. Hop-by-hop headers, `host`, `content-length`, `content-encoding`, proxy authentication, principal selectors, and Serverware service/internal headers are transport or local-auth data: they are stripped, validated, or regenerated by the forwarding pipeline and are not provider allowlist entries. `accept`, `accept-encoding`, `content-type`, `user-agent`, provider-specific headers, and all query keys remain caller policy data.
@@ -212,15 +214,22 @@ For Gmail and X reads, `allowedMediaTypes: []` means that no request body is per
 
 ## Common Patterns Already Modeled
 
-The demo policy includes:
+[policies/credential-limits.examples.json](../policies/credential-limits.examples.json) is one coherent catalog. Each route intersects endpoint matching, principal selection, adapter admission, request constraints, quota/JIT state, credential injection, and response validation; none of the rows below is an independent advisory example.
 
-- Gmail read access limited to the last 30 days, with page size, three-page, five-minute, 30-record, cumulative-byte, cursor-lineage, response-envelope, and response `internalDate` validation.
-- X recent search limited to seven days, capped per page and across a three-page, five-minute, 300-record traversal, with single-use cursor lineage, an exact response envelope, and response `created_at` validation.
-- X controlled posting limited to one plain-text tweet for the demo's single simulated account per UTC calendar day, resetting at 00:00 UTC. The production template and common example key the same limit by the OAuth callback-verified provider subject.
-- X bounded read access covering explicitly cataloged current GET operations except `search.read`; search is deliberately reachable only through the seven-day route. Writes, unknown endpoints, and streaming endpoints stay blocked.
-- npm publish, revision-bound unpublish, dist-tag, token-revocation, and bounded metadata/access writes guarded by operation allowlists and per-operation JIT approval. Token creation is recognized and denied before credential or approval work.
+| Common policy | Enforced constructs in the example | Important boundary |
+| --- | --- | --- |
+| Gmail mail from the last 30 days | `gmail.v1` forces the request cutoff, caps `maxResults`, hydrates list results for `internalDate` proof, validates direct message-detail reads against prior validated list evidence, checks response age, and bounds each cursor lineage to three pages, five minutes, 30 records, and 3 MiB. | Query rewriting alone is not the response proof. Equivalent endpoints such as threads, history, attachments, and IMAP remain denied. |
+| X read-only | `GET /2/**`, `mode: "readOnly"`, `blockWrites: true`, and `operationPolicy` admit only adapter-classified `tweets.read` and `users.read`. The separate recent-search route requires matching seven-day request and response proofs plus traversal limits. | The broad route does not admit search, bookmarks, DMs, streams, unknown operations, or any write merely because the HTTP method is `GET`. |
+| X one post per day | Only `POST /2/tweets` and `tweets.write` are admitted; the JSON body is allowlisted and bounded; `rateLimit` permits one operation per callback-verified provider account per UTC day. | This is a UTC calendar limit, not a rolling 24-hour interval, and the example does not authorize other X write families. |
+| npm write with approval on every use | `npm.registry` classifies a closed set of publish, unpublish, dist-tag, token-revocation, and metadata/access writes. `jit.mode: "perOperation"`, `maxUses: 1`, `consumeOn: "forwardStart"`, an operation digest, required user verification, YubiKey/hardware classes, and hardware attestation bind one approval to one forward attempt. | npm prerequisite reads need separate routes. Token creation is denied. Source support for the hardware-only denial path is not evidence that a physical YubiKey ceremony has succeeded. |
+| Host, path, method, source IP, header, and mTLS restrictions | Every route has an exact host/port/method/path family; `resolvedCidrs` can constrain destination resolution; principals use canonical `sourceCidrs`, selector `requiredHeaders`, and verified private mTLS evidence; generic routes can require bounded provider-visible headers. | A selector header is not a trust root. mTLS depends on trusted-ingress evidence, and the legacy mitmproxy ingress does not currently populate it. |
+| Request and response fields | `requestValue`, `jsonBody`, and `formBody` constrain admitted request values and structure. `responseJson`, `responseDateWindow`, `responseBinding`, `responseEnvelope`, and adapter projection validate and limit the response before release. | `responseJson` validates fields but does not redact siblings; projection belongs to the adapter response profile. Generic nested request capture and polymorphic response unions are unsupported. |
+| Monetary, rate, data-volume, and time-window limits | The Stripe PaymentIntent route caps each integer amount, five operations per UTC day, and 100,000 cents per trailing day. Slack demonstrates a true sliding count and UTC weekday/hour gate. Gmail and X traversal budgets cap cumulative validated response bytes as well as pages, records, and lifetime. | `maxBodyBytes` is a per-request bound, not a cumulative budget. Cumulative arbitrary upload/download bytes outside a modeled traversal, floating-point money, exchange-rate conversion, and provider-reported post hoc cost are unsupported. |
+| Generic REST credential injection | Separate routes demonstrate bearer, Basic, custom-header, query, and cookie injection with exact credential metadata and closed request/response profiles. | Body injection, multi-fragment credentials, request-dependent signing such as AWS SigV4, client TLS private-key use, and arbitrary templates or scripts are unsupported. |
 
-[policies/credential-limits.examples.json](../policies/credential-limits.examples.json) adds ready-to-adapt examples for Slack posting under a true sliding-hour count; GitHub issue listing scoped to an exact owner/repository and a typed response envelope; Stripe customer access scoped to one exact customer with request/response binding; tokenized PaymentIntent creation with a required bounded idempotency key, a five-operation UTC-day cap, a cumulative 100,000-cent trailing-day budget, amount caps, and hardware-backed JIT approval; and mTLS-only object-store writes scoped to one bucket and bounded key grammar under one fixed-window shared quota. The bucket/key captures constrain each request but are deliberately not quota dimensions, so changing object names cannot reset the assignment's hourly allowance. Each provider has a separate credential reference so copying the examples does not imply cross-provider credential reuse.
+Additional generic REST routes demonstrate bounded Slack posts, GitHub reads and hardware-approved issue creation, Stripe customer access and tokenized PaymentIntent creation, mTLS-only object-store writes, Google Calendar reads, bounded OpenAI Responses calls, hardware-approved Cloudflare DNS updates, and hardware-approved Twilio SMS. These are structural policy examples, not claims of live-provider compatibility or validation.
+
+The Calendar route proves that the outbound request asks for a bounded recent window, but generic REST cannot validate Calendar's polymorphic `start.date`/`start.dateTime` union against that request. A provider needing that guarantee, provider-side cost reconciliation, nested request-field capture, multipart/XML parsing, or another semantic outside the closed grammar remains denied until a typed adapter and matching Python/Rust enforcement are added.
 
 ## npm Wire Contracts
 
@@ -240,7 +249,7 @@ Two limits are deliberate. First, npm CLI prerequisite reads such as packument, 
 
 The X adapter classifies exact path templates from the current [X OpenAPI description](https://docs.x.com/openapi.json). Read operations are grouped into explicit policy names including `tweets.read`, `users.read`, `search.read`, `connections.read`, `directMessages.read`, `bookmarks.read`, `lists.read`, `spaces.read`, `analytics.read`, and the other cataloged families in the adapter schema. A new or changed X endpoint is denied until Serverware's Python classifier, Rust classifier, schema, and tests all recognize it.
 
-`example.x.full_bounded_read` demonstrates the broadest bounded-read profile that can coexist with the seven-day search guarantee. It permits the current non-streaming GET catalog except `search.read`, subject to the OAuth app, callback-verified account, and scopes bound to that credential. Sensitive private-data families such as bookmarks or direct messages remain available only when both the credential scopes and the route operation policy allow them. Search endpoints match the route path but fail operation admission there, so the same principal and credential can reach search only through `example.x.search.seven_days`. Policy admission rejects a future overlapping route that restores an unconstrained search operation.
+`example.x.full_bounded_read` uses `/2/**` as a broad path matcher but admits only the adapter-classified `tweets.read` and `users.read` operations, subject to the OAuth app, callback-verified account, and scopes bound to that credential. Bookmarks, direct messages, and every other read family remain denied by its operation allowlist. Search endpoints match the route path but fail operation admission there, so the same principal and credential can reach search only through `example.x.search.seven_days`. Policy admission rejects a future overlapping route that restores an unconstrained search operation.
 
 Streaming reads are intentionally excluded from that profile because a live stream cannot receive whole-response validation or a final response-proof artifact. An opaque X stream would be credential-bearing and is therefore rejected; supporting it requires a structured, incrementally redacting adapter mode rather than `mode: "stream"`. Controlled writes are separate: the current audited write surface accepts only `POST /2/tweets`, requires `tweets.write`, an explicit JSON body allowlist, and a bounded non-stream response. Delete, follow, direct-message, like, retweet, media-upload, and unknown writes fail closed.
 
@@ -250,7 +259,31 @@ Constraints compose as an intersection: a request must satisfy the principal, en
 
 Shared quotas and JIT are enforced as one release decision, not as sequential best-effort counters. The canonical request and operation digests are mandatory reserve inputs whether `jit.required` is true or false; omitting, malforming, or substituting either digest or the canonical request denies before quota state or provider contact, and only the exact binding can reserve and authorize dispatch. For example, a one-tweet-per-UTC-calendar-day route cannot consume the daily slot while discovering that its approval is missing, and a failed pre-dispatch audit cannot permanently burn either control. Calendar quota denial reports the next UTC boundary and a retry interval to that boundary; the daily reset is 00:00 UTC. Approval polling remains independently bounded to one hour.
 
+Uniqueness is a bounded composition, not a separate scripting language. Capture one compiler-proven scalar with `requestValue`, then include that capture in `rateLimit.key.operationFields` with `max: 1`. Always pair an agent-selectable uniqueness key with a coarser provider-account or principal/credential/route quota that bounds how many distinct keys can create durable rows. The PaymentIntent example does this with a provider-account-bound one-use-per-key 86,400-second bucket and an independent five-per-provider-account UTC-day bucket. This is strict uniqueness: after dispatch it denies even an identical retry. Do not put an object ID, repository, recipient, or idempotency value into the only quota key unless policy intentionally grants a fresh allowance for every value.
+
+JIT is likewise closed and bounded. `mode` is `perOperation`, TTL is 1-3,600 seconds, `maxUses` is 1-64, and consumption occurs at `forwardStart`. The binding includes the principal, route, credential and version, policy hash, method, authority, path, canonical query, selected headers, and body digest; operation-specific fields can narrow it further. Hardware attestation implies WebAuthn, required user verification, and only the `yubikey` or `hardware` authenticator classes. An npm, GitHub, Cloudflare, or Twilio example therefore cannot silently fall back to a platform passkey, password, development authenticator, or approval detached from the exact request.
+
 Policy files are data, not executable code. Unknown constraint types, fields, adapter operations, and extension semantics are rejected instead of ignored. A limitation that cannot be expressed by the typed constraints requires an audited adapter or constraint implementation in both enforcement runtimes, schema admission rules, and parity tests before it can be enabled. This preserves customization without allowing policy text to become an arbitrary-code escape hatch.
+
+## Static Credential Injection
+
+The v1 credential envelope has five static injection modes. Each mode is a closed object; fields from another mode reject the bundle.
+
+| Mode | Provider-visible value | Mandatory policy data | Runtime boundary |
+| --- | --- | --- | --- |
+| `bearer` | One header, normally `Authorization: Bearer <secret>` | Optional safe header, dotted secret `field`, and prefix | Managed OAuth is fixed to `Authorization`, `Bearer `, and `access_token`; static tokens may use another nonreserved header/prefix. |
+| `basic` | `Authorization: Basic base64(username:password)` or another safe header | Explicit bounded `username`; optional dotted password `field` | The password is exactly the selected secret string. Runtime code does not infer a username or reinterpret the selected value as another credential object. |
+| `header` | One named custom header with optional prefix | Explicit nonreserved `name`; optional `field` and prefix | `Authorization`, cookie, proxy, framing, hop-by-hop, and Serverware headers are forbidden. |
+| `query` | One canonical percent-encoded query pair | Explicit key `name`; optional `field` | An existing key, duplicate key, alternate query serialization, control character, or oversized value denies. |
+| `cookie` | One `Cookie` pair | Explicit cookie `name`; optional `field` | Agent-supplied `Cookie` collides and denies; the secret must be a nonempty canonical ASCII cookie-octet value. |
+
+All selected secret components are nonempty strings capped at 16,384 UTF-8 bytes and reject C0/DEL controls in the Python parity path. Header values additionally reject outer whitespace; prefixes reject the same controls. Injection happens only after request admission and release authorization, and final pre-send verification permits exactly the declared credential delta. The final response reflection guard scans the raw selected secret and common header, Basic, cookie, URL, JSON, Base64, Base64url, and SHA-256 representations after projection.
+
+A dotted `field` selects one exact object path from an encrypted JSON credential. Wildcards, arrays, missing components, scalar coercion, empty strings, and non-string leaves deny. Omitting `field` means the entire stored secret is the one credential component; it does not enable templates or multi-value expansion.
+
+Body-field credentials, multiple coordinated credential fragments, AWS SigV4 and other request-dependent MAC/signature protocols, OAuth client assertions, HTTP Message Signatures, client TLS private keys, SSH keys, database handshakes, multipart credentials, and provider-specific canonicalization are not static injection modes. Modeling any of them as a header prefix or generic body rewrite would sign or authorize the wrong request. They require a typed adapter or transport implementation that owns canonicalization, key use, nonce/time semantics, post-injection digest verification, response handling, schema admission, and Python/Rust parity. Until that implementation exists, the route is denied.
+
+The schema and Python parity path include the stricter prefix, target, size, cookie-octet, and Basic-selection rules in this source pass. Production activation still requires the Rust gate to mirror those exact value-level checks and error classes; schema admission alone cannot validate encrypted secret bytes. This source batch has not been built or executed.
 
 ## OAuth Credentials
 
@@ -290,9 +323,9 @@ An OAuth policy credential is typed independently from its encrypted token respo
 }
 ```
 
-Provider routes then declare `credentialBinding.subjects`, `credentialBinding.clientIds`, and `credentialBinding.requiredScopes`; X also declares the equal `appIds` list. Schema validation proves those are non-empty bounded canonical sets. Semantic admission proves the route's adapter provider matches the credential provider and that each allowed operation has a known required-scope mapping. Credential release proves the encrypted credential is a managed OAuth record whose callback-verified provider, subject, client ID, and granted scopes exactly satisfy the policy declaration. The token response's self-reported `scope` string is not accepted as the only evidence. Account aliases, email addresses, display names, mutable usernames, bearer-token parsing, and agent-supplied headers cannot establish provider subject or app identity.
+Provider routes then declare singleton `credentialBinding.subjects` and `credentialBinding.clientIds` arrays plus `credentialBinding.requiredScopes`; X also declares the identical singleton `appIds` array. Schema and semantic admission require the sole subject and client to equal the referenced credential declaration, require the adapter provider to match, and require every admitted operation to have a known required-scope mapping. Credential release proves the encrypted credential is a managed OAuth record whose callback-verified provider, subject, client ID, and complete granted-scope set exactly equal the signed credential declaration. The token response's self-reported `scope` string is not accepted as the only evidence. Account aliases, email addresses, display names, mutable usernames, bearer-token parsing, and agent-supplied headers cannot establish provider subject or app identity.
 
-OAuth bindings are strict intersections. A credential with extra scopes may be stored, but a route can invoke only operations admitted by its adapter and `requiredScopes`; an insufficient stored scope denies. Changing app, account, scope, credential kind, or provider requires a new credential version and policy generation. Non-OAuth credentials omit the OAuth fields and remain usable with bearer, Basic, header, query, or cookie injection only on routes whose adapter does not require OAuth evidence.
+OAuth bindings are strict intersections. The stored granted-scope set must exactly equal the signed credential declaration; a route may name only the required subset for its admitted operations, and any missing route scope denies. Undeclared extra stored scopes, extra route subjects, and extra route clients deny. Changing app, account, granted scope, credential kind, or provider requires a new credential version and policy generation. Non-OAuth credentials omit the OAuth fields and remain usable with bearer, Basic, header, query, or cookie injection only on routes whose adapter does not require OAuth evidence.
 
 Credential `field` selectors are strict dotted object paths such as `access_token` or `nested.token`. Wildcards, array fan-out, empty path components, and non-string selected values fail closed before forwarding the request. The agent never receives the OAuth token JSON or the refresh token.
 
@@ -307,6 +340,30 @@ Leases are cached only in zeroizing process memory. Cache and renewal work are b
 The control plane persists the accepted policy ID, sequence, `rollbackEpoch`, hash, and update time in its metadata store. Every production writer flocks the same shared policy-volume directory inode beneath root-owned, non-group/world-writable ancestry. Publication and activation bind the full candidate, predecessor, and signed-bundle digests under that lock. Pending and committed publication are distinct. A lost database commit acknowledgement remains ambiguous until recovery re-reads the authoritative committed winner; it is not guessed to be either rollback or success. The Rust gate independently persists its policy high-water record when a high-water path is configured. Startup and reload reject a policy ID change, a decreased rollback epoch, a changed policy whose sequence does not increase, or the reuse of a known hash with different monotonic metadata. Attestation binds the active policy and the control-plane high-water digest.
 
 This prevents an ordinary restart or stale signed bundle from silently re-enabling older access. Production durability still depends on protecting the fixed lock namespace and retaining both persistent high-water/store histories. Replacing that namespace or restoring the database, publication state, and data-plane high-water together is an external rollback problem that deployment attestation and storage controls must address.
+
+### Candidate Policy Safety
+
+A control-plane dry run is advisory and cannot authorize activation. Production
+candidate evaluation must use the same pure Rust policy core and the same
+immutable ingress facts as the active decision while receiving no credential,
+JIT, quota, cache, provider, filesystem, network, RNG, clock, or audit
+capability. Candidate results are closed as deny, permit, conditional intent,
+or indeterminate; conditional intents are compared but never executed.
+
+Every assigned gate produces a TEE-bound load receipt and contiguous signed
+checkpoints over complete integer-only decision, comparability, latency, error,
+and drop counters. Missing fleet members, sequence gaps, restarts, active-policy
+drift, drops, errors, indeterminate outcomes, incomplete response
+comparability, or an active-deny/candidate-permit expansion leave the candidate
+non-ready. Expansion requires a separately authenticated approval and pilot.
+Activation binds one sealed short-lived readiness root into fresh WebAuthn and
+any required two-person approval, then atomically advances the exact predecessor
+and policy high-water record. Candidate-generation and shadow-evaluation
+components now exist in source, but the signed producer/reducer, independently
+trusted custody and generation chain, and atomic authority transaction are still
+being integrated. Production activation therefore remains unavailable and must
+fail closed until that complete path is integrated and validated. This
+source-only policy pass does not claim activation works.
 
 ## Production Store Semantics
 
@@ -379,8 +436,8 @@ The lists are bounded, non-empty where proof is required, unique, and canonical.
   "required": true,
   "fields": {
     "status": {"required": true, "type": "string", "enum": ["ready", "done"]},
-    "score": {"type": "number", "min": 0, "max": 1},
-    "tags": {"type": "array", "maxItems": 3}
+    "score": {"required": true, "type": "number", "min": 0, "max": 1},
+    "tags": {"required": true, "type": "array", "maxItems": 3}
   }
 }
 ```
@@ -391,16 +448,16 @@ The lists are bounded, non-empty where proof is required, unique, and canonical.
 
 `fields` is required and must be a non-empty map of dotted paths, relative to each selected item, to non-empty `fieldRule` objects. Arrays encountered while resolving a field path fan out, and every resolved value must pass. A field rule supports:
 
-- `required`: require that field on every selected item.
+- `required`: must be exactly `true`; every proof field is present on every selected item.
 - `type`: `string`, `number`, `integer`, `boolean`, `object`, `array`, or `null`. Booleans are not numbers.
 - `enum` or `equals`: constrain the exact JSON value.
 - `minLength`, `maxLength`, and a bounded safe `pattern`: constrain strings. Patterns use only the anchored form `^<literal-prefix>[<ASCII class>]{min,max}$`; `max` cannot exceed 4096 and a pattern requires `maxLength`.
 - `min` and `max`: constrain finite numeric values.
 - `minItems` and `maxItems`: constrain arrays.
 
-Type-specific rules require an explicit compatible `type` at policy admission. String length or pattern rules require `type: "string"`; numeric bounds require `type: "number"` or `type: "integer"`; item-count bounds require `type: "array"`. Python, Rust, and JSON Schema reject incompatible or untyped combinations instead of conditionally ignoring them at runtime.
+Every response proof field is explicitly typed, required, and bounded. A string needs `equals`, `enum`, or `maxLength`; a number needs `equals`, `enum`, or both `min` and `max`; an array needs `equals`, `enum`, or `maxItems`; booleans and null require `equals` or `enum`. Type-specific rules require an explicit compatible `type` at policy admission. Python, Rust, and JSON Schema reject optional, unbounded, incompatible, or untyped response assertions instead of conditionally ignoring them at runtime.
 
-An absent field is allowed unless its own field rule has `required: true`. `responseJson` does not reject unmentioned siblings, remove fields, or define the release shape. Those are redaction responsibilities of the adapter response profile.
+An absent configured field always fails. `responseJson` does not reject unmentioned siblings, remove fields, or define the release shape. Those are redaction responsibilities of the adapter response profile. The constraint-level `required` controls only whether a configured `items` path may be absent; it does not make fields inside a present selected item optional.
 
 Both the Python policy engine and production Rust gate evaluate `responseJson` against the bounded, parsed upstream success body before applying `allowedFields`. This ordering lets a contract validate a provider field even when that field is not released. API-specific projection then runs, `responseDateWindow` evaluates the canonicalized response where required, structural projection removes unlisted fields, response headers are normalized, and the final credential-reflection guard scans the projected output.
 

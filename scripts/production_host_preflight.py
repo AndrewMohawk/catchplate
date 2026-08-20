@@ -174,6 +174,7 @@ ATTESTATION_HELPER_COMMAND_SETTINGS = (
     "SERVERWARE_DATA_PLANE_RESPONSE_PROOF_ATTESTATION_COMMAND",
     "SERVERWARE_DATA_PLANE_LEASE_RECIPIENT_VERIFY_COMMAND",
     "SERVERWARE_CONTROL_PLANE_ATTESTATION_VERIFY_COMMAND",
+    "SERVERWARE_RESPONSE_OBSERVATION_V2_TEE_VERIFY_COMMAND",
 )
 PROOF_COLLECTOR_COMMAND_SETTING = "SERVERWARE_PROXY_PROOF_COLLECTOR_COMMAND"
 PRODUCTION_PYTHON_EXECUTABLE_SETTING = "SERVERWARE_PRODUCTION_PYTHON_EXECUTABLE"
@@ -706,7 +707,11 @@ def snapshot_pinned_executables(env: dict[str, str]) -> tuple[list[dict[str, Any
             words = shlex.split(env.get(setting, ""))
         except ValueError:
             words = []
-        require_single_word = direct_path or collector
+        require_single_word = (
+            direct_path
+            or collector
+            or setting == "SERVERWARE_RESPONSE_OBSERVATION_V2_TEE_VERIFY_COMMAND"
+        )
         if (
             not words
             or (require_single_word and len(words) != 1)
@@ -738,6 +743,14 @@ def snapshot_pinned_executables(env: dict[str, str]) -> tuple[list[dict[str, Any
         except (OSError, ValueError) as exc:
             failures.append(f"{label} is missing, unsafe, or not executable: {host_path}: {exc}")
             continue
+        if setting == "SERVERWARE_RESPONSE_OBSERVATION_V2_TEE_VERIFY_COMMAND":
+            try:
+                run_production_readiness.validate_static_amd64_elf(
+                    executable_bytes,
+                    "response-v2 TEE verifier",
+                )
+            except ValueError as exc:
+                failures.append(str(exc))
         if stat.S_IMODE(metadata.st_mode) & 0o022:
             failures.append(f"{label} must not be writable by group/other: {host_path}")
         if metadata.st_uid not in {0, os.geteuid()}:
@@ -1232,6 +1245,350 @@ def response_signing_key_custody_check(
         )
     except (OSError, TypeError, ValueError) as exc:
         failures.append(f"response-signing key custody is invalid: {exc}")
+    status["ok"] = not failures
+    return status, failures
+
+
+def response_v2_release_transparency_inputs_check(
+    env: dict[str, str],
+    *,
+    skip_host_check: bool,
+) -> tuple[dict[str, Any], list[str]]:
+    status: dict[str, Any] = {
+        "ok": False,
+        "skipped": skip_host_check,
+        "topology_profile": env.get(
+            "SERVERWARE_RESPONSE_OBSERVATION_V2_TEE_TOPOLOGY_PROFILE"
+        ),
+        "private_keys_present": False,
+        "files": [],
+        "secret_values_redacted": True,
+    }
+    if skip_host_check:
+        status["ok"] = True
+        return status, []
+
+    failures: list[str] = []
+    try:
+        if status["topology_profile"] != "local-single-node-1-of-1":
+            raise ValueError(
+                "response-v2 TEE topology must explicitly be local-single-node-1-of-1"
+            )
+        public_config_dir = Path(
+            env.get("SERVERWARE_RESPONSE_OBSERVATION_V2_PUBLIC_CONFIG_DIR", "")
+        )
+        if not public_config_dir.is_absolute():
+            raise ValueError("response-v2 public config directory must be absolute")
+
+        file_settings = (
+            (
+                "SERVERWARE_RESPONSE_OBSERVATION_V2_CUSTODY_CONFIG_FILE",
+                "SERVERWARE_RESPONSE_OBSERVATION_V2_CUSTODY_CONFIG_SHA256",
+                "custody.json",
+                4 * 1024 * 1024,
+            ),
+            (
+                "SERVERWARE_RESPONSE_OBSERVATION_V2_TRANSPARENCY_TRUST_PIN_FILE",
+                "SERVERWARE_RESPONSE_OBSERVATION_V2_TRANSPARENCY_TRUST_PIN_SHA256",
+                "release-transparency-trust-pin.json",
+                1024 * 1024,
+            ),
+            (
+                "SERVERWARE_RESPONSE_OBSERVATION_V2_RELEASE_TRANSPARENCY_ARTIFACT_FILE",
+                "SERVERWARE_RESPONSE_OBSERVATION_V2_RELEASE_TRANSPARENCY_ARTIFACT_SHA256",
+                "release-transparency-artifact.json",
+                4 * 1024 * 1024,
+            ),
+        )
+        snapshots: dict[str, tuple[bytes, dict[str, Any]]] = {}
+        for path_setting, digest_setting, expected_name, maximum_bytes in file_settings:
+            path = Path(env.get(path_setting, ""))
+            if (
+                not path.is_absolute()
+                or path.parent != public_config_dir
+                or path.name != expected_name
+            ):
+                raise ValueError(
+                    f"{path_setting} must be the absolute {expected_name} direct child of the response-v2 public config directory"
+                )
+            run_production_readiness.validate_secure_ancestors(path, path_setting)
+            content, metadata = run_production_readiness.read_regular_file_once(
+                path,
+                path_setting,
+                max_bytes=maximum_bytes,
+            )
+            mode = stat.S_IMODE(metadata.st_mode)
+            digest = "sha256:" + hashlib.sha256(content).hexdigest()
+            if metadata.st_uid != 0 or mode != 0o444 or metadata.st_nlink != 1:
+                raise ValueError(
+                    f"{path_setting} must be root-owned mode 0444 with one hard link"
+                )
+            if not hmac.compare_digest(digest, env.get(digest_setting, "")):
+                raise ValueError(
+                    f"{path_setting} does not match its independently approved digest"
+                )
+            report = {
+                "setting": path_setting,
+                "path": str(path),
+                "sha256": digest,
+                "owner_uid": metadata.st_uid,
+                "mode": oct(mode),
+                "bytes": len(content),
+                "nofollow": True,
+                "secure_ancestors": True,
+            }
+            snapshots[path_setting] = (content, report)
+            status["files"].append(report)
+
+        tee_input_settings = (
+            (
+                "SERVERWARE_RESPONSE_V2_TEE_EXPECTATIONS_FILE",
+                "SERVERWARE_RESPONSE_V2_TEE_EXPECTATIONS_SHA256",
+                4 * 1024 * 1024,
+            ),
+            (
+                "SERVERWARE_RESPONSE_V2_NITRO_TRUST_ROOTS_FILE",
+                "SERVERWARE_RESPONSE_V2_NITRO_TRUST_ROOTS_SHA256",
+                8 * 1024 * 1024,
+            ),
+        )
+        tee_snapshots: dict[str, bytes] = {}
+        for path_setting, digest_setting, maximum_bytes in tee_input_settings:
+            path = Path(env.get(path_setting, ""))
+            if not path.is_absolute():
+                raise ValueError(f"{path_setting} must be an absolute host path")
+            run_production_readiness.validate_secure_ancestors(path, path_setting)
+            content, metadata = run_production_readiness.read_regular_file_once(
+                path,
+                path_setting,
+                max_bytes=maximum_bytes,
+            )
+            mode = stat.S_IMODE(metadata.st_mode)
+            digest = "sha256:" + hashlib.sha256(content).hexdigest()
+            if metadata.st_uid != 0 or mode != 0o444 or metadata.st_nlink != 1:
+                raise ValueError(
+                    f"{path_setting} must be root-owned mode 0444 with one hard link"
+                )
+            if not hmac.compare_digest(digest, env.get(digest_setting, "")):
+                raise ValueError(
+                    f"{path_setting} does not match its independently approved digest"
+                )
+            parsed = json.loads(content.decode("utf-8"))
+            if not isinstance(parsed, dict):
+                raise ValueError(f"{path_setting} must contain a JSON object")
+            tee_snapshots[path_setting] = content
+            status["files"].append(
+                {
+                    "setting": path_setting,
+                    "path": str(path),
+                    "sha256": digest,
+                    "owner_uid": metadata.st_uid,
+                    "mode": oct(mode),
+                    "bytes": len(content),
+                    "nofollow": True,
+                    "secure_ancestors": True,
+                }
+            )
+
+        def parse_public_json(setting: str, *, canonical: bool) -> dict[str, Any]:
+            content = snapshots[setting][0]
+            parsed = json.loads(content.decode("utf-8"))
+            if not isinstance(parsed, dict):
+                raise ValueError(f"{setting} must contain a JSON object")
+            if canonical and content != canonical_json(parsed).encode("utf-8"):
+                raise ValueError(f"{setting} must contain exact canonical JSON bytes")
+            return parsed
+
+        custody = parse_public_json(
+            "SERVERWARE_RESPONSE_OBSERVATION_V2_CUSTODY_CONFIG_FILE",
+            canonical=False,
+        )
+        trust_pin = parse_public_json(
+            "SERVERWARE_RESPONSE_OBSERVATION_V2_TRANSPARENCY_TRUST_PIN_FILE",
+            canonical=True,
+        )
+        artifact = parse_public_json(
+            "SERVERWARE_RESPONSE_OBSERVATION_V2_RELEASE_TRANSPARENCY_ARTIFACT_FILE",
+            canonical=True,
+        )
+        topology = custody.get("custodyTopology")
+        if (
+            not isinstance(topology, dict)
+            or topology.get("attestationMode") != "tee-hardware"
+            or topology.get("hardwareProof") is not True
+            or topology.get("faultDomainId") != "host-1"
+            or topology.get("quorumMode") != "LOCAL_1_OF_1"
+            or topology.get("faultDomainCount") != 1
+            or topology.get("externalWitnessCount") != 0
+        ):
+            raise ValueError(
+                "response-v2 topology must honestly declare one local TEE fault domain, LOCAL_1_OF_1, and zero external witnesses"
+            )
+        tee_expectations = json.loads(
+            tee_snapshots["SERVERWARE_RESPONSE_V2_TEE_EXPECTATIONS_FILE"].decode("utf-8")
+        )
+        if (
+            set(tee_expectations)
+            != {"apiVersion", "nitro", "staticClaims", "trustRootsSha256"}
+            or tee_expectations.get("apiVersion")
+            != "serverware.responseObservationV2NitroVerifierExpectations/v1"
+            or not isinstance(tee_expectations.get("nitro"), dict)
+            or not isinstance(tee_expectations.get("staticClaims"), dict)
+            or tee_expectations.get("trustRootsSha256")
+            != env.get("SERVERWARE_RESPONSE_V2_NITRO_TRUST_ROOTS_SHA256")
+        ):
+            raise ValueError(
+                "response-v2 TEE expectations do not bind the exact Nitro trust-root input"
+            )
+        trust_pin_json = env.get(
+            "SERVERWARE_RESPONSE_OBSERVATION_V2_TRANSPARENCY_TRUST_PIN_JSON", ""
+        )
+        parsed_env_pin = json.loads(trust_pin_json)
+        if (
+            not isinstance(parsed_env_pin, dict)
+            or trust_pin_json != canonical_json(parsed_env_pin)
+            or parsed_env_pin != trust_pin
+            or custody.get("releaseTransparencyTrustPin") != trust_pin
+            or custody.get("releaseTransparencyArtifact") != artifact
+        ):
+            raise ValueError(
+                "response-v2 custody config, canonical environment pin, and root-owned transparency files must agree exactly"
+            )
+
+        pins = custody.get("proofIndependentPins")
+        proof = artifact.get("releaseTransparencyProof")
+        if not isinstance(pins, dict) or not isinstance(proof, dict):
+            raise ValueError("response-v2 independent pins or release proof are missing")
+        checkpoint = proof.get("checkpoint")
+        leaf = proof.get("leaf")
+        if not isinstance(checkpoint, dict) or not isinstance(leaf, dict):
+            raise ValueError("response-v2 release proof lacks its leaf or checkpoint")
+        checkpoint_payload = checkpoint.get("payload")
+        checkpoint_auth = checkpoint.get("authentication")
+        release_record = leaf.get("releaseRecord")
+        if (
+            not isinstance(checkpoint_payload, dict)
+            or not isinstance(checkpoint_auth, dict)
+            or not isinstance(release_record, dict)
+            or not isinstance(release_record.get("payload"), dict)
+            or not isinstance(release_record.get("authentication"), dict)
+        ):
+            raise ValueError("response-v2 release proof lacks signed checkpoint or release-record fields")
+        release_payload = release_record["payload"]
+        release_auth = release_record["authentication"]
+
+        digest_fields = (
+            trust_pin.get("logKeySpkiSha256"),
+            trust_pin.get("anchorRootSha256"),
+            trust_pin.get("trustCheckpointSha256"),
+            pins.get("releaseSourceCommitSha256"),
+            pins.get("releaseSourceTreeSha256"),
+            pins.get("releaseExecutableSha256"),
+            pins.get("releaseConfigurationSha256"),
+            pins.get("releaseRecordSignerPublicKeySha256"),
+            release_auth.get("publicKeySpkiSha256"),
+        )
+        if any(
+            not isinstance(value, str)
+            or len(value) != 71
+            or not value.startswith("sha256:")
+            or any(character not in "0123456789abcdef" for character in value[7:])
+            for value in digest_fields
+        ):
+            raise ValueError(
+                "response-v2 log, anchor, source, binary, config, and signer pins must be lowercase SHA-256 digests"
+            )
+        if (
+            trust_pin.get("generationId")
+            != env.get("SERVERWARE_RESPONSE_OBSERVATION_V2_GENERATION_ID")
+            or trust_pin.get("generationId") != topology.get("generationId")
+            or trust_pin.get("providerGeneration") != topology.get("generation")
+            or trust_pin.get("proofPinsRootSha256")
+            != env.get("SERVERWARE_RESPONSE_OBSERVATION_V2_PROOF_PINS_ROOT_SHA256")
+            or trust_pin.get("trustCheckpointSha256")
+            != pins.get("trustCheckpointSha256")
+            or trust_pin.get("trustCheckpointSha256")
+            != topology.get("trustCheckpointSha256")
+            or trust_pin.get("revocationEpoch") != pins.get("revocationEpoch")
+            or trust_pin.get("logId") != pins.get("transparencyLogId")
+            or trust_pin.get("logKeyId") != pins.get("transparencyLogKeyId")
+            or trust_pin.get("logKeySpkiSha256")
+            != pins.get("transparencyLogKeySpkiSha256")
+            or trust_pin.get("anchorTreeSize")
+            != pins.get("transparencyAnchorRevision")
+            or trust_pin.get("anchorRootSha256")
+            != pins.get("transparencyAnchorRootSha256")
+            or checkpoint_payload.get("logId") != trust_pin.get("logId")
+            or checkpoint_payload.get("providerGeneration")
+            != trust_pin.get("providerGeneration")
+            or checkpoint_payload.get("trustCheckpointSha256")
+            != trust_pin.get("trustCheckpointSha256")
+            or checkpoint_payload.get("revocationEpoch")
+            != trust_pin.get("revocationEpoch")
+            or checkpoint_auth.get("keyId") != trust_pin.get("logKeyId")
+            or checkpoint_auth.get("publicKeySpkiSha256")
+            != trust_pin.get("logKeySpkiSha256")
+            or release_payload.get("sourceCommitSha256")
+            != pins.get("releaseSourceCommitSha256")
+            or release_payload.get("generationId") != trust_pin.get("generationId")
+            or release_payload.get("providerGeneration")
+            != trust_pin.get("providerGeneration")
+            or release_payload.get("sourceTreeSha256")
+            != pins.get("releaseSourceTreeSha256")
+            or release_payload.get("executableSha256")
+            != pins.get("releaseExecutableSha256")
+            or release_payload.get("configurationSha256")
+            != pins.get("releaseConfigurationSha256")
+            or release_auth.get("keyId")
+            != pins.get("releaseRecordSignerKeyId")
+            or release_auth.get("publicKeySha256")
+            != pins.get("releaseRecordSignerPublicKeySha256")
+            or release_payload.get("sourceCommitSha256")
+            != env.get("SERVERWARE_RESPONSE_OBSERVATION_V2_SOURCE_COMMIT_SHA256")
+            or release_payload.get("sourceTreeSha256")
+            != env.get("SERVERWARE_RESPONSE_OBSERVATION_V2_SOURCE_TREE_SHA256")
+        ):
+            raise ValueError(
+                "response-v2 external log/checkpoint/SPKI/anchor/source/binary pins are not independently consistent"
+            )
+
+        forbidden_private_fields = {
+            "privateKey",
+            "privateKeyBase64",
+            "privateKeyPem",
+            "signingPrivateKey",
+        }
+
+        def reject_private_fields(value: Any) -> None:
+            if isinstance(value, dict):
+                if forbidden_private_fields.intersection(value):
+                    raise ValueError("response-v2 public inputs contain private key material")
+                for nested in value.values():
+                    reject_private_fields(nested)
+            elif isinstance(value, list):
+                for nested in value:
+                    reject_private_fields(nested)
+
+        reject_private_fields(custody)
+        reject_private_fields(trust_pin)
+        reject_private_fields(artifact)
+        status.update(
+            {
+                "generation_id": trust_pin.get("generationId"),
+                "provider_generation": trust_pin.get("providerGeneration"),
+                "log_id": trust_pin.get("logId"),
+                "log_key_spki_sha256": trust_pin.get("logKeySpkiSha256"),
+                "anchor_tree_size": trust_pin.get("anchorTreeSize"),
+                "anchor_root_sha256": trust_pin.get("anchorRootSha256"),
+                "checkpoint_sha256": proof.get("checkpointSha256"),
+                "source_commit_sha256": release_payload.get("sourceCommitSha256"),
+                "source_tree_sha256": release_payload.get("sourceTreeSha256"),
+                "executable_sha256": release_payload.get("executableSha256"),
+                "configuration_sha256": release_payload.get("configurationSha256"),
+            }
+        )
+    except Exception as exc:
+        failures.append(f"response-v2 release transparency inputs are invalid: {exc}")
     status["ok"] = not failures
     return status, failures
 
@@ -2525,6 +2882,13 @@ def main() -> None:
         )
     )
     failures.extend(response_signing_key_custody_failures)
+    response_v2_release_transparency, response_v2_release_transparency_failures = (
+        response_v2_release_transparency_inputs_check(
+            loaded_env,
+            skip_host_check=args.skip_host_check,
+        )
+    )
+    failures.extend(response_v2_release_transparency_failures)
     images_env, images_value, images_failures = production_images_env_check(Path(args.production_images_env))
     failures.extend(images_failures)
     merge_status, merge_failures = env_merge_check(loaded_env, images_value) if loaded_env and images_value else (
@@ -2595,6 +2959,7 @@ def main() -> None:
             "runtime_trust_materials": runtime_trust,
             "oauth_secret_mounts": oauth_secret_mounts,
             "response_signing_key_custody": response_signing_key_custody,
+            "response_v2_release_transparency": response_v2_release_transparency,
             "production_images_env": images_env,
             "production_images_env_merge": merge_status,
             "production_compose": compose_status,

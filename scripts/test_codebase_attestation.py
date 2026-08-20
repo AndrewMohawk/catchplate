@@ -545,9 +545,7 @@ def exercise_bounded_control_plane_response_signing() -> None:
     )
     original_context_functions = {
         "runtime_manifest_digest": app_module.runtime_manifest_digest,
-        "release_provenance_digest": app_module.release_provenance_digest,
-        "image_signatures_digest": app_module.image_signatures_digest,
-        "source_tree_digest": app_module.source_tree_digest,
+        "attestation_artifact_digests": app_module.attestation_artifact_digests,
         "get_policy_snapshot": app_module.get_policy_snapshot,
         "response_signature_headers": app_module.response_signature_headers,
     }
@@ -723,6 +721,7 @@ def exercise_bounded_control_plane_response_signing() -> None:
             or captured_worker.get("request_nonce") != "captured-nonce"
             or captured_worker.get("response_status_code") != 200
             or captured_worker.get("body") != b"captured-body"
+            or captured_worker.get("representation_body") != b"captured-body"
             or not isinstance(captured_headers, list)
             or (b"x-captured-source", b"preserved")
             not in captured_headers
@@ -754,12 +753,59 @@ def exercise_bounded_control_plane_response_signing() -> None:
 
         app_module._SIGNED_RESPONSE_MAX_BYTES = 64
         app_module.runtime_manifest_digest = lambda: context["runtime_manifest_digest"]
-        app_module.release_provenance_digest = lambda: context["provenance_digest"]
-        app_module.image_signatures_digest = lambda: context["image_signatures_digest"]
-        app_module.source_tree_digest = lambda: context["source_tree_digest"]
+        app_module.attestation_artifact_digests = lambda: {
+            "provenance_digest": context["provenance_digest"],
+            "image_signatures_digest": context["image_signatures_digest"],
+            "source_tree_digest": context["source_tree_digest"],
+        }
         app_module.get_policy_snapshot = lambda: SimpleNamespace(
             hash=context["policy_bundle_digest"]
         )
+
+        attestation_context = {
+            field: "sha256:" + str(index) * 64
+            for index, field in enumerate(context, start=5)
+        }
+        captured_attestation_statement: dict[str, object] = {}
+
+        def unexpected_context_read(*_args: object, **_kwargs: object) -> object:
+            raise AssertionError(
+                "attestation response signing reread mutable runtime artifacts"
+            )
+
+        app_module.runtime_manifest_digest = unexpected_context_read
+        app_module.attestation_artifact_digests = unexpected_context_read
+        app_module.get_policy_snapshot = unexpected_context_read
+        app_module.response_signature_headers = (
+            lambda statement: captured_attestation_statement.update(statement) or {}
+        )
+        attestation_body = verifier.canonical_json(attestation_context).encode("ascii")
+        original_header_builder(
+            request_method="GET",
+            request_path="/attestation",
+            request_query="",
+            request_nonce="attestation-snapshot-nonce",
+            response_status_code=200,
+            response_headers=[],
+            body=attestation_body,
+            representation_body=attestation_body,
+        )
+        if captured_attestation_statement.get("context") != attestation_context:
+            raise AssertionError(
+                "attestation response signature did not bind the serialized artifact snapshot"
+            )
+        app_module.runtime_manifest_digest = lambda: context["runtime_manifest_digest"]
+        app_module.attestation_artifact_digests = lambda: {
+            "provenance_digest": context["provenance_digest"],
+            "image_signatures_digest": context["image_signatures_digest"],
+            "source_tree_digest": context["source_tree_digest"],
+        }
+        app_module.get_policy_snapshot = lambda: SimpleNamespace(
+            hash=context["policy_bundle_digest"]
+        )
+        app_module.response_signature_headers = original_context_functions[
+            "response_signature_headers"
+        ]
 
         original_secret = b"original-response-secret"
         unconsumed_secret = b"unconsumed-response-secret"
@@ -1761,6 +1807,21 @@ def signed_bundle_fixture(
 
 
 def exercise_bundle_verification() -> None:
+    for invalid_json in (
+        b'{"value":1,"value":2}',
+        b'{"value":NaN}',
+        b'{"value":-0}',
+        ('{"value":' + "9" * 400 + "}").encode("ascii"),
+    ):
+        try:
+            verifier.strict_json_loads(invalid_json)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                f"attestation verifier accepted non-strict JSON: {invalid_json[:32]!r}"
+            )
+
     release_key = Ed25519PrivateKey.generate()
     image_key = Ed25519PrivateKey.generate()
     release_public_pem = release_key.public_key().public_bytes(
@@ -1815,6 +1876,130 @@ def exercise_bundle_verification() -> None:
         provenance_digest,
         release_key_id,
     )
+    from serverware import attestation as attestation_module
+
+    original_provenance_path = attestation_module.RELEASE_PROVENANCE_PATH
+    original_signatures_path = attestation_module.IMAGE_SIGNATURES_PATH
+    try:
+        with tempfile.TemporaryDirectory() as artifact_tmp_raw:
+            artifact_root = Path(artifact_tmp_raw)
+            provenance_path = artifact_root / "release-provenance.json"
+            signatures_path = artifact_root / "image-signatures.json"
+            attestation_module.RELEASE_PROVENANCE_PATH = provenance_path
+            attestation_module.IMAGE_SIGNATURES_PATH = signatures_path
+            provenance_path.write_text(
+                verifier.canonical_json(provenance_document), encoding="ascii"
+            )
+            signatures_path.write_text(
+                verifier.canonical_json(bundle), encoding="ascii"
+            )
+            measured = attestation_module.attestation_artifact_digests()
+            if measured != {
+                "provenance_digest": provenance_digest,
+                "image_signatures_digest": bundle[
+                    "image_signature_bundle_digest"
+                ],
+                "source_tree_digest": provenance["source_tree"]["digest"],
+            }:
+                raise AssertionError(
+                    f"attestation artifact snapshot changed: {measured}"
+                )
+
+            changed_provenance = json.loads(json.dumps(provenance_document))
+            changed_provenance["provenance"]["source_tree"]["digest"] = (
+                "sha256:" + "0" * 64
+            )
+            provenance_path.write_text(
+                verifier.canonical_json(changed_provenance), encoding="ascii"
+            )
+            if any(attestation_module.attestation_artifact_digests().values()):
+                raise AssertionError(
+                    "attestation accepted provenance whose content did not match its digest"
+                )
+
+            provenance_path.write_text(
+                verifier.canonical_json(provenance_document), encoding="ascii"
+            )
+            rebound_artifact = json.loads(json.dumps(bundle))
+            rebound_artifact["metadata"]["provenanceDigest"] = (
+                "sha256:" + "0" * 64
+            )
+            rebound_normalized = verifier.normalized_image_signature_payload(
+                rebound_artifact
+            )
+            rebound_artifact["image_signature_bundle_digest"] = (
+                verifier.sha256_prefixed_json(rebound_normalized)
+            )
+            signatures_path.write_text(
+                verifier.canonical_json(rebound_artifact), encoding="ascii"
+            )
+            if any(attestation_module.attestation_artifact_digests().values()):
+                raise AssertionError(
+                    "attestation accepted artifacts from different release snapshots"
+                )
+
+            fifo_path = artifact_root / "blocking-artifact.fifo"
+            os.mkfifo(fifo_path)
+            started = time.monotonic()
+            try:
+                attestation_module._read_stable_regular_file(
+                    fifo_path,
+                    maximum_bytes=1024,
+                )
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("attestation accepted a FIFO artifact")
+            if time.monotonic() - started > 1:
+                raise AssertionError("attestation FIFO admission blocked")
+
+            real_parent = artifact_root / "real-parent"
+            real_parent.mkdir()
+            regular_artifact = real_parent / "artifact.json"
+            regular_artifact.write_bytes(b"{}")
+            linked_parent = artifact_root / "linked-parent"
+            linked_parent.symlink_to(real_parent, target_is_directory=True)
+            linked_file = artifact_root / "linked-artifact.json"
+            linked_file.symlink_to(regular_artifact)
+            for unsafe_path in (
+                linked_parent / regular_artifact.name,
+                linked_file,
+            ):
+                try:
+                    attestation_module._read_stable_regular_file(
+                        unsafe_path,
+                        maximum_bytes=1024,
+                    )
+                except (OSError, ValueError):
+                    pass
+                else:
+                    raise AssertionError(
+                        f"attestation followed an unsafe symlink path: {unsafe_path}"
+                    )
+
+            empty_artifact = artifact_root / "empty-artifact.json"
+            empty_artifact.write_bytes(b"")
+            oversized_artifact = artifact_root / "oversized-artifact.json"
+            oversized_artifact.write_bytes(b"12345")
+            for invalid_path, maximum_bytes in (
+                (empty_artifact, 1024),
+                (oversized_artifact, 4),
+            ):
+                try:
+                    attestation_module._read_stable_regular_file(
+                        invalid_path,
+                        maximum_bytes=maximum_bytes,
+                    )
+                except ValueError:
+                    pass
+                else:
+                    raise AssertionError(
+                        f"attestation accepted an unbounded artifact: {invalid_path}"
+                    )
+    finally:
+        attestation_module.RELEASE_PROVENANCE_PATH = original_provenance_path
+        attestation_module.IMAGE_SIGNATURES_PATH = original_signatures_path
+
     original_external = verifier.run_sigstore_verifier
     verifier.run_sigstore_verifier = lambda *_args, **_kwargs: None  # type: ignore[assignment]
     try:

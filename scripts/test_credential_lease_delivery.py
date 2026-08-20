@@ -41,13 +41,15 @@ INITIAL_METADATA = {
     "expires_at_epoch_ms": 4_102_444_800_000,
     "managed": True,
     "provider_id": "demo",
-    "scopes": ["demo"],
+    "provider_subject": "demo-service-account",
+    "secret_class": "bearerToken",
     "x_app_id": "demo-x-app",
 }
 UPDATED_METADATA = {
     "managed": True,
     "provider_id": "demo",
-    "scopes": ["demo"],
+    "provider_subject": "demo-service-account",
+    "secret_class": "bearerToken",
     "x_app_id": "demo-x-app-v2",
 }
 LEASE_PATH = "/api/data-plane/credential-leases"
@@ -833,6 +835,100 @@ def main() -> None:
         from serverware.constraints import shared_durable_budget_claims
 
         assert_python_v4_golden(app_module)
+        binding_metadata = app_module._credential_lease_public_metadata(
+            {
+                "secret": "credential-value-not-in-metadata",
+                "metadata": {
+                    "provider": "npm",
+                    "provider_subject": "npm-account-123",
+                    "account_subject": "npm-account-123",
+                    "secret_class": "automationToken",
+                    "token_class": "automationToken",
+                    "oauth_client_id": "public-client-id",
+                    "client_id": "public-client-id",
+                    "provider_identity_verified": True,
+                    "refresh_token": "must-not-cross-the-lease-boundary",
+                },
+            }
+        )
+        if binding_metadata != {
+            "account_subject": "npm-account-123",
+            "client_id": "public-client-id",
+            "oauth_client_id": "public-client-id",
+            "provider": "npm",
+            "provider_identity_verified": True,
+            "provider_subject": "npm-account-123",
+            "secret_class": "automationToken",
+            "token_class": "automationToken",
+        }:
+            raise AssertionError(
+                f"credential lease binding metadata contract drifted: {binding_metadata}"
+            )
+        exact_static_policy = policy_bundle.CredentialPolicy(
+            id="credential:binding-test",
+            provider="generic",
+            provider_subject="account:binding-test",
+            injection={"type": "bearer"},
+        )
+        try:
+            app_module._assert_credential_policy_binding(
+                {
+                    "kind": "bearer",
+                    "metadata": {
+                        "provider": "npm",
+                        "provider_subject": "account:binding-test",
+                        "secret_class": "automationToken",
+                    },
+                },
+                exact_static_policy,
+            )
+        except HTTPException as exc:
+            if exc.status_code != 409 or "provider" not in str(exc.detail):
+                raise AssertionError(
+                    f"generic provider mismatch failed incorrectly: {exc}"
+                ) from exc
+        else:
+            raise AssertionError("generic signed provider acted as a wildcard")
+        scoped_static_policy = policy_bundle.CredentialPolicy(
+            id="credential:scope-test",
+            provider="npm",
+            provider_subject="account:binding-test",
+            scopes=("package.publish",),
+            injection={"type": "bearer"},
+        )
+        try:
+            app_module._assert_credential_policy_binding(
+                {
+                    "kind": "bearer",
+                    "metadata": {
+                        "provider": "npm",
+                        "provider_subject": "account:binding-test",
+                        "secret_class": "automationToken",
+                    },
+                },
+                scoped_static_policy,
+            )
+        except HTTPException as exc:
+            if exc.status_code != 409 or "scopes" not in str(exc.detail):
+                raise AssertionError(
+                    f"static scope mismatch failed incorrectly: {exc}"
+                ) from exc
+        else:
+            raise AssertionError("static credential scope drift was accepted")
+        try:
+            app_module._credential_metadata_scopes(
+                {
+                    "scopes": ["package.publish"],
+                    "scope": "package.read",
+                }
+            )
+        except HTTPException as exc:
+            if exc.status_code != 409 or "contradictory" not in str(exc.detail):
+                raise AssertionError(
+                    f"scope alias contradiction failed incorrectly: {exc}"
+                ) from exc
+        else:
+            raise AssertionError("contradictory scope aliases were accepted")
         ensure_mitm_ca_material()
         db.init_db()
         original_replay_max = db.CREDENTIAL_LEASE_REPLAY_MAX_ENTRIES
@@ -1276,17 +1372,45 @@ def main() -> None:
                 "legacy uncontrolled dispatch did not omit authority fields"
             )
         dispatch_calls = 0
+        injection_binding_calls = 0
+        route_binding_calls = 0
+        original_assert_injection_binding = (
+            app_module._assert_credential_injection_binding
+        )
+        original_assert_route_binding = app_module._assert_route_credential_binding
 
         def count_dispatch_refresh(credential_id: str) -> dict[str, Any] | None:
             nonlocal dispatch_calls
             dispatch_calls += 1
             return original_credential_for_lease(credential_id)
 
+        def count_injection_binding(
+            credential: dict[str, Any], credential_policy: Any
+        ) -> None:
+            nonlocal injection_binding_calls
+            injection_binding_calls += 1
+            original_assert_injection_binding(credential, credential_policy)
+
+        def count_route_binding(
+            route: Any,
+            credential: dict[str, Any],
+            credential_policy: Any,
+        ) -> None:
+            nonlocal route_binding_calls
+            route_binding_calls += 1
+            original_assert_route_binding(route, credential, credential_policy)
+
         app_module._credential_for_lease = count_dispatch_refresh
+        app_module._assert_credential_injection_binding = count_injection_binding
+        app_module._assert_route_credential_binding = count_route_binding
         try:
             dispatch_response = post_lease(dispatch_payload, "initial-dispatch")
         finally:
             app_module._credential_for_lease = original_credential_for_lease
+            app_module._assert_credential_injection_binding = (
+                original_assert_injection_binding
+            )
+            app_module._assert_route_credential_binding = original_assert_route_binding
         assert_status(dispatch_response, 200, "initial dispatch credential lease")
         dispatch_plaintext = decrypt_lease(
             dispatch_response.json(),
@@ -1304,6 +1428,16 @@ def main() -> None:
             )
         if dispatch_calls != 1:
             raise AssertionError(f"dispatch secret refresh path called {dispatch_calls} times")
+        if injection_binding_calls != 2:
+            raise AssertionError(
+                "dispatch secret lease did not revalidate injection binding before "
+                f"and inside the immutable snapshot: {injection_binding_calls}"
+            )
+        if route_binding_calls != 2:
+            raise AssertionError(
+                "dispatch secret lease did not revalidate exact route binding before "
+                f"and inside the immutable snapshot: {route_binding_calls}"
+            )
 
         original_active_route_by_id = app_module._active_route_by_id
         original_atomic_release_enabled = (

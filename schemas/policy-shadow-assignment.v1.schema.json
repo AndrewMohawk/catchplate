@@ -1,0 +1,473 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/policy-shadow-assignment.v1.schema.json",
+  "title": "Serverware Policy Shadow Assignment v1",
+  "$comment": "Wire data is unverified. Native verification canonicalizes payload with serverware.canonicalJson/ascii-integer-v1, recomputes payloadSha256, and verifies Ed25519 over SERVERWARE-SIGNED-ENVELOPE-V1 framing: serverware.signedEnvelope/v1 NUL signatureDomain NUL canonicalProfile NUL canonicalPayload. Canonical JSON permits only null, booleans, signed 64-bit integers, ASCII strings, arrays, and ASCII-keyed objects; keys sort by raw ASCII bytes; strings use shortest JSON escapes; floats and whitespace are forbidden.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "kind",
+    "canonicalProfile",
+    "signatureDomain",
+    "payload",
+    "payloadSha256",
+    "signatureAlgorithm",
+    "signingKeyId",
+    "signingKeySpkiSha256",
+    "signature"
+  ],
+  "properties": {
+    "apiVersion": {"const": "serverware.policyShadowAssignment/v1"},
+    "kind": {"const": "PolicyShadowAssignment"},
+    "canonicalProfile": {"const": "serverware.canonicalJson/ascii-integer-v1"},
+    "signatureDomain": {"const": "serverware.policyShadowAssignment/v1"},
+    "payload": {"$ref": "#/$defs/payload"},
+    "payloadSha256": {"$ref": "#/$defs/sha256"},
+    "signatureAlgorithm": {"const": "Ed25519"},
+    "signingKeyId": {"$ref": "#/$defs/sha256"},
+    "signingKeySpkiSha256": {"$ref": "#/$defs/sha256"},
+    "signature": {"$ref": "#/$defs/ed25519Signature"}
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "ed25519Signature": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{85}[AQgw]$"
+    },
+    "signedI64": {
+      "type": "integer",
+      "minimum": -9223372036854775808,
+      "maximum": 9223372036854775807
+    },
+    "unsignedI64": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9223372036854775807
+    },
+    "positiveI64": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9223372036854775807
+    },
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,255}$"
+    },
+    "spiffeId": {
+      "type": "string",
+      "minLength": 12,
+      "maxLength": 2048,
+      "pattern": "^spiffe://[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*(?:/(?:[A-Za-z0-9._~!$&'()*+,;=:@-]|%[0-9A-F]{2})+)+$",
+      "not": {"pattern": "(?:/\\.{1,2})(?:/|$)"}
+    },
+    "policyIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidatePolicySha256",
+        "candidatePolicySequence",
+        "predecessorPolicySha256",
+        "predecessorPolicySequence",
+        "policyBundleSha256",
+        "policyCompilerBinarySha256",
+        "policyCompilerConfigurationSha256",
+        "policySchemaSha256",
+        "policySemanticModelSha256",
+        "decisionGateBinarySha256",
+        "rollbackEpoch"
+      ],
+      "properties": {
+        "candidatePolicySha256": {"$ref": "#/$defs/sha256"},
+        "candidatePolicySequence": {
+          "$ref": "#/$defs/positiveI64",
+          "$comment": "Native verification requires this to be strictly greater than predecessorPolicySequence."
+        },
+        "predecessorPolicySha256": {"$ref": "#/$defs/sha256"},
+        "predecessorPolicySequence": {"$ref": "#/$defs/positiveI64"},
+        "policyBundleSha256": {"$ref": "#/$defs/sha256"},
+        "policyCompilerBinarySha256": {"$ref": "#/$defs/sha256"},
+        "policyCompilerConfigurationSha256": {"$ref": "#/$defs/sha256"},
+        "policySchemaSha256": {"$ref": "#/$defs/sha256"},
+        "policySemanticModelSha256": {"$ref": "#/$defs/sha256"},
+        "decisionGateBinarySha256": {"$ref": "#/$defs/sha256"},
+        "rollbackEpoch": {"$ref": "#/$defs/positiveI64"}
+      }
+    },
+    "compiledPolicySnapshotIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "policySha256",
+        "policySequence",
+        "rollbackEpoch",
+        "compiledSnapshotSha256",
+        "policyCompilerBinarySha256",
+        "policyCompilerConfigurationSha256",
+        "policySchemaSha256",
+        "adapterSchemaSha256",
+        "policySemanticModelSha256",
+        "policyPlanSchemaSha256"
+      ],
+      "properties": {
+        "policySha256": {"$ref": "#/$defs/sha256"},
+        "policySequence": {"$ref": "#/$defs/positiveI64"},
+        "rollbackEpoch": {"$ref": "#/$defs/positiveI64"},
+        "compiledSnapshotSha256": {"$ref": "#/$defs/sha256"},
+        "policyCompilerBinarySha256": {"$ref": "#/$defs/sha256"},
+        "policyCompilerConfigurationSha256": {"$ref": "#/$defs/sha256"},
+        "policySchemaSha256": {"$ref": "#/$defs/sha256"},
+        "adapterSchemaSha256": {"$ref": "#/$defs/sha256"},
+        "policySemanticModelSha256": {"$ref": "#/$defs/sha256"},
+        "policyPlanSchemaSha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "assignedSnapshotIdentities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["active", "candidate", "requestFactsSchemaSha256"],
+      "properties": {
+        "active": {"$ref": "#/$defs/compiledPolicySnapshotIdentity"},
+        "candidate": {"$ref": "#/$defs/compiledPolicySnapshotIdentity"},
+        "requestFactsSchemaSha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "responseValidationObligation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "routeSha256",
+        "obligationRootSha256",
+        "minimumComparableResponses"
+      ],
+      "properties": {
+        "routeSha256": {"$ref": "#/$defs/sha256"},
+        "obligationRootSha256": {"$ref": "#/$defs/sha256"},
+        "minimumComparableResponses": {"$ref": "#/$defs/positiveI64"}
+      }
+    },
+    "fleetMember": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "instanceId",
+        "spiffeId",
+        "bootIdSha256",
+        "teePlatform",
+        "teeMeasurementSha256",
+        "teeAttestationKeyId",
+        "teeAttestationKeySpkiSha256",
+        "ingressSigningKeyId",
+        "ingressSigningKeySpkiSha256",
+        "activeDecisionSigningKeyId",
+        "activeDecisionSigningKeySpkiSha256",
+        "shadowSigningKeyId",
+        "shadowSigningKeySpkiSha256"
+      ],
+      "properties": {
+        "instanceId": {"$ref": "#/$defs/identifier"},
+        "spiffeId": {"$ref": "#/$defs/spiffeId"},
+        "bootIdSha256": {"$ref": "#/$defs/sha256"},
+        "teePlatform": {
+          "enum": ["aws-nitro-enclave", "amd-sev-snp", "intel-tdx"]
+        },
+        "teeMeasurementSha256": {"$ref": "#/$defs/sha256"},
+        "teeAttestationKeyId": {"$ref": "#/$defs/sha256"},
+        "teeAttestationKeySpkiSha256": {"$ref": "#/$defs/sha256"},
+        "ingressSigningKeyId": {"$ref": "#/$defs/sha256"},
+        "ingressSigningKeySpkiSha256": {"$ref": "#/$defs/sha256"},
+        "activeDecisionSigningKeyId": {"$ref": "#/$defs/sha256"},
+        "activeDecisionSigningKeySpkiSha256": {"$ref": "#/$defs/sha256"},
+        "shadowSigningKeyId": {"$ref": "#/$defs/sha256"},
+        "shadowSigningKeySpkiSha256": {"$ref": "#/$defs/sha256"}
+      },
+      "$comment": "Native verification requires ingress, active-decision, and shadow signing key IDs and SPKI digests to be pairwise distinct within a member and globally unique across every role of every assigned fleet member, then binds all keys to fresh TEE evidence."
+    },
+    "fleet": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fleetId",
+        "membershipRevision",
+        "membershipRootSha256",
+        "members"
+      ],
+      "properties": {
+        "fleetId": {"$ref": "#/$defs/sha256"},
+        "membershipRevision": {"$ref": "#/$defs/positiveI64"},
+        "membershipRootSha256": {
+          "$ref": "#/$defs/sha256",
+          "$comment": "Native verification recomputes the domain-separated Merkle root over canonical members in signed array order."
+        },
+        "members": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4096,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/fleetMember"}
+        }
+      }
+    },
+    "custodyAuthority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authorityId",
+        "storageRealmSha256",
+        "retrievalNamespaceSha256",
+        "ingressAdmissionKeyId",
+        "ingressAdmissionKeySpkiSha256",
+        "unavailableIngressKeyId",
+        "unavailableIngressKeySpkiSha256",
+        "dispatchBarrierKeyId",
+        "dispatchBarrierKeySpkiSha256",
+        "activeEffectBarrierKeyId",
+        "activeEffectBarrierKeySpkiSha256",
+        "activeEffectCommitKeyId",
+        "activeEffectCommitKeySpkiSha256",
+        "terminalAppendKeyId",
+        "terminalAppendKeySpkiSha256",
+        "ledgerAppendKeyId",
+        "ledgerAppendKeySpkiSha256",
+        "spoolCompactionKeyId",
+        "spoolCompactionKeySpkiSha256",
+        "publicationReconciliationKeyId",
+        "publicationReconciliationKeySpkiSha256",
+        "activationPublicationKeyId",
+        "activationPublicationKeySpkiSha256"
+      ],
+      "properties": {
+        "authorityId": {"$ref": "#/$defs/sha256"},
+        "storageRealmSha256": {"$ref": "#/$defs/sha256"},
+        "retrievalNamespaceSha256": {"$ref": "#/$defs/sha256"},
+        "ingressAdmissionKeyId": {"$ref": "#/$defs/sha256"},
+        "ingressAdmissionKeySpkiSha256": {"$ref": "#/$defs/sha256"},
+        "unavailableIngressKeyId": {"$ref": "#/$defs/sha256"},
+        "unavailableIngressKeySpkiSha256": {"$ref": "#/$defs/sha256"},
+        "dispatchBarrierKeyId": {"$ref": "#/$defs/sha256"},
+        "dispatchBarrierKeySpkiSha256": {"$ref": "#/$defs/sha256"},
+        "activeEffectBarrierKeyId": {"$ref": "#/$defs/sha256"},
+        "activeEffectBarrierKeySpkiSha256": {"$ref": "#/$defs/sha256"},
+        "activeEffectCommitKeyId": {"$ref": "#/$defs/sha256"},
+        "activeEffectCommitKeySpkiSha256": {"$ref": "#/$defs/sha256"},
+        "terminalAppendKeyId": {"$ref": "#/$defs/sha256"},
+        "terminalAppendKeySpkiSha256": {"$ref": "#/$defs/sha256"},
+        "ledgerAppendKeyId": {"$ref": "#/$defs/sha256"},
+        "ledgerAppendKeySpkiSha256": {"$ref": "#/$defs/sha256"},
+        "spoolCompactionKeyId": {"$ref": "#/$defs/sha256"},
+        "spoolCompactionKeySpkiSha256": {"$ref": "#/$defs/sha256"},
+        "publicationReconciliationKeyId": {"$ref": "#/$defs/sha256"},
+        "publicationReconciliationKeySpkiSha256": {"$ref": "#/$defs/sha256"},
+        "activationPublicationKeyId": {"$ref": "#/$defs/sha256"},
+        "activationPublicationKeySpkiSha256": {"$ref": "#/$defs/sha256"}
+      },
+      "$comment": "Native verification pins each exact custody role and requires every custody key ID and SPKI digest to be distinct from every fleet ingress, active-decision, shadow and TEE key and from every other custody role."
+    },
+    "authorityRoleKeyBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "role",
+        "scopeSha256",
+        "keyAlgorithm",
+        "keyId",
+        "keySpkiSha256",
+        "keyMaterialSha256"
+      ],
+      "properties": {
+        "role": {
+          "enum": [
+            "compiler-analysis",
+            "activation-readiness",
+            "activation-approval",
+            "fleet-tee-attestation",
+            "fleet-ingress",
+            "fleet-active-decision",
+            "fleet-shadow",
+            "custody-ingress-admission",
+            "custody-unavailable-ingress",
+            "custody-dispatch-barrier",
+            "custody-terminal-append",
+            "custody-ledger-append",
+            "custody-spool-compaction",
+            "custody-active-effect-barrier",
+            "custody-active-effect-commit",
+            "custody-publication-reconciliation",
+            "custody-activation-publication"
+          ]
+        },
+        "scopeSha256": {
+          "$ref": "#/$defs/sha256",
+          "$comment": "Singleton authority roles use assignmentId. Fleet roles use the domain-separated assigned member identity digest."
+        },
+        "keyAlgorithm": {"$ref": "#/$defs/identifier"},
+        "keyId": {"$ref": "#/$defs/sha256"},
+        "keySpkiSha256": {"$ref": "#/$defs/sha256"},
+        "keyMaterialSha256": {
+          "$ref": "#/$defs/sha256",
+          "$comment": "SHA-256 over serverware.policyAuthorityPublicKeyMaterial/v1 length-framed keyAlgorithm and the exact resolved DER SubjectPublicKeyInfo bytes. The role and scope are deliberately excluded so reuse of one public key in two roles produces the same material digest and is rejected."
+        }
+      }
+    },
+    "authorityKeyIndependence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bindings",
+        "keyIdSetRootSha256",
+        "spkiSetRootSha256",
+        "keyMaterialSetRootSha256",
+        "independenceRootSha256"
+      ],
+      "properties": {
+        "bindings": {
+          "type": "array",
+          "minItems": 17,
+          "maxItems": 16397,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/authorityRoleKeyBinding"},
+          "allOf": [
+            {"contains":{"properties":{"role":{"const":"compiler-analysis"}},"required":["role"]},"minContains":1,"maxContains":1},
+            {"contains":{"properties":{"role":{"const":"activation-readiness"}},"required":["role"]},"minContains":1,"maxContains":1},
+            {"contains":{"properties":{"role":{"const":"activation-approval"}},"required":["role"]},"minContains":1,"maxContains":1},
+            {"contains":{"properties":{"role":{"const":"custody-ingress-admission"}},"required":["role"]},"minContains":1,"maxContains":1},
+            {"contains":{"properties":{"role":{"const":"custody-unavailable-ingress"}},"required":["role"]},"minContains":1,"maxContains":1},
+            {"contains":{"properties":{"role":{"const":"custody-dispatch-barrier"}},"required":["role"]},"minContains":1,"maxContains":1},
+            {"contains":{"properties":{"role":{"const":"custody-terminal-append"}},"required":["role"]},"minContains":1,"maxContains":1},
+            {"contains":{"properties":{"role":{"const":"custody-ledger-append"}},"required":["role"]},"minContains":1,"maxContains":1},
+            {"contains":{"properties":{"role":{"const":"custody-spool-compaction"}},"required":["role"]},"minContains":1,"maxContains":1},
+            {"contains":{"properties":{"role":{"const":"custody-active-effect-barrier"}},"required":["role"]},"minContains":1,"maxContains":1},
+            {"contains":{"properties":{"role":{"const":"custody-active-effect-commit"}},"required":["role"]},"minContains":1,"maxContains":1},
+            {"contains":{"properties":{"role":{"const":"custody-publication-reconciliation"}},"required":["role"]},"minContains":1,"maxContains":1},
+            {"contains":{"properties":{"role":{"const":"custody-activation-publication"}},"required":["role"]},"minContains":1,"maxContains":1},
+            {"contains":{"properties":{"role":{"const":"fleet-tee-attestation"}},"required":["role"]},"minContains":1},
+            {"contains":{"properties":{"role":{"const":"fleet-ingress"}},"required":["role"]},"minContains":1},
+            {"contains":{"properties":{"role":{"const":"fleet-active-decision"}},"required":["role"]},"minContains":1},
+            {"contains":{"properties":{"role":{"const":"fleet-shadow"}},"required":["role"]},"minContains":1}
+          ]
+        },
+        "keyIdSetRootSha256": {"$ref": "#/$defs/sha256"},
+        "spkiSetRootSha256": {"$ref": "#/$defs/sha256"},
+        "keyMaterialSetRootSha256": {"$ref": "#/$defs/sha256"},
+        "independenceRootSha256": {"$ref": "#/$defs/sha256"}
+      },
+      "$comment": "Native verification resolves every key from proof-independent pinned trust material, requires strict role/scope order, and requires pairwise-distinct keyId, DER-SPKI digest, and role-independent public-key-material digest across the complete set. The complete set is exactly one compiler-analysis, activation-readiness, activation-approval, custody-ingress-admission, custody-unavailable-ingress, custody-dispatch-barrier, custody-terminal-append, custody-ledger-append, custody-spool-compaction, custody-active-effect-barrier, custody-active-effect-commit, custody-publication-reconciliation, and custody-activation-publication binding plus one TEE-attestation, ingress, active-decision, and shadow binding for every assigned fleet member. It must exactly match fleet and custodyAuthority fields. The three set roots are domain-separated Merkle roots over their respective strictly sorted raw 32-byte digests; independenceRootSha256 commits the canonical bindings and all three roots."
+    },
+    "observationWindow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "startsAtUnixNanos",
+        "endsAtUnixNanos",
+        "sealDeadlineUnixNanos",
+        "minimumDurationNanos",
+        "firstIngressSequence",
+        "samplingBasisPoints",
+        "requestCommitmentKeyId",
+        "requestCommitmentKeyEpoch",
+        "maximumEvidenceAgeNanos",
+        "maximumHeartbeatGapNanos"
+      ],
+      "properties": {
+        "startsAtUnixNanos": {"$ref": "#/$defs/signedI64"},
+        "endsAtUnixNanos": {"$ref": "#/$defs/signedI64"},
+        "sealDeadlineUnixNanos": {"$ref": "#/$defs/signedI64"},
+        "minimumDurationNanos": {"$ref": "#/$defs/positiveI64"},
+        "firstIngressSequence": {"$ref": "#/$defs/positiveI64"},
+        "samplingBasisPoints": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000
+        },
+        "requestCommitmentKeyId": {"$ref": "#/$defs/sha256"},
+        "requestCommitmentKeyEpoch": {"$ref": "#/$defs/positiveI64"},
+        "maximumEvidenceAgeNanos": {"$ref": "#/$defs/positiveI64"},
+        "maximumHeartbeatGapNanos": {
+          "$ref": "#/$defs/positiveI64",
+          "$comment": "Maximum signed-heartbeat gap from verified load through continuous checkpoint close, including both endpoint gaps."
+        }
+      }
+    },
+    "readinessThresholds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "minimumIngressRequests",
+        "minimumEvaluatedObservations",
+        "minimumComparableResponses",
+        "minimumIngressRequestsPerMember",
+        "minimumEvaluatedObservationsPerMember",
+        "minimumComparableResponsesPerMember",
+        "maximumCandidateEvaluationP99Nanos",
+        "maximumShadowTotalP99Nanos"
+      ],
+      "properties": {
+        "minimumIngressRequests": {"$ref": "#/$defs/positiveI64"},
+        "minimumEvaluatedObservations": {"$ref": "#/$defs/positiveI64"},
+        "minimumComparableResponses": {"$ref": "#/$defs/unsignedI64"},
+        "minimumIngressRequestsPerMember": {"$ref": "#/$defs/positiveI64"},
+        "minimumEvaluatedObservationsPerMember": {"$ref": "#/$defs/positiveI64"},
+        "minimumComparableResponsesPerMember": {"$ref": "#/$defs/unsignedI64"},
+        "maximumCandidateEvaluationP99Nanos": {"$ref": "#/$defs/positiveI64"},
+        "maximumShadowTotalP99Nanos": {"$ref": "#/$defs/positiveI64"}
+      },
+      "$comment": "Drops, errors, indeterminate outcomes, unavailable evidence, gaps, chain failures, and response divergence are unconditional zero-tolerance readiness invariants. Active-deny expansions remain zero-tolerance for NoExpansion and are permitted only under exact compiler-approved semantic cells, pilot limits, and WebAuthn approval."
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "assignmentId",
+        "canaryId",
+        "assignmentRevision",
+        "generationEpoch",
+        "minimumGenerationTombstoneEpoch",
+        "policyIdentity",
+        "expectedLoadedSnapshots",
+        "responseValidationObligations",
+        "responseValidationObligationsRootSha256",
+        "fleet",
+        "custodyAuthority",
+        "authorityKeyIndependence",
+        "observationWindow",
+        "readinessThresholds",
+        "issuedAtUnixNanos",
+        "expiresAtUnixNanos"
+      ],
+      "properties": {
+        "assignmentId": {"$ref": "#/$defs/sha256"},
+        "canaryId": {"$ref": "#/$defs/sha256"},
+        "assignmentRevision": {"$ref": "#/$defs/positiveI64"},
+        "generationEpoch": {"$ref": "#/$defs/positiveI64"},
+        "minimumGenerationTombstoneEpoch": {
+          "$ref": "#/$defs/positiveI64",
+          "$comment": "Native verification requires minimumGenerationTombstoneEpoch <= generationEpoch and rejects a retired generation identity."
+        },
+        "policyIdentity": {"$ref": "#/$defs/policyIdentity"},
+        "expectedLoadedSnapshots": {"$ref": "#/$defs/assignedSnapshotIdentities"},
+        "responseValidationObligations": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 512,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/responseValidationObligation"},
+          "$comment": "Native verification requires strict routeSha256 order and recomputes responseValidationObligationsRootSha256."
+        },
+        "responseValidationObligationsRootSha256": {"$ref": "#/$defs/sha256"},
+        "fleet": {"$ref": "#/$defs/fleet"},
+        "custodyAuthority": {"$ref": "#/$defs/custodyAuthority"},
+        "authorityKeyIndependence": {"$ref": "#/$defs/authorityKeyIndependence"},
+        "observationWindow": {"$ref": "#/$defs/observationWindow"},
+        "readinessThresholds": {"$ref": "#/$defs/readinessThresholds"},
+        "issuedAtUnixNanos": {"$ref": "#/$defs/signedI64"},
+        "expiresAtUnixNanos": {"$ref": "#/$defs/signedI64"}
+      },
+      "$comment": "Native verification exactly joins active and candidate compiled identities to policyIdentity and recomputes authorityKeyIndependence.independenceRootSha256. Aggregate and per-member comparable-response thresholds may be zero for a request/decision-only expansion pilot; readiness still enforces every ordinary route obligation and every response-expansion cell from the signed policy-authority analysis."
+    }
+  }
+}

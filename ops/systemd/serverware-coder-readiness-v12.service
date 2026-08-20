@@ -1,0 +1,42 @@
+[Unit]
+Description=Serverware Coder v12 static gate for mandatory per-invocation signed readiness
+PartOf=serverware-coder-v12.target
+After=serverware-coder-controller-v12.service serverware-coder-plan-executor-v12.service serverware-coder-private-dind-reconcile-v12.service serverware-coder-lifecycle-privileged-v12.service
+Requires=serverware-coder-controller-v12.service serverware-coder-plan-executor-v12.service serverware-coder-private-dind-reconcile-v12.service serverware-coder-lifecycle-privileged-v12.service
+Before=serverware-coder-v12.target
+
+[Service]
+Type=oneshot
+User=serverware-coder-executor
+Group=serverware-coder-executor
+SupplementaryGroups=serverware-coder-docker-api serverware-coder-lifecycle-api serverware-coder-cas
+UMask=0077
+Environment=SERVERWARE_CODER_PLAN_EXECUTOR_CONFIG_SHA256=@PLAN_EXECUTOR_CONFIG_SHA256@
+Environment=SERVERWARE_CODER_REQUIRE_PER_INVOCATION_READINESS_V12=1
+ExecStart=/usr/bin/timeout --signal=KILL 30s @RELEASE_ROOT@/bin/serverware-coder-plan-executor-v12 --config @RELEASE_ROOT@/config/plan-executor-v12.conf health
+RemainAfterExit=yes
+TimeoutStartSec=45s
+TimeoutStopSec=15s
+KillMode=control-group
+SendSIGKILL=yes
+FinalKillSignal=SIGKILL
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateIPC=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+RestrictAddressFamilies=AF_UNIX
+SystemCallArchitectures=native
+ReadWritePaths=/run/serverware/coder/v12/plan-executor /var/lib/serverware/coder-controller-v12/executor /var/lib/serverware/coder-controller-v12/cas
+
+[Install]
+WantedBy=serverware-coder-v12.target

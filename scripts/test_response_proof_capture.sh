@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 tmp_root="$(python3 - "${TMP_DIR:-.tmp}" <<'PY'
 import pathlib

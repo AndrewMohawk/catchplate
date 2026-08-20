@@ -1,13 +1,38 @@
+x-serverware-policy-custody-host-contract:
+  assuranceClass: trusted-host-no-tee
+  socketActivation: systemd-inherited-seqpacket
+  socketTarget: serverware-policy-custody-sockets.target
+  target: serverware-policy-custody.target
+  driverGroupGid: "${SERVERWARE_POLICY_CUSTODY_DRIVER_GID:?set host swpc-driver group ID}"
+  services:
+    durable-recovery-store:
+      user: swpc-store
+      socket: /run/serverware/policy-custody/durable-recovery-store.sock
+    cleanup-authorization-consumer:
+      user: swpc-consume
+      socket: /run/serverware/policy-custody/cleanup-authorization-consumer.sock
+    recovery-target-provider:
+      user: swpc-target
+      socket: /run/serverware/policy-custody/recovery-target-provider.sock
+    current-signature-authority:
+      user: swpc-signature
+      socket: /run/serverware/policy-custody/current-signature-authority.sock
+    bounded-cleanup-helper:
+      user: swpc-cleanup
+      socket: /run/serverware/policy-custody/bounded-cleanup-helper.sock
+
 services:
   serverware:
     image: ${SERVERWARE_CONTROL_PLANE_IMAGE:?set immutable control-plane image digest ref}
-    user: "65532:65532"
-    group_add:
-      - "65530"
+    user: "0:0"
     init: true
     read_only: true
     cap_drop:
       - ALL
+    cap_add:
+      - DAC_OVERRIDE
+      - SETGID
+      - SETUID
     security_opt:
       - no-new-privileges:true
       - seccomp=./security/seccomp/serverware-deny-dangerous.json
@@ -19,6 +44,7 @@ services:
         soft: 0
         hard: 0
     environment:
+      SERVERWARE_PROCESS_MODE: serverware-control-plane
       SERVERWARE_DATA_DIR: /data
       SERVERWARE_POLICY_BUNDLE: /run/serverware/gate/policy-bundle.json
       SERVERWARE_POLICY_HIGH_WATER_FILE: /var/lib/serverware/policy-high-water.json
@@ -138,6 +164,7 @@ services:
       SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN_FILE: /run/secrets/serverware-data-plane-rate-limit-consume-token
       SERVERWARE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN_FILE: /run/secrets/serverware-data-plane-release-authorization-token
       SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN_FILE: /run/secrets/serverware-data-plane-management-token
+      SERVERWARE_DECISION_GATE_BASE: http://127.0.0.1:9091
       SERVERWARE_AUDIT_ANCHOR_URL: https://audit-anchor:9100/anchors
       SERVERWARE_AUDIT_ANCHOR_CA_BUNDLE: /run/serverware/tls/ca.pem
       SERVERWARE_AUDIT_ANCHOR_TOKEN_FILE: /run/secrets/serverware-audit-anchor-token
@@ -169,6 +196,16 @@ services:
       SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST: ${SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST:?set measured data-plane binary digest}
     ports:
       - "127.0.0.1:3000:3000"
+      - "${SERVERWARE_PROXY_BIND_ADDRESS:?set explicit production proxy bind address}:8080:9090"
+    entrypoint:
+      - /runtime/python/bin/python3
+      - -I
+      - -P
+      - -s
+      - -S
+      - /runtime/authority-bootstrap/authority_fd_entrypoint.py
+      - control-plane
+    command: []
     volumes:
       - serverware-data:/data
       - serverware-gate-materials:/run/serverware/gate
@@ -196,6 +233,8 @@ services:
       - ${SERVERWARE_SETUP_HARDWARE_VERIFIER_PUBLIC_KEY:?set hardware verifier public key}:/run/serverware/setup-trust/hardware-verifier.pub.pem:ro
       - ${SERVERWARE_SETUP_FINAL_AUTHORITY_PUBLIC_KEY:?set final authority public key}:/run/serverware/setup-trust/final-authority.pub.pem:ro
       - ${SERVERWARE_WEBAUTHN_RECOVERY_ROOT_PUBLIC_KEY:?set offline WebAuthn recovery root public key}:/run/serverware/webauthn-recovery/offline-root.pub.pem:ro
+      - ${SERVERWARE_AUTHORITY_RUNTIME_SOCKET_DIR:?provision runtime relay socket directory uid 65524 gid 65524}:/run/serverware/authority-runtime
+      - ${SERVERWARE_AUTHORITY_RUNTIME_TRUST_DIR:?set signed runtime authority trust directory}:/run/serverware/authority-trust:ro
     devices:
       - /dev/nsm:/dev/nsm
     tmpfs:
@@ -203,9 +242,13 @@ services:
     healthcheck:
       test:
         - CMD
-        - /usr/bin/python3
-        - -c
-        - "import json,ssl,sys,urllib.request; from pathlib import Path; from serverware.response_identity import validate_response_signing_key_custody; validate_response_signing_key_custody(Path('/run/secrets/serverware-response-signing-key'),Path('/run/serverware/custody-trust/control-plane-response-signing.pub.pem'),Path('/run/serverware/custody-trust/control-plane-response-signing.key-id')); context=ssl.create_default_context(cafile='/run/serverware/tls/ca.pem'); response=urllib.request.urlopen('https://serverware:3000/healthz',context=context,timeout=2); response.status == 200 or sys.exit(1); json.load(response).get('ok') is True or sys.exit(1)"
+        - /runtime/python/bin/python3
+        - -I
+        - -P
+        - -s
+        - -S
+        - /runtime/authority-bootstrap/authority_fd_entrypoint.py
+        - control-plane-health
       interval: 1s
       timeout: 3s
       retries: 30
@@ -214,6 +257,289 @@ services:
       - default
       - gate-control
       - anchor-control
+    depends_on:
+      policy-authority-runtime:
+        condition: service_healthy
+
+  policy-authority-runtime:
+    image: ${SERVERWARE_CONTROL_PLANE_IMAGE:?set immutable control-plane image digest ref}
+    user: "0:0"
+    init: true
+    read_only: true
+    network_mode: none
+    cap_drop:
+      - ALL
+    cap_add:
+      - DAC_OVERRIDE
+      - SETGID
+      - SETUID
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./security/seccomp/serverware-deny-dangerous.json
+    pids_limit: 96
+    mem_limit: 256m
+    environment:
+      SERVERWARE_PROCESS_MODE: policy-authority-runtime
+    entrypoint:
+      - /runtime/python/bin/python3
+      - -I
+      - -P
+      - -s
+      - -S
+      - /runtime/authority-bootstrap/authority_fd_entrypoint.py
+      - runtime
+    command: []
+    volumes:
+      - ${SERVERWARE_AUTHORITY_RUNTIME_SOCKET_DIR:?provision runtime relay socket directory uid 65524 gid 65524}:/run/serverware/authority-runtime
+      - ${SERVERWARE_AUTHORITY_VERIFIER_SOCKET_DIR:?provision verifier socket directory uid 65520 gid 65520}:/run/serverware/authority-verifier
+      - ${SERVERWARE_AUTHORITY_LAUNCH_ROOT_PUBLIC_KEY:?set launch root public key}:/run/secrets/serverware-authority-launch-root-public-key:ro
+      - ${SERVERWARE_AUTHORITY_RUNTIME_LAUNCH_MANIFEST:?set signed runtime relay launch manifest}:/run/secrets/serverware-authority-runtime-launch-manifest:ro
+      - ${SERVERWARE_AUTHORITY_RUNTIME_ROOT_PUBLIC_KEY:?set runtime trust root public key}:/run/secrets/serverware-authority-runtime-root-public-key:ro
+      - ${SERVERWARE_AUTHORITY_RUNTIME_TRUST:?set signed runtime relay trust}:/run/secrets/serverware-authority-runtime-trust:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+    healthcheck:
+      test:
+        - CMD
+        - /runtime/python/bin/python3
+        - -I
+        - -P
+        - -s
+        - -S
+        - /runtime/authority-bootstrap/authority_fd_entrypoint.py
+        - socket-health
+        - runtime
+      interval: 1s
+      timeout: 2s
+      retries: 30
+      start_period: 1s
+    depends_on:
+      policy-authority-verifier:
+        condition: service_healthy
+    restart: on-failure
+
+  policy-authority-verifier:
+    image: ${SERVERWARE_CONTROL_PLANE_IMAGE:?set immutable control-plane image digest ref}
+    user: "0:0"
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - DAC_OVERRIDE
+      - SETGID
+      - SETUID
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./security/seccomp/serverware-deny-dangerous.json
+    pids_limit: 128
+    mem_limit: 512m
+    environment:
+      SERVERWARE_PROCESS_MODE: policy-authority-verifier
+    entrypoint:
+      - /runtime/python/bin/python3
+      - -I
+      - -P
+      - -s
+      - -S
+      - /runtime/authority-bootstrap/authority_fd_entrypoint.py
+      - verifier
+    command: []
+    volumes:
+      - ${SERVERWARE_AUTHORITY_VERIFIER_SOCKET_DIR:?provision verifier socket directory uid 65520 gid 65520}:/run/serverware/authority-verifier
+      - ${SERVERWARE_AUTHORITY_ISSUER_SOCKET_DIR:?provision issuer socket directory uid 65521 gid 65521}:/run/serverware/authority-issuer
+      - ${SERVERWARE_AUTHORITY_EXECUTOR_SOCKET_DIR:?provision executor socket directory uid 65522 gid 65522}:/run/serverware/authority-executor
+      - ${SERVERWARE_EXTERNAL_AUTHORITY_WITNESS_SOCKET_DIR:?mount external witness socket directory uid 65523 gid 65523}:/run/serverware/authority-witness:ro
+      - ${SERVERWARE_AUTHORITY_LAUNCH_ROOT_PUBLIC_KEY:?set launch root public key}:/run/secrets/serverware-authority-launch-root-public-key:ro
+      - ${SERVERWARE_AUTHORITY_VERIFIER_LAUNCH_MANIFEST:?set signed verifier launch manifest}:/run/secrets/serverware-authority-verifier-launch-manifest:ro
+      - ${SERVERWARE_AUTHORITY_ROOT_PUBLIC_KEY:?set authority root public key}:/run/secrets/serverware-authority-root-public-key:ro
+      - ${SERVERWARE_AUTHORITY_CONFIG:?set shared signed authority configuration with per-role launch and closure maps}:/run/secrets/serverware-authority-verifier-config:ro
+      - ${SERVERWARE_AUTHORITY_VERIFIER_ATTESTATION:?set verifier credential-release attestation}:/run/secrets/serverware-authority-verifier-attestation:ro
+      - ${SERVERWARE_AUTHORITY_VERIFIER_SIGNING_KEY:?set verifier signing key}:/run/secrets/serverware-authority-verifier-signing-key:ro
+      - ${SERVERWARE_AUTHORITY_VERIFIER_RELEASE_CONSUMER_SIGNING_KEY:?set verifier release-consumer signing key}:/run/secrets/serverware-authority-verifier-release-consumer-signing-key:ro
+      - ${SERVERWARE_AUTHORITY_VERIFIER_READ_DSN_FILE:?set SELECT-only verifier DSN file}:/run/secrets/serverware-authority-verifier-read-dsn:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=32m
+    networks:
+      - authority-db
+    healthcheck:
+      test:
+        - CMD
+        - /runtime/python/bin/python3
+        - -I
+        - -P
+        - -s
+        - -S
+        - /runtime/authority-bootstrap/authority_fd_entrypoint.py
+        - socket-health
+        - verifier
+        - witness
+      interval: 1s
+      timeout: 2s
+      retries: 30
+      start_period: 1s
+    depends_on:
+      policy-authority-issuer:
+        condition: service_healthy
+      policy-authority-executor:
+        condition: service_healthy
+      policy-authority-external-witness-ready:
+        condition: service_completed_successfully
+    restart: "no"
+
+  policy-authority-issuer:
+    image: ${SERVERWARE_CONTROL_PLANE_IMAGE:?set immutable control-plane image digest ref}
+    user: "0:0"
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - DAC_OVERRIDE
+      - SETGID
+      - SETUID
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./security/seccomp/serverware-deny-dangerous.json
+    pids_limit: 64
+    mem_limit: 384m
+    environment:
+      SERVERWARE_PROCESS_MODE: policy-authority-issuer
+    entrypoint:
+      - /runtime/python/bin/python3
+      - -I
+      - -P
+      - -s
+      - -S
+      - /runtime/authority-bootstrap/authority_fd_entrypoint.py
+      - issuer
+    command: []
+    volumes:
+      - ${SERVERWARE_AUTHORITY_ISSUER_SOCKET_DIR:?provision issuer socket directory uid 65521 gid 65521}:/run/serverware/authority-issuer
+      - ${SERVERWARE_EXTERNAL_AUTHORITY_WITNESS_SOCKET_DIR:?mount external witness socket directory uid 65523 gid 65523}:/run/serverware/authority-witness:ro
+      - ${SERVERWARE_AUTHORITY_LAUNCH_ROOT_PUBLIC_KEY:?set launch root public key}:/run/secrets/serverware-authority-launch-root-public-key:ro
+      - ${SERVERWARE_AUTHORITY_ISSUER_LAUNCH_MANIFEST:?set signed issuer launch manifest}:/run/secrets/serverware-authority-issuer-launch-manifest:ro
+      - ${SERVERWARE_AUTHORITY_ROOT_PUBLIC_KEY:?set authority root public key}:/run/secrets/serverware-authority-root-public-key:ro
+      - ${SERVERWARE_AUTHORITY_CONFIG:?set shared signed authority configuration with per-role launch and closure maps}:/run/secrets/serverware-authority-issuer-config:ro
+      - ${SERVERWARE_AUTHORITY_ISSUER_ATTESTATION:?set issuer credential-release attestation}:/run/secrets/serverware-authority-issuer-attestation:ro
+      - ${SERVERWARE_AUTHORITY_ISSUER_RELEASE_CONSUMER_SIGNING_KEY:?set issuer release-consumer signing key}:/run/secrets/serverware-authority-issuer-release-consumer-signing-key:ro
+      - ${SERVERWARE_AUTHORITY_ISSUER_DSN_FILE:?set capability issuer DSN file}:/run/secrets/serverware-authority-issuer-dsn:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=32m
+    networks:
+      - authority-db
+    healthcheck:
+      test:
+        - CMD
+        - /runtime/python/bin/python3
+        - -I
+        - -P
+        - -s
+        - -S
+        - /runtime/authority-bootstrap/authority_fd_entrypoint.py
+        - socket-health
+        - issuer
+        - witness
+      interval: 1s
+      timeout: 2s
+      retries: 30
+      start_period: 1s
+    depends_on:
+      policy-authority-external-witness-ready:
+        condition: service_completed_successfully
+    restart: "no"
+
+  policy-authority-executor:
+    image: ${SERVERWARE_CONTROL_PLANE_IMAGE:?set immutable control-plane image digest ref}
+    user: "0:0"
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - DAC_OVERRIDE
+      - SETGID
+      - SETUID
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./security/seccomp/serverware-deny-dangerous.json
+    pids_limit: 128
+    mem_limit: 512m
+    environment:
+      SERVERWARE_PROCESS_MODE: policy-authority-executor
+    entrypoint:
+      - /runtime/python/bin/python3
+      - -I
+      - -P
+      - -s
+      - -S
+      - /runtime/authority-bootstrap/authority_fd_entrypoint.py
+      - executor
+    command: []
+    volumes:
+      - ${SERVERWARE_AUTHORITY_EXECUTOR_SOCKET_DIR:?provision executor socket directory uid 65522 gid 65522}:/run/serverware/authority-executor
+      - ${SERVERWARE_EXTERNAL_AUTHORITY_WITNESS_SOCKET_DIR:?mount external witness socket directory uid 65523 gid 65523}:/run/serverware/authority-witness:ro
+      - ${SERVERWARE_AUTHORITY_LAUNCH_ROOT_PUBLIC_KEY:?set launch root public key}:/run/secrets/serverware-authority-launch-root-public-key:ro
+      - ${SERVERWARE_AUTHORITY_EXECUTOR_LAUNCH_MANIFEST:?set signed executor launch manifest}:/run/secrets/serverware-authority-executor-launch-manifest:ro
+      - ${SERVERWARE_AUTHORITY_ROOT_PUBLIC_KEY:?set authority root public key}:/run/secrets/serverware-authority-root-public-key:ro
+      - ${SERVERWARE_AUTHORITY_CONFIG:?set shared signed authority configuration with per-role launch and closure maps}:/run/secrets/serverware-authority-executor-config:ro
+      - ${SERVERWARE_AUTHORITY_EXECUTOR_ATTESTATION:?set executor credential-release attestation}:/run/secrets/serverware-authority-executor-attestation:ro
+      - ${SERVERWARE_AUTHORITY_EXECUTOR_RELEASE_CONSUMER_SIGNING_KEY:?set executor release-consumer signing key}:/run/secrets/serverware-authority-executor-release-consumer-signing-key:ro
+      - ${SERVERWARE_AUTHORITY_EXECUTOR_DSN_FILE:?set executor DSN file}:/run/secrets/serverware-authority-executor-dsn:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=32m
+    networks:
+      - authority-db
+    healthcheck:
+      test:
+        - CMD
+        - /runtime/python/bin/python3
+        - -I
+        - -P
+        - -s
+        - -S
+        - /runtime/authority-bootstrap/authority_fd_entrypoint.py
+        - socket-health
+        - executor
+        - witness
+      interval: 1s
+      timeout: 2s
+      retries: 30
+      start_period: 1s
+    depends_on:
+      policy-authority-external-witness-ready:
+        condition: service_completed_successfully
+    restart: "no"
+
+  policy-authority-external-witness-ready:
+    image: ${SERVERWARE_CONTROL_PLANE_IMAGE:?set immutable control-plane image digest ref}
+    user: "65520:65520"
+    group_add:
+      - "65523"
+    read_only: true
+    network_mode: none
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./security/seccomp/serverware-deny-dangerous.json
+    pids_limit: 16
+    mem_limit: 64m
+    entrypoint:
+      - /runtime/python/bin/python3
+      - -I
+      - -P
+      - -s
+      - -S
+      - /runtime/authority-bootstrap/authority_fd_entrypoint.py
+      - socket-health
+      - witness
+    command: []
+    volumes:
+      - ${SERVERWARE_EXTERNAL_AUTHORITY_WITNESS_SOCKET_DIR:?mount externally operated witness socket directory uid 65523 gid 65523}:/run/serverware/authority-witness:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=4m
+    restart: "no"
 
   audit-anchor:
     image: ${SERVERWARE_CONTROL_PLANE_IMAGE:?set immutable control-plane image digest ref}
@@ -287,11 +613,409 @@ services:
         condition: service_healthy
     restart: on-failure
 
+  response-v2-generation-bootstrap:
+    image: ${SERVERWARE_DECISION_GATE_IMAGE:?set immutable decision-gate image digest ref}
+    user: "65521:65519"
+    init: true
+    read_only: true
+    network_mode: none
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=${SERVERWARE_RESPONSE_OBSERVATION_V2_SECCOMP_PROFILE:?set response-v2 service seccomp profile}
+      - apparmor=${SERVERWARE_RESPONSE_OBSERVATION_V2_APPARMOR_PROFILE:?set response-v2 service AppArmor profile}
+    pids_limit: 32
+    mem_limit: 128m
+    ulimits:
+      core: {soft: 0, hard: 0}
+    entrypoint: ["/usr/local/bin/serverware-response-observation-v2-custody"]
+    command: ["--bootstrap-generation", "--config", "/run/serverware-response-v2/config/custody.json"]
+    environment:
+      CREDENTIALS_DIRECTORY: /run/credentials/serverware-response-v2-generation-bootstrap
+      SERVERWARE_RESPONSE_V2_PROVIDER_GENERATION_SHA256: ${SERVERWARE_RESPONSE_V2_PROVIDER_GENERATION_SHA256:?set verified provider-generation digest}
+      SERVERWARE_RESPONSE_V2_CGROUP_ROOT: /sys/fs/cgroup/serverware-response-v2
+    volumes:
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_STATE_DATA_DIR:?set pre-owned state-authority data directory}:/var/lib/serverware-response-v2/state-authority
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_LEDGER_DATA_DIR:?set immutable-ledger data directory}:/var/lib/serverware-response-v2/immutable-artifact-ledger:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_PUBLIC_CONFIG_DIR:?set signed public response-v2 generation directory}:/run/serverware-response-v2/config:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_BOOTSTRAP_KEY_DIR:?set one-shot generation bootstrap credential directory}:/run/credentials/serverware-response-v2-generation-bootstrap:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_POSTGRES_SOCKET_DIR:?set PostgreSQL Unix-socket directory}:/run/postgresql:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_CGROUP_ROOT:?set delegated response-v2 cgroup root}:/sys/fs/cgroup/serverware-response-v2:ro
+    cgroup: host
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=8m
+    restart: "no"
+
+  response-v2-state-authority:
+    image: ${SERVERWARE_DECISION_GATE_IMAGE:?set immutable decision-gate image digest ref}
+    user: "65521:65519"
+    init: true
+    read_only: true
+    network_mode: none
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=${SERVERWARE_RESPONSE_OBSERVATION_V2_SECCOMP_PROFILE:?set response-v2 service seccomp profile}
+      - apparmor=${SERVERWARE_RESPONSE_OBSERVATION_V2_APPARMOR_PROFILE:?set response-v2 service AppArmor profile}
+    pids_limit: 64
+    mem_limit: 256m
+    ulimits:
+      core: {soft: 0, hard: 0}
+    entrypoint: ["/usr/local/bin/serverware-response-observation-v2-custody"]
+    command: ["--service", "state-authority", "--config", "/run/serverware-response-v2/config/custody.json"]
+    environment:
+      CREDENTIALS_DIRECTORY: /run/credentials/serverware-response-v2-state-authority
+      SERVERWARE_RESPONSE_V2_GENERATION_PUBLIC_CREDENTIALS_DIRECTORY: /run/credentials/serverware-response-v2-generation-public
+      SERVERWARE_RESPONSE_V2_PROVIDER_GENERATION_SHA256: ${SERVERWARE_RESPONSE_V2_PROVIDER_GENERATION_SHA256:?set verified provider-generation digest}
+      SERVERWARE_RESPONSE_V2_CGROUP_ROOT: /sys/fs/cgroup/serverware-response-v2
+      SERVERWARE_RESPONSE_V2_GENERATION_ACTIVATION_TIMEOUT_MS: ${SERVERWARE_RESPONSE_V2_GENERATION_ACTIVATION_TIMEOUT_MS:-300000}
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/serverware-response-observation-v2-custody", "--service", "state-authority", "--config", "/run/serverware-response-v2/config/custody.json", "--check-readiness"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    volumes:
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_STATE_SOCKET_DIR:?set pre-owned state-authority socket directory}:/run/serverware-response-v2/state
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_STATE_DATA_DIR:?set pre-owned state-authority data directory}:/var/lib/serverware-response-v2/state-authority
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_PUBLIC_CONFIG_DIR:?set signed public response-v2 generation directory}:/run/serverware-response-v2/config:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_STATE_KEY_DIR:?set state-authority credential directory}:/run/credentials/serverware-response-v2-state-authority:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_GENERATION_PUBLIC_CREDENTIAL_DIR:?set public generation and trust-anchor credential directory}:/run/credentials/serverware-response-v2-generation-public:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_POSTGRES_SOCKET_DIR:?set PostgreSQL Unix-socket directory}:/run/postgresql:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_CGROUP_ROOT:?set delegated response-v2 cgroup root}:/sys/fs/cgroup/serverware-response-v2:ro
+    cgroup: host
+    depends_on:
+      response-v2-generation-bootstrap:
+        condition: service_completed_successfully
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+    restart: on-failure
+
+  response-v2-credential-transport:
+    image: ${SERVERWARE_DECISION_GATE_IMAGE:?set immutable decision-gate image digest ref}
+    user: "65522:65519"
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=${SERVERWARE_RESPONSE_OBSERVATION_V2_SECCOMP_PROFILE:?set response-v2 service seccomp profile}
+      - apparmor=${SERVERWARE_RESPONSE_OBSERVATION_V2_APPARMOR_PROFILE:?set response-v2 service AppArmor profile}
+    pids_limit: 64
+    mem_limit: 256m
+    ulimits:
+      core: {soft: 0, hard: 0}
+    entrypoint: ["/usr/local/bin/serverware-response-observation-v2-custody"]
+    command: ["--service", "credential-transport", "--config", "/run/serverware-response-v2/config/custody.json"]
+    environment:
+      CREDENTIALS_DIRECTORY: /run/credentials/serverware-response-v2-credential-transport
+      SERVERWARE_RESPONSE_V2_GENERATION_ACTIVATION_TIMEOUT_MS: ${SERVERWARE_RESPONSE_V2_GENERATION_ACTIVATION_TIMEOUT_MS:-300000}
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/serverware-response-observation-v2-custody", "--service", "credential-transport", "--config", "/run/serverware-response-v2/config/custody.json", "--check-readiness"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    volumes:
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_CREDENTIAL_SOCKET_DIR:?set pre-owned credential-transport socket directory}:/run/serverware-response-v2/credential-transport
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_STATE_SOCKET_DIR:?set pre-owned state-authority socket directory}:/run/serverware-response-v2/state:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_CREDENTIAL_DATA_DIR:?set pre-owned credential-transport data directory}:/var/lib/serverware-response-v2/credential-transport
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_PUBLIC_CONFIG_DIR:?set signed public response-v2 generation directory}:/run/serverware-response-v2/config:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_CREDENTIAL_KEY_DIR:?set credential-transport credential directory}:/run/credentials/serverware-response-v2-credential-transport:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+    networks:
+      - response-v2-egress
+    depends_on:
+      response-v2-state-authority:
+        condition: service_healthy
+    restart: on-failure
+
+  response-v2-policy-proof-verifier:
+    image: ${SERVERWARE_DECISION_GATE_IMAGE:?set immutable decision-gate image digest ref}
+    user: "65523:65519"
+    init: true
+    read_only: true
+    network_mode: none
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=${SERVERWARE_RESPONSE_OBSERVATION_V2_SECCOMP_PROFILE:?set response-v2 service seccomp profile}
+      - apparmor=${SERVERWARE_RESPONSE_OBSERVATION_V2_APPARMOR_PROFILE:?set response-v2 service AppArmor profile}
+    pids_limit: 64
+    mem_limit: 192m
+    ulimits:
+      core: {soft: 0, hard: 0}
+    entrypoint: ["/usr/local/bin/serverware-response-observation-v2-custody"]
+    command: ["--service", "policy-proof-verifier", "--config", "/run/serverware-response-v2/config/custody.json"]
+    environment:
+      CREDENTIALS_DIRECTORY: /run/credentials/serverware-response-v2-policy-proof-verifier
+      SERVERWARE_RESPONSE_V2_GENERATION_ACTIVATION_TIMEOUT_MS: ${SERVERWARE_RESPONSE_V2_GENERATION_ACTIVATION_TIMEOUT_MS:-300000}
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/serverware-response-observation-v2-custody", "--service", "policy-proof-verifier", "--config", "/run/serverware-response-v2/config/custody.json", "--check-readiness"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    volumes:
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_POLICY_SOCKET_DIR:?set pre-owned policy-proof-verifier socket directory}:/run/serverware-response-v2/policy-proof-verifier
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_STATE_SOCKET_DIR:?set pre-owned state-authority socket directory}:/run/serverware-response-v2/state:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_POLICY_DATA_DIR:?set pre-owned policy-proof-verifier data directory}:/var/lib/serverware-response-v2/policy-proof-verifier
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_PUBLIC_CONFIG_DIR:?set signed public response-v2 generation directory}:/run/serverware-response-v2/config:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_POLICY_KEY_DIR:?set policy-proof-verifier credential directory}:/run/credentials/serverware-response-v2-policy-proof-verifier:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+    depends_on:
+      response-v2-state-authority:
+        condition: service_healthy
+    restart: on-failure
+
+  response-v2-immutable-artifact-ledger:
+    image: ${SERVERWARE_DECISION_GATE_IMAGE:?set immutable decision-gate image digest ref}
+    user: "65524:65519"
+    init: true
+    read_only: true
+    network_mode: none
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=${SERVERWARE_RESPONSE_OBSERVATION_V2_SECCOMP_PROFILE:?set response-v2 service seccomp profile}
+      - apparmor=${SERVERWARE_RESPONSE_OBSERVATION_V2_APPARMOR_PROFILE:?set response-v2 service AppArmor profile}
+    pids_limit: 64
+    mem_limit: 256m
+    ulimits:
+      core: {soft: 0, hard: 0}
+    entrypoint: ["/usr/local/bin/serverware-response-observation-v2-custody"]
+    command: ["--service", "immutable-artifact-ledger", "--config", "/run/serverware-response-v2/config/custody.json"]
+    environment:
+      CREDENTIALS_DIRECTORY: /run/credentials/serverware-response-v2-immutable-artifact-ledger
+      SERVERWARE_RESPONSE_V2_GENERATION_ACTIVATION_TIMEOUT_MS: ${SERVERWARE_RESPONSE_V2_GENERATION_ACTIVATION_TIMEOUT_MS:-300000}
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/serverware-response-observation-v2-custody", "--service", "immutable-artifact-ledger", "--config", "/run/serverware-response-v2/config/custody.json", "--check-readiness"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    volumes:
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_LEDGER_SOCKET_DIR:?set pre-owned immutable-ledger socket directory}:/run/serverware-response-v2/immutable-artifact-ledger
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_STATE_SOCKET_DIR:?set pre-owned state-authority socket directory}:/run/serverware-response-v2/state:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_LEDGER_DATA_DIR:?set pre-owned immutable-ledger data directory}:/var/lib/serverware-response-v2/immutable-artifact-ledger
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_PUBLIC_CONFIG_DIR:?set signed public response-v2 generation directory}:/run/serverware-response-v2/config:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_LEDGER_KEY_DIR:?set immutable-ledger credential directory}:/run/credentials/serverware-response-v2-immutable-artifact-ledger:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+    depends_on:
+      response-v2-state-authority:
+        condition: service_healthy
+    restart: on-failure
+
+  response-v2-release-attestor-publisher:
+    image: ${SERVERWARE_DECISION_GATE_IMAGE:?set immutable decision-gate image digest ref}
+    user: "65525:65519"
+    init: true
+    read_only: true
+    network_mode: none
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=${SERVERWARE_RESPONSE_OBSERVATION_V2_SECCOMP_PROFILE:?set response-v2 service seccomp profile}
+      - apparmor=${SERVERWARE_RESPONSE_OBSERVATION_V2_APPARMOR_PROFILE:?set response-v2 service AppArmor profile}
+    pids_limit: 64
+    mem_limit: 192m
+    ulimits:
+      core: {soft: 0, hard: 0}
+    entrypoint: ["/usr/local/bin/serverware-response-observation-v2-custody"]
+    command: ["--service", "release-attestor-publisher", "--config", "/run/serverware-response-v2/config/custody.json"]
+    environment:
+      CREDENTIALS_DIRECTORY: /run/credentials/serverware-response-v2-release-attestor-publisher
+      SERVERWARE_RESPONSE_V2_GENERATION_ACTIVATION_TIMEOUT_MS: ${SERVERWARE_RESPONSE_V2_GENERATION_ACTIVATION_TIMEOUT_MS:-300000}
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/serverware-response-observation-v2-custody", "--service", "release-attestor-publisher", "--config", "/run/serverware-response-v2/config/custody.json", "--check-readiness"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    volumes:
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_RELEASE_SOCKET_DIR:?set pre-owned release-attestor socket directory}:/run/serverware-response-v2/release-attestor-publisher
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_STATE_SOCKET_DIR:?set pre-owned state-authority socket directory}:/run/serverware-response-v2/state:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_RELEASE_DATA_DIR:?set pre-owned release-attestor data directory}:/var/lib/serverware-response-v2/release-attestor-publisher
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_PUBLIC_CONFIG_DIR:?set signed public response-v2 generation directory}:/run/serverware-response-v2/config:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_RELEASE_KEY_DIR:?set release-attestor credential directory}:/run/credentials/serverware-response-v2-release-attestor-publisher:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+    depends_on:
+      response-v2-state-authority:
+        condition: service_healthy
+      response-v2-policy-proof-verifier:
+        condition: service_healthy
+      response-v2-immutable-artifact-ledger:
+        condition: service_healthy
+    restart: on-failure
+
+  response-v2-cleanup-watchdog:
+    image: ${SERVERWARE_DECISION_GATE_IMAGE:?set immutable decision-gate image digest ref}
+    user: "65526:65519"
+    init: true
+    read_only: true
+    network_mode: none
+    cgroup: host
+    cap_drop: [ALL]
+    cap_add: [KILL]
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=${SERVERWARE_RESPONSE_OBSERVATION_V2_SECCOMP_PROFILE:?set response-v2 service seccomp profile}
+      - apparmor=${SERVERWARE_RESPONSE_OBSERVATION_V2_APPARMOR_PROFILE:?set response-v2 service AppArmor profile}
+    pids_limit: 64
+    mem_limit: 128m
+    ulimits:
+      core: {soft: 0, hard: 0}
+    entrypoint: ["/usr/local/bin/serverware-response-observation-v2-custody"]
+    command: ["--service", "cleanup-watchdog", "--config", "/run/serverware-response-v2/config/custody.json"]
+    environment:
+      CREDENTIALS_DIRECTORY: /run/credentials/serverware-response-v2-cleanup-watchdog
+      SERVERWARE_RESPONSE_V2_GENERATION_ACTIVATION_TIMEOUT_MS: ${SERVERWARE_RESPONSE_V2_GENERATION_ACTIVATION_TIMEOUT_MS:-300000}
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/serverware-response-observation-v2-custody", "--service", "cleanup-watchdog", "--config", "/run/serverware-response-v2/config/custody.json", "--check-readiness"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    volumes:
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_WATCHDOG_SOCKET_DIR:?set pre-owned cleanup-watchdog socket directory}:/run/serverware-response-v2/cleanup-watchdog
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_STATE_SOCKET_DIR:?set pre-owned state-authority socket directory}:/run/serverware-response-v2/state:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_WATCHDOG_DATA_DIR:?set pre-owned cleanup-watchdog data directory}:/var/lib/serverware-response-v2/cleanup-watchdog
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_PUBLIC_CONFIG_DIR:?set signed public response-v2 generation directory}:/run/serverware-response-v2/config:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_WATCHDOG_KEY_DIR:?set cleanup-watchdog credential directory}:/run/credentials/serverware-response-v2-cleanup-watchdog:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_CGROUP_ROOT:?set delegated response-v2 cgroup root}:/sys/fs/cgroup/serverware-response-v2
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+    depends_on:
+      response-v2-state-authority:
+        condition: service_healthy
+    restart: on-failure
+
+  response-v2-custody-router:
+    image: ${SERVERWARE_DECISION_GATE_IMAGE:?set immutable decision-gate image digest ref}
+    user: "65520:65519"
+    init: true
+    read_only: true
+    network_mode: none
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=${SERVERWARE_RESPONSE_OBSERVATION_V2_SECCOMP_PROFILE:?set response-v2 service seccomp profile}
+      - apparmor=${SERVERWARE_RESPONSE_OBSERVATION_V2_APPARMOR_PROFILE:?set response-v2 service AppArmor profile}
+    pids_limit: 64
+    mem_limit: 192m
+    ulimits:
+      core: {soft: 0, hard: 0}
+    entrypoint: ["/usr/local/bin/serverware-response-observation-v2-custody"]
+    command: ["--service", "custody-router", "--config", "/run/serverware-response-v2/config/custody.json"]
+    environment:
+      CREDENTIALS_DIRECTORY: /run/credentials/serverware-response-v2-custody-router
+      SERVERWARE_RESPONSE_V2_GENERATION_ACTIVATION_TIMEOUT_MS: ${SERVERWARE_RESPONSE_V2_GENERATION_ACTIVATION_TIMEOUT_MS:-300000}
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/serverware-response-observation-v2-custody", "--service", "custody-router", "--config", "/run/serverware-response-v2/config/custody.json", "--check-readiness"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    volumes:
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_ROUTER_SOCKET_DIR:?set pre-owned custody-router socket directory}:/run/serverware-response-v2/router
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_STATE_SOCKET_DIR:?set pre-owned state-authority socket directory}:/run/serverware-response-v2/state:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_CREDENTIAL_SOCKET_DIR:?set pre-owned credential-transport socket directory}:/run/serverware-response-v2/credential-transport:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_POLICY_SOCKET_DIR:?set pre-owned policy-proof-verifier socket directory}:/run/serverware-response-v2/policy-proof-verifier:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_LEDGER_SOCKET_DIR:?set pre-owned immutable-ledger socket directory}:/run/serverware-response-v2/immutable-artifact-ledger:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_RELEASE_SOCKET_DIR:?set pre-owned release-attestor socket directory}:/run/serverware-response-v2/release-attestor-publisher:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_WATCHDOG_SOCKET_DIR:?set pre-owned cleanup-watchdog socket directory}:/run/serverware-response-v2/cleanup-watchdog:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_ROUTER_DATA_DIR:?set pre-owned custody-router data directory}:/var/lib/serverware-response-v2/custody-router
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_STATE_DATA_DIR:?set pre-owned state-authority data directory}:/var/lib/serverware-response-v2/state-authority:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_CREDENTIAL_DATA_DIR:?set pre-owned credential-transport data directory}:/var/lib/serverware-response-v2/credential-transport:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_POLICY_DATA_DIR:?set pre-owned policy-proof-verifier data directory}:/var/lib/serverware-response-v2/policy-proof-verifier:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_LEDGER_DATA_DIR:?set immutable-ledger data directory}:/var/lib/serverware-response-v2/immutable-artifact-ledger:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_RELEASE_DATA_DIR:?set pre-owned release-attestor data directory}:/var/lib/serverware-response-v2/release-attestor-publisher:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_WATCHDOG_DATA_DIR:?set pre-owned cleanup-watchdog data directory}:/var/lib/serverware-response-v2/cleanup-watchdog:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_PUBLIC_CONFIG_DIR:?set signed public response-v2 generation directory}:/run/serverware-response-v2/config:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_ROUTER_KEY_DIR:?set custody-router readiness/topology credential directory}:/run/credentials/serverware-response-v2-custody-router:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+    depends_on:
+      response-v2-state-authority:
+        condition: service_healthy
+      response-v2-credential-transport:
+        condition: service_healthy
+      response-v2-policy-proof-verifier:
+        condition: service_healthy
+      response-v2-immutable-artifact-ledger:
+        condition: service_healthy
+      response-v2-release-attestor-publisher:
+        condition: service_healthy
+      response-v2-cleanup-watchdog:
+        condition: service_healthy
+    restart: on-failure
+
+  response-v2-generation-activation:
+    image: ${SERVERWARE_DECISION_GATE_IMAGE:?set immutable decision-gate image digest ref}
+    user: "65521:65519"
+    init: true
+    read_only: true
+    network_mode: none
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=${SERVERWARE_RESPONSE_OBSERVATION_V2_SECCOMP_PROFILE:?set response-v2 service seccomp profile}
+      - apparmor=${SERVERWARE_RESPONSE_OBSERVATION_V2_APPARMOR_PROFILE:?set response-v2 service AppArmor profile}
+    pids_limit: 32
+    mem_limit: 192m
+    ulimits:
+      core: {soft: 0, hard: 0}
+    entrypoint: ["/usr/local/bin/serverware-response-observation-v2-custody"]
+    command: ["--activate-generation", "--config", "/run/serverware-response-v2/config/custody.json"]
+    environment:
+      CREDENTIALS_DIRECTORY: /run/credentials/serverware-response-v2-generation-bootstrap
+      SERVERWARE_RESPONSE_V2_PROVIDER_GENERATION_SHA256: ${SERVERWARE_RESPONSE_V2_PROVIDER_GENERATION_SHA256:?set verified provider-generation digest}
+      SERVERWARE_RESPONSE_V2_CGROUP_ROOT: /sys/fs/cgroup/serverware-response-v2
+      SERVERWARE_RESPONSE_V2_GENERATION_ACTIVATION_TIMEOUT_MS: ${SERVERWARE_RESPONSE_V2_GENERATION_ACTIVATION_TIMEOUT_MS:-300000}
+    volumes:
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_STATE_SOCKET_DIR:?set pre-owned state-authority socket directory}:/run/serverware-response-v2/state
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_CREDENTIAL_SOCKET_DIR:?set pre-owned credential-transport socket directory}:/run/serverware-response-v2/credential-transport:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_POLICY_SOCKET_DIR:?set pre-owned policy-proof-verifier socket directory}:/run/serverware-response-v2/policy-proof-verifier:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_LEDGER_SOCKET_DIR:?set pre-owned immutable-ledger socket directory}:/run/serverware-response-v2/immutable-artifact-ledger:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_RELEASE_SOCKET_DIR:?set pre-owned release-attestor socket directory}:/run/serverware-response-v2/release-attestor-publisher:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_WATCHDOG_SOCKET_DIR:?set pre-owned cleanup-watchdog socket directory}:/run/serverware-response-v2/cleanup-watchdog:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_ROUTER_SOCKET_DIR:?set pre-owned custody-router socket directory}:/run/serverware-response-v2/router:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_STATE_DATA_DIR:?set pre-owned state-authority data directory}:/var/lib/serverware-response-v2/state-authority
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_CREDENTIAL_DATA_DIR:?set pre-owned credential-transport data directory}:/var/lib/serverware-response-v2/credential-transport:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_POLICY_DATA_DIR:?set pre-owned policy-proof-verifier data directory}:/var/lib/serverware-response-v2/policy-proof-verifier:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_LEDGER_DATA_DIR:?set immutable-ledger data directory}:/var/lib/serverware-response-v2/immutable-artifact-ledger:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_RELEASE_DATA_DIR:?set pre-owned release-attestor data directory}:/var/lib/serverware-response-v2/release-attestor-publisher:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_WATCHDOG_DATA_DIR:?set pre-owned cleanup-watchdog data directory}:/var/lib/serverware-response-v2/cleanup-watchdog:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_ROUTER_DATA_DIR:?set pre-owned custody-router data directory}:/var/lib/serverware-response-v2/custody-router:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_PUBLIC_CONFIG_DIR:?set signed public response-v2 generation directory}:/run/serverware-response-v2/config:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_BOOTSTRAP_KEY_DIR:?set one-shot generation bootstrap credential directory}:/run/credentials/serverware-response-v2-generation-bootstrap:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_POSTGRES_SOCKET_DIR:?set PostgreSQL Unix-socket directory}:/run/postgresql:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_CGROUP_ROOT:?set delegated response-v2 cgroup root}:/sys/fs/cgroup/serverware-response-v2:ro
+    cgroup: host
+    depends_on:
+      response-v2-custody-router:
+        condition: service_healthy
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=8m
+    restart: "no"
+
   decision-gate-rs:
     image: ${SERVERWARE_DECISION_GATE_IMAGE:?set immutable decision-gate image digest ref}
+    network_mode: "service:serverware"
     user: "65532:65532"
     group_add:
+      - "65519"
+      - "${SERVERWARE_POLICY_CUSTODY_DRIVER_GID:?set host swpc-driver group ID}"
       - "65530"
+    labels:
+      # Informational only. Signed trust and attestation evidence remain the
+      # authority; the host custody services do not become a TEE by association.
+      dev.serverware.policy-shadow-runtime-attestation-class: tee-hardware
+      dev.serverware.policy-custody-assurance-class: trusted-host-no-tee
     init: true
     read_only: true
     cap_drop:
@@ -319,6 +1043,33 @@ services:
       SERVERWARE_RESPONSE_PROOF_CUSTODY_SOCKET: /run/serverware-custody/custody.sock
       SERVERWARE_RESPONSE_PROOF_CUSTODY_EXPECTED_UID: "65531"
       SERVERWARE_RESPONSE_PROOF_CUSTODY_STARTUP_TIMEOUT_MS: "30000"
+      SERVERWARE_RESPONSE_OBSERVATION_V2_SOCKET: /run/serverware-response-v2/router/custody.sock
+      SERVERWARE_RESPONSE_OBSERVATION_V2_EXPECTED_UID: "65520"
+      SERVERWARE_RESPONSE_OBSERVATION_V2_STARTUP_TIMEOUT_MS: "30000"
+      SERVERWARE_RESPONSE_OBSERVATION_V2_ATTESTATION_MODE: tee-hardware
+      SERVERWARE_RESPONSE_OBSERVATION_V2_TEE_VERIFY_COMMAND: ${SERVERWARE_RESPONSE_OBSERVATION_V2_TEE_VERIFY_COMMAND:?set external response-v2 TEE verifier command}
+      SERVERWARE_RESPONSE_V2_TEE_EXPECTATIONS_FILE: /run/serverware/response-v2-tee/expectations.json
+      SERVERWARE_RESPONSE_V2_TEE_EXPECTATIONS_SHA256: ${SERVERWARE_RESPONSE_V2_TEE_EXPECTATIONS_SHA256:?set independently pinned response-v2 TEE expectations SHA-256}
+      SERVERWARE_RESPONSE_V2_NITRO_TRUST_ROOTS_FILE: /run/serverware/response-v2-tee/nitro-trust-roots.json
+      SERVERWARE_RESPONSE_V2_NITRO_TRUST_ROOTS_SHA256: ${SERVERWARE_RESPONSE_V2_NITRO_TRUST_ROOTS_SHA256:?set independently pinned response-v2 Nitro trust-roots SHA-256}
+      SERVERWARE_RESPONSE_OBSERVATION_V2_TEE_TOPOLOGY_PROFILE: ${SERVERWARE_RESPONSE_OBSERVATION_V2_TEE_TOPOLOGY_PROFILE:?set local-single-node-1-of-1 response-v2 TEE topology profile}
+      SERVERWARE_RESPONSE_OBSERVATION_V2_TRANSPARENCY_TRUST_PIN_JSON: ${SERVERWARE_RESPONSE_OBSERVATION_V2_TRANSPARENCY_TRUST_PIN_JSON:?set canonical independently pinned response-v2 release-log trust JSON}
+      SERVERWARE_RESPONSE_OBSERVATION_V2_GENERATION_ID: ${SERVERWARE_RESPONSE_OBSERVATION_V2_GENERATION_ID:?set signed response-v2 generation ID}
+      SERVERWARE_RESPONSE_OBSERVATION_V2_SOURCE_COMMIT_SHA256: ${SERVERWARE_RESPONSE_OBSERVATION_V2_SOURCE_COMMIT_SHA256:?set release-record source commit SHA-256}
+      SERVERWARE_RESPONSE_OBSERVATION_V2_SOURCE_TREE_SHA256: ${SERVERWARE_RESPONSE_OBSERVATION_V2_SOURCE_TREE_SHA256:?set release-record source tree SHA-256}
+      SERVERWARE_RESPONSE_OBSERVATION_V2_ROLE_KEYS_JSON: ${SERVERWARE_RESPONSE_OBSERVATION_V2_ROLE_KEYS_JSON:?set canonical public role-key manifest JSON}
+      SERVERWARE_RESPONSE_OBSERVATION_V2_SIGNER_KEY_SHA256: ${SERVERWARE_RESPONSE_OBSERVATION_V2_SIGNER_KEY_SHA256:?set pinned v2 response signer raw-key SHA-256}
+      SERVERWARE_RESPONSE_OBSERVATION_V2_ROLE_IDENTITY_ROOT_SHA256: ${SERVERWARE_RESPONSE_OBSERVATION_V2_ROLE_IDENTITY_ROOT_SHA256:?set pinned v2 role-identity root SHA-256}
+      SERVERWARE_RESPONSE_OBSERVATION_V2_PROOF_PINS_ROOT_SHA256: ${SERVERWARE_RESPONSE_OBSERVATION_V2_PROOF_PINS_ROOT_SHA256:?set pinned v2 proof-policy root SHA-256}
+      SERVERWARE_POLICY_SHADOW_TRUST_MANIFEST: /run/serverware/policy-shadow/generation/trust-manifest.json
+      SERVERWARE_POLICY_SHADOW_TRUST_MANIFEST_SHA256: ${SERVERWARE_POLICY_SHADOW_TRUST_MANIFEST_SHA256:?set independently approved policy-shadow trust-manifest SHA-256}
+      SERVERWARE_POLICY_SHADOW_RUNTIME_ATTESTATION_VERIFY_COMMAND: /opt/serverware/bin/policy-shadow-runtime-attestation-verify
+      SERVERWARE_POLICY_SHADOW_RUNTIME_ATTESTATION_VERIFIER_SHA256: ${SERVERWARE_POLICY_SHADOW_RUNTIME_ATTESTATION_VERIFIER_SHA256:?set hardware runtime-attestation verifier executable SHA-256}
+      SERVERWARE_POLICY_SHADOW_PUBLICATION_HANDOFF_COMMAND: /opt/serverware/bin/policy-shadow-publication-handoff
+      SERVERWARE_POLICY_SHADOW_PUBLICATION_HANDOFF_SHA256: ${SERVERWARE_POLICY_SHADOW_PUBLICATION_HANDOFF_SHA256:?set independently approved publication-handoff executable SHA-256}
+      SERVERWARE_POLICY_SHADOW_CUSTODY_CONFIG: /run/serverware/policy-shadow/generation/custody-config.json
+      SERVERWARE_POLICY_SHADOW_STARTUP_GENERATION: ${SERVERWARE_POLICY_SHADOW_STARTUP_GENERATION:-}
+      SERVERWARE_POLICY_SHADOW_STARTUP_GENERATION_SHA256: ${SERVERWARE_POLICY_SHADOW_STARTUP_GENERATION_SHA256:-}
       SERVERWARE_DATA_PLANE_INSTANCE_ID: ${SERVERWARE_DATA_PLANE_INSTANCE_ID:?set data-plane SPIFFE instance ID}
       SERVERWARE_MITM_CA_CERT: /run/serverware/gate/decision-gate-ca-cert.pem
       SERVERWARE_MITM_CA_KEY: /run/serverware/gate/decision-gate-ca-key.pem
@@ -335,6 +1086,10 @@ services:
       SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN_FILE: /run/secrets/serverware-data-plane-management-token
       SERVERWARE_DECISION_GATE_HOST: 0.0.0.0
       SERVERWARE_DECISION_GATE_PORT: "9090"
+      SERVERWARE_PROXY_INGRESS_MODE: mtls
+      SERVERWARE_PROXY_TLS_CERT: /run/serverware/proxy-ingress/server-cert.pem
+      SERVERWARE_PROXY_TLS_KEY: /run/serverware/proxy-ingress/server-key.pem
+      SERVERWARE_PROXY_CLIENT_CA_BUNDLE: /run/serverware/proxy-ingress/client-ca.pem
       SERVERWARE_DECISION_GATE_MANAGEMENT_HOST: 127.0.0.1
       SERVERWARE_DECISION_GATE_MANAGEMENT_PORT: "9091"
       SERVERWARE_RELEASE_PROVENANCE: /run/serverware/release/release-provenance.json
@@ -344,15 +1099,28 @@ services:
       SERVERWARE_POLICY_MIN_SEQUENCE: ${SERVERWARE_POLICY_MIN_SEQUENCE:?set signed minimum policy sequence}
       SERVERWARE_POLICY_MIN_ROLLBACK_EPOCH: ${SERVERWARE_POLICY_MIN_ROLLBACK_EPOCH:?set signed minimum policy rollback epoch}
       SERVERWARE_DECISION_GATE_PROXY_WORKERS: "16"
-    ports:
-      - "${SERVERWARE_PROXY_BIND_ADDRESS:?set explicit production proxy bind address}:8080:9090"
     volumes:
       - serverware-gate-materials:/run/serverware/gate:ro
       - serverware-gate-state:/var/lib/serverware
       - serverware-custody-socket:/run/serverware-custody:ro
+      - ${SERVERWARE_POLICY_SHADOW_TRUST_MANIFEST_FILE:?set root-owned immutable policy-shadow trust manifest}:/run/serverware/policy-shadow/generation/trust-manifest.json:ro
+      - ${SERVERWARE_POLICY_SHADOW_CUSTODY_CONFIG_FILE:?set root-owned immutable policy-shadow custody config}:/run/serverware/policy-shadow/generation/custody-config.json:ro
+      - ${SERVERWARE_POLICY_SHADOW_STARTUP_GENERATION_FILE:-/dev/null}:/run/serverware/policy-shadow/generation/startup-generation.json:ro
+      # The five policy-custody workers are systemd descriptor-only services.
+      # The trusted launcher renders their configs after measuring the live
+      # driver. Candidate activation stays unavailable until the target is READY.
+      - ${SERVERWARE_POLICY_CUSTODY_SOCKET_DIR:?set root-owned policy-custody SOCK_SEQPACKET directory}:/run/serverware/policy-custody:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_ROUTER_SOCKET_DIR:?set pre-owned custody-router socket directory}:/run/serverware-response-v2/router:ro
+      # Host preflight requires cert/CA 0:0 mode 0444 and the private key
+      # 0:65532 mode 0440, giving only the decision-gate primary group read access.
+      - ${SERVERWARE_PROXY_TLS_CERT_FILE:?set root-owned proxy ingress certificate file}:/run/serverware/proxy-ingress/server-cert.pem:ro
+      - ${SERVERWARE_PROXY_TLS_KEY_FILE:?set root-owned proxy ingress private key file}:/run/serverware/proxy-ingress/server-key.pem:ro
+      - ${SERVERWARE_PROXY_CLIENT_CA_BUNDLE_FILE:?set root-owned proxy ingress client CA bundle file}:/run/serverware/proxy-ingress/client-ca.pem:ro
       - ${SERVERWARE_CONTROL_PLANE_TLS_DIR:?set control-plane TLS directory}/ca.pem:/run/serverware/tls/ca.pem:ro
       - ${SERVERWARE_ATTESTATION_HELPER_DIR:?set attestation helper directory}:/opt/serverware/bin:ro
       - ${SERVERWARE_NITRO_ROOT_CERT:?set Nitro root certificate}:/run/serverware/nitro/nitro-root.pem:ro
+      - ${SERVERWARE_RESPONSE_V2_TEE_EXPECTATIONS_FILE:?set response-v2 TEE expectations file}:/run/serverware/response-v2-tee/expectations.json:ro
+      - ${SERVERWARE_RESPONSE_V2_NITRO_TRUST_ROOTS_FILE:?set response-v2 Nitro trust-roots file}:/run/serverware/response-v2-tee/nitro-trust-roots.json:ro
       - ${SERVERWARE_RELEASE_PROVENANCE_FILE:?set release provenance artifact path}:/run/serverware/release/release-provenance.json:ro
       - ${SERVERWARE_IMAGE_SIGNATURES_FILE:?set image signatures artifact path}:/run/serverware/release/image-signatures.json:ro
       - ${SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN_FILE:?set credential-lease token file}:/run/secrets/serverware-data-plane-credential-lease-token:ro
@@ -365,12 +1133,13 @@ services:
       - /dev/nsm:/dev/nsm
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=32m
-    networks:
-      - default
-      - gate-control
     depends_on:
       custody-runtime:
         condition: service_started
+      response-v2-custody-router:
+        condition: service_healthy
+      response-v2-generation-activation:
+        condition: service_completed_successfully
     restart: on-failure
 
 volumes:
@@ -387,3 +1156,6 @@ networks:
     internal: true
   anchor-control:
     internal: true
+  authority-db:
+    internal: true
+  response-v2-egress:

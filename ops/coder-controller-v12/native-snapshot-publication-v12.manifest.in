@@ -1,0 +1,8 @@
+document_version=12
+source_commit=@SOURCE_COMMIT@
+native_point_snapshot_sha256=@NATIVE_POINT_SNAPSHOT_SHA256@
+canonical_bundle_sha256=@CANONICAL_BUNDLE_SHA256@
+source_ingress_descriptor_sha256=@SOURCE_INGRESS_DESCRIPTOR_SHA256@
+publication=retained-dirfd-copy-fsync-auth-manifest-renameat2-noreplace
+destination=controller-source-cas
+replace_existing=false

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import hashlib
 import json
 import os
@@ -10,6 +11,7 @@ import stat
 import subprocess
 import sys
 import tarfile
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -34,6 +36,14 @@ ED25519_SPKI_DER_PREFIX = bytes.fromhex("302a300506032b6570032100")
 LAUNCH_AUTHORITY_METADATA_FIELDS = (
     "launch_authority_key_id",
     "launch_authority_root_sha256",
+)
+PRIVATE_CONTEXT_FILES = (
+    "Dockerfile.production",
+    "data-plane/decision-gate-rs/Dockerfile.production",
+    "production-dependencies/cache/python-wheelhouse-linux-amd64.tar.gz",
+    "production-dependencies/cache/cargo-vendor.tar.gz",
+    "production-dependencies/cache/musl-1.2.5-r12.apk",
+    "production-dependencies/cache/musl-dev-1.2.5-r12.apk",
 )
 
 
@@ -60,8 +70,18 @@ def maybe_run(command: list[str]) -> str | None:
         return None
 
 
-def source_tree_digest() -> str:
-    return serverware_source_tree.source_tree_digest(ROOT)
+def verify_dependency_cache() -> None:
+    run([sys.executable, "production-dependencies/prefetch.py", "verify"])
+
+
+def source_contract(*, development_dirty_tree: bool) -> dict[str, Any]:
+    if development_dirty_tree:
+        return serverware_source_tree.development_source_contract(ROOT)
+    return serverware_source_tree.production_source_contract(ROOT)
+
+
+def source_tree_digest(*, development_dirty_tree: bool = False) -> str:
+    return source_contract(development_dirty_tree=development_dirty_tree)["digest"]
 
 
 def _decode_ed25519_point(public_key: bytes) -> tuple[int, int]:
@@ -119,12 +139,44 @@ def _validate_ed25519_public_key(public_key: bytes) -> None:
 
 def launch_authority_metadata(path: Path = LAUNCH_AUTHORITY_ROOT) -> dict[str, str]:
     try:
-        path_metadata = path.lstat()
-        if not stat.S_ISREG(path_metadata.st_mode):
-            raise RuntimeError(f"launch authority trust root is not a regular file: {path}")
-        tracked_bytes = path.read_bytes()
+        descriptor = os.open(
+            path,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0),
+        )
     except OSError as exc:
-        raise RuntimeError(f"could not read launch authority trust root {path}: {exc}") from exc
+        raise RuntimeError(f"could not open launch authority trust root {path}: {exc}") from exc
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or before.st_size != 65:
+            raise RuntimeError(f"launch authority trust root is not a regular file: {path}")
+        chunks: list[bytes] = []
+        remaining = before.st_size
+        while remaining:
+            chunk = os.read(descriptor, remaining)
+            if not chunk:
+                raise RuntimeError("launch authority trust root changed during read")
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        tracked_bytes = b"".join(chunks)
+        after = os.fstat(descriptor)
+        if (
+            before.st_dev,
+            before.st_ino,
+            before.st_mode,
+            before.st_size,
+            before.st_mtime_ns,
+            before.st_ctime_ns,
+        ) != (
+            after.st_dev,
+            after.st_ino,
+            after.st_mode,
+            after.st_size,
+            after.st_mtime_ns,
+            after.st_ctime_ns,
+        ):
+            raise RuntimeError("launch authority trust root changed during read")
+    finally:
+        os.close(descriptor)
     if re.fullmatch(rb"[0-9a-f]{64}\n", tracked_bytes) is None:
         raise RuntimeError(
             "launch authority trust root must be exactly 64 lowercase hex characters followed by LF"
@@ -141,8 +193,28 @@ def launch_authority_metadata(path: Path = LAUNCH_AUTHORITY_ROOT) -> dict[str, s
     }
 
 
-def build_metadata() -> dict[str, str]:
-    raw_epoch = os.getenv("SOURCE_DATE_EPOCH") or maybe_run(["git", "show", "-s", "--format=%ct", "HEAD"]) or "0"
+def build_metadata(*, development_dirty_tree: bool = False) -> dict[str, Any]:
+    contract = source_contract(development_dirty_tree=development_dirty_tree)
+    if development_dirty_tree:
+        raw_epoch = os.getenv("SOURCE_DATE_EPOCH", "0")
+        revision = "development-uncommitted"
+        source = "local-development-dirty-tree"
+        title_suffix = "development dirty tree"
+    else:
+        commit = contract.get("commit")
+        if not isinstance(commit, str) or not commit:
+            raise RuntimeError("production source contract is missing its exact commit")
+        raw_epoch = contract.get("commitTimestamp")
+        if not isinstance(raw_epoch, str) or not raw_epoch:
+            raise RuntimeError("production source contract is missing its authenticated commit timestamp")
+        supplied_epoch = os.getenv("SOURCE_DATE_EPOCH")
+        if supplied_epoch is not None and supplied_epoch != raw_epoch:
+            raise RuntimeError(
+                "production SOURCE_DATE_EPOCH must equal the authenticated Git commit timestamp"
+            )
+        revision = commit
+        source = str(contract["repository"])
+        title_suffix = "production"
     try:
         source_date_epoch = int(raw_epoch)
     except ValueError as exc:
@@ -150,16 +222,128 @@ def build_metadata() -> dict[str, str]:
     if source_date_epoch < 0:
         raise RuntimeError("SOURCE_DATE_EPOCH must be non-negative")
     return {
-        "source": "https://github.com/example/private-deployment",
-        "revision": maybe_run(["git", "rev-parse", "HEAD"]) or "unknown",
+        "source": source,
+        "revision": revision,
         "created": datetime.fromtimestamp(source_date_epoch, timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "source_date_epoch": str(source_date_epoch),
-        "source_tree_digest": source_tree_digest(),
+        "source_tree_digest": contract["digest"],
+        "source_archive_digest": contract["archive"]["sha256"],
+        "source_archive_path": contract["archivePath"],
+        "source_manifest_digest": contract["manifest"]["sha256"],
+        "source_manifest_path": contract["manifestPath"],
+        "source_file_list_digest": contract["verification"]["fileList"]["sha256"],
+        "source_file_list_path": contract["verificationPaths"]["fileList"],
+        "source_file_hashes_digest": contract["verification"]["fileHashes"]["sha256"],
+        "source_file_hashes_path": contract["verificationPaths"]["fileHashes"],
+        "source_file_modes_digest": contract["verification"]["fileModes"]["sha256"],
+        "source_file_modes_path": contract["verificationPaths"]["fileModes"],
+        "source_identity_mode": contract["identityMode"],
+        "production_release_eligible": contract["productionReleaseEligible"],
+        "image_title_suffix": title_suffix,
+        "source_contract": contract,
         **launch_authority_metadata(),
     }
 
 
-def build_command(dockerfile: str, tag: str, *, platform: str, metadata: dict[str, str]) -> list[str]:
+def _copy_context_file(source: Path, destination: Path, expected_sha256: str | None) -> None:
+    try:
+        source_descriptor = os.open(source, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError as exc:
+        raise RuntimeError(f"could not open private build-context input {source}: {exc}") from exc
+    try:
+        before = os.fstat(source_descriptor)
+        if not stat.S_ISREG(before.st_mode):
+            raise RuntimeError(f"private build-context input is not a regular file: {source}")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination_descriptor = os.open(
+            destination,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+            0o400,
+        )
+        digest = hashlib.sha256()
+        copied = 0
+        try:
+            with os.fdopen(source_descriptor, "rb", closefd=False) as source_handle:
+                with os.fdopen(destination_descriptor, "wb", closefd=False) as destination_handle:
+                    while True:
+                        chunk = source_handle.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        destination_handle.write(chunk)
+                        digest.update(chunk)
+                        copied += len(chunk)
+                    destination_handle.flush()
+                    os.fsync(destination_descriptor)
+        finally:
+            os.close(destination_descriptor)
+        after = os.fstat(source_descriptor)
+        if (before.st_dev, before.st_ino, before.st_size) != (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+        ) or copied != after.st_size:
+            raise RuntimeError(f"private build-context input changed while copied: {source}")
+        actual_sha256 = "sha256:" + digest.hexdigest()
+        if expected_sha256 is not None and actual_sha256 != expected_sha256:
+            raise RuntimeError(
+                f"private build-context input digest mismatch for {source}: "
+                f"expected {expected_sha256}, got {actual_sha256}"
+            )
+    finally:
+        os.close(source_descriptor)
+
+
+def _tracked_file_digests(metadata: dict[str, Any]) -> dict[str, str]:
+    files = metadata["source_contract"]["sourceTreeManifest"]["files"]
+    return {
+        str(item["path"]): str(item["sha256"])
+        for item in files
+        if item.get("type") == "file"
+    }
+
+
+@contextmanager
+def private_build_context(metadata: dict[str, Any]):
+    contract_paths = (
+        metadata["source_archive_path"],
+        metadata["source_manifest_path"],
+        metadata["source_file_list_path"],
+        metadata["source_file_hashes_path"],
+        metadata["source_file_modes_path"],
+    )
+    expected_contract_digests = {
+        metadata["source_archive_path"]: metadata["source_archive_digest"],
+        metadata["source_manifest_path"]: metadata["source_manifest_digest"],
+        metadata["source_file_list_path"]: metadata["source_file_list_digest"],
+        metadata["source_file_hashes_path"]: metadata["source_file_hashes_digest"],
+        metadata["source_file_modes_path"]: metadata["source_file_modes_digest"],
+    }
+    tracked_digests = _tracked_file_digests(metadata)
+    with tempfile.TemporaryDirectory(prefix="serverware-private-build-context.") as temporary:
+        context = Path(temporary)
+        for relative in (*PRIVATE_CONTEXT_FILES, *contract_paths):
+            relative_path = Path(relative)
+            if relative_path.is_absolute() or any(
+                part in {"", ".", ".."} for part in relative_path.parts
+            ):
+                raise RuntimeError(f"private build-context path escapes the repository: {relative}")
+            source = ROOT / relative_path
+            resolved_parent = source.parent.resolve()
+            if resolved_parent != ROOT and ROOT not in resolved_parent.parents:
+                raise RuntimeError(f"private build-context parent escapes the repository: {relative}")
+            expected = expected_contract_digests.get(relative) or tracked_digests.get(relative)
+            _copy_context_file(source, context / relative_path, expected)
+        yield context
+
+
+def build_command(
+    dockerfile: str,
+    tag: str,
+    *,
+    platform: str,
+    metadata: dict[str, Any],
+    context: Path,
+) -> list[str]:
     if platform != PRODUCTION_PLATFORM:
         raise RuntimeError(f"production image platform must be {PRODUCTION_PLATFORM}")
     command = [
@@ -167,12 +351,14 @@ def build_command(dockerfile: str, tag: str, *, platform: str, metadata: dict[st
         "build",
         "--network=none",
         "-f",
-        dockerfile,
+        str(context / dockerfile),
         "-t",
         tag,
         "--platform",
         platform,
     ]
+    component = "control plane" if dockerfile == "Dockerfile.production" else "decision gate"
+    image_title = f"Serverware {component} {metadata['image_title_suffix']}"
     command.extend(
         [
             "--build-arg",
@@ -182,12 +368,39 @@ def build_command(dockerfile: str, tag: str, *, platform: str, metadata: dict[st
             "--build-arg",
             f"SERVERWARE_IMAGE_CREATED={metadata['created']}",
             "--build-arg",
+            f"SERVERWARE_IMAGE_TITLE={image_title}",
+            "--build-arg",
             f"SERVERWARE_SOURCE_TREE_DIGEST={metadata['source_tree_digest']}",
+            "--build-arg",
+            f"SERVERWARE_SOURCE_ARCHIVE={metadata['source_archive_path']}",
+            "--build-arg",
+            f"SERVERWARE_SOURCE_ARCHIVE_SHA256={metadata['source_archive_digest']}",
+            "--build-arg",
+            f"SERVERWARE_SOURCE_MANIFEST={metadata['source_manifest_path']}",
+            "--build-arg",
+            f"SERVERWARE_SOURCE_MANIFEST_SHA256={metadata['source_manifest_digest']}",
+            "--build-arg",
+            f"SERVERWARE_SOURCE_FILE_LIST={metadata['source_file_list_path']}",
+            "--build-arg",
+            f"SERVERWARE_SOURCE_FILE_LIST_SHA256={metadata['source_file_list_digest']}",
+            "--build-arg",
+            f"SERVERWARE_SOURCE_FILE_HASHES={metadata['source_file_hashes_path']}",
+            "--build-arg",
+            f"SERVERWARE_SOURCE_FILE_HASHES_SHA256={metadata['source_file_hashes_digest']}",
+            "--build-arg",
+            f"SERVERWARE_SOURCE_FILE_MODES={metadata['source_file_modes_path']}",
+            "--build-arg",
+            f"SERVERWARE_SOURCE_FILE_MODES_SHA256={metadata['source_file_modes_digest']}",
+            "--build-arg",
+            f"SERVERWARE_SOURCE_IDENTITY_MODE={metadata['source_identity_mode']}",
+            "--build-arg",
+            "SERVERWARE_PRODUCTION_RELEASE_ELIGIBLE="
+            + ("true" if metadata["production_release_eligible"] else "false"),
             "--build-arg",
             f"SOURCE_DATE_EPOCH={metadata['source_date_epoch']}",
         ]
     )
-    command.append(".")
+    command.append(str(context))
     return command
 
 
@@ -270,72 +483,121 @@ def image_launch_authority_binding(service: str, metadata: dict[str, str]) -> di
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build local shell-free Serverware production image candidates.")
-    parser.add_argument("--control-tag", default="serverware/control:production-local")
-    parser.add_argument("--decision-gate-tag", default="serverware/decision-gate:production-local")
+    parser.add_argument("--control-tag")
+    parser.add_argument("--decision-gate-tag")
     parser.add_argument("--platform", default=PRODUCTION_PLATFORM, choices=(PRODUCTION_PLATFORM,))
-    parser.add_argument("--out", default=".tmp/production-images-build.json")
+    parser.add_argument("--out")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--development-dirty-tree",
+        action="store_true",
+        help="Build an explicitly non-production image from dirty/untracked filesystem bytes.",
+    )
     args = parser.parse_args()
 
+    if args.development_dirty_tree:
+        control_tag = args.control_tag or "serverware/control:development-dirty-tree"
+        decision_gate_tag = (
+            args.decision_gate_tag
+            or "serverware/decision-gate:development-dirty-tree"
+        )
+        output = args.out or ".tmp/development-dirty-images-build.json"
+    else:
+        control_tag = args.control_tag or "serverware/control:production-local"
+        decision_gate_tag = (
+            args.decision_gate_tag or "serverware/decision-gate:production-local"
+        )
+        output = args.out or ".tmp/production-images-build.json"
+
     image_specs = [
-        ("serverware-control", "Dockerfile.production", args.control_tag),
-        ("serverware-decision-gate", "data-plane/decision-gate-rs/Dockerfile.production", args.decision_gate_tag),
+        ("serverware-control", "Dockerfile.production", control_tag),
+        ("serverware-decision-gate", "data-plane/decision-gate-rs/Dockerfile.production", decision_gate_tag),
     ]
-    metadata = build_metadata()
-    commands = [
-        {
-            "service": service,
-            "dockerfile": dockerfile,
-            "tag": tag,
-            "argv": build_command(dockerfile, tag, platform=args.platform, metadata=metadata),
-        }
-        for service, dockerfile, tag in image_specs
-    ]
+    metadata = build_metadata(development_dirty_tree=args.development_dirty_tree)
     if args.dry_run:
+        placeholder_context = Path("/private/serverware-build-context")
+        commands = [
+            {
+                "service": service,
+                "dockerfile": dockerfile,
+                "tag": tag,
+                "argv": build_command(
+                    dockerfile,
+                    tag,
+                    platform=args.platform,
+                    metadata=metadata,
+                    context=placeholder_context,
+                ),
+            }
+            for service, dockerfile, tag in image_specs
+        ]
         print(
             canonical_json(
                 {
                     "ok": True,
+                    "identity_mode": metadata["source_identity_mode"],
+                    "production_release_eligible": metadata[
+                        "production_release_eligible"
+                    ],
                     "commands": commands,
                     "metadata": metadata,
                     "platform": args.platform,
-                    "out": args.out,
+                    "out": output,
                 }
             )
         )
         return
 
     images: list[dict[str, Any]] = []
-    for spec in commands:
-        print(f"==> building {spec['service']} with {spec['dockerfile']}", file=sys.stderr)
-        run(spec["argv"])
-        built_image_id = image_id(spec["tag"])
-        verify_image_platform(built_image_id, args.platform)
-        binary_digests: dict[str, str] = {}
-        if spec["service"] == "serverware-decision-gate":
-            binary_digests = decision_gate_binary_digests(built_image_id)
-        images.append(
+    verify_dependency_cache()
+    with private_build_context(metadata) as context:
+        commands = [
             {
-                "service": spec["service"],
-                "tag": spec["tag"],
-                "dockerfile": spec["dockerfile"],
-                "image_id": built_image_id,
-                **binary_digests,
-                **image_launch_authority_binding(spec["service"], metadata),
+                "service": service,
+                "dockerfile": dockerfile,
+                "tag": tag,
+                "argv": build_command(
+                    dockerfile,
+                    tag,
+                    platform=args.platform,
+                    metadata=metadata,
+                    context=context,
+                ),
             }
-        )
+            for service, dockerfile, tag in image_specs
+        ]
+        for spec in commands:
+            print(f"==> building {spec['service']} with {spec['dockerfile']}", file=sys.stderr)
+            run(spec["argv"])
+            built_image_id = image_id(spec["tag"])
+            verify_image_platform(built_image_id, args.platform)
+            binary_digests: dict[str, str] = {}
+            if spec["service"] == "serverware-decision-gate":
+                binary_digests = decision_gate_binary_digests(built_image_id)
+            images.append(
+                {
+                    "service": spec["service"],
+                    "tag": spec["tag"],
+                    "dockerfile": spec["dockerfile"],
+                    "image_id": built_image_id,
+                    **binary_digests,
+                    **image_launch_authority_binding(spec["service"], metadata),
+                }
+            )
     no_shell = verify_no_shell([str(item["image_id"]) for item in images])
     result = {
         "apiVersion": BUILD_API_VERSION,
         "kind": BUILD_KIND,
         "ok": True,
+        "identity_mode": metadata["source_identity_mode"],
+        "production_release_eligible": metadata["production_release_eligible"],
         "generated_at_unix": int(time.time()),
         "metadata": metadata,
         "images": images,
         "no_shell": no_shell,
         "publish_requirement": "publish these verified linux/amd64 image IDs unchanged, then set SERVERWARE_PRODUCTION_IMAGES to immutable @sha256 digest refs before live readiness",
     }
-    output_path = Path(args.out)
+    output_path = Path(output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(canonical_json(result))

@@ -1,0 +1,186 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/policy-shadow-load-receipt.v1.schema.json",
+  "title": "Serverware Policy Shadow Load Receipt v1",
+  "$comment": "Wire data is unverified. Native admission pins the signer, verifies fresh TEE evidence, matches every assignment/policy/fleet/runtime binding, and rejects candidate effect capability. Installation is only ready after monotonic custody durably persists rollback/tombstone/assignment state and reserves a non-overlapping bounded ingress sequence range for the signed generation. Readiness starts no earlier than max(trusted load verification time, assignment window start), so a late load cannot inherit nominal duration.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "kind",
+    "canonicalProfile",
+    "signatureDomain",
+    "payload",
+    "payloadSha256",
+    "signatureAlgorithm",
+    "signingKeyId",
+    "signingKeySpkiSha256",
+    "signature"
+  ],
+  "properties": {
+    "apiVersion": {"const": "serverware.policyShadowLoadReceipt/v1"},
+    "kind": {"const": "PolicyShadowLoadReceipt"},
+    "canonicalProfile": {"const": "serverware.canonicalJson/ascii-integer-v1"},
+    "signatureDomain": {"const": "serverware.policyShadowLoadReceipt/v1"},
+    "payload": {"$ref": "#/$defs/payload"},
+    "payloadSha256": {
+      "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/sha256"
+    },
+    "signatureAlgorithm": {"const": "Ed25519"},
+    "signingKeyId": {
+      "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/sha256"
+    },
+    "signingKeySpkiSha256": {
+      "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/sha256"
+    },
+    "signature": {
+      "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/ed25519Signature"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/sha256"
+    },
+    "signedI64": {
+      "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/signedI64"
+    },
+    "positiveI64": {
+      "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/positiveI64"
+    },
+    "runtimeIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "instanceId",
+        "spiffeId",
+        "bootIdSha256",
+        "teePlatform",
+        "teeEvidenceSha256",
+        "teeMeasurementSha256",
+        "teeAttestationKeyId",
+        "teeAttestationKeySpkiSha256",
+        "ingressSigningKeyId",
+        "ingressSigningKeySpkiSha256",
+        "activeDecisionSigningKeyId",
+        "activeDecisionSigningKeySpkiSha256",
+        "shadowSigningKeyId",
+        "shadowSigningKeySpkiSha256"
+      ],
+      "properties": {
+        "instanceId": {
+          "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/identifier"
+        },
+        "spiffeId": {
+          "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/spiffeId"
+        },
+        "bootIdSha256": {"$ref": "#/$defs/sha256"},
+        "teePlatform": {
+          "enum": ["aws-nitro-enclave", "amd-sev-snp", "intel-tdx"]
+        },
+        "teeEvidenceSha256": {"$ref": "#/$defs/sha256"},
+        "teeMeasurementSha256": {"$ref": "#/$defs/sha256"},
+        "teeAttestationKeyId": {"$ref": "#/$defs/sha256"},
+        "teeAttestationKeySpkiSha256": {"$ref": "#/$defs/sha256"},
+        "ingressSigningKeyId": {"$ref": "#/$defs/sha256"},
+        "ingressSigningKeySpkiSha256": {"$ref": "#/$defs/sha256"},
+        "activeDecisionSigningKeyId": {"$ref": "#/$defs/sha256"},
+        "activeDecisionSigningKeySpkiSha256": {"$ref": "#/$defs/sha256"},
+        "shadowSigningKeyId": {"$ref": "#/$defs/sha256"},
+        "shadowSigningKeySpkiSha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "loadedSnapshots": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "active",
+        "candidate",
+        "requestFactsSchemaSha256",
+        "effectCapabilitiesExposedToCandidate"
+      ],
+      "properties": {
+        "active": {
+          "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/compiledPolicySnapshotIdentity"
+        },
+        "candidate": {
+          "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/compiledPolicySnapshotIdentity"
+        },
+        "requestFactsSchemaSha256": {"$ref": "#/$defs/sha256"},
+        "effectCapabilitiesExposedToCandidate": {"const": false}
+      },
+      "$comment": "Native verification requires exact equality with the assignment's active and candidate compiled snapshot, compiler/configuration, policy/adapter/semantic-model/plan-schema, rollback, and request-facts identities before evidence can count."
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receiptId",
+        "assignmentSha256",
+        "assignmentPayloadSha256",
+        "assignmentRevision",
+        "canaryId",
+        "fleetId",
+        "fleetMembershipRevision",
+        "generationEpoch",
+        "generationTombstoneEpoch",
+        "ingressRangeStartSequence",
+        "ingressRangePredecessorHeadSha256",
+        "observationIntervalSha256",
+        "responseValidationObligationsRootSha256",
+        "custodyAuthoritySha256",
+        "authorityKeyIndependenceSha256",
+        "publicationReconciliationReceiptSha256",
+        "publicationRevision",
+        "authoritativeLedgerEventOrdinal",
+        "authoritativeLedgerHeadSha256",
+        "authoritativeSpoolRootSha256",
+        "policyIdentity",
+        "runtimeIdentity",
+        "loadedSnapshots",
+        "loadSequence",
+        "loadedAtUnixNanos",
+        "issuedAtUnixNanos",
+        "expiresAtUnixNanos",
+        "status"
+      ],
+      "properties": {
+        "receiptId": {"$ref": "#/$defs/sha256"},
+        "assignmentSha256": {"$ref": "#/$defs/sha256"},
+        "assignmentPayloadSha256": {"$ref": "#/$defs/sha256"},
+        "assignmentRevision": {"$ref": "#/$defs/positiveI64"},
+        "canaryId": {"$ref": "#/$defs/sha256"},
+        "fleetId": {"$ref": "#/$defs/sha256"},
+        "fleetMembershipRevision": {"$ref": "#/$defs/positiveI64"},
+        "generationEpoch": {"$ref": "#/$defs/positiveI64"},
+        "generationTombstoneEpoch": {
+          "$ref": "#/$defs/positiveI64",
+          "$comment": "Native verification requires this to satisfy the assignment tombstone floor and not exceed generationEpoch."
+        },
+        "ingressRangeStartSequence": {"$ref": "#/$defs/positiveI64"},
+        "ingressRangePredecessorHeadSha256": {"$ref": "#/$defs/sha256"},
+        "observationIntervalSha256": {"$ref": "#/$defs/sha256"},
+        "responseValidationObligationsRootSha256": {"$ref": "#/$defs/sha256"},
+        "custodyAuthoritySha256": {"$ref": "#/$defs/sha256"},
+        "authorityKeyIndependenceSha256": {
+          "$ref": "#/$defs/sha256",
+          "$comment": "Exact assignment authorityKeyIndependence.independenceRootSha256. Native admission re-resolves the complete role-key set and requires this runtime identity and every custody receipt role to match it."
+        },
+        "publicationReconciliationReceiptSha256": {"$ref": "#/$defs/sha256"},
+        "publicationRevision": {"$ref": "#/$defs/positiveI64"},
+        "authoritativeLedgerEventOrdinal": {"$ref": "#/$defs/unsignedI64"},
+        "authoritativeLedgerHeadSha256": {"$ref": "#/$defs/sha256"},
+        "authoritativeSpoolRootSha256": {"$ref": "#/$defs/sha256"},
+        "policyIdentity": {
+          "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/policyIdentity"
+        },
+        "runtimeIdentity": {"$ref": "#/$defs/runtimeIdentity"},
+        "loadedSnapshots": {"$ref": "#/$defs/loadedSnapshots"},
+        "loadSequence": {"$ref": "#/$defs/positiveI64"},
+        "loadedAtUnixNanos": {"$ref": "#/$defs/signedI64"},
+        "issuedAtUnixNanos": {"$ref": "#/$defs/signedI64"},
+        "expiresAtUnixNanos": {"$ref": "#/$defs/signedI64"},
+        "status": {"const": "loaded-side-effect-free"}
+      }
+    }
+  }
+}

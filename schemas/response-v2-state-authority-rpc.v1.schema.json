@@ -1,0 +1,3806 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/response-v2-state-authority-rpc.v1.schema.json",
+  "title": "Serverware Response v2 State Authority RPC",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/requestFrame"
+    },
+    {
+      "$ref": "#/$defs/signedResult"
+    },
+    {
+      "$ref": "#/$defs/generationRequestFrame"
+    },
+    {
+      "$ref": "#/$defs/signedGenerationResult"
+    }
+  ],
+  "$defs": {
+    "safeUint": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "positiveSafeUint": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@-]*$"
+    },
+    "sha256": {
+      "type": "string",
+      "minLength": 71,
+      "maxLength": 71,
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "nullableSha256": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/sha256"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "nullableIdentifier": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/identifier"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "targetEffectState": {
+      "enum": [
+        "DISPATCHING",
+        "OUTCOME_UNKNOWN",
+        "OBSERVED",
+        "RECONCILED_FAILURE"
+      ]
+    },
+    "attemptState": {
+      "enum": [
+        "ABSENT",
+        "RESERVED",
+        "AUTHORIZED",
+        "STAGED",
+        "DISPATCHING",
+        "OUTCOME_UNKNOWN",
+        "OBSERVED",
+        "RELEASE_PREPARED",
+        "TERMINAL_FAILED",
+        "FINALIZED",
+        "PUBLISHED",
+        "ARCHIVED"
+      ]
+    },
+    "serviceRole": {
+      "enum": [
+        "custody-router",
+        "state-authority",
+        "credential-transport",
+        "policy-proof-verifier",
+        "immutable-artifact-ledger",
+        "release-attestor-publisher",
+        "cleanup-watchdog"
+      ]
+    },
+    "reconciliationDomain": {
+      "enum": [
+        "PROVIDER_GENERATIONS",
+        "ROLE_IDENTITIES",
+        "ATTEMPTS",
+        "OPERATIONS",
+        "FENCES",
+        "REPLAY_LEDGERS",
+        "RELEASE_LEDGERS",
+        "CREDENTIAL_USES",
+        "TARGET_EFFECTS",
+        "POLICY_DECISIONS",
+        "EVIDENCE",
+        "FINALIZATIONS",
+        "IMMUTABLE_OBJECTS",
+        "IMMUTABLE_INSPECTIONS",
+        "TERMINAL_SETTLEMENTS",
+        "ARCHIVES",
+        "PUBLISHER_OUTBOX",
+        "TRANSPARENCY_LEAVES",
+        "TRANSPARENCY_CHECKPOINTS",
+        "TRUSTED_TIME_HIGHWATER"
+      ]
+    },
+    "generationOperation": {
+      "enum": [
+        "responseV2.generation.install/v1",
+        "responseV2.generation.reconcile/v1",
+        "responseV2.generation.ready/v1",
+        "responseV2.state.query/v1"
+      ]
+    },
+    "operation": {
+      "enum": [
+        "responseV2.attempt.reserve/v1",
+        "responseV2.attempt.authorize/v1",
+        "responseV2.object.commitRaw/v1",
+        "responseV2.object.inspectImmutableRaw/v1",
+        "responseV2.attempt.stage/v1",
+        "responseV2.dispatch.begin/v1",
+        "responseV2.dispatch.recordOutcome/v1",
+        "responseV2.attempt.terminalize/v1",
+        "responseV2.attempt.finalize/v1",
+        "responseV2.attempt.publish/v1",
+        "responseV2.release.consumeAndRetrieveExact/v1",
+        "responseV2.release.resolveReplay/v1",
+        "responseV2.attempt.settle/v1",
+        "responseV2.attempt.archive/v1",
+        "responseV2.fence.revoke/v1",
+        "responseV2.fence.observeQuiescence/v1",
+        "responseV2.evidence.append/v1",
+        "responseV2.publisher.enqueue/v1",
+        "responseV2.publisher.acknowledge/v1",
+        "responseV2.transparency.checkpoint/v1",
+        "responseV2.trustedTime.advance/v1",
+        "responseV2.reconciliation.transition/v1",
+        "responseV2.reconciliation.terminalizeExpiredAttempt/v1"
+      ]
+    },
+    "authentication": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "algorithm",
+        "keyId",
+        "signedPayloadSha256",
+        "signatureBase64url"
+      ],
+      "properties": {
+        "algorithm": {
+          "const": "Ed25519"
+        },
+        "keyId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "signedPayloadSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "signatureBase64url": {
+          "type": "string",
+          "minLength": 86,
+          "maxLength": 86,
+          "pattern": "^[A-Za-z0-9_-]{86}$"
+        }
+      }
+    },
+    "bootDeadline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "clock",
+        "bootId",
+        "deadlineBootMillis"
+      ],
+      "properties": {
+        "clock": {
+          "const": "CLOCK_BOOTTIME"
+        },
+        "bootId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "deadlineBootMillis": {
+          "$ref": "#/$defs/safeUint"
+        }
+      }
+    },
+    "fenceExpectation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "fenceToken"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "ALLOCATE",
+            "EXACT"
+          ]
+        },
+        "fenceToken": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 70,
+              "maxLength": 70,
+              "pattern": "^fence:[0-9a-f]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "ALLOCATE"
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "then": {
+            "properties": {
+              "fenceToken": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "EXACT"
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "then": {
+            "properties": {
+              "fenceToken": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "rawObjectReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "generationId",
+        "objectId",
+        "objectKind",
+        "contentSha256",
+        "contentLength",
+        "mediaType"
+      ],
+      "properties": {
+        "generationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "objectId": {
+          "type": "string",
+          "minLength": 68,
+          "maxLength": 68,
+          "pattern": "^obj:[0-9a-f]{64}$"
+        },
+        "objectKind": {
+          "$ref": "#/$defs/identifier"
+        },
+        "contentSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "contentLength": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 34603008
+        },
+        "mediaType": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        }
+      }
+    },
+    "immutableRawObject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "kind",
+        "schemaVersion",
+        "reference",
+        "rawContentBase64url"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.responseV2.immutableRawObject/v1"
+        },
+        "kind": {
+          "const": "ServerwareResponseV2ImmutableRawObject"
+        },
+        "schemaVersion": {
+          "const": "1"
+        },
+        "reference": {
+          "$ref": "#/$defs/rawObjectReference"
+        },
+        "rawContentBase64url": {
+          "type": "string",
+          "maxLength": 46137344,
+          "pattern": "^[A-Za-z0-9_-]*$"
+        }
+      }
+    },
+    "artifact": {
+      "$ref": "response-v2-nested-authority-artifact.v1.schema.json"
+    },
+    "artifactArray": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/artifact"
+      }
+    },
+    "requestFrame": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "request",
+        "authentication"
+      ],
+      "properties": {
+        "request": {
+          "$ref": "#/$defs/request"
+        },
+        "authentication": {
+          "$ref": "#/$defs/authentication"
+        }
+      }
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "kind",
+        "schemaVersion",
+        "generationId",
+        "requestId",
+        "operationId",
+        "callerRoleId",
+        "operation",
+        "attemptId",
+        "expectedRevision",
+        "expectedState",
+        "fence",
+        "deadline",
+        "payload"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.responseV2.stateAuthority/v1"
+        },
+        "kind": {
+          "const": "ServerwareResponseV2StateAuthorityRpc"
+        },
+        "schemaVersion": {
+          "const": "1"
+        },
+        "generationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "requestId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "operationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "callerRoleId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "operation": {
+          "$ref": "#/$defs/operation"
+        },
+        "attemptId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "expectedRevision": {
+          "$ref": "#/$defs/safeUint"
+        },
+        "expectedState": {
+          "$ref": "#/$defs/attemptState"
+        },
+        "fence": {
+          "$ref": "#/$defs/fenceExpectation"
+        },
+        "deadline": {
+          "$ref": "#/$defs/bootDeadline"
+        },
+        "payload": {
+          "$ref": "#/$defs/payload"
+        }
+      },
+      "allOf": [
+        {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/bindReserve"
+            },
+            {
+              "$ref": "#/$defs/bindAuthorize"
+            },
+            {
+              "$ref": "#/$defs/bindCommitRaw"
+            },
+            {
+              "$ref": "#/$defs/bindInspectImmutableRaw"
+            },
+            {
+              "$ref": "#/$defs/bindStage"
+            },
+            {
+              "$ref": "#/$defs/bindBeginDispatch"
+            },
+            {
+              "$ref": "#/$defs/bindDispatchOutcome"
+            },
+            {
+              "$ref": "#/$defs/bindTerminalize"
+            },
+            {
+              "$ref": "#/$defs/bindFinalize"
+            },
+            {
+              "$ref": "#/$defs/bindPublish"
+            },
+            {
+              "$ref": "#/$defs/bindRelease"
+            },
+            {
+              "$ref": "#/$defs/bindResolveReplay"
+            },
+            {
+              "$ref": "#/$defs/bindSettleAttempt"
+            },
+            {
+              "$ref": "#/$defs/bindArchive"
+            },
+            {
+              "$ref": "#/$defs/bindRevokeFence"
+            },
+            {
+              "$ref": "#/$defs/bindQuiescence"
+            },
+            {
+              "$ref": "#/$defs/bindEvidence"
+            },
+            {
+              "$ref": "#/$defs/bindEnqueue"
+            },
+            {
+              "$ref": "#/$defs/bindAcknowledge"
+            },
+            {
+              "$ref": "#/$defs/bindCheckpoint"
+            },
+            {
+              "$ref": "#/$defs/bindTrustedTime"
+            },
+            {
+              "$ref": "#/$defs/bindReconciliation"
+            },
+            {
+              "$ref": "#/$defs/bindTerminalizeExpiredAttempt"
+            }
+          ]
+        }
+      ]
+    },
+    "payload": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/reservePayload"
+        },
+        {
+          "$ref": "#/$defs/authorizePayload"
+        },
+        {
+          "$ref": "#/$defs/commitRawPayload"
+        },
+        {
+          "$ref": "#/$defs/inspectImmutableRawPayload"
+        },
+        {
+          "$ref": "#/$defs/stagePayload"
+        },
+        {
+          "$ref": "#/$defs/beginDispatchPayload"
+        },
+        {
+          "$ref": "#/$defs/dispatchOutcomePayload"
+        },
+        {
+          "$ref": "#/$defs/terminalizePayload"
+        },
+        {
+          "$ref": "#/$defs/finalizePayload"
+        },
+        {
+          "$ref": "#/$defs/publishPayload"
+        },
+        {
+          "$ref": "#/$defs/releasePayload"
+        },
+        {
+          "$ref": "#/$defs/resolveReplayPayload"
+        },
+        {
+          "$ref": "#/$defs/settleAttemptPayload"
+        },
+        {
+          "$ref": "#/$defs/archivePayload"
+        },
+        {
+          "$ref": "#/$defs/revokeFencePayload"
+        },
+        {
+          "$ref": "#/$defs/quiescencePayload"
+        },
+        {
+          "$ref": "#/$defs/evidencePayload"
+        },
+        {
+          "$ref": "#/$defs/enqueuePayload"
+        },
+        {
+          "$ref": "#/$defs/acknowledgePayload"
+        },
+        {
+          "$ref": "#/$defs/checkpointPayload"
+        },
+        {
+          "$ref": "#/$defs/trustedTimePayload"
+        },
+        {
+          "$ref": "#/$defs/reconciliationPayload"
+        },
+        {
+          "$ref": "#/$defs/terminalizeExpiredAttemptPayload"
+        }
+      ]
+    },
+    "serviceReadinessReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "serviceRole",
+        "processId",
+        "roleId",
+        "executableSha256",
+        "configurationSha256",
+        "operationSetSha256",
+        "logicalSubkeySetSha256",
+        "readinessArtifact",
+        "readinessArtifactSha256"
+      ],
+      "properties": {
+        "serviceRole": {
+          "$ref": "#/$defs/serviceRole"
+        },
+        "processId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "roleId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "executableSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "configurationSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "operationSetSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "logicalSubkeySetSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "readinessArtifact": {
+          "$ref": "response-v2-nested-authority-artifact.v1.schema.json#/$defs/roleReadinessArtifact"
+        },
+        "readinessArtifactSha256": {
+          "$ref": "#/$defs/sha256",
+          "$comment": "The verifier MUST reconstruct the nested readiness payload and require exact equality with serviceRole, processId, roleId, executable, configuration, operation-set, logical-subkey-set, and provider generation bindings."
+        }
+      }
+    },
+    "reconciliationDomainReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "domain",
+        "authoritativeCursor",
+        "state",
+        "domainStateSha256",
+        "receiptArtifact",
+        "receiptArtifactSha256"
+      ],
+      "properties": {
+        "domain": {
+          "$ref": "#/$defs/reconciliationDomain"
+        },
+        "authoritativeCursor": {
+          "$ref": "#/$defs/safeUint"
+        },
+        "state": {
+          "const": "COMPLETE"
+        },
+        "domainStateSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "receiptArtifact": {
+          "$ref": "response-v2-nested-authority-artifact.v1.schema.json#/$defs/reconciliationArtifact"
+        },
+        "receiptArtifactSha256": {
+          "$ref": "#/$defs/sha256",
+          "$comment": "The verifier MUST reconstruct the signed reconciliation payload and require its domain, authoritative cursor, state, and result digest to equal this receipt."
+        }
+      }
+    },
+    "exactServiceReadinessReceipts": {
+      "type": "array",
+      "minItems": 7,
+      "maxItems": 7,
+      "prefixItems": [
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/serviceReadinessReceipt"
+            },
+            {
+              "properties": {
+                "serviceRole": {
+                  "const": "custody-router"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/serviceReadinessReceipt"
+            },
+            {
+              "properties": {
+                "serviceRole": {
+                  "const": "state-authority"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/serviceReadinessReceipt"
+            },
+            {
+              "properties": {
+                "serviceRole": {
+                  "const": "credential-transport"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/serviceReadinessReceipt"
+            },
+            {
+              "properties": {
+                "serviceRole": {
+                  "const": "policy-proof-verifier"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/serviceReadinessReceipt"
+            },
+            {
+              "properties": {
+                "serviceRole": {
+                  "const": "immutable-artifact-ledger"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/serviceReadinessReceipt"
+            },
+            {
+              "properties": {
+                "serviceRole": {
+                  "const": "release-attestor-publisher"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/serviceReadinessReceipt"
+            },
+            {
+              "properties": {
+                "serviceRole": {
+                  "const": "cleanup-watchdog"
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "items": false
+    },
+    "exactRoleReadinessArtifacts": {
+      "type": "array",
+      "minItems": 7,
+      "maxItems": 7,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "response-v2-nested-authority-artifact.v1.schema.json#/$defs/roleReadinessArtifact"
+      },
+      "$comment": "The state authority verifies this deterministic seven-role order against the installed provider generation and rejects duplicate service roles, role IDs, process IDs, keys, signatures, or artifact digests."
+    },
+    "exactReconciliationDomainReceipts": {
+      "type": "array",
+      "minItems": 20,
+      "maxItems": 20,
+      "prefixItems": [
+        {
+          "$ref": "#/$defs/providerGenerationsDomainReceipt"
+        },
+        {
+          "$ref": "#/$defs/roleIdentitiesDomainReceipt"
+        },
+        {
+          "$ref": "#/$defs/attemptsDomainReceipt"
+        },
+        {
+          "$ref": "#/$defs/operationsDomainReceipt"
+        },
+        {
+          "$ref": "#/$defs/fencesDomainReceipt"
+        },
+        {
+          "$ref": "#/$defs/replayLedgersDomainReceipt"
+        },
+        {
+          "$ref": "#/$defs/releaseLedgersDomainReceipt"
+        },
+        {
+          "$ref": "#/$defs/credentialUsesDomainReceipt"
+        },
+        {
+          "$ref": "#/$defs/targetEffectsDomainReceipt"
+        },
+        {
+          "$ref": "#/$defs/policyDecisionsDomainReceipt"
+        },
+        {
+          "$ref": "#/$defs/evidenceDomainReceipt"
+        },
+        {
+          "$ref": "#/$defs/finalizationsDomainReceipt"
+        },
+        {
+          "$ref": "#/$defs/immutableObjectsDomainReceipt"
+        },
+        {
+          "$ref": "#/$defs/immutableInspectionsDomainReceipt"
+        },
+        {
+          "$ref": "#/$defs/terminalSettlementsDomainReceipt"
+        },
+        {
+          "$ref": "#/$defs/archivesDomainReceipt"
+        },
+        {
+          "$ref": "#/$defs/publisherOutboxDomainReceipt"
+        },
+        {
+          "$ref": "#/$defs/transparencyLeavesDomainReceipt"
+        },
+        {
+          "$ref": "#/$defs/transparencyCheckpointsDomainReceipt"
+        },
+        {
+          "$ref": "#/$defs/trustedTimeHighwaterDomainReceipt"
+        }
+      ],
+      "items": false
+    },
+    "providerGenerationsDomainReceipt": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/reconciliationDomainReceipt"
+        },
+        {
+          "properties": {
+            "domain": {
+              "const": "PROVIDER_GENERATIONS"
+            }
+          }
+        }
+      ]
+    },
+    "roleIdentitiesDomainReceipt": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/reconciliationDomainReceipt"
+        },
+        {
+          "properties": {
+            "domain": {
+              "const": "ROLE_IDENTITIES"
+            }
+          }
+        }
+      ]
+    },
+    "attemptsDomainReceipt": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/reconciliationDomainReceipt"
+        },
+        {
+          "properties": {
+            "domain": {
+              "const": "ATTEMPTS"
+            }
+          }
+        }
+      ]
+    },
+    "operationsDomainReceipt": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/reconciliationDomainReceipt"
+        },
+        {
+          "properties": {
+            "domain": {
+              "const": "OPERATIONS"
+            }
+          }
+        }
+      ]
+    },
+    "fencesDomainReceipt": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/reconciliationDomainReceipt"
+        },
+        {
+          "properties": {
+            "domain": {
+              "const": "FENCES"
+            }
+          }
+        }
+      ]
+    },
+    "replayLedgersDomainReceipt": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/reconciliationDomainReceipt"
+        },
+        {
+          "properties": {
+            "domain": {
+              "const": "REPLAY_LEDGERS"
+            }
+          }
+        }
+      ]
+    },
+    "releaseLedgersDomainReceipt": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/reconciliationDomainReceipt"
+        },
+        {
+          "properties": {
+            "domain": {
+              "const": "RELEASE_LEDGERS"
+            }
+          }
+        }
+      ]
+    },
+    "credentialUsesDomainReceipt": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/reconciliationDomainReceipt"
+        },
+        {
+          "properties": {
+            "domain": {
+              "const": "CREDENTIAL_USES"
+            }
+          }
+        }
+      ]
+    },
+    "targetEffectsDomainReceipt": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/reconciliationDomainReceipt"
+        },
+        {
+          "properties": {
+            "domain": {
+              "const": "TARGET_EFFECTS"
+            }
+          }
+        }
+      ]
+    },
+    "policyDecisionsDomainReceipt": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/reconciliationDomainReceipt"
+        },
+        {
+          "properties": {
+            "domain": {
+              "const": "POLICY_DECISIONS"
+            }
+          }
+        }
+      ]
+    },
+    "evidenceDomainReceipt": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/reconciliationDomainReceipt"
+        },
+        {
+          "properties": {
+            "domain": {
+              "const": "EVIDENCE"
+            }
+          }
+        }
+      ]
+    },
+    "finalizationsDomainReceipt": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/reconciliationDomainReceipt"
+        },
+        {
+          "properties": {
+            "domain": {
+              "const": "FINALIZATIONS"
+            }
+          }
+        }
+      ]
+    },
+    "immutableObjectsDomainReceipt": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/reconciliationDomainReceipt"
+        },
+        {
+          "properties": {
+            "domain": {
+              "const": "IMMUTABLE_OBJECTS"
+            }
+          }
+        }
+      ]
+    },
+    "immutableInspectionsDomainReceipt": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/reconciliationDomainReceipt"
+        },
+        {
+          "properties": {
+            "domain": {
+              "const": "IMMUTABLE_INSPECTIONS"
+            }
+          }
+        }
+      ]
+    },
+    "terminalSettlementsDomainReceipt": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/reconciliationDomainReceipt"
+        },
+        {
+          "properties": {
+            "domain": {
+              "const": "TERMINAL_SETTLEMENTS"
+            }
+          }
+        }
+      ]
+    },
+    "archivesDomainReceipt": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/reconciliationDomainReceipt"
+        },
+        {
+          "properties": {
+            "domain": {
+              "const": "ARCHIVES"
+            }
+          }
+        }
+      ]
+    },
+    "publisherOutboxDomainReceipt": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/reconciliationDomainReceipt"
+        },
+        {
+          "properties": {
+            "domain": {
+              "const": "PUBLISHER_OUTBOX"
+            }
+          }
+        }
+      ]
+    },
+    "transparencyLeavesDomainReceipt": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/reconciliationDomainReceipt"
+        },
+        {
+          "properties": {
+            "domain": {
+              "const": "TRANSPARENCY_LEAVES"
+            }
+          }
+        }
+      ]
+    },
+    "transparencyCheckpointsDomainReceipt": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/reconciliationDomainReceipt"
+        },
+        {
+          "properties": {
+            "domain": {
+              "const": "TRANSPARENCY_CHECKPOINTS"
+            }
+          }
+        }
+      ]
+    },
+    "trustedTimeHighwaterDomainReceipt": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/reconciliationDomainReceipt"
+        },
+        {
+          "properties": {
+            "domain": {
+              "const": "TRUSTED_TIME_HIGHWATER"
+            }
+          }
+        }
+      ]
+    },
+    "generationReadyPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mutation",
+        "parameters"
+      ],
+      "properties": {
+        "mutation": {
+          "const": "responseV2.generation.ready/v1"
+        },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "reconciliationCheckpointSha256",
+            "roleReadinessArtifacts",
+            "routerTopologyAttestation"
+          ],
+          "properties": {
+            "reconciliationCheckpointSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "roleReadinessArtifacts": {
+              "$ref": "#/$defs/exactRoleReadinessArtifacts"
+            },
+            "routerTopologyAttestation": {
+              "$ref": "response-v2-nested-authority-artifact.v1.schema.json#/$defs/routerTopologyAttestationArtifact"
+            }
+          }
+        }
+      }
+    },
+    "reservePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mutation",
+        "parameters"
+      ],
+      "properties": {
+        "mutation": {
+          "const": "responseV2.attempt.reserve/v1"
+        },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "stableResumeId",
+            "ownerProcessId",
+            "ownerPid",
+            "ownerStartTimeTicks",
+            "ownerCgroupId",
+            "attemptDeadline",
+            "requestSha256",
+            "routeSha256",
+            "credentialScopeSha256"
+          ],
+          "properties": {
+            "stableResumeId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "ownerProcessId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "ownerPid": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 4294967295
+            },
+            "ownerStartTimeTicks": {
+              "$ref": "#/$defs/positiveSafeUint"
+            },
+            "ownerCgroupId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "attemptDeadline": {
+              "$ref": "#/$defs/bootDeadline"
+            },
+            "requestSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "routeSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "credentialScopeSha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        }
+      }
+    },
+    "authorizePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mutation",
+        "parameters"
+      ],
+      "properties": {
+        "mutation": {
+          "const": "responseV2.attempt.authorize/v1"
+        },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "policyDecisionId",
+            "policyGenerationSha256",
+            "authorizationArtifacts"
+          ],
+          "properties": {
+            "policyDecisionId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "policyGenerationSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "authorizationArtifacts": {
+              "$ref": "#/$defs/artifactArray"
+            }
+          }
+        }
+      }
+    },
+    "commitRawPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mutation",
+        "parameters"
+      ],
+      "properties": {
+        "mutation": {
+          "const": "responseV2.object.commitRaw/v1"
+        },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "objectId",
+            "objectKind",
+            "mediaType",
+            "expectedContentLength",
+            "expectedContentSha256",
+            "storageLocator",
+            "immutableStorageReceiptSha256",
+            "artifactCommit"
+          ],
+          "properties": {
+            "objectId": {
+              "type": "string",
+              "minLength": 68,
+              "maxLength": 68,
+              "pattern": "^obj:[0-9a-f]{64}$"
+            },
+            "objectKind": {
+              "$ref": "#/$defs/identifier"
+            },
+            "mediaType": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "expectedContentLength": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 34603008
+            },
+            "expectedContentSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "storageLocator": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024
+            },
+            "immutableStorageReceiptSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "artifactCommit": {
+              "$ref": "#/$defs/artifact"
+            }
+          }
+        }
+      }
+    },
+    "inspectImmutableRawPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mutation",
+        "parameters"
+      ],
+      "properties": {
+        "mutation": {
+          "const": "responseV2.object.inspectImmutableRaw/v1"
+        },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "inspectionId",
+            "object",
+            "inspectionPurposeSha256",
+            "expectedImmutableStorageReceiptSha256",
+            "requireNoByteRelease"
+          ],
+          "properties": {
+            "inspectionId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "object": {
+              "$ref": "#/$defs/rawObjectReference"
+            },
+            "inspectionPurposeSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "expectedImmutableStorageReceiptSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "requireNoByteRelease": {
+              "const": true
+            }
+          }
+        }
+      }
+    },
+    "stagePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mutation",
+        "parameters"
+      ],
+      "properties": {
+        "mutation": {
+          "const": "responseV2.attempt.stage/v1"
+        },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "stagedRequestObject",
+            "credentialBindingSha256",
+            "transitionArtifacts"
+          ],
+          "properties": {
+            "stagedRequestObject": {
+              "$ref": "#/$defs/rawObjectReference"
+            },
+            "credentialBindingSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "transitionArtifacts": {
+              "$ref": "#/$defs/artifactArray"
+            }
+          }
+        }
+      }
+    },
+    "beginDispatchPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mutation",
+        "parameters"
+      ],
+      "properties": {
+        "mutation": {
+          "const": "responseV2.dispatch.begin/v1"
+        },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "targetEffectId",
+            "credentialUseId",
+            "credentialBindingSha256",
+            "idempotencyKeySha256",
+            "requestObject",
+            "transportAuthorization"
+          ],
+          "properties": {
+            "targetEffectId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "credentialUseId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "credentialBindingSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "idempotencyKeySha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "requestObject": {
+              "$ref": "#/$defs/rawObjectReference"
+            },
+            "transportAuthorization": {
+              "$ref": "#/$defs/artifact"
+            }
+          }
+        }
+      }
+    },
+    "dispatchOutcomePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mutation",
+        "parameters"
+      ],
+      "properties": {
+        "mutation": {
+          "const": "responseV2.dispatch.recordOutcome/v1"
+        },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "targetEffectId",
+            "outcome",
+            "responseObject",
+            "uncertaintyCode",
+            "transportEvidence"
+          ],
+          "properties": {
+            "targetEffectId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "outcome": {
+              "enum": [
+                "OUTCOME_UNKNOWN",
+                "OBSERVED"
+              ]
+            },
+            "responseObject": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/rawObjectReference"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "uncertaintyCode": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/identifier"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "transportEvidence": {
+              "$ref": "#/$defs/artifact"
+            }
+          }
+        }
+      }
+    },
+    "terminalizePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mutation",
+        "parameters"
+      ],
+      "properties": {
+        "mutation": {
+          "const": "responseV2.attempt.terminalize/v1"
+        },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "settlementId",
+            "appendSequence",
+            "predecessorSettlementSha256",
+            "stableResumeId",
+            "originalDeadline",
+            "cleanupDeadline",
+            "terminalCode",
+            "terminalDetailSha256",
+            "settledAtBootId",
+            "settledAtBootMillis",
+            "terminalArtifacts",
+            "terminalArtifactsRootSha256",
+            "appendOnly",
+            "replacementProhibited"
+          ],
+          "properties": {
+            "settlementId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "appendSequence": {
+              "$ref": "#/$defs/positiveSafeUint"
+            },
+            "predecessorSettlementSha256": {
+              "$ref": "#/$defs/nullableSha256"
+            },
+            "stableResumeId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "originalDeadline": {
+              "$ref": "#/$defs/bootDeadline"
+            },
+            "cleanupDeadline": {
+              "$ref": "#/$defs/bootDeadline"
+            },
+            "terminalCode": {
+              "$ref": "#/$defs/identifier"
+            },
+            "terminalDetailSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "settledAtBootId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "settledAtBootMillis": {
+              "$ref": "#/$defs/safeUint"
+            },
+            "terminalArtifacts": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 3,
+              "uniqueItems": true,
+              "items": {
+                "$ref": "#/$defs/artifact"
+              },
+              "allOf": [
+                {
+                  "contains": {
+                    "$ref": "response-v2-nested-authority-artifact.v1.schema.json#/$defs/stateCasArtifact"
+                  },
+                  "minContains": 1,
+                  "maxContains": 1
+                },
+                {
+                  "contains": {
+                    "type": "object",
+                    "properties": {
+                      "body": {
+                        "$ref": "response-v2-nested-authority-artifact.v1.schema.json#/$defs/bindCleanupObservationArtifact"
+                      }
+                    }
+                  },
+                  "minContains": 1,
+                  "maxContains": 1
+                }
+              ]
+            },
+            "terminalArtifactsRootSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "appendOnly": {
+              "const": true
+            },
+            "replacementProhibited": {
+              "const": true
+            }
+          }
+        }
+      }
+    },
+    "immutableInspectionResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "inspectionId",
+        "inspectionOperationId",
+        "objectReference",
+        "immutableStorageReceiptSha256",
+        "inspectionPurposeSha256",
+        "inspectedAtBootId",
+        "inspectedAtBootMillis",
+        "signedInspectionArtifact",
+        "inspectionArtifactSha256",
+        "bytesImmutable",
+        "replacementProhibited"
+      ],
+      "properties": {
+        "inspectionId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "inspectionOperationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "objectReference": {
+          "$ref": "#/$defs/rawObjectReference"
+        },
+        "immutableStorageReceiptSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "inspectionPurposeSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "inspectedAtBootId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "inspectedAtBootMillis": {
+          "$ref": "#/$defs/safeUint"
+        },
+        "signedInspectionArtifact": {
+          "$ref": "response-v2-nested-authority-artifact.v1.schema.json#/$defs/immutableInspectionArtifact"
+        },
+        "inspectionArtifactSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "bytesImmutable": {
+          "const": true
+        },
+        "replacementProhibited": {
+          "const": true
+        }
+      }
+    },
+    "finalizePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mutation",
+        "parameters"
+      ],
+      "properties": {
+        "mutation": {
+          "const": "responseV2.attempt.finalize/v1"
+        },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "finalizationId",
+            "finalEnvelope",
+            "finalEnvelopeVerification",
+            "artifactLedgerEvidence"
+          ],
+          "properties": {
+            "finalizationId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "finalEnvelope": {
+              "$ref": "response-v2-canonical-final-envelope.v1.schema.json"
+            },
+            "finalEnvelopeVerification": {
+              "$ref": "#/$defs/artifact"
+            },
+            "artifactLedgerEvidence": {
+              "$ref": "#/$defs/artifact"
+            }
+          }
+        }
+      }
+    },
+    "publishPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mutation",
+        "parameters"
+      ],
+      "properties": {
+        "mutation": {
+          "const": "responseV2.attempt.publish/v1"
+        },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "publicationId",
+            "outboxId",
+            "finalizationId",
+            "payloadObject",
+            "publisherAuthorization"
+          ],
+          "properties": {
+            "publicationId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "outboxId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "finalizationId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "payloadObject": {
+              "$ref": "#/$defs/rawObjectReference"
+            },
+            "publisherAuthorization": {
+              "$ref": "#/$defs/artifact"
+            }
+          }
+        }
+      }
+    },
+    "releasePreparationMutationBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "releaseAuthorizationId",
+        "releaseRequestSha256",
+        "inspectionResultSha256",
+        "releaseObject",
+        "clientBindingSha256",
+        "exactReplayKeySha256"
+      ],
+      "properties": {
+        "releaseAuthorizationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "releaseRequestSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "inspectionResultSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "releaseObject": {
+          "$ref": "#/$defs/rawObjectReference"
+        },
+        "clientBindingSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "exactReplayKeySha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "canonicalInspectionSeed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "kind",
+        "schemaVersion",
+        "body",
+        "bodySha256",
+        "authorityArtifacts"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.responseV2.canonicalFinalEnvelope/v1"
+        },
+        "kind": {
+          "const": "ResponseV2InspectionSeed"
+        },
+        "schemaVersion": {
+          "const": "1"
+        },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "generationId",
+            "attemptId",
+            "attemptRevision",
+            "fenceToken",
+            "stableResumeId",
+            "rawResponseObject",
+            "inspectionResultSha256",
+            "authorityArtifactsRootSha256"
+          ],
+          "properties": {
+            "generationId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "attemptId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "attemptRevision": {
+              "$ref": "#/$defs/positiveSafeUint"
+            },
+            "fenceToken": {
+              "$ref": "#/$defs/identifier"
+            },
+            "stableResumeId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "rawResponseObject": {
+              "$ref": "#/$defs/rawObjectReference"
+            },
+            "inspectionResultSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "authorityArtifactsRootSha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        },
+        "bodySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "authorityArtifacts": {
+          "type": "array",
+          "minItems": 9,
+          "maxItems": 9,
+          "uniqueItems": true,
+          "prefixItems": [
+            {
+              "$ref": "response-v2-nested-authority-artifact.v1.schema.json#/$defs/credentialUseArtifact"
+            },
+            {
+              "$ref": "response-v2-nested-authority-artifact.v1.schema.json#/$defs/targetEffectArtifact"
+            },
+            {
+              "$ref": "response-v2-nested-authority-artifact.v1.schema.json#/$defs/policyProofArtifact"
+            },
+            {
+              "$ref": "response-v2-nested-authority-artifact.v1.schema.json#/$defs/transitionAuthorizationArtifact"
+            },
+            {
+              "$ref": "response-v2-nested-authority-artifact.v1.schema.json#/$defs/immutableInspectionArtifact"
+            },
+            {
+              "$ref": "response-v2-nested-authority-artifact.v1.schema.json#/$defs/attestationArtifact"
+            },
+            {
+              "$ref": "response-v2-nested-authority-artifact.v1.schema.json#/$defs/artifactCommitArtifact"
+            },
+            {
+              "$ref": "response-v2-nested-authority-artifact.v1.schema.json#/$defs/trustedTimeArtifact"
+            },
+            {
+              "$ref": "response-v2-nested-authority-artifact.v1.schema.json#/$defs/transparencyCheckpointArtifact"
+            }
+          ],
+          "items": false
+        }
+      }
+    },
+    "releasePreparationMutationReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "body",
+        "authentication"
+      ],
+      "properties": {
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "apiVersion",
+            "kind",
+            "schemaVersion",
+            "generationId",
+            "requestId",
+            "operationId",
+            "exactRequestSha256",
+            "attemptId",
+            "stableResumeId",
+            "releaseAuthorizationId",
+            "releaseRequestSha256",
+            "inspectionResultSha256",
+            "releaseObjectSha256",
+            "clientBindingSha256",
+            "exactReplayKeySha256",
+            "preauthorizationArtifactSha256",
+            "oneUseNonceSha256",
+            "predecessorRevision",
+            "predecessorState",
+            "successorRevision",
+            "successorState",
+            "fenceToken"
+          ],
+          "properties": {
+            "apiVersion": {
+              "const": "serverware.responseV2.stateAuthority/v1"
+            },
+            "kind": {
+              "const": "ResponseV2ReleasePreparationMutationReceipt"
+            },
+            "schemaVersion": {
+              "const": "1"
+            },
+            "generationId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "requestId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "operationId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "exactRequestSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "attemptId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "stableResumeId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "releaseAuthorizationId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "releaseRequestSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "inspectionResultSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "releaseObjectSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "clientBindingSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "exactReplayKeySha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "preauthorizationArtifactSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "oneUseNonceSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "predecessorRevision": {
+              "$ref": "#/$defs/safeUint"
+            },
+            "predecessorState": {
+              "$ref": "#/$defs/attemptState"
+            },
+            "successorRevision": {
+              "$ref": "#/$defs/positiveSafeUint"
+            },
+            "successorState": {
+              "const": "RELEASE_PREPARED"
+            },
+            "fenceToken": {
+              "$ref": "#/$defs/identifier"
+            }
+          }
+        },
+        "authentication": {
+          "$ref": "#/$defs/authentication"
+        }
+      }
+    },
+    "releasePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mutation",
+        "parameters"
+      ],
+      "properties": {
+        "mutation": {
+          "const": "responseV2.release.consumeAndRetrieveExact/v1"
+        },
+        "parameters": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "phase",
+                "parameters"
+              ],
+              "properties": {
+                "phase": {
+                  "const": "PREPARE"
+                },
+                "parameters": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "binding",
+                    "inspectionSeed",
+                    "releaseAuthorization",
+                    "releaseConsumptionPreauthorization"
+                  ],
+                  "properties": {
+                    "binding": {
+                      "$ref": "#/$defs/releasePreparationMutationBinding"
+                    },
+                    "inspectionSeed": {
+                      "$ref": "#/$defs/canonicalInspectionSeed"
+                    },
+                    "releaseAuthorization": {
+                      "$ref": "#/$defs/artifact"
+                    },
+                    "releaseConsumptionPreauthorization": {
+                      "$ref": "response-v2-nested-authority-artifact.v1.schema.json#/$defs/releaseConsumptionPreauthorizationArtifact"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "phase",
+                "parameters"
+              ],
+              "properties": {
+                "phase": {
+                  "const": "RETRIEVE"
+                },
+                "parameters": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "binding",
+                    "preparedConsumptionReceipt",
+                    "finalEnvelopeVerification"
+                  ],
+                  "properties": {
+                    "binding": {
+                      "$ref": "#/$defs/releasePreparationMutationBinding"
+                    },
+                    "preparedConsumptionReceipt": {
+                      "$ref": "#/$defs/releasePreparationMutationReceipt"
+                    },
+                    "finalEnvelopeVerification": {
+                      "$ref": "#/$defs/artifact"
+                    }
+                  }
+                }
+              },
+              "$comment": "RETRIEVE is a read-only lookup against a durable PREPARE result. It MUST NOT advance the attempt revision or perform a second release CAS."
+            }
+          ]
+        }
+      }
+    },
+    "resolveReplayPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mutation",
+        "parameters"
+      ],
+      "properties": {
+        "mutation": {
+          "const": "responseV2.release.resolveReplay/v1"
+        },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "sourceReplayId",
+            "sourceOperationId",
+            "sourceExactRequestSha256",
+            "sourceCanonicalResultSha256",
+            "stableResumeId"
+          ],
+          "properties": {
+            "sourceReplayId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "sourceOperationId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "sourceExactRequestSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "sourceCanonicalResultSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "stableResumeId": {
+              "$ref": "#/$defs/identifier"
+            }
+          }
+        }
+      }
+    },
+    "settleAttemptPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mutation",
+        "parameters"
+      ],
+      "properties": {
+        "mutation": {
+          "const": "responseV2.attempt.settle/v1"
+        },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "stableResumeId",
+            "terminalCode",
+            "terminalDetailSha256",
+            "targetEffectId",
+            "upstreamResponseSha256",
+            "observedBootId",
+            "observedBootMillis",
+            "cleanupDeadline",
+            "reconciliationEvidence",
+            "recoveryEvidence"
+          ],
+          "properties": {
+            "stableResumeId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "terminalCode": {
+              "$ref": "#/$defs/identifier"
+            },
+            "terminalDetailSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "targetEffectId": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/identifier"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "upstreamResponseSha256": {
+              "$ref": "#/$defs/nullableSha256"
+            },
+            "observedBootId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "observedBootMillis": {
+              "$ref": "#/$defs/safeUint"
+            },
+            "cleanupDeadline": {
+              "$ref": "#/$defs/bootDeadline"
+            },
+            "reconciliationEvidence": {
+              "$ref": "#/$defs/artifact"
+            },
+            "recoveryEvidence": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/artifact"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "archivePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mutation",
+        "parameters"
+      ],
+      "properties": {
+        "mutation": {
+          "const": "responseV2.attempt.archive/v1"
+        },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "archiveId",
+            "finalizationId",
+            "objectIds",
+            "canonicalArchiveSha256",
+            "archiveEvidence"
+          ],
+          "properties": {
+            "archiveId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "finalizationId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "objectIds": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 256,
+              "uniqueItems": true,
+              "items": {
+                "$ref": "#/$defs/identifier"
+              }
+            },
+            "canonicalArchiveSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "archiveEvidence": {
+              "$ref": "#/$defs/artifact"
+            }
+          }
+        }
+      }
+    },
+    "revokeFencePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mutation",
+        "parameters"
+      ],
+      "properties": {
+        "mutation": {
+          "const": "responseV2.fence.revoke/v1"
+        },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "reasonCode",
+            "cleanupAuthorization"
+          ],
+          "properties": {
+            "reasonCode": {
+              "$ref": "#/$defs/identifier"
+            },
+            "cleanupAuthorization": {
+              "$ref": "#/$defs/artifact"
+            }
+          }
+        }
+      }
+    },
+    "quiescencePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mutation",
+        "parameters"
+      ],
+      "properties": {
+        "mutation": {
+          "const": "responseV2.fence.observeQuiescence/v1"
+        },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ownerProcessId",
+            "ownerPid",
+            "ownerStartTimeTicks",
+            "ownerCgroupId",
+            "ownerDeathObserved",
+            "cgroupEmptyObserved",
+            "cgroupDeathObserved",
+            "cleanupObservation"
+          ],
+          "properties": {
+            "ownerProcessId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "ownerPid": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 4294967295
+            },
+            "ownerStartTimeTicks": {
+              "$ref": "#/$defs/positiveSafeUint"
+            },
+            "ownerCgroupId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "ownerDeathObserved": {
+              "const": true
+            },
+            "cgroupEmptyObserved": {
+              "const": true
+            },
+            "cgroupDeathObserved": {
+              "const": true
+            },
+            "cleanupObservation": {
+              "$ref": "#/$defs/artifact"
+            }
+          }
+        }
+      }
+    },
+    "evidencePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mutation",
+        "parameters"
+      ],
+      "properties": {
+        "mutation": {
+          "const": "responseV2.evidence.append/v1"
+        },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "evidenceId",
+            "evidenceType",
+            "object",
+            "evidence"
+          ],
+          "properties": {
+            "evidenceId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "evidenceType": {
+              "$ref": "#/$defs/identifier"
+            },
+            "object": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/rawObjectReference"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "evidence": {
+              "$ref": "#/$defs/artifact"
+            }
+          }
+        }
+      }
+    },
+    "enqueuePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mutation",
+        "parameters"
+      ],
+      "properties": {
+        "mutation": {
+          "const": "responseV2.publisher.enqueue/v1"
+        },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "outboxId",
+            "publicationId",
+            "finalizationId",
+            "payloadObject",
+            "publisherAuthorization"
+          ],
+          "properties": {
+            "outboxId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "publicationId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "finalizationId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "payloadObject": {
+              "$ref": "#/$defs/rawObjectReference"
+            },
+            "publisherAuthorization": {
+              "$ref": "#/$defs/artifact"
+            }
+          }
+        }
+      }
+    },
+    "acknowledgePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mutation",
+        "parameters"
+      ],
+      "properties": {
+        "mutation": {
+          "const": "responseV2.publisher.acknowledge/v1"
+        },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "outboxId",
+            "publicationId",
+            "finalizationId",
+            "deliveredObjectSha256",
+            "publisherReceipt"
+          ],
+          "properties": {
+            "outboxId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "publicationId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "finalizationId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "deliveredObjectSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "publisherReceipt": {
+              "$ref": "#/$defs/artifact"
+            }
+          }
+        }
+      }
+    },
+    "checkpointPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mutation",
+        "parameters"
+      ],
+      "properties": {
+        "mutation": {
+          "const": "responseV2.transparency.checkpoint/v1"
+        },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "checkpoint"
+          ],
+          "properties": {
+            "checkpoint": {
+              "$ref": "response-v2-signed-checkpoint.v1.schema.json"
+            }
+          }
+        }
+      }
+    },
+    "trustedTimePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mutation",
+        "parameters"
+      ],
+      "properties": {
+        "mutation": {
+          "const": "responseV2.trustedTime.advance/v1"
+        },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "clockId",
+            "epochMillis",
+            "sequence",
+            "trustedTimeEvidence"
+          ],
+          "properties": {
+            "clockId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "epochMillis": {
+              "$ref": "#/$defs/safeUint"
+            },
+            "sequence": {
+              "$ref": "#/$defs/positiveSafeUint"
+            },
+            "trustedTimeEvidence": {
+              "$ref": "#/$defs/artifact"
+            }
+          }
+        }
+      }
+    },
+    "reconciliationPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mutation",
+        "parameters"
+      ],
+      "properties": {
+        "mutation": {
+          "const": "responseV2.reconciliation.transition/v1"
+        },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "reconciliationJobId",
+            "domain",
+            "expectedReconciliationState",
+            "successorReconciliationState",
+            "authoritativeCursor",
+            "blockerCode",
+            "reconciliationEvidence"
+          ],
+          "properties": {
+            "reconciliationJobId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "domain": {
+              "$ref": "#/$defs/reconciliationDomain"
+            },
+            "expectedReconciliationState": {
+              "$ref": "#/$defs/reconciliationState"
+            },
+            "successorReconciliationState": {
+              "$ref": "#/$defs/reconciliationState"
+            },
+            "authoritativeCursor": {
+              "$ref": "#/$defs/safeUint"
+            },
+            "blockerCode": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/identifier"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "reconciliationEvidence": {
+              "$ref": "#/$defs/artifact"
+            }
+          }
+        }
+      }
+    },
+    "terminalizeExpiredAttemptPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mutation",
+        "parameters"
+      ],
+      "properties": {
+        "mutation": {
+          "const": "responseV2.reconciliation.terminalizeExpiredAttempt/v1"
+        },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "settlementId",
+            "appendSequence",
+            "predecessorSettlementSha256",
+            "stableResumeId",
+            "originalDeadline",
+            "cleanupDeadline",
+            "observedBootId",
+            "observedBootMillis",
+            "terminalCode",
+            "terminalDetailSha256",
+            "stateTransitionEvidence",
+            "recoveryEvidence",
+            "cleanupEvidence",
+            "terminalArtifactsRootSha256",
+            "appendOnly",
+            "replacementProhibited"
+          ],
+          "properties": {
+            "settlementId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "appendSequence": {
+              "$ref": "#/$defs/positiveSafeUint"
+            },
+            "predecessorSettlementSha256": {
+              "$ref": "#/$defs/nullableSha256"
+            },
+            "stableResumeId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "originalDeadline": {
+              "$ref": "#/$defs/bootDeadline"
+            },
+            "cleanupDeadline": {
+              "$ref": "#/$defs/bootDeadline"
+            },
+            "observedBootId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "observedBootMillis": {
+              "$ref": "#/$defs/safeUint"
+            },
+            "terminalCode": {
+              "const": "DEADLINE_EXPIRED"
+            },
+            "terminalDetailSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "stateTransitionEvidence": {
+              "$ref": "response-v2-nested-authority-artifact.v1.schema.json#/$defs/stateCasArtifact"
+            },
+            "recoveryEvidence": {
+              "allOf": [
+                {
+                  "$ref": "response-v2-nested-authority-artifact.v1.schema.json"
+                },
+                {
+                  "properties": {
+                    "body": {
+                      "$ref": "response-v2-nested-authority-artifact.v1.schema.json#/$defs/bindRecoveryArtifact"
+                    }
+                  }
+                }
+              ]
+            },
+            "cleanupEvidence": {
+              "allOf": [
+                {
+                  "$ref": "response-v2-nested-authority-artifact.v1.schema.json"
+                },
+                {
+                  "properties": {
+                    "body": {
+                      "$ref": "response-v2-nested-authority-artifact.v1.schema.json#/$defs/bindCleanupObservationArtifact"
+                    }
+                  }
+                }
+              ]
+            },
+            "terminalArtifactsRootSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "appendOnly": {
+              "const": true
+            },
+            "replacementProhibited": {
+              "const": true
+            }
+          }
+        }
+      }
+    },
+    "reconciliationState": {
+      "enum": [
+        "PENDING",
+        "RUNNING",
+        "BLOCKED",
+        "COMPLETE",
+        "FAILED"
+      ]
+    },
+    "bindReserve": {
+      "properties": {
+        "operation": {
+          "const": "responseV2.attempt.reserve/v1"
+        },
+        "expectedRevision": {
+          "const": 0
+        },
+        "expectedState": {
+          "const": "ABSENT"
+        },
+        "fence": {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "const": "ALLOCATE"
+            }
+          }
+        },
+        "payload": {
+          "$ref": "#/$defs/reservePayload"
+        }
+      }
+    },
+    "bindAuthorize": {
+      "$ref": "#/$defs/bindAuthorizeShape"
+    },
+    "bindAuthorizeShape": {
+      "properties": {
+        "operation": {
+          "const": "responseV2.attempt.authorize/v1"
+        },
+        "payload": {
+          "$ref": "#/$defs/authorizePayload"
+        }
+      }
+    },
+    "bindCommitRaw": {
+      "properties": {
+        "operation": {
+          "const": "responseV2.object.commitRaw/v1"
+        },
+        "payload": {
+          "$ref": "#/$defs/commitRawPayload"
+        }
+      }
+    },
+    "bindInspectImmutableRaw": {
+      "properties": {
+        "operation": {
+          "const": "responseV2.object.inspectImmutableRaw/v1"
+        },
+        "payload": {
+          "$ref": "#/$defs/inspectImmutableRawPayload"
+        }
+      }
+    },
+    "bindStage": {
+      "properties": {
+        "operation": {
+          "const": "responseV2.attempt.stage/v1"
+        },
+        "payload": {
+          "$ref": "#/$defs/stagePayload"
+        }
+      }
+    },
+    "bindBeginDispatch": {
+      "properties": {
+        "operation": {
+          "const": "responseV2.dispatch.begin/v1"
+        },
+        "payload": {
+          "$ref": "#/$defs/beginDispatchPayload"
+        }
+      }
+    },
+    "bindDispatchOutcome": {
+      "properties": {
+        "operation": {
+          "const": "responseV2.dispatch.recordOutcome/v1"
+        },
+        "payload": {
+          "$ref": "#/$defs/dispatchOutcomePayload"
+        }
+      }
+    },
+    "bindTerminalize": {
+      "properties": {
+        "operation": {
+          "const": "responseV2.attempt.terminalize/v1"
+        },
+        "payload": {
+          "$ref": "#/$defs/terminalizePayload"
+        }
+      }
+    },
+    "bindFinalize": {
+      "properties": {
+        "operation": {
+          "const": "responseV2.attempt.finalize/v1"
+        },
+        "payload": {
+          "$ref": "#/$defs/finalizePayload"
+        }
+      }
+    },
+    "bindPublish": {
+      "properties": {
+        "operation": {
+          "const": "responseV2.attempt.publish/v1"
+        },
+        "payload": {
+          "$ref": "#/$defs/publishPayload"
+        }
+      }
+    },
+    "bindRelease": {
+      "properties": {
+        "operation": {
+          "const": "responseV2.release.consumeAndRetrieveExact/v1"
+        },
+        "payload": {
+          "$ref": "#/$defs/releasePayload"
+        }
+      }
+    },
+    "bindResolveReplay": {
+      "properties": {
+        "operation": {
+          "const": "responseV2.release.resolveReplay/v1"
+        },
+        "payload": {
+          "$ref": "#/$defs/resolveReplayPayload"
+        }
+      }
+    },
+    "bindSettleAttempt": {
+      "properties": {
+        "operation": {
+          "const": "responseV2.attempt.settle/v1"
+        },
+        "payload": {
+          "$ref": "#/$defs/settleAttemptPayload"
+        }
+      }
+    },
+    "bindArchive": {
+      "properties": {
+        "operation": {
+          "const": "responseV2.attempt.archive/v1"
+        },
+        "payload": {
+          "$ref": "#/$defs/archivePayload"
+        }
+      }
+    },
+    "bindRevokeFence": {
+      "properties": {
+        "operation": {
+          "const": "responseV2.fence.revoke/v1"
+        },
+        "payload": {
+          "$ref": "#/$defs/revokeFencePayload"
+        }
+      }
+    },
+    "bindQuiescence": {
+      "properties": {
+        "operation": {
+          "const": "responseV2.fence.observeQuiescence/v1"
+        },
+        "payload": {
+          "$ref": "#/$defs/quiescencePayload"
+        }
+      }
+    },
+    "bindEvidence": {
+      "properties": {
+        "operation": {
+          "const": "responseV2.evidence.append/v1"
+        },
+        "payload": {
+          "$ref": "#/$defs/evidencePayload"
+        }
+      }
+    },
+    "bindEnqueue": {
+      "properties": {
+        "operation": {
+          "const": "responseV2.publisher.enqueue/v1"
+        },
+        "payload": {
+          "$ref": "#/$defs/enqueuePayload"
+        }
+      }
+    },
+    "bindAcknowledge": {
+      "properties": {
+        "operation": {
+          "const": "responseV2.publisher.acknowledge/v1"
+        },
+        "payload": {
+          "$ref": "#/$defs/acknowledgePayload"
+        }
+      }
+    },
+    "bindCheckpoint": {
+      "properties": {
+        "operation": {
+          "const": "responseV2.transparency.checkpoint/v1"
+        },
+        "payload": {
+          "$ref": "#/$defs/checkpointPayload"
+        }
+      }
+    },
+    "bindTrustedTime": {
+      "properties": {
+        "operation": {
+          "const": "responseV2.trustedTime.advance/v1"
+        },
+        "payload": {
+          "$ref": "#/$defs/trustedTimePayload"
+        }
+      }
+    },
+    "bindReconciliation": {
+      "properties": {
+        "operation": {
+          "const": "responseV2.reconciliation.transition/v1"
+        },
+        "payload": {
+          "$ref": "#/$defs/reconciliationPayload"
+        }
+      }
+    },
+    "bindTerminalizeExpiredAttempt": {
+      "properties": {
+        "operation": {
+          "const": "responseV2.reconciliation.terminalizeExpiredAttempt/v1"
+        },
+        "payload": {
+          "$ref": "#/$defs/terminalizeExpiredAttemptPayload"
+        }
+      }
+    },
+    "generationRequestFrame": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "request",
+        "authentication"
+      ],
+      "properties": {
+        "request": {
+          "$ref": "#/$defs/generationRequest"
+        },
+        "authentication": {
+          "$ref": "#/$defs/authentication"
+        }
+      }
+    },
+    "generationRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "kind",
+        "schemaVersion",
+        "generationId",
+        "requestId",
+        "operationId",
+        "callerRoleId",
+        "operation",
+        "deadline",
+        "payload"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.responseV2.stateAuthority/v1"
+        },
+        "kind": {
+          "const": "ServerwareResponseV2StateAuthorityGenerationRpc"
+        },
+        "schemaVersion": {
+          "const": "1"
+        },
+        "generationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "requestId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "operationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "callerRoleId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "operation": {
+          "$ref": "#/$defs/generationOperation"
+        },
+        "deadline": {
+          "$ref": "#/$defs/bootDeadline"
+        },
+        "payload": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/generationInstallPayload"
+            },
+            {
+              "$ref": "#/$defs/generationReconcilePayload"
+            },
+            {
+              "$ref": "#/$defs/generationReadyPayload"
+            },
+            {
+              "$ref": "#/$defs/generationQueryPayload"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "oneOf": [
+            {
+              "properties": {
+                "operation": {
+                  "const": "responseV2.generation.install/v1"
+                },
+                "payload": {
+                  "$ref": "#/$defs/generationInstallPayload"
+                }
+              }
+            },
+            {
+              "properties": {
+                "operation": {
+                  "const": "responseV2.generation.reconcile/v1"
+                },
+                "payload": {
+                  "$ref": "#/$defs/generationReconcilePayload"
+                }
+              }
+            },
+            {
+              "properties": {
+                "operation": {
+                  "const": "responseV2.generation.ready/v1"
+                },
+                "payload": {
+                  "$ref": "#/$defs/generationReadyPayload"
+                }
+              }
+            },
+            {
+              "properties": {
+                "operation": {
+                  "const": "responseV2.state.query/v1"
+                },
+                "payload": {
+                  "$ref": "#/$defs/generationQueryPayload"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "generationInstallPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mutation",
+        "parameters"
+      ],
+      "properties": {
+        "mutation": {
+          "const": "responseV2.generation.install/v1"
+        },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "generation",
+            "canonicalGenerationSha256"
+          ],
+          "properties": {
+            "generation": {
+              "$ref": "response-v2-provider-generation.v1.schema.json"
+            },
+            "canonicalGenerationSha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        }
+      }
+    },
+    "generationReconcilePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mutation",
+        "parameters"
+      ],
+      "properties": {
+        "mutation": {
+          "const": "responseV2.generation.reconcile/v1"
+        },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "reconciliationJobId",
+            "domain",
+            "predecessorState",
+            "successorState",
+            "authoritativeCursor",
+            "blockerCode",
+            "resultSha256"
+          ],
+          "properties": {
+            "reconciliationJobId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "domain": {
+              "$ref": "#/$defs/reconciliationDomain"
+            },
+            "predecessorState": {
+              "$ref": "#/$defs/reconciliationState"
+            },
+            "successorState": {
+              "$ref": "#/$defs/reconciliationState"
+            },
+            "authoritativeCursor": {
+              "$ref": "#/$defs/safeUint"
+            },
+            "blockerCode": {
+              "$ref": "#/$defs/nullableIdentifier"
+            },
+            "resultSha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        }
+      }
+    },
+    "generationQueryPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mutation",
+        "parameters"
+      ],
+      "properties": {
+        "mutation": {
+          "const": "responseV2.state.query/v1"
+        },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "querySha256"
+          ],
+          "properties": {
+            "querySha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        }
+      }
+    },
+    "signedGenerationResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "body",
+        "authentication"
+      ],
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/generationResultBody"
+        },
+        "authentication": {
+          "$ref": "#/$defs/authentication"
+        }
+      }
+    },
+    "generationResultBody": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "kind",
+        "schemaVersion",
+        "generationId",
+        "requestId",
+        "operationId",
+        "exactRequestSha256",
+        "operation",
+        "disposition",
+        "predecessorGenerationStatus",
+        "generationStatus",
+        "generationSha256",
+        "completedDomains",
+        "blockers",
+        "resultArtifactIds",
+        "conflictCode"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.responseV2.stateAuthority/v1"
+        },
+        "kind": {
+          "const": "ServerwareResponseV2StateAuthorityGenerationResult"
+        },
+        "schemaVersion": {
+          "const": "1"
+        },
+        "generationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "requestId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "operationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "exactRequestSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "operation": {
+          "$ref": "#/$defs/generationOperation"
+        },
+        "disposition": {
+          "enum": [
+            "APPLIED",
+            "OUTCOME_UNKNOWN",
+            "CONFLICT",
+            "REJECTED"
+          ]
+        },
+        "predecessorGenerationStatus": {
+          "oneOf": [
+            {
+              "enum": [
+                "PROVISIONED",
+                "RECONCILING",
+                "READY",
+                "QUARANTINED",
+                "RETIRED"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "generationStatus": {
+          "enum": [
+            "PROVISIONED",
+            "RECONCILING",
+            "READY",
+            "QUARANTINED",
+            "RETIRED"
+          ]
+        },
+        "generationSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "completedDomains": {
+          "type": "array",
+          "maxItems": 20,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/reconciliationDomain"
+          }
+        },
+        "blockers": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/identifier"
+          }
+        },
+        "resultArtifactIds": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/identifier"
+          }
+        },
+        "conflictCode": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/identifier"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "releasePreparationDurableResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "releaseAuthorizationId",
+        "finalizationId",
+        "releaseRequestSha256",
+        "inspectionResultSha256",
+        "releaseObjectSha256",
+        "clientBindingSha256",
+        "exactReplayKeySha256",
+        "oneUseNonceSha256",
+        "preauthorizationArtifactId",
+        "preauthorizationArtifactSha256",
+        "signedStateMutationReceipt",
+        "signedStateMutationReceiptSha256"
+      ],
+      "properties": {
+        "releaseAuthorizationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "finalizationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "releaseRequestSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "inspectionResultSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "releaseObjectSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "clientBindingSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "exactReplayKeySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "oneUseNonceSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "preauthorizationArtifactId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "preauthorizationArtifactSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "signedStateMutationReceipt": {
+          "$ref": "#/$defs/releasePreparationMutationReceipt"
+        },
+        "signedStateMutationReceiptSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "releasePreparationResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "durableResult",
+        "durableCanonicalResultSha256",
+        "releasePreparationReceipt",
+        "releasePreparationReceiptSha256"
+      ],
+      "properties": {
+        "durableResult": {
+          "$ref": "#/$defs/releasePreparationDurableResult"
+        },
+        "durableCanonicalResultSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "releasePreparationReceipt": {
+          "$ref": "response-v2-nested-authority-artifact.v1.schema.json#/$defs/releasePreparationReceiptArtifact"
+        },
+        "releasePreparationReceiptSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "releaseRetrievalResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "releaseAuthorizationId",
+        "exactReplayKeySha256",
+        "preparedCanonicalResultSha256",
+        "signedStateMutationReceiptSha256",
+        "releasePreparationReceiptSha256",
+        "finalizationId",
+        "finalEnvelopeSha256",
+        "finalEnvelopeVerificationSha256",
+        "releaseObjectSha256"
+      ],
+      "properties": {
+        "releaseAuthorizationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "exactReplayKeySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "preparedCanonicalResultSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "signedStateMutationReceiptSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "releasePreparationReceiptSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "finalizationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "finalEnvelopeSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "finalEnvelopeVerificationSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "releaseObjectSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "replayResolutionResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sourceReplayId",
+        "sourceOperationId",
+        "sourceExactRequestSha256",
+        "sourceCanonicalResultSha256",
+        "sourceCanonicalResultBase64url"
+      ],
+      "properties": {
+        "sourceReplayId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "sourceOperationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "sourceExactRequestSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "sourceCanonicalResultSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "sourceCanonicalResultBase64url": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 67108864,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        }
+      }
+    },
+    "settlementResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "terminalCode",
+        "terminalDetailSha256",
+        "predecessorRevision",
+        "predecessorState",
+        "successorRevision",
+        "successorState",
+        "targetEffectId",
+        "targetEffectState",
+        "upstreamResponseSha256",
+        "reconciliationArtifactId",
+        "reconciliationArtifactSha256",
+        "recoveryArtifactId",
+        "recoveryArtifactSha256"
+      ],
+      "properties": {
+        "terminalCode": {
+          "$ref": "#/$defs/identifier"
+        },
+        "terminalDetailSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "predecessorRevision": {
+          "$ref": "#/$defs/safeUint"
+        },
+        "predecessorState": {
+          "$ref": "#/$defs/attemptState"
+        },
+        "successorRevision": {
+          "$ref": "#/$defs/positiveSafeUint"
+        },
+        "successorState": {
+          "const": "TERMINAL_FAILED"
+        },
+        "targetEffectId": {
+          "$ref": "#/$defs/nullableIdentifier"
+        },
+        "targetEffectState": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/targetEffectState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "upstreamResponseSha256": {
+          "$ref": "#/$defs/nullableSha256"
+        },
+        "reconciliationArtifactId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "reconciliationArtifactSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "recoveryArtifactId": {
+          "$ref": "#/$defs/nullableIdentifier"
+        },
+        "recoveryArtifactSha256": {
+          "$ref": "#/$defs/nullableSha256"
+        }
+      }
+    },
+    "responseDataResult": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "resultType",
+            "result"
+          ],
+          "properties": {
+            "resultType": {
+              "const": "RELEASE_PREPARATION"
+            },
+            "result": {
+              "$ref": "#/$defs/releasePreparationResult"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "resultType",
+            "result"
+          ],
+          "properties": {
+            "resultType": {
+              "const": "RELEASE_RETRIEVAL"
+            },
+            "result": {
+              "$ref": "#/$defs/releaseRetrievalResult"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "resultType",
+            "result"
+          ],
+          "properties": {
+            "resultType": {
+              "const": "REPLAY_RESOLUTION"
+            },
+            "result": {
+              "$ref": "#/$defs/replayResolutionResult"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "resultType",
+            "result"
+          ],
+          "properties": {
+            "resultType": {
+              "const": "SETTLEMENT"
+            },
+            "result": {
+              "$ref": "#/$defs/settlementResult"
+            }
+          }
+        }
+      ]
+    },
+    "signedResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "body",
+        "authentication"
+      ],
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/resultBody"
+        },
+        "authentication": {
+          "$ref": "#/$defs/authentication"
+        }
+      }
+    },
+    "resultBody": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "kind",
+        "schemaVersion",
+        "generationId",
+        "requestId",
+        "operationId",
+        "exactRequestSha256",
+        "operation",
+        "attemptId",
+        "disposition",
+        "authoritativeRevision",
+        "authoritativeState",
+        "fenceToken",
+        "stableResumeId",
+        "resultArtifactIds",
+        "conflictCode",
+        "immutableInspection",
+        "retrievedImmutableRaw",
+        "responseDataResult"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.responseV2.stateAuthority/v1"
+        },
+        "kind": {
+          "const": "ServerwareResponseV2StateAuthorityResult"
+        },
+        "schemaVersion": {
+          "const": "1"
+        },
+        "generationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "requestId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "operationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "exactRequestSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "operation": {
+          "$ref": "#/$defs/operation"
+        },
+        "attemptId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "disposition": {
+          "enum": [
+            "APPLIED",
+            "OUTCOME_UNKNOWN",
+            "CONFLICT",
+            "REJECTED"
+          ]
+        },
+        "authoritativeRevision": {
+          "$ref": "#/$defs/positiveSafeUint"
+        },
+        "authoritativeState": {
+          "$ref": "#/$defs/attemptState"
+        },
+        "fenceToken": {
+          "type": "string",
+          "minLength": 70,
+          "maxLength": 70,
+          "pattern": "^fence:[0-9a-f]{64}$"
+        },
+        "stableResumeId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "resultArtifactIds": {
+          "type": "array",
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/identifier"
+          }
+        },
+        "conflictCode": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/identifier"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "immutableInspection": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/immutableInspectionResult"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "retrievedImmutableRaw": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/immutableRawObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "responseDataResult": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/responseDataResult"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "operation": {
+                "const": "responseV2.release.consumeAndRetrieveExact/v1"
+              },
+              "responseDataResult": {
+                "type": "object",
+                "properties": {
+                  "resultType": {
+                    "const": "RELEASE_RETRIEVAL"
+                  }
+                },
+                "required": [
+                  "resultType"
+                ]
+              },
+              "disposition": {
+                "const": "APPLIED"
+              }
+            },
+            "required": [
+              "operation",
+              "responseDataResult",
+              "disposition"
+            ]
+          },
+          "then": {
+            "properties": {
+              "retrievedImmutableRaw": {
+                "$ref": "#/$defs/immutableRawObject"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "retrievedImmutableRaw": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "operation": {
+                "enum": [
+                  "responseV2.release.consumeAndRetrieveExact/v1",
+                  "responseV2.release.resolveReplay/v1",
+                  "responseV2.attempt.settle/v1"
+                ]
+              },
+              "disposition": {
+                "const": "APPLIED"
+              }
+            },
+            "required": [
+              "operation",
+              "disposition"
+            ]
+          },
+          "then": {
+            "properties": {
+              "responseDataResult": {
+                "$ref": "#/$defs/responseDataResult"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "responseDataResult": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "operation": {
+                "const": "responseV2.object.inspectImmutableRaw/v1"
+              },
+              "disposition": {
+                "const": "APPLIED"
+              }
+            },
+            "required": [
+              "operation",
+              "disposition"
+            ]
+          },
+          "then": {
+            "properties": {
+              "immutableInspection": {
+                "$ref": "#/$defs/immutableInspectionResult"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "immutableInspection": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

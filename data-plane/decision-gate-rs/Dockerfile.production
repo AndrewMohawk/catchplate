@@ -1,7 +1,4 @@
 FROM scratch AS rust-production-dependency-cache
-COPY data-plane/decision-gate-rs/Cargo.toml /dependency-cache/data-plane/decision-gate-rs/Cargo.toml
-COPY data-plane/decision-gate-rs/Cargo.lock /dependency-cache/data-plane/decision-gate-rs/Cargo.lock
-COPY production-dependencies/rust-linux-amd64.sha256 /dependency-cache/rust-linux-amd64.sha256
 COPY production-dependencies/cache/cargo-vendor.tar.gz /dependency-cache/cache/cargo-vendor.tar.gz
 COPY production-dependencies/cache/musl-1.2.5-r12.apk /dependency-cache/cache/musl-1.2.5-r12.apk
 COPY production-dependencies/cache/musl-dev-1.2.5-r12.apk /dependency-cache/cache/musl-dev-1.2.5-r12.apk
@@ -9,13 +6,55 @@ COPY production-dependencies/cache/musl-dev-1.2.5-r12.apk /dependency-cache/cach
 FROM rust:1.88-slim-bookworm@sha256:38bc5a86d998772d4aec2348656ed21438d20fcdce2795b56ca434cf21430d89 AS build
 
 ARG SOURCE_DATE_EPOCH="0"
+ARG SERVERWARE_SOURCE_ARCHIVE
+ARG SERVERWARE_SOURCE_ARCHIVE_SHA256
+ARG SERVERWARE_SOURCE_MANIFEST
+ARG SERVERWARE_SOURCE_MANIFEST_SHA256
+ARG SERVERWARE_SOURCE_FILE_LIST
+ARG SERVERWARE_SOURCE_FILE_LIST_SHA256
+ARG SERVERWARE_SOURCE_FILE_HASHES
+ARG SERVERWARE_SOURCE_FILE_HASHES_SHA256
+ARG SERVERWARE_SOURCE_FILE_MODES
+ARG SERVERWARE_SOURCE_FILE_MODES_SHA256
 ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH} \
     CARGO_NET_OFFLINE=true \
     RUSTFLAGS="-C link-arg=-Wl,--build-id=none"
 
 WORKDIR /src
+COPY ${SERVERWARE_SOURCE_ARCHIVE} /source-contract/source.tar
+COPY ${SERVERWARE_SOURCE_MANIFEST} /source-contract/source-manifest.json
+COPY ${SERVERWARE_SOURCE_FILE_LIST} /source-contract/source.files
+COPY ${SERVERWARE_SOURCE_FILE_HASHES} /source-contract/source.files.sha256
+COPY ${SERVERWARE_SOURCE_FILE_MODES} /source-contract/source.files.mode
 COPY --from=rust-production-dependency-cache /dependency-cache /dependency-cache
 RUN --network=none set -eu; \
+    test -n "${SERVERWARE_SOURCE_ARCHIVE_SHA256}"; \
+    test -n "${SERVERWARE_SOURCE_MANIFEST_SHA256}"; \
+    test -n "${SERVERWARE_SOURCE_FILE_LIST_SHA256}"; \
+    test -n "${SERVERWARE_SOURCE_FILE_HASHES_SHA256}"; \
+    test -n "${SERVERWARE_SOURCE_FILE_MODES_SHA256}"; \
+    printf '%s  %s\n' "${SERVERWARE_SOURCE_ARCHIVE_SHA256#sha256:}" /source-contract/source.tar | sha256sum -c -; \
+    printf '%s  %s\n' "${SERVERWARE_SOURCE_MANIFEST_SHA256#sha256:}" /source-contract/source-manifest.json | sha256sum -c -; \
+    printf '%s  %s\n' "${SERVERWARE_SOURCE_FILE_LIST_SHA256#sha256:}" /source-contract/source.files | sha256sum -c -; \
+    printf '%s  %s\n' "${SERVERWARE_SOURCE_FILE_HASHES_SHA256#sha256:}" /source-contract/source.files.sha256 | sha256sum -c -; \
+    printf '%s  %s\n' "${SERVERWARE_SOURCE_FILE_MODES_SHA256#sha256:}" /source-contract/source.files.mode | sha256sum -c -; \
+    tar -tf /source-contract/source.tar > /source-contract/archive.files; \
+    printf '%s  %s\n' "${SERVERWARE_SOURCE_FILE_LIST_SHA256#sha256:}" /source-contract/archive.files | sha256sum -c -; \
+    mkdir -p /source; \
+    tar --no-same-owner -xf /source-contract/source.tar -C /source; \
+    cd /source; \
+    sha256sum -c /source-contract/source.files.sha256; \
+    while read -r expected_mode relative; do \
+        test -n "${expected_mode}"; \
+        test -n "${relative}"; \
+        test -f "/source/${relative}"; \
+        test ! -L "/source/${relative}"; \
+        test "$(stat -c '%a' "/source/${relative}")" = "${expected_mode}"; \
+    done < /source-contract/source.files.mode; \
+    mkdir -p /dependency-cache/data-plane/decision-gate-rs; \
+    cp /source/data-plane/decision-gate-rs/Cargo.toml /dependency-cache/data-plane/decision-gate-rs/Cargo.toml; \
+    cp /source/data-plane/decision-gate-rs/Cargo.lock /dependency-cache/data-plane/decision-gate-rs/Cargo.lock; \
+    cp /source/production-dependencies/rust-linux-amd64.sha256 /dependency-cache/rust-linux-amd64.sha256; \
     cd /dependency-cache; \
     sha256sum -c rust-linux-amd64.sha256; \
     tar -xzf cache/cargo-vendor.tar.gz -C /src; \
@@ -27,17 +66,31 @@ RUN --network=none set -eu; \
         '[source.vendored-sources]' \
         'directory = "/src/vendor"' \
         > /src/.cargo/config.toml; \
-    cp data-plane/decision-gate-rs/Cargo.toml /src/Cargo.toml; \
-    cp data-plane/decision-gate-rs/Cargo.lock /src/Cargo.lock
-COPY data-plane/decision-gate-rs/src ./src
-COPY data-plane/decision-gate-rs/trust ./trust
-COPY schemas /schemas
+    cp /source/data-plane/decision-gate-rs/Cargo.toml /src/Cargo.toml; \
+    cp /source/data-plane/decision-gate-rs/Cargo.lock /src/Cargo.lock; \
+    cp -R /source/data-plane/decision-gate-rs/src /src/src; \
+    cp -R /source/data-plane/decision-gate-rs/trust /src/trust; \
+    cp -R /source/schemas /schemas; \
+    mkdir -p /policy-custody-assets/systemd; \
+    cp -R /source/ops/policy-custody/. /policy-custody-assets/; \
+    cp /source/ops/systemd/serverware-policy-custody-sockets.target /policy-custody-assets/systemd/serverware-policy-custody-sockets.target; \
+    cp /source/ops/systemd/serverware-policy-custody.target /policy-custody-assets/systemd/serverware-policy-custody.target; \
+    cp /source/ops/systemd/serverware-policy-custody@.socket /policy-custody-assets/systemd/serverware-policy-custody@.socket; \
+    cp /source/ops/systemd/serverware-policy-custody@.service.in /policy-custody-assets/systemd/serverware-policy-custody@.service.in; \
+    cp -R /source/ops/systemd/serverware-policy-custody@durable-recovery-store.service.d /policy-custody-assets/systemd/serverware-policy-custody@durable-recovery-store.service.d; \
+    cp -R /source/ops/systemd/serverware-policy-custody@cleanup-authorization-consumer.service.d /policy-custody-assets/systemd/serverware-policy-custody@cleanup-authorization-consumer.service.d; \
+    cp -R /source/ops/systemd/serverware-policy-custody@recovery-target-provider.service.d /policy-custody-assets/systemd/serverware-policy-custody@recovery-target-provider.service.d; \
+    cp -R /source/ops/systemd/serverware-policy-custody@current-signature-authority.service.d /policy-custody-assets/systemd/serverware-policy-custody@current-signature-authority.service.d; \
+    cp -R /source/ops/systemd/serverware-policy-custody@bounded-cleanup-helper.service.d /policy-custody-assets/systemd/serverware-policy-custody@bounded-cleanup-helper.service.d
 RUN --network=none cargo build --release --frozen \
     && install -d -m 0710 /runtime-layout/serverware-custody \
     && install -d -m 0700 /runtime-layout/serverware-custody-state \
     && install -d -m 0755 /runtime-layout/serverware-custody-trust \
     && SERVERWARE_CUSTODY_ATTEMPT_LEDGER_DIRECTORY=/runtime-layout/serverware-custody-state \
-        /src/target/release/serverware-custody-runtime --initialize-attempt-ledger
+        /src/target/release/serverware-custody-runtime --initialize-attempt-ledger \
+    && find /policy-custody-assets -type d -exec chmod 0555 {} + \
+    && find /policy-custody-assets -type f -exec chmod 0444 {} + \
+    && find /policy-custody-assets -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +
 
 FROM rust:1.88-alpine3.22@sha256:64eba3726734dcfe89e0a62a0485007a3ab7c7372ce5b38c621d8812f70215f0 AS launcher-build
 
@@ -47,7 +100,8 @@ ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH} \
     RUSTFLAGS="-C link-arg=-Wl,--build-id=none"
 
 WORKDIR /src
-COPY --from=rust-production-dependency-cache /dependency-cache /dependency-cache
+COPY --from=build /source /source
+COPY --from=build /dependency-cache /dependency-cache
 RUN --network=none set -eu; \
     cd /dependency-cache; \
     sha256sum -c rust-linux-amd64.sha256; \
@@ -66,11 +120,11 @@ RUN --network=none set -eu; \
         '[source.vendored-sources]' \
         'directory = "/src/vendor"' \
         > /src/.cargo/config.toml; \
-    cp data-plane/decision-gate-rs/Cargo.toml /src/Cargo.toml; \
-    cp data-plane/decision-gate-rs/Cargo.lock /src/Cargo.lock
-COPY data-plane/decision-gate-rs/src ./src
-COPY data-plane/decision-gate-rs/trust ./trust
-COPY schemas /schemas
+    cp /source/data-plane/decision-gate-rs/Cargo.toml /src/Cargo.toml; \
+    cp /source/data-plane/decision-gate-rs/Cargo.lock /src/Cargo.lock; \
+    cp -R /source/data-plane/decision-gate-rs/src /src/src; \
+    cp -R /source/data-plane/decision-gate-rs/trust /src/trust; \
+    cp -R /source/schemas /schemas
 RUN --network=none cargo build --release --frozen --bin serverware-production-launcher \
     && test "$(readelf -l /src/target/release/serverware-production-launcher | grep -c INTERP)" -eq 0 \
     && test "$(readelf -d /src/target/release/serverware-production-launcher | grep -c NEEDED)" -eq 0
@@ -81,21 +135,39 @@ COPY --from=launcher-build /src/target/release/serverware-production-launcher /s
 FROM gcr.io/distroless/cc-debian12:nonroot@sha256:ce0d66bc0f64aae46e6a03add867b07f42cc7b8799c949c2e898057b7f75a151
 
 ARG SERVERWARE_IMAGE_SOURCE="https://github.com/example/private-deployment"
+ARG SERVERWARE_IMAGE_TITLE="invalid source identity"
 ARG SERVERWARE_IMAGE_REVISION="unknown"
 ARG SERVERWARE_IMAGE_CREATED="unknown"
 ARG SERVERWARE_SOURCE_TREE_DIGEST="unknown"
+ARG SERVERWARE_SOURCE_ARCHIVE_SHA256="unknown"
+ARG SERVERWARE_SOURCE_MANIFEST_SHA256="unknown"
+ARG SERVERWARE_SOURCE_IDENTITY_MODE="invalid"
+ARG SERVERWARE_PRODUCTION_RELEASE_ELIGIBLE="false"
 ARG SOURCE_DATE_EPOCH="0"
 
-LABEL org.opencontainers.image.title="Serverware decision gate" \
+LABEL org.opencontainers.image.title="${SERVERWARE_IMAGE_TITLE}" \
       org.opencontainers.image.source="${SERVERWARE_IMAGE_SOURCE}" \
       org.opencontainers.image.revision="${SERVERWARE_IMAGE_REVISION}" \
       org.opencontainers.image.created="${SERVERWARE_IMAGE_CREATED}" \
-      dev.serverware.source_tree_digest="${SERVERWARE_SOURCE_TREE_DIGEST}"
+      dev.serverware.source_tree_digest="${SERVERWARE_SOURCE_TREE_DIGEST}" \
+      dev.serverware.source_archive_digest="${SERVERWARE_SOURCE_ARCHIVE_SHA256}" \
+      dev.serverware.source_manifest_digest="${SERVERWARE_SOURCE_MANIFEST_SHA256}" \
+      dev.serverware.source_identity_mode="${SERVERWARE_SOURCE_IDENTITY_MODE}" \
+      dev.serverware.production_release_eligible="${SERVERWARE_PRODUCTION_RELEASE_ELIGIBLE}"
 
 COPY --from=build /src/target/release/serverware-decision-gate /usr/local/bin/serverware-decision-gate
 COPY --from=build /src/target/release/serverware-proof-client /usr/local/bin/serverware-proof-client
 COPY --from=build /src/target/release/serverware-custody-runtime /usr/local/bin/serverware-custody-runtime
+COPY --from=build /src/target/release/serverware-response-observation-v2-custody /usr/local/bin/serverware-response-observation-v2-custody
+COPY --from=build /source-contract/source-manifest.json /usr/share/serverware/source-manifest.json
+COPY --from=build /src/target/release/serverware-policy-shadow-custody /usr/local/bin/serverware-policy-shadow-custody
+COPY --from=build /src/target/release/serverware-policy-custody-durable-recovery-store /usr/local/bin/serverware-policy-custody-durable-recovery-store
+COPY --from=build /src/target/release/serverware-policy-custody-recovery-target-provider /usr/local/bin/serverware-policy-custody-recovery-target-provider
+COPY --from=build /src/target/release/serverware-policy-custody-current-signature-authority /usr/local/bin/serverware-policy-custody-current-signature-authority
+COPY --from=build /src/target/release/serverware-policy-custody-cleanup-authorization-consumer /usr/local/bin/serverware-policy-custody-cleanup-authorization-consumer
+COPY --from=build /src/target/release/serverware-policy-custody-bounded-cleanup-helper /usr/local/bin/serverware-policy-custody-bounded-cleanup-helper
 COPY --from=launcher-build /src/target/release/serverware-production-launcher /usr/local/libexec/serverware-production-launcher
+COPY --from=build --chown=0:0 /policy-custody-assets /usr/share/serverware/policy-custody
 COPY --from=build --chown=65531:65530 --chmod=0710 /runtime-layout/serverware-custody /run/serverware-custody
 COPY --from=build --chown=65531:65530 --chmod=0700 /runtime-layout/serverware-custody-state /var/lib/serverware-custody
 COPY --from=build --chown=65531:65530 --chmod=0600 /runtime-layout/serverware-custody-state/manifest.json /var/lib/serverware-custody/manifest.json

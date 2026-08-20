@@ -1,0 +1,234 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/policy-authority-portal-package.v1.schema.json",
+  "title": "Serverware Policy Authority Portal Package v1",
+  "$comment": "This package contains only references to already durable signed candidate evidence and closed authority-operation arguments. It contains no signing keys and confers no authority until the server revalidates the current durable chain.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "handoff", "activation"],
+  "properties": {
+    "apiVersion": {"const": "serverware.policyAuthorityPortalPackage/v1"},
+    "handoff": {"$ref": "#/$defs/handoff"},
+    "activation": {"$ref": "#/$defs/activation"}
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "handoff": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidateId",
+        "artifactEnvelopeDigest",
+        "canaryId",
+        "assignmentEnvelopeDigest",
+        "loadReceiptEnvelopeDigest",
+        "instanceId",
+        "bootId",
+        "runtimeAttestationHandoffDigest",
+        "predecessorPolicyHash"
+      ],
+      "properties": {
+        "candidateId": {"$ref": "#/$defs/identifier"},
+        "artifactEnvelopeDigest": {"$ref": "#/$defs/sha256"},
+        "canaryId": {"$ref": "#/$defs/identifier"},
+        "assignmentEnvelopeDigest": {"$ref": "#/$defs/sha256"},
+        "loadReceiptEnvelopeDigest": {"$ref": "#/$defs/sha256"},
+        "instanceId": {"$ref": "#/$defs/identifier"},
+        "bootId": {"$ref": "#/$defs/sha256"},
+        "runtimeAttestationHandoffDigest": {"$ref": "#/$defs/sha256"},
+        "predecessorPolicyHash": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "activation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "prepare": {"$ref": "#/$defs/prepareStep"},
+        "recordInclusions": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {"$ref": "#/$defs/recordInclusionStep"}
+        },
+        "finalize": {"$ref": "#/$defs/finalizeStep"},
+        "abort": {"$ref": "#/$defs/abortStep"}
+      }
+    },
+    "prepareStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation", "arguments"],
+      "properties": {
+        "operation": {"const": "policy.activation.prepare"},
+        "arguments": {"$ref": "#/$defs/prepareArguments"}
+      }
+    },
+    "prepareArguments": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "activation",
+        "approval",
+        "approvalMembers",
+        "approvalConsumption",
+        "activationRevisions",
+        "canaryRevisions",
+        "publicationReceipt",
+        "generationPublicationEnvelopeDigest",
+        "decisionGateEvidenceDigest",
+        "policySignatureEvidenceDigest"
+      ],
+      "properties": {
+        "activation": {"type": "object", "minProperties": 1, "maxProperties": 64},
+        "approval": {"type": "object", "minProperties": 1, "maxProperties": 64},
+        "approvalMembers": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "items": {"type": "object", "minProperties": 1, "maxProperties": 64}
+        },
+        "approvalConsumption": {"type": "object", "minProperties": 1, "maxProperties": 64},
+        "activationRevisions": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 4,
+          "prefixItems": [
+            {"$ref": "#/$defs/preparedRevision"},
+            {"$ref": "#/$defs/approvedRevision"},
+            {"$ref": "#/$defs/publishingRevision"},
+            {"$ref": "#/$defs/committedRevision"}
+          ],
+          "items": false
+        },
+        "canaryRevisions": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "prefixItems": [
+            {"$ref": "#/$defs/activatingRevision"},
+            {"$ref": "#/$defs/activeRevision"}
+          ],
+          "items": false
+        },
+        "publicationReceipt": {"type": "object", "minProperties": 1, "maxProperties": 64},
+        "generationPublicationEnvelopeDigest": {"$ref": "#/$defs/sha256"},
+        "decisionGateEvidenceDigest": {"$ref": "#/$defs/sha256"},
+        "policySignatureEvidenceDigest": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "recordInclusionStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation", "arguments"],
+      "properties": {
+        "operation": {"const": "policy.activation.record-inclusion"},
+        "arguments": {"$ref": "#/$defs/recordInclusionArguments"}
+      }
+    },
+    "recordInclusionArguments": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "preparationDigest",
+        "inclusions",
+        "auditStoreIdentityDigest",
+        "generationPublicationEnvelopeDigest",
+        "decisionGateEvidenceDigest"
+      ],
+      "properties": {
+        "preparationDigest": {"type": "null"},
+        "inclusions": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": {"type": "object", "minProperties": 1, "maxProperties": 64}
+        },
+        "auditStoreIdentityDigest": {"$ref": "#/$defs/sha256"},
+        "generationPublicationEnvelopeDigest": {"$ref": "#/$defs/sha256"},
+        "decisionGateEvidenceDigest": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "finalizeStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation", "arguments"],
+      "properties": {
+        "operation": {"const": "policy.activation.finalize"},
+        "arguments": {"$ref": "#/$defs/finalizeArguments"}
+      }
+    },
+    "finalizeArguments": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "preparationDigest",
+        "inclusionReceiptEnvelopeDigests",
+        "activationAttemptId",
+        "canaryId",
+        "activationRevisionNumbers",
+        "canaryRevisionNumbers",
+        "controlPlaneApprovalIds",
+        "approverIds",
+        "requesterId",
+        "publicationReceiptEnvelopeDigest",
+        "rollbackAuthorizationDigest"
+      ],
+      "properties": {
+        "preparationDigest": {"type": "null"},
+        "inclusionReceiptEnvelopeDigests": {"type": "array", "maxItems": 0},
+        "activationAttemptId": {"$ref": "#/$defs/identifier"},
+        "canaryId": {"$ref": "#/$defs/identifier"},
+        "activationRevisionNumbers": {"type": "array", "minItems": 4, "maxItems": 4, "items": {"type": "integer", "minimum": 1}},
+        "canaryRevisionNumbers": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "integer", "minimum": 1}},
+        "controlPlaneApprovalIds": {"type": "array", "minItems": 1, "maxItems": 2, "uniqueItems": true, "items": {"$ref": "#/$defs/identifier"}},
+        "approverIds": {"type": "array", "minItems": 1, "maxItems": 2, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 1024}},
+        "requesterId": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "publicationReceiptEnvelopeDigest": {"$ref": "#/$defs/sha256"},
+        "rollbackAuthorizationDigest": {
+          "anyOf": [
+            {"$ref": "#/$defs/sha256"},
+            {"type": "null"}
+          ]
+        }
+      }
+    },
+    "revisionRecord": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 64,
+      "required": ["status"],
+      "properties": {"status": {"type": "string"}}
+    },
+    "preparedRevision": {"allOf": [{"$ref": "#/$defs/revisionRecord"}, {"properties": {"status": {"const": "prepared"}}}]},
+    "approvedRevision": {"allOf": [{"$ref": "#/$defs/revisionRecord"}, {"properties": {"status": {"const": "approved"}}}]},
+    "publishingRevision": {"allOf": [{"$ref": "#/$defs/revisionRecord"}, {"properties": {"status": {"const": "publishing"}}}]},
+    "committedRevision": {"allOf": [{"$ref": "#/$defs/revisionRecord"}, {"properties": {"status": {"const": "committed"}}}]},
+    "activatingRevision": {"allOf": [{"$ref": "#/$defs/revisionRecord"}, {"properties": {"status": {"const": "activating"}}}]},
+    "activeRevision": {"allOf": [{"$ref": "#/$defs/revisionRecord"}, {"properties": {"status": {"const": "active"}}}]},
+    "abortStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation", "arguments"],
+      "properties": {
+        "operation": {"const": "policy.activation.abort"},
+        "arguments": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["preparationDigest", "reason", "abortedBy"],
+          "properties": {
+            "preparationDigest": {"$ref": "#/$defs/sha256"},
+            "reason": {"type": "string", "minLength": 1, "maxLength": 1024},
+            "abortedBy": {"type": "string", "minLength": 1, "maxLength": 1024}
+          }
+        }
+      }
+    }
+  }
+}

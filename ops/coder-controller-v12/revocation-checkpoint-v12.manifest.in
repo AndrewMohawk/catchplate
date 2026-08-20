@@ -1,0 +1,7 @@
+document_version=12
+config_generation=@CONFIG_GENERATION@
+checkpoint_sequence=@CHECKPOINT_SEQUENCE@
+valid_until_epoch=@VALID_UNTIL_EPOCH@
+rollback_floor_generation=@ROLLBACK_FLOOR_GENERATION@
+revoked_spki_count=@REVOKED_SPKI_COUNT@
+@REVOKED_SPKI_ENTRIES@

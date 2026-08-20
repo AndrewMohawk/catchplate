@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import copy
 import hashlib
 import json
 import os
@@ -26,11 +27,15 @@ import serverware_source_tree
 import verify_nitro_tee
 import verify_production_readiness
 from serverware.http_client import request_bytes as bounded_request_bytes
+from serverware.policy_bundle import (
+    canonical_json as strict_canonical_json,
+    strict_json_loads,
+)
 from serverware.response_identity import response_headers_binding
 
 
 def canonical_json(value: Any) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return strict_canonical_json(value)
 
 
 def sha256_prefixed(value: bytes) -> str:
@@ -107,7 +112,7 @@ def request_bytes(
 
 def request_json(url: str, *, headers: dict[str, str] | None = None) -> dict[str, Any]:
     body, _, _, _ = request_bytes(url, headers=headers)
-    value = json.loads(body)
+    value = strict_json_loads(body)
     if not isinstance(value, dict):
         raise ValueError(f"{url} returned non-object JSON")
     return value
@@ -211,7 +216,7 @@ def verify_release_provenance(
 
 
 def normalized_image_signature_payload(bundle: dict[str, Any]) -> dict[str, Any]:
-    copied = json.loads(json.dumps(bundle))
+    copied = copy.deepcopy(bundle)
     copied.pop("image_signature_bundle_digest", None)
     copied.pop("bundle_signature", None)
     metadata = copied.get("metadata")
@@ -256,9 +261,11 @@ def run_sigstore_verifier(
         detail = result.stderr.decode("utf-8", errors="replace")[-2000:]
         raise ValueError(f"{label} external Sigstore verification failed: {detail}")
     try:
-        response = json.loads(result.stdout)
-    except Exception as exc:
+        response = strict_json_loads(result.stdout)
+    except (UnicodeDecodeError, ValueError, json.JSONDecodeError) as exc:
         raise ValueError(f"{label} external Sigstore verifier returned invalid JSON") from exc
+    if not isinstance(response, dict):
+        raise ValueError(f"{label} external Sigstore verifier returned non-object JSON")
     if response.get("ok") is not True or response.get("verified_transparency") is not True:
         raise ValueError(f"{label} external Sigstore verifier did not verify transparency")
     if response.get("statement_digest") != statement_digest:
@@ -521,20 +528,9 @@ def verify_response_signature(
     if b64e(statement_bytes) != statement_b64:
         raise ValueError("response statement encoding is not canonical")
 
-    def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-        result: dict[str, Any] = {}
-        for key, value in pairs:
-            if key in result:
-                raise ValueError("response statement contains duplicate keys")
-            result[key] = value
-        return result
-
     try:
-        statement = json.loads(
-            statement_bytes,
-            object_pairs_hook=reject_duplicate_keys,
-        )
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        statement = strict_json_loads(statement_bytes)
+    except (UnicodeDecodeError, ValueError, json.JSONDecodeError) as exc:
         raise ValueError("response statement is not valid JSON") from exc
     if (
         not isinstance(statement, dict)
@@ -738,7 +734,9 @@ def main(argv: list[str] | None = None) -> None:
         f"{base}/attestation?{attestation_query}",
         headers={"X-Serverware-Response-Nonce": nonce},
     )
-    attestation = json.loads(body)
+    attestation = strict_json_loads(body)
+    if not isinstance(attestation, dict):
+        raise ValueError("attestation response is not an object")
     if attestation.get("nonce") != nonce:
         raise ValueError("attestation nonce mismatch")
     verify_dev_quote(attestation)

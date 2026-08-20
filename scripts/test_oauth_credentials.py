@@ -2398,8 +2398,10 @@ def main(*, setup_session_only: bool = False) -> None:
             raise AssertionError("OAuth refresh path changed the verified provider account identity")
         gmail_scope = "https://www.googleapis.com/auth/gmail.readonly"
         valid_credential_policy = SimpleNamespace(
+            kind="oauth2",
             provider="google",
             provider_subject="google-subject-123",
+            oauth_client_id=stored["metadata"]["oauth_client_id"],
             scopes=(gmail_scope,),
         )
         app_module._assert_credential_policy_binding(stored, valid_credential_policy)
@@ -2419,8 +2421,10 @@ def main(*, setup_session_only: bool = False) -> None:
             app_module._assert_credential_policy_binding(
                 stored,
                 SimpleNamespace(
+                    kind="oauth2",
                     provider="google",
                     provider_subject="google-subject-123",
+                    oauth_client_id=stored["metadata"]["oauth_client_id"],
                     scopes=(gmail_scope, gmail_scope),
                 ),
             )
@@ -2430,12 +2434,32 @@ def main(*, setup_session_only: bool = False) -> None:
         else:
             raise AssertionError("malformed signed-policy OAuth scopes passed lease policy binding")
         for mismatched_policy in (
-            SimpleNamespace(provider="google", provider_subject="different-account", scopes=(gmail_scope,)),
-            SimpleNamespace(provider="google", provider_subject=None, scopes=(gmail_scope,)),
-            SimpleNamespace(provider="generic", provider_subject="google-subject-123", scopes=(gmail_scope,)),
             SimpleNamespace(
+                kind="oauth2",
+                provider="google",
+                provider_subject="different-account",
+                oauth_client_id=stored["metadata"]["oauth_client_id"],
+                scopes=(gmail_scope,),
+            ),
+            SimpleNamespace(
+                kind="oauth2",
+                provider="google",
+                provider_subject=None,
+                oauth_client_id=stored["metadata"]["oauth_client_id"],
+                scopes=(gmail_scope,),
+            ),
+            SimpleNamespace(
+                kind="oauth2",
+                provider="generic",
+                provider_subject="google-subject-123",
+                oauth_client_id=stored["metadata"]["oauth_client_id"],
+                scopes=(gmail_scope,),
+            ),
+            SimpleNamespace(
+                kind="oauth2",
                 provider="google",
                 provider_subject="google-subject-123",
+                oauth_client_id=stored["metadata"]["oauth_client_id"],
                 scopes=(gmail_scope, "openid"),
             ),
         ):
@@ -2449,6 +2473,13 @@ def main(*, setup_session_only: bool = False) -> None:
         for invalid_credential in (
             {**stored, "metadata": {**stored["metadata"], "provider_identity_verified": False}},
             {**stored, "metadata": {**stored["metadata"], "oauth": False}},
+            {
+                **stored,
+                "metadata": {
+                    **stored["metadata"],
+                    "account_subject": "different-account",
+                },
+            },
             {**stored, "kind": "bearer"},
         ):
             try:
@@ -2541,15 +2572,28 @@ def main(*, setup_session_only: bool = False) -> None:
                     f"runtime accepted {malformed_kind} OAuth lease material"
                 )
 
-        for provider in ("google.oauth2", "x.oauth2"):
+        for provider in ("google", "x"):
             canonical_policy = demo_policy_bundle("cred-oauth-custody")
             canonical_policy["credentials"][0].update(
                 {
+                    "credentialType": "oauth2",
                     "provider": provider,
                     "providerSubject": f"{provider}-subject",
+                    "oauthClientId": f"{provider}-client",
+                    "scopes": ["fixture.read"],
                     "injection": dict(canonical_oauth_injection),
                 }
             )
+            for route in canonical_policy["routes"]:
+                if route.get("credentialRef") != "cred-oauth-custody":
+                    continue
+                route["adapter"]["config"]["credentialBinding"] = {
+                    "credentialType": "oauth2",
+                    "provider": provider,
+                    "subjects": [f"{provider}-subject"],
+                    "clientIds": [f"{provider}-client"],
+                    "requiredScopes": ["fixture.read"],
+                }
             compile_policy_bundle(canonical_policy)
             invalid_injections = (
                 ("fieldless", {"type": "bearer", "header": "Authorization"}),

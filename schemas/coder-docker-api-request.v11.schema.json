@@ -1,0 +1,415 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.dev/schemas/coder-docker-api-request.v11.schema.json",
+  "title": "Serverware Docker API Request V11",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contractVersion",
+    "requestId",
+    "capabilityId",
+    "capabilitySha256",
+    "laneId",
+    "daemonGeneration",
+    "sourceSealSha256",
+    "artifactSealSha256",
+    "profile",
+    "ownerNamespace",
+    "sequence",
+    "deadlineBoottimeNs",
+    "apiVersion",
+    "fixedHeaders",
+    "method",
+    "normalizedRoute",
+    "canonicalQuery",
+    "bodySha256",
+    "bodyBytes",
+    "target",
+    "expectedTransition",
+    "streamMode",
+    "limits",
+    "createAuthority",
+    "networkMembership",
+    "signerAuthorization",
+    "signature"
+  ],
+  "properties": {
+    "contractVersion": {
+      "const": "11"
+    },
+    "requestId": {
+      "$ref": "#/$defs/id"
+    },
+    "capabilityId": {
+      "$ref": "#/$defs/id"
+    },
+    "capabilitySha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "laneId": {
+      "$ref": "#/$defs/id"
+    },
+    "daemonGeneration": {
+      "$ref": "#/$defs/id"
+    },
+    "sourceSealSha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "artifactSealSha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "profile": {
+      "enum": [
+        "BUILD",
+        "UNIT_NO_BUILD",
+        "INTEGRATION_NO_BUILD",
+        "E2E_NO_BUILD",
+        "ATTESTATION_NO_BUILD"
+      ]
+    },
+    "ownerNamespace": {
+      "type": "string",
+      "pattern": "^serverware-[a-z0-9][a-z0-9-]{7,62}$",
+      "maxLength": 63
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "deadlineBoottimeNs": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "apiVersion": {
+      "enum": [
+        "v1.43",
+        "v1.44",
+        "v1.45"
+      ]
+    },
+    "fixedHeaders": {
+      "type": "array",
+      "description": "Strictly sorted, unique semantic headers. Framing headers are synthesized by the proxy.",
+      "minItems": 2,
+      "maxItems": 3,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/fixedHeader"
+      }
+    },
+    "method": {
+      "enum": [
+        "GET",
+        "HEAD",
+        "POST",
+        "DELETE"
+      ]
+    },
+    "normalizedRoute": {
+      "type": "string",
+      "pattern": "^/[a-z0-9_./{}:-]{1,255}$",
+      "maxLength": 256
+    },
+    "canonicalQuery": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "value"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$"
+          },
+          "value": {
+            "type": "string",
+            "maxLength": 2048
+          }
+        }
+      }
+    },
+    "bodySha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "bodyBytes": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 8589934592
+    },
+    "target": {
+      "$ref": "#/$defs/target"
+    },
+    "expectedTransition": {
+      "$ref": "#/$defs/transition"
+    },
+    "streamMode": {
+      "enum": [
+        "BOUNDED_HTTP",
+        "FULL_DUPLEX",
+        "UPGRADE_101",
+        "BUILDKIT"
+      ]
+    },
+    "limits": {
+      "$ref": "#/$defs/limits"
+    },
+    "createAuthority": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "coder-docker-runner-execution.v12.schema.json"
+        },
+        {
+          "$ref": "coder-docker-service-instance.v12.schema.json"
+        }
+      ]
+    },
+    "networkMembership": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "coder-docker-network-membership.v12.schema.json"
+        }
+      ]
+    },
+    "signerAuthorization": {
+      "$ref": "#/$defs/signerAuthorization"
+    },
+    "signature": {
+      "$ref": "#/$defs/signature"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$",
+      "maxLength": 128
+    },
+    "fixedHeader": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "value"
+      ],
+      "properties": {
+        "name": {
+          "enum": [
+            "accept",
+            "content-type",
+            "user-agent"
+          ]
+        },
+        "value": {
+          "enum": [
+            "*/*",
+            "application/json",
+            "application/octet-stream",
+            "application/vnd.docker.raw-stream",
+            "application/x-tar",
+            "serverware-controller-v12"
+          ]
+        }
+      }
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "logicalId",
+        "engineId"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "DAEMON",
+            "BUILD",
+            "IMAGE",
+            "CONTAINER",
+            "NETWORK",
+            "VOLUME"
+          ]
+        },
+        "logicalId": {
+          "$ref": "#/$defs/id"
+        },
+        "engineId": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:@/-]{0,511}$",
+              "maxLength": 512
+            }
+          ]
+        }
+      }
+    },
+    "transition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "from",
+        "to"
+      ],
+      "properties": {
+        "from": {
+          "enum": [
+            "ABSENT",
+            "DECLARED",
+            "CREATING",
+            "CREATED",
+            "STARTING",
+            "RUNNING",
+            "EXITED",
+            "REMOVING",
+            "REMOVED",
+            "DESTROYING",
+            "DESTROYED",
+            "UNKNOWN"
+          ]
+        },
+        "to": {
+          "enum": [
+            "ABSENT",
+            "DECLARED",
+            "CREATING",
+            "CREATED",
+            "STARTING",
+            "RUNNING",
+            "EXITED",
+            "REMOVING",
+            "REMOVED",
+            "DESTROYING",
+            "DESTROYED",
+            "UNKNOWN"
+          ]
+        }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "maxRequestBytes",
+        "maxResponseBytes",
+        "maxStreamBytes",
+        "maxDurationMs"
+      ],
+      "properties": {
+        "maxRequestBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8589934592
+        },
+        "maxResponseBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8589934592
+        },
+        "maxStreamBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 17179869184
+        },
+        "maxDurationMs": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 14400000
+        }
+      }
+    },
+    "signerAuthorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "role",
+        "principalId",
+        "keyId",
+        "spkiDerSha256",
+        "authorizationLeafSha256",
+        "authorizationCheckpointSha256",
+        "revocationHighwater",
+        "notBeforeBoottimeNs",
+        "notAfterBoottimeNs"
+      ],
+      "properties": {
+        "role": {
+          "const": "controller-docker-request-authority"
+        },
+        "principalId": {
+          "$ref": "#/$defs/id"
+        },
+        "keyId": {
+          "$ref": "#/$defs/id"
+        },
+        "spkiDerSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "authorizationLeafSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "authorizationCheckpointSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "revocationHighwater": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "notBeforeBoottimeNs": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "notAfterBoottimeNs": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "algorithm",
+        "domain",
+        "payloadSha256",
+        "signatureBase64url"
+      ],
+      "properties": {
+        "algorithm": {
+          "const": "Ed25519"
+        },
+        "domain": {
+          "const": "serverware/docker-api-request/v11"
+        },
+        "payloadSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "signatureBase64url": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{86}$"
+        }
+      }
+    }
+  }
+}

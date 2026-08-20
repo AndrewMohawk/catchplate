@@ -113,7 +113,8 @@
     "credentialInjectionPrefix": {
       "type": "string",
       "maxLength": 128,
-      "pattern": "^[^\\r\\n]*$"
+      "pattern": "^[^\\u0000-\\u001F\\u007F]*$",
+      "$comment": "The runtime also caps the complete injected header value at 16384 UTF-8 bytes and rejects outer whitespace."
     },
     "credentialInjectionTargetName": {
       "type": "string",
@@ -154,6 +155,7 @@
     "requestAdmissionSelectorHeaderName": {
       "allOf": [
         {"$ref": "#/$defs/credentialInjectionTargetName"},
+        {"not": {"pattern": "_"}},
         {
           "not": {
             "anyOf": [
@@ -425,6 +427,17 @@
         "predicate": {"$ref": "#/$defs/requestValuePredicate"},
         "capture": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,127}$"}
       },
+      "allOf": [
+        {
+          "if": {
+            "required": ["source"],
+            "properties": {"source": {"const": "header"}}
+          },
+          "then": {
+            "properties": {"name": {"$ref": "#/$defs/lowercaseHeaderName"}}
+          }
+        }
+      ],
       "$comment": "Admission must bind query/header rules to the adapter allowlist and body rules to a typed parsed body profile. Unknown sources, ambiguous duplicate values, and unbounded parsing deny."
     },
     "responseHeaderRule": {
@@ -594,6 +607,10 @@
         "key": {
           "type": "object",
           "additionalProperties": false,
+          "anyOf": [
+            {"required": ["scope"]},
+            {"required": ["operationFields"]}
+          ],
           "properties": {
             "scope": {
               "type": "array",
@@ -604,6 +621,7 @@
             },
             "operationFields": {
               "type": "array",
+              "minItems": 1,
               "maxItems": 16,
               "uniqueItems": true,
               "items": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,127}$"}
@@ -743,6 +761,86 @@
       },
       "allOf": [
         {
+          "$comment": "Close each constraint object at the schema discriminator. The semantic compiler independently applies the same field vocabulary.",
+          "oneOf": [
+            {
+              "required": ["type"],
+              "properties": {"type": {"const": "rateLimit"}},
+              "propertyNames": {"enum": ["id", "description", "type", "phase", "statusCode", "extensions", "store", "max", "windowSeconds", "calendarWindow", "windowSemantics", "key"]}
+            },
+            {
+              "required": ["type"],
+              "properties": {"type": {"const": "slidingWindowLimit"}},
+              "propertyNames": {"enum": ["id", "description", "type", "phase", "statusCode", "extensions", "store", "windowSeconds", "max", "windowSemantics", "measure", "reservationMode", "onOverflow", "key"]}
+            },
+            {
+              "required": ["type"],
+              "properties": {"type": {"const": "weightedBudget"}},
+              "propertyNames": {"enum": ["id", "description", "type", "phase", "statusCode", "extensions", "store", "windowSeconds", "max", "windowSemantics", "measure", "reservationMode", "onOverflow", "key", "weight"]}
+            },
+            {
+              "required": ["type"],
+              "properties": {"type": {"const": "traversalBudget"}},
+              "propertyNames": {"enum": ["id", "description", "type", "phase", "statusCode", "extensions", "traversal", "operations"]}
+            },
+            {
+              "required": ["type"],
+              "properties": {"type": {"const": "operationPolicy"}},
+              "propertyNames": {"enum": ["id", "description", "type", "phase", "statusCode", "extensions", "allowedOperations", "deniedOperations"]}
+            },
+            {
+              "required": ["type"],
+              "properties": {"type": {"const": "queryDateWindow"}},
+              "propertyNames": {"enum": ["id", "description", "type", "phase", "statusCode", "extensions", "parameters", "required", "formats", "maxAgeDays", "allowFutureSkewSeconds"]}
+            },
+            {
+              "required": ["type"],
+              "properties": {"type": {"const": "queryNumericBounds"}},
+              "propertyNames": {"enum": ["id", "description", "type", "phase", "statusCode", "extensions", "parameters", "required", "min", "max", "integer"]}
+            },
+            {
+              "required": ["type"],
+              "properties": {"type": {"const": "requestTimeWindow"}},
+              "propertyNames": {"enum": ["id", "description", "type", "phase", "statusCode", "extensions", "timezone", "notBefore", "notAfter", "weekdays", "dailyWindows"]}
+            },
+            {
+              "required": ["type"],
+              "properties": {"type": {"const": "requestValue"}},
+              "propertyNames": {"enum": ["id", "description", "type", "phase", "statusCode", "extensions", "rules"]}
+            },
+            {
+              "required": ["type"],
+              "properties": {"type": {"const": "jsonBody"}},
+              "propertyNames": {"enum": ["id", "description", "type", "phase", "statusCode", "extensions", "contentTypes", "allowedFields", "requiredFields", "deniedFields", "fields"]}
+            },
+            {
+              "required": ["type"],
+              "properties": {"type": {"const": "formBody"}},
+              "propertyNames": {"enum": ["id", "description", "type", "phase", "statusCode", "extensions", "contentTypes", "allowedFields", "requiredFields", "deniedFields", "fields"]}
+            },
+            {
+              "required": ["type"],
+              "properties": {"type": {"const": "responseDateWindow"}},
+              "propertyNames": {"enum": ["id", "description", "type", "phase", "statusCode", "extensions", "required", "formats", "maxAgeDays", "allowFutureSkewSeconds", "items", "dateFields", "operations"]}
+            },
+            {
+              "required": ["type"],
+              "properties": {"type": {"const": "responseJson"}},
+              "propertyNames": {"enum": ["id", "description", "type", "phase", "statusCode", "extensions", "required", "items", "fields", "operations"]}
+            },
+            {
+              "required": ["type"],
+              "properties": {"type": {"const": "responseBinding"}},
+              "propertyNames": {"enum": ["id", "description", "type", "phase", "statusCode", "extensions", "successStatusCodes", "contentTypes", "bindings", "operations"]}
+            },
+            {
+              "required": ["type"],
+              "properties": {"type": {"const": "responseEnvelope"}},
+              "propertyNames": {"enum": ["id", "description", "type", "phase", "statusCode", "extensions", "statusCodes", "bodyPresence", "contentTypes", "allowedResponseHeaderNames", "responseHeaderRules", "operations"]}
+            }
+          ]
+        },
+        {
           "if": {
             "required": ["type"],
             "properties": {"type": {"enum": ["responseDateWindow", "responseJson", "responseBinding", "responseEnvelope"]}}
@@ -758,7 +856,7 @@
         {
           "if": {"properties": {"type": {"const": "rateLimit"}}, "required": ["type"]},
           "then": {
-            "required": ["max"],
+            "required": ["max", "key"],
             "properties": {
               "max": {"type": "integer", "minimum": 1, "maximum": 1000000000}
             },
@@ -823,7 +921,7 @@
         },
         {
           "if": {"properties": {"type": {"const": "operationPolicy"}}, "required": ["type"]},
-          "then": {"anyOf": [{"required": ["allowedOperations"]}, {"required": ["deniedOperations"]}]}
+          "then": {"oneOf": [{"required": ["allowedOperations"]}, {"required": ["deniedOperations"]}]}
         },
         {
           "if": {"properties": {"type": {"const": "queryDateWindow"}}, "required": ["type"]},
@@ -1107,7 +1205,7 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 512,
-              "pattern": "^(?!\\s)(?!.*\\s$)[^\\u0000-\\u001F\\u007F]+$"
+              "pattern": "^(?!.*\\s)[^\\u0000-\\u001F\\u007F]+$"
             }
           },
           "injection": {
@@ -1194,14 +1292,24 @@
                 "minItems": 1,
                 "maxItems": 16,
                 "uniqueItems": true,
-                "items": {"type": "string", "pattern": "^[A-Z]+$", "maxLength": 16}
+                "items": {
+                  "type": "string",
+                  "pattern": "^[A-Z]+$",
+                  "maxLength": 16,
+                  "not": {"enum": ["CONNECT", "TRACE"]}
+                }
               },
               "paths": {
                 "type": "array",
                 "minItems": 1,
                 "maxItems": 128,
                 "uniqueItems": true,
-                "items": {"type": "string", "minLength": 1, "maxLength": 2048, "pattern": "^/"}
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 2048,
+                  "pattern": "^/[^?#\\u0000-\\u001F\\u007F]*$"
+                }
               },
               "resolvedCidrs": {
                 "type": "array",
@@ -1217,6 +1325,50 @@
             "minLength": 1,
             "maxLength": 128,
             "$comment": "Admission must resolve this ID exactly once and prove that the referenced credential's type, provider, subject, OAuth client ID, and scopes satisfy the selected adapter config credentialBinding."
+          },
+          "responseObservation": {
+            "type": "object",
+            "required": ["version"],
+            "additionalProperties": false,
+            "properties": {
+              "version": {"enum": ["v1", "v2"]},
+              "lifecycleTimeoutMs": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 30000
+              },
+              "publicationTarget": {
+                "type": "object",
+                "required": ["id", "policySha256"],
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+                  },
+                  "policySha256": {
+                    "type": "string",
+                    "pattern": "^sha256:[0-9a-f]{64}$"
+                  }
+                }
+              }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "required": ["version"],
+                  "properties": {"version": {"const": "v2"}}
+                },
+                "then": {
+                  "required": ["lifecycleTimeoutMs", "publicationTarget"]
+                },
+                "else": {
+                  "not": {"required": ["publicationTarget"]}
+                }
+              }
+            ]
           },
           "adapter": {
             "oneOf": [
@@ -1272,7 +1424,7 @@
               "required": {"type": "boolean"},
               "mode": {"const": "perOperation"},
               "ttlSeconds": {"type": "integer", "minimum": 1, "maximum": 3600},
-              "maxUses": {"type": "integer", "minimum": 1},
+              "maxUses": {"type": "integer", "minimum": 1, "maximum": 64},
               "consumeOn": {"const": "forwardStart"},
               "binding": {
                 "type": "object",
@@ -1282,7 +1434,7 @@
                   "type": {"enum": ["requestDigest", "operationDigest"]},
                   "fields": {
                     "type": "array",
-                    "minItems": 1,
+                    "minItems": 11,
                     "maxItems": 32,
                     "uniqueItems": true,
                     "items": {
@@ -1303,7 +1455,20 @@
                         "tarballIntegrity",
                         "operation"
                       ]
-                    }
+                    },
+                    "allOf": [
+                      {"contains": {"const": "principal"}},
+                      {"contains": {"const": "routeId"}},
+                      {"contains": {"const": "credentialRef"}},
+                      {"contains": {"const": "credentialVersion"}},
+                      {"contains": {"const": "policyHash"}},
+                      {"contains": {"const": "method"}},
+                      {"contains": {"const": "authority"}},
+                      {"contains": {"const": "path"}},
+                      {"contains": {"const": "query"}},
+                      {"contains": {"const": "selectedHeaders"}},
+                      {"contains": {"const": "bodySha256"}}
+                    ]
                   }
                 }
               },
@@ -1340,7 +1505,26 @@
                         "items": {"enum": ["yubikey", "hardware", "platform", "dev", "unknown"]}
                       },
                       "requireHardwareAttestation": {"type": "boolean"}
-                    }
+                    },
+                    "allOf": [
+                      {
+                        "if": {
+                          "required": ["requireHardwareAttestation"],
+                          "properties": {
+                            "requireHardwareAttestation": {"const": true}
+                          }
+                        },
+                        "then": {
+                          "properties": {
+                            "webauthnRequired": {"const": true},
+                            "userVerification": {"const": "required"},
+                            "allowedAuthenticatorClasses": {
+                              "items": {"enum": ["yubikey", "hardware"]}
+                            }
+                          }
+                        }
+                      }
+                    ]
                   }
                 }
               }

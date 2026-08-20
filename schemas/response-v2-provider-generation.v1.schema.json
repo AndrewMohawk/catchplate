@@ -1,0 +1,1074 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/response-v2-provider-generation.v1.schema.json",
+  "title": "Serverware Response v2 Provider Generation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "kind",
+    "schemaVersion",
+    "generationId",
+    "generationSha256",
+    "predecessorGenerationId",
+    "sourceCommitSha256",
+    "sourceTreeSha256",
+    "schemaBundleSha256",
+    "migrationSha256",
+    "topology",
+    "rollbackFloor",
+    "notBeforeEpochMillis",
+    "notAfterEpochMillis",
+    "authentication"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "serverware.responseV2.providerGeneration/v1"
+    },
+    "kind": {
+      "const": "ServerwareResponseV2ProviderGeneration"
+    },
+    "schemaVersion": {
+      "const": "1"
+    },
+    "generationId": {
+      "$ref": "#/$defs/identifier"
+    },
+    "generationSha256": {
+      "$ref": "#/$defs/sha256",
+      "$comment": "SHA-256 over RFC 8785 JCS of this generation with generationSha256 and authentication omitted. authentication.signedPayloadSha256 MUST equal this value."
+    },
+    "predecessorGenerationId": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/identifier"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "sourceCommitSha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "sourceTreeSha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "schemaBundleSha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "migrationSha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "topology": {
+      "$ref": "#/$defs/topology"
+    },
+    "rollbackFloor": {
+      "$ref": "#/$defs/safeUint"
+    },
+    "notBeforeEpochMillis": {
+      "$ref": "#/$defs/safeUint"
+    },
+    "notAfterEpochMillis": {
+      "$ref": "#/$defs/positiveSafeUint"
+    },
+    "authentication": {
+      "$ref": "#/$defs/authentication"
+    }
+  },
+  "$defs": {
+    "safeUint": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "positiveSafeUint": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@-]*$"
+    },
+    "sha256": {
+      "type": "string",
+      "minLength": 71,
+      "maxLength": 71,
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "roleName": {
+      "enum": [
+        "custody-router",
+        "state-authority",
+        "credential-transport",
+        "policy-proof-verifier",
+        "immutable-artifact-ledger",
+        "release-attestor-publisher",
+        "cleanup-watchdog"
+      ]
+    },
+    "logicalRoleName": {
+      "enum": [
+        "trusted-time",
+        "readiness-topology-attestor",
+        "recovery",
+        "linearizable-store",
+        "quorum",
+        "transparency",
+        "public-release-consumption",
+        "outcome-reconciliation",
+        "emergency-fence-revoker",
+        "credential-authority",
+        "target-transport",
+        "mutation-supervisor",
+        "evidence-trust",
+        "live-proof-verifier",
+        "archive-proof-verifier",
+        "persistence",
+        "archive-store",
+        "runtime-attestation",
+        "attester",
+        "publisher",
+        "public-release",
+        "custody",
+        "emergency-cleanup-executor"
+      ]
+    },
+    "reconciliationDomain": {
+      "enum": [
+        "PROVIDER_GENERATIONS",
+        "ROLE_IDENTITIES",
+        "ATTEMPTS",
+        "OPERATIONS",
+        "FENCES",
+        "REPLAY_LEDGERS",
+        "RELEASE_LEDGERS",
+        "CREDENTIAL_USES",
+        "TARGET_EFFECTS",
+        "POLICY_DECISIONS",
+        "EVIDENCE",
+        "FINALIZATIONS",
+        "IMMUTABLE_OBJECTS",
+        "IMMUTABLE_INSPECTIONS",
+        "TERMINAL_SETTLEMENTS",
+        "ARCHIVES",
+        "PUBLISHER_OUTBOX",
+        "TRANSPARENCY_LEAVES",
+        "TRANSPARENCY_CHECKPOINTS",
+        "TRUSTED_TIME_HIGHWATER"
+      ]
+    },
+    "authentication": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "algorithm",
+        "trustAnchorKeyId",
+        "trustAnchorPublicKeySha256",
+        "signingDomain",
+        "signedPayloadSha256",
+        "signatureBase64url"
+      ],
+      "properties": {
+        "algorithm": {
+          "const": "Ed25519"
+        },
+        "trustAnchorKeyId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "trustAnchorPublicKeySha256": {
+          "$ref": "#/$defs/sha256",
+          "$comment": "Informational binding only. Verification MUST use an independently pinned generation trust anchor and MUST NOT trust a key merely because this document names it."
+        },
+        "signingDomain": {
+          "const": "serverware.responseV2.providerGeneration.signature/v1"
+        },
+        "signedPayloadSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "signatureBase64url": {
+          "type": "string",
+          "minLength": 86,
+          "maxLength": 86,
+          "pattern": "^[A-Za-z0-9_-]{86}$"
+        }
+      }
+    },
+    "operationId": {
+      "type": "string",
+      "enum": [
+        "responseV2.generation.install/v1",
+        "responseV2.generation.reconcile/v1",
+        "responseV2.generation.ready/v1",
+        "responseV2.attempt.reserve/v1",
+        "responseV2.attempt.authorize/v1",
+        "responseV2.object.commitRaw/v1",
+        "responseV2.object.inspectImmutableRaw/v1",
+        "responseV2.attempt.stage/v1",
+        "responseV2.dispatch.begin/v1",
+        "responseV2.dispatch.recordOutcome/v1",
+        "responseV2.attempt.terminalize/v1",
+        "responseV2.attempt.finalize/v1",
+        "responseV2.attempt.publish/v1",
+        "responseV2.release.authorize/v1",
+        "responseV2.release.consumeAndRetrieveExact/v1",
+        "responseV2.release.resolveReplay/v1",
+        "responseV2.attempt.settle/v1",
+        "responseV2.attempt.archive/v1",
+        "responseV2.fence.revoke/v1",
+        "responseV2.fence.observeQuiescence/v1",
+        "responseV2.evidence.append/v1",
+        "responseV2.publisher.enqueue/v1",
+        "responseV2.publisher.acknowledge/v1",
+        "responseV2.transparency.checkpoint/v1",
+        "responseV2.trustedTime.advance/v1",
+        "responseV2.reconciliation.transition/v1",
+        "responseV2.reconciliation.terminalizeExpiredAttempt/v1",
+        "responseV2.state.query/v1"
+      ]
+    },
+    "roleIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "roleId",
+        "role",
+        "processId",
+        "unixUid",
+        "unixGid",
+        "faultDomainId",
+        "keyId",
+        "publicKeyBase64url",
+        "publicKeySha256",
+        "signingAlgorithm",
+        "authorityArtifactSigning",
+        "executableSha256",
+        "configurationSha256",
+        "enabledOperations"
+      ],
+      "properties": {
+        "roleId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "role": {
+          "$ref": "#/$defs/roleName"
+        },
+        "processId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "unixUid": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4294967295
+        },
+        "unixGid": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4294967295
+        },
+        "faultDomainId": {
+          "const": "host-1"
+        },
+        "keyId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "publicKeyBase64url": {
+          "type": "string",
+          "minLength": 43,
+          "maxLength": 43,
+          "pattern": "^[A-Za-z0-9_-]{43}$"
+        },
+        "publicKeySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "signingAlgorithm": {
+          "const": "Ed25519"
+        },
+        "authorityArtifactSigning": {
+          "type": "boolean"
+        },
+        "executableSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "configurationSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "enabledOperations": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 27,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/operationId"
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "role": {
+                "const": "custody-router"
+              }
+            },
+            "required": [
+              "role"
+            ]
+          },
+          "then": {
+            "properties": {
+              "authorityArtifactSigning": {
+                "const": true
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "authorityArtifactSigning": {
+                "const": true
+              }
+            }
+          }
+        }
+      ]
+    },
+    "logicalRoleBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "logicalRole",
+        "serviceRole",
+        "processId",
+        "roleId",
+        "keyId",
+        "publicKeyBase64url",
+        "publicKeySha256",
+        "signingAlgorithm",
+        "enabledOperations",
+        "authorityScopeSha256"
+      ],
+      "properties": {
+        "logicalRole": {
+          "$ref": "#/$defs/logicalRoleName"
+        },
+        "serviceRole": {
+          "$ref": "#/$defs/roleName"
+        },
+        "processId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "roleId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "keyId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "publicKeyBase64url": {
+          "type": "string",
+          "minLength": 43,
+          "maxLength": 43,
+          "pattern": "^[A-Za-z0-9_-]{43}$"
+        },
+        "publicKeySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "signingAlgorithm": {
+          "const": "Ed25519"
+        },
+        "enabledOperations": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 26,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/operationId"
+          }
+        },
+        "authorityScopeSha256": {
+          "$ref": "#/$defs/sha256",
+          "$comment": "Digest of the generation, physical process, service role, logical role, role ID, subkey material, executable/configuration measurements, and exact enabled operation set."
+        }
+      }
+    },
+    "readinessContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requiredServiceRoles",
+        "requiredReconciliationDomains",
+        "serviceReceiptCount",
+        "routerTopologyAttestationCount",
+        "reconciliationDomainReceiptCount",
+        "contractSha256"
+      ],
+      "properties": {
+        "requiredServiceRoles": {
+          "type": "array",
+          "minItems": 7,
+          "maxItems": 7,
+          "prefixItems": [
+            {
+              "const": "custody-router"
+            },
+            {
+              "const": "state-authority"
+            },
+            {
+              "const": "credential-transport"
+            },
+            {
+              "const": "policy-proof-verifier"
+            },
+            {
+              "const": "immutable-artifact-ledger"
+            },
+            {
+              "const": "release-attestor-publisher"
+            },
+            {
+              "const": "cleanup-watchdog"
+            }
+          ],
+          "items": false
+        },
+        "requiredReconciliationDomains": {
+          "type": "array",
+          "minItems": 20,
+          "maxItems": 20,
+          "prefixItems": [
+            {
+              "const": "PROVIDER_GENERATIONS"
+            },
+            {
+              "const": "ROLE_IDENTITIES"
+            },
+            {
+              "const": "ATTEMPTS"
+            },
+            {
+              "const": "OPERATIONS"
+            },
+            {
+              "const": "FENCES"
+            },
+            {
+              "const": "REPLAY_LEDGERS"
+            },
+            {
+              "const": "RELEASE_LEDGERS"
+            },
+            {
+              "const": "CREDENTIAL_USES"
+            },
+            {
+              "const": "TARGET_EFFECTS"
+            },
+            {
+              "const": "POLICY_DECISIONS"
+            },
+            {
+              "const": "EVIDENCE"
+            },
+            {
+              "const": "FINALIZATIONS"
+            },
+            {
+              "const": "IMMUTABLE_OBJECTS"
+            },
+            {
+              "const": "IMMUTABLE_INSPECTIONS"
+            },
+            {
+              "const": "TERMINAL_SETTLEMENTS"
+            },
+            {
+              "const": "ARCHIVES"
+            },
+            {
+              "const": "PUBLISHER_OUTBOX"
+            },
+            {
+              "const": "TRANSPARENCY_LEAVES"
+            },
+            {
+              "const": "TRANSPARENCY_CHECKPOINTS"
+            },
+            {
+              "const": "TRUSTED_TIME_HIGHWATER"
+            }
+          ],
+          "items": false
+        },
+        "serviceReceiptCount": {
+          "const": 7
+        },
+        "routerTopologyAttestationCount": {
+          "const": 1
+        },
+        "reconciliationDomainReceiptCount": {
+          "const": 20
+        },
+        "contractSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "topology": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "attestationMode",
+        "faultDomainId",
+        "faultDomainCount",
+        "quorumProfile",
+        "externalWitnessCount",
+        "hardwareProof",
+        "roles",
+        "logicalRoleBindings",
+        "readinessContract"
+      ],
+      "properties": {
+        "attestationMode": {
+          "const": "TrustedHostNoTee"
+        },
+        "faultDomainId": {
+          "const": "host-1"
+        },
+        "faultDomainCount": {
+          "const": 1
+        },
+        "quorumProfile": {
+          "const": "LOCAL_1_OF_1"
+        },
+        "externalWitnessCount": {
+          "const": 0
+        },
+        "hardwareProof": {
+          "const": false
+        },
+        "roles": {
+          "type": "array",
+          "minItems": 7,
+          "maxItems": 7,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/roleIdentity"
+          },
+          "allOf": [
+            {
+              "contains": {
+                "type": "object",
+                "required": [
+                  "role"
+                ],
+                "properties": {
+                  "role": {
+                    "const": "custody-router"
+                  }
+                }
+              },
+              "minContains": 1,
+              "maxContains": 1
+            },
+            {
+              "contains": {
+                "type": "object",
+                "required": [
+                  "role"
+                ],
+                "properties": {
+                  "role": {
+                    "const": "state-authority"
+                  }
+                }
+              },
+              "minContains": 1,
+              "maxContains": 1
+            },
+            {
+              "contains": {
+                "type": "object",
+                "required": [
+                  "role"
+                ],
+                "properties": {
+                  "role": {
+                    "const": "credential-transport"
+                  }
+                }
+              },
+              "minContains": 1,
+              "maxContains": 1
+            },
+            {
+              "contains": {
+                "type": "object",
+                "required": [
+                  "role"
+                ],
+                "properties": {
+                  "role": {
+                    "const": "policy-proof-verifier"
+                  }
+                }
+              },
+              "minContains": 1,
+              "maxContains": 1
+            },
+            {
+              "contains": {
+                "type": "object",
+                "required": [
+                  "role"
+                ],
+                "properties": {
+                  "role": {
+                    "const": "immutable-artifact-ledger"
+                  }
+                }
+              },
+              "minContains": 1,
+              "maxContains": 1
+            },
+            {
+              "contains": {
+                "type": "object",
+                "required": [
+                  "role"
+                ],
+                "properties": {
+                  "role": {
+                    "const": "release-attestor-publisher"
+                  }
+                }
+              },
+              "minContains": 1,
+              "maxContains": 1
+            },
+            {
+              "contains": {
+                "type": "object",
+                "required": [
+                  "role"
+                ],
+                "properties": {
+                  "role": {
+                    "const": "cleanup-watchdog"
+                  }
+                }
+              },
+              "minContains": 1,
+              "maxContains": 1
+            }
+          ]
+        },
+        "logicalRoleBindings": {
+          "$comment": "Deterministic complete set of the 23 logical authority roles. Each entry is a distinct Ed25519 subkey bound to exactly one of the seven physical processes.",
+          "type": "array",
+          "minItems": 23,
+          "maxItems": 23,
+          "prefixItems": [
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/logicalRoleBinding"
+                },
+                {
+                  "properties": {
+                    "logicalRole": {
+                      "const": "trusted-time"
+                    },
+                    "serviceRole": {
+                      "const": "state-authority"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/logicalRoleBinding"
+                },
+                {
+                  "properties": {
+                    "logicalRole": {
+                      "const": "readiness-topology-attestor"
+                    },
+                    "serviceRole": {
+                      "const": "custody-router"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/logicalRoleBinding"
+                },
+                {
+                  "properties": {
+                    "logicalRole": {
+                      "const": "recovery"
+                    },
+                    "serviceRole": {
+                      "const": "state-authority"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/logicalRoleBinding"
+                },
+                {
+                  "properties": {
+                    "logicalRole": {
+                      "const": "linearizable-store"
+                    },
+                    "serviceRole": {
+                      "const": "state-authority"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/logicalRoleBinding"
+                },
+                {
+                  "properties": {
+                    "logicalRole": {
+                      "const": "quorum"
+                    },
+                    "serviceRole": {
+                      "const": "state-authority"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/logicalRoleBinding"
+                },
+                {
+                  "properties": {
+                    "logicalRole": {
+                      "const": "transparency"
+                    },
+                    "serviceRole": {
+                      "const": "state-authority"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/logicalRoleBinding"
+                },
+                {
+                  "properties": {
+                    "logicalRole": {
+                      "const": "public-release-consumption"
+                    },
+                    "serviceRole": {
+                      "const": "state-authority"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/logicalRoleBinding"
+                },
+                {
+                  "properties": {
+                    "logicalRole": {
+                      "const": "outcome-reconciliation"
+                    },
+                    "serviceRole": {
+                      "const": "cleanup-watchdog"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/logicalRoleBinding"
+                },
+                {
+                  "properties": {
+                    "logicalRole": {
+                      "const": "emergency-fence-revoker"
+                    },
+                    "serviceRole": {
+                      "const": "state-authority"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/logicalRoleBinding"
+                },
+                {
+                  "properties": {
+                    "logicalRole": {
+                      "const": "credential-authority"
+                    },
+                    "serviceRole": {
+                      "const": "credential-transport"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/logicalRoleBinding"
+                },
+                {
+                  "properties": {
+                    "logicalRole": {
+                      "const": "target-transport"
+                    },
+                    "serviceRole": {
+                      "const": "credential-transport"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/logicalRoleBinding"
+                },
+                {
+                  "properties": {
+                    "logicalRole": {
+                      "const": "mutation-supervisor"
+                    },
+                    "serviceRole": {
+                      "const": "credential-transport"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/logicalRoleBinding"
+                },
+                {
+                  "properties": {
+                    "logicalRole": {
+                      "const": "evidence-trust"
+                    },
+                    "serviceRole": {
+                      "const": "policy-proof-verifier"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/logicalRoleBinding"
+                },
+                {
+                  "properties": {
+                    "logicalRole": {
+                      "const": "live-proof-verifier"
+                    },
+                    "serviceRole": {
+                      "const": "policy-proof-verifier"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/logicalRoleBinding"
+                },
+                {
+                  "properties": {
+                    "logicalRole": {
+                      "const": "archive-proof-verifier"
+                    },
+                    "serviceRole": {
+                      "const": "policy-proof-verifier"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/logicalRoleBinding"
+                },
+                {
+                  "properties": {
+                    "logicalRole": {
+                      "const": "persistence"
+                    },
+                    "serviceRole": {
+                      "const": "immutable-artifact-ledger"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/logicalRoleBinding"
+                },
+                {
+                  "properties": {
+                    "logicalRole": {
+                      "const": "archive-store"
+                    },
+                    "serviceRole": {
+                      "const": "immutable-artifact-ledger"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/logicalRoleBinding"
+                },
+                {
+                  "properties": {
+                    "logicalRole": {
+                      "const": "runtime-attestation"
+                    },
+                    "serviceRole": {
+                      "const": "release-attestor-publisher"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/logicalRoleBinding"
+                },
+                {
+                  "properties": {
+                    "logicalRole": {
+                      "const": "attester"
+                    },
+                    "serviceRole": {
+                      "const": "release-attestor-publisher"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/logicalRoleBinding"
+                },
+                {
+                  "properties": {
+                    "logicalRole": {
+                      "const": "publisher"
+                    },
+                    "serviceRole": {
+                      "const": "release-attestor-publisher"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/logicalRoleBinding"
+                },
+                {
+                  "properties": {
+                    "logicalRole": {
+                      "const": "public-release"
+                    },
+                    "serviceRole": {
+                      "const": "release-attestor-publisher"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/logicalRoleBinding"
+                },
+                {
+                  "properties": {
+                    "logicalRole": {
+                      "const": "custody"
+                    },
+                    "serviceRole": {
+                      "const": "release-attestor-publisher"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/logicalRoleBinding"
+                },
+                {
+                  "properties": {
+                    "logicalRole": {
+                      "const": "emergency-cleanup-executor"
+                    },
+                    "serviceRole": {
+                      "const": "cleanup-watchdog"
+                    }
+                  }
+                }
+              ]
+            }
+          ],
+          "items": false
+        },
+        "readinessContract": {
+          "$ref": "#/$defs/readinessContract"
+        }
+      }
+    }
+  }
+}

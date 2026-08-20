@@ -1,0 +1,2483 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/coder-test-controller-request.v1.schema.json",
+  "title": "Serverware Controller Request Contract v11",
+  "description": "Closed request contract for the root-owned controller client. Repository Make and shell are untrusted submission surfaces and never receive request bytes, authorization material, keys, capabilities, request or worker file descriptors, or trusted execution. The controller never invokes or trusts any Make target.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contractVersion",
+    "preAllocationFrame",
+    "requestEnvelope",
+    "requestEnvelopeSha256",
+    "requestCanonicalBytes"
+  ],
+  "properties": {
+    "contractVersion": {
+      "const": 11
+    },
+    "preAllocationFrame": {
+      "$ref": "#/$defs/preAllocationFrame"
+    },
+    "requestEnvelope": {
+      "$ref": "#/$defs/requestEnvelope"
+    },
+    "requestEnvelopeSha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "requestCanonicalBytes": {
+      "$ref": "#/$defs/u64"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "uuid": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "u64": {
+      "description": "Canonical unsigned 64-bit integer encoded as exactly 20 zero-padded decimal digits. Native verification rejects lexicographic values greater than 18446744073709551615.",
+      "type": "string",
+      "pattern": "^[0-9]{20}$"
+    },
+    "positiveU64": {
+      "description": "Canonical positive unsigned 64-bit integer encoded as exactly 20 zero-padded decimal digits.",
+      "type": "string",
+      "pattern": "^(?!0{20}$)[0-9]{20}$"
+    },
+    "rfc3339": {
+      "description": "UTC RFC3339 with seconds and optional 1-9 fractional digits. Native verification performs strict calendar validation and rejects leap-second, offset, normalization, and impossible-date forms.",
+      "type": "string",
+      "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-([0-2][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\\.[0-9]{1,9})?Z$"
+    },
+    "base64url": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "maxLength": 4096
+    },
+    "preAllocationFrame": {
+      "description": "Closed mirror of the fixed 256-byte binary frame read from one SOCK_SEQPACKET message before the controller allocates request-body storage or begins streamed retrieval.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "frameVersion",
+        "magic",
+        "transport",
+        "fixedHeaderBytes",
+        "declaredCanonicalRequestBytes",
+        "maximumCanonicalRequestBytes",
+        "declaredEnvelopeBytes",
+        "maximumEnvelopeBytes",
+        "streamChunkBytes",
+        "maximumStreamChunkCount",
+        "maximumAggregateRetrievedBytes",
+        "frameDeadline",
+        "requestEnvelopeSha256",
+        "frameNonceSha256",
+        "frameSha256"
+      ],
+      "properties": {
+        "frameVersion": {
+          "const": "11"
+        },
+        "magic": {
+          "const": "SERVERWARE-CONTROLLER"
+        },
+        "transport": {
+          "const": "ROOT_OWNED_PEERCRED_SEQPACKET"
+        },
+        "fixedHeaderBytes": {
+          "const": "00000000000000000256"
+        },
+        "declaredCanonicalRequestBytes": {
+          "$ref": "#/$defs/u64"
+        },
+        "maximumCanonicalRequestBytes": {
+          "const": "00000000000016777216"
+        },
+        "declaredEnvelopeBytes": {
+          "$ref": "#/$defs/u64"
+        },
+        "maximumEnvelopeBytes": {
+          "const": "00000000000016777216"
+        },
+        "streamChunkBytes": {
+          "const": "00000000000000065536"
+        },
+        "maximumStreamChunkCount": {
+          "const": "00000000000000000256"
+        },
+        "maximumAggregateRetrievedBytes": {
+          "const": "00000000000067108864"
+        },
+        "frameDeadline": {
+          "$ref": "#/$defs/rfc3339"
+        },
+        "requestEnvelopeSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "frameNonceSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "frameSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "ed25519Signature": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{86}$"
+    },
+    "principalId": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:@/-]{0,127}$"
+    },
+    "role": {
+      "enum": [
+        "requester",
+        "planConfig",
+        "planRootCheckpoint",
+        "authoritySnapshotCheckpoint",
+        "controllerGeneration",
+        "sourceObserver",
+        "coverageObserver",
+        "controllerReceipt",
+        "resourceJournal",
+        "lifecycleJournal",
+        "destroyMonitor",
+        "postDestroyMonitor",
+        "noBuildMonitor",
+        "attestationVerifier",
+        "terminalSeal",
+        "stateQuorum",
+        "stateQuorumMembership",
+        "stateEpochFloor",
+        "immutableStore",
+        "stateWitness",
+        "stateWitnessAdmin",
+        "trustedTime",
+        "hostAttestation",
+        "containment",
+        "artifactManifest",
+        "stageRecord",
+        "cleanupInventory",
+        "pipelineCommit",
+        "credentialRevoker",
+        "finalVerdictCheckpoint",
+        "launchAuthorizer"
+      ]
+    },
+    "signatureDomain": {
+      "enum": [
+        "serverware/pipeline-plan/v11",
+        "serverware/plan-config/v11",
+        "serverware/plan-root-checkpoint/v11",
+        "serverware/authority-snapshot/v11",
+        "serverware/request-build/v11",
+        "serverware/request-unit/v11",
+        "serverware/request-integration/v11",
+        "serverware/request-e2e/v11",
+        "serverware/request-attestation/v11",
+        "serverware/predecessor-reference/v11",
+        "serverware/build-closure/v11",
+        "serverware/state-cas-quorum/v11",
+        "serverware/state-quorum-membership-checkpoint/v11",
+        "serverware/state-quorum-epoch-floor/v11",
+        "serverware/immutable-store-availability/v11",
+        "serverware/state-witness-anti-equivocation/v11",
+        "serverware/state-witness-admin-statement/v11",
+        "serverware/state-witness-global-admin-log-checkpoint/v11",
+        "serverware/reservation-commit/v11",
+        "serverware/lane-finalization/v11",
+        "serverware/host-attestation/v11",
+        "serverware/source-observation/v11",
+        "serverware/coverage-observation/v11",
+        "serverware/stage-record/v11",
+        "serverware/artifact-manifest/v11",
+        "serverware/resource-journal/v11",
+        "serverware/lifecycle-journal/v11",
+        "serverware/no-build-monitor/v11",
+        "serverware/no-build-start/v11",
+        "serverware/no-build-end/v11",
+        "serverware/attestation-freshness/v11",
+        "serverware/post-quote-attestation-verdict/v11",
+        "serverware/cleanup-inventory/v11",
+        "serverware/destroy-monitor/v11",
+        "serverware/post-destroy-monitor/v11",
+        "serverware/containment/v11",
+        "serverware/credential-revocation/v11",
+        "serverware/terminal-seal/v11",
+        "serverware/final-trust-observation/v11",
+        "serverware/receipt-authentication/v11",
+        "serverware/final-verdict/v11",
+        "serverware/execution-manifest/v11"
+      ]
+    },
+    "keyLeaf": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "leafVersion",
+        "role",
+        "principalId",
+        "keyId",
+        "algorithm",
+        "spkiDerSha256",
+        "physicalPrivateKeyIdentitySha256",
+        "trustRootSha256",
+        "trustRevision",
+        "validFrom",
+        "validUntil",
+        "keyLeafSha256"
+      ],
+      "properties": {
+        "leafVersion": {
+          "const": "11"
+        },
+        "role": {
+          "$ref": "#/$defs/role"
+        },
+        "principalId": {
+          "$ref": "#/$defs/principalId"
+        },
+        "keyId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "algorithm": {
+          "const": "Ed25519"
+        },
+        "spkiDerSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "physicalPrivateKeyIdentitySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "trustRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "trustRevision": {
+          "$ref": "#/$defs/u64"
+        },
+        "validFrom": {
+          "$ref": "#/$defs/rfc3339"
+        },
+        "validUntil": {
+          "$ref": "#/$defs/rfc3339"
+        },
+        "keyLeafSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "merklePathStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "direction",
+        "siblingSha256"
+      ],
+      "properties": {
+        "direction": {
+          "enum": [
+            "LEFT",
+            "RIGHT"
+          ]
+        },
+        "siblingSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "merkleProof": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "treeDomain",
+        "leafOrdinal",
+        "treeSize",
+        "leafSha256",
+        "path",
+        "rootSha256"
+      ],
+      "properties": {
+        "treeDomain": {
+          "enum": [
+            "KEY_TRUST_V11",
+            "KEY_NON_REVOCATION_V11",
+            "PLAN_ROOT_V11",
+            "STATE_QUORUM_V11",
+            "STATE_WITNESS_V11",
+            "STATE_WITNESS_ADMIN_LOG_V11",
+            "STATE_WITNESS_CONFLICT_SET_V11",
+            "IMMUTABLE_EVIDENCE_STORE_V11",
+            "COVERAGE_V11",
+            "SOURCE_MANIFEST_V11",
+            "NO_BUILD_EVENTS_V11",
+            "RESOURCE_INVENTORY_V11",
+            "PREFINAL_OBJECTS_V11",
+            "PREDECESSOR_ARTIFACT_CLOSURE_V11",
+            "RUNTIME_IMAGE_CLOSURE_V11",
+            "INTERPRETER_PROVENANCE_V11",
+            "EXECUTABLE_VMA_UNIVERSE_V11",
+            "STATE_QUORUM_MEMBERSHIP_V11",
+            "STATE_QUORUM_CHECKPOINT_LOG_V11"
+          ]
+        },
+        "leafOrdinal": {
+          "$ref": "#/$defs/u64"
+        },
+        "treeSize": {
+          "$ref": "#/$defs/u64"
+        },
+        "leafSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "path": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "$ref": "#/$defs/merklePathStep"
+          }
+        },
+        "rootSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "immutableStoreInclusionProof": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/merkleProof"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "treeDomain": {
+              "const": "IMMUTABLE_EVIDENCE_STORE_V11"
+            }
+          }
+        }
+      ]
+    },
+    "keyAuthorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "keyLeaf",
+        "trustInclusion",
+        "nonRevocationInclusion",
+        "nonRevocationRootSha256",
+        "nonRevocationRevision",
+        "checkedAt"
+      ],
+      "properties": {
+        "keyLeaf": {
+          "$ref": "#/$defs/keyLeaf"
+        },
+        "trustInclusion": {
+          "$ref": "#/$defs/merkleProof"
+        },
+        "nonRevocationInclusion": {
+          "$ref": "#/$defs/merkleProof"
+        },
+        "nonRevocationRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "nonRevocationRevision": {
+          "$ref": "#/$defs/u64"
+        },
+        "checkedAt": {
+          "$ref": "#/$defs/rfc3339"
+        }
+      }
+    },
+    "signature": {
+      "description": "The single key leaf identified here is used both to resolve the public key that verifies the signature and to authorize the signer role. No independent or caller-selected key identity exists.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "signatureVersion",
+        "domain",
+        "payloadSha256",
+        "signedAt",
+        "acceptedAt",
+        "signerRole",
+        "signerPrincipalId",
+        "signerKeyId",
+        "signerKeyLeafSha256",
+        "signerSpkiDerSha256",
+        "keyAuthorization",
+        "signatureBase64url"
+      ],
+      "properties": {
+        "signatureVersion": {
+          "const": "11"
+        },
+        "domain": {
+          "$ref": "#/$defs/signatureDomain"
+        },
+        "payloadSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "signedAt": {
+          "$ref": "#/$defs/rfc3339"
+        },
+        "acceptedAt": {
+          "$ref": "#/$defs/rfc3339"
+        },
+        "signerRole": {
+          "$ref": "#/$defs/role"
+        },
+        "signerPrincipalId": {
+          "$ref": "#/$defs/principalId"
+        },
+        "signerKeyId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "signerKeyLeafSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "signerSpkiDerSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "keyAuthorization": {
+          "$ref": "#/$defs/keyAuthorization"
+        },
+        "signatureBase64url": {
+          "$ref": "#/$defs/ed25519Signature"
+        }
+      }
+    },
+    "immutableAvailabilityCommitmentPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "commitmentVersion",
+        "storeIdentity",
+        "storeRootSha256",
+        "storeRevision",
+        "contentAddress",
+        "exactByteLength",
+        "contentSha256",
+        "availableFrom",
+        "availableUntil",
+        "retentionPolicySha256",
+        "replicaSetRootSha256",
+        "replicaCount",
+        "commitmentSha256"
+      ],
+      "properties": {
+        "commitmentVersion": {
+          "const": "11"
+        },
+        "storeIdentity": {
+          "$ref": "#/$defs/uuid"
+        },
+        "storeRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "storeRevision": {
+          "$ref": "#/$defs/u64"
+        },
+        "contentAddress": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "exactByteLength": {
+          "$ref": "#/$defs/u64"
+        },
+        "contentSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "availableFrom": {
+          "$ref": "#/$defs/rfc3339"
+        },
+        "availableUntil": {
+          "$ref": "#/$defs/rfc3339"
+        },
+        "retentionPolicySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "replicaSetRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "replicaCount": {
+          "$ref": "#/$defs/u64"
+        },
+        "commitmentSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "immutableAvailabilityCommitmentEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "domain",
+        "payload",
+        "payloadSha256",
+        "signature"
+      ],
+      "properties": {
+        "domain": {
+          "const": "serverware/immutable-store-availability/v11"
+        },
+        "payload": {
+          "$ref": "#/$defs/immutableAvailabilityCommitmentPayload"
+        },
+        "payloadSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "signature": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/signature"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "domain": {
+                  "const": "serverware/immutable-store-availability/v11"
+                },
+                "signerRole": {
+                  "const": "immutableStore"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "immutableRetrievalProof": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "retrievalSessionId",
+        "retrievalLedgerId",
+        "retrievalScopeSha256",
+        "globalRetrievalOrdinal",
+        "predecessorRetrievalTranscriptSha256",
+        "storeIdentity",
+        "storeRootSha256",
+        "storeRevision",
+        "requestedContentAddress",
+        "declaredObjectBytes",
+        "maximumObjectBytes",
+        "streamChunkBytes",
+        "streamChunkCount",
+        "maximumStreamChunkCount",
+        "chunks",
+        "chunkDigestRootSha256",
+        "globalCumulativeBytesBefore",
+        "globalCumulativeBytesAfter",
+        "maximumAggregateBytes",
+        "returnedExactByteLength",
+        "returnedBytesSha256",
+        "transportTranscriptSha256",
+        "retrievalTranscriptSha256",
+        "availabilityCommitmentSha256",
+        "requestedAt",
+        "firstChunkAt",
+        "lastChunkAt",
+        "retrievedAt",
+        "retrievalDeadline",
+        "streamCompleted"
+      ],
+      "properties": {
+        "retrievalSessionId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "retrievalLedgerId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "retrievalScopeSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "globalRetrievalOrdinal": {
+          "$ref": "#/$defs/u64"
+        },
+        "predecessorRetrievalTranscriptSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "storeIdentity": {
+          "$ref": "#/$defs/uuid"
+        },
+        "storeRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "storeRevision": {
+          "$ref": "#/$defs/u64"
+        },
+        "requestedContentAddress": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "declaredObjectBytes": {
+          "$ref": "#/$defs/u64"
+        },
+        "maximumObjectBytes": {
+          "const": "00000000000016777216"
+        },
+        "streamChunkBytes": {
+          "const": "00000000000000065536"
+        },
+        "streamChunkCount": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "maximumStreamChunkCount": {
+          "const": "00000000000000001024"
+        },
+        "chunks": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1024,
+          "items": {
+            "$ref": "#/$defs/immutableRetrievalChunk"
+          }
+        },
+        "chunkDigestRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "globalCumulativeBytesBefore": {
+          "$ref": "#/$defs/u64"
+        },
+        "globalCumulativeBytesAfter": {
+          "$ref": "#/$defs/u64"
+        },
+        "maximumAggregateBytes": {
+          "const": "00000000000067108864"
+        },
+        "returnedExactByteLength": {
+          "$ref": "#/$defs/u64"
+        },
+        "returnedBytesSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "transportTranscriptSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "retrievalTranscriptSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "availabilityCommitmentSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "requestedAt": {
+          "$ref": "#/$defs/rfc3339"
+        },
+        "firstChunkAt": {
+          "$ref": "#/$defs/rfc3339"
+        },
+        "lastChunkAt": {
+          "$ref": "#/$defs/rfc3339"
+        },
+        "retrievedAt": {
+          "$ref": "#/$defs/rfc3339"
+        },
+        "retrievalDeadline": {
+          "$ref": "#/$defs/rfc3339"
+        },
+        "streamCompleted": {
+          "const": true
+        }
+      }
+    },
+    "immutableRetrievalChunk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "chunkOrdinal",
+        "exactByteLength",
+        "bytesSha256"
+      ],
+      "properties": {
+        "chunkOrdinal": {
+          "$ref": "#/$defs/u64"
+        },
+        "exactByteLength": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "bytesSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "stageTuple": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "stageOrdinal",
+            "operation",
+            "clientStageLabel",
+            "planStageLabel"
+          ],
+          "properties": {
+            "stageOrdinal": {
+              "const": "00000000000000000000"
+            },
+            "operation": {
+              "const": "build"
+            },
+            "clientStageLabel": {
+              "const": "build"
+            },
+            "planStageLabel": {
+              "const": "serverware-build-v1"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "stageOrdinal",
+            "operation",
+            "clientStageLabel",
+            "planStageLabel"
+          ],
+          "properties": {
+            "stageOrdinal": {
+              "const": "00000000000000000001"
+            },
+            "operation": {
+              "const": "runNoBuild"
+            },
+            "clientStageLabel": {
+              "const": "unit"
+            },
+            "planStageLabel": {
+              "const": "serverware-unit-no-build-v1"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "stageOrdinal",
+            "operation",
+            "clientStageLabel",
+            "planStageLabel"
+          ],
+          "properties": {
+            "stageOrdinal": {
+              "const": "00000000000000000002"
+            },
+            "operation": {
+              "const": "runNoBuild"
+            },
+            "clientStageLabel": {
+              "const": "integration"
+            },
+            "planStageLabel": {
+              "const": "serverware-integration-no-build-v1"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "stageOrdinal",
+            "operation",
+            "clientStageLabel",
+            "planStageLabel"
+          ],
+          "properties": {
+            "stageOrdinal": {
+              "const": "00000000000000000003"
+            },
+            "operation": {
+              "const": "runNoBuild"
+            },
+            "clientStageLabel": {
+              "const": "e2e"
+            },
+            "planStageLabel": {
+              "const": "serverware-e2e-no-build-v1"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "stageOrdinal",
+            "operation",
+            "clientStageLabel",
+            "planStageLabel"
+          ],
+          "properties": {
+            "stageOrdinal": {
+              "const": "00000000000000000004"
+            },
+            "operation": {
+              "const": "runNoBuild"
+            },
+            "clientStageLabel": {
+              "const": "attestation"
+            },
+            "planStageLabel": {
+              "const": "serverware-attestation-no-build-v1"
+            }
+          }
+        }
+      ]
+    },
+    "pipelineStage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "stage",
+        "policySha256",
+        "configurationSha256",
+        "executionManifestPolicySha256",
+        "requiredPredecessorOrdinal"
+      ],
+      "properties": {
+        "stage": {
+          "$ref": "#/$defs/stageTuple"
+        },
+        "policySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "configurationSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "executionManifestPolicySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "requiredPredecessorOrdinal": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/u64"
+            }
+          ]
+        }
+      }
+    },
+    "pipelinePlanPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pipelineId",
+        "goalId",
+        "planRevision",
+        "stages",
+        "sourcePolicySha256",
+        "coveragePolicySha256",
+        "testInventoryRootSha256",
+        "noBuildPolicySha256",
+        "attestationPolicySha256",
+        "cleanupPolicySha256",
+        "executionManifestPolicySha256",
+        "immutableEvidenceStorePolicySha256",
+        "createdAt",
+        "validFrom",
+        "validUntil"
+      ],
+      "properties": {
+        "pipelineId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "goalId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "planRevision": {
+          "$ref": "#/$defs/u64"
+        },
+        "stages": {
+          "type": "array",
+          "minItems": 5,
+          "maxItems": 5,
+          "prefixItems": [
+            {
+              "$ref": "#/$defs/pipelineStage"
+            },
+            {
+              "$ref": "#/$defs/pipelineStage"
+            },
+            {
+              "$ref": "#/$defs/pipelineStage"
+            },
+            {
+              "$ref": "#/$defs/pipelineStage"
+            },
+            {
+              "$ref": "#/$defs/pipelineStage"
+            }
+          ],
+          "items": false
+        },
+        "sourcePolicySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "coveragePolicySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "testInventoryRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "noBuildPolicySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "attestationPolicySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "cleanupPolicySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "executionManifestPolicySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "immutableEvidenceStorePolicySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "createdAt": {
+          "$ref": "#/$defs/rfc3339"
+        },
+        "validFrom": {
+          "$ref": "#/$defs/rfc3339"
+        },
+        "validUntil": {
+          "$ref": "#/$defs/rfc3339"
+        }
+      }
+    },
+    "pipelinePlanEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "domain",
+        "payload",
+        "payloadSha256",
+        "signature"
+      ],
+      "properties": {
+        "domain": {
+          "const": "serverware/pipeline-plan/v11"
+        },
+        "payload": {
+          "$ref": "#/$defs/pipelinePlanPayload"
+        },
+        "payloadSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "signature": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/signature"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "domain": {
+                  "const": "serverware/pipeline-plan/v11"
+                },
+                "signerRole": {
+                  "const": "planConfig"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "planConfigurationPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "configurationId",
+        "configurationRevision",
+        "pipelinePlanSha256",
+        "controllerImageSha256",
+        "workerImageClosureSha256",
+        "dependencyClosureSha256",
+        "coverageBaselinePolicySha256",
+        "coveragePolicySha256",
+        "testInventoryRootSha256",
+        "noBuildPolicySha256",
+        "attestationPolicySha256",
+        "resourcePolicySha256",
+        "cleanupPolicySha256",
+        "executionManifestPolicySha256",
+        "immutableEvidenceStorePolicySha256",
+        "validFrom",
+        "validUntil"
+      ],
+      "properties": {
+        "configurationId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "configurationRevision": {
+          "$ref": "#/$defs/u64"
+        },
+        "pipelinePlanSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "controllerImageSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "workerImageClosureSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "dependencyClosureSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "coverageBaselinePolicySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "coveragePolicySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "testInventoryRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "noBuildPolicySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "attestationPolicySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "resourcePolicySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "cleanupPolicySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "executionManifestPolicySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "immutableEvidenceStorePolicySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "validFrom": {
+          "$ref": "#/$defs/rfc3339"
+        },
+        "validUntil": {
+          "$ref": "#/$defs/rfc3339"
+        }
+      }
+    },
+    "planConfigurationEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "domain",
+        "payload",
+        "payloadSha256",
+        "signature"
+      ],
+      "properties": {
+        "domain": {
+          "const": "serverware/plan-config/v11"
+        },
+        "payload": {
+          "$ref": "#/$defs/planConfigurationPayload"
+        },
+        "payloadSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "signature": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/signature"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "domain": {
+                  "const": "serverware/plan-config/v11"
+                },
+                "signerRole": {
+                  "const": "planConfig"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "planRootCheckpointPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "checkpointId",
+        "planRootSha256",
+        "planRevision",
+        "planSignerPrincipalId",
+        "planSignerKeyLeafSha256",
+        "planSignerSpkiDerSha256",
+        "planNonRevocationRootSha256",
+        "planNonRevocationRevision",
+        "issuedAt",
+        "validUntil"
+      ],
+      "properties": {
+        "checkpointId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "planRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "planRevision": {
+          "$ref": "#/$defs/u64"
+        },
+        "planSignerPrincipalId": {
+          "$ref": "#/$defs/principalId"
+        },
+        "planSignerKeyLeafSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "planSignerSpkiDerSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "planNonRevocationRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "planNonRevocationRevision": {
+          "$ref": "#/$defs/u64"
+        },
+        "issuedAt": {
+          "$ref": "#/$defs/rfc3339"
+        },
+        "validUntil": {
+          "$ref": "#/$defs/rfc3339"
+        }
+      }
+    },
+    "planRootCheckpointEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "domain",
+        "payload",
+        "payloadSha256",
+        "signature"
+      ],
+      "properties": {
+        "domain": {
+          "const": "serverware/plan-root-checkpoint/v11"
+        },
+        "payload": {
+          "$ref": "#/$defs/planRootCheckpointPayload"
+        },
+        "payloadSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "signature": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/signature"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "domain": {
+                  "const": "serverware/plan-root-checkpoint/v11"
+                },
+                "signerRole": {
+                  "const": "planRootCheckpoint"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "authorityRoot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "role",
+        "trustRootSha256",
+        "trustRevision",
+        "nonRevocationRootSha256",
+        "nonRevocationRevision",
+        "validFrom",
+        "validUntil"
+      ],
+      "properties": {
+        "role": {
+          "enum": [
+            "requester",
+            "planConfig",
+            "planRootCheckpoint",
+            "authoritySnapshotCheckpoint",
+            "controllerGeneration",
+            "sourceObserver",
+            "coverageObserver",
+            "controllerReceipt",
+            "resourceJournal",
+            "lifecycleJournal",
+            "destroyMonitor",
+            "postDestroyMonitor",
+            "noBuildMonitor",
+            "attestationVerifier",
+            "terminalSeal",
+            "stateQuorum",
+            "stateWitness",
+            "stateWitnessAdmin",
+            "trustedTime",
+            "hostAttestation",
+            "containment",
+            "artifactManifest",
+            "stageRecord",
+            "cleanupInventory",
+            "pipelineCommit",
+            "credentialRevoker",
+            "finalVerdictCheckpoint",
+            "launchAuthorizer"
+          ]
+        },
+        "trustRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "trustRevision": {
+          "$ref": "#/$defs/u64"
+        },
+        "nonRevocationRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "nonRevocationRevision": {
+          "$ref": "#/$defs/u64"
+        },
+        "validFrom": {
+          "$ref": "#/$defs/rfc3339"
+        },
+        "validUntil": {
+          "$ref": "#/$defs/rfc3339"
+        }
+      }
+    },
+    "stateHead": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "storeIdentity",
+        "headSha256",
+        "revision",
+        "nextSequence",
+        "term",
+        "logIndex",
+        "fencingToken"
+      ],
+      "properties": {
+        "storeIdentity": {
+          "$ref": "#/$defs/uuid"
+        },
+        "headSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "revision": {
+          "$ref": "#/$defs/u64"
+        },
+        "nextSequence": {
+          "$ref": "#/$defs/u64"
+        },
+        "term": {
+          "$ref": "#/$defs/u64"
+        },
+        "logIndex": {
+          "$ref": "#/$defs/u64"
+        },
+        "fencingToken": {
+          "$ref": "#/$defs/u64"
+        }
+      }
+    },
+    "authoritySnapshotPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "snapshotId",
+        "asOfEpoch",
+        "asOfTrustedTime",
+        "authoritySnapshotCheckpointId",
+        "authoritySnapshotCheckpointRootSha256",
+        "authoritySnapshotCheckpointRevision",
+        "authoritySnapshotSignerPrincipalId",
+        "authoritySnapshotSignerKeyLeafSha256",
+        "authoritySnapshotSignerSpkiDerSha256",
+        "authoritySnapshotNonRevocationRootSha256",
+        "authoritySnapshotNonRevocationRevision",
+        "planRootCheckpointSha256",
+        "planRootSha256",
+        "planRevision",
+        "controllerGenerationRootSha256",
+        "controllerGenerationRevision",
+        "requesterTrustRootSha256",
+        "requesterTrustRevision",
+        "authorityRoots",
+        "replayHead",
+        "allocationHead",
+        "continuityHead",
+        "pipelineHead",
+        "issuedAt",
+        "validUntil"
+      ],
+      "properties": {
+        "snapshotId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "asOfEpoch": {
+          "$ref": "#/$defs/u64"
+        },
+        "asOfTrustedTime": {
+          "$ref": "#/$defs/rfc3339"
+        },
+        "authoritySnapshotCheckpointId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "authoritySnapshotCheckpointRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "authoritySnapshotCheckpointRevision": {
+          "$ref": "#/$defs/u64"
+        },
+        "authoritySnapshotSignerPrincipalId": {
+          "$ref": "#/$defs/principalId"
+        },
+        "authoritySnapshotSignerKeyLeafSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "authoritySnapshotSignerSpkiDerSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "authoritySnapshotNonRevocationRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "authoritySnapshotNonRevocationRevision": {
+          "$ref": "#/$defs/u64"
+        },
+        "planRootCheckpointSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "planRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "planRevision": {
+          "$ref": "#/$defs/u64"
+        },
+        "controllerGenerationRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "controllerGenerationRevision": {
+          "$ref": "#/$defs/u64"
+        },
+        "requesterTrustRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "requesterTrustRevision": {
+          "$ref": "#/$defs/u64"
+        },
+        "authorityRoots": {
+          "type": "array",
+          "minItems": 28,
+          "maxItems": 28,
+          "items": {
+            "$ref": "#/$defs/authorityRoot"
+          }
+        },
+        "replayHead": {
+          "$ref": "#/$defs/stateHead"
+        },
+        "allocationHead": {
+          "$ref": "#/$defs/stateHead"
+        },
+        "continuityHead": {
+          "$ref": "#/$defs/stateHead"
+        },
+        "pipelineHead": {
+          "$ref": "#/$defs/stateHead"
+        },
+        "issuedAt": {
+          "$ref": "#/$defs/rfc3339"
+        },
+        "validUntil": {
+          "$ref": "#/$defs/rfc3339"
+        }
+      }
+    },
+    "authoritySnapshotEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "domain",
+        "payload",
+        "payloadSha256",
+        "signature"
+      ],
+      "properties": {
+        "domain": {
+          "const": "serverware/authority-snapshot/v11"
+        },
+        "payload": {
+          "$ref": "#/$defs/authoritySnapshotPayload"
+        },
+        "payloadSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "signature": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/signature"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "domain": {
+                  "const": "serverware/authority-snapshot/v11"
+                },
+                "signerRole": {
+                  "const": "authoritySnapshotCheckpoint"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "sourceIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repositoryId",
+        "commitSha256",
+        "treeSha256",
+        "archiveSha256",
+        "archiveCanonicalBytes",
+        "openDescriptorSha256",
+        "mountIdentitySha256",
+        "manifestIndexSha256"
+      ],
+      "properties": {
+        "repositoryId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "commitSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "treeSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "archiveSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "archiveCanonicalBytes": {
+          "$ref": "#/$defs/u64"
+        },
+        "openDescriptorSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "mountIdentitySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "manifestIndexSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "executionTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "coderDeploymentId",
+        "coderWorkspaceId",
+        "coderWorkspaceBuildId",
+        "executionHostId",
+        "executionHostBootId",
+        "runtimeInstanceId",
+        "runtimeNamespaceSha256",
+        "runtimeImageSha256",
+        "hostAttestationIdentitySha256"
+      ],
+      "properties": {
+        "coderDeploymentId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "coderWorkspaceId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "coderWorkspaceBuildId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "executionHostId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "executionHostBootId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "runtimeInstanceId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "runtimeNamespaceSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "runtimeImageSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "hostAttestationIdentitySha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "referenceHeader": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "objectType",
+        "objectVersion",
+        "objectDomain",
+        "exactByteLength",
+        "contentSha256",
+        "objectSha256",
+        "subjectBindingSha256",
+        "contentAddress"
+      ],
+      "properties": {
+        "objectType": {
+          "enum": [
+            "BUILD_CLOSURE",
+            "TEST_RECEIPT"
+          ]
+        },
+        "objectVersion": {
+          "const": "11"
+        },
+        "objectDomain": {
+          "type": "string",
+          "pattern": "^serverware/[a-z0-9-]+/v11$",
+          "maxLength": 96
+        },
+        "exactByteLength": {
+          "$ref": "#/$defs/u64"
+        },
+        "contentSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "objectSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "subjectBindingSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "contentAddress": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
+    "buildClosureSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pipelineId",
+        "goalId",
+        "pipelinePlanSha256",
+        "planConfigurationRevision",
+        "source",
+        "executionTarget",
+        "buildArtifactRootSha256",
+        "dependencyClosureSha256",
+        "imageClosureSha256",
+        "terminalTipSha256",
+        "buildReceiptSha256"
+      ],
+      "properties": {
+        "pipelineId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "goalId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "pipelinePlanSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "planConfigurationRevision": {
+          "$ref": "#/$defs/u64"
+        },
+        "source": {
+          "$ref": "#/$defs/sourceIdentity"
+        },
+        "executionTarget": {
+          "$ref": "#/$defs/executionTarget"
+        },
+        "buildArtifactRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "dependencyClosureSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "imageClosureSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "terminalTipSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "buildReceiptSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "testReceiptSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pipelineId",
+        "goalId",
+        "stage",
+        "receiptSha256",
+        "predecessorTipSha256",
+        "successorTipSha256",
+        "verdict"
+      ],
+      "properties": {
+        "pipelineId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "goalId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "stage": {
+          "$ref": "#/$defs/stageTuple"
+        },
+        "receiptSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "predecessorTipSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "successorTipSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "verdict": {
+          "const": "PASS"
+        }
+      }
+    },
+    "resolvedReference": {
+      "description": "A content-addressed reference whose object is resolved from the externally pinned immutable evidence store. The summary is a closed verifier-checkable projection, never a substitute for resolving and hashing the exact object.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "header",
+        "summary",
+        "storeIdentity",
+        "storeRootSha256",
+        "storeRevision",
+        "storeLeafSha256",
+        "storeInclusionProof",
+        "availabilityCommitment",
+        "availabilityCommitmentSha256",
+        "retrievalProof"
+      ],
+      "properties": {
+        "header": {
+          "$ref": "#/$defs/referenceHeader"
+        },
+        "summary": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/buildClosureSummary"
+            },
+            {
+              "$ref": "#/$defs/testReceiptSummary"
+            }
+          ]
+        },
+        "storeIdentity": {
+          "$ref": "#/$defs/uuid"
+        },
+        "storeRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "storeRevision": {
+          "$ref": "#/$defs/u64"
+        },
+        "storeLeafSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "storeInclusionProof": {
+          "$ref": "#/$defs/immutableStoreInclusionProof"
+        },
+        "availabilityCommitment": {
+          "$ref": "#/$defs/immutableAvailabilityCommitmentEnvelope"
+        },
+        "availabilityCommitmentSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "retrievalProof": {
+          "$ref": "#/$defs/immutableRetrievalProof"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "header": {
+                "type": "object",
+                "properties": {
+                  "objectType": {
+                    "const": "BUILD_CLOSURE"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "header": {
+                "properties": {
+                  "objectDomain": {
+                    "const": "serverware/build-closure/v11"
+                  }
+                }
+              },
+              "summary": {
+                "$ref": "#/$defs/buildClosureSummary"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "header": {
+                "type": "object",
+                "properties": {
+                  "objectType": {
+                    "const": "TEST_RECEIPT"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "header": {
+                "properties": {
+                  "objectDomain": {
+                    "const": "serverware/predecessor-reference/v11"
+                  }
+                }
+              },
+              "summary": {
+                "$ref": "#/$defs/testReceiptSummary"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "buildClosureReference": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/resolvedReference"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "header": {
+              "properties": {
+                "objectType": {
+                  "const": "BUILD_CLOSURE"
+                }
+              }
+            },
+            "summary": {
+              "$ref": "#/$defs/buildClosureSummary"
+            }
+          }
+        }
+      ]
+    },
+    "testReceiptReference": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/resolvedReference"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "header": {
+              "properties": {
+                "objectType": {
+                  "const": "TEST_RECEIPT"
+                }
+              }
+            },
+            "summary": {
+              "$ref": "#/$defs/testReceiptSummary"
+            }
+          }
+        }
+      ]
+    },
+    "predecessorPackage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "buildClosure",
+        "precedingTests",
+        "aggregateCanonicalBytes",
+        "maximumReferenceDepth"
+      ],
+      "properties": {
+        "buildClosure": {
+          "$ref": "#/$defs/buildClosureReference"
+        },
+        "precedingTests": {
+          "type": "array",
+          "maxItems": 3,
+          "items": {
+            "$ref": "#/$defs/testReceiptReference"
+          }
+        },
+        "aggregateCanonicalBytes": {
+          "$ref": "#/$defs/u64"
+        },
+        "maximumReferenceDepth": {
+          "const": "00000000000000000004"
+        }
+      }
+    },
+    "replayIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requestId",
+        "nonce",
+        "requesterKeyLeafSha256",
+        "requestIdReplayKeySha256",
+        "nonceReplayKeySha256"
+      ],
+      "properties": {
+        "requestId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "nonce": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43}$"
+        },
+        "requesterKeyLeafSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "requestIdReplayKeySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "nonceReplayKeySha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "attestationChallenge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "challengeId",
+        "challengeNonceBase64url",
+        "challengeConsumptionKeySha256",
+        "preExecutionChallengeSubjectSha256",
+        "issuedAt",
+        "notBefore",
+        "expiresAt",
+        "trustedFreshnessPolicySha256"
+      ],
+      "properties": {
+        "challengeId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "challengeNonceBase64url": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43}$"
+        },
+        "challengeConsumptionKeySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "preExecutionChallengeSubjectSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "issuedAt": {
+          "$ref": "#/$defs/rfc3339"
+        },
+        "notBefore": {
+          "$ref": "#/$defs/rfc3339"
+        },
+        "expiresAt": {
+          "$ref": "#/$defs/rfc3339"
+        },
+        "trustedFreshnessPolicySha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "requestBodyBase": {
+      "type": "object",
+      "required": [
+        "requesterPrincipalId",
+        "requesterKeyLeafSha256",
+        "replayIdentity",
+        "requestedAt",
+        "deadline",
+        "pipelinePlanEnvelope",
+        "pipelinePlanSha256",
+        "planConfigurationEnvelope",
+        "planConfigurationSha256",
+        "planRootCheckpointEnvelope",
+        "authoritySnapshotEnvelope",
+        "authoritySnapshotSha256",
+        "selectedStage",
+        "source",
+        "executionTarget",
+        "pipelineTipOwnerSha256",
+        "predecessorTipSha256"
+      ],
+      "properties": {
+        "requesterPrincipalId": {
+          "$ref": "#/$defs/principalId"
+        },
+        "requesterKeyLeafSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "replayIdentity": {
+          "$ref": "#/$defs/replayIdentity"
+        },
+        "requestedAt": {
+          "$ref": "#/$defs/rfc3339"
+        },
+        "deadline": {
+          "$ref": "#/$defs/rfc3339"
+        },
+        "pipelinePlanEnvelope": {
+          "$ref": "#/$defs/pipelinePlanEnvelope"
+        },
+        "pipelinePlanSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "planConfigurationEnvelope": {
+          "$ref": "#/$defs/planConfigurationEnvelope"
+        },
+        "planConfigurationSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "planRootCheckpointEnvelope": {
+          "$ref": "#/$defs/planRootCheckpointEnvelope"
+        },
+        "authoritySnapshotEnvelope": {
+          "$ref": "#/$defs/authoritySnapshotEnvelope"
+        },
+        "authoritySnapshotSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "selectedStage": {
+          "$ref": "#/$defs/stageTuple"
+        },
+        "source": {
+          "$ref": "#/$defs/sourceIdentity"
+        },
+        "executionTarget": {
+          "$ref": "#/$defs/executionTarget"
+        },
+        "pipelineTipOwnerSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "predecessorTipSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "buildRequestBody": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/requestBodyBase"
+        },
+        {
+          "type": "object",
+          "required": [
+            "requesterPrincipalId",
+            "requesterKeyLeafSha256",
+            "replayIdentity",
+            "requestedAt",
+            "deadline",
+            "pipelinePlanEnvelope",
+            "pipelinePlanSha256",
+            "planConfigurationEnvelope",
+            "planConfigurationSha256",
+            "planRootCheckpointEnvelope",
+            "authoritySnapshotEnvelope",
+            "authoritySnapshotSha256",
+            "selectedStage",
+            "source",
+            "executionTarget",
+            "pipelineTipOwnerSha256",
+            "predecessorTipSha256"
+          ],
+          "properties": {
+            "selectedStage": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/stageTuple"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "operation": {
+                      "const": "build"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "noBuildRequestBody": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/requestBodyBase"
+        },
+        {
+          "type": "object",
+          "required": [
+            "requesterPrincipalId",
+            "requesterKeyLeafSha256",
+            "replayIdentity",
+            "requestedAt",
+            "deadline",
+            "pipelinePlanEnvelope",
+            "pipelinePlanSha256",
+            "planConfigurationEnvelope",
+            "planConfigurationSha256",
+            "planRootCheckpointEnvelope",
+            "authoritySnapshotEnvelope",
+            "authoritySnapshotSha256",
+            "selectedStage",
+            "source",
+            "executionTarget",
+            "pipelineTipOwnerSha256",
+            "predecessorTipSha256",
+            "predecessorPackage"
+          ],
+          "properties": {
+            "predecessorPackage": {
+              "$ref": "#/$defs/predecessorPackage"
+            }
+          }
+        }
+      ]
+    },
+    "unitRequestBody": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/noBuildRequestBody"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "selectedStage": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/stageTuple"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "operation": {
+                      "const": "runNoBuild"
+                    },
+                    "planStageLabel": {
+                      "const": "serverware-unit-no-build-v1"
+                    }
+                  }
+                }
+              ]
+            },
+            "predecessorPackage": {
+              "properties": {
+                "precedingTests": {
+                  "maxItems": 0
+                }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "integrationRequestBody": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/noBuildRequestBody"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "selectedStage": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/stageTuple"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "operation": {
+                      "const": "runNoBuild"
+                    },
+                    "planStageLabel": {
+                      "const": "serverware-integration-no-build-v1"
+                    }
+                  }
+                }
+              ]
+            },
+            "predecessorPackage": {
+              "properties": {
+                "precedingTests": {
+                  "minItems": 1,
+                  "maxItems": 1
+                }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "e2eRequestBody": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/noBuildRequestBody"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "selectedStage": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/stageTuple"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "operation": {
+                      "const": "runNoBuild"
+                    },
+                    "planStageLabel": {
+                      "const": "serverware-e2e-no-build-v1"
+                    }
+                  }
+                }
+              ]
+            },
+            "predecessorPackage": {
+              "properties": {
+                "precedingTests": {
+                  "minItems": 2,
+                  "maxItems": 2
+                }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "attestationRequestBody": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/noBuildRequestBody"
+        },
+        {
+          "type": "object",
+          "required": [
+            "attestationChallenge"
+          ],
+          "properties": {
+            "selectedStage": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/stageTuple"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "operation": {
+                      "const": "runNoBuild"
+                    },
+                    "planStageLabel": {
+                      "const": "serverware-attestation-no-build-v1"
+                    }
+                  }
+                }
+              ]
+            },
+            "attestationChallenge": {
+              "$ref": "#/$defs/attestationChallenge"
+            },
+            "predecessorPackage": {
+              "properties": {
+                "precedingTests": {
+                  "minItems": 3,
+                  "maxItems": 3
+                }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "buildRequestEnvelope": {
+      "$ref": "#/$defs/requestEnvelopeTemplate",
+      "properties": {
+        "domain": {
+          "const": "serverware/request-build/v11"
+        },
+        "payload": {
+          "$ref": "#/$defs/buildRequestBody"
+        },
+        "signature": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/signature"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "domain": {
+                  "const": "serverware/request-build/v11"
+                },
+                "signerRole": {
+                  "const": "requester"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "unitRequestEnvelope": {
+      "$ref": "#/$defs/requestEnvelopeTemplate",
+      "properties": {
+        "domain": {
+          "const": "serverware/request-unit/v11"
+        },
+        "payload": {
+          "$ref": "#/$defs/unitRequestBody"
+        },
+        "signature": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/signature"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "domain": {
+                  "const": "serverware/request-unit/v11"
+                },
+                "signerRole": {
+                  "const": "requester"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "integrationRequestEnvelope": {
+      "$ref": "#/$defs/requestEnvelopeTemplate",
+      "properties": {
+        "domain": {
+          "const": "serverware/request-integration/v11"
+        },
+        "payload": {
+          "$ref": "#/$defs/integrationRequestBody"
+        },
+        "signature": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/signature"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "domain": {
+                  "const": "serverware/request-integration/v11"
+                },
+                "signerRole": {
+                  "const": "requester"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "e2eRequestEnvelope": {
+      "$ref": "#/$defs/requestEnvelopeTemplate",
+      "properties": {
+        "domain": {
+          "const": "serverware/request-e2e/v11"
+        },
+        "payload": {
+          "$ref": "#/$defs/e2eRequestBody"
+        },
+        "signature": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/signature"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "domain": {
+                  "const": "serverware/request-e2e/v11"
+                },
+                "signerRole": {
+                  "const": "requester"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "attestationRequestEnvelope": {
+      "$ref": "#/$defs/requestEnvelopeTemplate",
+      "properties": {
+        "domain": {
+          "const": "serverware/request-attestation/v11"
+        },
+        "payload": {
+          "$ref": "#/$defs/attestationRequestBody"
+        },
+        "signature": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/signature"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "domain": {
+                  "const": "serverware/request-attestation/v11"
+                },
+                "signerRole": {
+                  "const": "requester"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "requestEnvelopeTemplate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "domain",
+        "payload",
+        "payloadSha256",
+        "signature"
+      ],
+      "properties": {
+        "domain": {
+          "$ref": "#/$defs/signatureDomain"
+        },
+        "payload": {
+          "type": "object"
+        },
+        "payloadSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "signature": {
+          "$ref": "#/$defs/signature"
+        }
+      }
+    },
+    "requestEnvelope": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/buildRequestEnvelope"
+        },
+        {
+          "$ref": "#/$defs/unitRequestEnvelope"
+        },
+        {
+          "$ref": "#/$defs/integrationRequestEnvelope"
+        },
+        {
+          "$ref": "#/$defs/e2eRequestEnvelope"
+        },
+        {
+          "$ref": "#/$defs/attestationRequestEnvelope"
+        }
+      ]
+    }
+  },
+  "x-canonical-v11": {
+    "versioning": "This schema defines contractVersion 11 only. Every key leaf, signature, envelope, request, typed object, reference, Merkle domain, and length projection uses the v11 primitives and v11 domains below. A verifier rejects every other version value or domain; there is no compatibility mode.",
+    "primitive": "JCS means RFC 8785 canonical JSON encoded as UTF-8. LEN_BYTES(P) is the exact unsigned count of octets in byte string P before JSON or base64url representation; it is range-checked as a schema u64. LEN64BE(part) is the exactly 8-byte unsigned big-endian length of part and is used only to frame arbitrary LF11 parts. D20(value) is the exactly 20 ASCII bytes of a schema u64 after canonical validation and is the sole encoding of LEN_BYTES(P), an exact canonical byte length, or any other schema u64 inside a digest preimage. LF11(tag,parts...) = UTF8('serverware/controller/v11/') || LEN64BE(UTF8(tag)) || UTF8(tag) ||, for each part in order, LEN64BE(part) || part. H11(tag,parts...) is lowercase hexadecimal SHA-256(LF11(tag,parts...)). HEX consumes exactly 64 lowercase hexadecimal characters as 32 bytes. No implicit coercion is permitted.",
+    "u64": "All u64 fields are 20 ASCII digits, zero padded. Parse without floating point and reject values lexicographically greater than 18446744073709551615.",
+    "keyLeaf": "keyLeafSha256 = H11('key-leaf',UTF8('11'),UTF8(role),UTF8(principalId),UTF8(keyId),UTF8(algorithm),HEX(spkiDerSha256),HEX(physicalPrivateKeyIdentitySha256),HEX(trustRootSha256),D20(trustRevision),UTF8(validFrom),UTF8(validUntil)). This v11 leaf is the sole key identity for both signature verification and role authorization. physicalPrivateKeyIdentitySha256 is resolved from independently verified hardware, HSM, enclave, or equivalent key-origin attestation and cannot be asserted by the signer.",
+    "merkle": "For tree domain D, the empty root is H11('merkle-empty',UTF8(D)); Merkle leaf = H11('merkle-leaf',UTF8(D),HEX(leafSha256)); internal node = H11('merkle-node',UTF8(D),HEX(left),HEX(right)). Starting with the leaf, LEFT computes node(sibling,current) and RIGHT computes node(current,sibling). The final value equals rootSha256. leafOrdinal, treeSize, path length, and directions describe the same complete binary promotion algorithm; no duplicate-last convention is permitted.",
+    "signature": "For any signature record s over an already defined digest p = s.payloadSha256, signatureBase64url is Ed25519 over LF11('signature',UTF8('11'),UTF8(s.domain),HEX(p),UTF8(s.signedAt),UTF8(s.acceptedAt),UTF8(s.signerRole),UTF8(s.signerPrincipalId),UTF8(s.signerKeyId),HEX(s.signerKeyLeafSha256),HEX(s.signerSpkiDerSha256)). For a typed signed envelope e only, p = H11('payload',UTF8(e.domain),JCS(e.payload)); a separately named non-envelope object must define p once in its own canonical rule and is never also projected as a typed envelope. Signature identity fields exactly equal one verified v11 keyAuthorization.keyLeaf and both proofs resolve that leaf. signedAt <= acceptedAt and acceptedAt - signedAt <= 30 seconds.",
+    "typedEnvelope": "E11(typeDomain,payloadSha256,signature) = H11('typed-envelope',UTF8(typeDomain),HEX(payloadSha256),JCS(signature)). For every signed envelope, payloadSha256 and signature.payloadSha256 equal H11('payload',UTF8(typeDomain),JCS(payload)); envelope.domain, signature.domain, and typeDomain are byte-for-byte equal. requestEnvelopeSha256 equals E11. This is the only signed-envelope projection in the request schema; other named content, plan, typed-object, and immutable-store digests retain only their separately named formulas and are never also E11. No envelope digest appears in its payload.",
+    "requestCycle": "The unsigned request body is exactly requestEnvelope.payload and contains no root request digest, root canonical length, envelope signature, or self-length. requestEnvelopeSha256 = E11(requestEnvelope.domain,requestEnvelope.payloadSha256,requestEnvelope.signature). It is a root sibling outside its own preimage and has no special root-envelope projection.",
+    "requestLength": "requestCanonicalBytes = LEN_BYTES(JCS(the complete root request after replacing only root requestEnvelopeSha256 with 64 ASCII zeroes and root requestCanonicalBytes with 20 ASCII zeroes)). Both replacements preserve final field widths, so this equals the actual canonical root byte length without a fixed point. preAllocationFrame.declaredCanonicalRequestBytes equals requestCanonicalBytes and preAllocationFrame.requestEnvelopeSha256 equals the root requestEnvelopeSha256.",
+    "pipelinePlan": "pipelinePlanSha256 = H11('pipeline-plan',JCS(pipelinePlanEnvelope)). The exact ordered tuples are (0,build,build,serverware-build-v1), (1,runNoBuild,unit,serverware-unit-no-build-v1), (2,runNoBuild,integration,serverware-integration-no-build-v1), (3,runNoBuild,e2e,serverware-e2e-no-build-v1), and (4,runNoBuild,attestation,serverware-attestation-no-build-v1). selectedStage equals the item at its ordinal byte-for-byte.",
+    "replay": "requestIdReplayKeySha256 = H11('replay/request-id',HEX(requesterKeyLeafSha256),UTF8(requestId)); nonceReplayKeySha256 = H11('replay/nonce',HEX(requesterKeyLeafSha256),BASE64URL_DECODE(nonce)). Acceptance permanently consumes both keys; requestId uniqueness is independent of nonce.",
+    "source": "sourceIdentitySha256 = H11('source-identity',JCS(source)). Commit, tree, archive, open descriptor, mount, and manifest identities are observed from the same accepted immutable descriptors.",
+    "attestationPolicy": "Let B be the exact prepublished attestation-policy byte string resolved from the independently pinned policy catalog before request acceptance. pipelinePlanEnvelope.payload.attestationPolicySha256 and planConfigurationEnvelope.payload.attestationPolicySha256 both equal H11('attestation/prepublished-policy-bytes',D20(LEN_BYTES(B)),B). LEN_BYTES(B) is the exact unsigned byte count, not a character count or encoded length. No request field contains an immutable-store object reference, retrieval proof, quote, or post-quote object.",
+    "attestationChallenge": "Let N be the exact 32 bytes decoded from attestationChallenge.challengeNonceBase64url. challengeNonceSha256 = H11('attestation/challenge-nonce',N). preExecutionChallengeSubjectSha256 = H11('attestation/pre-execution-subject',UTF8(pipelineId),UTF8(goalId),JCS(selectedStage),HEX(source.commitSha256),HEX(source.treeSha256),HEX(source.archiveSha256),HEX(executionTarget.runtimeImageSha256),HEX(planConfigurationSha256),HEX(pipelinePlanEnvelope.payload.attestationPolicySha256)). challengeConsumptionKeySha256 = H11('attestation/challenge-consumption-key',HEX(requesterKeyLeafSha256),UTF8(pipelineId),UTF8(goalId),JCS(selectedStage),UTF8(challengeId),HEX(challengeNonceSha256),HEX(preExecutionChallengeSubjectSha256),UTF8(notBefore),UTF8(expiresAt)). The challenge and policy commitments exclude post-launch runtime, quote, collateral, immutable-store, retrieval, and post-quote verdict references.",
+    "reference": "For exact canonical resolved predecessor bytes B and header h, h.contentSha256 = SHA-256(B), h.contentAddress = 'sha256:' || h.contentSha256, and h.objectSha256 = H11('typed-object',UTF8(h.objectType),UTF8(h.objectVersion),UTF8(h.objectDomain),D20(h.exactByteLength),B). The immutable-store leaf is exactly H11('immutable-store-leaf',UTF8(h.objectType),UTF8(h.contentAddress),D20(h.exactByteLength),HEX(h.contentSha256),UTF8(reference.storeIdentity)). reference.storeLeafSha256 and reference.storeInclusionProof.leafSha256 equal that leaf; proof treeDomain is IMMUTABLE_EVIDENCE_STORE_V11 and its root equals the pinned current store. availability.commitmentSha256 = H11('immutable-store/availability',JCS(availability payload with commitmentSha256 replaced by 64 ASCII zeroes)); its E11 envelope exactly reproduces the reference. Let S = H11('immutable-retrieval/scope',HEX(root requestEnvelopeSha256),HEX(root preAllocationFrame.frameNonceSha256)). Every request and later receipt retrieval proof has retrievalScopeSha256=S and one retrievalLedgerId. For chunk c at array position i, c.chunkOrdinal=D20(i), chunkLeaf[i]=H11('immutable-retrieval/chunk',D20(i),D20(c.exactByteLength),HEX(c.bytesSha256)); chunkDigestRootSha256=M11('IMMUTABLE_RETRIEVAL_CHUNKS_V11',ordered chunkLeaf). Chunk lengths sum without overflow to returnedExactByteLength; every non-final chunk is exactly streamChunkBytes and the final chunk is 1..streamChunkBytes. The verifier hashes the exact returned chunk bytes, concatenates them in ordinal order, and requires their SHA-256 to equal returnedBytesSha256 and the referenced content digest. retrievalTranscriptSha256 = H11('immutable-retrieval/transcript',HEX(S),UTF8(retrievalLedgerId),D20(globalRetrievalOrdinal),HEX(predecessorRetrievalTranscriptSha256),UTF8(storeIdentity),HEX(storeRootSha256),D20(storeRevision),UTF8(requestedContentAddress),D20(declaredObjectBytes),D20(maximumObjectBytes),D20(streamChunkBytes),D20(streamChunkCount),D20(maximumStreamChunkCount),HEX(chunkDigestRootSha256),D20(globalCumulativeBytesBefore),D20(globalCumulativeBytesAfter),D20(maximumAggregateBytes),D20(returnedExactByteLength),HEX(returnedBytesSha256),HEX(availabilityCommitmentSha256),UTF8(requestedAt),UTF8(firstChunkAt),UTF8(lastChunkAt),UTF8(retrievedAt),UTF8(retrievalDeadline)); transportTranscriptSha256 equals retrievalTranscriptSha256. At ordinal zero predecessor = H11('immutable-retrieval/genesis',HEX(S),UTF8(retrievalLedgerId)) and cumulative before is zero. Thereafter ordinal increments exactly once, predecessor equals the prior transcript, cumulative before equals the prior cumulative after, and cumulative after = before + returned length. All proofs across the resolved request and receipt form this one chain, maximumAggregateBytes equals preAllocationFrame.maximumAggregateRetrievedBytes, and cumulative after never exceeds it. Availability signature acceptance and all retrieval instants are ordered through retrievalDeadline <= availabilityUntil and frameDeadline. Missing bytes, chunks, ordinals, predecessors, objects, or cumulative continuity rejects.",
+    "preAllocationFrame": "declaredEnvelopeBytes = LEN_BYTES(JCS(requestEnvelope)). frameSha256 = H11('pre-allocation-frame',UTF8(frameVersion),UTF8(magic),UTF8(transport),D20(fixedHeaderBytes),D20(declaredCanonicalRequestBytes),D20(maximumCanonicalRequestBytes),D20(declaredEnvelopeBytes),D20(maximumEnvelopeBytes),D20(streamChunkBytes),D20(maximumStreamChunkCount),D20(maximumAggregateRetrievedBytes),UTF8(frameDeadline),HEX(requestEnvelopeSha256),HEX(frameNonceSha256)). The exact 256-byte network-order frame is: bytes 0..23 ASCII SERVERWARE-CONTROLLER plus three zero bytes; 24..25 uint16be version 11; 26..27 uint16be transport id 1; 28..31 uint32be header length 256; 32..39 declared canonical bytes; 40..47 maximum canonical bytes; 48..55 declared envelope bytes; 56..63 maximum envelope bytes; 64..71 stream chunk bytes; 72..79 maximum chunk count; 80..87 maximum aggregate bytes; 88..119 request-envelope digest; 120..151 nonce digest; 152..183 frame digest; 184..215 canonical frameDeadline UTF-8 plus zero padding; and 216..255 zero. The JSON object is the exact projection. Trusted frameReceivedAt <= frameDeadline <= requestEnvelope.payload.deadline, and frameDeadline-frameReceivedAt <= 30 seconds. Peer credentials, every fixed byte, deadline, digest, and limit are checked from this first packet before reading or allocating any body byte. Expired, excess, truncated, trailing, nonzero-padding, mismatched, reordered, or overflowing input rejects pre-allocation."
+  },
+  "x-mandatory-external-trust-inputs-v11": {
+    "controllerClient": "The only untrusted entry is the fixed absolute /usr/local/libexec/serverware-coder-controller-client submit-fixed-v11 --operation=<operation> --plan=<plan> call with those three arguments in that order and no others. The unique mappings are build + serverware-build-v1 -> (0,build,build,serverware-build-v1); runNoBuild + serverware-unit-no-build-v1 -> (1,runNoBuild,unit,serverware-unit-no-build-v1); runNoBuild + serverware-integration-no-build-v1 -> (2,runNoBuild,integration,serverware-integration-no-build-v1); runNoBuild + serverware-e2e-no-build-v1 -> (3,runNoBuild,e2e,serverware-e2e-no-build-v1); and runNoBuild + serverware-attestation-no-build-v1 -> (4,runNoBuild,attestation,serverware-attestation-no-build-v1). Operation alone never selects a no-build stage. No alias, alternate path, omitted suffix, environment override, or additional argument is accepted. The root-owned client authenticates with its protected requester key over a root-owned SOCK_SEQPACKET socket after peer-credential checks, creates and signs the bounded request, and receives no authority/request descriptor. Repository Make and shell remain untrusted and the controller never invokes or trusts Make.",
+    "planRootCheckpointPin": "Root-owned immutable configuration independently pins the plan-root checkpoint trust root, revision, signer principal, signer key leaf, signer SPKI digest, non-revocation root/revision, and validity. The authority snapshot/checkpoint cannot select or modify this pin.",
+    "authoritySnapshotCheckpointPin": "Root-owned immutable configuration independently pins the authority-snapshot checkpoint trust root, revision, signer principal, signer key leaf, signer SPKI digest, non-revocation root/revision, and validity. Resolve this pin before reading delegated authorityRoots. The request, plan, repository, environment, and snapshot cannot select or modify it.",
+    "finalCheckpointPin": "Root-owned immutable configuration independently pins the final-verdict checkpoint trust root, revision, signer principal, signer key leaf, signer SPKI digest, non-revocation root/revision, and validity. Any finalVerdictCheckpoint entry in authorityRoots is only an equality commitment to this external pin and cannot select it.",
+    "immutableEvidenceStorePin": "Root-owned immutable configuration pins the append-only evidence-store identity, content Merkle root, revision, checkpoint signer identity/key/SPKI, non-revocation root/revision, validity, and maximum object/page size. A request cannot select the store.",
+    "attestationPolicyCatalogPin": "Root-owned immutable configuration independently pins the prepublished attestation-policy catalog identity, revision, content root, publisher key/root, non-revocation state, validity, and exact-byte retrieval mechanism. Acceptance resolves the policy bytes through this pin and recomputes attestationPolicySha256; the request, quote, runtime, authority snapshot, and immutable evidence store cannot select or replace the catalog.",
+    "stateStoreAndWitnessPins": "Root-owned immutable configuration pins the linearizable store and cluster identities; an independently signed quorum-membership checkpoint authority principal, keyId, key leaf, SPKI, physical private-key identity, trust root/revision, non-revocation root/revision, validity, checkpoint-log identity/root/tree size, current checkpoint envelope digest, membership root/epoch, member-set root, total weight, threshold, intersection model, and append-only predecessor policy; and a mechanically distinct stateEpochFloor authority with current persisted epoch floor, envelope digest, store/cluster/log identity, term/index/fence, trust/non-revocation, and rollback-resistant storage. It separately pins witness-log identity and one independently administered append-only global witness-admin-log. No request, snapshot, member, certificate, or prior checkpoint selects these pins. Plan, snapshot, final, launch, membership, epoch-floor, state-quorum, witness, witness-admin, immutable-store, and repository roles differ in role, principal, keyId, key leaf, SPKI, physical private-key identity, and trust root.",
+    "attestationReplayEnginePin": "Root-owned immutable configuration pins the attestation replay engine implementation source/build digest, image, measured runtime, parser/policy, trust/non-revocation/validity, expected engine identity, and for each supported platform exactly one adapter ID, adapter implementation digest, adapter measurement/authorization state, and validity. Request, quote, runtime, policy object, delegated verifier, and authority snapshot cannot select the engine or adapter.",
+    "immutableAvailabilityAuthorityPin": "Root-owned immutable configuration pins the immutableStore availability-signing authority principal, keyId, key leaf, SPKI, physical private-key identity, trust root/revision, non-revocation root/revision, validity, retention policy, minimum replica count, and maximum streamed object/aggregate limits."
+  },
+  "x-native-verification-v11": [
+    "Accept only /usr/local/libexec/serverware-coder-controller-client submit-fixed-v11 --operation=<operation> --plan=<plan> with those three arguments in that order. The five unique pairs are build/serverware-build-v1 -> ordinal 0 BUILD; runNoBuild/serverware-unit-no-build-v1 -> ordinal 1 UNIT; runNoBuild/serverware-integration-no-build-v1 -> ordinal 2 INTEGRATION; runNoBuild/serverware-e2e-no-build-v1 -> ordinal 3 E2E; and runNoBuild/serverware-attestation-no-build-v1 -> ordinal 4 ATTESTATION. Operation alone is insufficient for runNoBuild. Reject aliases, alternate paths, missing -no-build suffixes, reordered stages, extra arguments, and Make-provided request bytes, descriptors, keys, capabilities, or authority material.",
+    "Each selected pipeline stage and its PlanConfigurationEnvelope MUST identify the same executionManifestPolicySha256. The controller creates or resolves exactly one launch authorization under the independently pinned launchAuthorizer role; request or repository content cannot supply or select that authority.",
+    "Before any state CAS, verify the externally pinned stateQuorumMembership checkpoint signer and stateEpochFloor signer as mechanically distinct current authorities. Recompute the checkpoint payload/envelope, append-only checkpoint-log inclusion and exact predecessor link, intersection model, floor transition, and rollback-resistant persisted epoch. The checkpoint and floor must equal current external pins; no authority snapshot may select or self-root them. Every member weight comes only from one directionally proven current leaf under that checkpoint; asserted weights, aliases, duplicate SPKIs, and duplicate resolved physical private-key identities never authorize.",
+    "Reject non-UTF-8, non-JCS, duplicate JSON member names at any depth, unknown fields, noncanonical base64url, noncanonical u64, values above uint64 max, and timestamps that fail strict semantic UTC calendar validation.",
+    "Read and validate exactly one fixed 256-byte pre-allocation frame after peer-credential authentication and before body-backed allocation or immutable-object retrieval. Recompute frameSha256, require declared canonical/envelope sizes and root envelope digest equality, reject either size over 16777216, chunk count/size overflow, aggregate retrieval over 67108864, truncation, trailing frame data, or deadline over 300 seconds. Then stream into fixed bounded chunks and stop before exceeding any declared or configured cap. Enforce requestCanonicalBytes exactly and require requestedAt <= request signature signedAt <= request signature.acceptedAt = trusted controller acceptedAt with acceptedAt - signedAt <= 30 seconds.",
+    "Resolve the requester public key and role from the same recomputed keyLeafSha256 and verified paths. keyAuthorization.trustInclusion.treeDomain is KEY_TRUST_V11 and nonRevocationInclusion.treeDomain is KEY_NON_REVOCATION_V11. Any role, principal, keyId, key-leaf, SPKI, root, revision, version, or domain mismatch rejects.",
+    "Before delegated-role verification, resolve the independent external authority-snapshot and final-verdict checkpoint pins and require exact current equality with authoritySnapshot payload checkpoint root/revision/signer principal/key leaf/SPKI/non-revocation root/revision, its envelope signature, and the finalVerdictCheckpoint authority-root commitment. Reject any self-rooting or snapshot-selected trust chain.",
+    "Resolve the independent plan-root checkpoint pin separately and require exact equality/current validity. The checkpoint plan root/revision and named plan signer principal/key leaf/SPKI/non-revocation root/revision must exactly authorize pipelinePlanEnvelope and planConfigurationEnvelope; the checkpoint key itself cannot mint that plan signer. planConfig and planRootCheckpoint authorities must differ in role, principal, keyId, keyLeafSha256, SPKI digest, trust root, and private key from authoritySnapshotCheckpoint, finalVerdictCheckpoint, and every state authority.",
+    "authorityRoots contains each of the 28 closed authorityRoot.role values exactly once in that enum order; externally pinned stateQuorumMembership, stateEpochFloor, and immutableStore are not delegated snapshot entries. Every trust and non-revocation interval contains trusted acceptedAt. All delegated and external authority identities are mechanically pairwise distinct on role, principal, keyId, keyLeafSha256, SPKI digest, resolved physical private-key identity, and trust root; reuse of one private key under multiple identifiers rejects.",
+    "Atomically compare authoritySnapshot replay, allocation, continuity, and pipeline heads with the one externally pinned linearizable store before acceptance. CAS consumes the exact snapshot, requester-key/requestId replay key, requester-key/nonce replay key, reservation, continuity sequence, and single-consumer pipeline tip in one transaction.",
+    "The pipeline plan is shared by all five requests. Each operation-specific request branch selects exactly its fixed stage tuple. A no-build request cannot be rebound as build or vice versa.",
+    "Build has no predecessor package. Unit embeds exactly the build closure and zero prior tests; integration embeds build plus unit; e2e embeds build plus unit and integration; attestation embeds build plus unit, integration, and e2e. References are resolved, closed, current-revalidated, and bounded to depth 4, aggregate 12582912 canonical bytes, and individual 4194304 canonical bytes.",
+    "Every predecessor summary and exact resolved object must match pipelineId, goalId, shared pipelinePlanSha256, plan configuration revision, exact source commit/tree/archive, exact workspace/host/runtime/attestation lineage, build artifact root, dependency closure, image closure, and one unbroken predecessor terminal-tip chain. Recompute contentSha256, contentAddress, typed objectSha256, immutable-store leaf, signed availability commitment, and bounded retrieval transcript. Require exact store identity/root/revision, address/length/digest, retention/replica policy, chronological requested/first/last/retrieved/deadline ordering, per-object/chunk/aggregate caps, and completed stream. Any non-PASS verdict, revoked/expired key, stale checkpoint, unavailable object, late or partial retrieval, proof mismatch, or failed current revalidation cannot authorize work.",
+    "A pipeline stage is attempted once. Acceptance atomically changes its exact tip from READY to RUNNING. Any rejection after acceptance, failure, unknown, abandonment, containment, cleanup residual, or cleanup unknown permanently moves the pipeline to TERMINATED_NON_PASSING. Only a final PASS checkpoint can move RUNNING to PASS and expose the next stage tip. A new attempt requires a new immutable pipelineId and makes no success claim for this pipeline.",
+    "The attestation request challenge is pre-execution. Native receipt verification later derives an acyclic preQuoteMeasuredRuntimeSubjectSha256 only from the challenge, source, image, runtime, host, measurement, lineage, and plan-policy inputs. Quote report data binds that pre-quote subject. A separately signed postQuoteAttestationVerdict then binds the quote and collateral references plus native replay, current verifier trust, revocation, and trusted time.",
+    "For an attestation request, resolve the exact prepublished policy byte string B from the independent current policy-catalog pin before acceptance and require both plan/config attestationPolicySha256 fields to equal H11('attestation/prepublished-policy-bytes',D20(LEN_BYTES(B)),B). Recompute challengeConsumptionKeySha256 from the exact requester, pipeline, goal, fixed attestation stage tuple, challenge ID/nonce, pre-execution subject, and challenge interval. Reject policy-catalog ambiguity, unavailable bytes, digest mismatch, reused challenge keys, notBefore >= expiresAt, and any acceptedAt outside the challenge interval.",
+    "The attestation challenge key is one-use. Acceptance reserves its exact unconsumed ledger state for the attestation stage; the receipt must prove a same-transaction ATTESTATION_CHALLENGE_CONSUME CAS. No later request, retry, freshness object, quote, or verdict may refresh, replace, or consume that key after expiresAt.",
+    "For attestation, native replay uses only the externally pinned implementation/build/image/measurement/parser/policy/trust/non-revocation record and the one adapter ID/digest pinned for the selected platform. Recompute replayEngineIdentitySha256 including platform and adapter and reject any request-, quote-, runtime-, policy-, store-, verifier-, or snapshot-selected engine or adapter.",
+    "Before any request body read or allocation, parse exactly one 256-byte request frame, validate frameDeadline against trusted receive time and the signed request deadline, and reject expired or oversized declarations. No speculative read, decompression, JCS parsing, immutable retrieval, or buffer growth occurs before this gate. Receipt transport later applies the symmetric v11 receipt frame.",
+    "Collect every immutableRetrievalProof reachable from the request and any receipt in one retrievalScopeSha256/retrievalLedgerId chain. Sort only by explicit globalRetrievalOrdinal, require zero-based contiguous ordinals, exact predecessor transcript, exact cumulative-byte continuity, exact chunk bytes and chunk root, transportTranscriptSha256=retrievalTranscriptSha256, and one 67108864-byte global ceiling. Per-reference counters, missing earlier proofs, alternate ledgers, or independently reset aggregates reject.",
+    "The pre-allocation frame nonce is unique per authenticated peer principal and permanently consumed with requesterKeyLeafSha256/requestId before any body allocation. A duplicate frame nonce, duplicate body chunk ordinal, missing chunk, out-of-order chunk, declared/received-length mismatch, or stream after the frame deadline is rejected without retrying under the same frame.",
+    "No repository UID receives the controller socket, Docker/container runtime socket, worker descriptors, task credentials, authority material, or trusted execution capability. Admission is fail-closed by peer credentials, pre-allocation frame, source descriptor identity, IP/header/endpoint policy, deadline, replay ledger, exact plan tuple, and task-exclusive resource allocation."
+  ]
+}

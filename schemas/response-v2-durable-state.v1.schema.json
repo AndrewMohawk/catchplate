@@ -1,0 +1,1538 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/response-v2-durable-state.v1.schema.json",
+  "title": "Serverware Response v2 Durable State Snapshot",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "kind",
+    "schemaVersion",
+    "generationId",
+    "snapshotRevision",
+    "records"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "serverware.responseV2.durableState/v1"
+    },
+    "kind": {
+      "const": "ServerwareResponseV2DurableState"
+    },
+    "schemaVersion": {
+      "const": "1"
+    },
+    "generationId": {
+      "$ref": "#/$defs/identifier"
+    },
+    "snapshotRevision": {
+      "$ref": "#/$defs/safeUint"
+    },
+    "records": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 65536,
+      "items": {
+        "oneOf": [
+          {
+            "$ref": "#/$defs/providerGeneration"
+          },
+          {
+            "$ref": "#/$defs/roleIdentity"
+          },
+          {
+            "$ref": "#/$defs/attempt"
+          },
+          {
+            "$ref": "#/$defs/operation"
+          },
+          {
+            "$ref": "#/$defs/fence"
+          },
+          {
+            "$ref": "#/$defs/replayLedger"
+          },
+          {
+            "$ref": "#/$defs/releasePreparationLedger"
+          },
+          {
+            "$ref": "#/$defs/releaseRetrievalLedger"
+          },
+          {
+            "$ref": "#/$defs/credentialUse"
+          },
+          {
+            "$ref": "#/$defs/targetEffect"
+          },
+          {
+            "$ref": "#/$defs/policyDecision"
+          },
+          {
+            "$ref": "#/$defs/evidence"
+          },
+          {
+            "$ref": "#/$defs/finalization"
+          },
+          {
+            "$ref": "#/$defs/immutableObject"
+          },
+          {
+            "$ref": "#/$defs/immutableInspection"
+          },
+          {
+            "$ref": "#/$defs/terminalSettlement"
+          },
+          {
+            "$ref": "#/$defs/archive"
+          },
+          {
+            "$ref": "#/$defs/publisherOutbox"
+          },
+          {
+            "$ref": "#/$defs/transparencyLeaf"
+          },
+          {
+            "$ref": "#/$defs/transparencyCheckpoint"
+          },
+          {
+            "$ref": "#/$defs/trustedTimeHighwater"
+          },
+          {
+            "$ref": "#/$defs/reconciliationJob"
+          }
+        ]
+      }
+    }
+  },
+  "$defs": {
+    "safeUint": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "positiveSafeUint": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@-]*$"
+    },
+    "sha256": {
+      "type": "string",
+      "minLength": 71,
+      "maxLength": 71,
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "nullableSha256": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/sha256"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "nullableIdentifier": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/identifier"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "nullableIdentifier": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/identifier"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "bootDeadline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "clock",
+        "bootId",
+        "deadlineBootMillis"
+      ],
+      "properties": {
+        "clock": {
+          "const": "CLOCK_BOOTTIME"
+        },
+        "bootId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "deadlineBootMillis": {
+          "$ref": "#/$defs/safeUint"
+        }
+      }
+    },
+    "reconciliationDomain": {
+      "enum": [
+        "PROVIDER_GENERATIONS",
+        "ROLE_IDENTITIES",
+        "ATTEMPTS",
+        "OPERATIONS",
+        "FENCES",
+        "REPLAY_LEDGERS",
+        "RELEASE_LEDGERS",
+        "CREDENTIAL_USES",
+        "TARGET_EFFECTS",
+        "POLICY_DECISIONS",
+        "EVIDENCE",
+        "FINALIZATIONS",
+        "IMMUTABLE_OBJECTS",
+        "IMMUTABLE_INSPECTIONS",
+        "TERMINAL_SETTLEMENTS",
+        "ARCHIVES",
+        "PUBLISHER_OUTBOX",
+        "TRANSPARENCY_LEAVES",
+        "TRANSPARENCY_CHECKPOINTS",
+        "TRUSTED_TIME_HIGHWATER"
+      ]
+    },
+    "attemptState": {
+      "enum": [
+        "RESERVED",
+        "AUTHORIZED",
+        "STAGED",
+        "DISPATCHING",
+        "OUTCOME_UNKNOWN",
+        "OBSERVED",
+        "RELEASE_PREPARED",
+        "TERMINAL_FAILED",
+        "FINALIZED",
+        "PUBLISHED",
+        "ARCHIVED"
+      ]
+    },
+    "providerGeneration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "recordType",
+        "generationId",
+        "status",
+        "generationSha256",
+        "authenticatedGeneration",
+        "attestationMode",
+        "faultDomainId",
+        "quorumProfile",
+        "hardwareProof"
+      ],
+      "properties": {
+        "recordType": {
+          "const": "PROVIDER_GENERATION"
+        },
+        "generationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "status": {
+          "enum": [
+            "PROVISIONED",
+            "RECONCILING",
+            "READY",
+            "QUARANTINED",
+            "RETIRED"
+          ]
+        },
+        "generationSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "authenticatedGeneration": {
+          "$ref": "response-v2-provider-generation.v1.schema.json",
+          "$comment": "The embedded authenticated generation MUST have the same generationId and generationSha256 as this durable record."
+        },
+        "attestationMode": {
+          "const": "TrustedHostNoTee"
+        },
+        "faultDomainId": {
+          "const": "host-1"
+        },
+        "quorumProfile": {
+          "const": "LOCAL_1_OF_1"
+        },
+        "hardwareProof": {
+          "const": false
+        }
+      }
+    },
+    "roleIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "recordType",
+        "generationId",
+        "roleId",
+        "role",
+        "processId",
+        "keyId",
+        "publicKeySha256",
+        "authorityArtifactSigning"
+      ],
+      "properties": {
+        "recordType": {
+          "const": "ROLE_IDENTITY"
+        },
+        "generationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "roleId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "role": {
+          "enum": [
+            "custody-router",
+            "state-authority",
+            "credential-transport",
+            "policy-proof-verifier",
+            "immutable-artifact-ledger",
+            "release-attestor-publisher",
+            "cleanup-watchdog"
+          ]
+        },
+        "processId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "keyId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "publicKeySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "authorityArtifactSigning": {
+          "type": "boolean"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "role": {
+                "const": "custody-router"
+              }
+            },
+            "required": [
+              "role"
+            ]
+          },
+          "then": {
+            "properties": {
+              "authorityArtifactSigning": {
+                "const": false
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "authorityArtifactSigning": {
+                "const": true
+              }
+            }
+          }
+        }
+      ]
+    },
+    "attempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "recordType",
+        "generationId",
+        "attemptId",
+        "revision",
+        "state",
+        "fenceToken",
+        "stableResumeId",
+        "ownerProcessId",
+        "ownerPid",
+        "ownerStartTimeTicks",
+        "ownerCgroupId",
+        "deadlineClock",
+        "deadlineBootId",
+        "deadlineBootMillis",
+        "requestSha256"
+      ],
+      "properties": {
+        "recordType": {
+          "const": "ATTEMPT"
+        },
+        "generationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "attemptId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "revision": {
+          "$ref": "#/$defs/positiveSafeUint"
+        },
+        "state": {
+          "$ref": "#/$defs/attemptState"
+        },
+        "fenceToken": {
+          "$ref": "#/$defs/identifier"
+        },
+        "stableResumeId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "ownerProcessId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "ownerPid": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4294967295
+        },
+        "ownerStartTimeTicks": {
+          "$ref": "#/$defs/positiveSafeUint"
+        },
+        "ownerCgroupId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "deadlineClock": {
+          "const": "CLOCK_BOOTTIME"
+        },
+        "deadlineBootId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "deadlineBootMillis": {
+          "$ref": "#/$defs/safeUint"
+        },
+        "requestSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "operation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "recordType",
+        "generationId",
+        "operationId",
+        "requestId",
+        "attemptId",
+        "operation",
+        "exactRequestSha256",
+        "expectedRevision",
+        "expectedState",
+        "fenceToken",
+        "status",
+        "canonicalSignedResultSha256"
+      ],
+      "properties": {
+        "recordType": {
+          "const": "OPERATION"
+        },
+        "generationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "operationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "requestId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "attemptId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "operation": {
+          "$ref": "#/$defs/identifier"
+        },
+        "exactRequestSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "expectedRevision": {
+          "$ref": "#/$defs/safeUint"
+        },
+        "expectedState": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/attemptState"
+            },
+            {
+              "const": "ABSENT"
+            }
+          ]
+        },
+        "fenceToken": {
+          "$ref": "#/$defs/identifier"
+        },
+        "status": {
+          "enum": [
+            "PREPARED",
+            "COMMITTED",
+            "FAILED"
+          ]
+        },
+        "canonicalSignedResultSha256": {
+          "$ref": "#/$defs/nullableSha256"
+        }
+      }
+    },
+    "fence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "recordType",
+        "generationId",
+        "attemptId",
+        "fenceToken",
+        "allocationSequence",
+        "state",
+        "ownerProcessId",
+        "ownerPid",
+        "ownerStartTimeTicks",
+        "ownerCgroupId",
+        "revokedRevision",
+        "ownerDeathObserved",
+        "cgroupEmptyObserved",
+        "cgroupDeathObserved",
+        "observationEvidenceSha256"
+      ],
+      "properties": {
+        "recordType": {
+          "const": "FENCE"
+        },
+        "generationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "attemptId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "fenceToken": {
+          "$ref": "#/$defs/identifier"
+        },
+        "allocationSequence": {
+          "$ref": "#/$defs/positiveSafeUint"
+        },
+        "state": {
+          "enum": [
+            "ACTIVE",
+            "REVOKED",
+            "QUIESCENT"
+          ]
+        },
+        "ownerProcessId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "ownerPid": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4294967295
+        },
+        "ownerStartTimeTicks": {
+          "$ref": "#/$defs/positiveSafeUint"
+        },
+        "ownerCgroupId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "revokedRevision": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/positiveSafeUint"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ownerDeathObserved": {
+          "type": "boolean"
+        },
+        "cgroupEmptyObserved": {
+          "type": "boolean"
+        },
+        "cgroupDeathObserved": {
+          "type": "boolean"
+        },
+        "observationEvidenceSha256": {
+          "$ref": "#/$defs/nullableSha256"
+        }
+      }
+    },
+    "replayLedger": {
+      "$ref": "#/$defs/exactResultRecord"
+    },
+    "exactResultRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "recordType",
+        "generationId",
+        "recordId",
+        "operationId",
+        "exactRequestSha256",
+        "canonicalSignedResultSha256",
+        "canonicalSignedResultBase64url"
+      ],
+      "properties": {
+        "recordType": {
+          "const": "REPLAY_LEDGER"
+        },
+        "generationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "recordId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "operationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "exactRequestSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "canonicalSignedResultSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "canonicalSignedResultBase64url": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 67108864,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        }
+      }
+    },
+    "releasePreparationLedger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "recordType",
+        "generationId",
+        "releaseAuthorizationId",
+        "attemptId",
+        "finalizationId",
+        "exactReleaseRequestSha256",
+        "inspectionResultSha256",
+        "releaseObjectSha256",
+        "clientBindingSha256",
+        "exactReplayKeySha256",
+        "oneUseNonceSha256",
+        "preauthorizationArtifactSha256",
+        "signedStateMutationReceiptSha256",
+        "releasePreparationReceiptSha256",
+        "predecessorRevision",
+        "successorRevision",
+        "fenceToken",
+        "durableCanonicalResultSha256"
+      ],
+      "properties": {
+        "recordType": {
+          "const": "RELEASE_PREPARATION_LEDGER"
+        },
+        "generationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "releaseAuthorizationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "attemptId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "finalizationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "exactReleaseRequestSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "inspectionResultSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "releaseObjectSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "clientBindingSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "exactReplayKeySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "oneUseNonceSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "preauthorizationArtifactSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "signedStateMutationReceiptSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "releasePreparationReceiptSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "predecessorRevision": {
+          "$ref": "#/$defs/safeUint"
+        },
+        "successorRevision": {
+          "$ref": "#/$defs/positiveSafeUint"
+        },
+        "fenceToken": {
+          "$ref": "#/$defs/identifier"
+        },
+        "durableCanonicalResultSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "releaseRetrievalLedger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "recordType",
+        "generationId",
+        "retrievalId",
+        "releaseAuthorizationId",
+        "attemptId",
+        "finalizationId",
+        "exactReplayKeySha256",
+        "preparedCanonicalResultSha256",
+        "releasePreparationReceiptSha256",
+        "finalEnvelopeSha256",
+        "finalEnvelopeVerificationSha256",
+        "releaseObjectSha256",
+        "retrievalReceiptSha256"
+      ],
+      "properties": {
+        "recordType": {
+          "const": "RELEASE_RETRIEVAL_LEDGER"
+        },
+        "generationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "retrievalId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "releaseAuthorizationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "attemptId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "finalizationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "exactReplayKeySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "preparedCanonicalResultSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "releasePreparationReceiptSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "finalEnvelopeSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "finalEnvelopeVerificationSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "releaseObjectSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "retrievalReceiptSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "credentialUse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "recordType",
+        "generationId",
+        "credentialUseId",
+        "attemptId",
+        "credentialBindingSha256",
+        "transportAuthorizationSha256",
+        "targetEffectId",
+        "state"
+      ],
+      "properties": {
+        "recordType": {
+          "const": "CREDENTIAL_USE"
+        },
+        "generationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "credentialUseId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "attemptId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "credentialBindingSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "transportAuthorizationSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "targetEffectId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "state": {
+          "$ref": "#/$defs/targetEffectState"
+        }
+      }
+    },
+    "targetEffect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "recordType",
+        "generationId",
+        "targetEffectId",
+        "attemptId",
+        "idempotencyKeySha256",
+        "state",
+        "requestObjectSha256",
+        "responseObjectSha256",
+        "transportEvidenceSha256"
+      ],
+      "properties": {
+        "recordType": {
+          "const": "TARGET_EFFECT"
+        },
+        "generationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "targetEffectId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "attemptId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "idempotencyKeySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "state": {
+          "$ref": "#/$defs/targetEffectState"
+        },
+        "requestObjectSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "responseObjectSha256": {
+          "$ref": "#/$defs/nullableSha256"
+        },
+        "transportEvidenceSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "targetEffectState": {
+      "enum": [
+        "DISPATCHING",
+        "OUTCOME_UNKNOWN",
+        "OBSERVED",
+        "RECONCILED_FAILURE"
+      ]
+    },
+    "policyDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "recordType",
+        "generationId",
+        "policyDecisionId",
+        "attemptId",
+        "policyGenerationSha256",
+        "rawResponseObjectSha256",
+        "releasedProjectionSha256",
+        "verifierEvidenceSha256",
+        "passed"
+      ],
+      "properties": {
+        "recordType": {
+          "const": "POLICY_DECISION"
+        },
+        "generationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "policyDecisionId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "attemptId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "policyGenerationSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "rawResponseObjectSha256": {
+          "$ref": "#/$defs/nullableSha256"
+        },
+        "releasedProjectionSha256": {
+          "$ref": "#/$defs/nullableSha256"
+        },
+        "verifierEvidenceSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "passed": {
+          "type": "boolean"
+        }
+      }
+    },
+    "evidence": {
+      "$ref": "#/$defs/immutableDigestRecord"
+    },
+    "immutableDigestRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "recordType",
+        "generationId",
+        "recordId",
+        "attemptId",
+        "recordKind",
+        "canonicalSha256",
+        "objectSha256"
+      ],
+      "properties": {
+        "recordType": {
+          "const": "EVIDENCE"
+        },
+        "generationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "recordId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "attemptId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "recordKind": {
+          "$ref": "#/$defs/identifier"
+        },
+        "canonicalSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "objectSha256": {
+          "$ref": "#/$defs/nullableSha256"
+        }
+      }
+    },
+    "finalization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "recordType",
+        "generationId",
+        "finalizationId",
+        "attemptId",
+        "attemptRevision",
+        "fenceToken",
+        "canonicalFinalEnvelopeSha256",
+        "transitionChainSha256",
+        "evidenceRootSha256"
+      ],
+      "properties": {
+        "recordType": {
+          "const": "FINALIZATION"
+        },
+        "generationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "finalizationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "attemptId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "attemptRevision": {
+          "$ref": "#/$defs/positiveSafeUint"
+        },
+        "fenceToken": {
+          "$ref": "#/$defs/identifier"
+        },
+        "canonicalFinalEnvelopeSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "transitionChainSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "evidenceRootSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "immutableObject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "recordType",
+        "generationId",
+        "objectId",
+        "attemptId",
+        "objectKind",
+        "contentSha256",
+        "contentLength",
+        "mediaType",
+        "storageLocator",
+        "immutableStorageReceiptSha256"
+      ],
+      "properties": {
+        "recordType": {
+          "const": "IMMUTABLE_OBJECT"
+        },
+        "generationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "objectId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "attemptId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "objectKind": {
+          "$ref": "#/$defs/identifier"
+        },
+        "contentSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "contentLength": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 34603008
+        },
+        "mediaType": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "storageLocator": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "immutableStorageReceiptSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "immutableInspection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "recordType",
+        "generationId",
+        "inspectionId",
+        "inspectionOperationId",
+        "attemptId",
+        "attemptRevision",
+        "fenceToken",
+        "objectId",
+        "contentSha256",
+        "contentLength",
+        "immutableStorageReceiptSha256",
+        "inspectionPurposeSha256",
+        "inspectedAtBootId",
+        "inspectedAtBootMillis",
+        "signedInspectionArtifact",
+        "inspectionArtifactSha256",
+        "appendOnly",
+        "replacementProhibited"
+      ],
+      "properties": {
+        "recordType": {
+          "const": "IMMUTABLE_INSPECTION"
+        },
+        "generationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "inspectionId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "inspectionOperationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "attemptId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "attemptRevision": {
+          "$ref": "#/$defs/positiveSafeUint"
+        },
+        "fenceToken": {
+          "$ref": "#/$defs/identifier"
+        },
+        "objectId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "contentSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "contentLength": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 34603008
+        },
+        "immutableStorageReceiptSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "inspectionPurposeSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "inspectedAtBootId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "inspectedAtBootMillis": {
+          "$ref": "#/$defs/safeUint"
+        },
+        "signedInspectionArtifact": {
+          "$ref": "response-v2-nested-authority-artifact.v1.schema.json#/$defs/immutableInspectionArtifact"
+        },
+        "inspectionArtifactSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "appendOnly": {
+          "const": true
+        },
+        "replacementProhibited": {
+          "const": true
+        }
+      }
+    },
+    "terminalSettlement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "recordType",
+        "generationId",
+        "settlementId",
+        "appendSequence",
+        "predecessorSettlementSha256",
+        "attemptId",
+        "attemptRevision",
+        "fenceToken",
+        "stableResumeId",
+        "settlementKind",
+        "originalDeadline",
+        "cleanupDeadline",
+        "terminalCode",
+        "terminalDetailSha256",
+        "settledAtBootId",
+        "settledAtBootMillis",
+        "reconciliationArtifactId",
+        "reconciliationArtifactSha256",
+        "recoveryArtifactId",
+        "recoveryArtifactSha256",
+        "terminalArtifacts",
+        "terminalArtifactsRootSha256",
+        "appendOnly",
+        "replacementProhibited"
+      ],
+      "properties": {
+        "recordType": {
+          "const": "TERMINAL_SETTLEMENT"
+        },
+        "generationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "settlementId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "appendSequence": {
+          "$ref": "#/$defs/positiveSafeUint"
+        },
+        "predecessorSettlementSha256": {
+          "$ref": "#/$defs/nullableSha256"
+        },
+        "attemptId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "attemptRevision": {
+          "$ref": "#/$defs/positiveSafeUint"
+        },
+        "fenceToken": {
+          "$ref": "#/$defs/identifier"
+        },
+        "stableResumeId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "settlementKind": {
+          "enum": [
+            "POST_RESERVATION_FAILURE",
+            "EXPIRED_OPERATION_RECONCILIATION"
+          ]
+        },
+        "originalDeadline": {
+          "$ref": "#/$defs/bootDeadline"
+        },
+        "cleanupDeadline": {
+          "$ref": "#/$defs/bootDeadline"
+        },
+        "terminalCode": {
+          "$ref": "#/$defs/identifier"
+        },
+        "terminalDetailSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "settledAtBootId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "settledAtBootMillis": {
+          "$ref": "#/$defs/safeUint"
+        },
+        "reconciliationArtifactId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "reconciliationArtifactSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "recoveryArtifactId": {
+          "$ref": "#/$defs/nullableIdentifier"
+        },
+        "recoveryArtifactSha256": {
+          "$ref": "#/$defs/nullableSha256"
+        },
+        "terminalArtifacts": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "response-v2-nested-authority-artifact.v1.schema.json"
+          },
+          "allOf": [
+            {
+              "contains": {
+                "$ref": "response-v2-nested-authority-artifact.v1.schema.json#/$defs/stateCasArtifact"
+              },
+              "minContains": 1,
+              "maxContains": 1
+            },
+            {
+              "contains": {
+                "type": "object",
+                "properties": {
+                  "body": {
+                    "$ref": "response-v2-nested-authority-artifact.v1.schema.json#/$defs/bindCleanupObservationArtifact"
+                  }
+                }
+              },
+              "minContains": 1,
+              "maxContains": 1
+            }
+          ]
+        },
+        "terminalArtifactsRootSha256": {
+          "$ref": "#/$defs/sha256",
+          "$comment": "SHA-256 over RFC 8785 JCS of terminalArtifacts in artifactClass order. The terminal record is immutable and later observations append a successor settlement linked by predecessorSettlementSha256."
+        },
+        "appendOnly": {
+          "const": true
+        },
+        "replacementProhibited": {
+          "const": true
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "recoveryArtifactId": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "recoveryArtifactId"
+            ]
+          },
+          "then": {
+            "properties": {
+              "recoveryArtifactSha256": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "recoveryArtifactSha256": {
+                "$ref": "#/$defs/sha256"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "settlementKind": {
+                "const": "EXPIRED_OPERATION_RECONCILIATION"
+              }
+            },
+            "required": [
+              "settlementKind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "terminalArtifacts": {
+                "contains": {
+                  "type": "object",
+                  "properties": {
+                    "body": {
+                      "$ref": "response-v2-nested-authority-artifact.v1.schema.json#/$defs/bindRecoveryArtifact"
+                    }
+                  }
+                },
+                "minContains": 1,
+                "maxContains": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    "archive": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "recordType",
+        "generationId",
+        "archiveId",
+        "attemptId",
+        "finalizationId",
+        "canonicalArchiveSha256",
+        "objectIds"
+      ],
+      "properties": {
+        "recordType": {
+          "const": "ARCHIVE"
+        },
+        "generationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "archiveId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "attemptId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "finalizationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "canonicalArchiveSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "objectIds": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/identifier"
+          }
+        }
+      }
+    },
+    "publisherOutbox": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "recordType",
+        "generationId",
+        "outboxId",
+        "attemptId",
+        "publicationId",
+        "finalizationId",
+        "payloadObjectSha256",
+        "state",
+        "deliveryAttempt",
+        "deliveryReceiptSha256"
+      ],
+      "properties": {
+        "recordType": {
+          "const": "PUBLISHER_OUTBOX"
+        },
+        "generationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "outboxId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "attemptId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "publicationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "finalizationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "payloadObjectSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "state": {
+          "enum": [
+            "PENDING",
+            "DELIVERING",
+            "DELIVERED",
+            "OUTCOME_UNKNOWN"
+          ]
+        },
+        "deliveryAttempt": {
+          "$ref": "#/$defs/safeUint"
+        },
+        "deliveryReceiptSha256": {
+          "$ref": "#/$defs/nullableSha256"
+        }
+      }
+    },
+    "transparencyLeaf": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "recordType",
+        "generationId",
+        "leafSequence",
+        "leafSha256",
+        "predecessorLeafSha256",
+        "canonicalArtifactSha256"
+      ],
+      "properties": {
+        "recordType": {
+          "const": "TRANSPARENCY_LEAF"
+        },
+        "generationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "leafSequence": {
+          "$ref": "#/$defs/positiveSafeUint"
+        },
+        "leafSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "predecessorLeafSha256": {
+          "$ref": "#/$defs/nullableSha256"
+        },
+        "canonicalArtifactSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "transparencyCheckpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "recordType",
+        "generationId",
+        "checkpointId",
+        "treeSize",
+        "rootSha256",
+        "predecessorCheckpointSha256",
+        "signedCheckpointSha256"
+      ],
+      "properties": {
+        "recordType": {
+          "const": "TRANSPARENCY_CHECKPOINT"
+        },
+        "generationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "checkpointId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "treeSize": {
+          "$ref": "#/$defs/positiveSafeUint"
+        },
+        "rootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "predecessorCheckpointSha256": {
+          "$ref": "#/$defs/nullableSha256"
+        },
+        "signedCheckpointSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "trustedTimeHighwater": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "recordType",
+        "generationId",
+        "clockId",
+        "epochMillis",
+        "sequence",
+        "sourceEvidenceSha256"
+      ],
+      "properties": {
+        "recordType": {
+          "const": "TRUSTED_TIME_HIGHWATER"
+        },
+        "generationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "clockId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "epochMillis": {
+          "$ref": "#/$defs/safeUint"
+        },
+        "sequence": {
+          "$ref": "#/$defs/positiveSafeUint"
+        },
+        "sourceEvidenceSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "reconciliationJob": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "recordType",
+        "generationId",
+        "reconciliationJobId",
+        "attemptId",
+        "domain",
+        "state",
+        "authoritativeCursor",
+        "blockerCode",
+        "resultSha256"
+      ],
+      "properties": {
+        "recordType": {
+          "const": "RECONCILIATION_JOB"
+        },
+        "generationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "reconciliationJobId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "attemptId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "domain": {
+          "$ref": "#/$defs/reconciliationDomain"
+        },
+        "state": {
+          "enum": [
+            "PENDING",
+            "RUNNING",
+            "BLOCKED",
+            "COMPLETE",
+            "FAILED"
+          ]
+        },
+        "authoritativeCursor": {
+          "$ref": "#/$defs/safeUint"
+        },
+        "blockerCode": {
+          "$ref": "#/$defs/nullableIdentifier"
+        },
+        "resultSha256": {
+          "$ref": "#/$defs/nullableSha256"
+        }
+      }
+    }
+  }
+}

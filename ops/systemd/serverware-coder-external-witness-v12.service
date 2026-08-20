@@ -1,0 +1,39 @@
+[Unit]
+Description=Serverware Coder v12 co-located witness authority
+PartOf=serverware-coder-v12.target
+After=local-fs.target serverware-coder-runtime-v12.service serverware-coder-external-witness-v12.socket
+Requires=serverware-coder-runtime-v12.service serverware-coder-external-witness-v12.socket
+Before=serverware-coder-receipt-authority-v12.service serverware-coder-controller-v12.service
+
+[Service]
+Type=notify
+User=serverware-coder-witness
+Group=serverware-coder-witness
+UMask=0077
+Sockets=serverware-coder-external-witness-v12.socket
+LoadCredentialEncrypted=external-witness-key:@RELEASE_ROOT@/credentials/external-witness-key.cred
+ExecStart=@RELEASE_ROOT@/bin/serverware-coder-local-trust-authority-v12 --config @RELEASE_ROOT@/config/local-external-witness-v12.json
+Restart=on-failure
+RestartSec=2s
+TimeoutStartSec=30s
+TimeoutStopSec=45s
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateIPC=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+RestrictAddressFamilies=AF_UNIX
+SystemCallArchitectures=native
+ReadWritePaths=/var/lib/serverware/coder-controller-v12/external-witness
+
+[Install]
+WantedBy=serverware-coder-v12.target

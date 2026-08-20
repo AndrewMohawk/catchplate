@@ -313,6 +313,20 @@ def verify_candidate(
         require(expected in {"allow", "deny"}, f"candidate dry-run result {index} has invalid expectation")
         require(decision == expected, f"candidate dry-run result {index} decision mismatch")
         route_id = result.get("routeId")
+        expected_route_id = result.get("expectedRouteId")
+        if expected_route_id is not None:
+            require(
+                isinstance(expected_route_id, str) and expected_route_id,
+                f"candidate dry-run result {index} expected route is invalid",
+            )
+            require(
+                expected == "allow" and route_id == expected_route_id,
+                f"candidate dry-run result {index} did not select its expected route",
+            )
+            require(
+                expected_route_id in signed_route_ids,
+                f"candidate dry-run result {index} expected route is not in the signed candidate",
+            )
         if isinstance(route_id, str) and route_id:
             require(route_id in signed_route_ids, f"candidate dry-run result {index} route is not in the signed candidate")
             dry_run_route_ids.add(route_id)

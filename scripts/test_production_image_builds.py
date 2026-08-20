@@ -819,11 +819,26 @@ def assert_source_tree_digest_covers_untracked_source() -> None:
     for probe, content in probes.items():
         if probe.exists():
             raise AssertionError(f"unexpected source digest probe already exists: {probe}")
-        before = build_production_images.source_tree_digest()
+        before = build_production_images.source_tree_digest(
+            development_dirty_tree=True
+        )
         try:
             probe.parent.mkdir(parents=True, exist_ok=True)
             probe.write_bytes(content)
-            after = build_production_images.source_tree_digest()
+            after = build_production_images.source_tree_digest(
+                development_dirty_tree=True
+            )
+            try:
+                build_production_images.source_tree_digest()
+            except ValueError as exc:
+                if "clean index and worktree" not in str(exc):
+                    raise AssertionError(
+                        f"dirty production source failed for the wrong reason: {exc}"
+                    ) from exc
+            else:
+                raise AssertionError(
+                    f"production source accepted untracked build input: {probe}"
+                )
         finally:
             probe.unlink(missing_ok=True)
         if before == after:
@@ -873,7 +888,10 @@ def assert_source_tree_covers_production_copy_surface() -> None:
         subprocess.run(["git", "init", "-q", str(checkout)], check=True)
         subprocess.run(["git", "-C", str(checkout), "add", ".gitignore"], check=True)
 
-        baseline = serverware_source_tree.source_tree_digest(checkout)
+        baseline = serverware_source_tree.source_tree_digest(
+            checkout,
+            production=False,
+        )
         ignored = checkout / "scripts" / "ignored-build-input"
         ignored.write_bytes(b"ignored opaque input\x00v1\n")
         ignored_check = subprocess.run(
@@ -882,7 +900,10 @@ def assert_source_tree_covers_production_copy_surface() -> None:
         )
         if ignored_check.returncode != 0:
             raise AssertionError("ignored source-tree adversarial fixture is not ignored by Git")
-        ignored_digest = serverware_source_tree.source_tree_digest(checkout)
+        ignored_digest = serverware_source_tree.source_tree_digest(
+            checkout,
+            production=False,
+        )
         ignored_entry = next(
             (
                 item
@@ -894,7 +915,13 @@ def assert_source_tree_covers_production_copy_surface() -> None:
         if ignored_entry is None or ignored_digest == baseline:
             raise AssertionError("source-tree manifest omitted an ignored opaque file under a production COPY root")
         ignored.write_bytes(b"ignored opaque input\x00v2\n")
-        if serverware_source_tree.source_tree_digest(checkout) == ignored_digest:
+        if (
+            serverware_source_tree.source_tree_digest(
+                checkout,
+                production=False,
+            )
+            == ignored_digest
+        ):
             raise AssertionError("source-tree digest did not bind every byte of an ignored production COPY input")
 
         opaque_policy = checkout / "policies" / "emergency-policy"
@@ -906,7 +933,10 @@ def assert_source_tree_covers_production_copy_surface() -> None:
         ).stdout.split(b"\0")
         if b"policies/emergency-policy" not in untracked:
             raise AssertionError("opaque policy adversarial fixture is not untracked")
-        policy_digest = serverware_source_tree.source_tree_digest(checkout)
+        policy_digest = serverware_source_tree.source_tree_digest(
+            checkout,
+            production=False,
+        )
         policy_entry = next(
             (
                 item
@@ -918,7 +948,13 @@ def assert_source_tree_covers_production_copy_surface() -> None:
         if policy_entry is None:
             raise AssertionError("source-tree manifest omitted an opaque untracked policy file")
         opaque_policy.write_bytes(b"opaque untracked policy\x00v2\n")
-        if serverware_source_tree.source_tree_digest(checkout) == policy_digest:
+        if (
+            serverware_source_tree.source_tree_digest(
+                checkout,
+                production=False,
+            )
+            == policy_digest
+        ):
             raise AssertionError("source-tree digest did not bind every byte of an opaque untracked policy file")
 
 
@@ -934,8 +970,6 @@ def assert_source_tree_manifest_metadata_and_git_fallback() -> None:
         executable.chmod(0o755)
         opaque = checkout / "tracked-build-input.opaque"
         opaque.write_bytes(b"tracked opaque build input\n")
-        symlink = checkout / "scripts" / "release-tool-link"
-        symlink.symlink_to("release-tool")
         subprocess.run(["git", "init", "-q", str(checkout)], check=True)
         subprocess.run(["git", "-C", str(checkout), "add", "-A"], check=True)
 
@@ -948,36 +982,44 @@ def assert_source_tree_manifest_metadata_and_git_fallback() -> None:
             ".buildrc",
             "ops/production-readiness.env.example",
             "scripts/release-tool",
-            "scripts/release-tool-link",
             "tracked-build-input.opaque",
         }
         if not expected.issubset(entries):
             raise AssertionError(f"source-tree manifest omitted tracked inputs: {sorted(expected - set(entries))}")
         if entries["scripts/release-tool"].get("mode") != "100755":
             raise AssertionError(f"source-tree manifest omitted executable mode: {entries['scripts/release-tool']}")
-        link_entry = entries["scripts/release-tool-link"]
-        if link_entry.get("type") != "symlink" or link_entry.get("mode") != "120000" or link_entry.get("target") != "release-tool":
-            raise AssertionError(f"source-tree manifest followed or misrepresented a symlink: {link_entry}")
         if any(item["path"].startswith(".git/") for item in first["files"]):
             raise AssertionError("source-tree manifest included Git metadata")
 
         executable.chmod(0o644)
-        mode_digest = serverware_source_tree.source_tree_digest(checkout)
+        mode_digest = serverware_source_tree.source_tree_digest(
+            checkout,
+            production=False,
+        )
         if mode_digest == first["digest"]:
             raise AssertionError("source-tree digest did not commit to executable mode")
         executable.chmod(0o755)
-        symlink.unlink()
-        symlink.symlink_to("../.buildrc")
-        link_digest = serverware_source_tree.source_tree_digest(checkout)
-        if link_digest == first["digest"]:
-            raise AssertionError("source-tree digest did not commit to symlink target")
-        symlink.unlink()
+        symlink = checkout / "scripts" / "release-tool-link"
         symlink.symlink_to("release-tool")
+        try:
+            serverware_source_tree.source_tree_summary(checkout)
+        except ValueError as exc:
+            if "forbids symlinks" not in str(exc):
+                raise AssertionError(
+                    f"development source symlink failed for the wrong reason: {exc}"
+                ) from exc
+        else:
+            raise AssertionError("development source unexpectedly accepted a symlink")
+        symlink.unlink()
         opaque.unlink()
         missing = serverware_source_tree.source_tree_summary(checkout)
-        missing_entry = next(item for item in missing["files"] if item["path"] == "tracked-build-input.opaque")
-        if missing_entry.get("type") != "missing" or missing["digest"] == first["digest"]:
-            raise AssertionError(f"source-tree manifest did not commit to a deleted tracked input: {missing_entry}")
+        if (
+            any(item["path"] == "tracked-build-input.opaque" for item in missing["files"])
+            or missing["digest"] == first["digest"]
+        ):
+            raise AssertionError(
+                "development source snapshot did not reflect a removed filesystem input"
+            )
 
     with tempfile.TemporaryDirectory() as export_raw:
         exported = Path(export_raw)
@@ -989,23 +1031,80 @@ def assert_source_tree_manifest_metadata_and_git_fallback() -> None:
         launcher = exported / "scripts" / "release-tool"
         launcher.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         launcher.chmod(0o755)
-        (exported / "scripts" / "release-tool-link").symlink_to("release-tool")
-
         first = serverware_source_tree.source_tree_summary(exported)
         second = serverware_source_tree.source_tree_summary(exported)
         if first != second:
             raise AssertionError("source-tree manifest is not deterministic outside a Git checkout")
         entries = {item["path"]: item for item in first["files"]}
-        for required in (".buildrc", "ops/production-readiness.env.example", "scripts/release-tool-link"):
+        for required in (".buildrc", "ops/production-readiness.env.example", "scripts/release-tool"):
             if required not in entries:
                 raise AssertionError(f"Git-independent source-tree manifest omitted {required}")
         if "ops/production-readiness.env" in entries:
             raise AssertionError("Git-independent source-tree manifest included the runtime production secret env")
 
 
+def assert_source_contract_output_hardening() -> None:
+    with tempfile.TemporaryDirectory(prefix="serverware-source-contract-output-") as checkout_raw:
+        checkout = Path(checkout_raw)
+        (checkout / "scripts").mkdir()
+        (checkout / "scripts" / "release-tool.py").write_text(
+            "VALUE = 1\n",
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "init", "-q", str(checkout)], check=True)
+        subprocess.run(["git", "-C", str(checkout), "add", "scripts/release-tool.py"], check=True)
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(checkout),
+                "-c",
+                "user.name=Serverware Test",
+                "-c",
+                "user.email=serverware@example.invalid",
+                "commit",
+                "-q",
+                "-m",
+                "source contract fixture",
+            ],
+            check=True,
+        )
+
+        valid_output = checkout / ".tmp" / "source-contract"
+        contract = serverware_source_tree.production_source_contract(
+            checkout,
+            valid_output,
+        )
+        if not (checkout / contract["archivePath"]).is_file():
+            raise AssertionError("production source contract did not publish its archive")
+
+        real_output = checkout / ".tmp" / "real-output"
+        real_output.mkdir()
+        linked_output = checkout / ".tmp" / "linked-output"
+        linked_output.symlink_to(real_output, target_is_directory=True)
+        invalid_outputs = (
+            (linked_output, "non-symlink directory"),
+            (checkout / "artifacts" / "source-contract", "source-excluded directory"),
+            (checkout, "must not be the worktree root"),
+            (checkout.parent / "outside-source-contract", "inside the worktree"),
+        )
+        for output, expected_error in invalid_outputs:
+            try:
+                serverware_source_tree.production_source_contract(checkout, output)
+            except ValueError as exc:
+                if expected_error not in str(exc):
+                    raise AssertionError(
+                        f"unsafe source-contract output failed for the wrong reason: {exc}"
+                    ) from exc
+            else:
+                raise AssertionError(
+                    f"production source contract accepted unsafe output directory: {output}"
+                )
+
+
 def assert_release_source_tree_digest_callers_agree() -> None:
     build_digest = build_production_images.source_tree_digest()
-    provenance_digest = generate_release_provenance.source_tree()["digest"]
+    provenance_digest = generate_release_provenance.source_tree(production=True)["digest"]
     attestation_digest = verify_codebase_attestation.source_tree_digest(ROOT)
     if len({build_digest, provenance_digest, attestation_digest}) != 1:
         raise AssertionError(
@@ -1095,6 +1194,30 @@ def assert_production_release_key_is_pinned() -> None:
                 ) from exc
         else:
             raise AssertionError("production release signing accepted an untrusted private key")
+
+
+def assert_release_key_short_writes_are_completed() -> None:
+    with tempfile.TemporaryDirectory(prefix="serverware-release-key-write-") as tmp_raw:
+        key_path = Path(tmp_raw) / "release-signing.pem"
+        original_write = generate_release_provenance.os.write
+
+        def short_write(descriptor: int, value: object) -> int:
+            return original_write(descriptor, memoryview(value)[:7])
+
+        generate_release_provenance.os.write = short_write
+        try:
+            key = generate_release_provenance.load_release_key(key_path)
+        finally:
+            generate_release_provenance.os.write = original_write
+        encoded = key_path.read_bytes()
+        loaded = serialization.load_pem_private_key(encoded, password=None)
+        if not isinstance(loaded, Ed25519PrivateKey):
+            raise AssertionError("short-write release key did not produce a complete Ed25519 key")
+        if (
+            generate_release_provenance.public_key_id(loaded.public_key())
+            != generate_release_provenance.public_key_id(key.public_key())
+        ):
+            raise AssertionError("short-write release key changed during persistence")
 
 
 def assert_production_reproducibility_binds_image_outputs() -> None:
@@ -1230,8 +1353,10 @@ def main() -> None:
     assert_source_tree_digest_covers_untracked_source()
     assert_source_tree_covers_production_copy_surface()
     assert_source_tree_manifest_metadata_and_git_fallback()
+    assert_source_contract_output_hardening()
     assert_release_source_tree_digest_callers_agree()
     assert_production_release_key_is_pinned()
+    assert_release_key_short_writes_are_completed()
     assert_production_reproducibility_binds_image_outputs()
     assert_distroless_no_shell(ROOT / "Dockerfile.production", "gcr.io/distroless/python3-debian12")
     assert_base_images_pinned(ROOT / "Dockerfile.production")

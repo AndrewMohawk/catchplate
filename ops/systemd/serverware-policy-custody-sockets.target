@@ -1,0 +1,16 @@
+[Unit]
+Description=Serverware policy-custody authenticated seqpacket sockets
+BindsTo=serverware-policy-custody@durable-recovery-store.socket
+BindsTo=serverware-policy-custody@cleanup-authorization-consumer.socket
+BindsTo=serverware-policy-custody@recovery-target-provider.socket
+BindsTo=serverware-policy-custody@current-signature-authority.socket
+BindsTo=serverware-policy-custody@bounded-cleanup-helper.socket
+After=local-fs.target systemd-tmpfiles-setup.service
+After=serverware-policy-custody@durable-recovery-store.socket
+After=serverware-policy-custody@cleanup-authorization-consumer.socket
+After=serverware-policy-custody@recovery-target-provider.socket
+After=serverware-policy-custody@current-signature-authority.socket
+After=serverware-policy-custody@bounded-cleanup-helper.socket
+
+[Install]
+WantedBy=multi-user.target

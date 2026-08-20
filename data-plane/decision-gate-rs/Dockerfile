@@ -12,6 +12,16 @@ COPY data-plane/decision-gate-rs/trust ./trust
 COPY schemas /schemas
 COPY scripts/discard_headers_parity.v1.json /scripts/discard_headers_parity.v1.json
 COPY policies/credential-limits.examples.json /policies/credential-limits.examples.json
+COPY ops/policy-custody /policy-custody-assets
+COPY ops/systemd/serverware-policy-custody-sockets.target /policy-custody-assets/systemd/serverware-policy-custody-sockets.target
+COPY ops/systemd/serverware-policy-custody.target /policy-custody-assets/systemd/serverware-policy-custody.target
+COPY ops/systemd/serverware-policy-custody@.socket /policy-custody-assets/systemd/serverware-policy-custody@.socket
+COPY ops/systemd/serverware-policy-custody@.service.in /policy-custody-assets/systemd/serverware-policy-custody@.service.in
+COPY ops/systemd/serverware-policy-custody@durable-recovery-store.service.d /policy-custody-assets/systemd/serverware-policy-custody@durable-recovery-store.service.d
+COPY ops/systemd/serverware-policy-custody@cleanup-authorization-consumer.service.d /policy-custody-assets/systemd/serverware-policy-custody@cleanup-authorization-consumer.service.d
+COPY ops/systemd/serverware-policy-custody@recovery-target-provider.service.d /policy-custody-assets/systemd/serverware-policy-custody@recovery-target-provider.service.d
+COPY ops/systemd/serverware-policy-custody@current-signature-authority.service.d /policy-custody-assets/systemd/serverware-policy-custody@current-signature-authority.service.d
+COPY ops/systemd/serverware-policy-custody@bounded-cleanup-helper.service.d /policy-custody-assets/systemd/serverware-policy-custody@bounded-cleanup-helper.service.d
 
 FROM rust-source AS build
 
@@ -34,7 +44,10 @@ RUN set -eu; \
     chmod 0600 "$ledger_directory/manifest.json"; \
     install -m 0600 /dev/null "$ledger_directory/ledger.lock"; \
     test "$(wc -c < "$ledger_directory/ledger.lock")" -eq 0; \
-    test "$(wc -c < "$ledger_directory/manifest.json")" -le 1024
+    test "$(wc -c < "$ledger_directory/manifest.json")" -le 1024; \
+    find /policy-custody-assets -type d -exec chmod 0555 {} +; \
+    find /policy-custody-assets -type f -exec chmod 0444 {} +; \
+    find /policy-custody-assets -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +
 
 FROM rust-source AS coder-test-build
 
@@ -306,13 +319,43 @@ FROM --platform=linux/amd64 debian:bookworm-slim@sha256:7b140f374b289a7c2befc338
 
 RUN groupadd --gid 10001 serverware \
     && groupadd --gid 10003 custody-shared \
+    && groupadd --gid 65519 response-v2-shared \
     && useradd --uid 10001 --gid 10001 --create-home --shell /usr/sbin/nologin serverware \
     && useradd --uid 10002 --gid 10003 --no-create-home --shell /usr/sbin/nologin custody \
-    && install -d -o custody -g custody-shared -m 0710 /run/serverware-custody
+    && useradd --uid 65520 --gid 65519 --no-create-home --shell /usr/sbin/nologin response-v2-router \
+    && useradd --uid 65521 --gid 65519 --no-create-home --shell /usr/sbin/nologin response-v2-state \
+    && useradd --uid 65522 --gid 65519 --no-create-home --shell /usr/sbin/nologin response-v2-transport \
+    && useradd --uid 65523 --gid 65519 --no-create-home --shell /usr/sbin/nologin response-v2-policy \
+    && useradd --uid 65524 --gid 65519 --no-create-home --shell /usr/sbin/nologin response-v2-ledger \
+    && useradd --uid 65525 --gid 65519 --no-create-home --shell /usr/sbin/nologin response-v2-release \
+    && useradd --uid 65526 --gid 65519 --no-create-home --shell /usr/sbin/nologin response-v2-watchdog \
+    && install -d -o custody -g custody-shared -m 0710 /run/serverware-custody \
+    && install -d -o response-v2-router -g response-v2-shared -m 0710 /run/serverware-response-v2/router \
+    && install -d -o response-v2-state -g response-v2-shared -m 0710 /run/serverware-response-v2/state \
+    && install -d -o response-v2-transport -g response-v2-shared -m 0710 /run/serverware-response-v2/credential-transport \
+    && install -d -o response-v2-policy -g response-v2-shared -m 0710 /run/serverware-response-v2/policy-proof-verifier \
+    && install -d -o response-v2-ledger -g response-v2-shared -m 0710 /run/serverware-response-v2/immutable-artifact-ledger \
+    && install -d -o response-v2-release -g response-v2-shared -m 0710 /run/serverware-response-v2/release-attestor-publisher \
+    && install -d -o response-v2-watchdog -g response-v2-shared -m 0710 /run/serverware-response-v2/cleanup-watchdog \
+    && install -d -o response-v2-router -g response-v2-shared -m 0700 /var/lib/serverware-response-v2/custody-router \
+    && install -d -o response-v2-state -g response-v2-shared -m 0700 /var/lib/serverware-response-v2/state-authority \
+    && install -d -o response-v2-transport -g response-v2-shared -m 0700 /var/lib/serverware-response-v2/credential-transport \
+    && install -d -o response-v2-policy -g response-v2-shared -m 0700 /var/lib/serverware-response-v2/policy-proof-verifier \
+    && install -d -o response-v2-ledger -g response-v2-shared -m 0700 /var/lib/serverware-response-v2/immutable-artifact-ledger \
+    && install -d -o response-v2-release -g response-v2-shared -m 0700 /var/lib/serverware-response-v2/release-attestor-publisher \
+    && install -d -o response-v2-watchdog -g response-v2-shared -m 0700 /var/lib/serverware-response-v2/cleanup-watchdog
 COPY --from=build /src/target/release/serverware-decision-gate /usr/local/bin/serverware-decision-gate
 COPY --from=build /src/target/release/serverware-proof-client /usr/local/bin/serverware-proof-client
 COPY --from=build /src/target/release/serverware-response-proof-fixture /usr/local/bin/serverware-response-proof-fixture
 COPY --from=build /src/target/release/serverware-custody-runtime /usr/local/bin/serverware-custody-runtime
+COPY --from=build /src/target/release/serverware-response-observation-v2-custody /usr/local/bin/serverware-response-observation-v2-custody
+COPY --from=build /src/target/release/serverware-policy-shadow-custody /usr/local/bin/serverware-policy-shadow-custody
+COPY --from=build /src/target/release/serverware-policy-custody-durable-recovery-store /usr/local/bin/serverware-policy-custody-durable-recovery-store
+COPY --from=build /src/target/release/serverware-policy-custody-recovery-target-provider /usr/local/bin/serverware-policy-custody-recovery-target-provider
+COPY --from=build /src/target/release/serverware-policy-custody-current-signature-authority /usr/local/bin/serverware-policy-custody-current-signature-authority
+COPY --from=build /src/target/release/serverware-policy-custody-cleanup-authorization-consumer /usr/local/bin/serverware-policy-custody-cleanup-authorization-consumer
+COPY --from=build /src/target/release/serverware-policy-custody-bounded-cleanup-helper /usr/local/bin/serverware-policy-custody-bounded-cleanup-helper
+COPY --from=build --chown=0:0 /policy-custody-assets /usr/share/serverware/policy-custody
 COPY --from=build --chown=10002:10003 --chmod=0700 /runtime-layout/serverware-custody-state /var/lib/serverware-custody
 COPY --from=build --chown=10002:10003 --chmod=0600 /runtime-layout/serverware-custody-state/manifest.json /var/lib/serverware-custody/manifest.json
 COPY --from=build --chown=10002:10003 --chmod=0600 /runtime-layout/serverware-custody-state/ledger.lock /var/lib/serverware-custody/ledger.lock

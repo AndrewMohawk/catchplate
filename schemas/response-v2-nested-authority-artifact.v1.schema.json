@@ -1,0 +1,2315 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/response-v2-nested-authority-artifact.v1.schema.json",
+  "title": "Serverware Response v2 Nested Authority Artifact",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "body",
+    "authentication"
+  ],
+  "properties": {
+    "body": {
+      "$ref": "#/$defs/body"
+    },
+    "authentication": {
+      "$ref": "#/$defs/authentication"
+    }
+  },
+  "$defs": {
+    "safeUint": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "positiveSafeUint": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@-]*$"
+    },
+    "sha256": {
+      "type": "string",
+      "minLength": 71,
+      "maxLength": 71,
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "nullableSha256": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/sha256"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "bootDeadline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "clock",
+        "bootId",
+        "deadlineBootMillis"
+      ],
+      "properties": {
+        "clock": {
+          "const": "CLOCK_BOOTTIME"
+        },
+        "bootId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "deadlineBootMillis": {
+          "$ref": "#/$defs/safeUint"
+        }
+      }
+    },
+    "attemptState": {
+      "enum": [
+        "ABSENT",
+        "RESERVED",
+        "AUTHORIZED",
+        "STAGED",
+        "DISPATCHING",
+        "OUTCOME_UNKNOWN",
+        "OBSERVED",
+        "RELEASE_PREPARED",
+        "TERMINAL_FAILED",
+        "FINALIZED",
+        "PUBLISHED",
+        "ARCHIVED"
+      ]
+    },
+    "operation": {
+      "enum": [
+        "responseV2.generation.install/v1",
+        "responseV2.generation.reconcile/v1",
+        "responseV2.generation.ready/v1",
+        "responseV2.attempt.reserve/v1",
+        "responseV2.attempt.authorize/v1",
+        "responseV2.object.commitRaw/v1",
+        "responseV2.object.inspectImmutableRaw/v1",
+        "responseV2.attempt.stage/v1",
+        "responseV2.dispatch.begin/v1",
+        "responseV2.dispatch.recordOutcome/v1",
+        "responseV2.attempt.terminalize/v1",
+        "responseV2.attempt.finalize/v1",
+        "responseV2.attempt.publish/v1",
+        "responseV2.release.authorize/v1",
+        "responseV2.release.consumeAndRetrieveExact/v1",
+        "responseV2.release.resolveReplay/v1",
+        "responseV2.attempt.settle/v1",
+        "responseV2.attempt.archive/v1",
+        "responseV2.fence.revoke/v1",
+        "responseV2.fence.observeQuiescence/v1",
+        "responseV2.evidence.append/v1",
+        "responseV2.publisher.enqueue/v1",
+        "responseV2.publisher.acknowledge/v1",
+        "responseV2.transparency.checkpoint/v1",
+        "responseV2.trustedTime.advance/v1",
+        "responseV2.reconciliation.transition/v1",
+        "responseV2.reconciliation.terminalizeExpiredAttempt/v1",
+        "responseV2.state.query/v1"
+      ]
+    },
+    "serviceRole": {
+      "enum": [
+        "custody-router",
+        "state-authority",
+        "credential-transport",
+        "policy-proof-verifier",
+        "immutable-artifact-ledger",
+        "release-attestor-publisher",
+        "cleanup-watchdog"
+      ]
+    },
+    "logicalRole": {
+      "enum": [
+        "trusted-time",
+        "readiness-topology-attestor",
+        "recovery",
+        "linearizable-store",
+        "quorum",
+        "transparency",
+        "public-release-consumption",
+        "outcome-reconciliation",
+        "emergency-fence-revoker",
+        "credential-authority",
+        "target-transport",
+        "mutation-supervisor",
+        "evidence-trust",
+        "live-proof-verifier",
+        "archive-proof-verifier",
+        "persistence",
+        "archive-store",
+        "runtime-attestation",
+        "attester",
+        "publisher",
+        "public-release",
+        "custody",
+        "emergency-cleanup-executor"
+      ]
+    },
+    "nullableLogicalRole": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/logicalRole"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "artifactClass": {
+      "enum": [
+        "ROLE_READINESS",
+        "STATE_CAS",
+        "CREDENTIAL_USE",
+        "TARGET_EFFECT",
+        "POLICY_PROOF",
+        "TRANSITION_AUTHORIZATION",
+        "IMMUTABLE_INSPECTION",
+        "FINAL_ENVELOPE_VERIFICATION",
+        "ATTESTATION",
+        "RECOVERY",
+        "ARTIFACT_COMMIT",
+        "RELEASE_AUTHORIZATION",
+        "RELEASE_CONSUMPTION",
+        "RELEASE_CONSUMPTION_PREAUTHORIZATION",
+        "RELEASE_PREPARATION_RECEIPT",
+        "ROUTER_TOPOLOGY_ATTESTATION",
+        "CLEANUP_OBSERVATION",
+        "TRUSTED_TIME",
+        "TRANSPARENCY_CHECKPOINT",
+        "RECONCILIATION",
+        "PUBLICATION",
+        "ARCHIVE"
+      ]
+    },
+    "reconciliationDomain": {
+      "enum": [
+        "PROVIDER_GENERATIONS",
+        "ROLE_IDENTITIES",
+        "ATTEMPTS",
+        "OPERATIONS",
+        "FENCES",
+        "REPLAY_LEDGERS",
+        "RELEASE_LEDGERS",
+        "CREDENTIAL_USES",
+        "TARGET_EFFECTS",
+        "POLICY_DECISIONS",
+        "EVIDENCE",
+        "FINALIZATIONS",
+        "IMMUTABLE_OBJECTS",
+        "IMMUTABLE_INSPECTIONS",
+        "TERMINAL_SETTLEMENTS",
+        "ARCHIVES",
+        "PUBLISHER_OUTBOX",
+        "TRANSPARENCY_LEAVES",
+        "TRANSPARENCY_CHECKPOINTS",
+        "TRUSTED_TIME_HIGHWATER"
+      ]
+    },
+    "authentication": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "algorithm",
+        "keyId",
+        "keyMaterialSha256",
+        "authorityScopeSha256",
+        "signingDomain",
+        "signedPayloadSha256",
+        "signatureBase64url"
+      ],
+      "properties": {
+        "algorithm": {
+          "const": "Ed25519"
+        },
+        "keyId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "keyMaterialSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "authorityScopeSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "signingDomain": {
+          "const": "serverware.responseV2.nestedAuthorityArtifact.signature/v1"
+        },
+        "signedPayloadSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "signatureBase64url": {
+          "type": "string",
+          "minLength": 86,
+          "maxLength": 86,
+          "pattern": "^[A-Za-z0-9_-]{86}$"
+        }
+      }
+    },
+    "body": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "kind",
+        "schemaVersion",
+        "generationId",
+        "artifactId",
+        "producingRoleId",
+        "producingProcessId",
+        "producingServiceRole",
+        "producingLogicalRole",
+        "keyId",
+        "keyMaterialSha256",
+        "authorityScope",
+        "authorityScopeSha256",
+        "artifactClass",
+        "operation",
+        "operationId",
+        "attemptId",
+        "attemptRevision",
+        "fenceToken",
+        "issuedAtEpochMillis",
+        "expiresAtEpochMillis",
+        "payloadSha256",
+        "payload"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.responseV2.nestedAuthorityArtifact/v1"
+        },
+        "kind": {
+          "const": "ServerwareResponseV2NestedAuthorityArtifact"
+        },
+        "schemaVersion": {
+          "const": "1"
+        },
+        "generationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "artifactId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "producingRoleId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "producingProcessId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "producingServiceRole": {
+          "$ref": "#/$defs/serviceRole"
+        },
+        "producingLogicalRole": {
+          "$ref": "#/$defs/logicalRole"
+        },
+        "keyId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "keyMaterialSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "authorityScope": {
+          "$ref": "#/$defs/authorityScope"
+        },
+        "authorityScopeSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "artifactClass": {
+          "$ref": "#/$defs/artifactClass"
+        },
+        "operation": {
+          "$ref": "#/$defs/operation"
+        },
+        "operationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "attemptId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "attemptRevision": {
+          "$ref": "#/$defs/safeUint"
+        },
+        "fenceToken": {
+          "$ref": "#/$defs/identifier"
+        },
+        "issuedAtEpochMillis": {
+          "$ref": "#/$defs/safeUint"
+        },
+        "expiresAtEpochMillis": {
+          "$ref": "#/$defs/positiveSafeUint"
+        },
+        "payloadSha256": {
+          "$ref": "#/$defs/sha256",
+          "$comment": "SHA-256 over RFC 8785 JCS of payload. The verifier MUST reconstruct generation, physical process, service role, logical role, key material, authority scope, operation, operation ID, attempt, revision, fence, and payload and reject any mismatch between body and authentication."
+        },
+        "payload": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/roleReadinessPayload"
+            },
+            {
+              "$ref": "#/$defs/stateCasPayload"
+            },
+            {
+              "$ref": "#/$defs/credentialUsePayload"
+            },
+            {
+              "$ref": "#/$defs/targetEffectPayload"
+            },
+            {
+              "$ref": "#/$defs/policyProofPayload"
+            },
+            {
+              "$ref": "#/$defs/transitionAuthorizationPayload"
+            },
+            {
+              "$ref": "#/$defs/immutableInspectionPayload"
+            },
+            {
+              "$ref": "#/$defs/finalEnvelopeVerificationPayload"
+            },
+            {
+              "$ref": "#/$defs/attestationPayload"
+            },
+            {
+              "$ref": "#/$defs/recoveryPayload"
+            },
+            {
+              "$ref": "#/$defs/artifactCommitPayload"
+            },
+            {
+              "$ref": "#/$defs/releaseAuthorizationPayload"
+            },
+            {
+              "$ref": "#/$defs/releaseConsumptionPayload"
+            },
+            {
+              "$ref": "#/$defs/releaseConsumptionPreauthorizationPayload"
+            },
+            {
+              "$ref": "#/$defs/releasePreparationReceiptPayload"
+            },
+            {
+              "$ref": "#/$defs/routerTopologyAttestationPayload"
+            },
+            {
+              "$ref": "#/$defs/cleanupObservationPayload"
+            },
+            {
+              "$ref": "#/$defs/trustedTimePayload"
+            },
+            {
+              "$ref": "#/$defs/transparencyCheckpointPayload"
+            },
+            {
+              "$ref": "#/$defs/reconciliationPayload"
+            },
+            {
+              "$ref": "#/$defs/publicationPayload"
+            },
+            {
+              "$ref": "#/$defs/archivePayload"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/bindRoleReadinessArtifact"
+            },
+            {
+              "$ref": "#/$defs/bindStateCasArtifact"
+            },
+            {
+              "$ref": "#/$defs/bindCredentialUseArtifact"
+            },
+            {
+              "$ref": "#/$defs/bindTargetEffectArtifact"
+            },
+            {
+              "$ref": "#/$defs/bindPolicyProofArtifact"
+            },
+            {
+              "$ref": "#/$defs/bindTransitionAuthorizationArtifact"
+            },
+            {
+              "$ref": "#/$defs/bindImmutableInspectionArtifact"
+            },
+            {
+              "$ref": "#/$defs/bindFinalEnvelopeVerificationArtifact"
+            },
+            {
+              "$ref": "#/$defs/bindAttestationArtifact"
+            },
+            {
+              "$ref": "#/$defs/bindRecoveryArtifact"
+            },
+            {
+              "$ref": "#/$defs/bindArtifactCommitArtifact"
+            },
+            {
+              "$ref": "#/$defs/bindReleaseAuthorizationArtifact"
+            },
+            {
+              "$ref": "#/$defs/bindReleaseConsumptionArtifact"
+            },
+            {
+              "$ref": "#/$defs/bindReleaseConsumptionPreauthorizationArtifact"
+            },
+            {
+              "$ref": "#/$defs/bindReleasePreparationReceiptArtifact"
+            },
+            {
+              "$ref": "#/$defs/bindRouterTopologyAttestationArtifact"
+            },
+            {
+              "$ref": "#/$defs/bindCleanupObservationArtifact"
+            },
+            {
+              "$ref": "#/$defs/bindTrustedTimeArtifact"
+            },
+            {
+              "$ref": "#/$defs/bindTransparencyCheckpointArtifact"
+            },
+            {
+              "$ref": "#/$defs/bindReconciliationArtifact"
+            },
+            {
+              "$ref": "#/$defs/bindPublicationArtifact"
+            },
+            {
+              "$ref": "#/$defs/bindArchiveArtifact"
+            }
+          ]
+        }
+      ]
+    },
+    "authorityScope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "generationId",
+        "processId",
+        "serviceRole",
+        "logicalRole",
+        "roleId",
+        "keyId",
+        "keyMaterialSha256",
+        "executableSha256",
+        "configurationSha256",
+        "allowedOperations",
+        "scopeSha256"
+      ],
+      "properties": {
+        "generationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "processId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "serviceRole": {
+          "$ref": "#/$defs/serviceRole"
+        },
+        "logicalRole": {
+          "$ref": "#/$defs/logicalRole"
+        },
+        "roleId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "keyId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "keyMaterialSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "executableSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "configurationSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "allowedOperations": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 27,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/operation"
+          }
+        },
+        "scopeSha256": {
+          "$ref": "#/$defs/sha256",
+          "$comment": "SHA-256 over RFC 8785 JCS of this authority scope with scopeSha256 omitted. The verifier MUST require the enclosing operation to be present in allowedOperations and reconstruct every duplicated identity field from the authenticated provider generation."
+        }
+      }
+    },
+    "roleReadinessPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifactType",
+        "artifact"
+      ],
+      "properties": {
+        "artifactType": {
+          "const": "ROLE_READINESS"
+        },
+        "artifact": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "role",
+            "roleId",
+            "processId",
+            "keyId",
+            "reconciledGenerationId",
+            "reconciliationCheckpointSha256"
+          ],
+          "properties": {
+            "role": {
+              "enum": [
+                "custody-router",
+                "state-authority",
+                "credential-transport",
+                "policy-proof-verifier",
+                "immutable-artifact-ledger",
+                "release-attestor-publisher",
+                "cleanup-watchdog"
+              ]
+            },
+            "roleId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "processId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "keyId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "reconciledGenerationId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "reconciliationCheckpointSha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        }
+      }
+    },
+    "stateCasPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifactType",
+        "artifact"
+      ],
+      "properties": {
+        "artifactType": {
+          "const": "STATE_CAS"
+        },
+        "artifact": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "expectedRevision",
+            "expectedState",
+            "successorRevision",
+            "successorState",
+            "mutationSha256"
+          ],
+          "properties": {
+            "expectedRevision": {
+              "$ref": "#/$defs/safeUint"
+            },
+            "expectedState": {
+              "$ref": "#/$defs/attemptState"
+            },
+            "successorRevision": {
+              "$ref": "#/$defs/positiveSafeUint"
+            },
+            "successorState": {
+              "$ref": "#/$defs/attemptState"
+            },
+            "mutationSha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        }
+      }
+    },
+    "credentialUsePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifactType",
+        "artifact"
+      ],
+      "properties": {
+        "artifactType": {
+          "const": "CREDENTIAL_USE"
+        },
+        "artifact": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "credentialUseId",
+            "credentialBindingSha256",
+            "targetEffectId",
+            "oneUseNonceSha256"
+          ],
+          "properties": {
+            "credentialUseId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "credentialBindingSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "targetEffectId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "oneUseNonceSha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        }
+      }
+    },
+    "targetEffectPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifactType",
+        "artifact"
+      ],
+      "properties": {
+        "artifactType": {
+          "const": "TARGET_EFFECT"
+        },
+        "artifact": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "targetEffectId",
+            "idempotencyKeySha256",
+            "requestObjectSha256",
+            "responseObjectSha256",
+            "outcome"
+          ],
+          "properties": {
+            "targetEffectId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "idempotencyKeySha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "requestObjectSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "responseObjectSha256": {
+              "$ref": "#/$defs/nullableSha256"
+            },
+            "outcome": {
+              "enum": [
+                "DISPATCHING",
+                "OUTCOME_UNKNOWN",
+                "OBSERVED",
+                "RECONCILED_FAILURE"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "policyProofPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifactType",
+        "artifact"
+      ],
+      "properties": {
+        "artifactType": {
+          "const": "POLICY_PROOF"
+        },
+        "artifact": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "policyDecisionId",
+            "policyGenerationSha256",
+            "rawResponseObjectSha256",
+            "responseFramingSha256",
+            "releasedProjectionSha256",
+            "passed"
+          ],
+          "properties": {
+            "policyDecisionId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "policyGenerationSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "rawResponseObjectSha256": {
+              "$ref": "#/$defs/nullableSha256"
+            },
+            "responseFramingSha256": {
+              "$ref": "#/$defs/nullableSha256"
+            },
+            "releasedProjectionSha256": {
+              "$ref": "#/$defs/nullableSha256"
+            },
+            "passed": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    },
+    "transitionAuthorizationPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifactType",
+        "artifact"
+      ],
+      "properties": {
+        "artifactType": {
+          "const": "TRANSITION_AUTHORIZATION"
+        },
+        "artifact": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "policyDecisionId",
+            "policyGenerationSha256",
+            "expectedRevision",
+            "expectedState",
+            "successorRevision",
+            "successorState",
+            "passed"
+          ],
+          "properties": {
+            "policyDecisionId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "policyGenerationSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "expectedRevision": {
+              "$ref": "#/$defs/safeUint"
+            },
+            "expectedState": {
+              "$ref": "#/$defs/attemptState"
+            },
+            "successorRevision": {
+              "$ref": "#/$defs/positiveSafeUint"
+            },
+            "successorState": {
+              "$ref": "#/$defs/attemptState"
+            },
+            "passed": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    },
+    "immutableInspectionPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifactType",
+        "artifact"
+      ],
+      "properties": {
+        "artifactType": {
+          "const": "IMMUTABLE_INSPECTION"
+        },
+        "artifact": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "inspectionId",
+            "inspectionOperationId",
+            "objectId",
+            "objectKind",
+            "contentSha256",
+            "contentLength",
+            "mediaType",
+            "immutableStorageReceiptSha256",
+            "inspectionPurposeSha256",
+            "inspectedAtBootId",
+            "inspectedAtBootMillis",
+            "bytesImmutable",
+            "replacementProhibited"
+          ],
+          "properties": {
+            "inspectionId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "inspectionOperationId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "objectId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "objectKind": {
+              "$ref": "#/$defs/identifier"
+            },
+            "contentSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "contentLength": {
+              "$ref": "#/$defs/safeUint"
+            },
+            "mediaType": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "immutableStorageReceiptSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "inspectionPurposeSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "inspectedAtBootId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "inspectedAtBootMillis": {
+              "$ref": "#/$defs/safeUint"
+            },
+            "bytesImmutable": {
+              "const": true
+            },
+            "replacementProhibited": {
+              "const": true
+            }
+          }
+        }
+      }
+    },
+    "finalEnvelopeVerificationPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifactType",
+        "artifact"
+      ],
+      "properties": {
+        "artifactType": {
+          "const": "FINAL_ENVELOPE_VERIFICATION"
+        },
+        "artifact": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "policyDecisionId",
+            "policyGenerationSha256",
+            "finalEnvelopeBodySha256",
+            "rawResponseObjectSha256",
+            "responseFramingSha256",
+            "releasedProjectionSha256",
+            "passed"
+          ],
+          "properties": {
+            "policyDecisionId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "policyGenerationSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "finalEnvelopeBodySha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "rawResponseObjectSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "responseFramingSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "releasedProjectionSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "passed": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    },
+    "attestationPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifactType",
+        "artifact"
+      ],
+      "properties": {
+        "artifactType": {
+          "const": "ATTESTATION"
+        },
+        "artifact": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "attestationMode",
+            "sourceCommitSha256",
+            "sourceTreeSha256",
+            "executableSha256",
+            "configurationSha256",
+            "evidenceObjectSha256",
+            "hardwareProof"
+          ],
+          "properties": {
+            "attestationMode": {
+              "const": "TrustedHostNoTee"
+            },
+            "sourceCommitSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "sourceTreeSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "executableSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "configurationSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "evidenceObjectSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "hardwareProof": {
+              "const": false
+            }
+          }
+        }
+      }
+    },
+    "recoveryPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifactType",
+        "artifact"
+      ],
+      "properties": {
+        "artifactType": {
+          "const": "RECOVERY"
+        },
+        "artifact": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "recoveryAction",
+            "stableResumeId",
+            "predecessorState",
+            "successorState",
+            "originalDeadline",
+            "cleanupDeadline",
+            "observedBootId",
+            "observedBootMillis",
+            "fenceToken",
+            "predecessorFenceState",
+            "successorFenceState"
+          ],
+          "properties": {
+            "recoveryAction": {
+              "const": "TERMINALIZE_DEADLINE_EXPIRED"
+            },
+            "stableResumeId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "predecessorState": {
+              "$ref": "#/$defs/attemptState"
+            },
+            "successorState": {
+              "const": "TERMINAL_FAILED"
+            },
+            "originalDeadline": {
+              "$ref": "#/$defs/bootDeadline"
+            },
+            "cleanupDeadline": {
+              "$ref": "#/$defs/bootDeadline"
+            },
+            "observedBootId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "observedBootMillis": {
+              "$ref": "#/$defs/safeUint"
+            },
+            "fenceToken": {
+              "$ref": "#/$defs/identifier"
+            },
+            "predecessorFenceState": {
+              "const": "ACTIVE"
+            },
+            "successorFenceState": {
+              "const": "REVOKED"
+            }
+          }
+        }
+      }
+    },
+    "artifactCommitPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifactType",
+        "artifact"
+      ],
+      "properties": {
+        "artifactType": {
+          "const": "ARTIFACT_COMMIT"
+        },
+        "artifact": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "objectId",
+            "objectKind",
+            "contentSha256",
+            "contentLength",
+            "immutableStorageReceiptSha256"
+          ],
+          "properties": {
+            "objectId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "objectKind": {
+              "$ref": "#/$defs/identifier"
+            },
+            "contentSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "contentLength": {
+              "$ref": "#/$defs/safeUint"
+            },
+            "immutableStorageReceiptSha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        }
+      }
+    },
+    "releaseAuthorizationPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifactType",
+        "artifact"
+      ],
+      "properties": {
+        "artifactType": {
+          "const": "RELEASE_AUTHORIZATION"
+        },
+        "artifact": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "releaseAuthorizationId",
+            "finalizationId",
+            "releaseRequestSha256",
+            "releaseObjectSha256",
+            "oneUseNonceSha256"
+          ],
+          "properties": {
+            "releaseAuthorizationId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "finalizationId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "releaseRequestSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "releaseObjectSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "oneUseNonceSha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        }
+      }
+    },
+    "releaseConsumptionPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifactType",
+        "artifact"
+      ],
+      "properties": {
+        "artifactType": {
+          "const": "RELEASE_CONSUMPTION"
+        },
+        "artifact": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "releaseAuthorizationId",
+            "releaseRequestSha256",
+            "releaseObjectSha256",
+            "clientBindingSha256",
+            "oneUseNonceSha256"
+          ],
+          "properties": {
+            "releaseAuthorizationId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "releaseRequestSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "releaseObjectSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "clientBindingSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "oneUseNonceSha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        }
+      }
+    },
+    "releaseConsumptionPreauthorizationPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifactType",
+        "artifact"
+      ],
+      "properties": {
+        "artifactType": {
+          "const": "RELEASE_CONSUMPTION_PREAUTHORIZATION"
+        },
+        "artifact": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "releaseAuthorizationId",
+            "finalizationId",
+            "mutationBindingSha256",
+            "releaseRequestSha256",
+            "inspectionResultSha256",
+            "releaseObjectSha256",
+            "clientBindingSha256",
+            "exactReplayKeySha256",
+            "oneUseNonceSha256",
+            "expectedRevision",
+            "expectedState",
+            "successorRevision",
+            "successorState"
+          ],
+          "properties": {
+            "releaseAuthorizationId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "finalizationId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "mutationBindingSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "releaseRequestSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "inspectionResultSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "releaseObjectSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "clientBindingSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "exactReplayKeySha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "oneUseNonceSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "expectedRevision": {
+              "$ref": "#/$defs/safeUint"
+            },
+            "expectedState": {
+              "$ref": "#/$defs/attemptState"
+            },
+            "successorRevision": {
+              "$ref": "#/$defs/positiveSafeUint"
+            },
+            "successorState": {
+              "const": "RELEASE_PREPARED"
+            }
+          }
+        }
+      }
+    },
+    "releasePreparationReceiptPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifactType",
+        "artifact"
+      ],
+      "properties": {
+        "artifactType": {
+          "const": "RELEASE_PREPARATION_RECEIPT"
+        },
+        "artifact": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "releaseAuthorizationId",
+            "releaseRequestSha256",
+            "inspectionResultSha256",
+            "releaseObjectSha256",
+            "clientBindingSha256",
+            "exactReplayKeySha256",
+            "preauthorizationArtifactSha256",
+            "signedStateMutationReceiptSha256",
+            "predecessorRevision",
+            "predecessorState",
+            "successorRevision",
+            "successorState",
+            "fenceToken",
+            "oneUseNonceSha256",
+            "durableCanonicalResultSha256"
+          ],
+          "properties": {
+            "releaseAuthorizationId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "releaseRequestSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "inspectionResultSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "releaseObjectSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "clientBindingSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "exactReplayKeySha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "preauthorizationArtifactSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "signedStateMutationReceiptSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "predecessorRevision": {
+              "$ref": "#/$defs/safeUint"
+            },
+            "predecessorState": {
+              "$ref": "#/$defs/attemptState"
+            },
+            "successorRevision": {
+              "$ref": "#/$defs/positiveSafeUint"
+            },
+            "successorState": {
+              "const": "RELEASE_PREPARED"
+            },
+            "fenceToken": {
+              "$ref": "#/$defs/identifier"
+            },
+            "oneUseNonceSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "durableCanonicalResultSha256": {
+              "$ref": "#/$defs/sha256",
+              "$comment": "SHA-256 over the durable PREPARE result before the release-preparation artifact, signed preparation receipt, and outer operation result are added. This exclusion prevents a receipt self-reference."
+            }
+          }
+        }
+      }
+    },
+    "routerTopologyAttestationPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifactType",
+        "artifact"
+      ],
+      "properties": {
+        "artifactType": {
+          "const": "ROUTER_TOPOLOGY_ATTESTATION"
+        },
+        "artifact": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "routerRoleId",
+            "routerProcessId",
+            "routerKeyId",
+            "reconciledGenerationId",
+            "topologySha256",
+            "readinessContractSha256",
+            "reconciliationCheckpointSha256",
+            "roleReadinessRootSha256"
+          ],
+          "properties": {
+            "routerRoleId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "routerProcessId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "routerKeyId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "reconciledGenerationId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "topologySha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "readinessContractSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "reconciliationCheckpointSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "roleReadinessRootSha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        }
+      }
+    },
+    "cleanupObservationPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifactType",
+        "artifact"
+      ],
+      "properties": {
+        "artifactType": {
+          "const": "CLEANUP_OBSERVATION"
+        },
+        "artifact": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "cleanupAction",
+            "stableResumeId",
+            "originalDeadline",
+            "cleanupDeadline",
+            "ownerProcessId",
+            "ownerPid",
+            "ownerStartTimeTicks",
+            "ownerCgroupId",
+            "ownerDeathObserved",
+            "cgroupEmptyObserved",
+            "cgroupDeathObserved",
+            "predecessorFenceState"
+          ],
+          "properties": {
+            "cleanupAction": {
+              "$ref": "#/$defs/identifier"
+            },
+            "stableResumeId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "originalDeadline": {
+              "$ref": "#/$defs/bootDeadline"
+            },
+            "cleanupDeadline": {
+              "$ref": "#/$defs/bootDeadline"
+            },
+            "ownerProcessId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "ownerPid": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 4294967295
+            },
+            "ownerStartTimeTicks": {
+              "$ref": "#/$defs/positiveSafeUint"
+            },
+            "ownerCgroupId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "ownerDeathObserved": {
+              "type": "boolean"
+            },
+            "cgroupEmptyObserved": {
+              "type": "boolean"
+            },
+            "cgroupDeathObserved": {
+              "type": "boolean"
+            },
+            "predecessorFenceState": {
+              "enum": [
+                "ACTIVE",
+                "REVOKED"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "trustedTimePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifactType",
+        "artifact"
+      ],
+      "properties": {
+        "artifactType": {
+          "const": "TRUSTED_TIME"
+        },
+        "artifact": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "clockId",
+            "epochMillis",
+            "sequence",
+            "predecessorSequence"
+          ],
+          "properties": {
+            "clockId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "epochMillis": {
+              "$ref": "#/$defs/safeUint"
+            },
+            "sequence": {
+              "$ref": "#/$defs/positiveSafeUint"
+            },
+            "predecessorSequence": {
+              "$ref": "#/$defs/safeUint"
+            }
+          }
+        }
+      }
+    },
+    "transparencyCheckpointPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifactType",
+        "artifact"
+      ],
+      "properties": {
+        "artifactType": {
+          "const": "TRANSPARENCY_CHECKPOINT"
+        },
+        "artifact": {
+          "$ref": "response-v2-release-transparency-proof.v2.schema.json#/$defs/releaseTransparencyArtifact"
+        }
+      }
+    },
+    "reconciliationPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifactType",
+        "artifact"
+      ],
+      "properties": {
+        "artifactType": {
+          "const": "RECONCILIATION"
+        },
+        "artifact": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "reconciliationJobId",
+            "domain",
+            "predecessorState",
+            "successorState",
+            "authoritativeCursor",
+            "resultSha256"
+          ],
+          "properties": {
+            "reconciliationJobId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "domain": {
+              "$ref": "#/$defs/reconciliationDomain"
+            },
+            "predecessorState": {
+              "$ref": "#/$defs/reconciliationState"
+            },
+            "successorState": {
+              "$ref": "#/$defs/reconciliationState"
+            },
+            "authoritativeCursor": {
+              "$ref": "#/$defs/safeUint"
+            },
+            "resultSha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        }
+      }
+    },
+    "publicationPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifactType",
+        "artifact"
+      ],
+      "properties": {
+        "artifactType": {
+          "const": "PUBLICATION"
+        },
+        "artifact": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "publicationId",
+            "outboxId",
+            "finalizationId",
+            "payloadObjectSha256",
+            "publicationState",
+            "deliveryReceiptSha256"
+          ],
+          "properties": {
+            "publicationId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "outboxId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "finalizationId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "payloadObjectSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "publicationState": {
+              "enum": [
+                "PENDING",
+                "DELIVERING",
+                "DELIVERED",
+                "OUTCOME_UNKNOWN"
+              ]
+            },
+            "deliveryReceiptSha256": {
+              "$ref": "#/$defs/nullableSha256"
+            }
+          }
+        }
+      }
+    },
+    "archivePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifactType",
+        "artifact"
+      ],
+      "properties": {
+        "artifactType": {
+          "const": "ARCHIVE"
+        },
+        "artifact": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "archiveId",
+            "finalizationId",
+            "canonicalArchiveSha256",
+            "objectSetSha256"
+          ],
+          "properties": {
+            "archiveId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "finalizationId": {
+              "$ref": "#/$defs/identifier"
+            },
+            "canonicalArchiveSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "objectSetSha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        }
+      }
+    },
+    "bindRoleReadinessArtifact": {
+      "required": [
+        "artifactClass",
+        "operation",
+        "payload"
+      ],
+      "properties": {
+        "artifactClass": {
+          "const": "ROLE_READINESS"
+        },
+        "operation": {
+          "const": "responseV2.generation.ready/v1"
+        },
+        "payload": {
+          "$ref": "#/$defs/roleReadinessPayload"
+        }
+      }
+    },
+    "bindStateCasArtifact": {
+      "required": [
+        "artifactClass",
+        "operation",
+        "payload"
+      ],
+      "properties": {
+        "artifactClass": {
+          "const": "STATE_CAS"
+        },
+        "operation": {
+          "enum": [
+            "responseV2.generation.install/v1",
+            "responseV2.attempt.reserve/v1",
+            "responseV2.attempt.authorize/v1",
+            "responseV2.attempt.stage/v1",
+            "responseV2.attempt.terminalize/v1",
+            "responseV2.attempt.finalize/v1",
+            "responseV2.attempt.publish/v1",
+            "responseV2.attempt.archive/v1",
+            "responseV2.state.query/v1"
+          ]
+        },
+        "payload": {
+          "$ref": "#/$defs/stateCasPayload"
+        }
+      }
+    },
+    "bindCredentialUseArtifact": {
+      "required": [
+        "artifactClass",
+        "operation",
+        "payload"
+      ],
+      "properties": {
+        "artifactClass": {
+          "const": "CREDENTIAL_USE"
+        },
+        "operation": {
+          "const": "responseV2.attempt.authorize/v1"
+        },
+        "payload": {
+          "$ref": "#/$defs/credentialUsePayload"
+        }
+      }
+    },
+    "bindTargetEffectArtifact": {
+      "required": [
+        "artifactClass",
+        "operation",
+        "payload"
+      ],
+      "properties": {
+        "artifactClass": {
+          "const": "TARGET_EFFECT"
+        },
+        "operation": {
+          "enum": [
+            "responseV2.dispatch.begin/v1",
+            "responseV2.dispatch.recordOutcome/v1"
+          ]
+        },
+        "payload": {
+          "$ref": "#/$defs/targetEffectPayload"
+        }
+      }
+    },
+    "bindPolicyProofArtifact": {
+      "required": [
+        "artifactClass",
+        "operation",
+        "payload"
+      ],
+      "properties": {
+        "artifactClass": {
+          "const": "POLICY_PROOF"
+        },
+        "operation": {
+          "enum": [
+            "responseV2.attempt.authorize/v1",
+            "responseV2.attempt.terminalize/v1",
+            "responseV2.attempt.finalize/v1"
+          ]
+        },
+        "payload": {
+          "$ref": "#/$defs/policyProofPayload"
+        }
+      }
+    },
+    "bindTransitionAuthorizationArtifact": {
+      "required": [
+        "artifactClass",
+        "operation",
+        "payload"
+      ],
+      "properties": {
+        "artifactClass": {
+          "const": "TRANSITION_AUTHORIZATION"
+        },
+        "operation": {
+          "enum": [
+            "responseV2.attempt.authorize/v1",
+            "responseV2.attempt.stage/v1",
+            "responseV2.attempt.terminalize/v1",
+            "responseV2.attempt.finalize/v1",
+            "responseV2.attempt.publish/v1",
+            "responseV2.attempt.archive/v1"
+          ]
+        },
+        "payload": {
+          "$ref": "#/$defs/transitionAuthorizationPayload"
+        }
+      }
+    },
+    "bindImmutableInspectionArtifact": {
+      "required": [
+        "artifactClass",
+        "operation",
+        "payload"
+      ],
+      "properties": {
+        "artifactClass": {
+          "const": "IMMUTABLE_INSPECTION"
+        },
+        "operation": {
+          "const": "responseV2.object.inspectImmutableRaw/v1"
+        },
+        "payload": {
+          "$ref": "#/$defs/immutableInspectionPayload"
+        }
+      }
+    },
+    "bindFinalEnvelopeVerificationArtifact": {
+      "required": [
+        "artifactClass",
+        "operation",
+        "payload"
+      ],
+      "properties": {
+        "artifactClass": {
+          "const": "FINAL_ENVELOPE_VERIFICATION"
+        },
+        "operation": {
+          "const": "responseV2.attempt.finalize/v1"
+        },
+        "payload": {
+          "$ref": "#/$defs/finalEnvelopeVerificationPayload"
+        }
+      }
+    },
+    "bindAttestationArtifact": {
+      "required": [
+        "artifactClass",
+        "operation",
+        "payload"
+      ],
+      "properties": {
+        "artifactClass": {
+          "const": "ATTESTATION"
+        },
+        "operation": {
+          "enum": [
+            "responseV2.attempt.finalize/v1",
+            "responseV2.attempt.publish/v1"
+          ]
+        },
+        "payload": {
+          "$ref": "#/$defs/attestationPayload"
+        }
+      }
+    },
+    "bindRecoveryArtifact": {
+      "required": [
+        "artifactClass",
+        "operation",
+        "payload"
+      ],
+      "properties": {
+        "artifactClass": {
+          "const": "RECOVERY"
+        },
+        "operation": {
+          "enum": [
+            "responseV2.fence.revoke/v1",
+            "responseV2.reconciliation.terminalizeExpiredAttempt/v1"
+          ]
+        },
+        "payload": {
+          "$ref": "#/$defs/recoveryPayload"
+        }
+      }
+    },
+    "bindArtifactCommitArtifact": {
+      "required": [
+        "artifactClass",
+        "operation",
+        "payload"
+      ],
+      "properties": {
+        "artifactClass": {
+          "const": "ARTIFACT_COMMIT"
+        },
+        "operation": {
+          "enum": [
+            "responseV2.object.commitRaw/v1",
+            "responseV2.evidence.append/v1",
+            "responseV2.attempt.finalize/v1"
+          ]
+        },
+        "payload": {
+          "$ref": "#/$defs/artifactCommitPayload"
+        }
+      }
+    },
+    "bindReleaseAuthorizationArtifact": {
+      "required": [
+        "artifactClass",
+        "operation",
+        "payload"
+      ],
+      "properties": {
+        "artifactClass": {
+          "const": "RELEASE_AUTHORIZATION"
+        },
+        "operation": {
+          "const": "responseV2.release.authorize/v1"
+        },
+        "payload": {
+          "$ref": "#/$defs/releaseAuthorizationPayload"
+        }
+      }
+    },
+    "bindReleaseConsumptionArtifact": {
+      "required": [
+        "artifactClass",
+        "operation",
+        "payload"
+      ],
+      "properties": {
+        "artifactClass": {
+          "const": "RELEASE_CONSUMPTION"
+        },
+        "operation": {
+          "const": "responseV2.release.consumeAndRetrieveExact/v1"
+        },
+        "payload": {
+          "$ref": "#/$defs/releaseConsumptionPayload"
+        }
+      }
+    },
+    "bindReleaseConsumptionPreauthorizationArtifact": {
+      "required": [
+        "artifactClass",
+        "operation",
+        "payload"
+      ],
+      "properties": {
+        "artifactClass": {
+          "const": "RELEASE_CONSUMPTION_PREAUTHORIZATION"
+        },
+        "operation": {
+          "const": "responseV2.release.consumeAndRetrieveExact/v1"
+        },
+        "payload": {
+          "$ref": "#/$defs/releaseConsumptionPreauthorizationPayload"
+        }
+      }
+    },
+    "bindReleasePreparationReceiptArtifact": {
+      "required": [
+        "artifactClass",
+        "operation",
+        "payload"
+      ],
+      "properties": {
+        "artifactClass": {
+          "const": "RELEASE_PREPARATION_RECEIPT"
+        },
+        "operation": {
+          "const": "responseV2.release.consumeAndRetrieveExact/v1"
+        },
+        "payload": {
+          "$ref": "#/$defs/releasePreparationReceiptPayload"
+        }
+      }
+    },
+    "bindRouterTopologyAttestationArtifact": {
+      "required": [
+        "artifactClass",
+        "operation",
+        "payload"
+      ],
+      "properties": {
+        "artifactClass": {
+          "const": "ROUTER_TOPOLOGY_ATTESTATION"
+        },
+        "operation": {
+          "const": "responseV2.generation.ready/v1"
+        },
+        "payload": {
+          "$ref": "#/$defs/routerTopologyAttestationPayload"
+        }
+      }
+    },
+    "bindCleanupObservationArtifact": {
+      "required": [
+        "artifactClass",
+        "operation",
+        "payload"
+      ],
+      "properties": {
+        "artifactClass": {
+          "const": "CLEANUP_OBSERVATION"
+        },
+        "operation": {
+          "enum": [
+            "responseV2.fence.observeQuiescence/v1",
+            "responseV2.reconciliation.terminalizeExpiredAttempt/v1"
+          ]
+        },
+        "payload": {
+          "$ref": "#/$defs/cleanupObservationPayload"
+        }
+      }
+    },
+    "bindTrustedTimeArtifact": {
+      "required": [
+        "artifactClass",
+        "operation",
+        "payload"
+      ],
+      "properties": {
+        "artifactClass": {
+          "const": "TRUSTED_TIME"
+        },
+        "operation": {
+          "const": "responseV2.trustedTime.advance/v1"
+        },
+        "payload": {
+          "$ref": "#/$defs/trustedTimePayload"
+        }
+      }
+    },
+    "bindTransparencyCheckpointArtifact": {
+      "required": [
+        "artifactClass",
+        "operation",
+        "payload"
+      ],
+      "properties": {
+        "artifactClass": {
+          "const": "TRANSPARENCY_CHECKPOINT"
+        },
+        "operation": {
+          "const": "responseV2.transparency.checkpoint/v1"
+        },
+        "payload": {
+          "$ref": "#/$defs/transparencyCheckpointPayload"
+        }
+      }
+    },
+    "bindReconciliationArtifact": {
+      "required": [
+        "artifactClass",
+        "operation",
+        "payload"
+      ],
+      "properties": {
+        "artifactClass": {
+          "const": "RECONCILIATION"
+        },
+        "operation": {
+          "enum": [
+            "responseV2.generation.reconcile/v1",
+            "responseV2.reconciliation.transition/v1"
+          ]
+        },
+        "payload": {
+          "$ref": "#/$defs/reconciliationPayload"
+        }
+      }
+    },
+    "bindPublicationArtifact": {
+      "required": [
+        "artifactClass",
+        "operation",
+        "payload"
+      ],
+      "properties": {
+        "artifactClass": {
+          "const": "PUBLICATION"
+        },
+        "operation": {
+          "enum": [
+            "responseV2.attempt.publish/v1",
+            "responseV2.publisher.enqueue/v1",
+            "responseV2.publisher.acknowledge/v1"
+          ]
+        },
+        "payload": {
+          "$ref": "#/$defs/publicationPayload"
+        }
+      }
+    },
+    "bindArchiveArtifact": {
+      "required": [
+        "artifactClass",
+        "operation",
+        "payload"
+      ],
+      "properties": {
+        "artifactClass": {
+          "const": "ARCHIVE"
+        },
+        "operation": {
+          "const": "responseV2.attempt.archive/v1"
+        },
+        "payload": {
+          "$ref": "#/$defs/archivePayload"
+        }
+      }
+    },
+    "stateCasArtifact": {
+      "allOf": [
+        {
+          "$ref": "#"
+        },
+        {
+          "properties": {
+            "body": {
+              "$ref": "#/$defs/bindStateCasArtifact"
+            }
+          }
+        }
+      ]
+    },
+    "roleReadinessArtifact": {
+      "allOf": [
+        {
+          "$ref": "#"
+        },
+        {
+          "properties": {
+            "body": {
+              "$ref": "#/$defs/bindRoleReadinessArtifact"
+            }
+          }
+        }
+      ]
+    },
+    "releaseConsumptionPreauthorizationArtifact": {
+      "allOf": [
+        {
+          "$ref": "#"
+        },
+        {
+          "properties": {
+            "body": {
+              "$ref": "#/$defs/bindReleaseConsumptionPreauthorizationArtifact"
+            }
+          }
+        }
+      ]
+    },
+    "releasePreparationReceiptArtifact": {
+      "allOf": [
+        {
+          "$ref": "#"
+        },
+        {
+          "properties": {
+            "body": {
+              "$ref": "#/$defs/bindReleasePreparationReceiptArtifact"
+            }
+          }
+        }
+      ]
+    },
+    "routerTopologyAttestationArtifact": {
+      "allOf": [
+        {
+          "$ref": "#"
+        },
+        {
+          "properties": {
+            "body": {
+              "$ref": "#/$defs/bindRouterTopologyAttestationArtifact"
+            }
+          }
+        }
+      ]
+    },
+    "credentialUseArtifact": {
+      "allOf": [
+        {
+          "$ref": "#"
+        },
+        {
+          "properties": {
+            "body": {
+              "$ref": "#/$defs/bindCredentialUseArtifact"
+            }
+          }
+        }
+      ]
+    },
+    "targetEffectArtifact": {
+      "allOf": [
+        {
+          "$ref": "#"
+        },
+        {
+          "properties": {
+            "body": {
+              "$ref": "#/$defs/bindTargetEffectArtifact"
+            }
+          }
+        }
+      ]
+    },
+    "policyProofArtifact": {
+      "allOf": [
+        {
+          "$ref": "#"
+        },
+        {
+          "properties": {
+            "body": {
+              "$ref": "#/$defs/bindPolicyProofArtifact"
+            }
+          }
+        }
+      ]
+    },
+    "transitionAuthorizationArtifact": {
+      "allOf": [
+        {
+          "$ref": "#"
+        },
+        {
+          "properties": {
+            "body": {
+              "$ref": "#/$defs/bindTransitionAuthorizationArtifact"
+            }
+          }
+        }
+      ]
+    },
+    "immutableInspectionArtifact": {
+      "allOf": [
+        {
+          "$ref": "#"
+        },
+        {
+          "properties": {
+            "body": {
+              "$ref": "#/$defs/bindImmutableInspectionArtifact"
+            }
+          }
+        }
+      ]
+    },
+    "attestationArtifact": {
+      "allOf": [
+        {
+          "$ref": "#"
+        },
+        {
+          "properties": {
+            "body": {
+              "$ref": "#/$defs/bindAttestationArtifact"
+            }
+          }
+        }
+      ]
+    },
+    "artifactCommitArtifact": {
+      "allOf": [
+        {
+          "$ref": "#"
+        },
+        {
+          "properties": {
+            "body": {
+              "$ref": "#/$defs/bindArtifactCommitArtifact"
+            }
+          }
+        }
+      ]
+    },
+    "trustedTimeArtifact": {
+      "allOf": [
+        {
+          "$ref": "#"
+        },
+        {
+          "properties": {
+            "body": {
+              "$ref": "#/$defs/bindTrustedTimeArtifact"
+            }
+          }
+        }
+      ]
+    },
+    "transparencyCheckpointArtifact": {
+      "allOf": [
+        {
+          "$ref": "#"
+        },
+        {
+          "properties": {
+            "body": {
+              "$ref": "#/$defs/bindTransparencyCheckpointArtifact"
+            }
+          }
+        }
+      ]
+    },
+    "reconciliationArtifact": {
+      "allOf": [
+        {
+          "$ref": "#"
+        },
+        {
+          "properties": {
+            "body": {
+              "$ref": "#/$defs/bindReconciliationArtifact"
+            }
+          }
+        }
+      ]
+    },
+    "reconciliationState": {
+      "enum": [
+        "PENDING",
+        "RUNNING",
+        "BLOCKED",
+        "COMPLETE",
+        "FAILED"
+      ]
+    }
+  }
+}

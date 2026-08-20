@@ -7,6 +7,7 @@ import fcntl
 import hmac
 import html
 import hashlib
+import http.client
 import ipaddress
 import json
 import os
@@ -14,10 +15,13 @@ import re
 import secrets
 import shlex
 import signal
+import stat
 import subprocess
 import tempfile
 import threading
 import time
+import urllib.error
+import urllib.request
 import uuid
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager
@@ -55,20 +59,18 @@ from serverware.attestation import (
     AttestationContractError,
     TRUSTED_TLS_SCOPE_EXTENSION,
     _load_public_evidence_producer_descriptor,
+    attestation_artifact_digests,
     attestation_document,
     canonical_json as attestation_canonical_json,
     finalize_attestation_challenge,
-    image_signatures_digest,
     image_signatures_document,
     issue_attestation_challenge,
     production_attestation_response,
     production_attestation_state,
     production_public_evidence_response,
     release_attestation_challenge,
-    release_provenance_digest,
     release_provenance_document,
     runtime_manifest_digest,
-    source_tree_digest,
     trusted_public_tls_scope_from_asgi,
     trusted_tls_scope_from_asgi,
     reserve_attestation_challenge,
@@ -94,6 +96,9 @@ from serverware.config import (
     DATA_PLANE_LEASE_RECIPIENT_VERIFY_COMMAND,
     DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN,
     DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN,
+    DATA_PLANE_MANAGEMENT_TOKEN,
+    DECISION_GATE_BASE,
+    DECISION_GATE_TIMEOUT_SECONDS,
     DEV_AUTHENTICATOR_ENABLED,
     DIRECT_CA_DOWNLOAD_ENABLED,
     EXPECTED_DATA_PLANE_BINARY_DIGEST,
@@ -119,7 +124,7 @@ from serverware.config import (
     WEBAUTHN_BOOTSTRAP_TOKEN,
     WEBAUTHN_RECOVERY_ENABLED,
 )
-from serverware import db, grants, runtime
+from serverware import authority_contract, db, grants, http_client, runtime
 from serverware.rbac import (
     RBACRoleValidationError,
     normalize_rbac_roles,
@@ -235,7 +240,7 @@ from serverware.setup_receipts import (
 )
 from serverware.webauthn import (
     WebAuthnError,
-    approval_options,
+    authority_approval_options,
     credential_trust_status,
     control_plane_mutation_options,
     create_dev_credential,
@@ -248,7 +253,6 @@ from serverware.webauthn import (
     registration_options,
     verify_control_plane_mutation_assertion,
     verify_oidc_session_binding_assertion,
-    verify_approval_assertion,
     verify_registration,
     verify_lost_active_key_revocation,
     verify_recovery_registration,
@@ -278,8 +282,13 @@ _CREDENTIAL_LEASE_PLAINTEXT_MAX_BYTES = 4 * 1024 * 1024
 _CREDENTIAL_LEASE_RESPONSE_MAX_BYTES = 8 * 1024 * 1024
 _SIGNED_RESPONSE_MAX_BYTES = 8 * 1024 * 1024
 _CONTROL_PLANE_REQUEST_MAX_BYTES = 2 * 1024 * 1024
+_POLICY_AUTHORITY_TRANSACTION_REQUEST_MAX_BYTES = 16 * 1024 * 1024
+_POLICY_AUTHORITY_HANDOFF_REQUEST_MAX_BYTES = 12 * 1024 * 1024
+_POLICY_CANARY_EVIDENCE_REQUEST_MAX_BYTES = 8 * 1024 * 1024
 _PUBLIC_EVIDENCE_REQUEST_MAX_BYTES = 4 * 1024
 _PUBLIC_EVIDENCE_ROUTE_SLOTS = asyncio.BoundedSemaphore(1)
+_POLICY_AUTHORITY_HANDOFF_SLOTS = asyncio.BoundedSemaphore(2)
+_POLICY_CANARY_EVIDENCE_SLOTS = asyncio.BoundedSemaphore(4)
 _METADATA_AUDIT_OUTBOX_DRAIN_SLOTS = asyncio.BoundedSemaphore(1)
 _SIGNED_RESPONSE_WORKER_SLOTS = asyncio.BoundedSemaphore(4)
 _SIGNED_RESPONSE_BUFFER_SLOTS = asyncio.BoundedSemaphore(16)
@@ -372,9 +381,73 @@ async def csrf_middleware(request: Request, call_next):
 
 @app.middleware("http")
 async def bounded_control_plane_request_middleware(request: Request, call_next):
+    request_path = request.scope.get("path")
+    setup_canary_request = (
+        request.method == "POST"
+        and isinstance(request_path, str)
+        and re.fullmatch(
+            r"/api/setup/sessions/[^/]{1,512}/canary", request_path
+        )
+        is not None
+    )
+    strict_json_request = (
+        request.method == "POST"
+        and (
+            request_path
+            in {
+                "/api/authority/control-plane/execute",
+            "/api/authority/webauthn/challenges",
+            "/api/data-plane/policy-candidate/artifact",
+            "/api/policy/authority/candidates/package",
+            "/api/policy/authority/candidates/handoff",
+            "/api/data-plane/policy-canary/evidence",
+            }
+            or setup_canary_request
+        )
+    )
     public_evidence_request = (
         request.method == "POST"
-        and request.scope.get("path") == "/attestation/public-evidence"
+        and request_path == "/attestation/public-evidence"
+    )
+    if strict_json_request:
+        if request.scope.get("query_string", b""):
+            return JSONResponse(
+                status_code=400,
+                content={"detail": "authority route does not accept a query string"},
+            )
+        if request.headers.get("content-type") != "application/json":
+            return JSONResponse(
+                status_code=415,
+                content={"detail": "authority route requires application/json"},
+            )
+        if request.headers.get("content-length") is None:
+            return JSONResponse(
+                status_code=411,
+                content={"detail": "authority route requires Content-Length"},
+            )
+    request_limit = {
+        "/api/authority/control-plane/execute":
+            _POLICY_AUTHORITY_TRANSACTION_REQUEST_MAX_BYTES,
+        "/api/authority/webauthn/challenges":
+            _POLICY_AUTHORITY_TRANSACTION_REQUEST_MAX_BYTES,
+        "/api/data-plane/policy-candidate/artifact":
+            _POLICY_AUTHORITY_HANDOFF_REQUEST_MAX_BYTES,
+        "/api/policy/authority/candidates/package":
+            _POLICY_AUTHORITY_HANDOFF_REQUEST_MAX_BYTES,
+        "/api/policy/authority/candidates/handoff":
+            _POLICY_AUTHORITY_HANDOFF_REQUEST_MAX_BYTES,
+        "/api/data-plane/policy-canary/evidence":
+            _POLICY_CANARY_EVIDENCE_REQUEST_MAX_BYTES,
+    }.get(
+        request_path,
+        (
+            _POLICY_AUTHORITY_HANDOFF_REQUEST_MAX_BYTES
+            if setup_canary_request
+            else
+            _PUBLIC_EVIDENCE_REQUEST_MAX_BYTES
+            if public_evidence_request
+            else _CONTROL_PLANE_REQUEST_MAX_BYTES
+        ),
     )
     if public_evidence_request:
         raw_query = request.scope.get("query_string", b"")
@@ -406,47 +479,31 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
             return JSONResponse(
                 status_code=400, content={"detail": "invalid Content-Length"}
             )
-        request_limit = (
-            _PUBLIC_EVIDENCE_REQUEST_MAX_BYTES
-            if public_evidence_request
-            else _CONTROL_PLANE_REQUEST_MAX_BYTES
-        )
         if content_length > request_limit:
             return JSONResponse(
                 status_code=413,
                 content={
-                    "detail": (
-                        "public attestation request exceeds 4 KiB"
-                        if public_evidence_request
-                        else "control-plane request exceeds 2 MiB"
-                    )
+                    "detail": "request body exceeds its fixed route limit"
                 },
             )
     if public_evidence_request:
         return await call_next(request)
     if request.method not in {"GET", "HEAD", "OPTIONS"}:
-        request_limit = (
-            _PUBLIC_EVIDENCE_REQUEST_MAX_BYTES
-            if public_evidence_request
-            else _CONTROL_PLANE_REQUEST_MAX_BYTES
-        )
         body = bytearray()
         async for chunk in request.stream():
             body.extend(chunk)
             if len(body) > request_limit:
                 return JSONResponse(
                     status_code=413,
-                    content={
-                        "detail": (
-                            "public attestation request exceeds 4 KiB"
-                            if public_evidence_request
-                            else "control-plane request exceeds 2 MiB"
-                        )
-                    },
+                    content={"detail": "request body exceeds its fixed route limit"},
                 )
         request._body = bytes(body)
         request._stream_consumed = False
-    return await call_next(request)
+    response = await call_next(request)
+    if strict_json_request or request_path == "/api/policy/canary/status":
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Pragma"] = "no-cache"
+    return response
 
 
 class _BufferedHttpResponse:
@@ -847,6 +904,7 @@ class _SignedControlPlaneASGI:
                     response_status_code=response_status_code,
                     response_headers=unsigned_headers,
                     body=wire_body,
+                    representation_body=body,
                 )
             response = Response(
                 content=wire_body,
@@ -874,8 +932,38 @@ def _signed_control_plane_response_headers(
     response_status_code: int,
     response_headers: list[tuple[bytes, bytes]],
     body: bytes,
+    representation_body: bytes | None = None,
 ) -> dict[str, str]:
-    snapshot = get_policy_snapshot()
+    context_fields = (
+        "runtime_manifest_digest",
+        "policy_bundle_digest",
+        "provenance_digest",
+        "image_signatures_digest",
+        "source_tree_digest",
+    )
+    if request_path == "/attestation" and response_status_code == 200:
+        try:
+            attestation = strict_json_loads(
+                representation_body if representation_body is not None else body
+            )
+        except (UnicodeDecodeError, ValueError, json.JSONDecodeError) as exc:
+            raise ValueError(
+                "attestation representation is not strict JSON"
+            ) from exc
+        if not isinstance(attestation, dict) or any(
+            field not in attestation for field in context_fields
+        ):
+            raise ValueError(
+                "attestation representation is missing response-signature context"
+            )
+        context = {field: attestation[field] for field in context_fields}
+    else:
+        snapshot = get_policy_snapshot()
+        context = {
+            "runtime_manifest_digest": runtime_manifest_digest(),
+            "policy_bundle_digest": snapshot.hash if snapshot else None,
+            **attestation_artifact_digests(),
+        }
     statement = response_statement(
         method=request_method,
         path=request_path,
@@ -884,13 +972,7 @@ def _signed_control_plane_response_headers(
         body=body,
         response_headers=response_headers,
         nonce=request_nonce,
-        context={
-            "runtime_manifest_digest": runtime_manifest_digest(),
-            "policy_bundle_digest": snapshot.hash if snapshot else None,
-            "provenance_digest": release_provenance_digest(),
-            "image_signatures_digest": image_signatures_digest(),
-            "source_tree_digest": source_tree_digest(),
-        },
+        context=context,
     )
     return response_signature_headers(statement)
 
@@ -1014,6 +1096,12 @@ class ApprovalApprove(BaseModel):
 
     note: str | None = None
     assertion: dict[str, Any] | None = None
+    authority_challenge_id: str | None = Field(
+        default=None,
+        alias="authorityChallengeId",
+        min_length=1,
+        max_length=512,
+    )
     review_receipt_id: str | None = Field(
         default=None,
         alias="reviewReceiptId",
@@ -1028,6 +1116,13 @@ class ApprovalWebAuthnOptionsRequest(BaseModel):
         alias="reviewReceiptId",
         pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
     )
+    ttl_seconds: int = Field(
+        default=30,
+        alias="ttlSeconds",
+        ge=1,
+        le=3600,
+    )
+    note: str | None = Field(default=None, max_length=2000)
 
 
 class ApprovalDeny(BaseModel):
@@ -1076,6 +1171,151 @@ class ControlPlaneMutationWebAuthnOptions(BaseModel):
     approval_id: str | None = Field(default=None, alias="approvalId", max_length=64)
 
 
+class AuthorityWebAuthnChallengeRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    operation: str = Field(min_length=1, max_length=128)
+    arguments: dict[str, Any]
+    credential_record_id: str = Field(
+        alias="credentialRecordId",
+        min_length=1,
+        max_length=256,
+    )
+
+
+class ControlledAuthorityExecuteRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    request_id: str = Field(
+        alias="requestId",
+        pattern=(
+            r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-"
+            r"[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        ),
+    )
+    operation: str = Field(min_length=1, max_length=128)
+    arguments: dict[str, Any]
+
+
+_CONTROLLED_AUTHORITY_OPERATOR_ROLES = {
+    **{
+        operation: frozenset({"policy_publisher", "auditor"})
+        for operation in (
+            "policy.export.freeze",
+            "policy.export.authorize",
+            "policy.export.finalize",
+        )
+    },
+    **{
+        operation: frozenset({"admin", "approver"})
+        for operation in (
+            "control-approval.request",
+            "control-approval.decide",
+            "control-approval.consume",
+            "control-approval.deny",
+            "jit.review-receipt.issue",
+            "jit.decide",
+            "jit.deny",
+            "jit.consume",
+        )
+    },
+    "jit.request": frozenset(
+        {"admin", "credential_owner", "approver"}
+    ),
+    **{
+        operation: frozenset({"admin", "credential_owner"})
+        for operation in (
+            "quota.rate.consume",
+            "quota.budget.reserve",
+            "quota.budget.dispatch",
+            "quota.budget.commit",
+            "quota.budget.cancel",
+            "quota.traversal.reserve",
+            "quota.traversal.dispatch",
+            "quota.traversal.complete",
+            "quota.traversal.terminate",
+            "quota.policy-state.reserve",
+            "quota.policy-state.dispatch",
+            "quota.policy-state.complete",
+            "quota.policy-state.abort",
+            "quota.policy-state.fail",
+            "quota.policy-state.reconcile",
+            "release.reserve",
+            "release.v1.reserve",
+            "release.dispatch",
+            "release.v1.dispatch",
+            "release.complete",
+            "release.v1.complete",
+            "release.cancel",
+            "release.reconcile",
+            "release.credential-claim",
+        )
+    },
+    **{
+        operation: frozenset({"admin", "attestation_reviewer"})
+        for operation in (
+            "webauthn.trust.stage",
+            "webauthn.trust.complete",
+            "webauthn.trust.error",
+            "webauthn.registration.create",
+            "webauthn.registration.finalize",
+            "webauthn.credential.revoke",
+            "webauthn.challenge.create",
+        )
+    },
+}
+_SPECIALIZED_AUTHORITY_OPERATIONS = frozenset(
+    {
+        "policy.activation.prepare",
+        "policy.activation.record-inclusion",
+        "policy.activation.finalize",
+        "policy.activation.abort",
+        "policy.genesis.prepare",
+        "policy.genesis.finalize",
+        "rbac.binding.mutate",
+    }
+)
+_INTERNAL_ONLY_AUTHORITY_OPERATIONS = frozenset(
+    {
+        "release.audit-drain",
+        "credential-nonce.reserve",
+        "webauthn.counter.cas",
+        "webauthn.challenge.claim",
+        "webauthn.challenge.consume",
+    }
+)
+_KNOWN_AUTHORITY_OPERATION_CLASSIFICATIONS = (
+    set(_CONTROLLED_AUTHORITY_OPERATOR_ROLES)
+    | set(_SPECIALIZED_AUTHORITY_OPERATIONS)
+    | set(_INTERNAL_ONLY_AUTHORITY_OPERATIONS)
+)
+if (
+    not _KNOWN_AUTHORITY_OPERATION_CLASSIFICATIONS
+    <= set(authority_contract.OPERATIONS)
+    or any(
+        operation not in _KNOWN_AUTHORITY_OPERATION_CLASSIFICATIONS
+        and not operation.startswith("policy.")
+        for operation in authority_contract.OPERATIONS
+    )
+):
+    raise RuntimeError(
+        "authority API operation classification is incomplete"
+    )
+
+
+def _authority_operator_roles(operation: str) -> frozenset[str] | None:
+    roles = _CONTROLLED_AUTHORITY_OPERATOR_ROLES.get(operation)
+    if roles is not None:
+        return roles
+    if operation in _INTERNAL_ONLY_AUTHORITY_OPERATIONS:
+        return None
+    if operation == "rbac.binding.mutate":
+        return frozenset({"admin"})
+    if operation.startswith("policy."):
+        return frozenset({"policy_publisher"})
+    return None
+
+
 class OIDCSessionWebAuthnVerify(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -1083,7 +1323,7 @@ class OIDCSessionWebAuthnVerify(BaseModel):
 
 
 class PolicyDryRunCase(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     name: str | None = None
     principal_id: str = Field(alias="principalId", min_length=1)
@@ -1093,6 +1333,12 @@ class PolicyDryRunCase(BaseModel):
     method: str = Field(min_length=1)
     path: str = Field(min_length=1)
     expect: str = Field(default="allow", pattern="^(allow|deny)$")
+    expected_route_id: str | None = Field(
+        default=None,
+        alias="expectedRouteId",
+        min_length=1,
+        max_length=512,
+    )
 
 
 class PolicyCandidateRequest(BaseModel):
@@ -1128,6 +1374,142 @@ class PolicyCanaryCancelRequest(BaseModel):
 
     canary_id: str = Field(alias="canaryId", min_length=1)
     note: str | None = Field(default=None, max_length=500)
+
+
+class PolicyAuthorityCandidateHandoffRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    api_version: Literal["serverware.policyAuthorityCandidateHandoff/v1"] = Field(
+        alias="apiVersion"
+    )
+    request_id: str = Field(
+        alias="requestId",
+        pattern=(
+            r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-"
+            r"[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        ),
+    )
+    candidate_id: str = Field(alias="candidateId", min_length=1, max_length=256)
+    artifact_envelope_digest: str = Field(
+        alias="artifactEnvelopeDigest",
+        pattern=r"^sha256:[0-9a-f]{64}$",
+    )
+    canary_id: str = Field(alias="canaryId", min_length=1, max_length=256)
+    assignment_envelope_digest: str = Field(
+        alias="assignmentEnvelopeDigest",
+        pattern=r"^sha256:[0-9a-f]{64}$",
+    )
+    load_receipt_envelope_digest: str = Field(
+        alias="loadReceiptEnvelopeDigest",
+        pattern=r"^sha256:[0-9a-f]{64}$",
+    )
+    instance_id: str = Field(alias="instanceId", min_length=1, max_length=256)
+    boot_id: str = Field(
+        alias="bootId",
+        pattern=r"^sha256:[0-9a-f]{64}$",
+    )
+    runtime_attestation_handoff_digest: str = Field(
+        alias="runtimeAttestationHandoffDigest",
+        pattern=r"^sha256:[0-9a-f]{64}$",
+    )
+    predecessor_policy_hash: str = Field(
+        alias="predecessorPolicyHash",
+        pattern=r"^sha256:[0-9a-f]{64}$",
+    )
+    candidate_policy_bundle: dict[str, Any] = Field(
+        alias="candidatePolicyBundle"
+    )
+
+
+class PolicyCanaryEvidenceItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal[
+        "assignment",
+        "canary-revision",
+        "load-receipt",
+        "runtime-attestation-handoff",
+        "custody",
+        "ingress",
+        "active-decision",
+        "shadow-observation",
+        "instance-revision",
+        "checkpoint",
+        "compiler-analysis",
+        "readiness",
+    ]
+    record: dict[str, Any]
+
+
+class PolicyCandidateArtifactEvidenceRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    api_version: Literal[
+        "serverware.policyCandidateArtifactEvidenceRequest/v1"
+    ] = Field(alias="apiVersion")
+    request_id: str = Field(
+        alias="requestId",
+        pattern=(
+            r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-"
+            r"[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        ),
+    )
+    record: dict[str, Any]
+
+
+class PolicyAuthorityPortalPackageImportRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    api_version: Literal[
+        "serverware.policyAuthorityPortalPackageImportRequest/v1"
+    ] = Field(alias="apiVersion")
+    request_id: str = Field(
+        alias="requestId",
+        pattern=(
+            r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-"
+            r"[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        ),
+    )
+    purpose: Literal[
+        "handoff",
+        "decision-gate-activation",
+        "authority-finalization",
+        "abort",
+    ]
+    package: dict[str, Any]
+
+
+class PolicyAuthorityDecisionGateActivationRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    api_version: Literal[
+        "serverware.policyAuthorityDecisionGateActivationRequest/v1"
+    ] = Field(alias="apiVersion")
+    canary_id: str = Field(alias="canaryId", min_length=1, max_length=256)
+    generation_id: str = Field(
+        alias="generationId", pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    generation_publication_envelope_digest: str = Field(
+        alias="generationPublicationEnvelopeDigest",
+        pattern=r"^sha256:[0-9a-f]{64}$",
+    )
+
+
+class PolicyCanaryEvidenceBatch(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    api_version: Literal["serverware.policyCanaryEvidenceBatch/v1"] = Field(
+        alias="apiVersion"
+    )
+    request_id: str = Field(
+        alias="requestId",
+        pattern=(
+            r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-"
+            r"[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        ),
+    )
+    canary_id: str = Field(alias="canaryId", min_length=1, max_length=256)
+    events: list[PolicyCanaryEvidenceItem] = Field(min_length=1, max_length=128)
 
 
 class RoleBindingUpdate(BaseModel):
@@ -2244,6 +2626,7 @@ class SetupSessionCredentialRequest(SetupSessionRevisionRequest):
 
 class SetupSessionCanaryRequest(SetupSessionRevisionRequest):
     canary_id: str = Field(alias="canaryId", min_length=1, max_length=512)
+    candidate_policy_bundle: dict[str, Any] = Field(alias="candidatePolicyBundle")
 
 
 class SetupSessionEnrollmentRequest(SetupSessionRevisionRequest):
@@ -3002,6 +3385,56 @@ def _approval_authn_policy(jit: dict[str, Any]) -> dict[str, Any]:
     return (jit.get("approvers") or {}).get("authn") or {}
 
 
+def _jit_approve_authority_arguments(
+    *,
+    approval: dict[str, Any],
+    actor_id: str,
+    ttl_seconds: int,
+    review_receipt: dict[str, Any],
+    note: str | None,
+) -> dict[str, Any]:
+    policy = approval.get("approver_policy")
+    if not isinstance(policy, dict):
+        raise HTTPException(
+            status_code=409,
+            detail="approval approver policy binding is unavailable",
+        )
+    allowed_ids = (
+        None
+        if policy.get("allowAnyApproverId") is True
+        else set(policy.get("allowedApproverIds") or [])
+    )
+    credential_policy = policy.get("credentialPolicy")
+    if (
+        not isinstance(credential_policy, dict)
+        or not isinstance(policy.get("threshold"), int)
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="approval approver policy binding is invalid",
+        )
+    return {
+        "item_id": approval["id"],
+        "ttl_seconds": ttl_seconds,
+        "note": note,
+        "actor_id": actor_id,
+        "review_receipt_id": review_receipt["id"],
+        "review_digest": review_receipt["review_digest"],
+        "require_review_receipt": True,
+        "required_approver_roles":
+            set(policy.get("requiredRoles") or []),
+        "authority_policy_hash":
+            str(approval.get("policy_hash") or ""),
+        "authority_route_id":
+            str(approval.get("route_id") or ""),
+        "allowed_approver_ids": allowed_ids,
+        "require_approver_webauthn":
+            policy.get("requireWebAuthn") is True,
+        "approval_threshold": int(policy["threshold"]),
+        "approver_credential_policy": credential_policy,
+    }
+
+
 def _assert_approver_allowed(identity: AdminIdentity, jit: dict[str, Any]) -> None:
     approvers = jit.get("approvers") or {}
     users = set(approvers.get("users") or [])
@@ -3408,6 +3841,30 @@ def _require_control_plane_mutation_mfa(
 ) -> dict[str, Any] | None:
     if not CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED:
         return None
+    if isinstance(mfa, dict) and {
+        "authorityChallengeId",
+        "credentialRecordId",
+        "assertion",
+    } <= set(mfa):
+        assertion = mfa.get("assertion")
+        challenge_id = mfa.get("authorityChallengeId")
+        credential_record_id = mfa.get("credentialRecordId")
+        if (
+            not isinstance(assertion, dict)
+            or not isinstance(challenge_id, str)
+            or not challenge_id
+            or not isinstance(credential_record_id, str)
+            or not credential_record_id
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="authority WebAuthn evidence is malformed",
+            )
+        return {
+            "assertion": assertion,
+            "challenge_id": challenge_id,
+            "credential_record_id": credential_record_id,
+        }
     assertion = (mfa or {}).get("assertion") if isinstance(mfa, dict) else None
     if not assertion:
         raise HTTPException(
@@ -3870,7 +4327,14 @@ def _run_policy_dry_runs(
                 reason = "route_matched"
             else:
                 reason = "route_not_matched"
-        passed = decision == case.expect
+        expected_route_matches = (
+            case.expect != "allow"
+            or case.expected_route_id is None
+            or route_id == case.expected_route_id
+        )
+        if decision == "allow" and not expected_route_matches:
+            reason = "unexpected_route_matched"
+        passed = decision == case.expect and expected_route_matches
         results.append(
             {
                 "index": index,
@@ -3882,6 +4346,7 @@ def _run_policy_dry_runs(
                 "expect": case.expect,
                 "decision": decision,
                 "routeId": route_id,
+                "expectedRouteId": case.expected_route_id,
                 "reason": reason,
                 "passed": passed,
             }
@@ -4910,171 +5375,6 @@ def _policy_canary_authority_hash(connection: Any | None = None) -> str | None:
     return str(row["policy_hash"]) if row else None
 
 
-def _audit_event_route_id(event: dict[str, Any]) -> str | None:
-    for key in ("route_id", "routeId", "route"):
-        value = event.get(key)
-        if value:
-            return str(value)
-    request = event.get("request") if isinstance(event.get("request"), dict) else {}
-    for key in ("route_id", "routeId", "route"):
-        value = request.get(key)
-        if value:
-            return str(value)
-    return None
-
-
-def _policy_canary_route_filter(state: dict[str, Any]) -> set[str]:
-    diff = state.get("diff") if isinstance(state.get("diff"), dict) else {}
-    routes = diff.get("routes") if isinstance(diff.get("routes"), dict) else {}
-    route_ids: set[str] = set()
-    for key in ("added", "changed", "removed"):
-        route_ids.update(str(item) for item in routes.get(key) or [])
-    if not route_ids:
-        route_ids.update(
-            str(item) for item in state.get("candidate_route_ids") or []
-        )
-    return route_ids
-
-
-_POLICY_CANARY_EVIDENCE_EVENT_TYPES = {
-    "policy.canary.shadow.evaluated",
-}
-
-
-def _policy_canary_evidence_identity(event: dict[str, Any]) -> str:
-    identity_fields = {
-        key: event.get(key)
-        for key in (
-            "provenance_version",
-            "canary_id",
-            "evaluation_mode",
-            "candidate_evaluated",
-            "active_policy_hash",
-            "candidate_policy_hash",
-            "route_id",
-            "request_digest",
-            "active_decision",
-            "candidate_decision",
-            "candidate_latency_ms",
-            "measurement_digest",
-        )
-    }
-    return "sha256:" + hashlib.sha256(
-        _canonical_json(identity_fields).encode("utf-8")
-    ).hexdigest()
-
-
-def _policy_canary_evidence_row_is_well_formed(
-    state: dict[str, Any],
-    item: dict[str, Any],
-    *,
-    route_filter: set[str],
-    started_at: datetime,
-) -> tuple[str, str] | None:
-    created = _parse_iso_datetime(item.get("created_at"))
-    if created is None or created < started_at:
-        return None
-    event = item.get("event") if isinstance(item.get("event"), dict) else {}
-    if (
-        str(item.get("event_type") or "")
-        not in _POLICY_CANARY_EVIDENCE_EVENT_TYPES
-        or item.get("actor_id") != "decision-gate-rs"
-        or event.get("evaluation_mode") != "candidate_shadow"
-        or event.get("candidate_evaluated") is not True
-        or event.get("canary_id") != state.get("id")
-        or event.get("candidate_policy_hash")
-        != state.get("candidate_policy_hash")
-        or event.get("active_policy_hash") != state.get("previous_policy_hash")
-        or event.get("provenance_version")
-        != "serverware.candidate-shadow/v1"
-    ):
-        return None
-    evidence_id = event.get("evidence_id")
-    measurement_digest = event.get("measurement_digest")
-    if not (
-        isinstance(evidence_id, str)
-        and re.fullmatch(r"sha256:[0-9a-f]{64}", evidence_id)
-        and isinstance(measurement_digest, str)
-        and re.fullmatch(r"sha256:[0-9a-f]{64}", measurement_digest)
-        and isinstance(event.get("request_digest"), str)
-        and re.fullmatch(
-            r"sha256:[0-9a-f]{64}",
-            str(event.get("request_digest")),
-        )
-        and event.get("active_decision") in {"allow", "deny"}
-        and event.get("candidate_decision") in {"allow", "deny"}
-        and isinstance(event.get("candidate_latency_ms"), (int, float))
-        and not isinstance(event.get("candidate_latency_ms"), bool)
-        and math.isfinite(float(event["candidate_latency_ms"]))
-        and float(event["candidate_latency_ms"]) >= 0
-        and hmac.compare_digest(
-            evidence_id,
-            _policy_canary_evidence_identity(event),
-        )
-    ):
-        return None
-    route_id = _audit_event_route_id(event)
-    if route_id is None or (route_filter and route_id not in route_filter):
-        return None
-    return evidence_id, route_id
-
-
-def _policy_canary_monitor(
-    state: dict[str, Any], *, limit: int = 1000
-) -> dict[str, Any]:
-    started_at = _parse_iso_datetime(state.get("started_at")) or datetime.now(
-        timezone.utc
-    )
-    route_filter = _policy_canary_route_filter(state)
-    baseline_policy_hash = state.get("previous_policy_hash")
-    candidate_policy_hash = state.get("candidate_policy_hash")
-    events = db.list_audit_events(limit=limit)
-    shaped_untrusted = 0
-    duplicate_untrusted = 0
-    untrusted_ids: set[str] = set()
-    for item in events:
-        shaped = _policy_canary_evidence_row_is_well_formed(
-            state,
-            item,
-            route_filter=route_filter,
-            started_at=started_at,
-        )
-        if shaped is None:
-            continue
-        evidence_id, _ = shaped
-        if evidence_id in untrusted_ids:
-            duplicate_untrusted += 1
-            continue
-        untrusted_ids.add(evidence_id)
-        shaped_untrusted += 1
-    # No authenticated Rust candidate-shadow emitter/verifier exists. Database
-    # rows are caller-writable audit material, not activation authority.
-    accepted_evidence_ids: set[str] = set()
-    covered_routes: set[str] = set()
-    return {
-        "startedAt": state.get("started_at"),
-        "newestEventAt": None,
-        "observationSeconds": max(
-            0, int((datetime.now(timezone.utc) - started_at).total_seconds())
-        ),
-        "policyHash": candidate_policy_hash,
-        "activePolicyHash": baseline_policy_hash,
-        "candidateShadowEvaluationImplemented": False,
-        "routeFilter": sorted(route_filter),
-        "requiredRouteCoverage": sorted(route_filter),
-        "coveredRoutes": sorted(covered_routes),
-        "routeCoverageComplete": bool(route_filter)
-        and covered_routes == route_filter,
-        "auditEvents": len(accepted_evidence_ids),
-        "untrustedEvidenceRows": shaped_untrusted,
-        "duplicateEvidenceRows": duplicate_untrusted,
-        "denials": 0,
-        "latencySamples": 0,
-        "latencyMsP95": None,
-        "complete": len(events) < limit,
-    }
-
-
 def _start_policy_canary(
     *,
     payload: PolicyPublishRequest,
@@ -6069,6 +6369,323 @@ def csrf_token(
     }
 
 
+@app.post("/api/authority/webauthn/challenges")
+def authority_webauthn_challenge(
+    payload: AuthorityWebAuthnChallengeRequest,
+    identity: AdminIdentity = Depends(
+        require_role(
+            "admin",
+            "policy_author",
+            "policy_publisher",
+            "credential_owner",
+            "approver",
+            "attestation_reviewer",
+        )
+    ),
+) -> dict[str, Any]:
+    try:
+        operation = authority_contract.operation_spec(payload.operation)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="authority operation is not allowlisted",
+        ) from exc
+    if not bool(operation["assertionRequired"]):
+        raise HTTPException(
+            status_code=400,
+            detail="authority operation does not accept WebAuthn evidence",
+        )
+    required_roles = _authority_operator_roles(payload.operation)
+    if required_roles is None or not identity.has_any_role(
+        set(required_roles)
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="current identity cannot authorize this operation",
+        )
+    credential = db.get_webauthn_credential_by_record_id(
+        payload.credential_record_id
+    )
+    if (
+        credential is None
+        or credential.get("user_id") != identity.user_id
+        or credential.get("revoked_at") is not None
+    ):
+        raise HTTPException(
+            status_code=404,
+            detail="active WebAuthn credential was not found",
+        )
+    try:
+        challenge = db.issue_policy_authority_webauthn_challenge(
+            operation=payload.operation,
+            input_value=payload.arguments,
+            user_id=identity.user_id,
+            credential_id=str(credential["credential_id"]),
+        )
+    except (
+        db.MetadataStoreError,
+        db.PolicyCandidateAuthorityError,
+        RuntimeError,
+    ) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="authority WebAuthn challenge is unavailable",
+        ) from exc
+    challenge_payload = (
+        challenge.get("payload")
+        if isinstance(challenge, Mapping)
+        else None
+    )
+    if (
+        not isinstance(challenge, Mapping)
+        or set(challenge)
+        != {
+            "id",
+            "challenge",
+            "challenge_type",
+            "user_id",
+            "scope_key",
+            "approval_request_id",
+            "expires_at",
+            "used_at",
+            "created_at",
+            "payload",
+        }
+        or not isinstance(challenge_payload, Mapping)
+        or set(challenge_payload)
+        != {
+            "schema",
+            "operationId",
+            "rpId",
+            "origin",
+            "issuedAtEpochNs",
+            "expiresAtEpochNs",
+            "credentialId",
+        }
+        or challenge.get("challenge_type") != "policy_authority"
+        or challenge.get("user_id") != identity.user_id
+        or challenge.get("used_at") is not None
+        or challenge.get("approval_request_id") is not None
+        or challenge_payload.get("schema")
+        != "serverware.policyAuthorityWebAuthnChallenge/v1"
+        or challenge.get("scope_key")
+        != challenge_payload.get("operationId")
+        or challenge_payload.get("credentialId")
+        != credential["credential_id"]
+        or not isinstance(challenge_payload.get("rpId"), str)
+        or not isinstance(challenge_payload.get("origin"), str)
+        or not isinstance(
+            challenge_payload.get("issuedAtEpochNs"), int
+        )
+        or not isinstance(
+            challenge_payload.get("expiresAtEpochNs"), int
+        )
+        or challenge_payload["expiresAtEpochNs"]
+        <= challenge_payload["issuedAtEpochNs"]
+        or not isinstance(challenge.get("challenge"), str)
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail="authority WebAuthn challenge response is not closed",
+        )
+    return {
+        "apiVersion": "serverware.policyAuthorityBrowserChallenge/v1",
+        "operation": payload.operation,
+        "challengeId": challenge["id"],
+        "credentialRecordId": credential["id"],
+        "expiresAt": challenge["expires_at"],
+        "publicKey": {
+            "challenge": challenge["challenge"],
+            "rpId": challenge_payload["rpId"],
+            "timeout": 300_000,
+            "userVerification": "required",
+            "allowCredentials": [
+                {
+                    "type": "public-key",
+                    "id": credential["credential_id"],
+                }
+            ],
+        },
+    }
+
+
+@app.post("/api/authority/policy/execute")
+def execute_policy_authority_operation(
+    _: AdminIdentity = Depends(
+        require_role("admin", "policy_publisher")
+    ),
+) -> dict[str, Any]:
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "error": "legacy_policy_authority_execute_disabled",
+            "authorityEndpoint": "/api/authority/control-plane/execute",
+            "challengeEndpoint": "/api/authority/webauthn/challenges",
+            "requiredSchema":
+                "serverware.policyAuthorityControlledWriterInput/v1",
+        },
+    )
+
+
+@app.post("/api/authority/control-plane/execute")
+def execute_control_plane_authority_operation(
+    request: Request,
+    payload: ControlledAuthorityExecuteRequest,
+    identity: AdminIdentity = Depends(
+        require_role(
+            "admin",
+            "policy_publisher",
+            "auditor",
+            "credential_owner",
+            "approver",
+            "attestation_reviewer",
+        )
+    ),
+) -> dict[str, Any]:
+    try:
+        operation = authority_contract.operation_spec(payload.operation)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="control-plane authority operation is not allowlisted",
+        ) from exc
+    allowed_roles = _authority_operator_roles(payload.operation)
+    if allowed_roles is None:
+        raise HTTPException(
+            status_code=400,
+            detail="control-plane authority operation is not allowlisted",
+        )
+    if not identity.has_any_role(set(allowed_roles)):
+        raise HTTPException(
+            status_code=403,
+            detail="current identity cannot dispatch this authority operation",
+        )
+    content_length = request.headers.get("content-length")
+    try:
+        content_length_value = int(content_length or "")
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=411,
+            detail="authority execution requires a bounded content length",
+        ) from exc
+    if (
+        request.scope.get("query_string", b"")
+        or request.headers.get("content-type") != "application/json"
+        or not 2 <= content_length_value <= 16 * 1024 * 1024
+    ):
+        raise HTTPException(
+            status_code=415,
+            detail="authority execution requires exact bounded JSON framing",
+        )
+    assertion_fields = (
+        "authn",
+        "authn_evidence",
+        "webauthn_authorization",
+    )
+    has_assertion = any(
+        isinstance(payload.arguments.get(field), Mapping)
+        for field in assertion_fields
+    )
+    base_arguments = {
+        key: value
+        for key, value in payload.arguments.items()
+        if key not in assertion_fields
+    }
+    base_payload_digest = "sha256:" + hashlib.sha256(
+        _policy_authority_canonical_bytes(
+            {
+                "operation": payload.operation,
+                "arguments": base_arguments,
+            }
+        )
+    ).hexdigest()
+    try:
+        recovered = db.get_policy_control_plane_exact_result(
+            request_id=payload.request_id,
+            operation=payload.operation,
+            base_payload_digest=base_payload_digest,
+            actor_id=identity.user_id,
+        )
+    except db.PolicyCandidateAuthorityConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="authority request ID was already used differently",
+        ) from exc
+    except (
+        db.MetadataStoreError,
+        db.PolicyCandidateAuthorityError,
+    ) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="authority exact-result recovery is unavailable",
+        ) from exc
+    if recovered is not None:
+        return _policy_authority_plain(recovered)
+    if bool(operation["assertionRequired"]) and not has_assertion:
+        raise HTTPException(
+            status_code=428,
+            detail={
+                "error": "authority_webauthn_required",
+                "operation": payload.operation,
+                "challengeEndpoint":
+                    "/api/authority/webauthn/challenges",
+                "continuationEndpoint":
+                    "/api/authority/control-plane/execute",
+                "requestId": payload.request_id,
+            },
+        )
+    payload_digest = "sha256:" + hashlib.sha256(
+        _policy_authority_canonical_bytes(
+            {
+                "operation": payload.operation,
+                "arguments": payload.arguments,
+            }
+        )
+    ).hexdigest()
+    try:
+        db.claim_policy_control_plane_request(
+            request_id=payload.request_id,
+            operation=payload.operation,
+            payload_digest=payload_digest,
+            actor_type="admin",
+            actor_id=identity.user_id,
+            allow_exact_retry=True,
+        )
+        result = db.dispatch_policy_authority_operation(
+            payload.operation,
+            {
+                "schema":
+                    "serverware.policyAuthorityControlledWriterInput/v1",
+                "handler": operation["handler"],
+                "operationManifestDigest":
+                    authority_contract.OPERATION_MANIFEST_DIGEST,
+                "arguments": payload.arguments,
+            },
+        )
+        db.stage_policy_control_plane_exact_result(
+            request_id=payload.request_id,
+            operation=payload.operation,
+            base_payload_digest=base_payload_digest,
+            actor_id=identity.user_id,
+            response=result,
+        )
+        return result
+    except db.PolicyCandidateAuthorityConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="authority request ID was already used",
+        ) from exc
+    except (
+        db.MetadataStoreError,
+        db.PolicyCandidateAuthorityError,
+        RuntimeError,
+    ) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="control-plane authority operation was denied",
+        ) from exc
+
+
 @app.post("/api/control-plane/mutations/webauthn/options")
 def control_plane_mutation_webauthn_options(
     payload: ControlPlaneMutationWebAuthnOptions,
@@ -6124,6 +6741,16 @@ def rbac_role_binding_update(
     payload: RoleBindingUpdate,
     identity: AdminIdentity = Depends(require_role("admin")),
 ) -> dict[str, Any]:
+    del subject_id, payload, identity
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "error": "legacy_rbac_mutation_disabled",
+            "authorityEndpoint": "/api/authority/control-plane/execute",
+            "challengeEndpoint":
+                "/api/authority/webauthn/challenges",
+        },
+    )
     roles = _normalized_rbac_roles(payload.roles)
     payload_digest = _rbac_change_payload_digest(subject_id, payload)
     _preflight_rbac_generation(payload.expected_generation)
@@ -6135,40 +6762,51 @@ def rbac_role_binding_update(
         identity=identity,
     )
     try:
-        with db.connect() as conn:
-            two_person = _require_control_plane_two_person(
-                action="rbac.role.change",
-                resource_id=subject_id,
-                payload_digest=payload_digest,
-                mfa=payload.mfa,
-                identity=identity,
-                request={
-                    "subject_id": subject_id,
-                    "roles": roles,
-                    "expected_generation": payload.expected_generation,
-                    "reason": payload.reason,
-                },
-                connection=conn,
-            )
-            result = db.mutate_rbac_role_binding(
-                subject_id=subject_id,
-                roles=roles,
-                status="active",
-                expected_generation=payload.expected_generation,
-                actor_id=identity.user_id,
-                reason=payload.reason,
-                event_type="rbac.role_changed",
-                event={
-                    "reason": payload.reason,
-                    "control_plane_mfa": mfa,
-                    "control_plane_approval": two_person,
-                    "payload_digest": payload_digest,
-                },
-                _connection=conn,
-            )
+        two_person = _require_control_plane_two_person(
+            action="rbac.role.change",
+            resource_id=subject_id,
+            payload_digest=payload_digest,
+            mfa=payload.mfa,
+            identity=identity,
+            request={
+                "subject_id": subject_id,
+                "roles": roles,
+                "expected_generation": payload.expected_generation,
+                "reason": payload.reason,
+            },
+        )
+        result = db.mutate_rbac_role_binding(
+            subject_id=subject_id,
+            roles=roles,
+            status="active",
+            expected_generation=payload.expected_generation,
+            actor_id=identity.user_id,
+            reason=payload.reason,
+            event_type="rbac.role_changed",
+            event={
+                "reason": payload.reason,
+                "control_plane_mfa": mfa,
+                "control_plane_approval": two_person,
+                "payload_digest": payload_digest,
+            },
+            authn=mfa,
+            challenge_id=(
+                mfa.get("challenge_id")
+                if isinstance(mfa, dict)
+                else None
+            ),
+        )
     except db.RBACGenerationConflictError as exc:
         raise _rbac_generation_conflict(
             exc.expected_generation, exc.current_generation
+        ) from exc
+    except db.PolicyCandidateAuthorityError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "RBAC mutation requires a closed authority transaction "
+                "proposal at /api/authority/control-plane/execute"
+            ),
         ) from exc
     except (db.RBACBindingStoreError, db.AuditStoreError) as exc:
         raise HTTPException(status_code=503, detail="RBAC mutation failed") from exc
@@ -6192,6 +6830,16 @@ def rbac_deprovision_subject(
     payload: DeprovisionSubjectRequest,
     identity: AdminIdentity = Depends(require_role("admin")),
 ) -> dict[str, Any]:
+    del payload, identity
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "error": "legacy_rbac_deprovision_disabled",
+            "authorityEndpoint": "/api/authority/control-plane/execute",
+            "challengeEndpoint":
+                "/api/authority/webauthn/challenges",
+        },
+    )
     payload_digest = _rbac_deprovision_payload_digest(payload)
     _preflight_rbac_generation(payload.expected_generation)
     mfa = _require_control_plane_mutation_mfa(
@@ -6202,39 +6850,50 @@ def rbac_deprovision_subject(
         identity=identity,
     )
     try:
-        with db.connect() as conn:
-            two_person = _require_control_plane_two_person(
-                action="rbac.deprovision",
-                resource_id=payload.subject_id,
-                payload_digest=payload_digest,
-                mfa=payload.mfa,
-                identity=identity,
-                request={
-                    "subject_id": payload.subject_id,
-                    "expected_generation": payload.expected_generation,
-                    "reason": payload.reason,
-                },
-                connection=conn,
-            )
-            result = db.mutate_rbac_role_binding(
-                subject_id=payload.subject_id,
-                roles=[],
-                status="deprovisioned",
-                expected_generation=payload.expected_generation,
-                actor_id=identity.user_id,
-                reason=payload.reason,
-                event_type="rbac.deprovisioned",
-                event={
-                    "reason": payload.reason,
-                    "control_plane_mfa": mfa,
-                    "control_plane_approval": two_person,
-                    "payload_digest": payload_digest,
-                },
-                _connection=conn,
-            )
+        two_person = _require_control_plane_two_person(
+            action="rbac.deprovision",
+            resource_id=payload.subject_id,
+            payload_digest=payload_digest,
+            mfa=payload.mfa,
+            identity=identity,
+            request={
+                "subject_id": payload.subject_id,
+                "expected_generation": payload.expected_generation,
+                "reason": payload.reason,
+            },
+        )
+        result = db.mutate_rbac_role_binding(
+            subject_id=payload.subject_id,
+            roles=[],
+            status="deprovisioned",
+            expected_generation=payload.expected_generation,
+            actor_id=identity.user_id,
+            reason=payload.reason,
+            event_type="rbac.deprovisioned",
+            event={
+                "reason": payload.reason,
+                "control_plane_mfa": mfa,
+                "control_plane_approval": two_person,
+                "payload_digest": payload_digest,
+            },
+            authn=mfa,
+            challenge_id=(
+                mfa.get("challenge_id")
+                if isinstance(mfa, dict)
+                else None
+            ),
+        )
     except db.RBACGenerationConflictError as exc:
         raise _rbac_generation_conflict(
             exc.expected_generation, exc.current_generation
+        ) from exc
+    except db.PolicyCandidateAuthorityError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "RBAC mutation requires a closed authority transaction "
+                "proposal at /api/authority/control-plane/execute"
+            ),
         ) from exc
     except (db.RBACBindingStoreError, db.AuditStoreError) as exc:
         raise HTTPException(status_code=503, detail="RBAC mutation failed") from exc
@@ -6383,11 +7042,29 @@ def control_plane_approval_approve(
         approval_context=approval,
     )
     try:
+        authority_authn = (
+            {
+                "assertion": mfa["assertion"],
+                "credential_record_id": mfa["credential_record_id"],
+            }
+            if isinstance(mfa, dict)
+            and "challenge_id" in mfa
+            else mfa
+        )
         updated = db.approve_control_plane_approval(
             approval_id,
             actor_id=identity.user_id,
             note=decision.note if decision else None,
-            authn=mfa or {"method": identity.auth_method, "user_id": identity.user_id},
+            authn=authority_authn
+            or {
+                "method": identity.auth_method,
+                "user_id": identity.user_id,
+            },
+            challenge_id=(
+                mfa.get("challenge_id")
+                if isinstance(mfa, dict)
+                else None
+            ),
             require_webauthn=CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED,
             required_approver_roles=_control_plane_approval_roles(
                 str(approval["action"])
@@ -6443,6 +7120,2715 @@ def control_plane_approval_deny(
     return updated
 
 
+_POLICY_SHADOW_GENERATION_PATH = "/v1/policy-shadow/generations"
+_POLICY_SHADOW_GENERATION_ACTIVATION_PATH = (
+    "/v1/policy-shadow/generations/activate"
+)
+_POLICY_SHADOW_ACTIVATION_REQUEST_FIELDS = frozenset(
+    {
+        "apiVersion",
+        "requestId",
+        "replayId",
+        "generationId",
+        "generationPublicationEnvelopeSha256",
+        "policyAuthorityAnalysis",
+        "members",
+        "readiness",
+    }
+)
+_POLICY_SHADOW_ACTIVATION_RESPONSE_FIELDS = frozenset(
+    {
+        "apiVersion",
+        "status",
+        "requestId",
+        "replayId",
+        "requestSha256",
+        "generationId",
+        "generationPublicationEnvelope",
+        "generationPublicationEnvelopeDigest",
+        "activationPublicationEnvelope",
+        "activationPublicationEnvelopeDigest",
+        "runtimeAttestationVerifierEnvelope",
+        "runtimeAttestationVerifierEnvelopeDigest",
+        "trustedNowUnixNanos",
+        "expiresAtUnixNanos",
+    }
+)
+_POLICY_SHADOW_ACTIVATION_RECEIPT_FIELDS = (
+    "assignmentSha256",
+    "assignmentPayloadSha256",
+    "assignmentRevision",
+    "readinessCoreSha256",
+    "authorityKeyIndependenceSha256",
+    "transactionSha256",
+    "replacedPolicySha256",
+    "replacedPolicySequence",
+    "replacedRollbackEpoch",
+    "publishedPolicySha256",
+    "publishedPolicySequence",
+    "publishedRollbackEpoch",
+    "replacedPublicationRevision",
+    "publishedPublicationRevision",
+    "trustedObservedAtUnixNanos",
+    "trustedTimeCheckpointSha256",
+    "persistenceReceiptSha256",
+    "retrievalIdSha256",
+    "retrievalProofSha256",
+    "signingKeyId",
+    "signingKeySpkiSha256",
+    "signature",
+    "signedReceiptSha256",
+)
+_POLICY_AUTHORITY_DECISION_GATE_BINDING_FIELDS = frozenset(
+    {
+        "publicationRequestId",
+        "replayId",
+        "generationId",
+        "predecessorGenerationDigest",
+        "generationEpoch",
+        "generationTombstoneEpoch",
+        "assignmentEnvelopeDigest",
+        "assignmentPayloadDigest",
+        "assignmentRevision",
+        "loadReceiptEnvelopeDigest",
+        "loadReceiptPayloadDigest",
+        "custodyPreparationReceiptDigest",
+        "custodyPublicationReceiptDigest",
+        "activationPublicationReceiptDigest",
+        "ingressEvidenceChainDigest",
+        "ingressHighWaterDigest",
+        "ingressRangeStartSequence",
+        "ingressRangeEndSequence",
+        "ingressRangePredecessorHeadDigest",
+        "activationMode",
+        "activePolicyDigest",
+        "activePolicySequence",
+        "activeRollbackEpoch",
+        "activeCompiledSnapshotDigest",
+        "candidatePolicyDigest",
+        "candidatePolicySequence",
+        "candidateRollbackEpoch",
+        "candidateCompiledSnapshotDigest",
+        "publicationRevision",
+        "policyHighWaterBeforeDigest",
+        "policyHighWaterAfterDigest",
+        "readinessCoreDigest",
+        "authorityKeyIndependenceDigest",
+        "activationTransactionDigest",
+        "runtimeExecutableDigest",
+        "runtimeReleaseAttestationDigest",
+        "runtimePolicyAttestationDigest",
+        "runtimeConfigAttestationDigest",
+        "runtimeTeeEvidenceDigest",
+        "runtimeTeeMeasurementDigest",
+        "runtimeAttestationReceiptDigest",
+        "runtimeEvidenceChainDigest",
+        "bootIdDigest",
+        "instanceId",
+        "trustCheckpointDigest",
+        "trustRevocationGeneration",
+        "trustRevocationRootDigest",
+        "persistenceReceiptDigest",
+        "retrievalIdDigest",
+        "retrievalProofDigest",
+        "authoritativeLedgerEventOrdinal",
+        "authoritativeLedgerHeadDigest",
+        "authoritativeSpoolRootDigest",
+    }
+)
+
+
+def _policy_shadow_activation_assurance_class() -> str:
+    value = os.getenv(
+        "SERVERWARE_POLICY_SHADOW_ACTIVATION_ASSURANCE_CLASS", ""
+    )
+    if value not in {"trusted-host-no-tee", "tee-hardware"}:
+        raise HTTPException(
+            status_code=503,
+            detail="policy-shadow activation assurance class is not explicitly configured",
+        )
+    return value
+_POLICY_SHADOW_GENERATION_REQUEST_FIELDS = frozenset(
+    {
+        "apiVersion",
+        "requestId",
+        "replayId",
+        "managementHandoffId",
+        "assignment",
+        "loadReceipt",
+        "activePolicyBundle",
+        "candidatePolicyBundle",
+        "runtimeAttestation",
+    }
+)
+_POLICY_SHADOW_RUNTIME_ATTESTATION_HANDOFF_FIELDS = frozenset(
+    {
+        "apiVersion",
+        "receiptId",
+        "receiptRevision",
+        "receipt",
+        "receiptSha256",
+        "receiptPayloadSha256",
+        "roleAuthorizationId",
+        "roleAuthorizationRevision",
+        "roleAuthorization",
+        "roleAuthorizationSha256",
+        "roleAuthorizationPayloadSha256",
+        "evidence",
+        "chainSha256",
+    }
+)
+_POLICY_SHADOW_GENERATION_ENVELOPE_FIELDS = frozenset(
+    {
+        "apiVersion",
+        "kind",
+        "canonicalProfile",
+        "signatureDomain",
+        "payload",
+        "payloadSha256",
+        "signatureAlgorithm",
+        "signingKeyId",
+        "signingKeySpkiSha256",
+        "signature",
+    }
+)
+_POLICY_SHADOW_GENERATION_RECORD_MAP = {
+    "requestId": "request_id",
+    "replayId": "replay_id",
+    "managementHandoffId": "management_handoff_id",
+    "requestPayloadSha256": "request_payload_digest",
+    "managementHandoffIdentitySha256":
+        "management_handoff_identity_digest",
+    "candidateId": "candidate_id",
+    "canaryId": "canary_id",
+    "assignmentSha256": "assignment_envelope_digest",
+    "assignmentPayloadSha256": "assignment_payload_digest",
+    "assignmentRevision": "assignment_revision",
+    "generationEpoch": "generation_epoch",
+    "minimumGenerationTombstoneEpoch":
+        "minimum_generation_tombstone_epoch",
+    "fleetId": "fleet_id",
+    "fleetMembershipRevision": "membership_revision",
+    "membershipRootSha256": "membership_root_digest",
+    "memberOrdinal": "member_ordinal",
+    "memberId": "member_id",
+    "instanceId": "instance_id",
+    "bootIdSha256": "boot_id",
+    "loadReceiptSha256": "load_receipt_envelope_digest",
+    "loadReceiptPayloadSha256":
+        "load_receipt_payload_digest",
+    "generationId": "generation_id_digest",
+    "publicationRevision": "publication_revision",
+    "custodyPreparationReceiptSha256":
+        "custody_preparation_receipt_digest",
+    "custodyHighWaterSha256": "custody_high_water_digest",
+    "custodySequence": "custody_sequence",
+    "ingressHighWaterSha256": "ingress_high_water_digest",
+    "ingressSequence": "ingress_sequence",
+    "activePolicySha256": "active_policy_hash",
+    "activePolicySequence": "active_policy_sequence",
+    "activeRollbackEpoch": "active_rollback_epoch",
+    "activePolicyBundleSha256": "active_policy_bundle_digest",
+    "candidatePolicySha256": "candidate_policy_hash",
+    "candidatePolicySequence": "candidate_policy_sequence",
+    "candidateRollbackEpoch": "candidate_rollback_epoch",
+    "candidatePolicyBundleSha256":
+        "candidate_policy_bundle_digest",
+    "runtimeExecutableSha256": "runtime_executable_digest",
+    "runtimeReleaseSha256": "runtime_release_digest",
+    "runtimeConfigSha256": "runtime_config_digest",
+    "runtimePolicySha256": "runtime_policy_digest",
+    "attestationPolicySha256": "attestation_policy_digest",
+    "attestationTrustCheckpointSha256":
+        "attestation_trust_checkpoint_digest",
+    "runtimeAttestationReceiptSha256":
+        "runtime_attestation_receipt_envelope_digest",
+    "runtimeAttestationPayloadSha256":
+        "runtime_attestation_receipt_payload_digest",
+    "runtimeAttestationVerificationReceiptSha256":
+        "runtime_attestation_verification_envelope_digest",
+    "attestationRoleAuthorizationSha256":
+        "attestation_role_authorization_digest",
+    "attestationEvidenceSha256": "attestation_evidence_digest",
+    "teeMeasurementSha256": "tee_measurement_digest",
+    "attestationChainSha256": "attestation_chain_digest",
+    "attestationMode": "attestation_mode",
+    "hardwareAttested": "hardware_attested",
+}
+_POLICY_SHADOW_GENERATION_RECORD_FIELDS = frozenset(
+    {*_POLICY_SHADOW_GENERATION_RECORD_MAP, "generationEvidence"}
+)
+
+
+def _policy_authority_canonical_bytes(value: Any) -> bytes:
+    try:
+        return json.dumps(
+            value,
+            allow_nan=False,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("ascii")
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="policy-authority value is not canonical JSON",
+        ) from exc
+
+
+def _policy_authority_plain(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _policy_authority_plain(member) for key, member in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_policy_authority_plain(member) for member in value]
+    return value
+
+
+def _policy_authority_framed_digest(domain: str, *frames: bytes) -> str:
+    digest = hashlib.sha256()
+    digest.update(domain.encode("ascii"))
+    digest.update(b"\0")
+    for frame in frames:
+        digest.update(len(frame).to_bytes(8, "big"))
+        digest.update(frame)
+    return "sha256:" + digest.hexdigest()
+
+
+def _policy_authority_deterministic_uuid(
+    *, digest: str, purpose: str
+) -> str:
+    material = hashlib.sha256(
+        _policy_authority_canonical_bytes(
+            {
+                "schema": "serverware.policyAuthorityDeterministicIdentity/v1",
+                "requestDigest": digest,
+                "purpose": purpose,
+            }
+        )
+    ).hexdigest()
+    value = list(material[:32])
+    value[12] = "4"
+    value[16] = format((int(value[16], 16) & 0x3) | 0x8, "x")
+    text = "".join(value)
+    return f"{text[:8]}-{text[8:12]}-{text[12:16]}-{text[16:20]}-{text[20:]}"
+
+
+def _policy_shadow_activation_identities(
+    material: Mapping[str, Any],
+) -> tuple[str, str]:
+    members = []
+    for member in material["members"]:
+        members.append(
+            {
+                "instanceId": member["instance_id"],
+                "bootId": member["boot_id"],
+                "loadReceiptSha256": "sha256:"
+                + hashlib.sha256(
+                    _policy_authority_canonical_bytes(member["load_receipt"])
+                ).hexdigest(),
+                "runtimeAttestationSha256": "sha256:"
+                + hashlib.sha256(
+                    _policy_authority_canonical_bytes(
+                        member["runtime_attestation"]
+                    )
+                ).hexdigest(),
+                "runtimeVerificationSha256": "sha256:"
+                + hashlib.sha256(
+                    _policy_authority_canonical_bytes(
+                        member["runtime_attestation_verification"]
+                    )
+                ).hexdigest(),
+                "checkpointChainSha256": _policy_authority_framed_digest(
+                    "serverware.policyShadowActivationCheckpointChain/v1",
+                    *(
+                        _policy_authority_canonical_bytes(checkpoint)
+                        for checkpoint in member["checkpoints"]
+                    ),
+                ),
+            }
+        )
+    identity = {
+        "schema": "serverware.policyShadowGenerationActivationIdentity/v1",
+        "canaryId": material["canary_id"],
+        "candidateId": material["candidate_id"],
+        "generationId": material["generation_id"],
+        "generationPublicationEnvelopeSha256":
+            material["generation_publication_envelope_digest"],
+        "policyAuthorityAnalysisSha256": "sha256:"
+        + hashlib.sha256(
+            _policy_authority_canonical_bytes(
+                material["policy_authority_analysis"]
+            )
+        ).hexdigest(),
+        "members": members,
+        "readinessSha256": "sha256:"
+        + hashlib.sha256(
+            _policy_authority_canonical_bytes(material["readiness"])
+        ).hexdigest(),
+    }
+    identity_digest = "sha256:" + hashlib.sha256(
+        _policy_authority_canonical_bytes(identity)
+    ).hexdigest()
+    request_id = _policy_authority_deterministic_uuid(
+        digest=identity_digest,
+        purpose="decision-gate-generation-activation-request",
+    )
+    if (
+        not DATA_PLANE_MANAGEMENT_TOKEN
+        or len(DATA_PLANE_MANAGEMENT_TOKEN.encode("utf-8")) > 4096
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail="decision-gate management authentication is unavailable",
+        )
+    replay = hmac.new(
+        DATA_PLANE_MANAGEMENT_TOKEN.encode("utf-8"),
+        _policy_authority_canonical_bytes(
+            {
+                "schema": "serverware.policyShadowGenerationActivationReplay/v1",
+                "identityDigest": identity_digest,
+                "requestId": request_id,
+            }
+        ),
+        hashlib.sha256,
+    ).hexdigest()
+    return request_id, "replay:" + replay
+
+
+def _policy_shadow_generation_url(
+    path: str = _POLICY_SHADOW_GENERATION_PATH,
+) -> str:
+    if path not in {
+        _POLICY_SHADOW_GENERATION_PATH,
+        _POLICY_SHADOW_GENERATION_ACTIVATION_PATH,
+    }:
+        raise HTTPException(
+            status_code=503,
+            detail="decision-gate management path is not allowlisted",
+        )
+    try:
+        parsed = urlsplit(DECISION_GATE_BASE)
+        port = parsed.port
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="decision-gate management endpoint is invalid",
+        ) from exc
+    if (
+        parsed.scheme != "http"
+        or parsed.hostname
+        not in {"decision-gate-rs", "localhost", "127.0.0.1", "::1"}
+        or port != 9091
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail="decision-gate management endpoint is not allowlisted",
+        )
+    return urlunsplit(
+        (
+            "http",
+            parsed.netloc,
+            path,
+            "",
+            "",
+        )
+    )
+
+
+def _policy_authority_json_object(
+    value: Any,
+    *,
+    label: str,
+) -> dict[str, Any]:
+    try:
+        parsed = strict_json_loads(value)
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=f"{label} is not strict JSON",
+        ) from exc
+    if not isinstance(parsed, dict):
+        raise HTTPException(
+            status_code=409,
+            detail=f"{label} is not a JSON object",
+        )
+    return parsed
+
+
+def _post_policy_shadow_generation(
+    *,
+    body: bytes,
+    path: str = _POLICY_SHADOW_GENERATION_PATH,
+) -> http_client.HttpJsonResponse:
+    if (
+        not DATA_PLANE_MANAGEMENT_TOKEN
+        or len(DATA_PLANE_MANAGEMENT_TOKEN.encode("utf-8")) > 4096
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail="decision-gate management authentication is unavailable",
+        )
+    maximum = (
+        16 * 1024 * 1024
+        if path == _POLICY_SHADOW_GENERATION_ACTIVATION_PATH
+        else 8 * 1024 * 1024
+    )
+    if not 0 < len(body) <= maximum:
+        raise HTTPException(
+            status_code=413,
+            detail="policy-shadow generation request exceeds its fixed bound",
+        )
+    request = urllib.request.Request(
+        _policy_shadow_generation_url(path),
+        data=body,
+        method="POST",
+        headers={
+            "Accept": "application/json",
+            "Accept-Encoding": "identity",
+            "Content-Type": "application/json",
+            "X-Serverware-Data-Plane-Token":
+                DATA_PLANE_MANAGEMENT_TOKEN,
+        },
+    )
+    try:
+        response = http_client.request_json_bytes(
+            request,
+            timeout=DECISION_GATE_TIMEOUT_SECONDS,
+            max_bytes=maximum,
+            require_https=False,
+            expected_statuses=(201,),
+            expected_content_types=("application/json",),
+        )
+    except urllib.error.HTTPError as exc:
+        status = int(exc.code)
+        exc.close()
+        raise HTTPException(
+            status_code=503 if status >= 500 else 409,
+            detail="decision-gate rejected the policy-shadow generation request",
+        ) from exc
+    except (
+        urllib.error.URLError,
+        TimeoutError,
+        OSError,
+        http.client.HTTPException,
+        http_client.HttpClientError,
+    ) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="decision-gate policy-shadow handoff is unavailable",
+        ) from exc
+    if not isinstance(response.value, dict):
+        raise HTTPException(
+            status_code=503,
+            detail="decision-gate publication receipt is not an object",
+        )
+    return response
+
+
+def _policy_shadow_activation_trust() -> tuple[
+    Ed25519PublicKey, str, str, str, str
+]:
+    path_text = os.getenv(
+        "SERVERWARE_POLICY_SHADOW_ACTIVATION_PUBLIC_KEY_FILE", ""
+    )
+    key_id = os.getenv(
+        "SERVERWARE_POLICY_SHADOW_ACTIVATION_SIGNING_KEY_ID", ""
+    )
+    spki_digest = os.getenv(
+        "SERVERWARE_POLICY_SHADOW_ACTIVATION_SIGNING_KEY_SPKI_SHA256", ""
+    )
+    scope_digest = os.getenv(
+        "SERVERWARE_POLICY_SHADOW_ACTIVATION_PROOF_SCOPE_BINDING_SHA256", ""
+    )
+    closure_digest = os.getenv(
+        "SERVERWARE_POLICY_SHADOW_ACTIVATION_EXECUTION_CLOSURE_SHA256", ""
+    )
+    seccomp_digest = os.getenv(
+        "SERVERWARE_POLICY_SHADOW_ACTIVATION_SECCOMP_POLICY_SHA256", ""
+    )
+    pins = (key_id, spki_digest, scope_digest, closure_digest, seccomp_digest)
+    if (
+        not path_text
+        or not Path(path_text).is_absolute()
+        or any(re.fullmatch(r"sha256:[0-9a-f]{64}", pin) is None for pin in pins)
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail="independent activation-publication trust is not pinned",
+        )
+    path = Path(path_text)
+    try:
+        metadata = path.lstat()
+        encoded = path.read_bytes()
+    except OSError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="activation-publication public key is unavailable",
+        ) from exc
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or path.is_symlink()
+        or metadata.st_uid != 0
+        or metadata.st_mode & 0o022
+        or not 32 <= len(encoded) <= 16 * 1024
+        or b"PRIVATE KEY" in encoded.upper()
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail="activation-publication public key trust file is mutable or invalid",
+        )
+    try:
+        public_key = (
+            serialization.load_pem_public_key(encoded)
+            if encoded.lstrip().startswith(b"-----BEGIN")
+            else serialization.load_der_public_key(encoded)
+        )
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="activation-publication public key cannot be decoded",
+        ) from exc
+    if not isinstance(public_key, Ed25519PublicKey):
+        raise HTTPException(
+            status_code=503,
+            detail="activation-publication public key is not Ed25519",
+        )
+    spki = public_key.public_bytes(
+        serialization.Encoding.DER,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    actual = "sha256:" + hashlib.sha256(spki).hexdigest()
+    if actual != spki_digest or key_id != spki_digest:
+        raise HTTPException(
+            status_code=503,
+            detail="activation-publication public key differs from its independent pins",
+        )
+    return public_key, scope_digest, closure_digest, seccomp_digest, key_id
+
+
+def _verify_policy_shadow_activation_receipt(
+    receipt: Any,
+    *,
+    generation_payload: Mapping[str, Any],
+    readiness_record: Mapping[str, Any],
+) -> dict[str, Any]:
+    if not isinstance(receipt, dict) or set(receipt) != set(
+        _POLICY_SHADOW_ACTIVATION_RECEIPT_FIELDS
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail="activation-publication custody receipt is not closed",
+        )
+    generation = generation_payload.get("generation")
+    if not isinstance(generation, dict):
+        raise HTTPException(
+            status_code=503,
+            detail="generation publication identity is unavailable",
+        )
+    active = generation.get("active")
+    candidate = generation.get("candidate")
+    exact = {
+        "assignmentSha256": generation.get("assignmentEnvelopeSha256"),
+        "assignmentPayloadSha256": generation.get("assignmentPayloadSha256"),
+        "assignmentRevision": generation.get("assignmentRevision"),
+        "readinessCoreSha256": readiness_record.get("readiness_core_digest"),
+        "replacedPolicySha256": active.get("policySha256") if isinstance(active, dict) else None,
+        "replacedPolicySequence": active.get("policySequence") if isinstance(active, dict) else None,
+        "replacedRollbackEpoch": active.get("rollbackEpoch") if isinstance(active, dict) else None,
+        "publishedPolicySha256": candidate.get("policySha256") if isinstance(candidate, dict) else None,
+        "publishedPolicySequence": candidate.get("policySequence") if isinstance(candidate, dict) else None,
+        "publishedRollbackEpoch": candidate.get("rollbackEpoch") if isinstance(candidate, dict) else None,
+        "publishedPublicationRevision": generation.get("signedPublicationRevision"),
+    }
+    if (
+        any(receipt.get(field) != value for field, value in exact.items())
+        or not isinstance(receipt.get("replacedPublicationRevision"), int)
+        or receipt["replacedPublicationRevision"] + 1
+        != receipt["publishedPublicationRevision"]
+        or not isinstance(receipt.get("trustedObservedAtUnixNanos"), int)
+        or receipt["trustedObservedAtUnixNanos"] <= 0
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail="activation-publication custody receipt changed policy identity",
+        )
+    for field in _POLICY_SHADOW_ACTIVATION_RECEIPT_FIELDS:
+        if field.endswith("Sha256") or field == "signingKeyId":
+            _policy_authority_portal_digest(
+                receipt.get(field), label=f"activation receipt {field}"
+            )
+    signature = _decode_unpadded_base64url(
+        str(receipt.get("signature") or ""),
+        field_name="activation-publication signature",
+        expected_length=64,
+    )
+    canonical_payload = _policy_authority_canonical_bytes(
+        [
+            receipt[field]
+            for field in _POLICY_SHADOW_ACTIVATION_RECEIPT_FIELDS[:19]
+        ]
+        + [
+            "activation-publication",
+            receipt["signingKeyId"],
+            receipt["signingKeySpkiSha256"],
+        ]
+    )
+    expected_signed = _policy_authority_framed_digest(
+        "serverware.policyActivationPublicationReceipt/v1",
+        canonical_payload,
+        receipt["signature"].encode("ascii"),
+    )
+    if expected_signed != receipt["signedReceiptSha256"]:
+        raise HTTPException(
+            status_code=503,
+            detail="activation-publication signed receipt digest is invalid",
+        )
+    public_key, scope, closure, seccomp, key_id = (
+        _policy_shadow_activation_trust()
+    )
+    if (
+        receipt["signingKeyId"] != key_id
+        or receipt["signingKeySpkiSha256"] != key_id
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail="activation-publication signer is not independently trusted",
+        )
+    assignment_bound = _policy_authority_canonical_bytes(
+        [
+            "serverware.policyShadowAssignmentBoundCustodyReceipt/v1",
+            scope,
+            closure,
+            seccomp,
+            "activation-publication",
+            "sha256:" + hashlib.sha256(canonical_payload).hexdigest(),
+        ]
+    )
+    preimage = (
+        b"serverware.signedEnvelope/v1\0"
+        b"serverware.policyActivationPublication/v1\0"
+        b"serverware.canonicalJson/ascii-integer-v1\0"
+        + assignment_bound
+    )
+    try:
+        public_key.verify(signature, preimage)
+    except InvalidSignature as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="activation-publication custody signature is invalid",
+        ) from exc
+    return receipt
+
+
+def _policy_shadow_activation_response_record(
+    response: http_client.HttpJsonResponse,
+    *,
+    request: Mapping[str, Any],
+    request_bytes: bytes,
+    material: Mapping[str, Any],
+    actor_id: str,
+) -> dict[str, Any]:
+    value = response.value
+    raw = response.response.body
+    if (
+        not isinstance(value, dict)
+        or set(value) != _POLICY_SHADOW_ACTIVATION_RESPONSE_FIELDS
+        or raw != _policy_authority_canonical_bytes(value)
+        or value.get("apiVersion")
+        != "serverware.policyShadowGenerationActivationResponse/v1"
+        or value.get("status") != "published"
+        or value.get("requestId") != request["requestId"]
+        or value.get("replayId") != request["replayId"]
+        or value.get("generationId") != request["generationId"]
+        or value.get("requestSha256")
+        != "sha256:" + hashlib.sha256(request_bytes).hexdigest()
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail="decision-gate activation response is not exact",
+        )
+    generation_envelope = value["generationPublicationEnvelope"]
+    generation_bytes = _policy_authority_canonical_bytes(generation_envelope)
+    expected_generation = material["generation_publication_envelope_json"]
+    if (
+        generation_bytes.decode("ascii") != expected_generation
+        or value["generationPublicationEnvelopeDigest"]
+        != "sha256:" + hashlib.sha256(generation_bytes).hexdigest()
+        or value["generationPublicationEnvelopeDigest"]
+        != material["generation_publication_envelope_digest"]
+        or not isinstance(generation_envelope, dict)
+        or set(generation_envelope) != _POLICY_SHADOW_GENERATION_ENVELOPE_FIELDS
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail="activation response changed the native-verified generation envelope",
+        )
+    generation_payload = generation_envelope.get("payload")
+    attestation_chain = (
+        generation_payload.get("attestationChain")
+        if isinstance(generation_payload, dict)
+        else None
+    )
+    runtime_envelope = value["runtimeAttestationVerifierEnvelope"]
+    runtime_bytes = _policy_authority_canonical_bytes(runtime_envelope)
+    if (
+        not isinstance(attestation_chain, dict)
+        or runtime_envelope
+        != attestation_chain.get("runtimeAttestationVerification")
+        or value["runtimeAttestationVerifierEnvelopeDigest"]
+        != "sha256:" + hashlib.sha256(runtime_bytes).hexdigest()
+        or attestation_chain.get(
+            "runtimeAttestationVerificationEnvelopeSha256"
+        ) != value["runtimeAttestationVerifierEnvelopeDigest"]
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail="activation response changed the native-verified runtime envelope",
+        )
+    runtime_payload = (
+        runtime_envelope.get("payload")
+        if isinstance(runtime_envelope, dict)
+        else None
+    )
+    assurance_class = _policy_shadow_activation_assurance_class()
+    expected_runtime_mode = (
+        "trusted-host-no-tee"
+        if assurance_class == "trusted-host-no-tee"
+        else None
+    )
+    if (
+        not isinstance(runtime_payload, dict)
+        or runtime_payload.get("maximumAgeNanos", 0) <= 0
+        or runtime_payload.get("status") != "verified"
+        or (
+            assurance_class == "trusted-host-no-tee"
+            and (
+                runtime_payload.get("attestationMode")
+                    != expected_runtime_mode
+                or runtime_payload.get("hardwareAttested") is not False
+            )
+        )
+        or (
+            assurance_class == "tee-hardware"
+            and (
+                runtime_payload.get("attestationMode") not in {
+                    "aws-nitro-enclave", "amd-sev-snp", "intel-tdx"
+                }
+                or runtime_payload.get("hardwareAttested") is not True
+            )
+        )
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail="activation runtime-attestation verification is not current hardware evidence",
+        )
+    receipt = _verify_policy_shadow_activation_receipt(
+        value["activationPublicationEnvelope"],
+        generation_payload=generation_payload,
+        readiness_record=material["readiness_record"],
+    )
+    receipt_bytes = _policy_authority_canonical_bytes(receipt)
+    if value["activationPublicationEnvelopeDigest"] != (
+        "sha256:" + hashlib.sha256(receipt_bytes).hexdigest()
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail="activation-publication envelope digest is invalid",
+        )
+    trusted_at = value.get("trustedNowUnixNanos")
+    expires_at = value.get("expiresAtUnixNanos")
+    if (
+        not isinstance(trusted_at, int)
+        or isinstance(trusted_at, bool)
+        or not isinstance(expires_at, int)
+        or isinstance(expires_at, bool)
+        or not 0 < trusted_at < expires_at
+        or not runtime_payload["issuedAtUnixNanos"]
+        <= trusted_at
+        < runtime_payload["expiresAtUnixNanos"]
+        <= expires_at
+        or not generation_payload["issuedAtUnixNanos"]
+        <= trusted_at
+        < generation_payload["expiresAtUnixNanos"]
+        <= expires_at
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail="activation response trusted-time bounds are invalid",
+        )
+    generation = generation_payload["generation"]
+    custody = generation_payload["custody"]
+    runtime = generation_payload["runtime"]
+    trust = generation_payload["trust"]
+    local_member = next(
+        (
+            member
+            for member in material["members"]
+            if member["instance_id"] == runtime["runtimeInstanceId"]
+        ),
+        None,
+    )
+    if local_member is None:
+        raise HTTPException(
+            status_code=503,
+            detail="activation response runtime is not an assigned member",
+        )
+    final_checkpoint = local_member["checkpoints"][-1]
+    checkpoint_payload = final_checkpoint.get("payload")
+    cumulative_range = (
+        checkpoint_payload.get("cumulativeRange")
+        if isinstance(checkpoint_payload, dict)
+        else None
+    )
+    if not isinstance(cumulative_range, dict):
+        raise HTTPException(
+            status_code=503,
+            detail="activation final checkpoint has no cumulative ingress range",
+        )
+    high_water_before = {
+        "policyDigest": generation["active"]["policySha256"],
+        "policySequence": generation["active"]["policySequence"],
+        "rollbackEpoch": generation["active"]["rollbackEpoch"],
+        "publicationRevision": receipt["replacedPublicationRevision"],
+    }
+    high_water_after = {
+        "policyDigest": generation["candidate"]["policySha256"],
+        "policySequence": generation["candidate"]["policySequence"],
+        "rollbackEpoch": generation["candidate"]["rollbackEpoch"],
+        "publicationRevision": receipt["publishedPublicationRevision"],
+    }
+    ingress_root = cumulative_range.get("cumulativeIngressRootSha256")
+    checkpoint_digest = "sha256:" + hashlib.sha256(
+        _policy_authority_canonical_bytes(final_checkpoint)
+    ).hexdigest()
+    binding = {
+        "publicationRequestId": generation_payload["request"]["requestId"],
+        "replayId": generation_payload["request"]["replayId"],
+        "generationId": generation["generationId"],
+        "predecessorGenerationDigest":
+            generation_payload["preparationEnvelopeSha256"],
+        "generationEpoch": generation["generationEpoch"],
+        "generationTombstoneEpoch": generation["generationTombstoneEpoch"],
+        "assignmentEnvelopeDigest": generation["assignmentEnvelopeSha256"],
+        "assignmentPayloadDigest": generation["assignmentPayloadSha256"],
+        "assignmentRevision": generation["assignmentRevision"],
+        "loadReceiptEnvelopeDigest": generation["loadReceiptEnvelopeSha256"],
+        "loadReceiptPayloadDigest": generation["loadReceiptPayloadSha256"],
+        "custodyPreparationReceiptDigest": custody["preparationReceiptSha256"],
+        "custodyPublicationReceiptDigest": custody["publicationReceiptSha256"],
+        "activationPublicationReceiptDigest": receipt["signedReceiptSha256"],
+        "ingressEvidenceChainDigest": ingress_root,
+        "ingressHighWaterDigest": checkpoint_digest,
+        "ingressRangeStartSequence": generation["ingressRangeStartSequence"],
+        "ingressRangeEndSequence": cumulative_range["lastIngressSequence"],
+        "ingressRangePredecessorHeadDigest":
+            generation["ingressRangePredecessorHeadSha256"],
+        "activationMode": "forward",
+        "activePolicyDigest": generation["active"]["policySha256"],
+        "activePolicySequence": generation["active"]["policySequence"],
+        "activeRollbackEpoch": generation["active"]["rollbackEpoch"],
+        "activeCompiledSnapshotDigest":
+            generation["active"]["compiledSnapshotSha256"],
+        "candidatePolicyDigest": generation["candidate"]["policySha256"],
+        "candidatePolicySequence": generation["candidate"]["policySequence"],
+        "candidateRollbackEpoch": generation["candidate"]["rollbackEpoch"],
+        "candidateCompiledSnapshotDigest":
+            generation["candidate"]["compiledSnapshotSha256"],
+        "publicationRevision": generation["signedPublicationRevision"],
+        "policyHighWaterBeforeDigest": _policy_authority_framed_digest(
+            "serverware.policyAuthorityDecisionGatePolicyHighWater/v1",
+            _policy_authority_canonical_bytes(high_water_before),
+        ),
+        "policyHighWaterAfterDigest": _policy_authority_framed_digest(
+            "serverware.policyAuthorityDecisionGatePolicyHighWater/v1",
+            _policy_authority_canonical_bytes(high_water_after),
+        ),
+        "readinessCoreDigest": receipt["readinessCoreSha256"],
+        "authorityKeyIndependenceDigest":
+            receipt["authorityKeyIndependenceSha256"],
+        "activationTransactionDigest": receipt["transactionSha256"],
+        "runtimeExecutableDigest": runtime["decisionGateExecutableSha256"],
+        "runtimeReleaseAttestationDigest": runtime["releaseProvenanceSha256"],
+        "runtimePolicyAttestationDigest": runtime["runtimePolicySha256"],
+        "runtimeConfigAttestationDigest":
+            runtime["runtimeConfigurationSha256"],
+        "runtimeTeeEvidenceDigest": runtime_payload["teeEvidenceSha256"],
+        "runtimeTeeMeasurementDigest": runtime_payload["teeMeasurementSha256"],
+        "runtimeAttestationReceiptDigest":
+            runtime_payload["runtimeAttestationReceiptSha256"],
+        "runtimeEvidenceChainDigest": runtime_payload["evidenceChainSha256"],
+        "bootIdDigest": generation["runtimeBootIdSha256"],
+        "instanceId": runtime["runtimeInstanceId"],
+        "trustCheckpointDigest": trust["trustCheckpointSha256"],
+        "trustRevocationGeneration": trust["revocationGeneration"],
+        "trustRevocationRootDigest": trust["revocationRootSha256"],
+        "persistenceReceiptDigest": receipt["persistenceReceiptSha256"],
+        "retrievalIdDigest": receipt["retrievalIdSha256"],
+        "retrievalProofDigest": receipt["retrievalProofSha256"],
+        "authoritativeLedgerEventOrdinal":
+            custody["authoritativeLedgerEventOrdinal"],
+        "authoritativeLedgerHeadDigest":
+            custody["authoritativeLedgerHeadSha256"],
+        "authoritativeSpoolRootDigest":
+            custody["authoritativeSpoolRootSha256"],
+    }
+    if set(binding) != _POLICY_AUTHORITY_DECISION_GATE_BINDING_FIELDS:
+        raise HTTPException(
+            status_code=503,
+            detail="decision-gate activation binding fields diverged",
+        )
+    issued_at = min(
+        generation_payload["issuedAtUnixNanos"],
+        runtime_payload["issuedAtUnixNanos"],
+        receipt["trustedObservedAtUnixNanos"],
+    )
+    evidence_chain = _policy_authority_framed_digest(
+        "serverware.policyAuthorityDecisionGateEvidenceChain/v1",
+        _policy_authority_canonical_bytes(
+            {
+                **binding,
+                "expiresAtEpochNs": expires_at,
+                "issuedAtEpochNs": issued_at,
+            }
+        ),
+        value["generationPublicationEnvelopeDigest"].encode("ascii"),
+        value["activationPublicationEnvelopeDigest"].encode("ascii"),
+        value["runtimeAttestationVerifierEnvelopeDigest"].encode("ascii"),
+    )
+    statement = {
+        **binding,
+        "schema": "serverware.policyAuthorityDecisionGatePublicationChain/v1",
+        "issuedAtEpochNs": issued_at,
+        "expiresAtEpochNs": expires_at,
+        "generationPublicationEnvelope": generation_envelope,
+        "generationPublicationEnvelopeDigest":
+            value["generationPublicationEnvelopeDigest"],
+        "activationPublicationEnvelope": receipt,
+        "activationPublicationEnvelopeDigest":
+            value["activationPublicationEnvelopeDigest"],
+        "runtimeAttestationVerifierEnvelope": runtime_envelope,
+        "runtimeAttestationVerifierEnvelopeDigest":
+            value["runtimeAttestationVerifierEnvelopeDigest"],
+        "evidenceChainDigest": evidence_chain,
+    }
+    binding_bytes = _policy_authority_canonical_bytes(binding)
+    statement_bytes = _policy_authority_canonical_bytes(statement)
+    request_digest = "sha256:" + hashlib.sha256(request_bytes).hexdigest()
+    return {
+        "request_id": request["requestId"],
+        "replay_id": request["replayId"],
+        "request_digest": request_digest,
+        "request_json": request_bytes.decode("ascii"),
+        "response_digest": "sha256:" + hashlib.sha256(raw).hexdigest(),
+        "response_json": raw.decode("ascii"),
+        "canary_id": material["canary_id"],
+        "candidate_id": material["candidate_id"],
+        "generation_id_digest": material["generation_id"],
+        "generation_publication_envelope_digest":
+            value["generationPublicationEnvelopeDigest"],
+        "activation_publication_envelope_digest":
+            value["activationPublicationEnvelopeDigest"],
+        "runtime_attestation_verifier_envelope_digest":
+            value["runtimeAttestationVerifierEnvelopeDigest"],
+        "decision_gate_binding_digest": _policy_authority_framed_digest(
+            "serverware.policyAuthorityDecisionGatePublicationBinding/v1",
+            binding_bytes,
+        ),
+        "decision_gate_binding_json": binding_bytes.decode("ascii"),
+        "decision_gate_statement_digest": _policy_authority_framed_digest(
+            "serverware.policyAuthorityExternalEvidenceStatement/v1",
+            statement_bytes,
+        ),
+        "decision_gate_statement_json": statement_bytes.decode("ascii"),
+        "evidence_chain_digest": evidence_chain,
+        "external_evidence_status": (
+            "non-production-trusted-host"
+            if assurance_class == "trusted-host-no-tee"
+            else "awaiting-external-verifier"
+        ),
+        "trusted_at_epoch_ns": trusted_at,
+        "expires_at_epoch_ns": expires_at,
+        "actor_id": actor_id,
+        "created_at_epoch_ns": max(time.time_ns(), trusted_at),
+    }
+
+
+def _policy_shadow_publication_stage_record(
+    response: http_client.HttpJsonResponse,
+    *,
+    management_request_json: str,
+    actor_id: str,
+) -> dict[str, Any]:
+    envelope = response.value
+    raw_envelope = response.response.body
+    canonical_envelope = _policy_authority_canonical_bytes(envelope)
+    if (
+        raw_envelope != canonical_envelope
+        or set(envelope) != _POLICY_SHADOW_GENERATION_ENVELOPE_FIELDS
+        or envelope.get("apiVersion")
+        != "serverware.policyShadowGenerationPublication/v2"
+        or envelope.get("kind")
+        != "PolicyShadowGenerationPublication"
+        or envelope.get("canonicalProfile")
+        != "serverware.canonicalJson/ascii-integer-v1"
+        or envelope.get("signatureDomain")
+        != "serverware.policyShadowGenerationPublication/v2"
+        or envelope.get("signatureAlgorithm") != "Ed25519"
+        or re.fullmatch(
+            r"sha256:[0-9a-f]{64}",
+            str(envelope.get("signingKeyId") or ""),
+        )
+        is None
+        or envelope.get("signingKeySpkiSha256")
+        != envelope.get("signingKeyId")
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail="decision-gate signed publication envelope is not exact",
+        )
+    payload = envelope.get("payload")
+    if (
+        not isinstance(payload, dict)
+        or set(payload)
+        != {"issuedAtEpochNs", "expiresAtEpochNs", "record"}
+        or not isinstance(payload.get("issuedAtEpochNs"), int)
+        or isinstance(payload.get("issuedAtEpochNs"), bool)
+        or not isinstance(payload.get("expiresAtEpochNs"), int)
+        or isinstance(payload.get("expiresAtEpochNs"), bool)
+        or int(payload["issuedAtEpochNs"]) < 0
+        or int(payload["expiresAtEpochNs"])
+        <= int(payload["issuedAtEpochNs"])
+        or not isinstance(payload.get("record"), dict)
+        or set(payload["record"])
+        != _POLICY_SHADOW_GENERATION_RECORD_FIELDS
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail="decision-gate publication payload is not closed",
+        )
+    payload_bytes = _policy_authority_canonical_bytes(payload)
+    payload_digest = "sha256:" + hashlib.sha256(
+        payload_bytes
+    ).hexdigest()
+    if not hmac.compare_digest(
+        payload_digest,
+        str(envelope.get("payloadSha256") or ""),
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail="decision-gate publication payload digest is invalid",
+        )
+    record = payload["record"]
+    generation_evidence = record.get("generationEvidence")
+    if not isinstance(generation_evidence, dict):
+        raise HTTPException(
+            status_code=503,
+            detail="decision-gate publication evidence is not an object",
+        )
+    integer_fields = {
+        "assignmentRevision",
+        "generationEpoch",
+        "minimumGenerationTombstoneEpoch",
+        "fleetMembershipRevision",
+        "memberOrdinal",
+        "publicationRevision",
+        "custodySequence",
+        "ingressSequence",
+        "activePolicySequence",
+        "activeRollbackEpoch",
+        "candidatePolicySequence",
+        "candidateRollbackEpoch",
+    }
+    if any(
+        not isinstance(record[field], int)
+        or isinstance(record[field], bool)
+        or record[field] < (
+            0 if field in {"custodySequence", "ingressSequence"} else 1
+        )
+        for field in integer_fields
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail="decision-gate publication revisions are invalid",
+        )
+    digest_fields = {
+        field
+        for field in record
+        if field.endswith("Sha256") or field == "generationId"
+    }
+    if any(
+        re.fullmatch(r"sha256:[0-9a-f]{64}", str(record[field] or ""))
+        is None
+        for field in digest_fields
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail="decision-gate publication digest is invalid",
+        )
+    assurance_class = _policy_shadow_activation_assurance_class()
+    if (
+        assurance_class == "trusted-host-no-tee"
+        and (
+            record.get("attestationMode") != "trusted-host-no-tee"
+            or record.get("hardwareAttested") is not False
+        )
+    ) or (
+        assurance_class == "tee-hardware"
+        and (
+            record.get("attestationMode") not in {
+                "aws-nitro-enclave", "amd-sev-snp", "intel-tdx"
+            }
+            or record.get("hardwareAttested") is not True
+        )
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail="decision-gate publication differs from its configured assurance class",
+        )
+    signature = envelope.get("signature")
+    try:
+        signature_bytes = _decode_unpadded_base64url(
+            str(signature or ""),
+            field_name="decision-gate publication signature",
+            expected_length=64,
+        )
+    except HTTPException as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="decision-gate publication signature encoding is invalid",
+        ) from exc
+    staged = {
+        target: record[source]
+        for source, target in _POLICY_SHADOW_GENERATION_RECORD_MAP.items()
+    }
+    staged.update(
+        {
+            "generation_evidence_json":
+                _policy_authority_canonical_bytes(
+                    generation_evidence
+                ).decode("ascii"),
+            "management_request_json": management_request_json,
+            "generation_publication_envelope_json":
+                raw_envelope.decode("ascii"),
+            "generation_publication_envelope_digest":
+                "sha256:" + hashlib.sha256(raw_envelope).hexdigest(),
+            "generation_publication_payload_json":
+                payload_bytes.decode("ascii"),
+            "generation_publication_payload_digest":
+                payload_digest,
+            "signature_algorithm": envelope["signatureAlgorithm"],
+            "signing_key_id": envelope["signingKeyId"],
+            "signature": signature,
+            "signature_digest":
+                "sha256:" + hashlib.sha256(signature_bytes).hexdigest(),
+            "actor_id": actor_id,
+        }
+    )
+    return staged
+
+
+def _policy_shadow_publication_result(
+    publication: Mapping[str, Any],
+    *,
+    recovered: bool,
+) -> dict[str, Any]:
+    return {
+        "ok": True,
+        "apiVersion":
+            "serverware.policyAuthorityCandidateHandoffResult/v2",
+        "requestId": publication["request_id"],
+        "replayId": publication["replay_id"],
+        "managementHandoffId":
+            publication["management_handoff_id"],
+        "canaryId": publication["canary_id"],
+        "candidateId": publication["candidate_id"],
+        "instanceId": publication["instance_id"],
+        "bootIdSha256": publication["boot_id"],
+        "requestPayloadSha256": publication["request_payload_digest"],
+        "generationId": publication["generation_id_digest"],
+        "publicationEnvelopeSha256":
+            publication["generation_publication_envelope_digest"],
+        "publicationPayloadSha256":
+            publication["generation_publication_payload_digest"],
+        "verificationReceiptSha256":
+            publication["verification_receipt_digest"],
+        "attestationChainSha256":
+            publication["attestation_chain_digest"],
+        "signingKeySpkiSha256": publication["signing_key_id"],
+        "recovered": recovered,
+    }
+
+
+_POLICY_AUTHORITY_PORTAL_PACKAGE_FIELDS = frozenset(
+    {"apiVersion", "handoff", "activation"}
+)
+_POLICY_AUTHORITY_PORTAL_HANDOFF_FIELDS = frozenset(
+    {
+        "candidateId",
+        "artifactEnvelopeDigest",
+        "canaryId",
+        "assignmentEnvelopeDigest",
+        "loadReceiptEnvelopeDigest",
+        "instanceId",
+        "bootId",
+        "runtimeAttestationHandoffDigest",
+        "predecessorPolicyHash",
+    }
+)
+_POLICY_AUTHORITY_PORTAL_ACTIVATION_FIELDS = frozenset(
+    {"prepare", "recordInclusions", "finalize", "abort"}
+)
+_POLICY_AUTHORITY_PORTAL_STEP_FIELDS = frozenset(
+    {"operation", "arguments"}
+)
+_POLICY_AUTHORITY_PORTAL_ARGUMENT_FIELDS = {
+    "policy.activation.prepare": frozenset(
+        {
+            "activation",
+            "approval",
+            "approvalMembers",
+            "approvalConsumption",
+            "activationRevisions",
+            "canaryRevisions",
+            "publicationReceipt",
+            "generationPublicationEnvelopeDigest",
+            "decisionGateEvidenceDigest",
+            "policySignatureEvidenceDigest",
+        }
+    ),
+    "policy.activation.record-inclusion": frozenset(
+        {
+            "preparationDigest",
+            "inclusions",
+            "auditStoreIdentityDigest",
+            "generationPublicationEnvelopeDigest",
+            "decisionGateEvidenceDigest",
+        }
+    ),
+    "policy.activation.finalize": frozenset(
+        {
+            "preparationDigest",
+            "inclusionReceiptEnvelopeDigests",
+            "activationAttemptId",
+            "canaryId",
+            "activationRevisionNumbers",
+            "canaryRevisionNumbers",
+            "controlPlaneApprovalIds",
+            "approverIds",
+            "requesterId",
+            "publicationReceiptEnvelopeDigest",
+            "rollbackAuthorizationDigest",
+        }
+    ),
+    "policy.activation.abort": frozenset(
+        {"preparationDigest", "reason", "abortedBy"}
+    ),
+}
+
+
+def _policy_authority_portal_text(
+    value: Any,
+    *,
+    label: str,
+    maximum: int = 256,
+) -> str:
+    if (
+        not isinstance(value, str)
+        or not value
+        or value != value.strip()
+        or len(value.encode("utf-8")) > maximum
+    ):
+        raise HTTPException(status_code=422, detail=f"{label} is invalid")
+    return value
+
+
+def _policy_authority_portal_digest(value: Any, *, label: str) -> str:
+    text = _policy_authority_portal_text(value, label=label)
+    if re.fullmatch(r"sha256:[0-9a-f]{64}", text) is None:
+        raise HTTPException(
+            status_code=422,
+            detail=f"{label} is not a canonical SHA-256 digest",
+        )
+    return text
+
+
+def _policy_authority_reject_private_material(
+    value: Any,
+    *,
+    path: str,
+    depth: int = 0,
+    budget: dict[str, int] | None = None,
+) -> None:
+    if budget is None:
+        budget = {"nodes": 0, "string_bytes": 0}
+    budget["nodes"] += 1
+    if depth > 20 or budget["nodes"] > 16_384:
+        raise HTTPException(
+            status_code=422,
+            detail=f"{path} exceeds the private-material inspection bound",
+        )
+    if isinstance(value, dict):
+        if len(value) > 512:
+            raise HTTPException(
+                status_code=422,
+                detail=f"{path} exceeds the object member bound",
+            )
+        for key, member in value.items():
+            if not isinstance(key, str):
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"{path} contains a non-string key",
+                )
+            normalized = re.sub(r"[^a-z0-9]", "", key.lower())
+            if any(
+                marker in normalized
+                for marker in (
+                    "privatekey",
+                    "secretkey",
+                    "signingseed",
+                    "seedphrase",
+                    "recoveryphrase",
+                    "mnemonic",
+                    "clientsecret",
+                    "sharedsecret",
+                    "accesstoken",
+                    "refreshtoken",
+                    "bearertoken",
+                    "password",
+                )
+            ):
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"{path}.{key} contains forbidden key material",
+                )
+            _policy_authority_reject_private_material(
+                member,
+                path=f"{path}.{key}",
+                depth=depth + 1,
+                budget=budget,
+            )
+    elif isinstance(value, list):
+        if len(value) > 4096:
+            raise HTTPException(
+                status_code=422,
+                detail=f"{path} exceeds the array member bound",
+            )
+        for index, member in enumerate(value):
+            _policy_authority_reject_private_material(
+                member,
+                path=f"{path}[{index}]",
+                depth=depth + 1,
+                budget=budget,
+            )
+    elif isinstance(value, str):
+        encoded_length = len(value.encode("utf-8"))
+        budget["string_bytes"] += encoded_length
+        if (
+            encoded_length > 8 * 1024 * 1024
+            or budget["string_bytes"] > 16 * 1024 * 1024
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail=f"{path} exceeds the string inspection bound",
+            )
+        stripped = value.strip()
+        lowered = stripped.lower()
+        if (
+            re.search(
+                r"-----begin [a-z0-9 ]*private key-----",
+                lowered,
+            )
+            or re.match(r"^(?:bearer|basic|token)\s+[A-Za-z0-9._~+/-]+=*$", stripped, re.I)
+            or re.fullmatch(
+                r"[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}",
+                stripped,
+            )
+            or re.search(r"^[a-z][a-z0-9+.-]*://[^/@:\s]+:[^/@\s]+@", stripped, re.I)
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail=f"{path} contains forbidden private or token material",
+            )
+        if (
+            depth < 20
+            and encoded_length <= 1024 * 1024
+            and stripped[:1] in {"{", "["}
+        ):
+            try:
+                embedded = strict_json_loads(stripped)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                embedded = None
+            if isinstance(embedded, (dict, list)):
+                _policy_authority_reject_private_material(
+                    embedded,
+                    path=f"{path}<embedded-json>",
+                    depth=depth + 1,
+                    budget=budget,
+                )
+
+
+def _policy_authority_portal_step(
+    value: Any,
+    *,
+    operation: str,
+) -> dict[str, Any]:
+    if (
+        not isinstance(value, dict)
+        or set(value) != _POLICY_AUTHORITY_PORTAL_STEP_FIELDS
+        or value.get("operation") != operation
+        or not isinstance(value.get("arguments"), dict)
+        or set(value["arguments"])
+        != _POLICY_AUTHORITY_PORTAL_ARGUMENT_FIELDS[operation]
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail=f"{operation} package step is not closed",
+        )
+    arguments = value["arguments"]
+    if operation == "policy.activation.prepare":
+        for field in (
+            "activation",
+            "approval",
+            "approvalConsumption",
+            "publicationReceipt",
+        ):
+            if not isinstance(arguments[field], dict) or not arguments[field]:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"{operation} {field} is not an executable record",
+                )
+        members = arguments["approvalMembers"]
+        activation_revisions = arguments["activationRevisions"]
+        canary_revisions = arguments["canaryRevisions"]
+        if (
+            not isinstance(members, list)
+            or not 1 <= len(members) <= 2
+            or any(not isinstance(item, dict) or not item for item in members)
+            or not isinstance(activation_revisions, list)
+            or len(activation_revisions) != 4
+            or [item.get("status") for item in activation_revisions]
+                != ["prepared", "approved", "publishing", "committed"]
+            or not isinstance(canary_revisions, list)
+            or len(canary_revisions) != 2
+            or [item.get("status") for item in canary_revisions]
+                != ["activating", "active"]
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail=f"{operation} lifecycle records are not exact",
+            )
+        for field in (
+            "generationPublicationEnvelopeDigest",
+            "decisionGateEvidenceDigest",
+            "policySignatureEvidenceDigest",
+        ):
+            _policy_authority_portal_digest(
+                arguments[field], label=f"{operation} {field}"
+            )
+    elif operation == "policy.activation.record-inclusion":
+        inclusions = arguments["inclusions"]
+        if (
+            arguments["preparationDigest"] is not None
+            or not isinstance(inclusions, list)
+            or not 1 <= len(inclusions) <= 64
+            or any(not isinstance(item, dict) or not item for item in inclusions)
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail=f"{operation} is not a post-prepare template",
+            )
+        for field in (
+            "auditStoreIdentityDigest",
+            "generationPublicationEnvelopeDigest",
+            "decisionGateEvidenceDigest",
+        ):
+            _policy_authority_portal_digest(
+                arguments[field], label=f"{operation} {field}"
+            )
+    elif operation == "policy.activation.finalize":
+        if (
+            arguments["preparationDigest"] is not None
+            or arguments["inclusionReceiptEnvelopeDigests"] != []
+            or not isinstance(arguments["activationRevisionNumbers"], list)
+            or len(arguments["activationRevisionNumbers"]) != 4
+            or not isinstance(arguments["canaryRevisionNumbers"], list)
+            or len(arguments["canaryRevisionNumbers"]) != 2
+            or not isinstance(arguments["controlPlaneApprovalIds"], list)
+            or not 1 <= len(arguments["controlPlaneApprovalIds"]) <= 2
+            or not isinstance(arguments["approverIds"], list)
+            or not 1 <= len(arguments["approverIds"]) <= 2
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail=f"{operation} is not an exact post-inclusion template",
+            )
+        for field in (
+            "publicationReceiptEnvelopeDigest",
+        ):
+            _policy_authority_portal_digest(
+                arguments[field], label=f"{operation} {field}"
+            )
+        if arguments["rollbackAuthorizationDigest"] is not None:
+            _policy_authority_portal_digest(
+                arguments["rollbackAuthorizationDigest"],
+                label=f"{operation} rollbackAuthorizationDigest",
+            )
+        for field in (
+            "activationAttemptId",
+            "canaryId",
+            "requesterId",
+        ):
+            _policy_authority_portal_text(
+                arguments[field], label=f"{operation} {field}", maximum=1024
+            )
+    else:
+        _policy_authority_portal_digest(
+            arguments["preparationDigest"],
+            label=f"{operation} preparationDigest",
+        )
+        _policy_authority_portal_text(
+            arguments["reason"], label=f"{operation} reason", maximum=1024
+        )
+        _policy_authority_portal_text(
+            arguments["abortedBy"],
+            label=f"{operation} abortedBy",
+            maximum=1024,
+        )
+    _policy_authority_canonical_bytes(value)
+    return copy.deepcopy(value)
+
+
+def _policy_authority_portal_package(
+    value: Any,
+    *,
+    purpose: Literal[
+        "handoff",
+        "decision-gate-activation",
+        "authority-finalization",
+        "abort",
+    ],
+) -> dict[str, Any]:
+    _policy_authority_reject_private_material(
+        value, path="policy-authority portal package"
+    )
+    if (
+        not isinstance(value, dict)
+        or set(value) != _POLICY_AUTHORITY_PORTAL_PACKAGE_FIELDS
+        or value.get("apiVersion")
+        != "serverware.policyAuthorityPortalPackage/v1"
+        or not isinstance(value.get("handoff"), dict)
+        or set(value["handoff"])
+        != _POLICY_AUTHORITY_PORTAL_HANDOFF_FIELDS
+        or not isinstance(value.get("activation"), dict)
+        or not set(value["activation"]).issubset(
+            _POLICY_AUTHORITY_PORTAL_ACTIVATION_FIELDS
+        )
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="policy-authority portal package is not closed",
+        )
+    handoff = copy.deepcopy(value["handoff"])
+    for field in ("candidateId", "canaryId", "instanceId"):
+        _policy_authority_portal_text(
+            handoff[field], label=f"portal handoff {field}"
+        )
+    for field in (
+        "artifactEnvelopeDigest",
+        "assignmentEnvelopeDigest",
+        "loadReceiptEnvelopeDigest",
+        "bootId",
+        "runtimeAttestationHandoffDigest",
+        "predecessorPolicyHash",
+    ):
+        _policy_authority_portal_digest(
+            handoff[field], label=f"portal handoff {field}"
+        )
+    raw_activation = value["activation"]
+    activation: dict[str, Any] = {}
+    if "prepare" in raw_activation:
+        activation["prepare"] = _policy_authority_portal_step(
+            raw_activation["prepare"],
+            operation="policy.activation.prepare",
+        )
+    if "recordInclusions" in raw_activation:
+        inclusions = raw_activation["recordInclusions"]
+        if not isinstance(inclusions, list) or len(inclusions) > 64:
+            raise HTTPException(
+                status_code=422,
+                detail="activation inclusion package exceeds its fixed bound",
+            )
+        activation["recordInclusions"] = [
+            _policy_authority_portal_step(
+                item,
+                operation="policy.activation.record-inclusion",
+            )
+            for item in inclusions
+        ]
+    if "finalize" in raw_activation:
+        activation["finalize"] = _policy_authority_portal_step(
+            raw_activation["finalize"],
+            operation="policy.activation.finalize",
+        )
+    if "abort" in raw_activation:
+        activation["abort"] = _policy_authority_portal_step(
+            raw_activation["abort"],
+            operation="policy.activation.abort",
+        )
+    activation_fields = set(activation)
+    if purpose in {"handoff", "decision-gate-activation"} and activation_fields:
+        raise HTTPException(
+            status_code=422,
+            detail=f"{purpose} package must not contain authority finalization",
+        )
+    if purpose == "authority-finalization" and (
+        activation_fields != {"prepare", "recordInclusions", "finalize"}
+        or not activation["recordInclusions"]
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "authority-finalization package requires prepare, at least one audit "
+                "inclusion, and finalize steps"
+            ),
+        )
+    if purpose == "abort" and activation_fields != {"abort"}:
+        raise HTTPException(
+            status_code=422,
+            detail="abort package requires one previously prepared abort step",
+        )
+    normalized = {
+        "apiVersion": "serverware.policyAuthorityPortalPackage/v1",
+        "handoff": handoff,
+        "activation": activation,
+    }
+    _policy_authority_canonical_bytes(normalized)
+    return normalized
+
+
+def _exact_policy_candidate_handoff_context(
+    handoff: Mapping[str, Any],
+) -> dict[str, Any]:
+    try:
+        artifact = db.get_policy_candidate_artifact(
+            artifact_envelope_digest=handoff["artifactEnvelopeDigest"]
+        )
+        assignment = db.get_policy_canary_assignment(
+            assignment_envelope_digest=handoff["assignmentEnvelopeDigest"]
+        )
+        load_receipt = db.get_policy_canary_load_receipt(
+            canary_id=handoff["canaryId"],
+            instance_id=handoff["instanceId"],
+            boot_id=handoff["bootId"],
+            load_receipt_envelope_digest=
+                handoff["loadReceiptEnvelopeDigest"],
+        )
+        generation_trust = db.get_policy_shadow_generation_trust_context(
+            canary_id=handoff["canaryId"],
+            instance_id=handoff["instanceId"],
+            boot_id=handoff["bootId"],
+            runtime_attestation_handoff_digest=
+                handoff["runtimeAttestationHandoffDigest"],
+        )
+        high_water = db.get_policy_high_water()
+    except db.PolicyCandidateAuthorityConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (
+        db.MetadataStoreError,
+        db.PolicyCandidateAuthorityError,
+    ) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="durable policy candidate handoff evidence is unavailable",
+        ) from exc
+    if (
+        artifact is None
+        or assignment is None
+        or load_receipt is None
+        or high_water is None
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="every candidate handoff record must already be durable",
+        )
+    if (
+        artifact["candidate_id"] != handoff["candidateId"]
+        or artifact["artifact_envelope_digest"]
+        != handoff["artifactEnvelopeDigest"]
+        or assignment["canary_id"] != handoff["canaryId"]
+        or assignment["assignment_envelope_digest"]
+        != handoff["assignmentEnvelopeDigest"]
+        or assignment["artifact_envelope_digest"]
+        != artifact["artifact_envelope_digest"]
+        or load_receipt["load_receipt_envelope_digest"]
+        != handoff["loadReceiptEnvelopeDigest"]
+        or load_receipt["assignment_envelope_digest"]
+        != assignment["assignment_envelope_digest"]
+        or load_receipt["artifact_envelope_digest"]
+        != artifact["artifact_envelope_digest"]
+        or generation_trust["runtime_attestation_handoff_digest"]
+        != handoff["runtimeAttestationHandoffDigest"]
+        or generation_trust["candidate_id"] != handoff["candidateId"]
+        or generation_trust["assignment_envelope_digest"]
+        != assignment["assignment_envelope_digest"]
+        or generation_trust["load_receipt_envelope_digest"]
+        != load_receipt["load_receipt_envelope_digest"]
+        or assignment["candidate_policy_hash"] != artifact["policy_hash"]
+        or load_receipt["candidate_policy_hash"] != artifact["policy_hash"]
+        or artifact["predecessor_policy_hash"]
+        != handoff["predecessorPolicyHash"]
+        or high_water["policy_id"] != artifact["policy_id"]
+        or high_water["policy_hash"]
+        != artifact["predecessor_policy_hash"]
+        or int(high_water["sequence"])
+        != int(artifact["predecessor_policy_sequence"])
+        or int(high_water["rollback_epoch"])
+        != int(artifact["predecessor_rollback_epoch"])
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="candidate handoff is not the exact current durable chain",
+        )
+    active = get_policy_snapshot()
+    if active is None:
+        raise HTTPException(
+            status_code=409,
+            detail="active policy bundle is unavailable",
+        )
+    if (
+        active.hash != high_water["policy_hash"]
+        or _policy_metadata_int(active.raw, "sequence")
+        != int(high_water["sequence"])
+        or _policy_metadata_int(active.raw, "rollbackEpoch")
+        != int(high_water["rollback_epoch"])
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="active policy bundle differs from durable high-water",
+        )
+    return {
+        "artifact": artifact,
+        "assignment": assignment,
+        "load_receipt": load_receipt,
+        "generation_trust": generation_trust,
+        "high_water": high_water,
+        "active": active,
+    }
+
+
+def _bind_policy_authority_activation_package(
+    package: Mapping[str, Any],
+    context: Mapping[str, Any],
+    *,
+    require_durable_generation: bool,
+) -> None:
+    prepare = package["activation"].get("prepare")
+    abort_only = package["activation"].get("abort")
+    if prepare is None:
+        if abort_only is None:
+            raise HTTPException(
+                status_code=409,
+                detail="authority package has no phase-valid operation",
+            )
+        preparation_digest = abort_only["arguments"].get(
+            "preparationDigest"
+        )
+        try:
+            preparation = db.get_policy_activation_preparation(
+                preparation_digest
+            )
+        except (
+            db.MetadataStoreError,
+            db.PolicyCandidateAuthorityError,
+        ) as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="durable activation preparation recovery is unavailable",
+            ) from exc
+        if preparation is None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "cancellation is unavailable before a durable authority "
+                    "preparation exists"
+                ),
+            )
+        return
+    attempt = prepare["arguments"].get("activation")
+    artifact = context["artifact"]
+    assignment = context["assignment"]
+    handoff = package["handoff"]
+    exact = {
+        "artifact_envelope_digest": artifact["artifact_envelope_digest"],
+        "artifact_payload_digest": artifact["artifact_payload_digest"],
+        "assignment_envelope_digest": assignment["assignment_envelope_digest"],
+        "assignment_payload_digest": assignment["assignment_payload_digest"],
+        "canary_id": handoff["canaryId"],
+        "candidate_policy_hash": artifact["policy_hash"],
+        "candidate_policy_sequence": artifact["policy_sequence"],
+        "candidate_rollback_epoch": artifact["rollback_epoch"],
+        "predecessor_policy_hash": artifact["predecessor_policy_hash"],
+        "expected_active_policy_sequence":
+            artifact["predecessor_policy_sequence"],
+        "expected_active_rollback_epoch":
+            artifact["predecessor_rollback_epoch"],
+    }
+    if not isinstance(attempt, dict) or any(
+        attempt.get(field) != expected for field, expected in exact.items()
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="activation package does not bind the exact handoff chain",
+        )
+    generation_digest = prepare["arguments"][
+        "generationPublicationEnvelopeDigest"
+    ]
+    if require_durable_generation:
+        try:
+            generation = db.get_policy_shadow_generation_publication(
+                canary_id=handoff["canaryId"],
+                instance_id=handoff["instanceId"],
+                boot_id=handoff["bootId"],
+            )
+        except (
+            db.MetadataStoreError,
+            db.PolicyCandidateAuthorityError,
+        ) as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="durable generation publication is unavailable",
+            ) from exc
+        if generation is None or any(
+            actual != expected
+            for actual, expected in (
+                (
+                    generation["generation_publication_envelope_digest"],
+                    generation_digest,
+                ),
+                (generation["candidate_id"], handoff["candidateId"]),
+                (generation["canary_id"], handoff["canaryId"]),
+                (
+                    generation["assignment_envelope_digest"],
+                    handoff["assignmentEnvelopeDigest"],
+                ),
+                (
+                    generation["load_receipt_envelope_digest"],
+                    handoff["loadReceiptEnvelopeDigest"],
+                ),
+                (generation["instance_id"], handoff["instanceId"]),
+                (generation["boot_id"], handoff["bootId"]),
+                (
+                    generation["active_policy_hash"],
+                    handoff["predecessorPolicyHash"],
+                ),
+                (
+                    generation["candidate_policy_hash"],
+                    artifact["policy_hash"],
+                ),
+                (
+                    generation["attestation_chain_digest"],
+                    context["generation_trust"][
+                        "runtime_attestation_chain_digest"
+                    ],
+                ),
+            )
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="activation package lacks its exact durable generation",
+            )
+    for inclusion in package["activation"].get("recordInclusions", []):
+        if (
+            inclusion["arguments"]["preparationDigest"] is not None
+            or
+            inclusion["arguments"][
+                "generationPublicationEnvelopeDigest"
+            ]
+            != generation_digest
+            or inclusion["arguments"]["decisionGateEvidenceDigest"]
+            != prepare["arguments"]["decisionGateEvidenceDigest"]
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "activation inclusion changed the generation or "
+                    "decision-gate evidence"
+                ),
+            )
+    finalize = package["activation"].get("finalize")
+    abort = package["activation"].get("abort")
+    if finalize is not None:
+        publication_receipt = prepare["arguments"][
+            "publicationReceipt"
+        ]
+        activation_revisions = prepare["arguments"][
+            "activationRevisions"
+        ]
+        canary_revisions = prepare["arguments"]["canaryRevisions"]
+        if (
+            finalize["arguments"]["preparationDigest"] is not None
+            or finalize["arguments"][
+                "inclusionReceiptEnvelopeDigests"
+            ] != []
+            or
+            finalize["arguments"]["activationAttemptId"]
+            != attempt.get("activation_attempt_id")
+            or finalize["arguments"]["canaryId"] != handoff["canaryId"]
+            or finalize["arguments"]["publicationReceiptEnvelopeDigest"]
+            != publication_receipt.get(
+                "publication_receipt_envelope_digest"
+            )
+            or finalize["arguments"]["requesterId"]
+            != attempt.get("requested_by")
+            or finalize["arguments"]["rollbackAuthorizationDigest"]
+            != attempt.get("rollback_authorization_digest")
+            or finalize["arguments"]["activationRevisionNumbers"]
+            != [item.get("revision") for item in activation_revisions]
+            or finalize["arguments"]["canaryRevisionNumbers"]
+            != [item.get("revision") for item in canary_revisions]
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="activation finalization changed the prepared transition",
+            )
+    if abort is not None:
+        _policy_authority_portal_digest(
+            abort["arguments"]["preparationDigest"],
+            label="abort durable preparation digest",
+        )
+
+
+@app.post("/api/policy/authority/candidates/package")
+async def policy_authority_candidate_package_import(
+    request: Request,
+    payload: PolicyAuthorityPortalPackageImportRequest,
+    identity: AdminIdentity = Depends(require_role("policy_publisher")),
+) -> dict[str, Any]:
+    content_length = request.headers.get("content-length")
+    try:
+        content_length_value = int(content_length or "")
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=411,
+            detail="policy-authority package import requires a bounded content length",
+        ) from exc
+    if (
+        request.scope.get("query_string", b"")
+        or request.headers.get("content-type") != "application/json"
+        or not 2 <= content_length_value <= 12 * 1024 * 1024
+    ):
+        raise HTTPException(
+            status_code=415,
+            detail="policy-authority package import requires exact JSON framing",
+        )
+    package = _policy_authority_portal_package(
+        payload.package,
+        purpose=payload.purpose,
+    )
+    context = _exact_policy_candidate_handoff_context(package["handoff"])
+    phase_state = "executable"
+    generation = None
+    if payload.purpose == "decision-gate-activation":
+        try:
+            generation = db.get_policy_shadow_generation_publication(
+                canary_id=package["handoff"]["canaryId"],
+                instance_id=package["handoff"]["instanceId"],
+                boot_id=package["handoff"]["bootId"],
+            )
+            if generation is not None:
+                db.get_policy_shadow_activation_material(
+                    canary_id=package["handoff"]["canaryId"],
+                    generation_id=generation["generation_id_digest"],
+                )
+        except db.PolicyCandidateAuthorityConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except (
+            db.MetadataStoreError,
+            db.PolicyCandidateAuthorityError,
+        ) as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="decision-gate activation material is unavailable",
+            ) from exc
+        if generation is None:
+            raise HTTPException(
+                status_code=409,
+                detail="decision-gate activation requires its durable generation",
+            )
+    elif payload.purpose in {"authority-finalization", "abort"}:
+        _bind_policy_authority_activation_package(
+            package,
+            context,
+            require_durable_generation=True,
+        )
+        if payload.purpose == "authority-finalization":
+            prepare = package["activation"]["prepare"]
+            generation_digest = prepare["arguments"][
+                "generationPublicationEnvelopeDigest"
+            ]
+            generation = db.get_policy_shadow_generation_publication(
+                canary_id=package["handoff"]["canaryId"],
+                instance_id=package["handoff"]["instanceId"],
+                boot_id=package["handoff"]["bootId"],
+            )
+            activation_publication = (
+                None
+                if generation is None
+                else db.get_policy_shadow_generation_activation_publication(
+                    generation_id=generation["generation_id_digest"]
+                )
+            )
+            if (
+                generation is None
+                or generation[
+                    "generation_publication_envelope_digest"
+                ] != generation_digest
+                or activation_publication is None
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "authority finalization is unavailable before durable "
+                        "custody activation publication"
+                    ),
+                )
+            if (
+                activation_publication["external_evidence_status"]
+                == "non-production-trusted-host"
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "trusted-host activation evidence is not "
+                        "authority-finalization eligible"
+                    ),
+                )
+            try:
+                external_receipt = (
+                    db.get_verified_policy_authority_external_evidence(
+                        evidence_digest=prepare["arguments"][
+                            "decisionGateEvidenceDigest"
+                        ],
+                        evidence_type="decision-gate-publication-chain/v1",
+                        binding_digest=activation_publication[
+                            "decision_gate_binding_digest"
+                        ],
+                        statement_digest=activation_publication[
+                            "decision_gate_statement_digest"
+                        ],
+                    )
+                )
+            except db.PolicyCandidateAuthorityConflictError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            except (
+                db.MetadataStoreError,
+                db.PolicyCandidateAuthorityError,
+            ) as exc:
+                raise HTTPException(
+                    status_code=503,
+                    detail="native external-evidence verification is unavailable",
+                ) from exc
+            if external_receipt is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "error": "decision_gate_external_evidence_not_provisioned",
+                        "statementDigest": activation_publication[
+                            "decision_gate_statement_digest"
+                        ],
+                        "bindingDigest": activation_publication[
+                            "decision_gate_binding_digest"
+                        ],
+                    },
+                )
+            phase_state = "executable-with-durable-external-evidence"
+    package_bytes = _policy_authority_canonical_bytes(package)
+    package_digest = "sha256:" + hashlib.sha256(package_bytes).hexdigest()
+    request_bytes = _policy_authority_canonical_bytes(
+        payload.model_dump(by_alias=True)
+    )
+    request_digest = "sha256:" + hashlib.sha256(request_bytes).hexdigest()
+    try:
+        claim = db.claim_policy_control_plane_request(
+            request_id=payload.request_id,
+            operation="policy.authority.portal-package.import",
+            payload_digest=request_digest,
+            actor_type="admin",
+            actor_id=identity.user_id,
+            allow_exact_retry=True,
+        )
+    except db.PolicyCandidateAuthorityConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="policy-authority package import request ID was already used",
+        ) from exc
+    return {
+        "ok": True,
+        "apiVersion": "serverware.policyAuthorityPortalPackageImportAck/v1",
+        "requestId": payload.request_id,
+        "purpose": payload.purpose,
+        "phaseState": phase_state,
+        "requestClaimAuditEventHash": claim["audit_event_hash"],
+        "requestPayloadDigest": request_digest,
+        "packageDigest": package_digest,
+        "artifactEnvelopeDigest":
+            context["artifact"]["artifact_envelope_digest"],
+        "assignmentEnvelopeDigest":
+            context["assignment"]["assignment_envelope_digest"],
+        "loadReceiptEnvelopeDigest":
+            context["load_receipt"]["load_receipt_envelope_digest"],
+        "runtimeAttestationHandoffDigest":
+            context["generation_trust"][
+                "runtime_attestation_handoff_digest"
+            ],
+        "predecessorPolicyHash": context["high_water"]["policy_hash"],
+        "generationId": (
+            generation["generation_id_digest"]
+            if generation is not None
+            else None
+        ),
+        "generationPublicationEnvelopeDigest": (
+            generation["generation_publication_envelope_digest"]
+            if generation is not None
+            else None
+        ),
+        "portalPackage": package,
+    }
+
+
+@app.post("/api/policy/authority/candidates/handoff")
+async def policy_authority_candidate_handoff(
+    request: Request,
+    payload: PolicyAuthorityCandidateHandoffRequest,
+    identity: AdminIdentity = Depends(require_role("policy_publisher")),
+) -> dict[str, Any]:
+    if (
+        request.scope.get("query_string", b"")
+        or request.headers.get("content-type") != "application/json"
+        or request.headers.get("content-length") is None
+    ):
+        raise HTTPException(
+            status_code=415,
+            detail="policy candidate handoff requires exact JSON framing",
+        )
+    context = _exact_policy_candidate_handoff_context(
+        {
+            "candidateId": payload.candidate_id,
+            "artifactEnvelopeDigest": payload.artifact_envelope_digest,
+            "canaryId": payload.canary_id,
+            "assignmentEnvelopeDigest":
+                payload.assignment_envelope_digest,
+            "loadReceiptEnvelopeDigest":
+                payload.load_receipt_envelope_digest,
+            "instanceId": payload.instance_id,
+            "bootId": payload.boot_id,
+            "runtimeAttestationHandoffDigest":
+                payload.runtime_attestation_handoff_digest,
+            "predecessorPolicyHash": payload.predecessor_policy_hash,
+        }
+    )
+    artifact = context["artifact"]
+    assignment = context["assignment"]
+    load_receipt = context["load_receipt"]
+    generation_trust = context["generation_trust"]
+    active = context["active"]
+    try:
+        candidate = compile_policy_bundle(
+            payload.candidate_policy_bundle,
+            verify_signature=True,
+            validate_schema=True,
+        )
+    except PolicyBundleError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="candidate PolicyBundle is invalid",
+        ) from exc
+    _assert_policy_candidate_credential_bindings(candidate)
+    candidate_bundle_digest = _policy_canary_bundle_digest(
+        payload.candidate_policy_bundle
+    )
+    if (
+        candidate.hash != artifact["policy_hash"]
+        or candidate_bundle_digest != artifact["policy_bundle_digest"]
+        or candidate_bundle_digest != assignment["policy_bundle_digest"]
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="candidate PolicyBundle changed after authority staging",
+        )
+    assignment_envelope = _policy_authority_json_object(
+        assignment["assignment_envelope_json"],
+        label="signed assignment envelope",
+    )
+    load_receipt_envelope = _policy_authority_json_object(
+        load_receipt["load_receipt_envelope_json"],
+        label="signed load-receipt envelope",
+    )
+    active_sequence = _policy_metadata_int(active.raw, "sequence")
+    active_rollback_epoch = _policy_metadata_int(
+        active.raw, "rollbackEpoch"
+    )
+    if (
+        active_sequence != int(artifact["predecessor_policy_sequence"])
+        or active_rollback_epoch
+        != int(artifact["predecessor_rollback_epoch"])
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="active policy high-water changed before handoff",
+        )
+    active_bundle_digest = "sha256:" + hashlib.sha256(
+        _policy_authority_canonical_bytes(active.raw)
+    ).hexdigest()
+    runtime_attestation = _policy_authority_json_object(
+        generation_trust["runtime_attestation_json"],
+        label="durable runtime-attestation handoff",
+    )
+    if (
+        set(runtime_attestation)
+        != _POLICY_SHADOW_RUNTIME_ATTESTATION_HANDOFF_FIELDS
+        or runtime_attestation.get("apiVersion")
+        != "serverware.policyShadowRuntimeAttestationHandoff/v2"
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="durable runtime-attestation handoff is not closed",
+        )
+    identity_request = {
+        "activePolicyBundle": active.raw,
+        "apiVersion": "serverware.policyShadowGenerationInstall/v2",
+        "assignment": assignment_envelope,
+        "candidatePolicyBundle": payload.candidate_policy_bundle,
+        "loadReceipt": load_receipt_envelope,
+        "requestId": payload.request_id,
+        "runtimeAttestation": runtime_attestation,
+    }
+    request_identity_digest = "sha256:" + hashlib.sha256(
+        _policy_authority_canonical_bytes(identity_request)
+    ).hexdigest()
+    try:
+        request_identities = (
+            db.derive_policy_shadow_generation_request_identities(
+                request_id=payload.request_id,
+                actor_id=identity.user_id,
+                candidate_id=payload.candidate_id,
+                canary_id=payload.canary_id,
+                instance_id=payload.instance_id,
+                boot_id=payload.boot_id,
+                assignment_envelope_digest=
+                    assignment["assignment_envelope_digest"],
+                load_receipt_envelope_digest=
+                    load_receipt["load_receipt_envelope_digest"],
+                active_policy_hash=active.hash,
+                active_policy_bundle_digest=active_bundle_digest,
+                candidate_policy_hash=artifact["policy_hash"],
+                candidate_policy_bundle_digest=candidate_bundle_digest,
+                runtime_attestation_chain_digest=
+                    generation_trust["runtime_attestation_chain_digest"],
+                request_identity_digest=request_identity_digest,
+            )
+        )
+    except db.PolicyCandidateAuthorityError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="durable generation request identity is unavailable",
+        ) from exc
+    handoff = {
+        **identity_request,
+        "managementHandoffId":
+            request_identities["management_handoff_id"],
+        "replayId": request_identities["replay_id"],
+    }
+    if set(handoff) != _POLICY_SHADOW_GENERATION_REQUEST_FIELDS:
+        raise HTTPException(
+            status_code=503,
+            detail="generation handoff request fields are not exact",
+        )
+    handoff_body = _policy_authority_canonical_bytes(handoff)
+    handoff_digest = "sha256:" + hashlib.sha256(handoff_body).hexdigest()
+    latest_context = _exact_policy_candidate_handoff_context(
+        {
+            "candidateId": payload.candidate_id,
+            "artifactEnvelopeDigest": payload.artifact_envelope_digest,
+            "canaryId": payload.canary_id,
+            "assignmentEnvelopeDigest":
+                payload.assignment_envelope_digest,
+            "loadReceiptEnvelopeDigest":
+                payload.load_receipt_envelope_digest,
+            "instanceId": payload.instance_id,
+            "bootId": payload.boot_id,
+            "runtimeAttestationHandoffDigest":
+                payload.runtime_attestation_handoff_digest,
+            "predecessorPolicyHash": payload.predecessor_policy_hash,
+        }
+    )
+    latest_active_digest = "sha256:" + hashlib.sha256(
+        _policy_authority_canonical_bytes(latest_context["active"].raw)
+    ).hexdigest()
+    if (
+        latest_context["high_water"] != context["high_water"]
+        or latest_active_digest != active_bundle_digest
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="active durable predecessor changed before handoff",
+        )
+    _assert_policy_candidate_credential_bindings(candidate)
+    try:
+        replay_claim = db.claim_policy_shadow_generation_request(
+            request_id=payload.request_id,
+            replay_id=request_identities["replay_id"],
+            management_handoff_id=
+                request_identities["management_handoff_id"],
+            request_identity_digest=request_identity_digest,
+            payload_digest=handoff_digest,
+            actor_id=identity.user_id,
+        )
+    except db.PolicyCandidateAuthorityConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "policy candidate handoff request ID conflicts with "
+                "different immutable input"
+            ),
+        ) from exc
+    try:
+        recovered = db.get_policy_shadow_generation_publication_by_request(
+            request_id=payload.request_id,
+            replay_id=request_identities["replay_id"],
+            management_handoff_id=
+                request_identities["management_handoff_id"],
+            request_payload_digest=handoff_digest,
+        )
+    except (
+        db.MetadataStoreError,
+        db.PolicyCandidateAuthorityError,
+    ) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="durable generation publication recovery is unavailable",
+        ) from exc
+    if recovered is not None:
+        return _policy_shadow_publication_result(
+            recovered,
+            recovered=True,
+        )
+
+    response = await _run_bounded_blocking(
+        _POLICY_AUTHORITY_HANDOFF_SLOTS,
+        _post_policy_shadow_generation,
+        body=handoff_body,
+    )
+    staged_record = _policy_shadow_publication_stage_record(
+        response,
+        management_request_json=handoff_body.decode("ascii"),
+        actor_id=identity.user_id,
+    )
+    try:
+        publication = await _run_bounded_blocking(
+            _POLICY_AUTHORITY_HANDOFF_SLOTS,
+            db.stage_policy_shadow_generation_publication,
+            staged_record,
+        )
+    except db.PolicyCandidateAuthorityConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "signed decision-gate publication conflicts with "
+                "durable authority state"
+            ),
+        ) from exc
+    except db.PolicyCandidateAuthorityError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "signed decision-gate publication is malformed or "
+                "not authorized by its startup attestation"
+            ),
+        ) from exc
+    except db.MetadataStoreError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="signed generation publication could not be persisted",
+        ) from exc
+    db.record_audit_event(
+        "policy.candidate.handoff.published",
+        {
+            "request_id": payload.request_id,
+            "request_claim_audit_event_hash":
+                replay_claim["audit_event_hash"],
+            "handoff_digest": handoff_digest,
+            "candidate_id": payload.candidate_id,
+            "artifact_envelope_digest":
+                payload.artifact_envelope_digest,
+            "canary_id": payload.canary_id,
+            "instance_id": payload.instance_id,
+            "assignment_envelope_digest":
+                payload.assignment_envelope_digest,
+            "load_receipt_envelope_digest":
+                payload.load_receipt_envelope_digest,
+            "runtime_attestation_handoff_digest":
+                payload.runtime_attestation_handoff_digest,
+            "predecessor_policy_hash":
+                payload.predecessor_policy_hash,
+            "generation_id": publication["generation_id_digest"],
+            "publication_envelope_digest":
+                publication[
+                    "generation_publication_envelope_digest"
+                ],
+            "publication_verification_receipt_digest":
+                publication["verification_receipt_digest"],
+            "runtime_attestation_receipt_digest":
+                publication[
+                    "runtime_attestation_receipt_envelope_digest"
+                ],
+            "attestation_chain_digest":
+                publication["attestation_chain_digest"],
+        },
+        actor_type="admin",
+        actor_id=identity.user_id,
+        idempotency_key=(
+            "policy-candidate-handoff-published:" + payload.request_id
+        ),
+    )
+    return _policy_shadow_publication_result(
+        publication,
+        recovered=False,
+    )
+
+
+def _policy_shadow_activation_publication_result(
+    publication: Mapping[str, Any],
+    *,
+    recovered: bool,
+) -> dict[str, Any]:
+    trusted_host = (
+        publication["external_evidence_status"]
+        == "non-production-trusted-host"
+    )
+    return {
+        "ok": True,
+        "apiVersion":
+            "serverware.policyAuthorityDecisionGateActivationResult/v1",
+        "requestId": publication["request_id"],
+        "replayId": publication["replay_id"],
+        "requestSha256": publication["request_digest"],
+        "responseSha256": publication["response_digest"],
+        "canaryId": publication["canary_id"],
+        "candidateId": publication["candidate_id"],
+        "generationId": publication["generation_id_digest"],
+        "generationPublicationEnvelopeDigest":
+            publication["generation_publication_envelope_digest"],
+        "activationPublicationEnvelopeDigest":
+            publication["activation_publication_envelope_digest"],
+        "runtimeAttestationVerifierEnvelopeDigest":
+            publication[
+                "runtime_attestation_verifier_envelope_digest"
+            ],
+        "decisionGateBindingDigest":
+            publication["decision_gate_binding_digest"],
+        "decisionGateStatementDigest":
+            publication["decision_gate_statement_digest"],
+        "evidenceChainDigest": publication["evidence_chain_digest"],
+        "externalEvidenceStatus": publication["external_evidence_status"],
+        "activationAssuranceClass": (
+            "trusted-host-no-tee" if trusted_host else "tee-hardware"
+        ),
+        "productionEligible": not trusted_host,
+        "trustedAtEpochNs": publication["trusted_at_epoch_ns"],
+        "expiresAtEpochNs": publication["expires_at_epoch_ns"],
+        "activationRequest": strict_json_loads(publication["request_json"]),
+        "activationResponse": strict_json_loads(publication["response_json"]),
+        "decisionGateBinding": strict_json_loads(
+            publication["decision_gate_binding_json"]
+        ),
+        "decisionGateStatement": strict_json_loads(
+            publication["decision_gate_statement_json"]
+        ),
+        "authorityFinalizationState": (
+            "not-eligible-non-production-trusted-host"
+            if trusted_host
+            else "awaiting-external-verifier"
+        ),
+        "recovered": recovered,
+    }
+
+
+@app.post("/api/policy/authority/candidates/decision-gate-activate")
+async def policy_authority_candidate_decision_gate_activate(
+    request: Request,
+    payload: PolicyAuthorityDecisionGateActivationRequest,
+    identity: AdminIdentity = Depends(require_role("policy_publisher")),
+) -> dict[str, Any]:
+    content_length = request.headers.get("content-length")
+    try:
+        content_length_value = int(content_length or "")
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=411,
+            detail="decision-gate activation requires a bounded content length",
+        ) from exc
+    if (
+        request.scope.get("query_string", b"")
+        or request.headers.get("content-type") != "application/json"
+        or not 2 <= content_length_value <= 64 * 1024
+    ):
+        raise HTTPException(
+            status_code=415,
+            detail="decision-gate activation requires exact bounded JSON framing",
+        )
+    try:
+        durable = db.get_policy_shadow_generation_activation_publication(
+            generation_id=payload.generation_id
+        )
+        material_value = db.get_policy_shadow_activation_material(
+            canary_id=payload.canary_id,
+            generation_id=payload.generation_id,
+        )
+    except db.PolicyCandidateAuthorityConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (
+        db.MetadataStoreError,
+        db.PolicyCandidateAuthorityError,
+    ) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="durable decision-gate activation evidence is unavailable",
+        ) from exc
+    if durable is not None:
+        if (
+            durable["canary_id"] != payload.canary_id
+            or durable["generation_publication_envelope_digest"]
+            != payload.generation_publication_envelope_digest
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="generation activation identity was already used differently",
+            )
+        return _policy_shadow_activation_publication_result(
+            durable, recovered=True
+        )
+    if material_value is None:
+        raise HTTPException(
+            status_code=409,
+            detail="the exact durable generation activation material is absent",
+        )
+    material = _policy_authority_plain(material_value)
+    if (
+        material["generation_publication_envelope_digest"]
+        != payload.generation_publication_envelope_digest
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="activation does not name the exact durable generation publication",
+        )
+    request_id, replay_id = _policy_shadow_activation_identities(material)
+    activation_request = {
+        "apiVersion": "serverware.policyShadowGenerationActivationRequest/v1",
+        "requestId": request_id,
+        "replayId": replay_id,
+        "generationId": material["generation_id"],
+        "generationPublicationEnvelopeSha256":
+            material["generation_publication_envelope_digest"],
+        "policyAuthorityAnalysis": material["policy_authority_analysis"],
+        "members": [
+            {
+                "loadReceipt": member["load_receipt"],
+                "runtimeAttestation": member["runtime_attestation"],
+                "runtimeAttestationVerification":
+                    member["runtime_attestation_verification"],
+                "checkpoints": member["checkpoints"],
+            }
+            for member in material["members"]
+        ],
+        "readiness": material["readiness"],
+    }
+    if set(activation_request) != _POLICY_SHADOW_ACTIVATION_REQUEST_FIELDS:
+        raise HTTPException(
+            status_code=503,
+            detail="server activation request assembly is not closed",
+        )
+    activation_bytes = _policy_authority_canonical_bytes(activation_request)
+    if not 2 <= len(activation_bytes) <= 16 * 1024 * 1024:
+        raise HTTPException(
+            status_code=413,
+            detail="server activation request exceeds its fixed body bound",
+        )
+    activation_digest = "sha256:" + hashlib.sha256(
+        activation_bytes
+    ).hexdigest()
+    try:
+        db.claim_policy_control_plane_request(
+            request_id=request_id,
+            operation="policy.shadow-generation.activate",
+            payload_digest=activation_digest,
+            actor_type="admin",
+            actor_id=identity.user_id,
+            allow_exact_retry=True,
+        )
+    except db.PolicyCandidateAuthorityConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="activation request identity conflicts with prior bytes",
+        ) from exc
+    response = await _run_bounded_blocking(
+        _POLICY_AUTHORITY_HANDOFF_SLOTS,
+        _post_policy_shadow_generation,
+        body=activation_bytes,
+        path=_POLICY_SHADOW_GENERATION_ACTIVATION_PATH,
+    )
+    staged = _policy_shadow_activation_response_record(
+        response,
+        request=activation_request,
+        request_bytes=activation_bytes,
+        material=material,
+        actor_id=identity.user_id,
+    )
+    try:
+        publication = await _run_bounded_blocking(
+            _POLICY_AUTHORITY_HANDOFF_SLOTS,
+            db.stage_policy_shadow_generation_activation_publication,
+            staged,
+        )
+    except db.PolicyCandidateAuthorityConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (
+        db.MetadataStoreError,
+        db.PolicyCandidateAuthorityError,
+    ) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="verified decision-gate activation could not be persisted",
+        ) from exc
+    db.record_audit_event(
+        "policy.candidate.decision_gate_activation.published",
+        {
+            "request_id": request_id,
+            "request_digest": activation_digest,
+            "canary_id": material["canary_id"],
+            "candidate_id": material["candidate_id"],
+            "generation_id": material["generation_id"],
+            "activation_publication_envelope_digest":
+                publication["activation_publication_envelope_digest"],
+            "decision_gate_statement_digest":
+                publication["decision_gate_statement_digest"],
+            "external_evidence_status":
+                publication["external_evidence_status"],
+        },
+        actor_type="admin",
+        actor_id=identity.user_id,
+        idempotency_key="policy-decision-gate-activation:" + request_id,
+    )
+    return _policy_shadow_activation_publication_result(
+        publication, recovered=False
+    )
+
+
 @app.post("/api/policy/candidate")
 def policy_candidate(
     payload: PolicyCandidateRequest,
@@ -6458,298 +9844,311 @@ def policy_publish(
     payload: PolicyPublishRequest,
     identity: AdminIdentity = Depends(require_role("policy_publisher")),
 ) -> dict[str, Any]:
-    payload_digest = _policy_publish_payload_digest(payload)
-    if payload.activation_mode == "full" and POLICY_CANARY_REQUIRED:
-        raise HTTPException(
-            status_code=412,
-            detail="policy canary activation is required before full publish",
-        )
-    if payload.activation_mode == "canary":
-        report = _policy_candidate_report(
-            bundle=payload.bundle,
-            dry_run=payload.dry_run,
-            enforce_monotonic=True,
-        )
-        metadata = (
-            report["signedBundle"].get("metadata")
-            if isinstance(report["signedBundle"].get("metadata"), dict)
-            else {}
-        )
-        policy_id = metadata.get("id")
-        candidate_hash = report["candidate"]["policyHash"]
-        previous_hash = report["current"]["policyHash"]
-        if candidate_hash == previous_hash:
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "error": "policy_canary_candidate_already_active",
-                    "candidatePolicyHash": candidate_hash,
-                },
-            )
-        candidate_bundle_digest = _policy_canary_bundle_digest(
-            report["signedBundle"]
-        )
-        payload_digest = _policy_canary_start_payload_digest(
-            payload,
-            candidate_policy_hash=candidate_hash,
-            previous_policy_hash=previous_hash,
-            candidate_bundle_sha256=candidate_bundle_digest,
-        )
-        mfa = _require_control_plane_mutation_mfa(
-            action="policy.publish",
-            resource_id=policy_id,
-            payload_digest=payload_digest,
-            mfa=payload.mfa,
-            identity=identity,
-        )
-        approval_request = {
-            "policy_id": policy_id,
-            "previous_policy_hash": previous_hash,
-            "candidate_policy_hash": candidate_hash,
-            "previous_sequence": report["current"]["sequence"],
-            "new_sequence": metadata.get("sequence"),
-            "previous_rollback_epoch": report["current"]["rollbackEpoch"],
-            "new_rollback_epoch": metadata.get("rollbackEpoch"),
-            "diff": report["diff"],
-            "dry_run": report["dryRun"],
-        }
-        if _control_plane_two_person_required("policy.publish") and not (
-            _control_plane_approval_id(payload.mfa)
-        ):
-            _require_control_plane_two_person(
-                action="policy.publish",
-                resource_id=policy_id,
-                payload_digest=payload_digest,
-                mfa=payload.mfa,
-                identity=identity,
-                request=approval_request,
-            )
-            raise AssertionError("policy canary approval request unexpectedly returned")
-        return _start_policy_canary(
-            payload=payload,
-            payload_digest=payload_digest,
-            approved_candidate_policy_hash=candidate_hash,
-            approved_previous_policy_hash=previous_hash,
-            approved_candidate_bundle_sha256=candidate_bundle_digest,
-            identity=identity,
-            mfa=mfa,
-        )
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "error": "legacy_policy_publish_disabled",
+            "authorityEndpoint": "/api/authority/control-plane/execute",
+            "artifactEvidenceEndpoint":
+                "/api/data-plane/policy-candidate/artifact",
+            "canaryEvidenceEndpoint":
+                "/api/data-plane/policy-canary/evidence",
+            "packageImportEndpoint":
+                "/api/policy/authority/candidates/package",
+            "handoffEndpoint":
+                "/api/policy/authority/candidates/handoff",
+            "challengeEndpoint":
+                "/api/authority/webauthn/challenges",
+        },
+    )
 
-    report = _policy_candidate_report(
-        bundle=payload.bundle,
-        dry_run=payload.dry_run,
-        enforce_monotonic=True,
-    )
-    idempotent_snapshot = get_policy_snapshot()
-    if (
-        idempotent_snapshot is not None
-        and idempotent_snapshot.hash
-        == report["candidate"]["policyHash"]
-        == report["current"]["policyHash"]
-    ):
-        return _completed_policy_publish_report(report, idempotent_snapshot)
-    approved_candidate_hash = report["candidate"]["policyHash"]
-    approved_previous_hash = report["current"]["policyHash"]
-    approved_bundle_digest = _policy_canary_bundle_digest(
-        report["signedBundle"]
-    )
-    payload_digest = _policy_publication_ceremony_payload_digest(
-        payload,
-        candidate_policy_hash=approved_candidate_hash,
-        previous_policy_hash=approved_previous_hash,
-        candidate_bundle_sha256=approved_bundle_digest,
-    )
-    metadata = (
-        report["signedBundle"].get("metadata")
-        if isinstance(report["signedBundle"].get("metadata"), dict)
-        else {}
-    )
-    policy_id = metadata.get("id")
-    mfa = _require_control_plane_mutation_mfa(
-        action="policy.publish",
-        resource_id=policy_id,
-        payload_digest=payload_digest,
-        mfa=payload.mfa,
-        identity=identity,
-    )
-    approval_request = {
-        "policy_id": policy_id,
-        "previous_policy_hash": approved_previous_hash,
-        "candidate_policy_hash": approved_candidate_hash,
-        "previous_sequence": report["current"]["sequence"],
-        "new_sequence": metadata.get("sequence"),
-        "previous_rollback_epoch": report["current"]["rollbackEpoch"],
-        "new_rollback_epoch": metadata.get("rollbackEpoch"),
-        "diff": report["diff"],
-        "dry_run": report["dryRun"],
-    }
-    if _control_plane_two_person_required("policy.publish") and not (
-        _control_plane_approval_id(payload.mfa)
-    ):
-        _require_control_plane_two_person(
-            action="policy.publish",
-            resource_id=policy_id,
-            payload_digest=payload_digest,
-            mfa=payload.mfa,
-            identity=identity,
-            request=approval_request,
-        )
-        raise AssertionError("policy approval request unexpectedly returned")
 
-    publication_recovery: dict[str, Any] = {"snapshot": None}
-    with _policy_publication_file_lock():
-        locked_report = _policy_candidate_report(
-            bundle=payload.bundle,
-            dry_run=payload.dry_run,
-            enforce_monotonic=True,
+def _durable_policy_canary_status(
+    canary_id: str | None,
+) -> dict[str, Any]:
+    try:
+        head = (
+            db.get_policy_canary_head(canary_id)
+            if canary_id is not None
+            else db.get_latest_policy_canary_head()
         )
-        locked_candidate_hash = locked_report["candidate"]["policyHash"]
-        locked_previous_hash = locked_report["current"]["policyHash"]
-        locked_bundle_digest = _policy_canary_bundle_digest(
-            locked_report["signedBundle"]
+        if head is None:
+            return {"ok": True, "canary": None, "monitoring": None}
+        durable_canary_id = str(head["canary_id"])
+        assignment = db.get_policy_canary_assignment(
+            canary_id=durable_canary_id
         )
-        locked_payload_digest = _policy_publication_ceremony_payload_digest(
-            payload,
-            candidate_policy_hash=locked_candidate_hash,
-            previous_policy_hash=locked_previous_hash,
-            candidate_bundle_sha256=locked_bundle_digest,
+        readiness = db.get_policy_canary_readiness(
+            canary_id=durable_canary_id
         )
-        if not (
-            hmac.compare_digest(
-                locked_candidate_hash,
-                approved_candidate_hash,
-            )
-            and locked_previous_hash == approved_previous_hash
-            and hmac.compare_digest(
-                locked_bundle_digest,
-                approved_bundle_digest,
-            )
-            and hmac.compare_digest(
-                locked_payload_digest,
-                payload_digest,
-            )
-        ):
-            raise HTTPException(
-                status_code=409,
-                detail="policy candidate or predecessor changed before publication",
-            )
-        locked_snapshot = get_policy_snapshot()
-        if (
-            locked_snapshot is not None
-            and locked_snapshot.hash
-            == locked_candidate_hash
-            == locked_previous_hash
-        ):
-            return _completed_policy_publish_report(
-                locked_report,
-                locked_snapshot,
-            )
-        expected_previous_policy_hash = locked_previous_hash
-        if (
-            locked_snapshot is None
-            and expected_previous_policy_hash == locked_candidate_hash
-        ):
-            committed_publication = db.get_policy_publication(
-                locked_candidate_hash
-            )
-            if (
-                committed_publication is not None
-                and committed_publication.get("status") == "committed"
-            ):
-                expected_previous_policy_hash = committed_publication.get(
-                    "previous_policy_hash"
-                )
-        staged_publication = _stage_policy_bundle_for_transaction(
-            locked_report["signedBundle"],
-            expected_previous_policy_hash=expected_previous_policy_hash,
-        )
-        metadata = (
-            locked_report["signedBundle"].get("metadata")
-            if isinstance(locked_report["signedBundle"].get("metadata"), dict)
-            else {}
-        )
-        policy_id = metadata.get("id")
-        approval_request = {
-            "policy_id": policy_id,
-            "previous_policy_hash": locked_previous_hash,
-            "candidate_policy_hash": locked_candidate_hash,
-            "previous_sequence": locked_report["current"]["sequence"],
-            "new_sequence": metadata.get("sequence"),
-            "previous_rollback_epoch": locked_report["current"][
-                "rollbackEpoch"
-            ],
-            "new_rollback_epoch": metadata.get("rollbackEpoch"),
-            "diff": locked_report["diff"],
-            "dry_run": locked_report["dryRun"],
-        }
-        with (
-            _restore_files_on_error(
-                POLICY_BUNDLE_PATH,
-                authoritative_policy=lambda: publication_recovery["snapshot"],
-            ),
-            db.connect() as connection,
-        ):
-            db.lock_policy_publication(connection)
-            two_person = _require_control_plane_two_person(
-                action="policy.publish",
-                resource_id=policy_id,
-                payload_digest=payload_digest,
-                mfa=payload.mfa,
-                identity=identity,
-                request=approval_request,
-                connection=connection,
-            )
-            snapshot = _write_policy_bundle_in_transaction(
-                staged_publication,
-                connection=connection,
-            )
-            publication_recovery["snapshot"] = snapshot
-            db.append_audit_event(
-                connection,
-                event_type="policy.published",
-                actor_type="admin",
-                actor_id=identity.user_id,
-                event={
-                    "activation_mode": "full",
-                    "policy_id": policy_id,
-                    "previous_policy_hash": locked_previous_hash,
-                    "new_policy_hash": snapshot.hash,
-                    "previous_sequence": locked_report["current"]["sequence"],
-                    "new_sequence": metadata.get("sequence"),
-                    "previous_rollback_epoch": locked_report["current"][
-                        "rollbackEpoch"
-                    ],
-                    "new_rollback_epoch": metadata.get("rollbackEpoch"),
-                    "diff": locked_report["diff"],
-                    "dry_run": locked_report["dryRun"],
-                    "control_plane_mfa": mfa,
-                    "control_plane_approval": two_person,
-                    "payload_digest": payload_digest,
-                },
-            )
-    committed_snapshot = get_policy_snapshot()
-    if committed_snapshot is None or committed_snapshot.hash != snapshot.hash:
+    except (
+        db.MetadataStoreError,
+        db.PolicyCandidateAuthorityError,
+    ) as exc:
         raise HTTPException(
             status_code=503,
-            detail="committed policy publication is not readable",
+            detail="durable policy-canary state is unavailable",
+        ) from exc
+    if assignment is None:
+        raise HTTPException(
+            status_code=503,
+            detail="durable policy-canary assignment is missing",
         )
-    return _completed_policy_publish_report(locked_report, committed_snapshot)
+
+    instance_evidence: tuple[Mapping[str, Any], ...] = ()
+    evidence_complete = False
+    if readiness is not None:
+        try:
+            instance_evidence = (
+                db.get_policy_canary_assigned_instance_evidence(
+                    durable_canary_id
+                )
+            )
+            evidence_complete = (
+                len(instance_evidence)
+                == int(readiness["expected_instance_count"])
+                and all(
+                    item["instance_head_revision"]["status"] == "sealed"
+                    and item["checkpoint_head"]["sealed"] in {True, 1}
+                    and item["load_receipt"]["evidence_kind"]
+                    == "load_receipt"
+                    and item["generation_publication"]["evidence_kind"]
+                    == "generation_publication"
+                    and item["generation_publication"][
+                        "assignment_envelope_digest"
+                    ]
+                    == assignment["assignment_envelope_digest"]
+                    and item["generation_publication"][
+                        "load_receipt_envelope_digest"
+                    ]
+                    == item["load_receipt"][
+                        "load_receipt_envelope_digest"
+                    ]
+                    and re.fullmatch(
+                        r"sha256:[0-9a-f]{64}",
+                        str(
+                            item["load_receipt"][
+                                "verification_receipt_digest"
+                            ]
+                        ),
+                    )
+                    is not None
+                    and re.fullmatch(
+                        r"sha256:[0-9a-f]{64}",
+                        str(
+                            item["generation_publication"][
+                                "verification_receipt_digest"
+                            ]
+                        ),
+                    )
+                    is not None
+                    and re.fullmatch(
+                        r"sha256:[0-9a-f]{64}",
+                        str(
+                            item["generation_publication"][
+                                "rust_attestation_verification_receipt_digest"
+                            ]
+                        ),
+                    )
+                    is not None
+                    and item["generation_publication"]["signing_key_id"]
+                    == item["generation_publication"][
+                        "publication_signing_key_id"
+                    ]
+                    == item["generation_publication"][
+                        "publication_signing_key_spki_digest"
+                    ]
+                    and isinstance(
+                        item["generation_publication"][
+                            "generation_evidence_json"
+                        ],
+                        str,
+                    )
+                    for item in instance_evidence
+                )
+            )
+        except db.PolicyCandidateAuthorityConflictError:
+            evidence_complete = False
+        except (
+            db.MetadataStoreError,
+            db.PolicyCandidateAuthorityError,
+        ) as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="signed policy-canary instance evidence is unavailable",
+            ) from exc
+    readiness_bound = bool(
+        readiness is not None
+        and readiness["status"] == "ready"
+        and readiness["canary_id"] == durable_canary_id
+        and readiness["assignment_envelope_digest"]
+        == assignment["assignment_envelope_digest"]
+        and readiness["assignment_payload_digest"]
+        == assignment["assignment_payload_digest"]
+        and head["readiness_envelope_digest"]
+        == readiness["readiness_envelope_digest"]
+        and head["readiness_payload_digest"]
+        == readiness["readiness_payload_digest"]
+        and head["sealed_checkpoint_root_digest"]
+        == readiness["sealed_checkpoint_root_digest"]
+        and head["sealed_instance_set_digest"]
+        == readiness["sealed_instance_set_digest"]
+        and head["status"]
+        in {
+            "ready",
+            "activating",
+            "active",
+            "verifying",
+            "completed",
+        }
+    )
+    candidate_evaluation_implemented = bool(
+        readiness_bound and evidence_complete
+    )
+    decision_gate_activation = None
+    if instance_evidence:
+        local_generation = min(
+            instance_evidence,
+            key=lambda item: int(
+                item["generation_publication"]["member_ordinal"]
+            ),
+        )["generation_publication"]
+        try:
+            activation_publication = (
+                db.get_policy_shadow_generation_activation_publication(
+                    generation_id=local_generation["generation_id_digest"]
+                )
+            )
+        except (
+            db.MetadataStoreError,
+            db.PolicyCandidateAuthorityError,
+        ) as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="durable custody activation state is unavailable",
+            ) from exc
+        decision_gate_activation = {
+            "generationId": local_generation["generation_id_digest"],
+            "generationPublicationEnvelopeDigest": local_generation[
+                "generation_publication_envelope_digest"
+            ],
+            "publication": (
+                None
+                if activation_publication is None
+                else {
+                    "activationPublicationEnvelopeDigest":
+                        activation_publication[
+                            "activation_publication_envelope_digest"
+                        ],
+                    "statementDigest": activation_publication[
+                        "decision_gate_statement_digest"
+                    ],
+                    "bindingDigest": activation_publication[
+                        "decision_gate_binding_digest"
+                    ],
+                    "externalEvidenceStatus": activation_publication[
+                        "external_evidence_status"
+                    ],
+                    "expiresAtEpochNs": activation_publication[
+                        "expires_at_epoch_ns"
+                    ],
+                }
+            ),
+        }
+    canary = {
+        "id": durable_canary_id,
+        "status": head["status"],
+        "revision": int(head["revision"]),
+        "candidatePolicyHash":
+            assignment["candidate_policy_hash"],
+        "candidateSequence": (
+            int(readiness["candidate_policy_sequence"])
+            if readiness is not None
+            else None
+        ),
+        "assignmentEnvelopeDigest":
+            assignment["assignment_envelope_digest"],
+        "assignmentRevision":
+            int(assignment["assignment_revision"]),
+        "expectedInstanceCount": (
+            int(readiness["expected_instance_count"])
+            if readiness is not None
+            else None
+        ),
+        "readinessPayloadDigest": (
+            readiness["readiness_payload_digest"]
+            if readiness is not None
+            else None
+        ),
+        "createdAtEpochNs": int(head["created_at_epoch_ns"]),
+        "observationStartedAtEpochNs":
+            head["observation_started_at_epoch_ns"],
+        "sealedAtEpochNs": head["sealed_at_epoch_ns"],
+        "terminalAtEpochNs": head["terminal_at_epoch_ns"],
+    }
+    monitoring = {
+        "candidateShadowEvaluationImplemented":
+            candidate_evaluation_implemented,
+        "signedReadinessPresent": readiness is not None,
+        "signedReadinessBound": readiness_bound,
+        "assignedInstanceEvidenceComplete": evidence_complete,
+        "assignedInstanceEvidenceCount": len(instance_evidence),
+        "auditEvents": (
+            int(readiness["evaluated_request_count"])
+            if readiness is not None
+            else 0
+        ),
+        "observedRequests": (
+            int(readiness["observed_request_count"])
+            if readiness is not None
+            else 0
+        ),
+        "droppedRequests": (
+            int(readiness["dropped_request_count"])
+            if readiness is not None
+            else 0
+        ),
+        "evaluationErrors": (
+            int(readiness["evaluation_error_count"])
+            if readiness is not None
+            else 0
+        ),
+        "routeCoverageComplete": candidate_evaluation_implemented,
+        "complete": candidate_evaluation_implemented,
+    }
+    return {
+        "ok": True,
+        "apiVersion": "serverware.policyCanaryDurableStatus/v1",
+        "canary": canary,
+        "monitoring": monitoring,
+        "decisionGateActivation": decision_gate_activation,
+        "authorityFinalizationState": (
+            "awaiting-custody-activation"
+            if not decision_gate_activation
+            or decision_gate_activation["publication"] is None
+            else "trusted-host-activation-complete-non-production"
+            if decision_gate_activation["publication"][
+                "externalEvidenceStatus"
+            ] == "non-production-trusted-host"
+            else "external-finalization-package-required"
+        ),
+        "cancellationState": "requires-durable-authority-preparation",
+    }
 
 
 @app.get("/api/policy/canary/status")
 def policy_canary_status(
+    canary_id: str | None = Query(
+        default=None,
+        alias="canaryId",
+        min_length=1,
+        max_length=256,
+    ),
     _: AdminIdentity = Depends(
         require_role("auditor", "policy_publisher", "policy_author")
     ),
 ) -> dict[str, Any]:
-    state = _read_policy_canary_state()
-    if not state:
-        return {"ok": True, "canary": None, "monitoring": None}
-    return {
-        "ok": True,
-        "canary": _policy_canary_public(state),
-        "monitoring": _policy_canary_monitor(state),
-    }
+    return _durable_policy_canary_status(canary_id)
 
 
 @app.post("/api/policy/canary/activate")
@@ -6757,85 +10156,19 @@ def policy_canary_activate(
     payload: PolicyCanaryActivationRequest,
     identity: AdminIdentity = Depends(require_role("policy_publisher")),
 ) -> dict[str, Any]:
-    del identity
-    with _policy_publication_file_lock():
-        state = _read_policy_canary_state()
-        if not state or state.get("id") != payload.canary_id:
-            raise HTTPException(status_code=404, detail="policy canary not found")
-        if state.get("status") != "running":
-            raise HTTPException(
-                status_code=409,
-                detail=f"policy canary is {state.get('status')}",
-            )
-        signed_bundle = _verified_policy_canary_bundle(state)
-        try:
-            candidate = compile_policy_bundle(
-                signed_bundle,
-                verify_signature=True,
-                validate_schema=True,
-            )
-        except PolicyBundleError as exc:
-            raise HTTPException(
-                status_code=409,
-                detail=f"policy canary bundle is invalid: {exc}",
-            ) from exc
-        metadata = (
-            signed_bundle.get("metadata")
-            if isinstance(signed_bundle.get("metadata"), dict)
-            else {}
-        )
-        predecessor_hash = state.get("previous_policy_hash")
-        expected_canary_id = _policy_canary_id(
-            candidate.hash,
-            metadata.get("sequence"),
-            predecessor_hash,
-        )
-        if not (
-            candidate.hash == state.get("candidate_policy_hash")
-            and hmac.compare_digest(expected_canary_id, payload.canary_id)
-            and hmac.compare_digest(
-                _policy_canary_bundle_digest(signed_bundle),
-                str(state.get("candidate_bundle_sha256") or ""),
-            )
-        ):
-            raise HTTPException(
-                status_code=409,
-                detail="policy canary identity no longer matches its locked candidate",
-            )
-        _assert_policy_candidate_credential_bindings(candidate)
-        current = get_policy_snapshot()
-        current_hash = current.hash if current else None
-        durable_authority_hash = (
-            _policy_canary_authority_hash() if current is None else None
-        )
-        if current_hash == candidate.hash or (
-            current is None and durable_authority_hash == candidate.hash
-        ):
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "error": "policy_canary_candidate_already_active",
-                    "candidatePolicyHash": candidate.hash,
-                },
-            )
-        if current_hash != predecessor_hash and not (
-            current is None
-            and durable_authority_hash == predecessor_hash
-        ):
-            raise HTTPException(
-                status_code=409,
-                detail="active policy changed after canary start",
-            )
-        if current is not None:
-            _assert_policy_publish_monotonic(current.raw, signed_bundle)
-        monitor = _policy_canary_monitor(state)
-        _policy_canary_activate_payload_digest(payload, state)
-        _require_policy_canary_activation_thresholds(
-            state,
-            monitor,
-            payload,
-        )
-    raise AssertionError("unavailable candidate-shadow evaluation was accepted")
+    del payload, identity
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "error": "legacy_policy_canary_activate_disabled",
+            "authorityEndpoint":
+                "/api/authority/control-plane/execute",
+            "challengeEndpoint":
+                "/api/authority/webauthn/challenges",
+            "prepareOperation": "policy.activation.prepare",
+            "finalizeOperation": "policy.activation.finalize",
+        },
+    )
 
 
 @app.post("/api/policy/canary/cancel")
@@ -6843,48 +10176,17 @@ def policy_canary_cancel(
     payload: PolicyCanaryCancelRequest,
     identity: AdminIdentity = Depends(require_role("policy_publisher")),
 ) -> dict[str, Any]:
-    state = _read_policy_canary_state()
-    if not state or state.get("id") != payload.canary_id:
-        raise HTTPException(status_code=404, detail="policy canary not found")
-    if state.get("status") != "running":
-        raise HTTPException(
-            status_code=409, detail=f"policy canary is {state.get('status')}"
-        )
-    with (
-        _policy_publication_file_lock(),
-        _restore_files_on_error(POLICY_CANARY_STATE_PATH),
-        db.connect() as connection,
-    ):
-        db.lock_policy_publication(connection)
-        state = _read_policy_canary_state()
-        if not state or state.get("id") != payload.canary_id:
-            raise HTTPException(status_code=404, detail="policy canary not found")
-        if state.get("status") != "running":
-            raise HTTPException(
-                status_code=409, detail=f"policy canary is {state.get('status')}"
-            )
-        state.update(
-            {
-                "status": "cancelled",
-                "cancelled_at": _now_iso(),
-                "cancelled_by": identity.user_id,
-                "cancel_note": payload.note,
-            }
-        )
-        _write_policy_canary_state(state)
-        db.append_audit_event(
-            connection,
-            event_type="policy.canary.cancelled",
-            actor_type="admin",
-            actor_id=identity.user_id,
-            event={
-                "canary_id": state.get("id"),
-                "policy_id": state.get("policy_id"),
-                "candidate_policy_hash": state.get("candidate_policy_hash"),
-                "note": payload.note,
-            },
-        )
-    return {"ok": True, "canary": _policy_canary_public(state)}
+    del payload, identity
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "error": "legacy_policy_canary_cancel_disabled",
+            "authorityEndpoint": "/api/authority/control-plane/execute",
+            "abortOperation": "policy.activation.abort",
+            "challengeEndpoint":
+                "/api/authority/webauthn/challenges",
+        },
+    )
 
 
 def _setup_check(
@@ -7091,23 +10393,11 @@ def _setup_credential_binding_checks(
         else {}
     )
     injection_type = str(injection.get("type") or "")
-    expected_type = "bearer" if stored_kind == "oauth2" else stored_kind
-    injection_matches = bool(injection_type) and injection_type == expected_type
-    if injection_matches and stored_kind == "oauth2":
-        injection_matches = (
-            str(injection.get("header") or "Authorization").lower() == "authorization"
-            and injection.get("field") == "access_token"
-        )
-    if injection_matches and injection_type in {"header", "query", "cookie"}:
-        injection_matches = injection.get("name") == metadata.get("injection_name")
-    if injection_matches and injection_type == "basic":
-        injection_matches = bool(metadata.get("username")) and injection.get(
-            "username"
-        ) == metadata.get("username")
-    if injection_matches and metadata.get("injection_field") is not None:
-        injection_matches = injection.get("field") == metadata.get("injection_field")
-    if injection_matches and metadata.get("injection_prefix") is not None:
-        injection_matches = injection.get("prefix") == metadata.get("injection_prefix")
+    try:
+        _assert_credential_injection_binding(credential, policy_credential)
+        injection_matches = True
+    except HTTPException:
+        injection_matches = False
     checks.append(
         _setup_check(
             "credential.injectionBinding",
@@ -7122,13 +10412,25 @@ def _setup_credential_binding_checks(
 
     managed_oauth = stored_kind == "oauth2" or metadata.get("oauth") is True
     if not managed_oauth:
+        static_binding = False
+        try:
+            _assert_credential_policy_binding(credential, policy_credential)
+            if route is None:
+                raise HTTPException(status_code=409, detail="route is unavailable")
+            _assert_route_credential_binding(route, credential, policy_credential)
+            static_binding = True
+        except HTTPException:
+            static_binding = False
         checks.extend(
             [
                 _setup_check(
                     "credential.providerBinding",
-                    passed=True,
-                    summary="Static credential does not require an OAuth subject binding.",
-                    evidence={"provider": policy_credential.provider},
+                    passed=static_binding,
+                    summary="Static provider, account subject, secret class, and signed route binding agree exactly.",
+                    evidence={
+                        "provider": policy_credential.provider,
+                        "providerSubjectBound": static_binding,
+                    },
                 ),
                 _setup_check(
                     "credential.scopeBinding",
@@ -7146,42 +10448,30 @@ def _setup_credential_binding_checks(
         provider_id, provider_subject, _ = db.validate_managed_oauth_account_identity(
             metadata
         )
-        normalized_provider_id = _normalized_credential_provider(provider_id)
-        policy_provider = _normalized_credential_provider(policy_credential.provider)
-        provider_binding = (
-            metadata.get("provider_identity_verified") is True
-            and normalized_provider_id == policy_provider
-            and policy_credential.provider_subject == provider_subject
-        )
-        if provider_binding and normalized_provider_id == "x":
-            app_id = metadata.get("x_app_id") or metadata.get("app_id")
-            configured_app_ids = (
-                route.adapter_config.get("appIds") if route is not None else None
-            )
-            provider_binding = (
-                isinstance(app_id, str)
-                and bool(app_id)
-                and isinstance(configured_app_ids, list)
-                and app_id in configured_app_ids
-            )
-    except db.ManagedOAuthCredentialError:
+        _assert_credential_policy_binding(credential, policy_credential)
+        if route is None:
+            raise HTTPException(status_code=409, detail="route is unavailable")
+        _assert_route_credential_binding(route, credential, policy_credential)
+        provider_binding = metadata.get("provider_identity_verified") is True
+    except (db.ManagedOAuthCredentialError, HTTPException):
         provider_binding = False
     checks.append(
         _setup_check(
             "credential.providerBinding",
             passed=provider_binding,
-            summary="Verified OAuth subject is bound to the same provider and signed policy subject.",
+            summary="Verified OAuth provider, subject, client ID, and signed route binding agree exactly.",
             evidence={
                 "provider": provider_id,
                 "providerSubjectBound": bool(provider_subject),
             },
         )
     )
-    granted_scopes = metadata.get("scopes")
+    granted_scopes: frozenset[str] = frozenset()
     try:
+        granted_scopes = _credential_metadata_scopes(metadata)
         stored_scope_set = frozenset(
             _canonical_oauth_granted_scopes(
-                granted_scopes,
+                list(granted_scopes),
                 field_name="OAuth credential metadata scopes",
             )
         )
@@ -7192,7 +10482,7 @@ def _setup_credential_binding_checks(
             )
         )
         scope_binding = stored_scope_set == policy_scope_set
-    except OAuthError:
+    except (OAuthError, HTTPException):
         scope_binding = False
     checks.append(
         _setup_check(
@@ -7201,9 +10491,7 @@ def _setup_credential_binding_checks(
             summary="Stored and signed-policy OAuth scope sets agree exactly and are non-empty.",
             evidence={
                 "policyScopeCount": len(policy_credential.scopes),
-                "grantedScopeCount": len(granted_scopes)
-                if isinstance(granted_scopes, list)
-                else 0,
+                "grantedScopeCount": len(granted_scopes),
             },
         )
     )
@@ -9301,12 +12589,50 @@ def setup_session_bind_canary(
     ),
 ) -> dict[str, Any]:
     item = _load_setup_session_for_identity(session_id, identity, mutate=True)
-    state = _read_policy_canary_state()
-    if not state or state.get("id") != payload.canary_id:
+    try:
+        head = db.get_policy_canary_head(payload.canary_id)
+        assignment = db.get_policy_canary_assignment(
+            canary_id=payload.canary_id
+        )
+        artifact = (
+            db.get_policy_candidate_artifact(
+                artifact_envelope_digest=
+                    assignment["artifact_envelope_digest"]
+            )
+            if assignment is not None
+            else None
+        )
+    except (
+        db.MetadataStoreError,
+        db.PolicyCandidateAuthorityError,
+    ) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="durable policy candidate evidence is unavailable",
+        ) from exc
+    if head is None or assignment is None or artifact is None:
         raise HTTPException(status_code=404, detail="policy canary not found")
-    if state.get("status") != "running":
+    if head["status"] in {
+        "indeterminate",
+        "failed",
+        "cancelled",
+        "expired",
+        "superseded",
+    }:
         raise HTTPException(status_code=409, detail="policy canary is not usable")
-    signed_bundle = _verified_policy_canary_bundle(state)
+    signed_bundle = payload.candidate_policy_bundle
+    try:
+        signed_bundle_bytes = _policy_authority_canonical_bytes(signed_bundle)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="candidate policy bundle is not canonical JSON",
+        ) from exc
+    if len(signed_bundle_bytes) > 8 * 1024 * 1024:
+        raise HTTPException(
+            status_code=413,
+            detail="candidate policy bundle exceeds 8 MiB",
+        )
     try:
         candidate = compile_policy_bundle(
             signed_bundle, verify_signature=True, validate_schema=True
@@ -9315,24 +12641,27 @@ def setup_session_bind_canary(
         raise HTTPException(
             status_code=409, detail=f"policy canary bundle is invalid: {exc}"
         ) from exc
-    metadata = (
-        signed_bundle.get("metadata")
-        if isinstance(signed_bundle.get("metadata"), dict)
-        else {}
-    )
-    expected_canary_id = _policy_canary_id(
-        candidate.hash,
-        metadata.get("sequence"),
-        state.get("previous_policy_hash"),
-    )
     if not (
-        candidate.hash == state.get("candidate_policy_hash")
-        and hmac.compare_digest(expected_canary_id, payload.canary_id)
-        and candidate.hash != state.get("previous_policy_hash")
+        assignment["canary_id"] == payload.canary_id
+        and head["assignment_envelope_digest"]
+        == assignment["assignment_envelope_digest"]
+        and assignment["artifact_envelope_digest"]
+        == artifact["artifact_envelope_digest"]
+        and assignment["artifact_payload_digest"]
+        == artifact["artifact_payload_digest"]
+        and candidate.hash == assignment["candidate_policy_hash"]
+        == artifact["policy_hash"]
+        and _policy_canary_bundle_digest(signed_bundle)
+        == assignment["policy_bundle_digest"]
+        == artifact["policy_bundle_digest"]
+        and candidate.hash != artifact["predecessor_policy_hash"]
     ):
         raise HTTPException(
             status_code=409,
-            detail="policy canary identity does not match its signed candidate",
+            detail=(
+                "policy canary identity does not match its durable signed "
+                "candidate"
+            ),
         )
     route, raw_route, route_digest = _setup_active_route(
         candidate, str(item.get("route_id") or "")
@@ -9370,7 +12699,7 @@ def setup_session_bind_canary(
                 "route_policy_digest": route_digest,
                 "assignment_digest": assignment_digest,
             },
-            event={"assignment": assignment, "canary_status": state.get("status")},
+            event={"assignment": assignment, "canary_status": head["status"]},
         )
     except db.SetupSessionError as exc:
         _setup_session_error(exc)
@@ -9536,8 +12865,8 @@ def setup_session_verify(
     )
     current = item
     try:
-        # Candidate-shadow provenance is not implemented, so setup cannot
-        # manufacture the canary_result evidence needed for this transition.
+        # This verification endpoint records runtime evidence only. It must not
+        # synthesize the separately authenticated policy-authority canary result.
         if (
             current["phase"] == "canaries_verified"
             and result["runtimeVerified"] is True
@@ -9693,7 +13022,7 @@ def _canonical_oauth_granted_scopes(
         ):
             raise OAuthError(f"{field_name} contains an invalid scope")
         scopes.append(scope)
-    if len(scopes) > 30 or any(len(scope) > 200 for scope in scopes):
+    if len(scopes) > 64 or any(len(scope.encode("utf-8")) > 512 for scope in scopes):
         raise OAuthError(f"{field_name} is too large")
     if len(scopes) != len(set(scopes)):
         raise OAuthError(f"{field_name} contains duplicate scopes")
@@ -11434,6 +14763,22 @@ def break_glass_grant(
             "reason": payload.reason,
         },
     )
+    snapshot = get_policy_snapshot()
+    if (
+        snapshot is None
+        or not hmac.compare_digest(snapshot.hash, payload.policy_hash)
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="break-glass request policy is not the active policy",
+        )
+    route = _active_route_by_id(payload.route_id, snapshot=snapshot)
+    jit = route.jit or {}
+    if jit.get("required") is not True:
+        raise HTTPException(
+            status_code=409,
+            detail="break-glass route does not require a JIT grant",
+        )
     approval = db.ensure_jit_approval_request(
         route_id=payload.route_id,
         method=payload.method,
@@ -11457,28 +14802,12 @@ def break_glass_grant(
         pending_ttl_seconds=60,
         grant_ttl_seconds=payload.grant_ttl_seconds,
         grant_max_uses=payload.grant_max_uses,
+        **db.jit_approver_policy_arguments(jit),
     )
-    approved = db.approve_request(
-        approval["id"],
-        ttl_seconds=payload.grant_ttl_seconds,
-        note=f"break-glass: {payload.reason}",
-        actor_id=identity.user_id,
-        authn={
-            "method": "break_glass",
-            "control_plane_mfa": mfa,
-            "control_plane_approval": two_person,
-            "payload_digest": payload_digest,
-        },
-        required_approver_roles={"approver"},
-    )
-    if not approved:
-        raise HTTPException(
-            status_code=409, detail="break-glass grant could not be approved"
-        )
     db.record_audit_event(
-        "approval.break_glass_granted",
+        "approval.break_glass_requested",
         {
-            "approval_request_id": approved["id"],
+            "approval_request_id": approval["id"],
             "principal_id": payload.principal_id,
             "route_id": payload.route_id,
             "credential_id": payload.credential_id,
@@ -11497,8 +14826,8 @@ def break_glass_grant(
     )
     return {
         "ok": True,
-        "approvalId": approved["id"],
-        "grantRef": f"approval:{approved['id']}",
+        "status": "pending",
+        "approvalId": approval["id"],
         "principalId": payload.principal_id,
         "routeId": payload.route_id,
         "credentialId": payload.credential_id,
@@ -11506,8 +14835,9 @@ def break_glass_grant(
         "policyHash": payload.policy_hash,
         "requestDigest": payload.request_digest,
         "operationDigest": payload.operation_digest,
-        "expiresAt": approved.get("approved_until"),
+        "expiresAt": approval.get("expires_at"),
         "grantMaxUses": payload.grant_max_uses,
+        "webauthnRequired": True,
     }
 
 
@@ -11609,46 +14939,39 @@ def approve(
             status_code=412,
             detail="approval review receipt is invalid, expired, or already used",
         )
-    authn_policy = _approval_authn_policy(jit)
-    authn: dict[str, Any]
-    if _webauthn_required(authn_policy) or (payload and payload.assertion):
-        if not payload or not payload.assertion:
-            raise HTTPException(
-                status_code=412, detail="WebAuthn assertion required for this approval"
-            )
-        try:
-            authn = verify_approval_assertion(
-                approval,
-                identity.user_id,
-                authn_policy,
-                payload.assertion,
-                review_receipt,
-            )
-        except WebAuthnError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
-    else:
-        authn = {
-            "method": identity.auth_method,
-            "user_id": identity.user_id,
-            "review_receipt_id": review_receipt["id"],
-            "review_digest": review_receipt["review_digest"],
-        }
+    if (
+        not payload
+        or not isinstance(payload.assertion, dict)
+        or not payload.authority_challenge_id
+    ):
+        raise HTTPException(
+            status_code=412,
+            detail="authority-bound WebAuthn assertion required",
+        )
+    credential_id = (
+        payload.assertion.get("id")
+        or payload.assertion.get("rawId")
+    )
+    if not isinstance(credential_id, str) or not credential_id:
+        raise HTTPException(
+            status_code=400,
+            detail="WebAuthn credential identity is invalid",
+        )
+    authority_arguments = _jit_approve_authority_arguments(
+        approval=approval,
+        actor_id=identity.user_id,
+        ttl_seconds=ttl_seconds,
+        review_receipt=review_receipt,
+        note=payload.note,
+    )
     try:
-        allowed_approver_ids = set((jit.get("approvers") or {}).get("users") or [])
         updated = db.approve_request(
-            approval_id,
-            ttl_seconds=ttl_seconds,
-            note=payload.note if payload else None,
-            actor_id=identity.user_id,
-            authn=authn,
-            challenge_id=authn.get("challenge_id"),
-            review_receipt_id=review_receipt["id"],
-            review_digest=review_receipt["review_digest"],
-            require_review_receipt=True,
-            required_approver_roles={"approver"},
-            authority_policy_hash=str(approval.get("policy_hash") or ""),
-            authority_route_id=str(approval.get("route_id") or ""),
-            allowed_approver_ids=allowed_approver_ids,
+            **authority_arguments,
+            authn={
+                "assertion": payload.assertion,
+                "credential_id": credential_id,
+            },
+            challenge_id=payload.authority_challenge_id,
         )
     except (db.MetadataStoreError, db.RBACBindingStoreError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -11742,11 +15065,16 @@ def approval_webauthn_options(
             detail="open or refresh the approval review before requesting WebAuthn",
         )
     try:
-        return approval_options(
-            approval,
-            identity.user_id,
-            _approval_authn_policy(jit),
-            review_receipt,
+        return authority_approval_options(
+            user_id=identity.user_id,
+            authn_policy=_approval_authn_policy(jit),
+            target_arguments=_jit_approve_authority_arguments(
+                approval=approval,
+                actor_id=identity.user_id,
+                ttl_seconds=payload.ttl_seconds,
+                review_receipt=review_receipt,
+                note=payload.note,
+            ),
         )
     except WebAuthnError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
@@ -12680,26 +16008,75 @@ def _normalized_credential_provider(value: Any) -> str:
 
 
 def _credential_metadata_scopes(metadata: dict[str, Any]) -> frozenset[str]:
-    raw_scopes = metadata.get("scopes")
-    if raw_scopes is None:
-        raw_scopes = metadata.get("scope")
-    if raw_scopes is None:
+    populated = [
+        metadata[name]
+        for name in ("scopes", "scope")
+        if metadata.get(name) is not None
+    ]
+    if not populated:
         return frozenset()
-    if isinstance(raw_scopes, str):
-        scopes = [item for item in raw_scopes.split() if item]
-    elif isinstance(raw_scopes, list) and all(
-        isinstance(item, str) and item for item in raw_scopes
-    ):
-        scopes = raw_scopes
-    else:
+    normalized: list[frozenset[str]] = []
+    for raw_scopes in populated:
+        if isinstance(raw_scopes, str):
+            scopes = [item for item in raw_scopes.split() if item]
+        elif isinstance(raw_scopes, list) and all(
+            isinstance(item, str)
+            and item
+            and item == item.strip()
+            and not any(character.isspace() for character in item)
+            for item in raw_scopes
+        ):
+            scopes = raw_scopes
+        else:
+            raise HTTPException(
+                status_code=503, detail="credential scope metadata is invalid"
+            )
+        if len(scopes) != len(set(scopes)):
+            raise HTTPException(
+                status_code=503,
+                detail="credential scope metadata contains duplicates",
+            )
+        normalized.append(frozenset(scopes))
+    if any(scopes != normalized[0] for scopes in normalized[1:]):
         raise HTTPException(
-            status_code=503, detail="credential scope metadata is invalid"
+            status_code=409,
+            detail="credential scope metadata aliases are contradictory",
         )
-    if len(scopes) != len(set(scopes)):
+    return normalized[0]
+
+
+def _credential_metadata_binding_alias(
+    metadata: dict[str, Any],
+    names: tuple[str, ...],
+    *,
+    label: str,
+    normalize: Callable[[Any], str] | None = None,
+) -> str:
+    values: list[str] = []
+    normalized: list[str] = []
+    for name in names:
+        if metadata.get(name) is None:
+            continue
+        value = metadata[name]
+        if (
+            not isinstance(value, str)
+            or not value
+            or value != value.strip()
+            or len(value.encode("utf-8")) > 2048
+            or any(ord(character) < 32 or ord(character) == 127 for character in value)
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=f"stored credential {label} metadata is invalid",
+            )
+        values.append(value)
+        normalized.append(normalize(value) if normalize is not None else value)
+    if not values or any(value != normalized[0] for value in normalized[1:]):
         raise HTTPException(
-            status_code=503, detail="credential scope metadata contains duplicates"
+            status_code=409,
+            detail=f"stored credential {label} metadata is missing or contradictory",
         )
-    return frozenset(scopes)
+    return normalized[0]
 
 
 def _assert_credential_policy_binding(
@@ -12709,23 +16086,23 @@ def _assert_credential_policy_binding(
     if not isinstance(metadata, dict):
         raise HTTPException(status_code=503, detail="credential metadata is invalid")
     policy_provider = _normalized_credential_provider(credential_policy.provider)
-    stored_provider = _normalized_credential_provider(
-        metadata.get("provider_id") or metadata.get("provider")
+    stored_provider = _credential_metadata_binding_alias(
+        metadata,
+        ("provider_id", "provider"),
+        label="provider",
+        normalize=_normalized_credential_provider,
     )
-    if policy_provider not in {"", "generic"} and stored_provider != policy_provider:
+    if stored_provider != policy_provider:
         raise HTTPException(
             status_code=409,
             detail="stored credential provider does not match the active signed policy",
         )
-    if (
-        credential_policy.provider_subject is not None
-        and credential.get("kind") != "oauth2"
-    ):
-        raise HTTPException(
-            status_code=409,
-            detail="signed provider account binding requires a verified OAuth credential",
-        )
     if credential.get("kind") == "oauth2":
+        if credential_policy.kind != "oauth2":
+            raise HTTPException(
+                status_code=409,
+                detail="stored OAuth credential type does not match the active signed policy",
+            )
         try:
             verified_provider, stored_subject = db.validate_managed_oauth_identity(
                 metadata
@@ -12737,6 +16114,16 @@ def _assert_credential_policy_binding(
                 status_code=409,
                 detail="verified OAuth provider does not match the active signed policy",
             )
+        stored_subject_alias = _credential_metadata_binding_alias(
+            metadata,
+            ("provider_subject", "account_subject"),
+            label="provider subject",
+        )
+        if not hmac.compare_digest(stored_subject_alias, stored_subject):
+            raise HTTPException(
+                status_code=409,
+                detail="stored OAuth subject aliases do not match the verified identity",
+            )
         policy_subject = credential_policy.provider_subject
         if (
             not isinstance(policy_subject, str)
@@ -12747,10 +16134,25 @@ def _assert_credential_policy_binding(
                 status_code=409,
                 detail="stored OAuth account does not match the active signed policy",
             )
+        stored_client_id = _credential_metadata_binding_alias(
+            metadata,
+            ("oauth_client_id", "client_id", "x_app_id", "app_id"),
+            label="OAuth client ID",
+        )
+        if (
+            not isinstance(credential_policy.oauth_client_id, str)
+            or not hmac.compare_digest(
+                stored_client_id, credential_policy.oauth_client_id
+            )
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="stored OAuth client does not match the active signed policy",
+            )
         try:
             stored_scopes = frozenset(
                 _canonical_oauth_granted_scopes(
-                    metadata.get("scopes"),
+                    list(_credential_metadata_scopes(metadata)),
                     field_name="OAuth credential metadata scopes",
                 )
             )
@@ -12763,17 +16165,32 @@ def _assert_credential_policy_binding(
         except OAuthError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
     else:
+        if credential_policy.kind != "static":
+            raise HTTPException(
+                status_code=409,
+                detail="stored static credential type does not match the active signed policy",
+            )
+        stored_subject = _credential_metadata_binding_alias(
+            metadata,
+            ("provider_subject", "account_subject"),
+            label="provider subject",
+        )
+        if (
+            not isinstance(credential_policy.provider_subject, str)
+            or not hmac.compare_digest(
+                stored_subject, credential_policy.provider_subject
+            )
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="stored credential account does not match the active signed policy",
+            )
         policy_scopes = frozenset(str(item) for item in credential_policy.scopes)
         stored_scopes = _credential_metadata_scopes(metadata)
-    if credential.get("kind") == "oauth2" and stored_scopes != policy_scopes:
+    if stored_scopes != policy_scopes:
         raise HTTPException(
             status_code=409,
-            detail="stored OAuth scopes do not exactly match the active signed policy",
-        )
-    if credential.get("kind") != "oauth2" and not stored_scopes.issubset(policy_scopes):
-        raise HTTPException(
-            status_code=409,
-            detail="stored credential scopes exceed the active signed policy",
+            detail="stored credential scopes do not exactly match the active signed policy",
         )
 
 
@@ -12835,6 +16252,73 @@ def _assert_credential_injection_binding(
         )
 
 
+def _assert_route_credential_binding(
+    route: Any,
+    credential: dict[str, Any],
+    credential_policy: Any,
+) -> None:
+    metadata = credential.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        raise HTTPException(status_code=503, detail="credential metadata is invalid")
+    binding = route.adapter_config.get("credentialBinding")
+    if not isinstance(binding, dict):
+        raise HTTPException(
+            status_code=409,
+            detail=f"route {route.id} has no exact credential binding",
+        )
+    policy_provider = _normalized_credential_provider(credential_policy.provider)
+    if (
+        binding.get("credentialType") != credential_policy.kind
+        or _normalized_credential_provider(binding.get("provider"))
+        != policy_provider
+        or binding.get("subjects") != [credential_policy.provider_subject]
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=f"route {route.id} does not exactly bind the signed credential identity",
+        )
+
+    if credential.get("kind") == "oauth2":
+        client_id = _credential_metadata_binding_alias(
+            metadata,
+            ("oauth_client_id", "client_id", "x_app_id", "app_id"),
+            label="OAuth client ID",
+        )
+        required_scopes = binding.get("requiredScopes")
+        stored_scopes = _credential_metadata_scopes(metadata)
+        if (
+            binding.get("clientIds") != [client_id]
+            or not isinstance(required_scopes, list)
+            or not required_scopes
+            or len(required_scopes) != len(set(required_scopes))
+            or not all(isinstance(scope, str) and scope for scope in required_scopes)
+            or not set(required_scopes).issubset(stored_scopes)
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=f"route {route.id} does not exactly bind the stored OAuth grant",
+            )
+        if route.adapter_type == "x.v2" and route.adapter_config.get("appIds") != [
+            client_id
+        ]:
+            raise HTTPException(
+                status_code=409,
+                detail=f"route {route.id} does not exactly bind the stored X app",
+            )
+        return
+
+    secret_class = _credential_metadata_binding_alias(
+        metadata,
+        ("secret_class", "token_class"),
+        label="secret class",
+    )
+    if binding.get("secretClass") != secret_class:
+        raise HTTPException(
+            status_code=409,
+            detail=f"route {route.id} does not bind the stored secret class",
+        )
+
+
 def _assert_policy_candidate_credential_bindings(snapshot: Any) -> None:
     stored_credentials: dict[str, dict[str, Any]] = {}
     for credential_id, credential_policy in snapshot.credentials.items():
@@ -12859,26 +16343,20 @@ def _assert_policy_candidate_credential_bindings(snapshot: Any) -> None:
         if not credential_id:
             continue
         credential = stored_credentials.get(credential_id)
-        if credential is None or credential.get("kind") != "oauth2":
-            continue
-        metadata = credential.get("metadata") or {}
-        if _normalized_credential_provider(metadata.get("provider_id")) != "x":
-            continue
-        app_id = metadata.get("x_app_id") or metadata.get("app_id")
-        allowed_app_ids = route.adapter_config.get("appIds")
-        if (
-            not isinstance(app_id, str)
-            or not app_id
-            or not isinstance(allowed_app_ids, list)
-            or app_id not in allowed_app_ids
-        ):
+        if credential is None:
             raise HTTPException(
                 status_code=409,
-                detail=(
-                    f"credential {credential_id}: stored X OAuth app is not allowed "
-                    f"by route {route.id}"
-                ),
+                detail=f"credential {credential_id} is missing or inactive",
             )
+        try:
+            _assert_route_credential_binding(
+                route, credential, snapshot.credentials[credential_id]
+            )
+        except HTTPException as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail=f"credential {credential_id}: {exc.detail}",
+            ) from exc
 
 
 def _credential_secret_for_lease(
@@ -12960,24 +16438,32 @@ def _assert_credential_lease_route_binding(
 
 _CREDENTIAL_LEASE_PUBLIC_METADATA_FIELDS = frozenset(
     {
+        "account_subject",
         "app_id",
+        "client_id",
         "expires_at_epoch_ms",
         "injection_field",
         "injection_name",
         "injection_prefix",
         "managed",
         "oauth",
+        "oauth_client_id",
         "provider",
         "provider_id",
+        "provider_identity_verified",
         "provider_subject",
         "scope",
         "scopes",
+        "secret_class",
         "subject",
+        "token_class",
         "username",
         "x_app_id",
     }
 )
-_CREDENTIAL_LEASE_PUBLIC_METADATA_BOOLEAN_FIELDS = frozenset({"managed", "oauth"})
+_CREDENTIAL_LEASE_PUBLIC_METADATA_BOOLEAN_FIELDS = frozenset(
+    {"managed", "oauth", "provider_identity_verified"}
+)
 _CREDENTIAL_LEASE_PUBLIC_METADATA_STRING_FIELDS = (
     _CREDENTIAL_LEASE_PUBLIC_METADATA_FIELDS
     - _CREDENTIAL_LEASE_PUBLIC_METADATA_BOOLEAN_FIELDS
@@ -13468,6 +16954,11 @@ def _claim_credential_lease_release_authorization(
             detail="controlled credential issuance is missing request authority",
         )
     jit = route.jit if isinstance(route.jit, dict) else {}
+    jit_authority = (
+        db.jit_approver_policy_arguments(jit)
+        if dispatch_authority["issuanceKind"] == "jitGrant"
+        else {}
+    )
     try:
         return db.claim_release_credential_issuance(
             release_kind=str(dispatch_authority["issuanceKind"]),
@@ -13506,19 +16997,22 @@ def _claim_credential_lease_release_authorization(
                 request_authority.reservation_expires_at_epoch_ms
             ),
             required_approver_roles=(
-                {"approver"}
-                if dispatch_authority["issuanceKind"] == "jitGrant"
-                else set()
+                jit_authority.get("required_approver_roles", set())
             ),
-            allowed_approver_ids=(
-                set((jit.get("approvers") or {}).get("users") or []) or None
-                if dispatch_authority["issuanceKind"] == "jitGrant"
-                else None
+            allowed_approver_ids=jit_authority.get(
+                "allowed_approver_ids"
             ),
-            require_approver_webauthn=(
-                _webauthn_required(_approval_authn_policy(jit))
-                if dispatch_authority["issuanceKind"] == "jitGrant"
-                else False
+            require_approver_webauthn=bool(
+                jit_authority.get(
+                    "require_approver_webauthn",
+                    False,
+                )
+            ),
+            approval_threshold=int(
+                jit_authority.get("approval_threshold", 1)
+            ),
+            approver_credential_policy=jit_authority.get(
+                "approver_credential_policy"
             ),
         )
     except db.ReleaseAuthorizationConflictError as exc:
@@ -13639,6 +17133,10 @@ def data_plane_credential_leases(
                     status_code=404, detail="requested credential is unavailable"
                 )
             _assert_credential_policy_binding(prepared_credential, credential_policy)
+            _assert_credential_injection_binding(prepared_credential, credential_policy)
+            _assert_route_credential_binding(
+                route, prepared_credential, credential_policy
+            )
             prepared_metadata = _credential_lease_public_metadata(
                 prepared_credential
             )
@@ -13751,6 +17249,12 @@ def data_plane_credential_leases(
                 )
             _assert_credential_policy_binding(
                 current_credential, current_credential_policy
+            )
+            _assert_credential_injection_binding(
+                current_credential, current_credential_policy
+            )
+            _assert_route_credential_binding(
+                current_route, current_credential, current_credential_policy
             )
             metadata = _credential_lease_public_metadata(current_credential)
             metadata_sha256 = _credential_lease_metadata_sha256(metadata)
@@ -14028,6 +17532,230 @@ async def data_plane_audit(
     }
 
 
+@app.post("/api/data-plane/policy-candidate/artifact")
+async def data_plane_policy_candidate_artifact(
+    request: Request,
+    payload: PolicyCandidateArtifactEvidenceRequest,
+    x_serverware_data_plane_token: str | None = Header(
+        default=None, alias="X-Serverware-Data-Plane-Token"
+    ),
+    x_serverware_data_plane_instance: str | None = Header(
+        default=None, alias="X-Serverware-Data-Plane-Instance"
+    ),
+) -> dict[str, Any]:
+    authenticated_instance_id = _require_data_plane_token(
+        x_serverware_data_plane_token,
+        DATA_PLANE_AUDIT_INGEST_TOKEN,
+    )
+    if (
+        not x_serverware_data_plane_instance
+        or not hmac.compare_digest(
+            x_serverware_data_plane_instance,
+            authenticated_instance_id,
+        )
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail="data-plane instance authentication required",
+        )
+    raw_content_length = request.headers.get("content-length")
+    if (
+        request.scope.get("query_string", b"")
+        or request.headers.get("content-type") != "application/json"
+        or raw_content_length is None
+    ):
+        raise HTTPException(
+            status_code=415,
+            detail="candidate-artifact evidence requires exact JSON framing",
+        )
+    try:
+        content_length = int(raw_content_length)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="candidate-artifact evidence Content-Length is invalid",
+        ) from exc
+    if not 0 < content_length <= _POLICY_AUTHORITY_HANDOFF_REQUEST_MAX_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail="candidate-artifact evidence exceeds its fixed body bound",
+        )
+    canonical_payload = _policy_authority_canonical_bytes(
+        payload.model_dump(by_alias=True)
+    )
+    payload_digest = "sha256:" + hashlib.sha256(
+        canonical_payload
+    ).hexdigest()
+    try:
+        replay_claim = db.claim_policy_control_plane_request(
+            request_id=payload.request_id,
+            operation="policy.candidate.artifact.ingest",
+            payload_digest=payload_digest,
+            actor_type="data-plane",
+            actor_id=authenticated_instance_id,
+            allow_exact_retry=True,
+        )
+    except db.PolicyCandidateAuthorityConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="candidate-artifact request ID was already used",
+        ) from exc
+    try:
+        staged = await _run_bounded_blocking(
+            _POLICY_CANARY_EVIDENCE_SLOTS,
+            db.stage_policy_candidate_artifact,
+            payload.record,
+        )
+    except db.PolicyCandidateAuthorityConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="candidate artifact conflicts with durable state",
+        ) from exc
+    except db.PolicyCandidateAuthorityError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="candidate artifact is malformed or unverifiable",
+        ) from exc
+    except db.MetadataStoreError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="candidate-artifact storage is unavailable",
+        ) from exc
+    return {
+        "ok": True,
+        "apiVersion": "serverware.policyCandidateArtifactEvidenceAck/v1",
+        "requestId": payload.request_id,
+        "requestClaimAuditEventHash": replay_claim["audit_event_hash"],
+        "producerInstanceId": authenticated_instance_id,
+        "payloadDigest": payload_digest,
+        "candidateId": staged["candidate_id"],
+        "artifactEnvelopeDigest": staged["artifact_envelope_digest"],
+        "artifactPayloadDigest": staged["artifact_payload_digest"],
+        "policyHash": staged["policy_hash"],
+        "policyBundleDigest": staged["policy_bundle_digest"],
+        "verificationReceiptDigest": staged["verification_receipt_digest"],
+        "recovered": bool(staged["idempotent_replay"]),
+    }
+
+
+@app.post("/api/data-plane/policy-canary/evidence")
+async def data_plane_policy_canary_evidence(
+    request: Request,
+    payload: PolicyCanaryEvidenceBatch,
+    x_serverware_data_plane_token: str | None = Header(
+        default=None, alias="X-Serverware-Data-Plane-Token"
+    ),
+    x_serverware_data_plane_instance: str | None = Header(
+        default=None, alias="X-Serverware-Data-Plane-Instance"
+    ),
+) -> dict[str, Any]:
+    authenticated_instance_id = _require_data_plane_token(
+        x_serverware_data_plane_token,
+        DATA_PLANE_AUDIT_INGEST_TOKEN,
+    )
+    if (
+        not x_serverware_data_plane_instance
+        or not hmac.compare_digest(
+            x_serverware_data_plane_instance,
+            authenticated_instance_id,
+        )
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail="data-plane instance authentication required",
+        )
+    raw_content_length = request.headers.get("content-length")
+    if (
+        request.scope.get("query_string", b"")
+        or request.headers.get("content-type") != "application/json"
+        or raw_content_length is None
+    ):
+        raise HTTPException(
+            status_code=415,
+            detail="policy-canary evidence requires exact JSON framing",
+        )
+    try:
+        content_length = int(raw_content_length)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="policy-canary evidence Content-Length is invalid",
+        ) from exc
+    if not 0 < content_length <= _POLICY_CANARY_EVIDENCE_REQUEST_MAX_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail="policy-canary evidence exceeds its fixed body bound",
+        )
+    events = [
+        item.model_dump()
+        for item in payload.events
+    ]
+    if any(
+        event["record"].get("instance_id") is not None
+        and event["record"]["instance_id"]
+        != authenticated_instance_id
+        for event in events
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="policy-canary evidence instance binding does not match",
+        )
+    canonical_payload = _policy_authority_canonical_bytes(
+        payload.model_dump(by_alias=True)
+    )
+    payload_digest = "sha256:" + hashlib.sha256(
+        canonical_payload
+    ).hexdigest()
+    try:
+        replay_claim = db.claim_policy_control_plane_request(
+            request_id=payload.request_id,
+            operation="policy.canary.evidence.ingest",
+            payload_digest=payload_digest,
+            actor_type="data-plane",
+            actor_id=authenticated_instance_id,
+        )
+    except db.PolicyCandidateAuthorityConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="policy-canary evidence request ID was already used",
+        ) from exc
+    try:
+        accepted = await _run_bounded_blocking(
+            _POLICY_CANARY_EVIDENCE_SLOTS,
+            db.stage_policy_canary_evidence_batch,
+            events,
+            expected_canary_id=payload.canary_id,
+            authenticated_instance_id=authenticated_instance_id,
+        )
+    except db.PolicyCandidateAuthorityConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="policy-canary evidence conflicts with durable state",
+        ) from exc
+    except db.PolicyCandidateAuthorityError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="policy-canary evidence is malformed or unverifiable",
+        ) from exc
+    except db.MetadataStoreError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="policy-canary evidence storage is unavailable",
+        ) from exc
+    return {
+        "ok": True,
+        "apiVersion": "serverware.policyCanaryEvidenceAck/v1",
+        "requestId": payload.request_id,
+        "requestClaimAuditEventHash":
+            replay_claim["audit_event_hash"],
+        "canaryId": payload.canary_id,
+        "instanceId": authenticated_instance_id,
+        "payloadDigest": payload_digest,
+        "accepted": len(accepted),
+        "results": [dict(item) for item in accepted],
+    }
+
+
 @app.post("/api/data-plane/grants/consume")
 def data_plane_grant_consume(
     payload: DataPlaneGrantConsume,
@@ -14038,18 +17766,12 @@ def data_plane_grant_consume(
     _require_data_plane_token(
         x_serverware_data_plane_token, DATA_PLANE_GRANT_CONSUME_TOKEN
     )
-    if ATOMIC_RELEASE_AUTHORIZATION_ENABLED and RELEASE_CHANNEL.strip().lower() not in {
-        "dev",
-        "development",
-        "local",
-        "test",
-    }:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "legacy grant mutation is disabled; use atomic release authorization"
-            ),
-        )
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            "legacy grant mutation is disabled; use atomic release authorization"
+        ),
+    )
     snapshot = get_policy_snapshot()
     if not snapshot:
         raise HTTPException(status_code=503, detail="policy bundle missing")
@@ -14130,6 +17852,7 @@ def data_plane_grant_consume(
         pending_ttl_seconds=pending_ttl,
         grant_ttl_seconds=grant_ttl,
         grant_max_uses=max_uses,
+        **db.jit_approver_policy_arguments(jit),
     )
     return {
         "ok": True,
@@ -15468,20 +19191,11 @@ def data_plane_release_authorization_reserve(
             "actor_id": authenticated_actor_id,
             "authority_policy_hash": payload.policy_hash,
             "authority_route_id": route.id,
-            "required_approver_roles": (
-                {"approver"} if require_jit_grant else None
-            ),
-            "allowed_approver_ids": (
-                set((jit.get("approvers") or {}).get("users") or [])
-                or None
-            )
-            if require_jit_grant
-            else None,
-            "require_approver_webauthn": (
-                require_jit_grant
-                and _webauthn_required(_approval_authn_policy(jit))
-            ),
         }
+        if require_jit_grant:
+            reserve_arguments.update(
+                db.jit_approver_policy_arguments(jit)
+            )
         if durable_policy is not None:
             reserve_arguments["durable_policy_binding"] = durable_policy
         result = reserve(**reserve_arguments)
@@ -15734,7 +19448,8 @@ def seed_demo(_: AdminIdentity = Depends(require_role("admin"))) -> dict[str, An
             "x_app_id": "demo-x-app",
             "managed": True,
             "provider_id": "demo",
-            "scopes": ["demo"],
+            "provider_subject": "demo-service-account",
+            "secret_class": "bearerToken",
             "expires_at_epoch_ms": 4_102_444_800_000,
         },
     )
@@ -15921,6 +19636,225 @@ def seed_demo(_: AdminIdentity = Depends(require_role("admin"))) -> dict[str, An
         "policy_sequence": policy_snapshot.raw["metadata"]["sequence"],
         "policy_path": str(POLICY_BUNDLE_PATH),
     }
+
+
+_PORTAL_POLICY_TEMPLATE_SPECS = {
+    "gmail_recent": (
+        "example.gmail.last_30_days",
+        "Gmail messages from last 30 days",
+    ),
+    "x_read_recent": (
+        "example.x.search.seven_days",
+        "X recent search from last 7 days",
+    ),
+    "x_full_bounded_read": (
+        "example.x.full_bounded_read",
+        "X bounded tweet and user reads",
+    ),
+    "x_one_post_daily": (
+        "example.x.tweet.one_per_day",
+        "X one text post per UTC calendar day",
+    ),
+    "npm_write_mfa": (
+        "example.npm.publish.yubikey_jit",
+        "npm common writes with YubiKey JIT",
+    ),
+    "slack_chat_post": (
+        "example.slack.chat_post.hourly",
+        "Slack bounded message post",
+    ),
+    "stripe_customers_list": (
+        "example.stripe.customers.list",
+        "Stripe customer list read-only",
+    ),
+    "stripe_customer_get": (
+        "example.stripe.customers.get",
+        "Stripe customer get read-only",
+    ),
+    "stripe_payment_intent_jit": (
+        "example.stripe.payment_intent.tokenized_jit",
+        "Tokenized Stripe PaymentIntent with quota and hardware JIT",
+    ),
+    "object_store_put": (
+        "example.object_store.small_puts",
+        "Object store bounded PUT with response binding",
+    ),
+}
+_PORTAL_POLICY_TEMPLATES_PLACEHOLDER = (
+    "__SERVERWARE_CANONICAL_POLICY_TEMPLATES__"
+)
+
+
+def _read_portal_policy_examples() -> dict[str, Any]:
+    path = Path(__file__).resolve().parent.parent / "policies" / (
+        "credential-limits.examples.json"
+    )
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags)
+    try:
+        before = os.fstat(fd)
+        if not stat.S_ISREG(before.st_mode):
+            raise RuntimeError("portal policy example catalog must be a regular file")
+        if before.st_size < 2 or before.st_size > MAX_POLICY_BUNDLE_BYTES:
+            raise RuntimeError("portal policy example catalog has an invalid size")
+        raw = bytearray()
+        while len(raw) < before.st_size:
+            chunk = os.read(fd, min(65536, before.st_size - len(raw)))
+            if not chunk:
+                break
+            raw.extend(chunk)
+        after = os.fstat(fd)
+        if (
+            len(raw) != before.st_size
+            or before.st_dev != after.st_dev
+            or before.st_ino != after.st_ino
+            or before.st_size != after.st_size
+            or before.st_mtime_ns != after.st_mtime_ns
+        ):
+            raise RuntimeError("portal policy example catalog changed while reading")
+    finally:
+        os.close(fd)
+    catalog = strict_json_loads(raw)
+    if not isinstance(catalog, dict):
+        raise RuntimeError("portal policy example catalog must be an object")
+    return catalog
+
+
+def _portal_policy_templates_json() -> str:
+    catalog = _read_portal_policy_examples()
+    route_items = catalog.get("routes")
+    credential_items = catalog.get("credentials")
+    if not isinstance(route_items, list) or not isinstance(credential_items, list):
+        raise RuntimeError("portal policy example catalog is incomplete")
+    routes = {
+        item.get("id"): item
+        for item in route_items
+        if isinstance(item, dict) and isinstance(item.get("id"), str)
+    }
+    credentials = {
+        item.get("id"): item
+        for item in credential_items
+        if isinstance(item, dict) and isinstance(item.get("id"), str)
+    }
+    if len(routes) != len(route_items) or len(credentials) != len(credential_items):
+        raise RuntimeError("portal policy example catalog has duplicate or invalid IDs")
+
+    templates: dict[str, Any] = {}
+    for template_id, (route_id, label) in _PORTAL_POLICY_TEMPLATE_SPECS.items():
+        route = routes.get(route_id)
+        if not isinstance(route, dict):
+            raise RuntimeError(f"portal policy example route is missing: {route_id}")
+        credential = credentials.get(route.get("credentialRef"))
+        if not isinstance(credential, dict):
+            raise RuntimeError(f"portal policy example credential is missing: {route_id}")
+        adapter = route.get("adapter")
+        config = adapter.get("config") if isinstance(adapter, dict) else None
+        binding = config.get("credentialBinding") if isinstance(config, dict) else None
+        if not isinstance(binding, dict):
+            raise RuntimeError(f"portal policy example binding is missing: {route_id}")
+        provider = binding.get("provider")
+        if (
+            not isinstance(provider, str)
+            or provider != credential.get("provider")
+            or binding.get("credentialType") != credential.get("credentialType")
+        ):
+            raise RuntimeError(f"portal policy example binding is inconsistent: {route_id}")
+        template = {
+            "label": label,
+            "routeId": route_id,
+            "provider": provider,
+            "injection": copy.deepcopy(credential.get("injection")),
+            "match": copy.deepcopy(route.get("match")),
+            "adapter": copy.deepcopy(adapter),
+            "constraints": copy.deepcopy(route.get("constraints") or []),
+        }
+        required_scopes = binding.get("requiredScopes")
+        if required_scopes is not None:
+            template["requiredScopes"] = copy.deepcopy(required_scopes)
+        if route.get("jit") is not None:
+            template["jit"] = copy.deepcopy(route["jit"])
+            template["jit"]["approvers"]["users"] = []
+        templates[template_id] = template
+
+    templates["custom_json"] = {
+        "label": "Custom typed route policy JSON",
+        "routeId": "custom.restricted-operation",
+        "custom": True,
+        "injection": {"type": "bearer"},
+        "match": {
+            "scheme": "https",
+            "host": "api.internal",
+            "port": 443,
+            "methods": ["GET"],
+            "paths": ["/v1/resource"],
+        },
+        "adapter": {
+            "type": "generic.rest",
+            "config": {
+                "credentialMode": "required",
+                "credentialBinding": {
+                    "credentialType": "static",
+                    "provider": "custom",
+                    "subjects": ["replace-with-account-subject"],
+                    "secretClass": "bearerToken",
+                },
+                "request": {
+                    "allowedHeaders": ["accept", "user-agent"],
+                    "allowedQueryKeys": [],
+                    "allowedMediaTypes": [],
+                    "bodyMode": "none",
+                    "maxBodyBytes": 0,
+                    "valueRules": [],
+                    "operation": {"name": "custom.resource.read"},
+                },
+                "response": {
+                    "mode": "json",
+                    "maxBodyBytes": 65536,
+                    "contentTypes": ["application/json"],
+                    "allowedFields": ["id"],
+                    "allowedHeaders": [],
+                    "error": {
+                        "mode": "json",
+                        "maxBodyBytes": 65536,
+                        "allowedFields": ["error", "code", "message"],
+                        "allowedHeaders": ["retry-after"],
+                        "onInvalid": "block",
+                    },
+                },
+            },
+        },
+        "constraints": [
+            {
+                "id": "custom-response-envelope",
+                "type": "responseEnvelope",
+                "phase": "response",
+                "operations": ["custom.resource.read"],
+                "statusCodes": [200, 400, 401, 403, 404, 429, 500, 502, 503],
+                "bodyPresence": "required",
+                "contentTypes": ["application/json"],
+                "allowedResponseHeaderNames": ["retry-after"],
+                "responseHeaderRules": [
+                    {
+                        "name": "retry-after",
+                        "required": False,
+                        "predicate": {
+                            "kind": "pattern",
+                            "pattern": "^[0-9]{1,6}$",
+                            "maxLength": 6,
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+    encoded = json.dumps(
+        templates, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    )
+    return (
+        encoded.replace("<", r"\u003c")
+        .replace(">", r"\u003e")
+        .replace("&", r"\u0026")
+    )
 
 
 UI_HTML = r"""
@@ -16530,12 +20464,12 @@ UI_HTML = r"""
             </div>
           </form>
           <p id="policy-candidate-summary" class="hint" role="status" aria-live="polite"></p>
-          <label for="policy-candidate-output">Signed candidate, diff, and dry-run</label>
+          <label for="policy-candidate-output">Signed candidate, diff, and route-match dry-run</label>
           <textarea id="policy-candidate-output" class="policy-result" readonly></textarea>
+          <label for="policy-authority-package">Signed staged authority and runtime handoff package</label>
+          <textarea id="policy-authority-package" class="policy-result" spellcheck="false"></textarea>
           <label for="policy-canary-status">Staged candidate lifecycle</label>
           <textarea id="policy-canary-status" class="output" readonly></textarea>
-          <label for="policy-canary-note">Cancellation note</label>
-          <input id="policy-canary-note" maxlength="500" placeholder="Reason for cancellation">
           <div class="toolbar" style="margin-top:10px">
             <button class="secondary" type="button" onclick="runUiAction('Refresh staged candidate', refresh)">Refresh status</button>
             <button id="policy-activate-button" type="button" onclick="runUiAction('Activate staged candidate', activatePolicyCanary)" disabled>Activate</button>
@@ -16696,163 +20630,7 @@ UI_HTML = r"""
       }
     };
 
-    const policyTemplates = {
-      gmail_recent: {
-        label: 'Gmail messages from last 30 days',
-        routeId: 'gmail.messages.last-30-days',
-        provider: 'google',
-        requiredScopes: ['https://www.googleapis.com/auth/gmail.readonly'],
-        injection: {type: 'bearer', field: 'access_token'},
-        match: {scheme: 'https', host: 'gmail.googleapis.com', port: 443, methods: ['GET'], paths: ['/gmail/v1/users/{user}/messages', '/gmail/v1/users/{user}/messages/{message_id}']},
-        adapter: {type: 'gmail.v1', config: {maxAgeDays: 30, maxResults: 10, forceQuery: true, allowMessageGetOnlyFromPriorSearch: true, cacheTtlSeconds: 1800, denyEquivalentEndpoints: ['threads', 'history', 'attachments', 'imap'], request: {allowedHeaders: ['accept', 'accept-encoding', 'content-type', 'user-agent', 'x-goog-api-client', 'x-goog-request-params', 'x-goog-user-project'], discardHeaders: [], allowedQueryKeys: ['$.xgafv', 'alt', 'fields', 'format', 'includeSpamTrash', 'labelIds', 'maxResults', 'metadataHeaders', 'pageToken', 'prettyPrint', 'q', 'quotaUser'], allowedMediaTypes: [], maxBodyBytes: 0}, response: {validateInternalDate: true, validateListByMetadataFetch: true, metadataFetch: {maxMessages: 10, perRequestTimeoutMs: 1500, totalTimeoutMs: 8000, maxBodyBytes: 4096}, maxBodyBytes: 1048576, allowedFields: ['id', 'threadId', 'labelIds', 'snippet', 'internalDate', 'payload.headers'], allowedHeaders: [], allowedMessageHeaderNames: ['From', 'Subject', 'Date'], error: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['error.code', 'error.status', 'error.message', 'error.errors.reason', 'error.errors.domain'], allowedHeaders: ['retry-after', 'www-authenticate'], onInvalid: 'block'}, onViolation: 'block'}}},
-        constraints: [
-          {id: 'gmail-max-page-size', type: 'queryNumericBounds', parameters: ['maxResults'], min: 1, max: 10, integer: true},
-          {id: 'gmail-response-last-30-days', type: 'responseDateWindow', phase: 'response', operations: ['gmail.messages.list'], items: ['messages'], dateFields: ['internalDate'], formats: ['epochMillis'], maxAgeDays: 30, required: true}
-        ]
-      },
-      x_read_recent: {
-        label: 'X recent search from last 7 days',
-        routeId: 'x.search.last-7-days',
-        provider: 'x',
-        requiredScopes: ['tweet.read', 'users.read'],
-        injection: {type: 'bearer', field: 'access_token'},
-        match: {scheme: 'https', host: 'api.x.com', port: 443, methods: ['GET'], paths: ['/2/tweets/search/recent']},
-        adapter: {type: 'x.v2', config: {mode: 'recentSearchOnly', blockWrites: true, allowedReadOperations: ['search.read'], request: {allowedHeaders: ['accept', 'accept-encoding', 'content-type', 'user-agent'], discardHeaders: [], allowedQueryKeys: ['end_time', 'expansions', 'granularity', 'max_results', 'media.fields', 'next_token', 'pagination_token', 'place.fields', 'poll.fields', 'query', 'search_count.fields', 'since_id', 'sort_order', 'start_time', 'tweet.fields', 'until_id', 'user.fields'], allowedMediaTypes: [], maxBodyBytes: 0}, response: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['data.id', 'data.text', 'data.created_at', 'meta.result_count'], allowedHeaders: [], error: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['title', 'detail', 'type', 'status', 'errors.title', 'errors.detail', 'errors.type', 'errors.value'], allowedHeaders: ['retry-after'], onInvalid: 'block'}}}},
-        constraints: [
-          {id: 'x-search-last-7-days', type: 'queryDateWindow', parameters: ['start_time', 'end_time'], maxAgeDays: 7, formats: ['rfc3339', 'date'], required: false},
-          {id: 'x-search-page-cap', type: 'queryNumericBounds', parameters: ['max_results'], min: 1, max: 100, integer: true},
-          {id: 'x-search-response-last-7-days', type: 'responseDateWindow', phase: 'response', items: ['data'], dateFields: ['created_at'], formats: ['rfc3339', 'date'], maxAgeDays: 7, required: true}
-        ]
-      },
-      x_full_bounded_read: {
-        label: 'X all currently cataloged bounded reads',
-        routeId: 'x.full-bounded-read',
-        provider: 'x',
-        requiredScopes: ['block.read', 'bookmark.read', 'dm.read', 'follows.read', 'like.read', 'list.read', 'mute.read', 'space.read', 'timeline.read', 'tweet.read', 'users.read'],
-        injection: {type: 'bearer', field: 'access_token'},
-        match: {scheme: 'https', host: 'api.x.com', port: 443, methods: ['GET'], paths: ['/2/**']},
-        adapter: {type: 'x.v2', config: {
-          request: {
-            allowedHeaders: ['accept', 'accept-encoding', 'content-type', 'user-agent'],
-            discardHeaders: [],
-            allowedQueryKeys: ['analytics.fields', 'chat_conversation.fields', 'chat_message_event.fields', 'command', 'community.fields', 'compliance_job.fields', 'connection.fields', 'days', 'dm_event.fields', 'end_time', 'endpoints', 'engagement.fields', 'event_types', 'exclude', 'expansions', 'granularity', 'ids', 'list.fields', 'max_age_hours', 'max_results', 'max_trends', 'media.fields', 'media_analytics.fields', 'media_id', 'media_keys', 'news.fields', 'next_token', 'note.fields', 'pagination_token', 'personalized_trend.fields', 'place.fields', 'poll.fields', 'post_selection', 'public_key.fields', 'query', 'requested_metrics', 'search_count.fields', 'since_id', 'sort_order', 'space.fields', 'start_time', 'state', 'status', 'test_mode', 'topic.fields', 'trend.fields', 'tweet.fields', 'tweet_ids', 'type', 'until_id', 'usage.fields', 'user.fields', 'user_ids', 'usernames', 'webhook_config.fields'],
-            allowedMediaTypes: [],
-            maxBodyBytes: 0
-          },
-          mode: 'readOnly',
-          blockWrites: true,
-          allowedReadOperations: ['accountActivity.read', 'activity.read', 'analytics.read', 'bookmarks.read', 'chat.read', 'communities.read', 'compliance.read', 'connections.read', 'directMessages.read', 'insights.read', 'lists.read', 'media.read', 'news.read', 'notes.read', 'schema.read', 'search.read', 'spaces.read', 'trends.read', 'tweets.read', 'usage.read', 'users.read', 'webhooks.read'],
-          response: {mode: 'json', maxBodyBytes: 16777216, allowedFields: ['data', 'includes', 'meta', 'errors', 'title', 'detail', 'type', 'status'], allowedHeaders: [], error: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['title', 'detail', 'type', 'status', 'errors.title', 'errors.detail', 'errors.type', 'errors.value'], allowedHeaders: ['retry-after'], onInvalid: 'block'}}
-        }},
-        constraints: [
-          {id: 'all-currently-cataloged-bounded-x-reads', type: 'operationPolicy', allowedOperations: ['accountActivity.read', 'activity.read', 'analytics.read', 'bookmarks.read', 'chat.read', 'communities.read', 'compliance.read', 'connections.read', 'directMessages.read', 'insights.read', 'lists.read', 'media.read', 'news.read', 'notes.read', 'schema.read', 'search.read', 'spaces.read', 'trends.read', 'tweets.read', 'usage.read', 'users.read', 'webhooks.read']}
-        ]
-      },
-      x_one_post_daily: {
-        label: 'X one text post per UTC calendar day, resetting at 00:00 UTC',
-        routeId: 'x.post.one-per-day',
-        provider: 'x',
-        requiredScopes: ['tweet.read', 'tweet.write', 'users.read', 'offline.access'],
-        injection: {type: 'bearer', field: 'access_token'},
-        match: {scheme: 'https', host: 'api.x.com', port: 443, methods: ['POST'], paths: ['/2/tweets']},
-        adapter: {type: 'x.v2', config: {mode: 'controlledWrite', blockWrites: false, request: {allowedHeaders: ['accept', 'accept-encoding', 'content-type', 'user-agent'], discardHeaders: [], allowedQueryKeys: [], allowedMediaTypes: ['application/json'], maxBodyBytes: 65536}, response: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['data.id', 'data.text'], allowedHeaders: [], error: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['title', 'detail', 'type', 'status', 'errors.title', 'errors.detail', 'errors.type', 'errors.value'], allowedHeaders: ['retry-after'], onInvalid: 'block'}}}},
-        constraints: [
-          {id: 'x-only-tweet-create', type: 'operationPolicy', allowedOperations: ['tweets.write']},
-          {id: 'x-one-post-per-day', type: 'rateLimit', max: 1, calendarWindow: 'utcDay', store: 'shared', key: {scope: ['route', 'operation'], operationFields: ['providerAccount']}},
-          {id: 'x-plain-text-body', type: 'jsonBody', contentTypes: ['application/json'], allowedFields: ['text', 'reply_settings'], requiredFields: ['text'], deniedFields: ['media', 'poll', 'direct_message_deep_link'], fields: {text: {type: 'string', minLength: 1, maxLength: 280}, reply_settings: {type: 'string', enum: ['following', 'mentionedUsers']}}}
-        ]
-      },
-      npm_write_mfa: {
-        label: 'npm common writes with YubiKey JIT',
-        routeId: 'npm.common-writes.yubikey-jit',
-        provider: 'npm',
-        injection: {type: 'bearer'},
-        match: {scheme: 'https', host: 'registry.npmjs.org', port: 443, methods: ['PUT', 'POST', 'DELETE'], paths: ['/{package}', '/{package}/-rev/{revision}', '/{package}/-/{tarball}/-rev/{revision}', '/-/package/{package}/dist-tags/{tag}', '/-/package/{package}/access', '/-/npm/v1/tokens', '/-/npm/v1/tokens/token/{token}', '/-/npm/v1/user', '/-/team/{scope}/{team}/package']},
-        adapter: {type: 'npm.registry', config: {request: {allowedHeaders: ['accept', 'accept-encoding', 'content-type', 'npm-auth-type', 'npm-command', 'npm-in-ci', 'npm-otp', 'npm-scope', 'user-agent'], discardHeaders: ['npm-session'], allowedQueryKeys: [], allowedMediaTypes: ['application/json'], maxBodyBytes: 16777216}, operations: ['publish', 'unpublish', 'distTagWrite', 'tokenWrite', 'metadataWrite'], publishResponseContract: 'npm-public-registry-receipt-v1', response: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['ok', 'published'], allowedHeaders: [], error: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['error', 'reason', 'code'], allowedHeaders: ['retry-after', 'www-authenticate'], onInvalid: 'block'}}}},
-        constraints: [{id: 'npm-common-writes-require-jit', type: 'operationPolicy', allowedOperations: ['npm.publish', 'npm.unpublish', 'npm.distTagWrite', 'npm.tokenWrite', 'npm.metadataWrite']}],
-        jit: {required: true, mode: 'perOperation', ttlSeconds: 30, maxUses: 1, consumeOn: 'forwardStart', binding: {type: 'operationDigest', fields: ['principal', 'routeId', 'credentialRef', 'credentialVersion', 'policyHash', 'method', 'authority', 'path', 'query', 'selectedHeaders', 'bodySha256', 'operation', 'packageName', 'packageVersion', 'tarballIntegrity']}, approvers: {quorum: 1, users: [], authn: {webauthnRequired: true, userVerification: 'required', allowedAuthenticatorClasses: ['yubikey', 'hardware'], requireHardwareAttestation: true}}}
-      },
-      slack_chat_post: {
-        label: 'Slack bounded message post',
-        routeId: 'example.slack.chat_post.hourly',
-        provider: 'slack',
-        injection: {type: 'bearer'},
-        match: {scheme: 'https', host: 'slack.com', port: 443, methods: ['POST'], paths: ['/api/chat.postMessage']},
-        adapter: {type: 'generic.rest', config: {request: {allowedHeaders: ['accept', 'content-type', 'user-agent'], allowedQueryKeys: [], bodyMode: 'json', maxBodyBytes: 32768, operation: {name: 'slack.chat.postMessage', jsonFields: ['channel', 'text']}}, response: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['ok', 'channel', 'ts', 'message.text'], allowedHeaders: [], error: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['ok', 'error', 'needed', 'provided'], allowedHeaders: ['retry-after'], onInvalid: 'block'}}}},
-        constraints: [
-          {id: 'five-slack-posts-per-assignment-hour', type: 'rateLimit', max: 5, windowSeconds: 3600, store: 'shared', key: {scope: ['principal', 'credential', 'route']}},
-          {id: 'slack-weekday-utc-hours', type: 'requestTimeWindow', timezone: 'UTC', weekdays: ['mon', 'tue', 'wed', 'thu', 'fri'], dailyWindows: [{start: '13:00', end: '23:00'}]},
-          {id: 'slack-message-body', type: 'jsonBody', contentTypes: ['application/json'], allowedFields: ['channel', 'text', 'thread_ts'], requiredFields: ['channel', 'text'], fields: {channel: {type: 'string', minLength: 1, maxLength: 80}, text: {type: 'string', minLength: 1, maxLength: 4000}}},
-          {id: 'slack-response-ok', type: 'responseJson', phase: 'response', operations: ['slack.chat.postMessage'], fields: {ok: {required: true, type: 'boolean', equals: true}}},
-          {id: 'slack-response-binding', type: 'responseBinding', phase: 'response', operations: ['slack.chat.postMessage'], successStatusCodes: [200], contentTypes: ['application/json'], bindings: [{id: 'channel', operationField: 'channel', responseField: 'channel', comparison: 'exactString'}]}
-        ]
-      },
-      stripe_customers_list: {
-        label: 'Stripe customer list read-only',
-        routeId: 'example.stripe.customers.list',
-        provider: 'stripe',
-        injection: {type: 'bearer'},
-        match: {scheme: 'https', host: 'api.stripe.com', port: 443, methods: ['GET'], paths: ['/v1/customers']},
-        adapter: {type: 'generic.rest', config: {request: {allowedHeaders: ['accept', 'content-type', 'user-agent'], allowedQueryKeys: ['limit', 'starting_after', 'ending_before'], bodyMode: 'none', maxBodyBytes: 0, operation: {name: 'stripe.customers.list'}}, response: {mode: 'json', maxBodyBytes: 1048576, allowedFields: ['object', 'data.id', 'data.object', 'data.email', 'data.name', 'data.created', 'data.deleted', 'has_more'], allowedHeaders: [], error: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['error.type', 'error.code', 'error.message', 'error.param'], allowedHeaders: ['retry-after'], onInvalid: 'block'}}}},
-        constraints: [
-          {id: 'stripe-customer-page-cap', type: 'queryNumericBounds', parameters: ['limit'], min: 1, max: 25, integer: true},
-          {id: 'stripe-customer-list-shape', type: 'responseJson', phase: 'response', operations: ['stripe.customers.list'], fields: {object: {required: true, type: 'string', equals: 'list'}, has_more: {required: true, type: 'boolean'}}},
-          {id: 'stripe-customer-list-items', type: 'responseJson', phase: 'response', operations: ['stripe.customers.list'], items: ['data'], fields: {id: {required: true, type: 'string', minLength: 5, maxLength: 255, pattern: '^cus_[A-Za-z0-9]{1,251}$'}, object: {required: true, type: 'string', equals: 'customer'}, deleted: {required: false, type: 'boolean'}}}
-        ]
-      },
-      stripe_customer_get: {
-        label: 'Stripe customer get read-only',
-        routeId: 'example.stripe.customers.get',
-        provider: 'stripe',
-        injection: {type: 'bearer'},
-        match: {scheme: 'https', host: 'api.stripe.com', port: 443, methods: ['GET'], paths: ['/v1/customers/{customer_id}']},
-        adapter: {type: 'generic.rest', config: {request: {allowedHeaders: ['accept', 'content-type', 'user-agent'], allowedQueryKeys: [], bodyMode: 'none', maxBodyBytes: 0, operation: {name: 'stripe.customers.get', pathParams: ['customer_id']}}, response: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['id', 'object', 'email', 'name', 'created', 'deleted'], allowedHeaders: [], error: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['error.type', 'error.code', 'error.message', 'error.param'], allowedHeaders: ['retry-after'], onInvalid: 'block'}}}},
-        constraints: [
-          {id: 'stripe-approved-customer', type: 'requestValue', rules: [{source: 'pathParam', name: 'customer_id', predicate: {kind: 'equals', value: 'cus_replace_with_approved_customer'}, capture: 'approvedCustomerId'}]},
-          {id: 'stripe-customer-get-shape', type: 'responseJson', phase: 'response', operations: ['stripe.customers.get'], fields: {id: {required: true, type: 'string', minLength: 5, maxLength: 255, pattern: '^cus_[A-Za-z0-9]{1,251}$'}, object: {required: true, type: 'string', equals: 'customer'}, deleted: {required: false, type: 'boolean'}}},
-          {id: 'stripe-customer-get-binding', type: 'responseBinding', phase: 'response', operations: ['stripe.customers.get'], successStatusCodes: [200], contentTypes: ['application/json'], bindings: [{id: 'customer-id', operationField: 'approvedCustomerId', responseField: 'id', comparison: 'exactString'}]}
-        ]
-      },
-      stripe_payment_intent_jit: {
-        label: 'Tokenized PaymentIntent create, five per UTC calendar day, resetting at 00:00 UTC + hardware JIT',
-        routeId: 'example.stripe.payment_intent.tokenized_jit',
-        provider: 'stripe',
-        injection: {type: 'bearer'},
-        match: {scheme: 'https', host: 'api.stripe.com', port: 443, methods: ['POST'], paths: ['/v1/payment_intents']},
-        adapter: {type: 'generic.rest', config: {request: {allowedHeaders: ['accept', 'content-type', 'idempotency-key', 'user-agent'], requiredHeaders: {'idempotency-key': {type: 'string', minLength: 1, maxLength: 255, pattern: '^[-A-Za-z0-9._:]{1,255}$'}}, allowedQueryKeys: [], bodyMode: 'formUrlencoded', maxBodyBytes: 16384, operation: {name: 'stripe.payment_intents.create', formFields: ['amount', 'currency', 'payment_method', 'confirm', 'metadata.agent_request_id']}}, response: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['id', 'object', 'amount', 'currency', 'status', 'payment_method', 'created'], allowedHeaders: [], error: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['error.type', 'error.code', 'error.message', 'error.param'], allowedHeaders: ['retry-after'], onInvalid: 'block'}}}},
-        constraints: [
-          {id: 'payment-intent-five-per-assignment-day', type: 'rateLimit', max: 5, calendarWindow: 'utcDay', store: 'shared', key: {scope: ['principal', 'credential', 'route']}},
-          {id: 'payment-intent-tokenized-only', type: 'formBody', contentTypes: ['application/x-www-form-urlencoded'], allowedFields: ['amount', 'currency', 'payment_method', 'confirm', 'metadata.agent_request_id'], requiredFields: ['amount', 'currency', 'payment_method', 'confirm'], deniedFields: ['payment_method_data.card.number', 'payment_method_data.card.cvc', 'source', 'card'], fields: {amount: {type: 'integer', min: 50, max: 50000}, currency: {type: 'string', equals: 'usd'}, payment_method: {type: 'string', pattern: '^pm_[A-Za-z0-9]{8,64}$', maxLength: 67}, confirm: {type: 'string', equals: 'true'}, 'metadata.agent_request_id': {type: 'string', maxLength: 128}}},
-          {id: 'payment-intent-response-shape', type: 'responseJson', phase: 'response', operations: ['stripe.payment_intents.create'], fields: {id: {required: true, type: 'string', minLength: 4, maxLength: 255, pattern: '^pi_[A-Za-z0-9]{1,252}$'}, object: {required: true, type: 'string', equals: 'payment_intent'}, status: {required: true, type: 'string', enum: ['requires_payment_method', 'requires_confirmation', 'requires_action', 'processing', 'requires_capture', 'canceled', 'succeeded']}}},
-          {id: 'payment-intent-response-binding', type: 'responseBinding', phase: 'response', operations: ['stripe.payment_intents.create'], successStatusCodes: [200], contentTypes: ['application/json'], bindings: [{id: 'amount', operationField: 'amount', responseField: 'amount', comparison: 'canonicalInteger'}, {id: 'currency', operationField: 'currency', responseField: 'currency', comparison: 'exactString'}, {id: 'payment-method', operationField: 'payment_method', responseField: 'payment_method', comparison: 'exactString'}]}
-        ],
-        jit: {required: true, mode: 'perOperation', ttlSeconds: 60, maxUses: 1, consumeOn: 'forwardStart', binding: {type: 'requestDigest', fields: ['principal', 'routeId', 'credentialRef', 'credentialVersion', 'policyHash', 'method', 'authority', 'path', 'query', 'selectedHeaders', 'bodySha256']}, approvers: {quorum: 1, users: [], authn: {webauthnRequired: true, userVerification: 'required', allowedAuthenticatorClasses: ['yubikey', 'hardware'], requireHardwareAttestation: true}}}
-      },
-      object_store_put: {
-        label: 'Object store bounded PUT with verified request digest',
-        routeId: 'example.object_store.small_puts',
-        provider: 'object-store',
-        injection: {type: 'header', name: 'X-Api-Key'},
-        match: {scheme: 'https', host: 'objects.example.com', port: 443, methods: ['PUT'], paths: ['/v1/buckets/{bucket}/objects/{artifact_id}']},
-        adapter: {type: 'generic.rest', config: {request: {allowedHeaders: ['accept', 'content-type', 'user-agent'], allowedQueryKeys: [], bodyMode: 'json', maxBodyBytes: 65536, operation: {name: 'object_store.objects.put', bodySha256Field: 'requestBodySha256', pathParams: ['artifact_id']}}, response: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['ok', 'id', 'sha256'], allowedHeaders: [], error: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['error', 'code', 'message'], allowedHeaders: ['retry-after'], onInvalid: 'block'}}}},
-        constraints: [
-          {id: 'object-store-bucket-and-key-scope', type: 'requestValue', rules: [{source: 'pathParam', name: 'bucket', predicate: {kind: 'equals', value: 'agent-artifacts'}, capture: 'validatedBucket'}, {source: 'pathParam', name: 'artifact_id', predicate: {kind: 'pattern', pattern: '^[A-Za-z0-9._-]{1,128}$', maxLength: 128}, capture: 'validatedObjectKey'}]},
-          {id: 'object-store-json-payload', type: 'jsonBody', contentTypes: ['application/json'], allowedFields: ['content', 'contentType'], requiredFields: ['content'], fields: {content: {type: 'string', minLength: 1, maxLength: 4096}, contentType: {type: 'string', maxLength: 128}}},
-          {id: 'object-store-ten-puts-per-assignment-hour', type: 'rateLimit', max: 10, windowSeconds: 3600, store: 'shared', key: {scope: ['principal', 'credential', 'route']}},
-          {id: 'object-store-response-contract', type: 'responseJson', phase: 'response', operations: ['object_store.objects.put'], fields: {ok: {required: true, type: 'boolean', equals: true}, id: {required: true, type: 'string', maxLength: 128, pattern: '^[A-Za-z0-9._-]{1,128}$'}, sha256: {required: true, type: 'string', maxLength: 71, pattern: '^sha256:[0-9a-f]{64,64}$'}}},
-          {id: 'object-store-response-binding', type: 'responseBinding', phase: 'response', operations: ['object_store.objects.put'], successStatusCodes: [200], contentTypes: ['application/json'], bindings: [{id: 'artifact-id', operationField: 'validatedObjectKey', responseField: 'id', comparison: 'exactString'}, {id: 'sha256', operationField: 'requestBodySha256', responseField: 'sha256', comparison: 'exactString'}]}
-        ]
-      },
-      custom_json: {
-        label: 'Custom route policy JSON',
-        routeId: 'custom.restricted-operation',
-        custom: true,
-        injection: {type: 'bearer'},
-        match: {scheme: 'https', host: 'api.internal', port: 443, methods: ['GET'], paths: ['/v1/resource']},
-        adapter: {type: 'generic.rest', config: {request: {allowedHeaders: ['accept', 'user-agent'], allowedQueryKeys: [], bodyMode: 'none', maxBodyBytes: 0}, response: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['id'], allowedHeaders: [], error: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['error', 'code', 'message'], allowedHeaders: ['retry-after'], onInvalid: 'block'}}}},
-        constraints: []
-      }
-    };
+    const policyTemplates = __SERVERWARE_CANONICAL_POLICY_TEMPLATES__;
 
     function adminToken() {
       return $('admin-token').value.trim();
@@ -17192,6 +20970,111 @@ UI_HTML = r"""
       publicKey.challenge = b64ToBytes(publicKey.challenge);
       publicKey.allowCredentials = (publicKey.allowCredentials || []).map((item) => ({...item, id: b64ToBytes(item.id)}));
       return publicKey;
+    }
+
+    function policyAuthorityPackage() {
+      const raw = $('policy-authority-package').value.trim();
+      if (!raw) throw new Error('A signed authority and runtime handoff package is required');
+      const value = JSON.parse(raw);
+      if (!value || typeof value !== 'object' || Array.isArray(value)
+          || value.apiVersion !== 'serverware.policyAuthorityPortalPackage/v1') {
+        throw new Error('The policy authority package has an unsupported schema');
+      }
+      const allowed = new Set(['apiVersion', 'handoff', 'activation']);
+      if (Object.keys(value).some((key) => !allowed.has(key))) {
+        throw new Error('The policy authority package contains an unknown field');
+      }
+      return value;
+    }
+
+    function policyAuthorityStep(value, expectedOperations) {
+      if (!value || typeof value !== 'object' || Array.isArray(value)
+          || Object.keys(value).sort().join(',') !== 'arguments,operation'
+          || typeof value.operation !== 'string'
+          || !expectedOperations.includes(value.operation)
+          || !value.arguments || typeof value.arguments !== 'object'
+          || Array.isArray(value.arguments)) {
+        throw new Error(`A closed ${expectedOperations.join(' or ')} authority step is required`);
+      }
+      return {operation: value.operation, arguments: JSON.parse(JSON.stringify(value.arguments))};
+    }
+
+    function policyActivationPackage(value) {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        throw new Error('The policy authority package does not contain activation steps');
+      }
+      const allowed = new Set(['prepare', 'recordInclusions', 'finalize', 'abort']);
+      if (Object.keys(value).some((key) => !allowed.has(key))) {
+        throw new Error('The activation package contains an unknown step');
+      }
+      if (value.recordInclusions != null
+          && (!Array.isArray(value.recordInclusions) || value.recordInclusions.length > 64)) {
+        throw new Error('Activation audit inclusion steps exceed the fixed limit');
+      }
+      return value;
+    }
+
+    function authorityRequestId() {
+      if (typeof crypto.randomUUID !== 'function') throw new Error('Secure UUID generation is not available in this browser');
+      return crypto.randomUUID();
+    }
+
+    function canonicalAuthorityJson(value) {
+      if (Array.isArray(value)) return `[${value.map(canonicalAuthorityJson).join(',')}]`;
+      if (value && typeof value === 'object') {
+        return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalAuthorityJson(value[key])}`).join(',')}}`;
+      }
+      return JSON.stringify(value);
+    }
+
+    async function authorityStepRequestId(step) {
+      if (!crypto.subtle || typeof TextEncoder !== 'function') throw new Error('Secure deterministic authority identity is unavailable');
+      const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonicalAuthorityJson(step))));
+      bytes[6] = (bytes[6] & 0x0f) | 0x40;
+      bytes[8] = (bytes[8] & 0x3f) | 0x80;
+      const text = Array.from(bytes.slice(0, 16), (value) => value.toString(16).padStart(2, '0')).join('');
+      return `${text.slice(0, 8)}-${text.slice(8, 12)}-${text.slice(12, 16)}-${text.slice(16, 20)}-${text.slice(20)}`;
+    }
+
+    async function executePolicyAuthorityStep(stepValue, expectedOperations) {
+      const step = policyAuthorityStep(stepValue, expectedOperations);
+      const requestId = await authorityStepRequestId(step);
+      const execute = (argumentsValue) => api('/api/authority/control-plane/execute', {
+        method: 'POST',
+        body: JSON.stringify({requestId, operation: step.operation, arguments: argumentsValue})
+      });
+      try {
+        return await execute(step.arguments);
+      } catch (error) {
+        const detail = error instanceof ApiError ? error.detail : null;
+        if (error.status !== 428 || !detail || detail.error !== 'authority_webauthn_required') throw error;
+        if (!window.PublicKeyCredential || !navigator.credentials) throw new Error('WebAuthn is not available in this browser');
+        const credential = (state.webauthnCredentials || []).find(
+          (item) => item.active !== false && !item.revoked_at && item.current_trust?.currently_trusted === true
+        );
+        if (!credential) throw new Error('No currently trusted passkey is available for this operator');
+        const challenge = await api('/api/authority/webauthn/challenges', {
+          method: 'POST',
+          body: JSON.stringify({
+            operation: step.operation,
+            arguments: step.arguments,
+            credentialRecordId: credential.id
+          })
+        });
+        const assertion = await navigator.credentials.get({
+          publicKey: prepareRequestOptions(challenge)
+        });
+        const continuedArguments = JSON.parse(JSON.stringify(step.arguments));
+        delete continuedArguments.authn;
+        delete continuedArguments.authn_evidence;
+        delete continuedArguments.webauthn_authorization;
+        continuedArguments.authn_evidence = {
+          challengeId: challenge.challengeId,
+          credentialRecordId: challenge.credentialRecordId,
+          assertion: credentialToJson(assertion)
+        };
+        return execute(continuedArguments);
+      }
     }
 
     async function ensureCsrfToken() {
@@ -17655,13 +21538,17 @@ UI_HTML = r"""
         }
         const current = items.get(item.id) || {id: item.id, activeCredential: null};
         const identity = item.metadata?.provider_account || item.metadata?.account || item.metadata?.account_email || item.metadata?.provider_subject || item.metadata?.subject || '';
-        const provider = item.metadata?.provider_id || '';
+        const provider = item.metadata?.provider_id || item.metadata?.provider || '';
         const identityLabel = [identity, provider].filter(Boolean).join(' / ');
         items.set(item.id, {...current, label: `${item.name}${identityLabel ? ` - ${identityLabel}` : ''} (${item.id})`, storedCredential: item});
       });
       return Array.from(items.values()).map((item) => {
         try {
-          policyCredentialInjection(item.storedCredential, item.activeCredential, template);
+          const injection = policyCredentialInjection(item.storedCredential, item.activeCredential, template);
+          signedPolicyCredential(item.storedCredential, injection);
+          if (!template.custom) {
+            policyCredentialBinding(item.storedCredential, {adapter: template.adapter});
+          }
           return {...item, compatible: true, reason: ''};
         } catch (error) {
           return {...item, compatible: false, reason: error.message};
@@ -18349,6 +22236,107 @@ UI_HTML = r"""
       return subject;
     }
 
+    function credentialMetadataBindingValue(credential, names, label) {
+      const values = names
+        .filter((name) => credential?.metadata?.[name] !== undefined && credential?.metadata?.[name] !== null)
+        .map((name) => credential.metadata[name]);
+      if (
+        values.length === 0
+        || values.some((value) => typeof value !== 'string' || !value || value !== value.trim() || value.length > 512 || /[\u0000-\u001f\u007f]/.test(value))
+        || values.some((value) => value !== values[0])
+      ) {
+        throw new Error(`Credential ${credential?.id || 'unknown'} has missing, malformed, or contradictory ${label} metadata`);
+      }
+      if (/^replace[-_ ]with(?:[-_ ]|$)/i.test(values[0])) {
+        throw new Error(`Credential ${credential?.id || 'unknown'} still uses a placeholder ${label}`);
+      }
+      return values[0];
+    }
+
+    function credentialProviderSubject(credential) {
+      return credential?.kind === 'oauth2'
+        ? oauthCredentialProviderSubject(credential)
+        : credentialMetadataBindingValue(credential, ['provider_subject', 'account_subject'], 'provider subject');
+    }
+
+    function oauthCredentialClientId(credential) {
+      if (credential?.kind !== 'oauth2') return null;
+      return credentialMetadataBindingValue(
+        credential,
+        ['oauth_client_id', 'client_id', 'x_app_id', 'app_id'],
+        'OAuth client ID'
+      );
+    }
+
+    function staticCredentialSecretClass(credential) {
+      if (credential?.kind === 'oauth2') return null;
+      return credentialMetadataBindingValue(
+        credential,
+        ['secret_class', 'token_class'],
+        'secret class'
+      );
+    }
+
+    function policyCredentialBinding(credential, route) {
+      const configured = route?.adapter?.config?.credentialBinding;
+      if (!configured || typeof configured !== 'object' || Array.isArray(configured)) {
+        throw new Error('The selected route must declare a typed credentialBinding');
+      }
+      const provider = String(credential?.metadata?.provider_id || credential?.metadata?.provider || '');
+      if (!provider || provider !== String(configured.provider || '')) {
+        throw new Error(`Credential ${credential?.id || 'unknown'} provider does not match the route credentialBinding`);
+      }
+      const subject = credentialProviderSubject(credential);
+      if (credential.kind === 'oauth2') {
+        if (configured.credentialType !== 'oauth2') throw new Error('The route credentialBinding does not admit an OAuth credential');
+        const grantedScopes = new Set(oauthCredentialGrantedScopes(credential));
+        const requiredScopes = configured.requiredScopes;
+        if (
+          !Array.isArray(requiredScopes)
+          || requiredScopes.length === 0
+          || new Set(requiredScopes).size !== requiredScopes.length
+          || requiredScopes.some((scope) => typeof scope !== 'string' || !scope || !grantedScopes.has(scope))
+        ) {
+          throw new Error(`OAuth credential ${credential.id} does not satisfy the route credentialBinding scopes`);
+        }
+        return {
+          credentialType: 'oauth2',
+          provider,
+          subjects: [subject],
+          clientIds: [oauthCredentialClientId(credential)],
+          requiredScopes: [...requiredScopes]
+        };
+      }
+      if (configured.credentialType !== 'static') throw new Error('The route credentialBinding does not admit a static credential');
+      const secretClass = staticCredentialSecretClass(credential);
+      if (secretClass !== configured.secretClass) {
+        throw new Error(`Credential ${credential.id} secret class does not match the route credentialBinding`);
+      }
+      return {
+        credentialType: 'static',
+        provider,
+        subjects: [subject],
+        secretClass
+      };
+    }
+
+    function signedPolicyCredential(credential, injection) {
+      const provider = String(credential?.metadata?.provider_id || credential?.metadata?.provider || '');
+      if (!provider) throw new Error(`Credential ${credential?.id || 'unknown'} has no provider metadata`);
+      const declaration = {
+        id: credential.id,
+        credentialType: credential.kind === 'oauth2' ? 'oauth2' : 'static',
+        provider,
+        providerSubject: credentialProviderSubject(credential),
+        injection: JSON.parse(JSON.stringify(injection))
+      };
+      if (credential.kind === 'oauth2') {
+        declaration.oauthClientId = oauthCredentialClientId(credential);
+        declaration.scopes = oauthCredentialGrantedScopes(credential);
+      }
+      return declaration;
+    }
+
     function policyCredentialInjection(credential, activeCredential, template) {
       const storedInjection = storedCredentialInjection(credential);
       const activeInjection = activeCredential?.injection || null;
@@ -18366,9 +22354,12 @@ UI_HTML = r"""
       if (storedInjection && activeInjection && !injectionShapesCompatible(activeInjection, storedInjection)) {
         throw new Error(`Credential ${credential.id} does not match its active PolicyBundle injection shape`);
       }
-      const providerId = String(activeCredential?.provider || credential?.metadata?.provider_id || credential?.metadata?.provider || '');
+      const providerId = String(credential?.metadata?.provider_id || credential?.metadata?.provider || '');
       if (template.provider && providerId !== template.provider) {
         throw new Error(`Credential ${credential?.id || activeCredential?.id || 'unknown'} belongs to ${providerId || 'an unknown provider'}, not ${template.provider}`);
+      }
+      if (activeCredential?.provider && activeCredential.provider !== providerId) {
+        throw new Error(`Credential ${credential.id} does not match its active PolicyBundle provider`);
       }
       if (credential?.kind === 'oauth2') {
         const grantedScopes = new Set(oauthCredentialGrantedScopes(credential));
@@ -18377,10 +22368,7 @@ UI_HTML = r"""
           throw new Error(`OAuth credential ${credential.id} is missing required scopes: ${missingScopes.join(', ')}`);
         }
       }
-      if (template.adapter?.type === 'x.v2') {
-        const appId = String(credential?.metadata?.x_app_id || credential?.metadata?.app_id || '');
-        if (!appId) throw new Error(`X credential ${credential?.id || 'unknown'} is missing its OAuth app ID binding`);
-      }
+      if (template.adapter?.type === 'x.v2') oauthCredentialClientId(credential);
       return JSON.parse(JSON.stringify(candidateInjection));
     }
 
@@ -18493,24 +22481,13 @@ UI_HTML = r"""
       delete bundle.metadata.signature;
       delete bundle.metadata.signingKeyId;
       bundle.credentials = bundle.credentials || [];
-      const activeCredential = bundle.credentials.find((item) => item.id === credentialRef);
       const storedCredential = (state.credentials || []).find((item) => item.id === credentialRef);
-      const candidateInjection = policyCredentialInjection(storedCredential, activeCredential, template);
-      const grantedScopes = oauthCredentialGrantedScopes(storedCredential);
-      const providerSubject = oauthCredentialProviderSubject(storedCredential);
-      if (!activeCredential) {
-        const provider = template.provider || storedCredential?.metadata?.provider_id || storedCredential?.metadata?.provider || 'custom';
-        bundle.credentials.push({
-          id: credentialRef,
-          provider,
-          ...(grantedScopes ? {scopes: grantedScopes} : {}),
-          ...(providerSubject ? {providerSubject} : {}),
-          injection: candidateInjection
-        });
-      } else {
-        if (grantedScopes) activeCredential.scopes = grantedScopes;
-        if (providerSubject) activeCredential.providerSubject = providerSubject;
+      if (!storedCredential || (storedCredential.lifecycle_status || 'active') !== 'active') {
+        throw new Error('The selected stored credential is unavailable or inactive');
       }
+      const activeCredentialIndex = bundle.credentials.findIndex((item) => item.id === credentialRef);
+      const activeCredential = activeCredentialIndex >= 0 ? bundle.credentials[activeCredentialIndex] : null;
+      const candidateInjection = policyCredentialInjection(storedCredential, activeCredential, template);
       let route;
       if (template.custom) {
         const parsed = JSON.parse(String(form.get('customRoute') || '{}'));
@@ -18530,20 +22507,25 @@ UI_HTML = r"""
           adapter: JSON.parse(JSON.stringify(template.adapter)),
           constraints: JSON.parse(JSON.stringify(template.constraints || []))
         };
-        if (route.adapter.type === 'x.v2') {
-          route.adapter.config.appIds = [String(storedCredential.metadata.x_app_id || storedCredential.metadata.app_id)];
-        }
         if (template.jit) {
           route.jit = JSON.parse(JSON.stringify(template.jit));
           route.jit.approvers.users = parseApproverPrincipals(form.get('approvers'));
         }
       }
+      const credentialBinding = policyCredentialBinding(storedCredential, route);
+      route.adapter.config.credentialBinding = credentialBinding;
+      if (route.adapter.type === 'x.v2') {
+        route.adapter.config.appIds = [...credentialBinding.clientIds];
+      }
+      const candidateCredential = signedPolicyCredential(storedCredential, candidateInjection);
+      if (activeCredentialIndex >= 0) bundle.credentials[activeCredentialIndex] = candidateCredential;
+      else bundle.credentials.push(candidateCredential);
       const existingIndex = (bundle.routes || []).findIndex((item) => item.id === routeId);
       if (existingIndex >= 0) bundle.routes[existingIndex] = route;
       else (bundle.routes = bundle.routes || []).push(route);
       const allowPath = materializePolicyPath(route.match.paths[0]);
       const dryRun = [
-        {name: `${routeId} allows assigned operation`, principalId, scheme: 'https', host: route.match.host, port: route.match.port, method: route.match.methods[0], path: allowPath, expect: 'allow'},
+        {name: `${routeId} selects the assigned route`, principalId, scheme: 'https', host: route.match.host, port: route.match.port, method: route.match.methods[0], path: allowPath, expect: 'allow', expectedRouteId: routeId},
         {name: `${routeId} keeps unknown host denied`, principalId, scheme: 'https', host: 'serverware-policy-deny.invalid', port: 443, method: route.match.methods[0], path: allowPath, expect: 'deny'}
       ];
       return {bundle, dryRun, basePolicyHash: state.activePolicy.policy_hash, routeId, principalId, credentialRef, templateId: form.get('template')};
@@ -18576,11 +22558,22 @@ UI_HTML = r"""
     function renderPolicyCanary() {
       const payload = state.policyCanary;
       const canary = payload?.canary;
-      const running = canary?.status === 'running';
-      $('policy-activate-button').disabled = !running;
-      $('policy-cancel-button').disabled = !running;
+      const terminal = new Set(['completed', 'indeterminate', 'failed', 'cancelled', 'expired', 'superseded']);
+      const activationReady = canary?.status === 'ready'
+        && payload?.monitoring?.candidateShadowEvaluationImplemented === true
+        && (payload?.decisionGateActivation?.publication == null
+          || payload?.authorityFinalizationState === 'external-finalization-package-required');
+      const durablePreparation = state.policyCandidate?.authorityPreparation?.preparation_digest;
+      $('policy-activate-button').disabled = !activationReady;
+      $('policy-cancel-button').disabled = !canary || terminal.has(canary.status) || !durablePreparation;
       $('policy-canary-status').value = canary
-        ? JSON.stringify({canary, monitoring: payload.monitoring}, null, 2)
+        ? JSON.stringify({
+            canary,
+            monitoring: payload.monitoring,
+            decisionGateActivation: payload.decisionGateActivation,
+            authorityFinalizationState: payload.authorityFinalizationState,
+            cancellationState: durablePreparation ? 'prepared' : payload.cancellationState
+          }, null, 2)
         : 'No policy candidate is staged.';
     }
 
@@ -18593,50 +22586,166 @@ UI_HTML = r"""
       }
       const active = await api('/api/policy');
       if (active.policy_hash !== candidate.basePolicyHash) throw new Error('Active policy changed after preview; generate a new candidate');
-      const mutation = {
-        kind: 'policy-canary',
-        label: `Stage PolicyBundle route ${candidate.routeId}`,
-        persist: true,
-        path: '/api/policy/publish',
+      const importedPackage = await api('/api/policy/authority/candidates/package', {
         method: 'POST',
-        body: {bundle: candidate.bundle, dryRun: candidate.dryRun, activationMode: 'canary'}
+        body: JSON.stringify({
+          apiVersion: 'serverware.policyAuthorityPortalPackageImportRequest/v1',
+          requestId: authorityRequestId(),
+          purpose: 'handoff',
+          package: policyAuthorityPackage()
+        })
+      });
+      const authorityPackage = importedPackage.portalPackage;
+      const handoff = authorityPackage.handoff;
+      const requiredHandoff = [
+        'candidateId',
+        'artifactEnvelopeDigest',
+        'canaryId',
+        'assignmentEnvelopeDigest',
+        'loadReceiptEnvelopeDigest',
+        'instanceId',
+        'bootId',
+        'runtimeAttestationHandoffDigest',
+        'predecessorPolicyHash'
+      ];
+      if (!handoff || typeof handoff !== 'object' || Array.isArray(handoff)
+          || Object.keys(handoff).sort().join(',') !== requiredHandoff.sort().join(',')) {
+        throw new Error('The policy authority package does not contain a closed runtime handoff');
+      }
+      const handoffResult = await api('/api/policy/authority/candidates/handoff', {
+        method: 'POST',
+        body: JSON.stringify({
+          apiVersion: 'serverware.policyAuthorityCandidateHandoff/v1',
+          requestId: authorityRequestId(),
+          ...handoff,
+          candidatePolicyBundle: candidate.report.signedBundle
+        })
+      });
+      candidate.stage = {
+        handoff: handoffResult,
+        packageDigest: importedPackage.packageDigest,
+        portalPackage: authorityPackage
       };
-      const completed = await runControlPlaneMutation(mutation);
-      if (!completed.pending) await finishMutation(completed.mutation, completed.result);
-      return completed;
+      if (state.setupSession?.phase === 'credential_activated') {
+        const bound = await api(`/api/setup/sessions/${encodeURIComponent(state.setupSession.id)}/canary`, {
+          method: 'POST',
+          body: JSON.stringify({
+            expectedRevision: state.setupSession.revision,
+            canaryId: handoff.canaryId,
+            candidatePolicyBundle: candidate.report.signedBundle
+          })
+        });
+        rememberSetupSession(bound.session);
+      }
+      renderPolicyCandidate();
+      await refresh();
+      return candidate.stage;
     }
 
     async function activatePolicyCanary() {
       const canary = state.policyCanary?.canary;
-      if (!canary || canary.status !== 'running') throw new Error('No staged policy candidate is available to activate');
-      const mutation = {
-        kind: 'policy-canary-activate',
-        label: `Activate staged policy candidate ${canary.id}`,
-        persist: true,
-        path: '/api/policy/canary/activate',
+      if (!canary || canary.status !== 'ready'
+          || state.policyCanary?.monitoring?.candidateShadowEvaluationImplemented !== true) {
+        throw new Error('Signed candidate evaluation evidence is not ready for activation');
+      }
+      if (state.policyCanary?.decisionGateActivation?.publication != null) {
+        const importedFinalization = await api('/api/policy/authority/candidates/package', {
+          method: 'POST',
+          body: JSON.stringify({
+            apiVersion: 'serverware.policyAuthorityPortalPackageImportRequest/v1',
+            requestId: authorityRequestId(),
+            purpose: 'authority-finalization',
+            package: policyAuthorityPackage()
+          })
+        });
+        const activation = policyActivationPackage(importedFinalization.portalPackage.activation);
+        const preparation = await executePolicyAuthorityStep(activation.prepare, ['policy.activation.prepare']);
+        if (!preparation?.preparation_digest) throw new Error('Authority prepare did not return a durable preparation digest');
+        if (state.policyCandidate) state.policyCandidate.authorityPreparation = preparation;
+        renderPolicyCanary();
+        const inclusionDigests = [];
+        for (const template of activation.recordInclusions || []) {
+          const inclusion = JSON.parse(JSON.stringify(template));
+          if (inclusion.arguments.preparationDigest !== null) throw new Error('Authority inclusion template asserted a preparation digest');
+          inclusion.arguments.preparationDigest = preparation.preparation_digest;
+          const recorded = await executePolicyAuthorityStep(inclusion, ['policy.activation.record-inclusion']);
+          for (const receipt of recorded.recorded_inclusion_receipts || []) {
+            const digest = receipt.inclusion_receipt_envelope_digest;
+            if (typeof digest !== 'string') throw new Error('Authority inclusion did not return its durable receipt digest');
+            inclusionDigests.push(digest);
+          }
+        }
+        const finalization = JSON.parse(JSON.stringify(activation.finalize));
+        if (finalization.arguments.preparationDigest !== null
+            || finalization.arguments.inclusionReceiptEnvelopeDigests.length !== 0) {
+          throw new Error('Authority finalization template asserted prepare results');
+        }
+        finalization.arguments.preparationDigest = preparation.preparation_digest;
+        finalization.arguments.inclusionReceiptEnvelopeDigests = inclusionDigests;
+        const result = await executePolicyAuthorityStep(finalization, ['policy.activation.finalize']);
+        if (state.policyCandidate) state.policyCandidate.authorityFinalization = result;
+        if (state.setupSession?.phase === 'policy_staged') {
+          const bound = await api(`/api/setup/sessions/${encodeURIComponent(state.setupSession.id)}/policy`, {
+            method: 'POST',
+            body: JSON.stringify({expectedRevision: state.setupSession.revision})
+          });
+          rememberSetupSession(bound.session);
+        }
+        await refresh();
+        return result;
+      }
+      const importedPackage = await api('/api/policy/authority/candidates/package', {
         method: 'POST',
-        body: {canaryId: canary.id}
-      };
-      const completed = await runControlPlaneMutation(mutation);
-      if (!completed.pending) await finishMutation(completed.mutation, completed.result);
-      return completed;
+        body: JSON.stringify({
+          apiVersion: 'serverware.policyAuthorityPortalPackageImportRequest/v1',
+          requestId: authorityRequestId(),
+          purpose: 'decision-gate-activation',
+          package: policyAuthorityPackage()
+        })
+      });
+      const result = await api('/api/policy/authority/candidates/decision-gate-activate', {
+        method: 'POST',
+        body: JSON.stringify({
+          apiVersion: 'serverware.policyAuthorityDecisionGateActivationRequest/v1',
+          canaryId: canary.id,
+          generationId: importedPackage.generationId,
+          generationPublicationEnvelopeDigest: importedPackage.generationPublicationEnvelopeDigest
+        })
+      });
+      if (state.policyCandidate) state.policyCandidate.decisionGateActivation = result;
+      await refresh();
+      return result;
     }
 
     async function cancelPolicyCanary() {
       const canary = state.policyCanary?.canary;
-      if (!canary || canary.status !== 'running') throw new Error('No staged policy candidate is available to cancel');
+      const terminal = new Set(['completed', 'indeterminate', 'failed', 'cancelled', 'expired', 'superseded']);
+      if (!canary || terminal.has(canary.status)) throw new Error('No cancellable policy candidate is available');
+      const preparationDigest = state.policyCandidate?.authorityPreparation?.preparation_digest;
+      if (!preparationDigest) throw new Error('Cancellation requires a durable authority preparation');
       if (!window.confirm(`Cancel staged policy candidate ${canary.id}?`)) return cancelledAction('Policy candidate cancellation');
-      const mutation = {
-        kind: 'policy-canary-cancel',
-        label: `Cancel staged policy candidate ${canary.id}`,
-        persist: true,
-        path: '/api/policy/canary/cancel',
+      const importedPackage = await api('/api/policy/authority/candidates/package', {
         method: 'POST',
-        body: {canaryId: canary.id, note: $('policy-canary-note').value.trim() || null}
-      };
-      const completed = await runControlPlaneMutation(mutation);
-      if (!completed.pending) await finishMutation(completed.mutation, completed.result);
-      return completed;
+        body: JSON.stringify({
+          apiVersion: 'serverware.policyAuthorityPortalPackageImportRequest/v1',
+          requestId: authorityRequestId(),
+          purpose: 'abort',
+          package: policyAuthorityPackage()
+        })
+      });
+      const abort = policyActivationPackage(
+        importedPackage.portalPackage.activation
+      ).abort;
+      if (abort.arguments.preparationDigest !== preparationDigest) {
+        throw new Error('Abort package does not name the durable authority preparation');
+      }
+      const result = await executePolicyAuthorityStep(
+        abort,
+        ['policy.activation.abort', 'policy.canary.cancel']
+      );
+      if (state.policyCandidate) state.policyCandidate.abort = result;
+      await refresh();
+      return result;
     }
 
     $('credential-kind').addEventListener('change', () => syncCredentialKindFields(true));
@@ -18650,7 +22759,9 @@ UI_HTML = r"""
         const injectionNameValue = String(form.get('injectionName') || '').trim();
         if (kind === 'basic') metadata.username = injectionNameValue;
         if (['header', 'query', 'cookie'].includes(kind)) metadata.injection_name = injectionNameValue;
-        storedCredentialInjection({id: 'new credential', kind, metadata});
+        const candidateCredential = {id: 'new credential', kind, metadata};
+        const candidateInjection = storedCredentialInjection(candidateCredential);
+        signedPolicyCredential(candidateCredential, candidateInjection);
         const mutation = {
           kind: 'credential-create',
           label: `Create credential ${form.get('name')}`,
@@ -18739,9 +22850,17 @@ UI_HTML = r"""
       const setupSession = await ensureSetupSession();
       const provider = (state.oauthProviders || []).find((item) => item.id === template.provider);
       if (!provider) {
+        const binding = template.adapter?.config?.credentialBinding;
+        if (binding?.credentialType !== 'static' || typeof binding.secretClass !== 'string') {
+          throw new Error('This static template has no valid credential identity contract');
+        }
         $('credential-name').value = `${template.label} credential`;
         $('credential-kind').value = template.injection?.type || 'bearer';
-        $('credential-metadata').value = JSON.stringify({provider: template.provider}, null, 2);
+        $('credential-metadata').value = JSON.stringify({
+          provider: template.provider,
+          provider_subject: 'replace-with-account-subject',
+          secret_class: binding.secretClass
+        }, null, 2);
         syncCredentialKindFields(true);
         if (template.injection?.type === 'header') $('credential-injection-name').value = template.injection.name || 'x-api-key';
         if (['query', 'cookie'].includes(template.injection?.type)) $('credential-injection-name').value = template.injection.name || '';
@@ -19363,16 +23482,19 @@ UI_HTML = r"""
         setStatus(`Review receipt refreshed for approval ${id}. Inspect it before approving.`, 'pending');
         return {pending: true, reviewLoaded: true};
       }
+      const grantTtlSeconds = Number(item.grant_ttl_seconds || state.approvalReview?.retry_semantics?.grant_ttl_seconds || 30);
       const options = await api(`/api/approvals/${id}/webauthn/options`, {
         method: 'POST',
-        body: JSON.stringify({reviewReceiptId})
+        body: JSON.stringify({reviewReceiptId, ttlSeconds: grantTtlSeconds})
       });
-      let body = {reviewReceiptId};
+      let body = {
+        reviewReceiptId,
+        authorityChallengeId: options.serverware.authorityChallengeId
+      };
       if (window.PublicKeyCredential && (options.publicKey.allowCredentials || []).length) {
         const assertion = await navigator.credentials.get({publicKey: prepareRequestOptions(options)});
         body.assertion = credentialToJson(assertion);
       }
-      const grantTtlSeconds = Number(item.grant_ttl_seconds || state.approvalReview?.retry_semantics?.grant_ttl_seconds || 30);
       await api(`/api/approvals/${id}/approve?ttl_seconds=${encodeURIComponent(grantTtlSeconds)}`, {
         method: 'POST',
         body: JSON.stringify(body)
@@ -19542,6 +23664,13 @@ UI_HTML = r"""
 </body>
 </html>
 """
+
+if UI_HTML.count(_PORTAL_POLICY_TEMPLATES_PLACEHOLDER) != 1:
+    raise RuntimeError("portal policy template placeholder is missing or duplicated")
+UI_HTML = UI_HTML.replace(
+    _PORTAL_POLICY_TEMPLATES_PLACEHOLDER,
+    _portal_policy_templates_json(),
+)
 
 
 app = _SignedControlPlaneASGI(_fastapi_app)

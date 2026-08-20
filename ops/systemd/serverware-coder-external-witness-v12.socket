@@ -1,0 +1,19 @@
+[Unit]
+Description=Serverware Coder v12 local witness RPC
+PartOf=serverware-coder-v12.target
+After=serverware-coder-runtime-v12.service
+Requires=serverware-coder-runtime-v12.service
+Before=serverware-coder-external-witness-v12.service
+
+[Socket]
+ListenStream=/run/serverware/coder/v12/external-witness/control.sock
+SocketUser=root
+SocketGroup=serverware-coder-witness-api
+SocketMode=0660
+DirectoryMode=0750
+RemoveOnStop=yes
+Accept=no
+Service=serverware-coder-external-witness-v12.service
+
+[Install]
+WantedBy=serverware-coder-v12.target

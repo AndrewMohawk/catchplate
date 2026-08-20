@@ -1,0 +1,44 @@
+[Unit]
+Description=Serverware Coder v12 unprivileged delegated-FD Docker proxy
+PartOf=serverware-coder-v12.target
+After=local-fs.target serverware-coder-runtime-v12.service serverware-coder-docker-proxy-v12.socket serverware-coder-lifecycle-v12.service
+Requires=serverware-coder-runtime-v12.service serverware-coder-docker-proxy-v12.socket serverware-coder-lifecycle-v12.service
+Before=serverware-coder-plan-executor-v12.service
+RequiresMountsFor=/var/lib/serverware/coder-controller-v12
+
+[Service]
+Type=notify
+User=serverware-coder-docker
+Group=serverware-coder-docker
+SupplementaryGroups=serverware-coder-docker-api serverware-coder-lifecycle-api
+UMask=0077
+Sockets=serverware-coder-docker-proxy-v12.socket
+ExecStart=@RELEASE_ROOT@/bin/serverware-coder-docker-proxy-v12 --config @RELEASE_ROOT@/config/docker-proxy-v12.conf
+ExecStop=/bin/kill -TERM $MAINPID
+Restart=on-failure
+RestartSec=2s
+TimeoutStartSec=45s
+TimeoutStopSec=90s
+KillMode=control-group
+SendSIGKILL=yes
+FinalKillSignal=SIGKILL
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateIPC=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+RestrictAddressFamilies=AF_UNIX
+SystemCallArchitectures=native
+ReadWritePaths=/run/serverware/coder/v12/docker-proxy /var/lib/serverware/coder-controller-v12/docker-proxy
+
+[Install]
+WantedBy=serverware-coder-v12.target

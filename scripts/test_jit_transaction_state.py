@@ -7330,13 +7330,31 @@ def exercise_proxy_credential_binding(policy_engine: Any, credential_policy_type
         id="credential:x",
         provider="twitter",
         provider_subject="subject-123",
+        oauth_client_id="x-client",
         scopes=scopes,
         injection={
             "type": "bearer",
             "header": "Authorization",
             "field": "access_token",
+            "prefix": "Bearer ",
         },
     )
+
+    def route_for(candidate_policy: Any) -> Any:
+        return SimpleNamespace(
+            adapter_type="x.v2",
+            adapter_config={
+                "appIds": [candidate_policy.oauth_client_id],
+                "credentialBinding": {
+                    "credentialType": "oauth2",
+                    "provider": candidate_policy.provider,
+                    "subjects": [candidate_policy.provider_subject],
+                    "clientIds": [candidate_policy.oauth_client_id],
+                    "requiredScopes": list(scopes),
+                },
+            },
+        )
+
     credential = {
         "id": policy.id,
         "kind": "oauth2",
@@ -7347,10 +7365,17 @@ def exercise_proxy_credential_binding(policy_engine: Any, credential_policy_type
             "provider_identity_verified": True,
             "provider_id": "x.oauth2",
             "provider_subject": "subject-123",
+            "account_subject": "subject-123",
+            "oauth_client_id": "x-client",
             "scopes": list(reversed(scopes)),
         },
     }
-    if policy_engine._credential_policy_binding_decision(policy, credential) is not None:
+    if (
+        policy_engine._credential_policy_binding_decision(
+            route_for(policy), policy, credential, "post.create"
+        )
+        is not None
+    ):
         raise AssertionError("proxy binding rejected lease-equivalent provider aliases or scope order")
 
     mismatches = (
@@ -7359,6 +7384,7 @@ def exercise_proxy_credential_binding(policy_engine: Any, credential_policy_type
                 id=policy.id,
                 provider="x",
                 provider_subject="different-subject",
+                oauth_client_id="x-client",
                 scopes=scopes,
                 injection=policy.injection,
             ),
@@ -7370,6 +7396,7 @@ def exercise_proxy_credential_binding(policy_engine: Any, credential_policy_type
                 id=policy.id,
                 provider="x",
                 provider_subject="subject-123",
+                oauth_client_id="x-client",
                 scopes=("tweet.read",),
                 injection=policy.injection,
             ),
@@ -7387,8 +7414,10 @@ def exercise_proxy_credential_binding(policy_engine: Any, credential_policy_type
     )
     for candidate_policy, candidate_credential, binding in mismatches:
         decision = policy_engine._credential_policy_binding_decision(
+            route_for(candidate_policy),
             candidate_policy,
             candidate_credential,
+            "post.create",
         )
         if (
             decision is None
@@ -7402,7 +7431,9 @@ def exercise_proxy_credential_binding(policy_engine: Any, credential_policy_type
         **credential,
         "metadata": {**credential["metadata"], "scopes": [scopes[0], scopes[0]]},
     }
-    malformed_decision = policy_engine._credential_policy_binding_decision(policy, malformed)
+    malformed_decision = policy_engine._credential_policy_binding_decision(
+        route_for(policy), policy, malformed, "post.create"
+    )
     if (
         malformed_decision is None
         or malformed_decision.status_code != 503
@@ -7418,17 +7449,70 @@ def exercise_proxy_credential_binding(policy_engine: Any, credential_policy_type
     )
     service_credential = {
         "kind": "header",
-        "metadata": {"provider": "stripe", "scope": "charges.write"},
+        "metadata": {
+            "provider": "stripe",
+            "provider_subject": "stripe-account",
+            "secret_class": "customHeader",
+            "scope": "charges.write",
+            "injection_name": "X-Api-Key",
+        },
     }
-    if policy_engine._credential_policy_binding_decision(service_policy, service_credential) is not None:
+    service_policy = credential_policy_type(
+        id=service_policy.id,
+        provider=service_policy.provider,
+        provider_subject="stripe-account",
+        scopes=service_policy.scopes,
+        injection=service_policy.injection,
+    )
+    service_route = SimpleNamespace(
+        adapter_type="generic.rest",
+        adapter_config={
+            "credentialBinding": {
+                "credentialType": "static",
+                "provider": "stripe",
+                "subjects": ["stripe-account"],
+                "secretClass": "customHeader",
+            }
+        },
+    )
+    if (
+        policy_engine._credential_policy_binding_decision(
+            service_route, service_policy, service_credential, "charge.create"
+        )
+        is not None
+    ):
         raise AssertionError("proxy rejected a non-OAuth credential within its signed scope binding")
     expanded = {
         **service_credential,
         "metadata": {"provider": "stripe", "scope": "charges.write refunds.write"},
     }
-    expanded_decision = policy_engine._credential_policy_binding_decision(service_policy, expanded)
+    expanded_decision = policy_engine._credential_policy_binding_decision(
+        service_route, service_policy, expanded, "charge.create"
+    )
     if expanded_decision is None or expanded_decision.status_code != 409:
         raise AssertionError("proxy allowed stored non-OAuth scopes to exceed signed policy")
+    duplicate_static_scopes = {
+        **service_credential,
+        "metadata": {
+            **service_credential["metadata"],
+            "scopes": ["charges.write", "charges.write"],
+        },
+    }
+    duplicate_static_decision = policy_engine._credential_policy_binding_decision(
+        service_route,
+        service_policy,
+        duplicate_static_scopes,
+        "charge.create",
+    )
+    if (
+        duplicate_static_decision is None
+        or duplicate_static_decision.status_code != 503
+        or duplicate_static_decision.payload.get("error")
+        != "credential_policy_binding_invalid"
+    ):
+        raise AssertionError(
+            "proxy did not classify malformed static scopes as invalid"
+        )
 
 
 def exercise_internal_header_boundary(

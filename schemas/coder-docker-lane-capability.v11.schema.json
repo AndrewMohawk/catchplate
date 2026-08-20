@@ -1,0 +1,327 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.dev/schemas/coder-docker-lane-capability.v11.schema.json",
+  "title": "Serverware Docker Lane Capability V11",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contractVersion",
+    "capabilityId",
+    "laneId",
+    "daemonGeneration",
+    "sourceSealSha256",
+    "artifactSealSha256",
+    "profile",
+    "ownerNamespace",
+    "sequenceStart",
+    "sequenceEnd",
+    "deadlineBoottimeNs",
+    "policySha256",
+    "allowedApiVersions",
+    "buildTuple",
+    "allowedPinnedPulls",
+    "allowedImageDigests",
+    "limits",
+    "signerAuthorization",
+    "signature"
+  ],
+  "properties": {
+    "contractVersion": {
+      "const": "11"
+    },
+    "capabilityId": {
+      "$ref": "#/$defs/id"
+    },
+    "laneId": {
+      "$ref": "#/$defs/id"
+    },
+    "daemonGeneration": {
+      "$ref": "#/$defs/id"
+    },
+    "sourceSealSha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "artifactSealSha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "profile": {
+      "enum": [
+        "BUILD",
+        "UNIT_NO_BUILD",
+        "INTEGRATION_NO_BUILD",
+        "E2E_NO_BUILD",
+        "ATTESTATION_NO_BUILD"
+      ]
+    },
+    "ownerNamespace": {
+      "type": "string",
+      "pattern": "^serverware-[a-z0-9][a-z0-9-]{7,62}$",
+      "maxLength": 63
+    },
+    "sequenceStart": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "sequenceEnd": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "deadlineBoottimeNs": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "policySha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "allowedApiVersions": {
+      "type": "array",
+      "description": "Strictly sorted and unique Docker API versions from the compiled registry.",
+      "minItems": 1,
+      "maxItems": 8,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "v1.43",
+          "v1.44",
+          "v1.45"
+        ]
+      }
+    },
+    "buildTuple": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/buildTuple"
+        }
+      ]
+    },
+    "allowedPinnedPulls": {
+      "type": "array",
+      "uniqueItems": true,
+      "maxItems": 64,
+      "items": {
+        "$ref": "#/$defs/pinnedPull"
+      }
+    },
+    "allowedImageDigests": {
+      "type": "array",
+      "uniqueItems": true,
+      "maxItems": 256,
+      "items": {
+        "$ref": "#/$defs/sealedImageId"
+      }
+    },
+    "limits": {
+      "$ref": "#/$defs/limits"
+    },
+    "signerAuthorization": {
+      "$ref": "#/$defs/signerAuthorization"
+    },
+    "signature": {
+      "$ref": "#/$defs/signature"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "profile": {
+            "const": "BUILD"
+          }
+        },
+        "required": [
+          "profile"
+        ]
+      },
+      "then": {
+        "properties": {
+          "buildTuple": {
+            "$ref": "#/$defs/buildTuple"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "buildTuple": {
+            "type": "null"
+          },
+          "allowedPinnedPulls": {
+            "maxItems": 0
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$",
+      "maxLength": 128
+    },
+    "pinnedPull": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._/-]*@sha256:[0-9a-f]{64}$",
+      "maxLength": 512
+    },
+    "sealedImageId": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "buildTuple": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contextCasSha256",
+        "dockerfileCasSha256",
+        "target",
+        "platform",
+        "output",
+        "buildArgsSha256"
+      ],
+      "properties": {
+        "contextCasSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "dockerfileCasSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "target": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "platform": {
+          "type": "string",
+          "pattern": "^linux/(amd64|arm64)(/v[0-9]+)?$"
+        },
+        "output": {
+          "const": "oci-cas"
+        },
+        "buildArgsSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "maxRequestBytes",
+        "maxResponseBytes",
+        "maxStreamBytes",
+        "maxDurationMs",
+        "maxObjects"
+      ],
+      "properties": {
+        "maxRequestBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8589934592
+        },
+        "maxResponseBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8589934592
+        },
+        "maxStreamBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 17179869184
+        },
+        "maxDurationMs": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 14400000
+        },
+        "maxObjects": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4096
+        }
+      }
+    },
+    "signerAuthorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "role",
+        "principalId",
+        "keyId",
+        "spkiDerSha256",
+        "authorizationLeafSha256",
+        "authorizationCheckpointSha256",
+        "revocationHighwater",
+        "notBeforeBoottimeNs",
+        "notAfterBoottimeNs"
+      ],
+      "properties": {
+        "role": {
+          "const": "controller-plan-executor"
+        },
+        "principalId": {
+          "$ref": "#/$defs/id"
+        },
+        "keyId": {
+          "$ref": "#/$defs/id"
+        },
+        "spkiDerSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "authorizationLeafSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "authorizationCheckpointSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "revocationHighwater": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "notBeforeBoottimeNs": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "notAfterBoottimeNs": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "algorithm",
+        "domain",
+        "payloadSha256",
+        "signatureBase64url"
+      ],
+      "properties": {
+        "algorithm": {
+          "const": "Ed25519"
+        },
+        "domain": {
+          "const": "serverware/docker-lane-capability/v11"
+        },
+        "payloadSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "signatureBase64url": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{86}$"
+        }
+      }
+    }
+  }
+}

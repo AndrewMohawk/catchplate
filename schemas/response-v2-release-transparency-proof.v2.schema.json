@@ -1,0 +1,497 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/response-v2-release-transparency-proof.v2.schema.json",
+  "title": "Serverware Response v2 Release Transparency Proof",
+  "$comment": "The logged leaf contains only a preexisting signed release identity record. It deliberately has no request, attempt, response, finalization, final-envelope, or response-artifact field, so inclusion cannot be made circular by hashing the response that contains this proof. Verification still requires the Rust verifier to validate RFC6962 inclusion and consistency, both Ed25519 signatures, the independently pinned log SPKI and anchor, freshness and revocation, and exact release identity bindings.",
+  "$ref": "#/$defs/releaseTransparencyArtifact",
+  "$defs": {
+    "safeUint": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "positiveSafeUint": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@-]*$"
+    },
+    "sha256": {
+      "type": "string",
+      "minLength": 71,
+      "maxLength": 71,
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "ed25519PublicKeyBase64": {
+      "type": "string",
+      "minLength": 44,
+      "maxLength": 44,
+      "pattern": "^[A-Za-z0-9+/]{43}=$"
+    },
+    "ed25519SpkiBase64": {
+      "type": "string",
+      "minLength": 60,
+      "maxLength": 60,
+      "pattern": "^[A-Za-z0-9+/]{59}=$"
+    },
+    "ed25519SignatureBase64url": {
+      "type": "string",
+      "minLength": 86,
+      "maxLength": 86,
+      "pattern": "^[A-Za-z0-9_-]{86}$"
+    },
+    "digestPath": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "$ref": "#/$defs/sha256"
+      }
+    },
+    "releaseIdentityRecordPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "kind",
+        "schemaVersion",
+        "releaseRecordId",
+        "generationId",
+        "providerGeneration",
+        "sourceCommitSha256",
+        "sourceTreeSha256",
+        "executableSha256",
+        "configurationSha256",
+        "issuedAtEpochMs",
+        "notBeforeEpochMs",
+        "notAfterEpochMs"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.responseV2.releaseIdentityRecord/v2"
+        },
+        "kind": {
+          "const": "ServerwareResponseV2ReleaseIdentityRecord"
+        },
+        "schemaVersion": {
+          "const": "2"
+        },
+        "releaseRecordId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "generationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "providerGeneration": {
+          "$ref": "#/$defs/positiveSafeUint"
+        },
+        "sourceCommitSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "sourceTreeSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "executableSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "configurationSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "issuedAtEpochMs": {
+          "$ref": "#/$defs/positiveSafeUint"
+        },
+        "notBeforeEpochMs": {
+          "$ref": "#/$defs/safeUint"
+        },
+        "notAfterEpochMs": {
+          "$ref": "#/$defs/positiveSafeUint"
+        }
+      }
+    },
+    "releaseIdentityRecordAuthentication": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "algorithm",
+        "signerRole",
+        "keyId",
+        "publicKeyBase64",
+        "publicKeySha256",
+        "publicKeySpkiSha256",
+        "signingDomain",
+        "signedPayloadSha256",
+        "signatureBase64url"
+      ],
+      "properties": {
+        "algorithm": {
+          "const": "Ed25519"
+        },
+        "signerRole": {
+          "const": "runtime-attestation"
+        },
+        "keyId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "publicKeyBase64": {
+          "$ref": "#/$defs/ed25519PublicKeyBase64"
+        },
+        "publicKeySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "publicKeySpkiSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "signingDomain": {
+          "const": "serverware.responseV2.releaseIdentityRecord.signature/v2"
+        },
+        "signedPayloadSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "signatureBase64url": {
+          "$ref": "#/$defs/ed25519SignatureBase64url"
+        }
+      }
+    },
+    "signedReleaseIdentityRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "payload",
+        "authentication"
+      ],
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/releaseIdentityRecordPayload"
+        },
+        "authentication": {
+          "$ref": "#/$defs/releaseIdentityRecordAuthentication"
+        }
+      }
+    },
+    "releaseTransparencyLeaf": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "kind",
+        "schemaVersion",
+        "logId",
+        "releaseRecordSha256",
+        "releaseRecord",
+        "integratedAtEpochMs"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.responseV2.releaseTransparencyLeaf/v2"
+        },
+        "kind": {
+          "const": "ServerwareResponseV2ReleaseTransparencyLeaf"
+        },
+        "schemaVersion": {
+          "const": "2"
+        },
+        "logId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "releaseRecordSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "releaseRecord": {
+          "$ref": "#/$defs/signedReleaseIdentityRecord"
+        },
+        "integratedAtEpochMs": {
+          "$ref": "#/$defs/positiveSafeUint"
+        }
+      }
+    },
+    "releaseTransparencyCheckpointPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "kind",
+        "schemaVersion",
+        "checkpointId",
+        "logId",
+        "providerGeneration",
+        "treeSize",
+        "rootSha256",
+        "issuedAtEpochMs",
+        "expiresAtEpochMs",
+        "trustCheckpointSha256",
+        "revocationEpoch"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.responseV2.releaseTransparencyCheckpoint/v2"
+        },
+        "kind": {
+          "const": "ServerwareResponseV2ReleaseTransparencyCheckpoint"
+        },
+        "schemaVersion": {
+          "const": "2"
+        },
+        "checkpointId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "logId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "providerGeneration": {
+          "$ref": "#/$defs/positiveSafeUint"
+        },
+        "treeSize": {
+          "$ref": "#/$defs/positiveSafeUint"
+        },
+        "rootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "issuedAtEpochMs": {
+          "$ref": "#/$defs/positiveSafeUint"
+        },
+        "expiresAtEpochMs": {
+          "$ref": "#/$defs/positiveSafeUint"
+        },
+        "trustCheckpointSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "revocationEpoch": {
+          "$ref": "#/$defs/positiveSafeUint"
+        }
+      }
+    },
+    "releaseTransparencyCheckpointAuthentication": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "algorithm",
+        "keyId",
+        "publicKeySpkiBase64",
+        "publicKeySpkiSha256",
+        "signingDomain",
+        "signedPayloadSha256",
+        "signatureBase64url"
+      ],
+      "properties": {
+        "algorithm": {
+          "const": "Ed25519"
+        },
+        "keyId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "publicKeySpkiBase64": {
+          "$ref": "#/$defs/ed25519SpkiBase64"
+        },
+        "publicKeySpkiSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "signingDomain": {
+          "const": "serverware.responseV2.releaseTransparencyCheckpoint.signature/v2"
+        },
+        "signedPayloadSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "signatureBase64url": {
+          "$ref": "#/$defs/ed25519SignatureBase64url"
+        }
+      }
+    },
+    "signedReleaseTransparencyCheckpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "payload",
+        "authentication"
+      ],
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/releaseTransparencyCheckpointPayload"
+        },
+        "authentication": {
+          "$ref": "#/$defs/releaseTransparencyCheckpointAuthentication"
+        }
+      }
+    },
+    "releaseTransparencyProof": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "kind",
+        "schemaVersion",
+        "digestAlgorithm",
+        "merkleTreeAlgorithm",
+        "leafCanonicalization",
+        "leaf",
+        "leafSha256",
+        "leafIndex",
+        "treeSize",
+        "auditPathSha256",
+        "anchorTreeSize",
+        "anchorRootSha256",
+        "consistencyPathSha256",
+        "checkpoint",
+        "checkpointSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.responseV2.releaseTransparencyProof/v2"
+        },
+        "kind": {
+          "const": "ServerwareResponseV2ReleaseTransparencyProof"
+        },
+        "schemaVersion": {
+          "const": "2"
+        },
+        "digestAlgorithm": {
+          "const": "SHA-256"
+        },
+        "merkleTreeAlgorithm": {
+          "const": "RFC6962"
+        },
+        "leafCanonicalization": {
+          "const": "RFC8785"
+        },
+        "leaf": {
+          "$ref": "#/$defs/releaseTransparencyLeaf"
+        },
+        "leafSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "leafIndex": {
+          "$ref": "#/$defs/safeUint"
+        },
+        "treeSize": {
+          "$ref": "#/$defs/positiveSafeUint"
+        },
+        "auditPathSha256": {
+          "$ref": "#/$defs/digestPath"
+        },
+        "anchorTreeSize": {
+          "$ref": "#/$defs/positiveSafeUint"
+        },
+        "anchorRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "consistencyPathSha256": {
+          "$ref": "#/$defs/digestPath"
+        },
+        "checkpoint": {
+          "$ref": "#/$defs/signedReleaseTransparencyCheckpoint"
+        },
+        "checkpointSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "releaseTransparencyArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "releaseTransparencyProof",
+        "releaseTransparencyProofSha256"
+      ],
+      "properties": {
+        "releaseTransparencyProof": {
+          "$ref": "#/$defs/releaseTransparencyProof"
+        },
+        "releaseTransparencyProofSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "releaseTransparencyTrustPin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "kind",
+        "schemaVersion",
+        "generationId",
+        "providerGeneration",
+        "proofPinsRootSha256",
+        "logId",
+        "logKeyId",
+        "logKeySpkiBase64",
+        "logKeySpkiSha256",
+        "anchorTreeSize",
+        "anchorRootSha256",
+        "trustCheckpointSha256",
+        "revocationEpoch",
+        "validFromEpochMs",
+        "validUntilEpochMs",
+        "revokedAtEpochMs",
+        "maximumCheckpointAgeMs"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.responseV2.releaseTransparencyTrustPin/v2"
+        },
+        "kind": {
+          "const": "ServerwareResponseV2ReleaseTransparencyTrustPin"
+        },
+        "schemaVersion": {
+          "const": "2"
+        },
+        "generationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "providerGeneration": {
+          "$ref": "#/$defs/positiveSafeUint"
+        },
+        "proofPinsRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "logId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "logKeyId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "logKeySpkiBase64": {
+          "$ref": "#/$defs/ed25519SpkiBase64"
+        },
+        "logKeySpkiSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "anchorTreeSize": {
+          "$ref": "#/$defs/positiveSafeUint"
+        },
+        "anchorRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "trustCheckpointSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "revocationEpoch": {
+          "$ref": "#/$defs/positiveSafeUint"
+        },
+        "validFromEpochMs": {
+          "$ref": "#/$defs/positiveSafeUint"
+        },
+        "validUntilEpochMs": {
+          "$ref": "#/$defs/positiveSafeUint"
+        },
+        "revokedAtEpochMs": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/positiveSafeUint"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "maximumCheckpointAgeMs": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 86400000
+        }
+      }
+    }
+  }
+}

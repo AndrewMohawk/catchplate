@@ -1,0 +1,1 @@
+{"runtime":@RUNTIME_HEADER_JSON@,"serviceSigningKeyCredential":"@SERVICE_SIGNING_KEY_CREDENTIAL@","serviceSigningPin":@SERVICE_SIGNING_PIN_JSON@,"currentSubjects":@CURRENT_SUBJECTS_JSON@}

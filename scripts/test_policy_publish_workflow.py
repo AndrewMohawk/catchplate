@@ -19,6 +19,14 @@ sys.path.insert(0, str(ROOT))
 def candidate_bundle(policy_bundle: Any, sequence: int) -> dict[str, Any]:
     bundle = policy_bundle.demo_policy_bundle("cred-demo-bearer")
     bundle["metadata"]["sequence"] = sequence
+    bundle["credentials"] = [
+        item for item in bundle["credentials"] if item["id"] == "cred-demo-bearer"
+    ]
+    bundle["routes"] = [
+        route
+        for route in bundle["routes"]
+        if route.get("credentialRef") in {None, "cred-demo-bearer"}
+    ]
     return bundle
 
 
@@ -1340,6 +1348,17 @@ def main() -> None:
         from serverware.auth import AdminIdentity
 
         db.init_db()
+        db.upsert_credential_with_id(
+            "cred-demo-bearer",
+            "Policy publish demo credential",
+            "bearer",
+            "demo-token-from-vault",
+            {
+                "provider": "demo",
+                "provider_subject": "demo-service-account",
+                "secret_class": "bearerToken",
+            },
+        )
         verify_mixed_backend_rejection(db)
         verify_checked_in_demo_policy(policy_bundle)
         verify_principal_identity_cardinality(policy_bundle)

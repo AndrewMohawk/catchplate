@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/policy-authority-portal-package-import-request.v1.schema.json",
+  "title": "Serverware Policy Authority Portal Package Import Request v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "requestId", "purpose", "package"],
+  "properties": {
+    "apiVersion": {
+      "const": "serverware.policyAuthorityPortalPackageImportRequest/v1"
+    },
+    "requestId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "purpose": {"enum": ["handoff", "decision-gate-activation", "authority-finalization", "abort"]},
+    "package": {
+      "$ref": "policy-authority-portal-package.v1.schema.json"
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"purpose": {"enum": ["handoff", "decision-gate-activation"]}}},
+      "then": {
+        "properties": {
+          "package": {
+            "properties": {
+              "activation": {"maxProperties": 0}
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {"properties": {"purpose": {"const": "authority-finalization"}}},
+      "then": {
+        "properties": {
+          "package": {
+            "properties": {
+              "activation": {
+                "required": ["prepare", "recordInclusions", "finalize"],
+                "maxProperties": 3,
+                "properties": {
+                  "recordInclusions": {"minItems": 1}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {"properties": {"purpose": {"const": "abort"}}},
+      "then": {
+        "properties": {
+          "package": {
+            "properties": {
+              "activation": {
+                "required": ["abort"],
+                "maxProperties": 1
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

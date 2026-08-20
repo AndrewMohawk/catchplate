@@ -264,6 +264,324 @@ services:
       serverware:
         condition: service_healthy
 
+  response-v2-generation-bootstrap:
+    profiles: ["custody"]
+    platform: linux/amd64
+    image: ${SERVERWARE_DECISION_GATE_DEV_IMAGE:-serverware-decision-gate:dev}
+    pull_policy: never
+    user: "65521:65519"
+    init: true
+    read_only: true
+    network_mode: none
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=${SERVERWARE_RESPONSE_OBSERVATION_V2_SECCOMP_PROFILE:-./security/seccomp/serverware-deny-dangerous.json}
+    pids_limit: 32
+    mem_limit: 128m
+    entrypoint: ["/usr/local/bin/serverware-response-observation-v2-custody"]
+    command: ["--bootstrap-generation", "--config", "/run/serverware-response-v2/config/custody.json"]
+    environment:
+      CREDENTIALS_DIRECTORY: /run/credentials/serverware-response-v2-generation-bootstrap
+      SERVERWARE_RESPONSE_V2_PROVIDER_GENERATION_SHA256: ${SERVERWARE_RESPONSE_V2_PROVIDER_GENERATION_SHA256:?set verified provider-generation digest}
+      SERVERWARE_RESPONSE_V2_CGROUP_ROOT: /sys/fs/cgroup/serverware-response-v2
+    volumes:
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_STATE_DATA_DIR:-serverware-response-v2-state-data}:/var/lib/serverware-response-v2/state-authority
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_LEDGER_DATA_DIR:-serverware-response-v2-ledger-data}:/var/lib/serverware-response-v2/immutable-artifact-ledger:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_PUBLIC_CONFIG_DIR:-/dev/null}:/run/serverware-response-v2/config:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_BOOTSTRAP_KEY_DIR:?set one-shot generation bootstrap credential directory}:/run/credentials/serverware-response-v2-generation-bootstrap:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_POSTGRES_SOCKET_DIR:-/dev/null}:/run/postgresql:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_CGROUP_ROOT:-/dev/null}:/sys/fs/cgroup/serverware-response-v2:ro
+    cgroup: host
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=8m
+    restart: "no"
+
+  response-v2-state-authority:
+    profiles: ["custody"]
+    platform: linux/amd64
+    image: ${SERVERWARE_DECISION_GATE_DEV_IMAGE:-serverware-decision-gate:dev}
+    pull_policy: never
+    user: "65521:65519"
+    init: true
+    read_only: true
+    network_mode: none
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=${SERVERWARE_RESPONSE_OBSERVATION_V2_SECCOMP_PROFILE:-./security/seccomp/serverware-deny-dangerous.json}
+    pids_limit: 64
+    mem_limit: 256m
+    entrypoint: ["/usr/local/bin/serverware-response-observation-v2-custody"]
+    command: ["--service", "state-authority", "--config", "/run/serverware-response-v2/config/custody.json"]
+    environment:
+      CREDENTIALS_DIRECTORY: /run/credentials/serverware-response-v2-state-authority
+      SERVERWARE_RESPONSE_V2_GENERATION_PUBLIC_CREDENTIALS_DIRECTORY: /run/credentials/serverware-response-v2-generation-public
+      SERVERWARE_RESPONSE_V2_PROVIDER_GENERATION_SHA256: ${SERVERWARE_RESPONSE_V2_PROVIDER_GENERATION_SHA256:?set verified provider-generation digest}
+      SERVERWARE_RESPONSE_V2_CGROUP_ROOT: /sys/fs/cgroup/serverware-response-v2
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/serverware-response-observation-v2-custody", "--service", "state-authority", "--config", "/run/serverware-response-v2/config/custody.json", "--check-readiness"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    volumes:
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_STATE_SOCKET_DIR:-serverware-response-v2-state-socket}:/run/serverware-response-v2/state
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_STATE_DATA_DIR:-serverware-response-v2-state-data}:/var/lib/serverware-response-v2/state-authority
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_PUBLIC_CONFIG_DIR:-/dev/null}:/run/serverware-response-v2/config:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_STATE_KEY_DIR:-/dev/null}:/run/credentials/serverware-response-v2-state-authority:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_GENERATION_PUBLIC_CREDENTIAL_DIR:?set public generation and trust-anchor credential directory}:/run/credentials/serverware-response-v2-generation-public:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_POSTGRES_SOCKET_DIR:-/dev/null}:/run/postgresql:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_CGROUP_ROOT:-/dev/null}:/sys/fs/cgroup/serverware-response-v2:ro
+    cgroup: host
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+    depends_on:
+      response-v2-generation-bootstrap:
+        condition: service_completed_successfully
+
+  response-v2-credential-transport:
+    profiles: ["custody"]
+    platform: linux/amd64
+    image: ${SERVERWARE_DECISION_GATE_DEV_IMAGE:-serverware-decision-gate:dev}
+    pull_policy: never
+    user: "65522:65519"
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=${SERVERWARE_RESPONSE_OBSERVATION_V2_SECCOMP_PROFILE:-./security/seccomp/serverware-deny-dangerous.json}
+    pids_limit: 64
+    mem_limit: 256m
+    entrypoint: ["/usr/local/bin/serverware-response-observation-v2-custody"]
+    command: ["--service", "credential-transport", "--config", "/run/serverware-response-v2/config/custody.json"]
+    environment:
+      CREDENTIALS_DIRECTORY: /run/credentials/serverware-response-v2-credential-transport
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/serverware-response-observation-v2-custody", "--service", "credential-transport", "--config", "/run/serverware-response-v2/config/custody.json", "--check-readiness"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    volumes:
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_CREDENTIAL_SOCKET_DIR:-serverware-response-v2-credential-socket}:/run/serverware-response-v2/credential-transport
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_STATE_SOCKET_DIR:-serverware-response-v2-state-socket}:/run/serverware-response-v2/state:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_CREDENTIAL_DATA_DIR:-serverware-response-v2-credential-data}:/var/lib/serverware-response-v2/credential-transport
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_PUBLIC_CONFIG_DIR:-/dev/null}:/run/serverware-response-v2/config:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_CREDENTIAL_KEY_DIR:-/dev/null}:/run/credentials/serverware-response-v2-credential-transport:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+    networks:
+      - response-v2-egress
+    depends_on:
+      response-v2-state-authority:
+        condition: service_healthy
+
+  response-v2-policy-proof-verifier:
+    profiles: ["custody"]
+    platform: linux/amd64
+    image: ${SERVERWARE_DECISION_GATE_DEV_IMAGE:-serverware-decision-gate:dev}
+    pull_policy: never
+    user: "65523:65519"
+    init: true
+    read_only: true
+    network_mode: none
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=${SERVERWARE_RESPONSE_OBSERVATION_V2_SECCOMP_PROFILE:-./security/seccomp/serverware-deny-dangerous.json}
+    pids_limit: 64
+    mem_limit: 192m
+    entrypoint: ["/usr/local/bin/serverware-response-observation-v2-custody"]
+    command: ["--service", "policy-proof-verifier", "--config", "/run/serverware-response-v2/config/custody.json"]
+    environment:
+      CREDENTIALS_DIRECTORY: /run/credentials/serverware-response-v2-policy-proof-verifier
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/serverware-response-observation-v2-custody", "--service", "policy-proof-verifier", "--config", "/run/serverware-response-v2/config/custody.json", "--check-readiness"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    volumes:
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_POLICY_SOCKET_DIR:-serverware-response-v2-policy-socket}:/run/serverware-response-v2/policy-proof-verifier
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_STATE_SOCKET_DIR:-serverware-response-v2-state-socket}:/run/serverware-response-v2/state:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_POLICY_DATA_DIR:-serverware-response-v2-policy-data}:/var/lib/serverware-response-v2/policy-proof-verifier
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_PUBLIC_CONFIG_DIR:-/dev/null}:/run/serverware-response-v2/config:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_POLICY_KEY_DIR:-/dev/null}:/run/credentials/serverware-response-v2-policy-proof-verifier:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+    depends_on:
+      response-v2-state-authority:
+        condition: service_healthy
+
+  response-v2-immutable-artifact-ledger:
+    profiles: ["custody"]
+    platform: linux/amd64
+    image: ${SERVERWARE_DECISION_GATE_DEV_IMAGE:-serverware-decision-gate:dev}
+    pull_policy: never
+    user: "65524:65519"
+    init: true
+    read_only: true
+    network_mode: none
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=${SERVERWARE_RESPONSE_OBSERVATION_V2_SECCOMP_PROFILE:-./security/seccomp/serverware-deny-dangerous.json}
+    pids_limit: 64
+    mem_limit: 256m
+    entrypoint: ["/usr/local/bin/serverware-response-observation-v2-custody"]
+    command: ["--service", "immutable-artifact-ledger", "--config", "/run/serverware-response-v2/config/custody.json"]
+    environment:
+      CREDENTIALS_DIRECTORY: /run/credentials/serverware-response-v2-immutable-artifact-ledger
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/serverware-response-observation-v2-custody", "--service", "immutable-artifact-ledger", "--config", "/run/serverware-response-v2/config/custody.json", "--check-readiness"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    volumes:
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_LEDGER_SOCKET_DIR:-serverware-response-v2-ledger-socket}:/run/serverware-response-v2/immutable-artifact-ledger
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_STATE_SOCKET_DIR:-serverware-response-v2-state-socket}:/run/serverware-response-v2/state:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_LEDGER_DATA_DIR:-serverware-response-v2-ledger-data}:/var/lib/serverware-response-v2/immutable-artifact-ledger
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_PUBLIC_CONFIG_DIR:-/dev/null}:/run/serverware-response-v2/config:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_LEDGER_KEY_DIR:-/dev/null}:/run/credentials/serverware-response-v2-immutable-artifact-ledger:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+    depends_on:
+      response-v2-state-authority:
+        condition: service_healthy
+
+  response-v2-release-attestor-publisher:
+    profiles: ["custody"]
+    platform: linux/amd64
+    image: ${SERVERWARE_DECISION_GATE_DEV_IMAGE:-serverware-decision-gate:dev}
+    pull_policy: never
+    user: "65525:65519"
+    init: true
+    read_only: true
+    network_mode: none
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=${SERVERWARE_RESPONSE_OBSERVATION_V2_SECCOMP_PROFILE:-./security/seccomp/serverware-deny-dangerous.json}
+    pids_limit: 64
+    mem_limit: 192m
+    entrypoint: ["/usr/local/bin/serverware-response-observation-v2-custody"]
+    command: ["--service", "release-attestor-publisher", "--config", "/run/serverware-response-v2/config/custody.json"]
+    environment:
+      CREDENTIALS_DIRECTORY: /run/credentials/serverware-response-v2-release-attestor-publisher
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/serverware-response-observation-v2-custody", "--service", "release-attestor-publisher", "--config", "/run/serverware-response-v2/config/custody.json", "--check-readiness"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    volumes:
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_RELEASE_SOCKET_DIR:-serverware-response-v2-release-socket}:/run/serverware-response-v2/release-attestor-publisher
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_STATE_SOCKET_DIR:-serverware-response-v2-state-socket}:/run/serverware-response-v2/state:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_RELEASE_DATA_DIR:-serverware-response-v2-release-data}:/var/lib/serverware-response-v2/release-attestor-publisher
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_PUBLIC_CONFIG_DIR:-/dev/null}:/run/serverware-response-v2/config:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_RELEASE_KEY_DIR:-/dev/null}:/run/credentials/serverware-response-v2-release-attestor-publisher:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+    depends_on:
+      response-v2-state-authority:
+        condition: service_healthy
+      response-v2-policy-proof-verifier:
+        condition: service_healthy
+      response-v2-immutable-artifact-ledger:
+        condition: service_healthy
+
+  response-v2-cleanup-watchdog:
+    profiles: ["custody"]
+    platform: linux/amd64
+    image: ${SERVERWARE_DECISION_GATE_DEV_IMAGE:-serverware-decision-gate:dev}
+    pull_policy: never
+    user: "65526:65519"
+    init: true
+    read_only: true
+    network_mode: none
+    cgroup: host
+    cap_drop: [ALL]
+    cap_add: [KILL]
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=${SERVERWARE_RESPONSE_OBSERVATION_V2_SECCOMP_PROFILE:-./security/seccomp/serverware-deny-dangerous.json}
+    pids_limit: 64
+    mem_limit: 128m
+    entrypoint: ["/usr/local/bin/serverware-response-observation-v2-custody"]
+    command: ["--service", "cleanup-watchdog", "--config", "/run/serverware-response-v2/config/custody.json"]
+    environment:
+      CREDENTIALS_DIRECTORY: /run/credentials/serverware-response-v2-cleanup-watchdog
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/serverware-response-observation-v2-custody", "--service", "cleanup-watchdog", "--config", "/run/serverware-response-v2/config/custody.json", "--check-readiness"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    volumes:
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_WATCHDOG_SOCKET_DIR:-serverware-response-v2-watchdog-socket}:/run/serverware-response-v2/cleanup-watchdog
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_STATE_SOCKET_DIR:-serverware-response-v2-state-socket}:/run/serverware-response-v2/state:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_WATCHDOG_DATA_DIR:-serverware-response-v2-watchdog-data}:/var/lib/serverware-response-v2/cleanup-watchdog
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_PUBLIC_CONFIG_DIR:-/dev/null}:/run/serverware-response-v2/config:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_WATCHDOG_KEY_DIR:-/dev/null}:/run/credentials/serverware-response-v2-cleanup-watchdog:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_CGROUP_ROOT:-/dev/null}:/sys/fs/cgroup/serverware-response-v2
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+    depends_on:
+      response-v2-state-authority:
+        condition: service_healthy
+
+  response-v2-custody-router:
+    profiles: ["custody"]
+    platform: linux/amd64
+    image: ${SERVERWARE_DECISION_GATE_DEV_IMAGE:-serverware-decision-gate:dev}
+    pull_policy: never
+    user: "65520:65519"
+    init: true
+    read_only: true
+    network_mode: none
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=${SERVERWARE_RESPONSE_OBSERVATION_V2_SECCOMP_PROFILE:-./security/seccomp/serverware-deny-dangerous.json}
+    pids_limit: 64
+    mem_limit: 192m
+    entrypoint: ["/usr/local/bin/serverware-response-observation-v2-custody"]
+    command: ["--service", "custody-router", "--config", "/run/serverware-response-v2/config/custody.json"]
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/serverware-response-observation-v2-custody", "--service", "custody-router", "--config", "/run/serverware-response-v2/config/custody.json", "--check-readiness"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    volumes:
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_ROUTER_SOCKET_DIR:-serverware-response-v2-router-socket}:/run/serverware-response-v2/router
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_STATE_SOCKET_DIR:-serverware-response-v2-state-socket}:/run/serverware-response-v2/state:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_CREDENTIAL_SOCKET_DIR:-serverware-response-v2-credential-socket}:/run/serverware-response-v2/credential-transport:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_POLICY_SOCKET_DIR:-serverware-response-v2-policy-socket}:/run/serverware-response-v2/policy-proof-verifier:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_LEDGER_SOCKET_DIR:-serverware-response-v2-ledger-socket}:/run/serverware-response-v2/immutable-artifact-ledger:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_RELEASE_SOCKET_DIR:-serverware-response-v2-release-socket}:/run/serverware-response-v2/release-attestor-publisher:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_WATCHDOG_SOCKET_DIR:-serverware-response-v2-watchdog-socket}:/run/serverware-response-v2/cleanup-watchdog:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_ROUTER_DATA_DIR:-serverware-response-v2-router-data}:/var/lib/serverware-response-v2/custody-router
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_PUBLIC_CONFIG_DIR:-/dev/null}:/run/serverware-response-v2/config:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+    depends_on:
+      response-v2-state-authority:
+        condition: service_healthy
+      response-v2-credential-transport:
+        condition: service_healthy
+      response-v2-policy-proof-verifier:
+        condition: service_healthy
+      response-v2-immutable-artifact-ledger:
+        condition: service_healthy
+      response-v2-release-attestor-publisher:
+        condition: service_healthy
+      response-v2-cleanup-watchdog:
+        condition: service_healthy
+
   decision-gate-rs:
     platform: linux/amd64
     image: ${SERVERWARE_DECISION_GATE_DEV_IMAGE:-serverware-decision-gate:dev}
@@ -336,3 +654,20 @@ volumes:
   serverware-custody-trust:
   serverware-custody-state:
   serverware-response-signing-private:
+  serverware-response-v2-router-socket:
+  serverware-response-v2-state-socket:
+  serverware-response-v2-credential-socket:
+  serverware-response-v2-policy-socket:
+  serverware-response-v2-ledger-socket:
+  serverware-response-v2-release-socket:
+  serverware-response-v2-watchdog-socket:
+  serverware-response-v2-router-data:
+  serverware-response-v2-state-data:
+  serverware-response-v2-credential-data:
+  serverware-response-v2-policy-data:
+  serverware-response-v2-ledger-data:
+  serverware-response-v2-release-data:
+  serverware-response-v2-watchdog-data:
+
+networks:
+  response-v2-egress:

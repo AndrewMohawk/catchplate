@@ -1,0 +1,1718 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/policy-shadow-observation.v1.schema.json",
+  "title": "Serverware Policy Shadow Observation v1",
+  "$comment": "Exactly one signed observation accounts for each contiguous ingress sequence. Independently signed ingressEvidence authoritatively accounts for admission, while a distinct activeDecision envelope authoritatively records the terminal active result; the shadow signer cannot author either role. Native verification exactly joins assignment/load/policy/runtime/boot identities and requires both signed roles to match the outer result. Request commitments are keyed HMACs over canonical protected facts plus assignment payload digest/revision, boot identity, ingress sequence, key epoch, and signed observed time. The complete expansion set and root are deterministically derived by the verifier from the signed active/candidate evaluations, signed PolicyAuthorityAnalysis, compiled semantic authority binding, and pilot membership; evaluator omissions, duplicates, and extras fail.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "kind",
+    "canonicalProfile",
+    "signatureDomain",
+    "payload",
+    "payloadSha256",
+    "signatureAlgorithm",
+    "signingKeyId",
+    "signingKeySpkiSha256",
+    "signature"
+  ],
+  "properties": {
+    "apiVersion": {"const": "serverware.policyShadowObservation/v1"},
+    "kind": {"const": "PolicyShadowObservation"},
+    "canonicalProfile": {"const": "serverware.canonicalJson/ascii-integer-v1"},
+    "signatureDomain": {"const": "serverware.policyShadowObservation/v1"},
+    "payload": {"$ref": "#/$defs/payload"},
+    "payloadSha256": {"$ref": "#/$defs/sha256"},
+    "signatureAlgorithm": {"const": "Ed25519"},
+    "signingKeyId": {"$ref": "#/$defs/sha256"},
+    "signingKeySpkiSha256": {"$ref": "#/$defs/sha256"},
+    "signature": {
+      "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/ed25519Signature"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/sha256"
+    },
+    "hmacSha256": {
+      "type": "string",
+      "pattern": "^hmac-sha256:[0-9a-f]{64}$"
+    },
+    "signedI64": {
+      "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/signedI64"
+    },
+    "unsignedI64": {
+      "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/unsignedI64"
+    },
+    "positiveI64": {
+      "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/positiveI64"
+    },
+    "identifier": {
+      "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/identifier"
+    },
+    "canonicalCustodyEvidence": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode","canonicalPayloadBase64Url","canonicalPayloadSha256"],
+          "properties": {
+            "mode": {"const": "inline-canonical"},
+            "canonicalPayloadBase64Url": {"type":"string","pattern":"^[A-Za-z0-9_-]+$","maxLength":1048576},
+            "canonicalPayloadSha256": {"$ref":"#/$defs/sha256"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode","canonicalPayloadSha256","immutableObjectIdSha256"],
+          "properties": {
+            "mode": {"const": "immutable-reference"},
+            "canonicalPayloadSha256": {"$ref":"#/$defs/sha256"},
+            "immutableObjectIdSha256": {"$ref":"#/$defs/sha256"}
+          }
+        }
+      ]
+    },
+    "custodySignerEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "role","signingKeyId","signingKeySpkiSha256","signature",
+        "trustedObservedAtUnixNanos","trustCheckpointSha256",
+        "revocationGeneration","revocationRootSha256"
+      ],
+      "properties": {
+        "role": {"enum":["ingress-admission","unavailable-ingress","dispatch-barrier","active-effect-barrier","active-effect-commit","terminal-append","ledger-append","spool-compaction","publication-reconciliation","activation-publication"]},
+        "signingKeyId": {"$ref":"#/$defs/sha256"},
+        "signingKeySpkiSha256": {"$ref":"#/$defs/sha256"},
+        "signature": {"$ref":"policy-shadow-assignment.v1.schema.json#/$defs/ed25519Signature"},
+        "trustedObservedAtUnixNanos": {"$ref":"#/$defs/positiveI64"},
+        "trustCheckpointSha256": {"$ref":"#/$defs/sha256"},
+        "revocationGeneration": {"$ref":"#/$defs/positiveI64"},
+        "revocationRootSha256": {"$ref":"#/$defs/sha256"}
+      }
+    },
+    "durabilityEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "persistenceReceiptSha256","retrievalIdSha256",
+        "retrievalProofSha256","canonicalEvidence"
+      ],
+      "properties": {
+        "persistenceReceiptSha256": {"$ref":"#/$defs/sha256"},
+        "retrievalIdSha256": {"$ref":"#/$defs/sha256"},
+        "retrievalProofSha256": {"$ref":"#/$defs/sha256"},
+        "canonicalEvidence": {"$ref":"#/$defs/canonicalCustodyEvidence"}
+      }
+    },
+    "ledgerPredecessor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["eventOrdinal","predecessorEventOrdinal","predecessorHeadSha256","resultingHeadSha256"],
+      "properties": {
+        "eventOrdinal": {"$ref":"#/$defs/positiveI64"},
+        "predecessorEventOrdinal": {"$ref":"#/$defs/unsignedI64"},
+        "predecessorHeadSha256": {"$ref":"#/$defs/sha256"},
+        "resultingHeadSha256": {"$ref":"#/$defs/sha256"}
+      },
+      "$comment": "Native verification requires eventOrdinal == predecessorEventOrdinal + 1 and recomputes resultingHeadSha256 from the exact canonical record."
+    },
+    "runtimeLedgerEvent": {
+      "oneOf": [
+        {"type":"object","additionalProperties":false,"required":["event","phase"],"properties":{"event":{"const":"active-pre-dispatch-terminal"},"phase":{"const":"pre-dispatch-terminal"}}},
+        {"type":"object","additionalProperties":false,"required":["event","phase"],"properties":{"event":{"const":"response-terminal-appended"},"phase":{"const":"post-dispatch-terminal"}}},
+        {"type":"object","additionalProperties":false,"required":["event","phase"],"properties":{"event":{"const":"dispatch-barrier-appended"},"phase":{"const":"dispatch-barrier"}}},
+        {"type":"object","additionalProperties":false,"required":["event","phase"],"properties":{"event":{"const":"response-capture-enqueued"},"phase":{"const":"response"}}},
+        {"type":"object","additionalProperties":false,"required":["event","phase"],"properties":{"event":{"const":"candidate-evaluated"},"phase":{"const":"candidate"}}},
+        {"type":"object","additionalProperties":false,"required":["event","phase"],"properties":{"event":{"const":"response-evaluated"},"phase":{"const":"response"}}},
+        {"type":"object","additionalProperties":false,"required":["event","reason","phase"],"properties":{"event":{"const":"cleanup-quarantined"},"reason":{"const":"internal-error"},"phase":{"const":"response"}}},
+        {"type":"object","additionalProperties":false,"required":["event","phase"],"properties":{"event":{"enum":["sampled-out","transport-excluded","unsupported-required-ingress"]},"phase":{"const":"ingress-open"}}},
+        {"$ref":"#/$defs/failureRuntimeLedgerEvent"}
+      ],
+      "$comment": "Phase and counters are derived from this closed event. Failure phase is derived from terminalReason by the native exhaustive matcher; no independent caller phase or accounting kind exists."
+    },
+    "spoolAppendReservationReceipt": {
+      "type":"object",
+      "additionalProperties":false,
+      "required":["kind","generationId","ingressSequence","lane","eventOrdinal","predecessorEventOrdinal","predecessorHeadSha256","eventSha256","durability","signer","signedReceiptSha256"],
+      "properties":{
+        "kind":{"const":"spool-append-reservation"},
+        "generationId":{"$ref":"#/$defs/sha256"},
+        "ingressSequence":{"$ref":"#/$defs/positiveI64"},
+        "lane":{"type":"integer","minimum":0,"maximum":63},
+        "eventOrdinal":{"$ref":"#/$defs/positiveI64"},
+        "predecessorEventOrdinal":{"$ref":"#/$defs/unsignedI64"},
+        "predecessorHeadSha256":{"$ref":"#/$defs/sha256"},
+        "eventSha256":{"$ref":"#/$defs/sha256"},
+        "durability":{"$ref":"#/$defs/durabilityEvidence"},
+        "signer":{"$ref":"#/$defs/custodySignerEvidence"},
+        "signedReceiptSha256":{"$ref":"#/$defs/sha256"}
+      },
+      "allOf":[{"properties":{"signer":{"properties":{"role":{"const":"ledger-append"}}}}}],
+      "$comment":"The native verifier requires eventOrdinal == predecessorEventOrdinal + 1 and admits this capability only after pinned Ed25519, current trust/revocation, persistence and immutable retrieval verification."
+    },
+    "admittedIngressReceipt": {
+      "type":"object",
+      "additionalProperties":false,
+      "required":["kind","generationId","ingressSequence","requestBindingSha256","requestCommitmentSha256","samplingDecision","openingEventCanonicalEvidence","ledger","durability","signer","signedReceiptSha256"],
+      "properties":{
+        "kind":{"const":"admitted-ingress"},
+        "generationId":{"$ref":"#/$defs/sha256"},
+        "ingressSequence":{"$ref":"#/$defs/positiveI64"},
+        "requestBindingSha256":{"$ref":"#/$defs/sha256"},
+        "requestCommitmentSha256":{"$ref":"#/$defs/sha256"},
+        "samplingDecision":{"enum":["included","excluded-by-assignment"]},
+        "openingEventCanonicalEvidence":{"$ref":"#/$defs/canonicalCustodyEvidence"},
+        "ledger":{"$ref":"#/$defs/ledgerPredecessor"},
+        "durability":{"$ref":"#/$defs/durabilityEvidence"},
+        "signer":{"$ref":"#/$defs/custodySignerEvidence"},
+        "signedReceiptSha256":{"$ref":"#/$defs/sha256"}
+      },
+      "allOf":[{"properties":{"signer":{"properties":{"role":{"const":"ingress-admission"}}}}}]
+    },
+    "unavailableIngressReceipt": {
+      "type":"object",
+      "additionalProperties":false,
+      "required":["kind","generationId","generationInstallState","requestBindingSha256","requestCommitmentSha256","reason","ledger","durability","signer","signedReceiptSha256"],
+      "properties":{
+        "kind":{"const":"unavailable-ingress"},
+        "generationId":{"oneOf":[{"type":"null"},{"$ref":"#/$defs/sha256"}]},
+        "generationInstallState":{"enum":["uninstalled","reconciling","installed","retired","sequence-range-exhausted"]},
+        "requestBindingSha256":{"$ref":"#/$defs/sha256"},
+        "requestCommitmentSha256":{"$ref":"#/$defs/sha256"},
+        "reason":{"enum":["no-installed-generation","generation-reconciling","sequence-range-exhausted","durable-spool-backpressure","custody-unavailable"]},
+        "ledger":{"$ref":"#/$defs/ledgerPredecessor"},
+        "durability":{"$ref":"#/$defs/durabilityEvidence"},
+        "signer":{"$ref":"#/$defs/custodySignerEvidence"},
+        "signedReceiptSha256":{"$ref":"#/$defs/sha256"}
+      },
+      "allOf":[{"properties":{"signer":{"properties":{"role":{"const":"unavailable-ingress"}}}}}]
+    },
+    "spillReceipt": {
+      "type":"object",
+      "additionalProperties":false,
+      "required":["kind","generationId","ingressSequence","requestBindingSha256","requestCommitmentSha256","event","eventSha256","eventCanonicalEvidence","disposition","ledger","durability","signer","signedReceiptSha256"],
+      "properties":{
+        "kind":{"const":"spill-append"},
+        "generationId":{"$ref":"#/$defs/sha256"},
+        "ingressSequence":{"$ref":"#/$defs/positiveI64"},
+        "requestBindingSha256":{"$ref":"#/$defs/sha256"},
+        "requestCommitmentSha256":{"$ref":"#/$defs/sha256"},
+        "event":{"$ref":"#/$defs/runtimeLedgerEvent"},
+        "eventSha256":{"$ref":"#/$defs/sha256"},
+        "eventCanonicalEvidence":{"$ref":"#/$defs/canonicalCustodyEvidence"},
+        "disposition":{"enum":["appended","unavailable"]},
+        "ledger":{"$ref":"#/$defs/ledgerPredecessor"},
+        "durability":{"$ref":"#/$defs/durabilityEvidence"},
+        "signer":{"$ref":"#/$defs/custodySignerEvidence"},
+        "signedReceiptSha256":{"$ref":"#/$defs/sha256"}
+      },
+      "allOf":[
+        {
+          "if":{"properties":{"event":{"properties":{"event":{"const":"dispatch-barrier-appended"}}}}},
+          "then":{"properties":{"signer":{"properties":{"role":{"const":"dispatch-barrier"}}}}},
+          "else":{
+            "if":{"properties":{"event":{"properties":{"phase":{"enum":["pre-dispatch-terminal","post-dispatch-terminal"]}}}}},
+            "then":{"properties":{"signer":{"properties":{"role":{"const":"terminal-append"}}}}},
+            "else":{"properties":{"signer":{"properties":{"role":{"const":"ledger-append"}}}}}
+          }
+        }
+      ]
+    },
+    "dispatchBarrierReceipt": {
+      "type":"object",
+      "additionalProperties":false,
+      "required":["kind","generationId","ingressSequence","requestBindingSha256","requestCommitmentSha256","activePlanSha256","decisionAtUnixNanos","finalUpstreamRequestCommitmentSha256","effectAuthorityCommitmentsSha256","eventSha256","eventCanonicalEvidence","ledger","durability","signer","signedReceiptSha256"],
+      "properties":{
+        "kind":{"const":"dispatch-barrier"},
+        "generationId":{"$ref":"#/$defs/sha256"},
+        "ingressSequence":{"$ref":"#/$defs/positiveI64"},
+        "requestBindingSha256":{"$ref":"#/$defs/sha256"},
+        "requestCommitmentSha256":{"$ref":"#/$defs/sha256"},
+        "activePlanSha256":{"$ref":"#/$defs/sha256"},
+        "decisionAtUnixNanos":{"$ref":"#/$defs/positiveI64"},
+        "finalUpstreamRequestCommitmentSha256":{"$ref":"#/$defs/sha256"},
+        "effectAuthorityCommitmentsSha256":{"$ref":"#/$defs/sha256"},
+        "eventSha256":{"$ref":"#/$defs/sha256"},
+        "eventCanonicalEvidence":{"$ref":"#/$defs/canonicalCustodyEvidence"},
+        "ledger":{"$ref":"#/$defs/ledgerPredecessor"},
+        "durability":{"$ref":"#/$defs/durabilityEvidence"},
+        "signer":{"$ref":"#/$defs/custodySignerEvidence"},
+        "signedReceiptSha256":{"$ref":"#/$defs/sha256"}
+      },
+      "allOf":[{"properties":{"signer":{"properties":{"role":{"const":"dispatch-barrier"}}}}}]
+    },
+    "activeMutableEffectKind": {
+      "enum": [
+        "jit-grant-reserve",
+        "jit-grant-dispatch",
+        "jit-grant-complete",
+        "jit-grant-abort",
+        "quota-reserve",
+        "quota-commit",
+        "quota-cancel",
+        "durable-budget-reserve",
+        "durable-budget-commit",
+        "durable-budget-cancel",
+        "credential-lease",
+        "credential-generation",
+        "credential-decrypt",
+        "credential-injection",
+        "oauth-refresh",
+        "oauth-exchange",
+        "oauth-mint",
+        "oauth-rotation",
+        "release-reserve",
+        "release-dispatch",
+        "release-complete",
+        "release-abort",
+        "provider-send",
+        "gmail-child-register",
+        "gmail-child-injecting",
+        "gmail-child-injected",
+        "gmail-child-dispatch",
+        "gmail-child-provider-outcome",
+        "gmail-child-failed",
+        "gmail-child-succeeded",
+        "cleanup"
+      ],
+      "$comment": "Each listed mutation is a separate prepare -> signed durable barrier -> verified one-use permit -> commit operation. JIT reserve, dispatch, complete, and abort are distinct mutations; complete and abort are mutually exclusive terminals for one reservation. The same fresh-receipt rule applies independently to quota reserve/commit/cancel, durable-budget reserve/commit/cancel, release reserve/dispatch/complete/abort, Gmail registration and every Gmail ledger transition."
+    },
+    "activeEffectPreparation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "generationId",
+        "ingressSequence",
+        "effectIdSha256",
+        "effectKind",
+        "effectIntentSha256",
+        "preparedStateSha256"
+      ],
+      "properties": {
+        "generationId": {"$ref":"#/$defs/sha256"},
+        "ingressSequence": {"$ref":"#/$defs/positiveI64"},
+        "effectIdSha256": {"$ref":"#/$defs/sha256"},
+        "effectKind": {"$ref":"#/$defs/activeMutableEffectKind"},
+        "effectIntentSha256": {"$ref":"#/$defs/sha256"},
+        "preparedStateSha256": {"$ref":"#/$defs/sha256"}
+      },
+      "$comment": "effectIdSha256 is the serverware.policyShadowActiveEffectPreparation/v1 domain hash over the canonical generation, ingress, effect kind, intent and prepared-state binding."
+    },
+    "activeEffectBarrierReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "preparation",
+        "barrierOrdinal",
+        "predecessorHeadSha256",
+        "resultingHeadSha256",
+        "trustedObservedAtUnixNanos",
+        "trustedTimeCheckpointSha256",
+        "persistenceReceiptSha256",
+        "retrievalIdSha256",
+        "retrievalProofSha256",
+        "signingKeyId",
+        "signingKeySpkiSha256",
+        "signature",
+        "signedReceiptSha256"
+      ],
+      "properties": {
+        "preparation": {"$ref":"#/$defs/activeEffectPreparation"},
+        "barrierOrdinal": {"$ref":"#/$defs/positiveI64"},
+        "predecessorHeadSha256": {"$ref":"#/$defs/sha256"},
+        "resultingHeadSha256": {"$ref":"#/$defs/sha256"},
+        "trustedObservedAtUnixNanos": {"$ref":"#/$defs/positiveI64"},
+        "trustedTimeCheckpointSha256": {"$ref":"#/$defs/sha256"},
+        "persistenceReceiptSha256": {"$ref":"#/$defs/sha256"},
+        "retrievalIdSha256": {"$ref":"#/$defs/sha256"},
+        "retrievalProofSha256": {"$ref":"#/$defs/sha256"},
+        "signingKeyId": {"$ref":"#/$defs/sha256"},
+        "signingKeySpkiSha256": {"$ref":"#/$defs/sha256"},
+        "signature": {
+          "$ref":"policy-shadow-assignment.v1.schema.json#/$defs/ed25519Signature"
+        },
+        "signedReceiptSha256": {"$ref":"#/$defs/sha256"}
+      },
+      "$comment": "This is the exact unverified ActiveEffectBarrierReceiptWire shape. Its signed canonical preimage inserts the fixed active-effect-barrier role. Only the native VerifiedActiveEffectPermit produced after pinned Ed25519, current trust/revocation, persistence and immutable retrieval verification is a one-use commit capability."
+    },
+    "activeEffectCommitReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "effectIdSha256",
+        "barrierReceiptSha256",
+        "terminalState",
+        "resultSha256",
+        "reconcileRequired",
+        "trustedObservedAtUnixNanos",
+        "trustedTimeCheckpointSha256",
+        "persistenceReceiptSha256",
+        "retrievalIdSha256",
+        "retrievalProofSha256",
+        "signingKeyId",
+        "signingKeySpkiSha256",
+        "signature",
+        "signedReceiptSha256"
+      ],
+      "properties": {
+        "effectIdSha256": {"$ref":"#/$defs/sha256"},
+        "barrierReceiptSha256": {"$ref":"#/$defs/sha256"},
+        "terminalState": {"enum":["committed","aborted","outcome-unknown","reconcile-required"]},
+        "resultSha256": {"$ref":"#/$defs/sha256"},
+        "reconcileRequired": {"type":"boolean"},
+        "trustedObservedAtUnixNanos": {"$ref":"#/$defs/positiveI64"},
+        "trustedTimeCheckpointSha256": {"$ref":"#/$defs/sha256"},
+        "persistenceReceiptSha256": {"$ref":"#/$defs/sha256"},
+        "retrievalIdSha256": {"$ref":"#/$defs/sha256"},
+        "retrievalProofSha256": {"$ref":"#/$defs/sha256"},
+        "signingKeyId": {"$ref":"#/$defs/sha256"},
+        "signingKeySpkiSha256": {"$ref":"#/$defs/sha256"},
+        "signature": {
+          "$ref":"policy-shadow-assignment.v1.schema.json#/$defs/ed25519Signature"
+        },
+        "signedReceiptSha256": {"$ref":"#/$defs/sha256"}
+      },
+      "allOf": [
+        {
+          "if":{"properties":{"terminalState":{"enum":["outcome-unknown","reconcile-required"]}},"required":["terminalState"]},
+          "then":{"properties":{"reconcileRequired":{"const":true}}},
+          "else":{"properties":{"reconcileRequired":{"const":false}}}
+        }
+      ],
+      "$comment": "This is the exact unverified ActiveEffectCommitReceiptWire shape. Its signed canonical preimage inserts the fixed active-effect-commit role. The receipt consumes the exact barrier receipt and binds the terminal result. Unknown or reconcile-required outcomes remain hard-unready until custody reconciliation."
+    },
+    "nullableDispatchBarrierReceipt": {
+      "oneOf":[{"type":"null"},{"$ref":"#/$defs/dispatchBarrierReceipt"}]
+    },
+    "spoolCompactionReceipt": {
+      "type":"object",
+      "additionalProperties":false,
+      "required":["kind","generationId","oldSpoolHeadSha256","compactedFirstEventOrdinal","compactedLastEventOrdinal","compactedOrderedRangeRootSha256","compactedRecordCount","compactedThroughSpillReceiptSha256","retainedSuccessorEventOrdinal","retainedSuccessorHeadSha256","newSpoolRootSha256","durability","signer","signedReceiptSha256"],
+      "properties":{
+        "kind":{"const":"spool-compaction"},
+        "generationId":{"$ref":"#/$defs/sha256"},
+        "oldSpoolHeadSha256":{"$ref":"#/$defs/sha256"},
+        "compactedFirstEventOrdinal":{"$ref":"#/$defs/positiveI64"},
+        "compactedLastEventOrdinal":{"$ref":"#/$defs/positiveI64"},
+        "compactedOrderedRangeRootSha256":{"$ref":"#/$defs/sha256"},
+        "compactedRecordCount":{"$ref":"#/$defs/positiveI64"},
+        "compactedThroughSpillReceiptSha256":{"$ref":"#/$defs/sha256"},
+        "retainedSuccessorEventOrdinal":{"oneOf":[{"type":"null"},{"$ref":"#/$defs/positiveI64"}]},
+        "retainedSuccessorHeadSha256":{"oneOf":[{"type":"null"},{"$ref":"#/$defs/sha256"}]},
+        "newSpoolRootSha256":{"$ref":"#/$defs/sha256"},
+        "durability":{"$ref":"#/$defs/durabilityEvidence"},
+        "signer":{"$ref":"#/$defs/custodySignerEvidence"},
+        "signedReceiptSha256":{"$ref":"#/$defs/sha256"}
+      },
+      "allOf":[{"properties":{"signer":{"properties":{"role":{"const":"spool-compaction"}}}}}]
+    },
+    "publicationReconciliationReceipt": {
+      "type":"object",
+      "additionalProperties":false,
+      "required":["kind","state","publicationRevision","predecessorGenerationSha256","committedGenerationSha256","publishedGenerationSha256","firstIngressSequence","lastIngressSequence","ledgerEventOrdinal","ledgerHeadSha256","spoolRootSha256","preparedPublicationSha256","durability","signer","signedReceiptSha256"],
+      "properties":{
+        "kind":{"const":"publication-reconciliation"},
+        "state":{"enum":["uninstalled","prepared","committed","published","retired"]},
+        "publicationRevision":{"$ref":"#/$defs/positiveI64"},
+        "predecessorGenerationSha256":{"oneOf":[{"type":"null"},{"$ref":"#/$defs/sha256"}]},
+        "committedGenerationSha256":{"oneOf":[{"type":"null"},{"$ref":"#/$defs/sha256"}]},
+        "publishedGenerationSha256":{"oneOf":[{"type":"null"},{"$ref":"#/$defs/sha256"}]},
+        "firstIngressSequence":{"oneOf":[{"type":"null"},{"$ref":"#/$defs/positiveI64"}]},
+        "lastIngressSequence":{"oneOf":[{"type":"null"},{"$ref":"#/$defs/positiveI64"}]},
+        "ledgerEventOrdinal":{"$ref":"#/$defs/unsignedI64"},
+        "ledgerHeadSha256":{"$ref":"#/$defs/sha256"},
+        "spoolRootSha256":{"$ref":"#/$defs/sha256"},
+        "preparedPublicationSha256":{"oneOf":[{"type":"null"},{"$ref":"#/$defs/sha256"}]},
+        "durability":{"$ref":"#/$defs/durabilityEvidence"},
+        "signer":{"$ref":"#/$defs/custodySignerEvidence"},
+        "signedReceiptSha256":{"$ref":"#/$defs/sha256"}
+      },
+      "allOf":[{"properties":{"signer":{"properties":{"role":{"const":"publication-reconciliation"}}}}}],
+      "$comment":"Native verification resolves the publication signer only from the assignment custody-publication-reconciliation binding, requires exact key ID, DER-SPKI, and public-key-material equality with the signed authority-analysis publication requirement, and accepts only a durable published-state receipt into publicationReceiptCount/root."
+    },
+    "custodyEvidence": {
+      "type":"object",
+      "additionalProperties":false,
+      "required":["admittedIngressReceiptSha256","unavailableIngressReceiptSha256","dispatchBarrierReceiptSha256","dispatchBarrierReceiptCount","dispatchBarrierReceiptsRootSha256","activeEffectBarrierReceiptCount","activeEffectBarrierReceiptsRootSha256","activeEffectCommitReceiptCount","activeEffectCommitReceiptsRootSha256","terminalReceiptCount","terminalReceiptsRootSha256","publicationReceiptCount","publicationReceiptsRootSha256","spillReceiptCount","spillReceiptsRootSha256","persistenceReceiptsRootSha256","retrievalProofsRootSha256","compactionReceiptCount","compactionReceiptsRootSha256","lastLedgerEventOrdinal","lastLedgerHeadSha256","lastSpoolRootSha256","publicationReconciliationReceiptSha256","publicationRevision","custodyEvidenceRootSha256"],
+      "properties":{
+        "admittedIngressReceiptSha256":{"$ref":"#/$defs/nullableSha256"},
+        "unavailableIngressReceiptSha256":{"$ref":"#/$defs/nullableSha256"},
+        "dispatchBarrierReceiptSha256":{"$ref":"#/$defs/nullableSha256"},
+        "dispatchBarrierReceiptCount":{"$ref":"#/$defs/unsignedI64"},
+        "dispatchBarrierReceiptsRootSha256":{"$ref":"#/$defs/sha256"},
+        "activeEffectBarrierReceiptCount":{"$ref":"#/$defs/unsignedI64"},
+        "activeEffectBarrierReceiptsRootSha256":{"$ref":"#/$defs/sha256"},
+        "activeEffectCommitReceiptCount":{"$ref":"#/$defs/unsignedI64"},
+        "activeEffectCommitReceiptsRootSha256":{"$ref":"#/$defs/sha256"},
+        "terminalReceiptCount":{"$ref":"#/$defs/positiveI64"},
+        "terminalReceiptsRootSha256":{"$ref":"#/$defs/sha256"},
+        "publicationReceiptCount":{"$ref":"#/$defs/positiveI64"},
+        "publicationReceiptsRootSha256":{"$ref":"#/$defs/sha256"},
+        "spillReceiptCount":{"$ref":"#/$defs/unsignedI64"},
+        "spillReceiptsRootSha256":{"$ref":"#/$defs/sha256"},
+        "persistenceReceiptsRootSha256":{"$ref":"#/$defs/sha256"},
+        "retrievalProofsRootSha256":{"$ref":"#/$defs/sha256"},
+        "compactionReceiptCount":{"$ref":"#/$defs/unsignedI64"},
+        "compactionReceiptsRootSha256":{"$ref":"#/$defs/sha256"},
+        "lastLedgerEventOrdinal":{"$ref":"#/$defs/positiveI64"},
+        "lastLedgerHeadSha256":{"$ref":"#/$defs/sha256"},
+        "lastSpoolRootSha256":{"$ref":"#/$defs/sha256"},
+        "publicationReconciliationReceiptSha256":{"$ref":"#/$defs/sha256"},
+        "publicationRevision":{"$ref":"#/$defs/positiveI64"},
+        "custodyEvidenceRootSha256":{"$ref":"#/$defs/sha256"}
+      },
+      "allOf":[
+        {
+          "if":{"properties":{"dispatchBarrierReceiptCount":{"const":0}},"required":["dispatchBarrierReceiptCount"]},
+          "then":{"properties":{"dispatchBarrierReceiptSha256":{"type":"null"}}},
+          "else":{"properties":{"dispatchBarrierReceiptSha256":{"$ref":"#/$defs/sha256"}}}
+        }
+      ],
+      "oneOf":[
+        {
+          "properties":{
+            "admittedIngressReceiptSha256":{"$ref":"#/$defs/sha256"},
+            "unavailableIngressReceiptSha256":{"type":"null"},
+            "spillReceiptCount":{"minimum":1}
+          }
+        },
+        {
+          "properties":{
+            "admittedIngressReceiptSha256":{"type":"null"},
+            "unavailableIngressReceiptSha256":{"$ref":"#/$defs/sha256"},
+            "dispatchBarrierReceiptCount":{"const":0}
+          }
+        }
+      ],
+      "$comment":"The verifier resolves the closed receipt wire objects by immutable retrieval proof, joins every receipt to this observation, and recomputes exact ordered roots. dispatchBarrierReceiptSha256 is the primary dispatch barrier and must be non-null exactly when dispatchBarrierReceiptCount is positive. activeEffectBarrierReceiptCount must equal activeEffectCommitReceiptCount; their roots bind every prepare-barrier and exact terminal receipt. terminalReceiptCount/root cover only terminal-append-role receipts and include the exact terminalSpillReceiptSha256 joined to the active decision. publicationReceiptCount/root cover only publication-reconciliation-role receipts and include publicationReconciliationReceiptSha256. Both counts are positive for every observation, remain separate from spill and effect roots, and all counts/roots bind into custodyEvidenceRootSha256."
+    },
+    "terminalReason": {
+      "enum": [
+        "facts-capture-error",
+        "active-evaluation-error",
+        "candidate-evaluation-error",
+        "response-validation-error",
+        "commitment-error",
+        "internal-error",
+        "response-policy-rejected",
+        "response-evidence-invalid",
+        "credential-reflection-blocked",
+        "raw-transport-capture-unavailable-after-release",
+        "raw-transport-capture-unavailable-after-block",
+        "buffered-local-terminal",
+        "upstream-outcome-unknown",
+        "streaming-upstream-outcome-unknown",
+        "intercepted-stream-outcome-unknown",
+        "response-queue-full",
+        "response-worker-unavailable",
+        "worker-lost",
+        "streaming-response-not-bounded-exact",
+        "active-response-validation-unavailable",
+        "upstream-response-not-observed",
+        "required-active-response-validation-unavailable",
+        "required-gmail-metadata-evidence-unavailable",
+        "generation-changed-before-terminal",
+        "pre-dispatch-terminal-http-status-invalid",
+        "post-dispatch-terminal-http-status-invalid",
+        "terminal-outcome-invalid",
+        "decision-time-plan-binding-mismatch",
+        "duplicate-terminal-finalization",
+        "terminal-state-contention",
+        "candidate-enqueue-failed",
+        "post-dispatch-typed-completion-required",
+        "early-local-terminal-evidence-unavailable",
+        "dispatch-barrier-non-allow",
+        "dispatch-barrier-evidence-unavailable",
+        "dispatch-barrier-state-contention",
+        "duplicate-dispatch-barrier",
+        "pre-dispatch-response-parse-unavailable",
+        "pre-dispatch-response-status-invalid",
+        "pre-dispatch-finalization-failed",
+        "post-dispatch-active-decision-unavailable",
+        "post-dispatch-response-parse-unavailable",
+        "post-dispatch-finalization-failed",
+        "accounting-custody-unavailable",
+        "accounting-ledger-contention",
+        "accounting-serialization-failed",
+        "accounting-queue-full",
+        "accounting-queue-disconnected",
+        "accounting-oversize",
+        "accounting-generation-tombstoned"
+      ]
+    },
+    "failureRuntimeLedgerEvent": {
+      "type":"object",
+      "additionalProperties":false,
+      "required":["event","reason","phase"],
+      "properties":{
+        "event":{"const":"failure"},
+        "reason":{"$ref":"#/$defs/terminalReason"},
+        "phase":{"enum":["capture","decision","pre-dispatch-terminal","dispatch-barrier","post-dispatch-terminal","response","candidate"]}
+      },
+      "oneOf":[
+        {"properties":{"phase":{"const":"capture"},"reason":{"enum":["facts-capture-error","accounting-serialization-failed","accounting-oversize"]}}},
+        {"properties":{"phase":{"const":"candidate"},"reason":{"enum":["candidate-evaluation-error","candidate-enqueue-failed","accounting-queue-full","accounting-queue-disconnected"]}}},
+        {"properties":{"phase":{"const":"response"},"reason":{"enum":["response-validation-error","response-queue-full","response-worker-unavailable","worker-lost","streaming-response-not-bounded-exact","active-response-validation-unavailable","upstream-response-not-observed","required-active-response-validation-unavailable","required-gmail-metadata-evidence-unavailable"]}}},
+        {"properties":{"phase":{"const":"pre-dispatch-terminal"},"reason":{"enum":["early-local-terminal-evidence-unavailable","pre-dispatch-terminal-http-status-invalid","pre-dispatch-response-parse-unavailable","pre-dispatch-response-status-invalid","pre-dispatch-finalization-failed"]}}},
+        {"properties":{"phase":{"const":"dispatch-barrier"},"reason":{"enum":["dispatch-barrier-non-allow","dispatch-barrier-evidence-unavailable","dispatch-barrier-state-contention","duplicate-dispatch-barrier"]}}},
+        {"properties":{"phase":{"const":"post-dispatch-terminal"},"reason":{"enum":["response-policy-rejected","response-evidence-invalid","credential-reflection-blocked","raw-transport-capture-unavailable-after-release","raw-transport-capture-unavailable-after-block","buffered-local-terminal","upstream-outcome-unknown","streaming-upstream-outcome-unknown","intercepted-stream-outcome-unknown","post-dispatch-typed-completion-required","post-dispatch-terminal-http-status-invalid","post-dispatch-active-decision-unavailable","post-dispatch-response-parse-unavailable","post-dispatch-finalization-failed"]}}},
+        {"properties":{"phase":{"const":"decision"},"reason":{"enum":["active-evaluation-error","commitment-error","internal-error","generation-changed-before-terminal","terminal-outcome-invalid","decision-time-plan-binding-mismatch","duplicate-terminal-finalization","terminal-state-contention","accounting-custody-unavailable","accounting-ledger-contention","accounting-generation-tombstoned"]}}}
+      ],
+      "$comment":"This exhaustive pairing is the wire projection of PolicyShadowTerminalReason::spool_phase; impossible reason/phase combinations are rejected."
+    },
+    "generation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "generationId",
+        "generationEpoch",
+        "generationTombstoneEpoch",
+        "assignmentRevision",
+        "assignmentSha256",
+        "assignmentPayloadSha256",
+        "loadReceiptSha256",
+        "loadReceiptPayloadSha256",
+        "activePolicySha256",
+        "activePolicySequence",
+        "activeRollbackEpoch",
+        "activeCompiledSnapshotSha256",
+        "candidatePolicySha256",
+        "candidatePolicySequence",
+        "candidateRollbackEpoch",
+        "candidateCompiledSnapshotSha256",
+        "runtimeBootIdSha256",
+        "assignmentStartsAtUnixNanos",
+        "assignmentEndsAtUnixNanos",
+        "samplingBasisPoints",
+        "requestCommitmentKeyId",
+        "requestCommitmentKeyEpoch",
+        "requestFactsSchemaSha256",
+        "ingressRangeStartSequence",
+        "ingressRangePredecessorHeadSha256",
+        "observationIntervalSha256",
+        "responseValidationObligationsRootSha256"
+      ],
+      "properties": {
+        "generationId": {"$ref": "#/$defs/sha256"},
+        "generationEpoch": {"$ref": "#/$defs/positiveI64"},
+        "generationTombstoneEpoch": {"$ref": "#/$defs/positiveI64"},
+        "assignmentRevision": {"$ref": "#/$defs/positiveI64"},
+        "assignmentSha256": {"$ref": "#/$defs/sha256"},
+        "assignmentPayloadSha256": {"$ref": "#/$defs/sha256"},
+        "loadReceiptSha256": {"$ref": "#/$defs/sha256"},
+        "loadReceiptPayloadSha256": {"$ref": "#/$defs/sha256"},
+        "activePolicySha256": {"$ref": "#/$defs/sha256"},
+        "activePolicySequence": {"$ref": "#/$defs/positiveI64"},
+        "activeRollbackEpoch": {"$ref": "#/$defs/positiveI64"},
+        "activeCompiledSnapshotSha256": {"$ref": "#/$defs/sha256"},
+        "candidatePolicySha256": {"$ref": "#/$defs/sha256"},
+        "candidatePolicySequence": {"$ref": "#/$defs/positiveI64"},
+        "candidateRollbackEpoch": {"$ref": "#/$defs/positiveI64"},
+        "candidateCompiledSnapshotSha256": {"$ref": "#/$defs/sha256"},
+        "runtimeBootIdSha256": {"$ref": "#/$defs/sha256"},
+        "assignmentStartsAtUnixNanos": {"$ref": "#/$defs/signedI64"},
+        "assignmentEndsAtUnixNanos": {"$ref": "#/$defs/signedI64"},
+        "samplingBasisPoints": {"type":"integer","minimum":1,"maximum":10000},
+        "requestCommitmentKeyId": {"$ref": "#/$defs/sha256"},
+        "requestCommitmentKeyEpoch": {"$ref": "#/$defs/positiveI64"},
+        "requestFactsSchemaSha256": {"$ref": "#/$defs/sha256"},
+        "ingressRangeStartSequence": {"$ref": "#/$defs/positiveI64"},
+        "ingressRangePredecessorHeadSha256": {"$ref": "#/$defs/sha256"},
+        "observationIntervalSha256": {"$ref": "#/$defs/sha256"},
+        "responseValidationObligationsRootSha256": {"$ref": "#/$defs/sha256"}
+      },
+      "$comment": "Native verification derives every field from the verified assignment and load receipt, recomputes the single generationId, and requires generationTombstoneEpoch <= generationEpoch. Runtime code uses this signed identity directly; a retired generation cannot be reconstructed from a later load receipt."
+    },
+    "requestCommitment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "algorithm",
+        "domain",
+        "keyId",
+        "keyEpoch",
+        "assignmentPayloadSha256",
+        "assignmentRevision",
+        "bootIdSha256",
+        "ingressSequence",
+        "observedAtUnixNanos",
+        "commitment"
+      ],
+      "properties": {
+        "algorithm": {"const": "HMAC-SHA-256"},
+        "domain": {"const": "serverware.policyShadowRequestCommitment/v1"},
+        "keyId": {"$ref": "#/$defs/sha256"},
+        "keyEpoch": {"$ref": "#/$defs/positiveI64"},
+        "assignmentPayloadSha256": {"$ref": "#/$defs/sha256"},
+        "assignmentRevision": {"$ref": "#/$defs/positiveI64"},
+        "bootIdSha256": {"$ref": "#/$defs/sha256"},
+        "ingressSequence": {"$ref": "#/$defs/positiveI64"},
+        "observedAtUnixNanos": {"$ref": "#/$defs/signedI64"},
+        "commitment": {"$ref": "#/$defs/hmacSha256"}
+      }
+    },
+    "capturedFacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "requestCommitment"],
+      "properties": {
+        "state": {"const": "captured"},
+        "requestCommitment": {"$ref": "#/$defs/requestCommitment"}
+      }
+    },
+    "unavailableFacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "reason", "unavailableMarkerSha256"],
+      "properties": {
+        "state": {"const": "unavailable"},
+        "reason": {
+          "enum": [
+            "facts-capture-failed",
+            "commitment-unavailable",
+            "runtime-shutting-down"
+          ]
+        },
+        "unavailableMarkerSha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "factsState": {
+      "oneOf": [
+        {"$ref": "#/$defs/capturedFacts"},
+        {"$ref": "#/$defs/unavailableFacts"}
+      ]
+    },
+    "accountingEvaluated": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {"status": {"const": "evaluated"}}
+    },
+    "accountingDropped": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "reason", "unavailableMarkerSha256"],
+      "properties": {
+        "status": {"const": "dropped"},
+        "reason": {
+          "enum": [
+            "queue-full",
+            "worker-unavailable",
+            "deadline-exceeded",
+            "facts-unsupported",
+            "shutdown"
+          ]
+        },
+        "unavailableMarkerSha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "accountingError": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "terminalReason", "unavailableMarkerSha256"],
+      "properties": {
+        "status": {"const": "error"},
+        "terminalReason": {
+          "allOf": [
+            {"$ref": "#/$defs/terminalReason"},
+            {"enum": [
+              "facts-capture-error",
+              "active-evaluation-error",
+              "candidate-evaluation-error",
+              "response-validation-error",
+              "commitment-error",
+              "internal-error"
+            ]}
+          ]
+        },
+        "unavailableMarkerSha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "accountingExcluded": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "reason"],
+      "properties": {
+        "status": {"const": "excluded"},
+        "reason": {"const": "deterministic-assignment-sampling"}
+      }
+    },
+    "accountingTransportExcluded": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "status": {"const": "transport-excluded"}
+      },
+      "$comment": "A sampled outer CONNECT is transport-only accounting. Decrypted inner HTTP is the covered ingress, so this result is truthful and non-invalidating."
+    },
+    "accountingOutcome": {
+      "oneOf": [
+        {"$ref": "#/$defs/accountingEvaluated"},
+        {"$ref": "#/$defs/accountingDropped"},
+        {"$ref": "#/$defs/accountingError"},
+        {"$ref": "#/$defs/accountingExcluded"},
+        {"$ref": "#/$defs/accountingTransportExcluded"}
+      ]
+    },
+    "ingressEvidencePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "evidenceId",
+        "assignmentSha256",
+        "assignmentPayloadSha256",
+        "assignmentRevision",
+        "canaryId",
+        "fleetId",
+        "fleetMembershipRevision",
+        "runtimeIdentity",
+        "ingressSequence",
+        "custodyIngressReceiptSha256",
+        "publicationRevision",
+        "observedAtUnixNanos",
+        "samplingDecision",
+        "factsState",
+        "accountingOutcome",
+        "issuedAtUnixNanos",
+        "expiresAtUnixNanos"
+      ],
+      "properties": {
+        "evidenceId": {"$ref": "#/$defs/sha256"},
+        "assignmentSha256": {"$ref": "#/$defs/sha256"},
+        "assignmentPayloadSha256": {"$ref": "#/$defs/sha256"},
+        "assignmentRevision": {"$ref": "#/$defs/positiveI64"},
+        "canaryId": {"$ref": "#/$defs/sha256"},
+        "fleetId": {"$ref": "#/$defs/sha256"},
+        "fleetMembershipRevision": {"$ref": "#/$defs/positiveI64"},
+        "runtimeIdentity": {
+          "$ref": "policy-shadow-load-receipt.v1.schema.json#/$defs/runtimeIdentity"
+        },
+        "ingressSequence": {"$ref": "#/$defs/positiveI64"},
+        "custodyIngressReceiptSha256": {"$ref": "#/$defs/sha256"},
+        "publicationRevision": {"$ref": "#/$defs/positiveI64"},
+        "observedAtUnixNanos": {"$ref": "#/$defs/signedI64"},
+        "samplingDecision": {
+          "enum": ["included", "excluded-by-assignment"]
+        },
+        "factsState": {"$ref": "#/$defs/factsState"},
+        "accountingOutcome": {"$ref": "#/$defs/accountingOutcome"},
+        "issuedAtUnixNanos": {"$ref": "#/$defs/signedI64"},
+        "expiresAtUnixNanos": {"$ref": "#/$defs/signedI64"}
+      }
+    },
+    "ingressEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "kind",
+        "canonicalProfile",
+        "signatureDomain",
+        "payload",
+        "payloadSha256",
+        "signatureAlgorithm",
+        "signingKeyId",
+        "signingKeySpkiSha256",
+        "signature"
+      ],
+      "properties": {
+        "apiVersion": {"const": "serverware.policyShadowIngressEvidence/v1"},
+        "kind": {"const": "PolicyShadowIngressEvidence"},
+        "canonicalProfile": {"const": "serverware.canonicalJson/ascii-integer-v1"},
+        "signatureDomain": {"const": "serverware.policyShadowIngressEvidence/v1"},
+        "payload": {"$ref": "#/$defs/ingressEvidencePayload"},
+        "payloadSha256": {"$ref": "#/$defs/sha256"},
+        "signatureAlgorithm": {"const": "Ed25519"},
+        "signingKeyId": {"$ref": "#/$defs/sha256"},
+        "signingKeySpkiSha256": {"$ref": "#/$defs/sha256"},
+        "signature": {
+          "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/ed25519Signature"
+        }
+      }
+    },
+    "policyOutcome": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "reason"],
+          "properties": {
+            "kind": {"enum": ["deny", "conditional", "indeterminate"]},
+            "reason": {"$ref": "#/$defs/identifier"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": {"kind": {"const": "permit"}}
+        }
+      ]
+    },
+    "activeEffectIntent": {
+      "oneOf": [
+        {"type":"object","additionalProperties":false,"required":["kind","credentialSlotSha256","destination"],"properties":{"kind":{"const":"materialize-credential"},"credentialSlotSha256":{"$ref":"#/$defs/sha256"},"destination":{"$ref":"#/$defs/identifier"}}},
+        {"type":"object","additionalProperties":false,"required":["kind","routeSha256","gmailUserSha256","messageIdSha256","maximumAgeDays"],"properties":{"kind":{"const":"require-gmail-prior-search-proof"},"routeSha256":{"$ref":"#/$defs/sha256"},"gmailUserSha256":{"$ref":"#/$defs/sha256"},"messageIdSha256":{"$ref":"#/$defs/sha256"},"maximumAgeDays":{"$ref":"#/$defs/positiveI64"}}},
+        {"type":"object","additionalProperties":false,"required":["kind","routeSha256","maximumAgeDays","maximumMessages"],"properties":{"kind":{"const":"resolve-gmail-metadata-fanout"},"routeSha256":{"$ref":"#/$defs/sha256"},"maximumAgeDays":{"$ref":"#/$defs/positiveI64"},"maximumMessages":{"$ref":"#/$defs/positiveI64"}}},
+        {"type":"object","additionalProperties":false,"required":["kind","credentialSlotSha256","credentialClaimSha256"],"properties":{"kind":{"const":"resolve-credential-version"},"credentialSlotSha256":{"$ref":"#/$defs/sha256"},"credentialClaimSha256":{"$ref":"#/$defs/sha256"}}},
+        {"type":"object","additionalProperties":false,"required":["kind","credentialSlotSha256","oauthAuthoritySha256"],"properties":{"kind":{"enum":["refresh-oauth-credential","exchange-oauth-credential","mint-oauth-credential"]},"credentialSlotSha256":{"$ref":"#/$defs/sha256"},"oauthAuthoritySha256":{"$ref":"#/$defs/sha256"}}},
+        {"type":"object","additionalProperties":false,"required":["kind","credentialSlotSha256","leasePolicySha256"],"properties":{"kind":{"const":"acquire-credential-lease"},"credentialSlotSha256":{"$ref":"#/$defs/sha256"},"leasePolicySha256":{"$ref":"#/$defs/sha256"}}},
+        {"type":"object","additionalProperties":false,"required":["kind","credentialSlotSha256","decryptionContextSha256"],"properties":{"kind":{"const":"decrypt-credential"},"credentialSlotSha256":{"$ref":"#/$defs/sha256"},"decryptionContextSha256":{"$ref":"#/$defs/sha256"}}},
+        {"type":"object","additionalProperties":false,"required":["kind","credentialSlotSha256","injectionCommitmentSha256"],"properties":{"kind":{"const":"inject-credential"},"credentialSlotSha256":{"$ref":"#/$defs/sha256"},"injectionCommitmentSha256":{"$ref":"#/$defs/sha256"}}},
+        {"type":"object","additionalProperties":false,"required":["kind","idempotencyCommitmentSha256"],"properties":{"kind":{"const":"bind-idempotency-key"},"idempotencyCommitmentSha256":{"$ref":"#/$defs/sha256"}}},
+        {"type":"object","additionalProperties":false,"required":["kind","recoveryCommitmentSha256"],"properties":{"kind":{"const":"resolve-recovery-state"},"recoveryCommitmentSha256":{"$ref":"#/$defs/sha256"}}},
+        {"type":"object","additionalProperties":false,"required":["kind","approvalPolicySha256"],"properties":{"kind":{"const":"require-jit-approval"},"approvalPolicySha256":{"$ref":"#/$defs/sha256"}}},
+        {"type":"object","additionalProperties":false,"required":["kind","counterSha256","claimSha256","weightedUnits"],"properties":{"kind":{"const":"reserve-quota"},"counterSha256":{"$ref":"#/$defs/sha256"},"claimSha256":{"$ref":"#/$defs/sha256"},"weightedUnits":{"$ref":"#/$defs/positiveI64"}}},
+        {"type":"object","additionalProperties":false,"required":["kind","budgetSha256","claimSha256","weightedUnits"],"properties":{"kind":{"const":"reserve-durable-budget"},"budgetSha256":{"$ref":"#/$defs/sha256"},"claimSha256":{"$ref":"#/$defs/sha256"},"weightedUnits":{"$ref":"#/$defs/positiveI64"}}}
+      ]
+    },
+    "activePolicyPlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["outcome","requestRewriteCommitments","responseValidationCommitments","effectIntents"],
+      "properties": {
+        "outcome": {"$ref":"#/$defs/policyOutcome"},
+        "requestRewriteCommitments": {"type":"array","maxItems":128,"uniqueItems":true,"items":{"$ref":"#/$defs/sha256"}},
+        "responseValidationCommitments": {"type":"array","maxItems":128,"uniqueItems":true,"items":{"$ref":"#/$defs/sha256"}},
+        "effectIntents": {"type":"array","maxItems":128,"items":{"$ref":"#/$defs/activeEffectIntent"}}
+      },
+      "$comment": "Native verification recomputes policyPlanSha256 and the domain-separated effectIntentsSha256, then derives the exact ordered effect requirement set from this typed plan."
+    },
+    "evaluation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "outcome",
+        "policyPlan",
+        "policyPlanSha256",
+        "reasonSetSha256",
+        "obligationsSha256",
+        "effectIntentsSha256",
+        "dispatchCommitmentSha256",
+        "effectRequirements",
+        "evaluationNanos"
+      ],
+      "properties": {
+        "outcome": {
+          "enum": ["deny", "permit", "conditional", "indeterminate"]
+        },
+        "policyPlan": {"$ref": "#/$defs/activePolicyPlan"},
+        "policyPlanSha256": {"$ref": "#/$defs/sha256"},
+        "reasonSetSha256": {"$ref": "#/$defs/sha256"},
+        "obligationsSha256": {"$ref": "#/$defs/sha256"},
+        "effectIntentsSha256": {"$ref": "#/$defs/sha256"},
+        "dispatchCommitmentSha256": {"$ref": "#/$defs/sha256"},
+        "effectRequirements": {"$ref": "#/$defs/activeEffectRequirements"},
+        "evaluationNanos": {"$ref": "#/$defs/unsignedI64"}
+      }
+    },
+    "candidateEvaluation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "outcome",
+        "policyPlanSha256",
+        "reasonSetSha256",
+        "obligationsSha256",
+        "effectIntentsSha256",
+        "dispatchCommitmentSha256",
+        "evaluationNanos",
+        "evaluationPurpose",
+        "effectCapabilitiesAvailable",
+        "effectIntentsExecuted"
+      ],
+      "properties": {
+        "outcome": {
+          "enum": ["deny", "permit", "conditional", "indeterminate"]
+        },
+        "policyPlanSha256": {"$ref": "#/$defs/sha256"},
+        "reasonSetSha256": {"$ref": "#/$defs/sha256"},
+        "obligationsSha256": {"$ref": "#/$defs/sha256"},
+        "effectIntentsSha256": {"$ref": "#/$defs/sha256"},
+        "dispatchCommitmentSha256": {"$ref": "#/$defs/sha256"},
+        "evaluationNanos": {"$ref": "#/$defs/unsignedI64"},
+        "evaluationPurpose": {"const": "candidate-shadow"},
+        "effectCapabilitiesAvailable": {"const": false},
+        "effectIntentsExecuted": {"const": false}
+      }
+    },
+    "semanticExpansionCell": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cellSha256",
+        "authorityExpansion",
+        "routeSha256",
+        "operation",
+        "compiledSemanticProfileSha256",
+        "requestAuthorityClass",
+        "activeOutcome",
+        "candidateOutcome",
+        "routeAuthorityRootSha256",
+        "operationAuthorityRootSha256",
+        "pilotPrincipalSetRootSha256",
+        "pilotRouteSetRootSha256",
+        "maximumRequests",
+        "maximumWriteRequests"
+      ],
+      "properties": {
+        "cellSha256": {"$ref": "#/$defs/sha256"},
+        "authorityExpansion": {
+          "enum": [
+            "endpoint-added",
+            "credential-scope-added",
+            "write-method-enabled",
+            "quota-increased",
+            "budget-increased",
+            "response-field-exposure-added",
+            "response-validation-relaxed",
+            "response-filter-reduced",
+            "other-compiler-declared",
+            "active-deny-to-conditional",
+            "active-deny-to-permit",
+            "active-conditional-to-permit",
+            "active-indeterminate-to-conditional",
+            "active-indeterminate-to-permit"
+          ]
+        },
+        "routeSha256": {"$ref": "#/$defs/sha256"},
+        "operation": {
+          "enum": ["read", "search", "write", "publish", "delete", "administrative"]
+        },
+        "compiledSemanticProfileSha256": {"$ref": "#/$defs/sha256"},
+        "requestAuthorityClass": {"enum": ["read", "write"]},
+        "activeOutcome": {"enum": ["deny", "permit", "conditional", "indeterminate"]},
+        "candidateOutcome": {"enum": ["deny", "permit", "conditional", "indeterminate"]},
+        "routeAuthorityRootSha256": {"$ref": "#/$defs/sha256"},
+        "operationAuthorityRootSha256": {"$ref": "#/$defs/sha256"},
+        "pilotPrincipalSetRootSha256": {"$ref": "#/$defs/sha256"},
+        "pilotRouteSetRootSha256": {"$ref": "#/$defs/sha256"},
+        "maximumRequests": {"$ref": "#/$defs/positiveI64"},
+        "maximumWriteRequests": {"$ref": "#/$defs/unsignedI64"}
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": ["operation"],
+            "properties": {
+              "operation": {"enum": ["read", "search"]}
+            }
+          },
+          "then": {
+            "properties": {
+              "requestAuthorityClass": {"const": "read"}
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["operation"],
+            "properties": {
+              "operation": {
+                "enum": ["write", "publish", "delete", "administrative"]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "requestAuthorityClass": {"const": "write"}
+            }
+          }
+        }
+      ],
+      "$comment": "Native verification recomputes cellSha256 from every other field, requires compiler-analysis membership, and enforces positive per-cell coverage and the signed per-cell total/write caps."
+    },
+    "derivedExpansionSet": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cells", "cellsRootSha256"],
+      "properties": {
+        "cells": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/semanticExpansionCell"}
+        },
+        "cellsRootSha256": {"$ref": "#/$defs/sha256"}
+      },
+      "$comment": "Native verification derives the exact strictly ordered cells from signed evidence and recomputes the domain-separated Merkle root. The empty set uses the canonical empty Merkle root."
+    },
+    "activeEffectRequirements": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requirements"],
+      "properties": {
+        "requirements": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 31,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "trust-freshness",
+              "gmail-prior-search-proof",
+              "gmail-metadata-fanout",
+              "jit-grant",
+              "quota-reserve",
+              "quota-terminal",
+              "durable-budget-reserve",
+              "durable-budget-terminal",
+              "credential-version",
+              "credential-lease",
+              "credential-decrypt",
+              "credential-injection",
+              "oauth-refresh",
+              "oauth-exchange",
+              "oauth-mint",
+              "idempotency-binding",
+              "recovery-resolution",
+              "final-request",
+              "dispatch-authorization",
+              "dispatch-terminal",
+              "response-validation",
+              "terminal-response"
+            ]
+          }
+        }
+      },
+      "$comment": "Native verification requires strict enum order and exact equality with requirements deterministically derived from the embedded typed ActivePolicyPlan. Every JIT, quota, durable-budget, and release lifecycle mutation has distinct evidence. For mutually exclusive success/abort or commit/cancel branches, the non-selected terminal is present as not-reached rather than being omitted."
+    },
+    "merkleProofStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["siblingSide", "siblingSha256"],
+      "properties": {
+        "siblingSide": {"enum": ["left", "right"]},
+        "siblingSha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "pilotMembershipEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "principalLeafSha256",
+        "principalProof",
+        "routeLeafSha256",
+        "routeProof"
+      ],
+      "properties": {
+        "principalLeafSha256": {"$ref": "#/$defs/sha256"},
+        "principalProof": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 64,
+          "items": {"$ref": "#/$defs/merkleProofStep"}
+        },
+        "routeLeafSha256": {"$ref": "#/$defs/sha256"},
+        "routeProof": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 64,
+          "items": {"$ref": "#/$defs/merkleProofStep"}
+        }
+      },
+      "$comment": "Native verification derives principal and route leaves from HMAC-verified protected facts and recomputes both pilot roots with serverware.policyPilotMembershipNode/v1."
+    },
+    "nullablePilotMembershipEvidence": {
+      "oneOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/pilotMembershipEvidence"}
+      ]
+    },
+    "responseObligationBinding": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["disposition","routeSha256","obligationRootSha256","activeConstraintsRootSha256","candidateConstraintsRootSha256","exactResponseCommitmentSha256","appliedObligationsRootSha256"],
+          "properties": {
+            "disposition": {"const": "applied"},
+            "routeSha256": {"$ref": "#/$defs/sha256"},
+            "obligationRootSha256": {"$ref": "#/$defs/sha256"},
+            "activeConstraintsRootSha256": {"$ref": "#/$defs/sha256"},
+            "candidateConstraintsRootSha256": {"$ref": "#/$defs/sha256"},
+            "exactResponseCommitmentSha256": {"$ref": "#/$defs/sha256"},
+            "appliedObligationsRootSha256": {"$ref": "#/$defs/sha256"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["disposition","routeSha256","obligationRootSha256","activeOutcome","candidateOutcome","notApplicableSha256"],
+          "properties": {
+            "disposition": {"const": "not-applicable-active-not-dispatched"},
+            "routeSha256": {"$ref": "#/$defs/sha256"},
+            "obligationRootSha256": {"$ref": "#/$defs/sha256"},
+            "activeOutcome": {"enum":["deny","permit","conditional","indeterminate"]},
+            "candidateOutcome": {"enum":["deny","permit","conditional","indeterminate"]},
+            "notApplicableSha256": {"$ref": "#/$defs/sha256"}
+          }
+        }
+      ],
+      "$comment": "Request/decision expansion coverage remains positive when active enforcement legitimately did not dispatch. Only the applied variant can satisfy response-comparability coverage."
+    },
+    "nullableResponseObligationBinding": {
+      "oneOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/responseObligationBinding"}
+      ]
+    },
+    "boundResponseValidation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "policySnapshotSha256",
+        "responseConstraintsRootSha256",
+        "exactResponseCommitmentSha256",
+        "outcome",
+        "validationResultSha256"
+      ],
+      "properties": {
+        "policySnapshotSha256": {"$ref": "#/$defs/sha256"},
+        "responseConstraintsRootSha256": {"$ref": "#/$defs/sha256"},
+        "exactResponseCommitmentSha256": {"$ref": "#/$defs/sha256"},
+        "outcome": {
+          "enum": ["accepted", "rejected", "indeterminate", "not-evaluated"]
+        },
+        "validationResultSha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "nullableSha256": {
+      "oneOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]
+    },
+    "nullableHttpStatus": {
+      "oneOf": [
+        {"type": "null"},
+        {"type": "integer", "minimum": 200, "maximum": 599}
+      ]
+    },
+    "nullableBoundResponseValidation": {
+      "oneOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/boundResponseValidation"}
+      ]
+    },
+    "responseComparison": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "classification",
+        "captureMode",
+        "upstreamStatus",
+        "exactResponseBodyBytes",
+        "exactResponseBodySha256",
+        "physicalResponseHeaderCount",
+        "physicalResponseHeadersSha256",
+        "exactResponseCommitmentSha256",
+        "activeValidation",
+        "candidateValidation",
+        "unavailableMarkerSha256",
+        "transportCaptureReceiptSha256",
+        "runtimeAttestationSha256",
+        "peerIdentitySha256",
+        "physicalResponseFraming",
+        "responseProofSha256"
+      ],
+      "properties": {
+        "classification": {
+          "enum": [
+            "comparable-identical",
+            "comparable-validation-match",
+            "comparable-validation-divergence",
+            "not-applicable-active-not-dispatched",
+            "not-comparable-candidate-not-dispatchable",
+            "not-comparable-dispatch-commitment-mismatch",
+            "not-comparable-active-response-unavailable",
+            "not-comparable-candidate-validator-unavailable",
+            "not-applicable-both-deny"
+          ]
+        },
+        "captureMode": {
+          "enum": ["bounded-exact", "streaming-unavailable", "not-dispatched"]
+        },
+        "upstreamStatus": {"$ref": "#/$defs/nullableHttpStatus"},
+        "exactResponseBodyBytes": {"$ref": "#/$defs/nullableUnsignedI64"},
+        "exactResponseBodySha256": {"$ref": "#/$defs/nullableSha256"},
+        "physicalResponseHeaderCount": {"$ref": "#/$defs/nullableUnsignedI64"},
+        "physicalResponseHeadersSha256": {"$ref": "#/$defs/nullableSha256"},
+        "exactResponseCommitmentSha256": {"$ref": "#/$defs/nullableSha256"},
+        "activeValidation": {"$ref": "#/$defs/nullableBoundResponseValidation"},
+        "candidateValidation": {"$ref": "#/$defs/nullableBoundResponseValidation"},
+        "unavailableMarkerSha256": {"$ref": "#/$defs/nullableSha256"},
+        "transportCaptureReceiptSha256": {"$ref": "#/$defs/nullableSha256"},
+        "runtimeAttestationSha256": {"$ref": "#/$defs/nullableSha256"},
+        "peerIdentitySha256": {"$ref": "#/$defs/nullableSha256"},
+        "physicalResponseFraming": {"$ref": "#/$defs/nullablePhysicalResponseFraming"},
+        "responseProofSha256": {"$ref": "#/$defs/sha256"}
+      },
+      "$comment": "Only bounded-exact evidence reconstructed from an authenticated signed and runtime-attested transport receipt binding runtime, generation, request, peer, raw head, raw body, framing, and completion is comparable. The verifier derives status, physical headers, framing, and decoded body and rejects parsed-adapter mismatches. Not-applicable active non-dispatch is valid authority coverage but is not comparable response coverage."
+    },
+    "nullablePhysicalResponseFraming": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "enum": [
+            "content-length",
+            "chunked",
+            "close-delimited",
+            "no-body"
+          ]
+        }
+      ]
+    },
+    "nullableUnsignedI64": {
+      "oneOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/unsignedI64"}
+      ]
+    },
+    "latencySamples": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "factsCaptureNanos",
+        "activeEvaluationNanos",
+        "candidateEvaluationNanos",
+        "responseValidationNanos",
+        "shadowTotalNanos"
+      ],
+      "properties": {
+        "factsCaptureNanos": {"$ref": "#/$defs/nullableUnsignedI64"},
+        "activeEvaluationNanos": {"$ref": "#/$defs/nullableUnsignedI64"},
+        "candidateEvaluationNanos": {"$ref": "#/$defs/nullableUnsignedI64"},
+        "responseValidationNanos": {"$ref": "#/$defs/nullableUnsignedI64"},
+        "shadowTotalNanos": {"$ref": "#/$defs/nullableUnsignedI64"}
+      },
+      "$comment": "Only non-null samples enter histograms. Null is never converted to zero."
+    },
+    "observedAuthorityBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "principalSha256",
+        "routeSha256",
+        "operation",
+        "compiledSemanticProfileSha256",
+        "requestAuthorityClass"
+      ],
+      "properties": {
+        "principalSha256": {"$ref": "#/$defs/sha256"},
+        "routeSha256": {"$ref": "#/$defs/sha256"},
+        "operation": {
+          "enum": ["read", "search", "write", "publish", "delete", "administrative"]
+        },
+        "compiledSemanticProfileSha256": {"$ref": "#/$defs/sha256"},
+        "requestAuthorityClass": {"enum": ["read", "write"]}
+      }
+    },
+    "activeEffectResolution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "finalizationBindingSha256",
+        "resolvedEffectIntentsSha256",
+        "effectRequirements",
+        "terminalEvidence",
+        "effectResultCommitmentsRootSha256",
+        "finalOutcome",
+        "returnedHttpStatus",
+        "upstreamDispatchAuthorized",
+        "finalizedAtUnixNanos"
+      ],
+      "properties": {
+        "finalizationBindingSha256": {"$ref": "#/$defs/sha256"},
+        "resolvedEffectIntentsSha256": {"$ref": "#/$defs/sha256"},
+        "effectRequirements": {"$ref": "#/$defs/activeEffectRequirements"},
+        "terminalEvidence": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 31,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/activeEffectTerminalEvidence"}
+        },
+        "effectResultCommitmentsRootSha256": {"$ref": "#/$defs/sha256"},
+        "finalOutcome": {"enum": ["allow", "deny", "conditional", "error"]},
+        "returnedHttpStatus": {"type":"integer","minimum":200,"maximum":599},
+        "upstreamDispatchAuthorized": {"type": "boolean"},
+        "finalizedAtUnixNanos": {"$ref": "#/$defs/signedI64"}
+      },
+      "$comment": "terminalEvidence must be strictly ordered and contain exactly one terminal state for every requirement derived from the embedded active plan. Missing, duplicate, extra, or generic decision-JSON commitments are rejected."
+    },
+    "activeEffectTerminalEvidence": {
+      "type":"object",
+      "additionalProperties":false,
+      "required":["requirement","terminalState","resultSha256"],
+      "properties":{
+        "requirement":{"enum":["trust-freshness","gmail-prior-search-proof","gmail-metadata-fanout","jit-grant","quota-reserve","quota-terminal","durable-budget-reserve","durable-budget-terminal","credential-version","credential-lease","credential-decrypt","credential-injection","oauth-refresh","oauth-exchange","oauth-mint","idempotency-binding","recovery-resolution","final-request","dispatch-authorization","dispatch-terminal","response-validation","terminal-response"]},
+        "terminalState":{"enum":["completed","denied","failed","cancelled","provider-outcome-unknown","recovery-required","not-reached"]},
+        "resultSha256":{"$ref":"#/$defs/sha256"}
+      }
+    },
+    "evaluatedResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "pureActiveEvaluation",
+        "finalActiveEnforcement",
+        "candidateEvaluation",
+        "authorityBinding",
+        "derivedExpansion",
+        "pilotMembership",
+        "responseObligation",
+        "responseComparison",
+        "latencySamples"
+      ],
+      "properties": {
+        "status": {"const": "evaluated"},
+        "pureActiveEvaluation": {"$ref": "#/$defs/evaluation"},
+        "finalActiveEnforcement": {"$ref": "#/$defs/activeEffectResolution"},
+        "candidateEvaluation": {"$ref": "#/$defs/candidateEvaluation"},
+        "authorityBinding": {"$ref": "#/$defs/observedAuthorityBinding"},
+        "derivedExpansion": {"$ref": "#/$defs/derivedExpansionSet"},
+        "pilotMembership": {"$ref": "#/$defs/nullablePilotMembershipEvidence"},
+        "responseObligation": {"$ref": "#/$defs/nullableResponseObligationBinding"},
+        "responseComparison": {"$ref": "#/$defs/responseComparison"},
+        "latencySamples": {"$ref": "#/$defs/latencySamples"}
+      }
+    },
+    "droppedResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "reason",
+        "unavailableMarkerSha256",
+        "latencySamples"
+      ],
+      "properties": {
+        "status": {"const": "dropped"},
+        "reason": {
+          "enum": [
+            "queue-full",
+            "worker-unavailable",
+            "deadline-exceeded",
+            "facts-unsupported",
+            "shutdown"
+          ]
+        },
+        "unavailableMarkerSha256": {"$ref": "#/$defs/sha256"},
+        "latencySamples": {"$ref": "#/$defs/latencySamples"}
+      }
+    },
+    "errorResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "terminalReason",
+        "unavailableMarkerSha256",
+        "latencySamples"
+      ],
+      "properties": {
+        "status": {"const": "error"},
+        "terminalReason": {
+          "allOf": [
+            {"$ref": "#/$defs/terminalReason"},
+            {"enum": [
+              "facts-capture-error",
+              "active-evaluation-error",
+              "candidate-evaluation-error",
+              "response-validation-error",
+              "commitment-error",
+              "internal-error"
+            ]}
+          ]
+        },
+        "unavailableMarkerSha256": {"$ref": "#/$defs/sha256"},
+        "latencySamples": {"$ref": "#/$defs/latencySamples"}
+      }
+    },
+    "excludedResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "reason"],
+      "properties": {
+        "status": {"const": "excluded"},
+        "reason": {"const": "deterministic-assignment-sampling"}
+      }
+    },
+    "transportExcludedResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "status": {"const": "transport-excluded"}
+      }
+    },
+    "result": {
+      "oneOf": [
+        {"$ref": "#/$defs/evaluatedResult"},
+        {"$ref": "#/$defs/droppedResult"},
+        {"$ref": "#/$defs/errorResult"},
+        {"$ref": "#/$defs/excludedResult"},
+        {"$ref": "#/$defs/transportExcludedResult"}
+      ]
+    },
+    "activeDecisionFinalized": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "pureActiveEvaluation",
+        "effectResolution"
+      ],
+      "properties": {
+        "status": {"const": "finalized"},
+        "pureActiveEvaluation": {"$ref": "#/$defs/evaluation"},
+        "effectResolution": {"$ref": "#/$defs/activeEffectResolution"}
+      }
+    },
+    "activeDecisionSampledOut": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "accountingRecordSha256"],
+      "properties": {
+        "status": {"const": "sampled-out"},
+        "accountingRecordSha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "activeDecisionCandidateDropped": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status","pureActiveEvaluation","effectResolution","reason","unavailableMarkerSha256"],
+      "properties": {
+        "status": {"const": "candidate-dropped"},
+        "pureActiveEvaluation": {"$ref": "#/$defs/evaluation"},
+        "effectResolution": {"$ref": "#/$defs/activeEffectResolution"},
+        "reason": {
+          "enum": [
+            "queue-full",
+            "worker-unavailable",
+            "deadline-exceeded",
+            "facts-unsupported",
+            "shutdown"
+          ]
+        },
+        "unavailableMarkerSha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "activeDecisionTransportExcluded": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "accountingRecordSha256"],
+      "properties": {
+        "status": {"const": "transport-excluded"},
+        "accountingRecordSha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "activeDecisionCaptureFailed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "terminalReason", "unavailableMarkerSha256"],
+      "properties": {
+        "status": {"const": "capture-failed"},
+        "terminalReason": {
+          "allOf": [
+            {"$ref": "#/$defs/terminalReason"},
+            {"const": "facts-capture-error"}
+          ]
+        },
+        "unavailableMarkerSha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "activeDecisionNotEvaluated": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "terminalReason", "unavailableMarkerSha256"],
+      "properties": {
+        "status": {"const": "not-evaluated"},
+        "terminalReason": {
+          "allOf": [
+            {"$ref": "#/$defs/terminalReason"},
+            {"enum": [
+              "active-evaluation-error",
+              "commitment-error",
+              "internal-error"
+            ]}
+          ]
+        },
+        "unavailableMarkerSha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "activeDecisionPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receiptId",
+        "assignmentSha256",
+        "assignmentPayloadSha256",
+        "assignmentRevision",
+        "authorityKeyIndependenceSha256",
+        "policyAuthorityAnalysisSha256",
+        "policyAuthorityAnalysisPayloadSha256",
+        "custodyReceiptEvidenceRequirementsSha256",
+        "loadReceiptSha256",
+        "loadReceiptPayloadSha256",
+        "canaryId",
+        "policyIdentity",
+        "runtimeIdentity",
+        "generationId",
+        "ingressEvidenceSha256",
+        "ingressSequence",
+        "capturedAtUnixNanos",
+        "decisionAtUnixNanos",
+        "dispatchBarrierReceiptSha256",
+        "terminalSpillReceiptSha256",
+        "result",
+        "issuedAtUnixNanos",
+        "expiresAtUnixNanos"
+      ],
+      "properties": {
+        "receiptId": {"$ref": "#/$defs/sha256"},
+        "assignmentSha256": {"$ref": "#/$defs/sha256"},
+        "assignmentPayloadSha256": {"$ref": "#/$defs/sha256"},
+        "assignmentRevision": {"$ref": "#/$defs/positiveI64"},
+        "authorityKeyIndependenceSha256": {
+          "$ref": "#/$defs/sha256",
+          "$comment": "Exact assignment authorityKeyIndependence.independenceRootSha256; every envelope and custody receipt signer is re-resolved against this set."
+        },
+        "policyAuthorityAnalysisSha256": {"$ref": "#/$defs/sha256"},
+        "policyAuthorityAnalysisPayloadSha256": {"$ref": "#/$defs/sha256"},
+        "custodyReceiptEvidenceRequirementsSha256": {"$ref": "#/$defs/sha256"},
+        "loadReceiptSha256": {"$ref": "#/$defs/sha256"},
+        "loadReceiptPayloadSha256": {"$ref": "#/$defs/sha256"},
+        "canaryId": {"$ref": "#/$defs/sha256"},
+        "policyIdentity": {
+          "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/policyIdentity"
+        },
+        "runtimeIdentity": {
+          "$ref": "policy-shadow-load-receipt.v1.schema.json#/$defs/runtimeIdentity"
+        },
+        "generationId": {"$ref": "#/$defs/sha256"},
+        "ingressEvidenceSha256": {"$ref": "#/$defs/sha256"},
+        "ingressSequence": {"$ref": "#/$defs/positiveI64"},
+        "capturedAtUnixNanos": {"$ref": "#/$defs/signedI64"},
+        "decisionAtUnixNanos": {"$ref": "#/$defs/signedI64"},
+        "dispatchBarrierReceiptSha256": {"$ref": "#/$defs/nullableSha256"},
+        "terminalSpillReceiptSha256": {"$ref": "#/$defs/sha256"},
+        "result": {
+          "oneOf": [
+            {"$ref": "#/$defs/activeDecisionFinalized"},
+            {"$ref": "#/$defs/activeDecisionSampledOut"},
+            {"$ref": "#/$defs/activeDecisionCandidateDropped"},
+            {"$ref": "#/$defs/activeDecisionTransportExcluded"},
+            {"$ref": "#/$defs/activeDecisionCaptureFailed"},
+            {"$ref": "#/$defs/activeDecisionNotEvaluated"}
+          ]
+        },
+        "issuedAtUnixNanos": {"$ref": "#/$defs/signedI64"},
+        "expiresAtUnixNanos": {"$ref": "#/$defs/signedI64"}
+      }
+    },
+    "activeDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "kind",
+        "canonicalProfile",
+        "signatureDomain",
+        "payload",
+        "payloadSha256",
+        "signatureAlgorithm",
+        "signingKeyId",
+        "signingKeySpkiSha256",
+        "signature"
+      ],
+      "properties": {
+        "apiVersion": {"const": "serverware.policyShadowActiveDecision/v1"},
+        "kind": {"const": "PolicyShadowActiveDecision"},
+        "canonicalProfile": {"const": "serverware.canonicalJson/ascii-integer-v1"},
+        "signatureDomain": {"const": "serverware.policyShadowActiveDecision/v1"},
+        "payload": {"$ref": "#/$defs/activeDecisionPayload"},
+        "payloadSha256": {"$ref": "#/$defs/sha256"},
+        "signatureAlgorithm": {"const": "Ed25519"},
+        "signingKeyId": {"$ref": "#/$defs/sha256"},
+        "signingKeySpkiSha256": {"$ref": "#/$defs/sha256"},
+        "signature": {
+          "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/ed25519Signature"
+        }
+      },
+      "$comment": "Native verification pins this envelope to the distinct active-decision key and exactly matches the outer active result."
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "observationId",
+        "assignmentSha256",
+        "assignmentPayloadSha256",
+        "assignmentRevision",
+        "authorityKeyIndependenceSha256",
+        "policyAuthorityAnalysisSha256",
+        "policyAuthorityAnalysisPayloadSha256",
+        "custodyReceiptEvidenceRequirementsSha256",
+        "loadReceiptSha256",
+        "loadReceiptPayloadSha256",
+        "canaryId",
+        "fleetId",
+        "fleetMembershipRevision",
+        "policyIdentity",
+        "runtimeIdentity",
+        "generation",
+        "observationSequence",
+        "previousObservationSha256",
+        "ingressEvidenceSha256",
+        "ingressEvidence",
+        "activeDecisionSha256",
+        "activeDecision",
+        "custodyEvidence",
+        "result",
+        "issuedAtUnixNanos",
+        "expiresAtUnixNanos"
+      ],
+      "properties": {
+        "observationId": {"$ref": "#/$defs/sha256"},
+        "assignmentSha256": {"$ref": "#/$defs/sha256"},
+        "assignmentPayloadSha256": {"$ref": "#/$defs/sha256"},
+        "assignmentRevision": {"$ref": "#/$defs/positiveI64"},
+        "authorityKeyIndependenceSha256": {"$ref": "#/$defs/sha256"},
+        "policyAuthorityAnalysisSha256": {"$ref": "#/$defs/sha256"},
+        "policyAuthorityAnalysisPayloadSha256": {"$ref": "#/$defs/sha256"},
+        "custodyReceiptEvidenceRequirementsSha256": {"$ref": "#/$defs/sha256"},
+        "loadReceiptSha256": {"$ref": "#/$defs/sha256"},
+        "loadReceiptPayloadSha256": {"$ref": "#/$defs/sha256"},
+        "canaryId": {"$ref": "#/$defs/sha256"},
+        "fleetId": {"$ref": "#/$defs/sha256"},
+        "fleetMembershipRevision": {"$ref": "#/$defs/positiveI64"},
+        "policyIdentity": {
+          "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/policyIdentity"
+        },
+        "runtimeIdentity": {
+          "$ref": "policy-shadow-load-receipt.v1.schema.json#/$defs/runtimeIdentity"
+        },
+        "generation": {"$ref": "#/$defs/generation"},
+        "observationSequence": {"$ref": "#/$defs/positiveI64"},
+        "previousObservationSha256": {
+          "$ref": "#/$defs/sha256",
+          "$comment": "Sequence one anchors to generationId; later values equal the immediately preceding verified observation envelope digest."
+        },
+        "ingressEvidenceSha256": {"$ref": "#/$defs/sha256"},
+        "ingressEvidence": {"$ref": "#/$defs/ingressEvidence"},
+        "activeDecisionSha256": {"$ref": "#/$defs/sha256"},
+        "activeDecision": {"$ref": "#/$defs/activeDecision"},
+        "custodyEvidence": {"$ref": "#/$defs/custodyEvidence"},
+        "result": {"$ref": "#/$defs/result"},
+        "issuedAtUnixNanos": {"$ref": "#/$defs/signedI64"},
+        "expiresAtUnixNanos": {"$ref": "#/$defs/signedI64"}
+      }
+    }
+  }
+}

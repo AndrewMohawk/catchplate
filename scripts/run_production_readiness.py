@@ -15,6 +15,7 @@ import secrets
 import selectors
 import shlex
 import stat
+import struct
 import subprocess
 import sys
 import time
@@ -49,6 +50,7 @@ ATTESTATION_HELPER_COMMAND_SETTINGS = (
     "SERVERWARE_DATA_PLANE_RESPONSE_PROOF_ATTESTATION_COMMAND",
     "SERVERWARE_DATA_PLANE_LEASE_RECIPIENT_VERIFY_COMMAND",
     "SERVERWARE_CONTROL_PLANE_ATTESTATION_VERIFY_COMMAND",
+    "SERVERWARE_RESPONSE_OBSERVATION_V2_TEE_VERIFY_COMMAND",
 )
 PROOF_COLLECTOR_COMMAND_SETTING = "SERVERWARE_PROXY_PROOF_COLLECTOR_COMMAND"
 PROXY_PROOF_CONTRACT_ENV = "SERVERWARE_PROXY_PROOF_CONTRACT"
@@ -2223,6 +2225,44 @@ def open_measured_executable(
     except Exception:
         os.close(descriptor)
         raise
+
+
+def validate_static_amd64_elf(data: bytes, label: str) -> None:
+    if len(data) < 64 or data[:4] != b"\x7fELF" or data[4:7] != b"\x02\x01\x01":
+        raise ValueError(f"{label} must be a 64-bit little-endian ELF executable")
+    elf_type, machine, version = struct.unpack_from("<HHI", data, 16)
+    if elf_type not in {2, 3} or machine != 62 or version != 1:
+        raise ValueError(f"{label} must be an x86-64 executable or static PIE")
+    program_offset = struct.unpack_from("<Q", data, 32)[0]
+    program_entry_bytes, program_entries = struct.unpack_from("<HH", data, 54)
+    if program_entry_bytes != 56 or not 1 <= program_entries <= 256:
+        raise ValueError(f"{label} has an invalid ELF program table")
+    program_end = program_offset + program_entry_bytes * program_entries
+    if program_end > len(data):
+        raise ValueError(f"{label} has a truncated ELF program table")
+    load_seen = False
+    for index in range(program_entries):
+        offset = program_offset + index * program_entry_bytes
+        program_type = struct.unpack_from("<I", data, offset)[0]
+        if program_type == 3:
+            raise ValueError(f"{label} must not use PT_INTERP")
+        if program_type == 1:
+            load_seen = True
+        if program_type != 2:
+            continue
+        dynamic_offset = struct.unpack_from("<Q", data, offset + 8)[0]
+        dynamic_bytes = struct.unpack_from("<Q", data, offset + 32)[0]
+        dynamic_end = dynamic_offset + dynamic_bytes
+        if dynamic_bytes % 16 or dynamic_end > len(data):
+            raise ValueError(f"{label} has an invalid ELF dynamic segment")
+        for entry in range(dynamic_offset, dynamic_end, 16):
+            tag = struct.unpack_from("<Q", data, entry)[0]
+            if tag == 1:
+                raise ValueError(f"{label} must not contain DT_NEEDED dependencies")
+            if tag == 0:
+                break
+    if not load_seen:
+        raise ValueError(f"{label} has no loadable ELF segment")
 
 
 def open_measured_script(

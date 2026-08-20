@@ -45,6 +45,14 @@ def candidate_bundle(
 ) -> dict[str, Any]:
     bundle = policy_bundle.demo_policy_bundle(credential_id)
     bundle["metadata"]["sequence"] = sequence
+    bundle["credentials"] = [
+        item for item in bundle["credentials"] if item["id"] == credential_id
+    ]
+    bundle["routes"] = [
+        route
+        for route in bundle["routes"]
+        if route.get("credentialRef") in {None, credential_id}
+    ]
     return bundle
 
 
@@ -191,7 +199,11 @@ def main() -> None:
             name="Production demo API token",
             kind="bearer",
             secret="super-secret-token",
-            metadata={"provider": "demo", "scopes": ["demo"]},
+            metadata={
+                "provider": "demo",
+                "provider_subject": "demo-service-account",
+                "secret_class": "bearerToken",
+            },
         )
         pending_detail = expect_http_error(
             "credential create without second approval",

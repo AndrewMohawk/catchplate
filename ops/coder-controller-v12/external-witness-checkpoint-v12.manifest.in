@@ -1,0 +1,5 @@
+document_version=12
+witness_sequence=@WITNESS_SEQUENCE@
+rollback_floor_generation=@ROLLBACK_FLOOR_GENERATION@
+signed_tree_head_sha256=@SIGNED_TREE_HEAD_SHA256@
+valid_until_epoch=@VALID_UNTIL_EPOCH@

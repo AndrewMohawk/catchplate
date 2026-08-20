@@ -326,9 +326,34 @@ def main() -> None:
             *,
             provider: str | None = "google",
             provider_subject: str | None = PROVIDER_SUBJECT,
+            oauth_client_id: str | None = None,
             scopes: list[str] | None = None,
             injection: dict[str, Any] | None = None,
         ):
+            stored_credential = db.get_credential(credential_id)
+            metadata = (
+                stored_credential.get("metadata")
+                if isinstance(stored_credential, dict)
+                else None
+            )
+            stored_client_id = (
+                metadata.get("oauth_client_id")
+                if isinstance(metadata, dict)
+                else None
+            )
+            if not isinstance(stored_client_id, str) or not stored_client_id:
+                raise AssertionError(
+                    f"OAuth fixture {credential_id!r} has no exact client ID"
+                )
+            signed_provider = (
+                app_module._normalized_credential_provider(provider)
+                if provider is not None
+                else None
+            )
+            signed_client_id = (
+                stored_client_id if oauth_client_id is None else oauth_client_id
+            )
+            signed_scopes = [SCOPE] if scopes is None else list(scopes)
             bundle = demo_policy_bundle(credential_id)
             bundle["principals"].append(
                 {
@@ -338,15 +363,17 @@ def main() -> None:
                 }
             )
             policy_credential = bundle["credentials"][0]
+            policy_credential["credentialType"] = "oauth2"
             if provider is None:
                 policy_credential.pop("provider", None)
             else:
-                policy_credential["provider"] = provider
+                policy_credential["provider"] = signed_provider
             if provider_subject is None:
                 policy_credential.pop("providerSubject", None)
             else:
                 policy_credential["providerSubject"] = provider_subject
-            policy_credential["scopes"] = [SCOPE] if scopes is None else scopes
+            policy_credential["oauthClientId"] = signed_client_id
+            policy_credential["scopes"] = signed_scopes
             if injection is None:
                 policy_credential["injection"] = {"type": "bearer", "field": "access_token"}
             elif injection:
@@ -354,6 +381,13 @@ def main() -> None:
             else:
                 policy_credential.pop("injection", None)
             route = next(item for item in bundle["routes"] if item["id"] == ROUTE_ID)
+            route["adapter"]["config"]["credentialBinding"] = {
+                "credentialType": "oauth2",
+                "provider": signed_provider or "google",
+                "subjects": [provider_subject or PROVIDER_SUBJECT],
+                "clientIds": [signed_client_id],
+                "requiredScopes": signed_scopes,
+            }
             route["jit"] = copy.deepcopy(jit_policy)
             return write_policy_bundle(bundle)
 
@@ -578,14 +612,37 @@ def main() -> None:
                     ),
                 )
 
-            for label, provider, provider_subject in (
-                ("missing signed provider binding", None, None),
-                ("wrong signed provider binding", "x", PROVIDER_SUBJECT),
+            try:
+                activate_policy(
+                    exact_credential["id"],
+                    provider=None,
+                    provider_subject=None,
+                )
+            except PolicyBundleError:
+                pass
+            else:
+                raise AssertionError("policy admission accepted a missing OAuth identity binding")
+
+            for label, provider, provider_subject, oauth_client_id in (
+                ("wrong signed provider binding", "x", PROVIDER_SUBJECT, None),
+                (
+                    "wrong signed provider subject",
+                    "google",
+                    "google-subject-other",
+                    None,
+                ),
+                (
+                    "wrong signed OAuth client",
+                    "google",
+                    PROVIDER_SUBJECT,
+                    "google-client-other",
+                ),
             ):
                 activate_policy(
                     exact_credential["id"],
                     provider=provider,
                     provider_subject=provider_subject,
+                    oauth_client_id=oauth_client_id,
                 )
                 assert_configuration_failure(
                     label,

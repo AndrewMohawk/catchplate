@@ -1,0 +1,447 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/response-v2-resume-release-replay.v1.schema.json",
+  "title": "Serverware Response v2 Stable Resume and Release Replay Records",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/resumeRecord"
+    },
+    {
+      "$ref": "#/$defs/releasePreparationReplayRecord"
+    },
+    {
+      "$ref": "#/$defs/releaseRetrievalReplayRecord"
+    },
+    {
+      "$ref": "#/$defs/replayStateQuery"
+    },
+    {
+      "$ref": "#/$defs/replayResolutionMutation"
+    },
+    {
+      "$ref": "#/$defs/replayResolutionResult"
+    }
+  ],
+  "$defs": {
+    "safeUint": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "positiveSafeUint": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@-]*$"
+    },
+    "sha256": {
+      "type": "string",
+      "minLength": 71,
+      "maxLength": 71,
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "attemptState": {
+      "enum": [
+        "RESERVED",
+        "AUTHORIZED",
+        "STAGED",
+        "DISPATCHING",
+        "OUTCOME_UNKNOWN",
+        "OBSERVED",
+        "RELEASE_PREPARED",
+        "TERMINAL_FAILED",
+        "FINALIZED",
+        "PUBLISHED",
+        "ARCHIVED"
+      ]
+    },
+    "resumeRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "kind",
+        "schemaVersion",
+        "generationId",
+        "stableResumeId",
+        "attemptId",
+        "revision",
+        "state",
+        "fenceToken",
+        "lastOperationId",
+        "lastCanonicalResultSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.responseV2.resumeRecord/v1"
+        },
+        "kind": {
+          "const": "ServerwareResponseV2ResumeRecord"
+        },
+        "schemaVersion": {
+          "const": "1"
+        },
+        "generationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "stableResumeId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "attemptId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "revision": {
+          "$ref": "#/$defs/positiveSafeUint"
+        },
+        "state": {
+          "$ref": "#/$defs/attemptState"
+        },
+        "fenceToken": {
+          "type": "string",
+          "minLength": 70,
+          "maxLength": 70,
+          "pattern": "^fence:[0-9a-f]{64}$"
+        },
+        "lastOperationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "lastCanonicalResultSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "releasePreparationReplayRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "kind",
+        "schemaVersion",
+        "generationId",
+        "releaseAuthorizationId",
+        "attemptId",
+        "finalizationId",
+        "exactReleaseRequestSha256",
+        "inspectionResultSha256",
+        "releaseObjectSha256",
+        "clientBindingSha256",
+        "exactReplayKeySha256",
+        "oneUseNonceSha256",
+        "preauthorizationArtifactSha256",
+        "signedStateMutationReceiptSha256",
+        "releasePreparationReceiptSha256",
+        "canonicalSignedResultSha256",
+        "canonicalSignedResultBase64url",
+        "preparedAtEpochMillis"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.responseV2.releasePreparationReplay/v1"
+        },
+        "kind": {
+          "const": "ServerwareResponseV2ReleasePreparationReplay"
+        },
+        "schemaVersion": {
+          "const": "1"
+        },
+        "generationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "releaseAuthorizationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "attemptId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "finalizationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "exactReleaseRequestSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "inspectionResultSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "releaseObjectSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "clientBindingSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "exactReplayKeySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "oneUseNonceSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "preauthorizationArtifactSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "signedStateMutationReceiptSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "releasePreparationReceiptSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "canonicalSignedResultSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "canonicalSignedResultBase64url": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 67108864,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "preparedAtEpochMillis": {
+          "$ref": "#/$defs/safeUint"
+        }
+      }
+    },
+    "releaseRetrievalReplayRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "kind",
+        "schemaVersion",
+        "generationId",
+        "releaseAuthorizationId",
+        "attemptId",
+        "finalizationId",
+        "exactReplayKeySha256",
+        "preparedCanonicalResultSha256",
+        "releasePreparationReceiptSha256",
+        "finalEnvelopeSha256",
+        "finalEnvelopeVerificationSha256",
+        "releaseObjectSha256",
+        "canonicalSignedResultSha256",
+        "canonicalSignedResultBase64url",
+        "retrievedAtEpochMillis"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.responseV2.releaseRetrievalReplay/v1"
+        },
+        "kind": {
+          "const": "ServerwareResponseV2ReleaseRetrievalReplay"
+        },
+        "schemaVersion": {
+          "const": "1"
+        },
+        "generationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "releaseAuthorizationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "attemptId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "finalizationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "exactReplayKeySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "preparedCanonicalResultSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "releasePreparationReceiptSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "finalEnvelopeSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "finalEnvelopeVerificationSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "releaseObjectSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "canonicalSignedResultSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "canonicalSignedResultBase64url": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 67108864,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "retrievedAtEpochMillis": {
+          "$ref": "#/$defs/safeUint"
+        }
+      }
+    },
+    "replayStateQuery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "kind",
+        "schemaVersion",
+        "generationId",
+        "attemptId",
+        "stableResumeId",
+        "phase",
+        "exactReplayKeySha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.responseV2.replayStateQuery/v1"
+        },
+        "kind": {
+          "const": "ServerwareResponseV2ReplayStateQuery"
+        },
+        "schemaVersion": {
+          "const": "1"
+        },
+        "generationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "attemptId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "stableResumeId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "phase": {
+          "enum": [
+            "PREPARE",
+            "RETRIEVE"
+          ]
+        },
+        "exactReplayKeySha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "replayResolutionMutation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "kind",
+        "schemaVersion",
+        "generationId",
+        "attemptId",
+        "stableResumeId",
+        "sourceReplayId",
+        "sourceOperationId",
+        "sourceExactRequestSha256",
+        "sourceCanonicalResultSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.responseV2.replayResolutionMutation/v1"
+        },
+        "kind": {
+          "const": "ServerwareResponseV2ReplayResolutionMutation"
+        },
+        "schemaVersion": {
+          "const": "1"
+        },
+        "generationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "attemptId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "stableResumeId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "sourceReplayId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "sourceOperationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "sourceExactRequestSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "sourceCanonicalResultSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "replayResolutionResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "kind",
+        "schemaVersion",
+        "generationId",
+        "attemptId",
+        "stableResumeId",
+        "authoritativeRevision",
+        "authoritativeState",
+        "fenceToken",
+        "sourceReplayId",
+        "sourceOperationId",
+        "sourceExactRequestSha256",
+        "sourceCanonicalResultSha256",
+        "sourceCanonicalResultBase64url",
+        "replayRecordSha256",
+        "stateAuthorityReceiptSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.responseV2.replayResolutionResult/v1"
+        },
+        "kind": {
+          "const": "ServerwareResponseV2ReplayResolutionResult"
+        },
+        "schemaVersion": {
+          "const": "1"
+        },
+        "generationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "attemptId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "stableResumeId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "authoritativeRevision": {
+          "$ref": "#/$defs/positiveSafeUint"
+        },
+        "authoritativeState": {
+          "$ref": "#/$defs/attemptState"
+        },
+        "fenceToken": {
+          "$ref": "#/$defs/identifier"
+        },
+        "sourceReplayId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "sourceOperationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "sourceExactRequestSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "sourceCanonicalResultSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "sourceCanonicalResultBase64url": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 67108864,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "replayRecordSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "stateAuthorityReceiptSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    }
+  }
+}

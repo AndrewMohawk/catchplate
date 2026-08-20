@@ -1,0 +1,896 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/policy-shadow-checkpoint.v1.schema.json",
+  "title": "Serverware Policy Shadow Checkpoint v1",
+  "$comment": "Every nonempty checkpoint is cumulative from observation sequence one and the assignment's first persisted ingress sequence. Every ingress, including sampled-out, transport-excluded, and capture-failed traffic, has a signed ingress/accounting envelope so the verifier rejects all sequence gaps. A zero-ingress checkpoint instead carries explicit null heads, zero counters/work, normative empty roots, continuous signed no-ingress heartbeats, and a signed no-ingress close. Native verification recomputes observation, ingress, active-decision, authority, response, terminal-receipt, publication-receipt, and signed-heartbeat roots plus all counters and re-resolves every signer against the assignment authority-key-independence set. Readiness independently requires positive traffic sufficiency.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "kind",
+    "canonicalProfile",
+    "signatureDomain",
+    "payload",
+    "payloadSha256",
+    "signatureAlgorithm",
+    "signingKeyId",
+    "signingKeySpkiSha256",
+    "signature"
+  ],
+  "properties": {
+    "apiVersion": {"const": "serverware.policyShadowCheckpoint/v1"},
+    "kind": {"const": "PolicyShadowCheckpoint"},
+    "canonicalProfile": {"const": "serverware.canonicalJson/ascii-integer-v1"},
+    "signatureDomain": {"const": "serverware.policyShadowCheckpoint/v1"},
+    "payload": {"$ref": "#/$defs/payload"},
+    "payloadSha256": {"$ref": "#/$defs/sha256"},
+    "signatureAlgorithm": {"const": "Ed25519"},
+    "signingKeyId": {"$ref": "#/$defs/sha256"},
+    "signingKeySpkiSha256": {"$ref": "#/$defs/sha256"},
+    "signature": {
+      "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/ed25519Signature"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/sha256"
+    },
+    "signedI64": {
+      "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/signedI64"
+    },
+    "unsignedI64": {
+      "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/unsignedI64"
+    },
+    "positiveI64": {
+      "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/positiveI64"
+    },
+    "nullablePositiveI64": {
+      "oneOf": [
+        {"type":"null"},
+        {"$ref":"#/$defs/positiveI64"}
+      ]
+    },
+    "nullableSignedI64": {
+      "oneOf": [
+        {"type":"null"},
+        {"$ref":"#/$defs/signedI64"}
+      ]
+    },
+    "nullableSha256": {
+      "oneOf": [
+        {"type":"null"},
+        {"$ref":"#/$defs/sha256"}
+      ]
+    },
+    "identifier": {
+      "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/identifier"
+    },
+    "totals": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ingressAdmitted",
+        "evaluated",
+        "dropped",
+        "errors",
+        "excluded",
+        "unavailableEvidence",
+        "activeIndeterminate",
+        "unapprovedActiveIndeterminate",
+        "candidateIndeterminate",
+        "activeDenyCandidatePermit",
+        "activeDenyCandidateConditional",
+        "activeConditionalCandidatePermit",
+        "activeIndeterminateCandidatePermit",
+        "activeIndeterminateCandidateConditional",
+        "authorityExpansionObservations",
+        "authorityExpansionWriteObservations",
+        "responseValidationDivergence",
+        "responseValidatorUnavailable",
+        "responseNoncomparable",
+        "comparableResponses"
+      ],
+      "properties": {
+        "ingressAdmitted": {"$ref": "#/$defs/unsignedI64"},
+        "evaluated": {"$ref": "#/$defs/unsignedI64"},
+        "dropped": {"$ref": "#/$defs/unsignedI64"},
+        "errors": {"$ref": "#/$defs/unsignedI64"},
+        "excluded": {"$ref": "#/$defs/unsignedI64"},
+        "unavailableEvidence": {"$ref": "#/$defs/unsignedI64"},
+        "activeIndeterminate": {"$ref": "#/$defs/unsignedI64"},
+        "unapprovedActiveIndeterminate": {"$ref": "#/$defs/unsignedI64"},
+        "candidateIndeterminate": {"$ref": "#/$defs/unsignedI64"},
+        "activeDenyCandidatePermit": {"$ref": "#/$defs/unsignedI64"},
+        "activeDenyCandidateConditional": {"$ref": "#/$defs/unsignedI64"},
+        "activeConditionalCandidatePermit": {"$ref": "#/$defs/unsignedI64"},
+        "activeIndeterminateCandidatePermit": {"$ref": "#/$defs/unsignedI64"},
+        "activeIndeterminateCandidateConditional": {"$ref": "#/$defs/unsignedI64"},
+        "authorityExpansionObservations": {"$ref": "#/$defs/unsignedI64"},
+        "authorityExpansionWriteObservations": {"$ref": "#/$defs/unsignedI64"},
+        "responseValidationDivergence": {"$ref": "#/$defs/unsignedI64"},
+        "responseValidatorUnavailable": {"$ref": "#/$defs/unsignedI64"},
+        "responseNoncomparable": {"$ref": "#/$defs/unsignedI64"},
+        "comparableResponses": {"$ref": "#/$defs/unsignedI64"}
+      }
+    },
+    "outcomes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "denyDeny",
+        "denyPermit",
+        "denyConditional",
+        "denyIndeterminate",
+        "permitDeny",
+        "permitPermit",
+        "permitConditional",
+        "permitIndeterminate",
+        "conditionalDeny",
+        "conditionalPermit",
+        "conditionalConditional",
+        "conditionalIndeterminate",
+        "indeterminateDeny",
+        "indeterminatePermit",
+        "indeterminateConditional",
+        "indeterminateIndeterminate",
+        "total"
+      ],
+      "properties": {
+        "denyDeny": {"$ref": "#/$defs/unsignedI64"},
+        "denyPermit": {"$ref": "#/$defs/unsignedI64"},
+        "denyConditional": {"$ref": "#/$defs/unsignedI64"},
+        "denyIndeterminate": {"$ref": "#/$defs/unsignedI64"},
+        "permitDeny": {"$ref": "#/$defs/unsignedI64"},
+        "permitPermit": {"$ref": "#/$defs/unsignedI64"},
+        "permitConditional": {"$ref": "#/$defs/unsignedI64"},
+        "permitIndeterminate": {"$ref": "#/$defs/unsignedI64"},
+        "conditionalDeny": {"$ref": "#/$defs/unsignedI64"},
+        "conditionalPermit": {"$ref": "#/$defs/unsignedI64"},
+        "conditionalConditional": {"$ref": "#/$defs/unsignedI64"},
+        "conditionalIndeterminate": {"$ref": "#/$defs/unsignedI64"},
+        "indeterminateDeny": {"$ref": "#/$defs/unsignedI64"},
+        "indeterminatePermit": {"$ref": "#/$defs/unsignedI64"},
+        "indeterminateConditional": {"$ref": "#/$defs/unsignedI64"},
+        "indeterminateIndeterminate": {"$ref": "#/$defs/unsignedI64"},
+        "total": {"$ref": "#/$defs/unsignedI64"}
+      }
+    },
+    "comparability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "comparableIdentical",
+        "comparableValidationMatch",
+        "comparableValidationDivergence",
+        "notApplicableActiveNotDispatched",
+        "notComparableCandidateNotDispatchable",
+        "notComparableDispatchCommitmentMismatch",
+        "notComparableActiveResponseUnavailable",
+        "notComparableCandidateValidatorUnavailable",
+        "notApplicableBothDeny",
+        "total"
+      ],
+      "properties": {
+        "comparableIdentical": {"$ref": "#/$defs/unsignedI64"},
+        "comparableValidationMatch": {"$ref": "#/$defs/unsignedI64"},
+        "comparableValidationDivergence": {"$ref": "#/$defs/unsignedI64"},
+        "notApplicableActiveNotDispatched": {"$ref": "#/$defs/unsignedI64"},
+        "notComparableCandidateNotDispatchable": {"$ref": "#/$defs/unsignedI64"},
+        "notComparableDispatchCommitmentMismatch": {"$ref": "#/$defs/unsignedI64"},
+        "notComparableActiveResponseUnavailable": {"$ref": "#/$defs/unsignedI64"},
+        "notComparableCandidateValidatorUnavailable": {"$ref": "#/$defs/unsignedI64"},
+        "notApplicableBothDeny": {"$ref": "#/$defs/unsignedI64"},
+        "total": {"$ref": "#/$defs/unsignedI64"}
+      }
+    },
+    "drops": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "queueFull",
+        "workerUnavailable",
+        "deadlineExceeded",
+        "factsUnsupported",
+        "shutdown",
+        "total"
+      ],
+      "properties": {
+        "queueFull": {"$ref": "#/$defs/unsignedI64"},
+        "workerUnavailable": {"$ref": "#/$defs/unsignedI64"},
+        "deadlineExceeded": {"$ref": "#/$defs/unsignedI64"},
+        "factsUnsupported": {"$ref": "#/$defs/unsignedI64"},
+        "shutdown": {"$ref": "#/$defs/unsignedI64"},
+        "total": {"$ref": "#/$defs/unsignedI64"}
+      }
+    },
+    "errors": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "factsCaptureError",
+        "activeEvaluationError",
+        "candidateEvaluationError",
+        "responseValidationError",
+        "commitmentError",
+        "internalError",
+        "total"
+      ],
+      "properties": {
+        "factsCaptureError": {"$ref": "#/$defs/unsignedI64"},
+        "activeEvaluationError": {"$ref": "#/$defs/unsignedI64"},
+        "candidateEvaluationError": {"$ref": "#/$defs/unsignedI64"},
+        "responseValidationError": {"$ref": "#/$defs/unsignedI64"},
+        "commitmentError": {"$ref": "#/$defs/unsignedI64"},
+        "internalError": {"$ref": "#/$defs/unsignedI64"},
+        "total": {"$ref": "#/$defs/unsignedI64"}
+      }
+    },
+    "latencyHistogram": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "nanos0To99999",
+        "nanos100000To499999",
+        "nanos500000To999999",
+        "nanos1000000To4999999",
+        "nanos5000000To9999999",
+        "nanos10000000To49999999",
+        "nanos50000000To99999999",
+        "nanos100000000To499999999",
+        "nanos500000000To999999999",
+        "nanos1000000000To4999999999",
+        "nanos5000000000OrMore",
+        "total"
+      ],
+      "properties": {
+        "nanos0To99999": {"$ref": "#/$defs/unsignedI64"},
+        "nanos100000To499999": {"$ref": "#/$defs/unsignedI64"},
+        "nanos500000To999999": {"$ref": "#/$defs/unsignedI64"},
+        "nanos1000000To4999999": {"$ref": "#/$defs/unsignedI64"},
+        "nanos5000000To9999999": {"$ref": "#/$defs/unsignedI64"},
+        "nanos10000000To49999999": {"$ref": "#/$defs/unsignedI64"},
+        "nanos50000000To99999999": {"$ref": "#/$defs/unsignedI64"},
+        "nanos100000000To499999999": {"$ref": "#/$defs/unsignedI64"},
+        "nanos500000000To999999999": {"$ref": "#/$defs/unsignedI64"},
+        "nanos1000000000To4999999999": {"$ref": "#/$defs/unsignedI64"},
+        "nanos5000000000OrMore": {"$ref": "#/$defs/unsignedI64"},
+        "total": {"$ref": "#/$defs/unsignedI64"}
+      }
+    },
+    "latencyHistograms": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "factsCapture",
+        "activeEvaluation",
+        "candidateEvaluation",
+        "responseValidation",
+        "shadowTotal"
+      ],
+      "properties": {
+        "factsCapture": {"$ref": "#/$defs/latencyHistogram"},
+        "activeEvaluation": {"$ref": "#/$defs/latencyHistogram"},
+        "candidateEvaluation": {"$ref": "#/$defs/latencyHistogram"},
+        "responseValidation": {"$ref": "#/$defs/latencyHistogram"},
+        "shadowTotal": {"$ref": "#/$defs/latencyHistogram"}
+      }
+    },
+    "expansionCellCounter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cellSha256",
+        "authorityExpansion",
+        "routeSha256",
+        "operation",
+        "compiledSemanticProfileSha256",
+        "requestAuthorityClass",
+        "activeOutcome",
+        "candidateOutcome",
+        "requestCount",
+        "writeRequestCount",
+        "responseCount",
+        "writeResponseCount"
+      ],
+      "properties": {
+        "cellSha256": {"$ref": "#/$defs/sha256"},
+        "authorityExpansion": {
+          "enum": [
+            "endpoint-added",
+            "credential-scope-added",
+            "write-method-enabled",
+            "quota-increased",
+            "budget-increased",
+            "response-field-exposure-added",
+            "response-validation-relaxed",
+            "response-filter-reduced",
+            "other-compiler-declared",
+            "active-deny-to-conditional",
+            "active-deny-to-permit",
+            "active-conditional-to-permit",
+            "active-indeterminate-to-conditional",
+            "active-indeterminate-to-permit"
+          ]
+        },
+        "routeSha256": {"$ref": "#/$defs/sha256"},
+        "operation": {
+          "enum": ["read", "search", "write", "publish", "delete", "administrative"]
+        },
+        "compiledSemanticProfileSha256": {"$ref": "#/$defs/sha256"},
+        "requestAuthorityClass": {"enum": ["read", "write"]},
+        "activeOutcome": {
+          "enum": ["deny", "permit", "conditional", "indeterminate"]
+        },
+        "candidateOutcome": {
+          "enum": ["deny", "permit", "conditional", "indeterminate"]
+        },
+        "requestCount": {"$ref": "#/$defs/unsignedI64"},
+        "writeRequestCount": {"$ref": "#/$defs/unsignedI64"},
+        "responseCount": {"$ref": "#/$defs/unsignedI64"},
+        "writeResponseCount": {"$ref": "#/$defs/unsignedI64"}
+      }
+    },
+    "responseRouteCoverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "routeSha256",
+        "obligationRootSha256",
+        "comparableResponses",
+        "validationDivergences",
+        "validatorUnavailable",
+        "noncomparable"
+      ],
+      "properties": {
+        "routeSha256": {"$ref": "#/$defs/sha256"},
+        "obligationRootSha256": {"$ref": "#/$defs/sha256"},
+        "comparableResponses": {"$ref": "#/$defs/unsignedI64"},
+        "validationDivergences": {"$ref": "#/$defs/unsignedI64"},
+        "validatorUnavailable": {"$ref": "#/$defs/unsignedI64"},
+        "noncomparable": {"$ref": "#/$defs/unsignedI64"}
+      }
+    },
+    "cumulativeCounters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "totals",
+        "outcomes",
+        "comparability",
+        "drops",
+        "errors",
+        "latencyHistograms",
+        "expansionCells",
+        "responseRouteCoverage"
+      ],
+      "properties": {
+        "totals": {"$ref": "#/$defs/totals"},
+        "outcomes": {"$ref": "#/$defs/outcomes"},
+        "comparability": {"$ref": "#/$defs/comparability"},
+        "drops": {"$ref": "#/$defs/drops"},
+        "errors": {"$ref": "#/$defs/errors"},
+        "latencyHistograms": {"$ref": "#/$defs/latencyHistograms"},
+        "expansionCells": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/expansionCellCounter"},
+          "$comment": "Native verification requires strict cellSha256 order and recomputes every count."
+        },
+        "responseRouteCoverage": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 512,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/responseRouteCoverage"},
+          "$comment": "Native verification requires strict routeSha256 order and exact assignment-obligation roots. A route exercised only by request/decision expansion may contain structurally valid active-not-dispatched samples with zero comparable responses; ordinary obligated routes and every route with a response-expansion cell must satisfy the signed comparable-response minimum."
+        }
+      }
+    },
+    "cumulativeRange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "firstObservationSequence",
+        "lastObservationSequence",
+        "firstObservationSha256",
+        "lastObservationSha256",
+        "firstIngressSequence",
+        "lastIngressSequence",
+        "lastIngressEvidenceSha256",
+        "firstObservedAtUnixNanos",
+        "lastObservedAtUnixNanos",
+        "observationCount",
+        "ingressCount",
+        "verifiedEvidenceBytes",
+        "verificationWorkUnits",
+        "cumulativeObservationRootSha256",
+        "cumulativeIngressRootSha256",
+        "cumulativeActiveDecisionRootSha256",
+        "cumulativePrincipalAuthorityRootSha256",
+        "cumulativeRouteAuthorityRootSha256",
+        "cumulativeCustodyEvidenceRootSha256",
+        "cumulativeAdmittedIngressReceiptRootSha256",
+        "cumulativeUnavailableIngressReceiptRootSha256",
+        "cumulativeDispatchBarrierReceiptRootSha256",
+        "cumulativeActiveEffectBarrierReceiptRootSha256",
+        "cumulativeActiveEffectCommitReceiptRootSha256",
+        "cumulativeTerminalReceiptCount",
+        "cumulativeTerminalReceiptRootSha256",
+        "cumulativePublicationReceiptCount",
+        "cumulativePublicationReceiptRootSha256",
+        "cumulativeSpillReceiptRootSha256",
+        "cumulativePersistenceReceiptRootSha256",
+        "cumulativeRetrievalProofRootSha256",
+        "cumulativeCompactionReceiptRootSha256",
+        "lastLedgerEventOrdinal",
+        "lastLedgerHeadSha256",
+        "lastSpoolRootSha256"
+      ],
+      "properties": {
+        "firstObservationSequence": {"$ref": "#/$defs/nullablePositiveI64"},
+        "lastObservationSequence": {"$ref": "#/$defs/nullablePositiveI64"},
+        "firstObservationSha256": {"$ref": "#/$defs/nullableSha256"},
+        "lastObservationSha256": {"$ref": "#/$defs/nullableSha256"},
+        "firstIngressSequence": {"$ref": "#/$defs/nullablePositiveI64"},
+        "lastIngressSequence": {"$ref": "#/$defs/nullablePositiveI64"},
+        "lastIngressEvidenceSha256": {"$ref": "#/$defs/nullableSha256"},
+        "firstObservedAtUnixNanos": {"$ref": "#/$defs/nullableSignedI64"},
+        "lastObservedAtUnixNanos": {"$ref": "#/$defs/nullableSignedI64"},
+        "observationCount": {"type": "integer", "minimum": 0, "maximum": 65536},
+        "ingressCount": {"type": "integer", "minimum": 0, "maximum": 65536},
+        "verifiedEvidenceBytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 67108864
+        },
+        "verificationWorkUnits": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000
+        },
+        "cumulativeObservationRootSha256": {
+          "$ref": "#/$defs/sha256",
+          "$comment": "Leaves are SHA-256(serverware.policyShadowMerkleLeaf/v1 || 0x00 || sequence_be_u64 || digest_32); parents are SHA-256(serverware.policyShadowMerkleNode/v1 || 0x01 || left_32 || right_32); an unpaired node is promoted unchanged."
+        },
+        "cumulativeIngressRootSha256": {"$ref": "#/$defs/sha256"},
+        "cumulativeActiveDecisionRootSha256": {
+          "$ref": "#/$defs/sha256",
+          "$comment": "Streaming Merkle root over distinct active-decision receipt envelope digests in observation order."
+        },
+        "cumulativePrincipalAuthorityRootSha256": {"$ref": "#/$defs/sha256"},
+        "cumulativeRouteAuthorityRootSha256": {"$ref": "#/$defs/sha256"},
+        "cumulativeCustodyEvidenceRootSha256": {"$ref": "#/$defs/sha256"},
+        "cumulativeAdmittedIngressReceiptRootSha256": {"$ref": "#/$defs/sha256"},
+        "cumulativeUnavailableIngressReceiptRootSha256": {"$ref": "#/$defs/sha256"},
+        "cumulativeDispatchBarrierReceiptRootSha256": {
+          "$ref": "#/$defs/sha256",
+          "$comment": "Streaming Merkle root over each nonempty observation dispatchBarrierReceiptsRootSha256, thereby covering the primary request barrier and every bounded effect-dispatch barrier."
+        },
+        "cumulativeActiveEffectBarrierReceiptRootSha256": {
+          "$ref": "#/$defs/sha256",
+          "$comment": "Streaming Merkle root over each nonempty observation activeEffectBarrierReceiptsRootSha256."
+        },
+        "cumulativeActiveEffectCommitReceiptRootSha256": {
+          "$ref": "#/$defs/sha256",
+          "$comment": "Streaming Merkle root over each nonempty observation activeEffectCommitReceiptsRootSha256; native verification requires each observation's barrier and commit counts to match."
+        },
+        "cumulativeTerminalReceiptCount": {"$ref": "#/$defs/unsignedI64"},
+        "cumulativeTerminalReceiptRootSha256": {
+          "$ref": "#/$defs/sha256",
+          "$comment": "Streaming Merkle root over verified observation terminalReceiptsRootSha256 values using the authority-analysis terminal leaf/root domains."
+        },
+        "cumulativePublicationReceiptCount": {"$ref": "#/$defs/unsignedI64"},
+        "cumulativePublicationReceiptRootSha256": {
+          "$ref": "#/$defs/sha256",
+          "$comment": "Streaming Merkle root over verified observation publicationReceiptsRootSha256 values using the authority-analysis publication leaf/root domains."
+        },
+        "cumulativeSpillReceiptRootSha256": {"$ref": "#/$defs/sha256"},
+        "cumulativePersistenceReceiptRootSha256": {"$ref": "#/$defs/sha256"},
+        "cumulativeRetrievalProofRootSha256": {"$ref": "#/$defs/sha256"},
+        "cumulativeCompactionReceiptRootSha256": {"$ref": "#/$defs/sha256"},
+        "lastLedgerEventOrdinal": {"$ref": "#/$defs/nullablePositiveI64"},
+        "lastLedgerHeadSha256": {"$ref": "#/$defs/nullableSha256"},
+        "lastSpoolRootSha256": {"$ref": "#/$defs/nullableSha256"}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"observationCount": {"const": 0}},
+            "required": ["observationCount"]
+          },
+          "then": {
+            "$comment": "A sealed no-ingress range has explicit null heads, zero counters/work, and the native verifier requires every cumulative root to equal the normative empty Merkle root.",
+            "properties": {
+              "firstObservationSequence": {"type": "null"},
+              "lastObservationSequence": {"type": "null"},
+              "firstObservationSha256": {"type": "null"},
+              "lastObservationSha256": {"type": "null"},
+              "firstIngressSequence": {"type": "null"},
+              "lastIngressSequence": {"type": "null"},
+              "lastIngressEvidenceSha256": {"type": "null"},
+              "firstObservedAtUnixNanos": {"type": "null"},
+              "lastObservedAtUnixNanos": {"type": "null"},
+              "lastLedgerEventOrdinal": {"type": "null"},
+              "lastLedgerHeadSha256": {"type": "null"},
+              "lastSpoolRootSha256": {"type": "null"},
+              "ingressCount": {"const": 0},
+              "cumulativeTerminalReceiptCount": {"const": 0},
+              "cumulativePublicationReceiptCount": {"const": 0},
+              "verifiedEvidenceBytes": {"const": 0},
+              "verificationWorkUnits": {"const": 0}
+            }
+          },
+          "else": {
+            "properties": {
+              "firstObservationSequence": {"$ref": "#/$defs/positiveI64"},
+              "lastObservationSequence": {"$ref": "#/$defs/positiveI64"},
+              "firstObservationSha256": {"$ref": "#/$defs/sha256"},
+              "lastObservationSha256": {"$ref": "#/$defs/sha256"},
+              "firstIngressSequence": {"$ref": "#/$defs/positiveI64"},
+              "lastIngressSequence": {"$ref": "#/$defs/positiveI64"},
+              "lastIngressEvidenceSha256": {"$ref": "#/$defs/sha256"},
+              "firstObservedAtUnixNanos": {"$ref": "#/$defs/signedI64"},
+              "lastObservedAtUnixNanos": {"$ref": "#/$defs/signedI64"},
+              "lastLedgerEventOrdinal": {"$ref": "#/$defs/positiveI64"},
+              "lastLedgerHeadSha256": {"$ref": "#/$defs/sha256"},
+              "lastSpoolRootSha256": {"$ref": "#/$defs/sha256"},
+              "ingressCount": {"type": "integer", "minimum": 1},
+              "cumulativeTerminalReceiptCount": {"type": "integer", "minimum": 1},
+              "cumulativePublicationReceiptCount": {"type": "integer", "minimum": 1},
+              "verifiedEvidenceBytes": {"type": "integer", "minimum": 1},
+              "verificationWorkUnits": {"type": "integer", "minimum": 1}
+            }
+          }
+        }
+      ]
+    },
+    "heartbeatPayload": {
+      "type":"object",
+      "additionalProperties":false,
+      "required":["heartbeatId","assignmentSha256","assignmentPayloadSha256","assignmentRevision","runtimeIdentity","generationId","heartbeatSequence","previousHeartbeatSha256","ingressState","ingressRangeStartSequence","ingressRangePredecessorHeadSha256","lastIngressSequence","lastIngressEvidenceSha256","observedAtUnixNanos","issuedAtUnixNanos","expiresAtUnixNanos"],
+      "properties":{
+        "heartbeatId":{"$ref":"#/$defs/sha256"},
+        "assignmentSha256":{"$ref":"#/$defs/sha256"},
+        "assignmentPayloadSha256":{"$ref":"#/$defs/sha256"},
+        "assignmentRevision":{"$ref":"#/$defs/positiveI64"},
+        "runtimeIdentity":{"$ref":"policy-shadow-load-receipt.v1.schema.json#/$defs/runtimeIdentity"},
+        "generationId":{"$ref":"#/$defs/sha256"},
+        "heartbeatSequence":{"$ref":"#/$defs/positiveI64"},
+        "previousHeartbeatSha256":{"$ref":"#/$defs/sha256"},
+        "ingressState":{"enum":["no-ingress","observed"]},
+        "ingressRangeStartSequence":{"$ref":"#/$defs/positiveI64"},
+        "ingressRangePredecessorHeadSha256":{"$ref":"#/$defs/sha256"},
+        "lastIngressSequence":{"$ref":"#/$defs/nullablePositiveI64"},
+        "lastIngressEvidenceSha256":{"$ref":"#/$defs/nullableSha256"},
+        "observedAtUnixNanos":{"$ref":"#/$defs/signedI64"},
+        "issuedAtUnixNanos":{"$ref":"#/$defs/signedI64"},
+        "expiresAtUnixNanos":{"$ref":"#/$defs/signedI64"}
+      },
+      "allOf":[
+        {
+          "if":{"properties":{"ingressState":{"const":"no-ingress"}},"required":["ingressState"]},
+          "then":{
+            "properties":{
+              "lastIngressSequence":{"type":"null"},
+              "lastIngressEvidenceSha256":{"type":"null"}
+            }
+          }
+        },
+        {
+          "if":{"properties":{"ingressState":{"const":"observed"}},"required":["ingressState"]},
+          "then":{
+            "properties":{
+              "lastIngressSequence":{"$ref":"#/$defs/positiveI64"},
+              "lastIngressEvidenceSha256":{"$ref":"#/$defs/sha256"}
+            }
+          }
+        }
+      ],
+      "$comment":"No-ingress requires both nullable head fields to be explicit null. Observed requires both to be non-null and to identify the exact latest signed ingress envelope in the allocated range."
+    },
+    "heartbeat": {
+      "type":"object",
+      "additionalProperties":false,
+      "required":["apiVersion","kind","canonicalProfile","signatureDomain","payload","payloadSha256","signatureAlgorithm","signingKeyId","signingKeySpkiSha256","signature"],
+      "properties":{
+        "apiVersion":{"const":"serverware.policyShadowHeartbeat/v1"},
+        "kind":{"const":"PolicyShadowHeartbeat"},
+        "canonicalProfile":{"const":"serverware.canonicalJson/ascii-integer-v1"},
+        "signatureDomain":{"const":"serverware.policyShadowHeartbeat/v1"},
+        "payload":{"$ref":"#/$defs/heartbeatPayload"},
+        "payloadSha256":{"$ref":"#/$defs/sha256"},
+        "signatureAlgorithm":{"const":"Ed25519"},
+        "signingKeyId":{"$ref":"#/$defs/sha256"},
+        "signingKeySpkiSha256":{"$ref":"#/$defs/sha256"},
+        "signature":{"$ref":"policy-shadow-assignment.v1.schema.json#/$defs/ed25519Signature"}
+      }
+    },
+    "cumulativeHeartbeatRange": {
+      "type":"object",
+      "additionalProperties":false,
+      "required":["firstHeartbeatSequence","lastHeartbeatSequence","heartbeatCount","firstHeartbeatAtUnixNanos","lastHeartbeatAtUnixNanos","maximumObservedGapNanos","cumulativeHeartbeatRootSha256"],
+      "properties":{
+        "firstHeartbeatSequence":{"$ref":"#/$defs/positiveI64"},
+        "lastHeartbeatSequence":{"$ref":"#/$defs/positiveI64"},
+        "heartbeatCount":{"type":"integer","minimum":1,"maximum":65536},
+        "firstHeartbeatAtUnixNanos":{"$ref":"#/$defs/signedI64"},
+        "lastHeartbeatAtUnixNanos":{"$ref":"#/$defs/signedI64"},
+        "maximumObservedGapNanos":{"$ref":"#/$defs/unsignedI64"},
+        "cumulativeHeartbeatRootSha256":{"$ref":"#/$defs/sha256"}
+      },
+      "$comment":"Native verification authenticates the complete heartbeat chain, recomputes this range/root, and checks the load-to-first, every consecutive, and last-to-close gaps against the assignment maximum."
+    },
+    "generation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "generationId",
+        "generationEpoch",
+        "generationTombstoneEpoch",
+        "assignmentRevision",
+        "assignmentSha256",
+        "assignmentPayloadSha256",
+        "loadReceiptSha256",
+        "loadReceiptPayloadSha256",
+        "activePolicySha256",
+        "activePolicySequence",
+        "activeRollbackEpoch",
+        "activeCompiledSnapshotSha256",
+        "candidatePolicySha256",
+        "candidatePolicySequence",
+        "candidateRollbackEpoch",
+        "candidateCompiledSnapshotSha256",
+        "runtimeBootIdSha256",
+        "assignmentStartsAtUnixNanos",
+        "assignmentEndsAtUnixNanos",
+        "samplingBasisPoints",
+        "requestCommitmentKeyId",
+        "requestCommitmentKeyEpoch",
+        "requestFactsSchemaSha256",
+        "ingressRangeStartSequence",
+        "ingressRangePredecessorHeadSha256",
+        "observationIntervalSha256",
+        "responseValidationObligationsRootSha256"
+      ],
+      "properties": {
+        "generationId": {"$ref": "#/$defs/sha256"},
+        "generationEpoch": {"$ref": "#/$defs/positiveI64"},
+        "generationTombstoneEpoch": {"$ref": "#/$defs/positiveI64"},
+        "assignmentRevision": {"$ref": "#/$defs/positiveI64"},
+        "assignmentSha256": {"$ref": "#/$defs/sha256"},
+        "assignmentPayloadSha256": {"$ref": "#/$defs/sha256"},
+        "loadReceiptSha256": {"$ref": "#/$defs/sha256"},
+        "loadReceiptPayloadSha256": {"$ref": "#/$defs/sha256"},
+        "activePolicySha256": {"$ref": "#/$defs/sha256"},
+        "activePolicySequence": {"$ref": "#/$defs/positiveI64"},
+        "activeRollbackEpoch": {"$ref": "#/$defs/positiveI64"},
+        "activeCompiledSnapshotSha256": {"$ref": "#/$defs/sha256"},
+        "candidatePolicySha256": {"$ref": "#/$defs/sha256"},
+        "candidatePolicySequence": {"$ref": "#/$defs/positiveI64"},
+        "candidateRollbackEpoch": {"$ref": "#/$defs/positiveI64"},
+        "candidateCompiledSnapshotSha256": {"$ref": "#/$defs/sha256"},
+        "runtimeBootIdSha256": {"$ref": "#/$defs/sha256"},
+        "assignmentStartsAtUnixNanos": {"$ref": "#/$defs/signedI64"},
+        "assignmentEndsAtUnixNanos": {"$ref": "#/$defs/signedI64"},
+        "samplingBasisPoints": {"type":"integer","minimum":1,"maximum":10000},
+        "requestCommitmentKeyId": {"$ref": "#/$defs/sha256"},
+        "requestCommitmentKeyEpoch": {"$ref": "#/$defs/positiveI64"},
+        "requestFactsSchemaSha256": {"$ref": "#/$defs/sha256"},
+        "ingressRangeStartSequence": {"$ref": "#/$defs/positiveI64"},
+        "ingressRangePredecessorHeadSha256": {"$ref": "#/$defs/sha256"},
+        "observationIntervalSha256": {"$ref": "#/$defs/sha256"},
+        "responseValidationObligationsRootSha256": {"$ref": "#/$defs/sha256"}
+      },
+      "$comment": "Native verification derives every field from the verified assignment and load receipt, recomputes the single generationId, and rejects identities below the assignment tombstone floor."
+    },
+    "windowClosurePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "closureId",
+        "assignmentSha256",
+        "assignmentPayloadSha256",
+        "assignmentRevision",
+        "runtimeIdentity",
+        "windowEndsAtUnixNanos",
+        "ingressState",
+        "ingressRangeStartSequence",
+        "ingressRangePredecessorHeadSha256",
+        "lastIngressSequence",
+        "lastIngressEvidenceSha256",
+        "lastHeartbeatSequence",
+        "cumulativeHeartbeatRootSha256",
+        "closedAtUnixNanos",
+        "issuedAtUnixNanos",
+        "expiresAtUnixNanos"
+      ],
+      "properties": {
+        "closureId": {"$ref": "#/$defs/sha256"},
+        "assignmentSha256": {"$ref": "#/$defs/sha256"},
+        "assignmentPayloadSha256": {"$ref": "#/$defs/sha256"},
+        "assignmentRevision": {"$ref": "#/$defs/positiveI64"},
+        "runtimeIdentity": {
+          "$ref": "policy-shadow-load-receipt.v1.schema.json#/$defs/runtimeIdentity"
+        },
+        "windowEndsAtUnixNanos": {"$ref": "#/$defs/signedI64"},
+        "ingressState": {"enum":["no-ingress","observed"]},
+        "ingressRangeStartSequence": {"$ref":"#/$defs/positiveI64"},
+        "ingressRangePredecessorHeadSha256": {"$ref":"#/$defs/sha256"},
+        "lastIngressSequence": {"$ref": "#/$defs/nullablePositiveI64"},
+        "lastIngressEvidenceSha256": {"$ref":"#/$defs/nullableSha256"},
+        "lastHeartbeatSequence": {"$ref": "#/$defs/positiveI64"},
+        "cumulativeHeartbeatRootSha256": {"$ref": "#/$defs/sha256"},
+        "closedAtUnixNanos": {"$ref": "#/$defs/signedI64"},
+        "issuedAtUnixNanos": {"$ref": "#/$defs/signedI64"},
+        "expiresAtUnixNanos": {"$ref": "#/$defs/signedI64"}
+      },
+      "allOf": [
+        {
+          "if": {"properties":{"ingressState":{"const":"no-ingress"}},"required":["ingressState"]},
+          "then": {
+            "properties": {
+              "lastIngressSequence": {"type":"null"},
+              "lastIngressEvidenceSha256": {"type":"null"}
+            }
+          }
+        },
+        {
+          "if": {"properties":{"ingressState":{"const":"observed"}},"required":["ingressState"]},
+          "then": {
+            "properties": {
+              "lastIngressSequence": {"$ref":"#/$defs/positiveI64"},
+              "lastIngressEvidenceSha256": {"$ref":"#/$defs/sha256"}
+            }
+          }
+        }
+      ],
+      "$comment": "No-ingress requires both nullable head fields to be explicit null. Observed requires both to be non-null and to identify the exact latest signed ingress envelope in the allocated range."
+    },
+    "windowClosure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "kind",
+        "canonicalProfile",
+        "signatureDomain",
+        "payload",
+        "payloadSha256",
+        "signatureAlgorithm",
+        "signingKeyId",
+        "signingKeySpkiSha256",
+        "signature"
+      ],
+      "properties": {
+        "apiVersion": {"const": "serverware.policyShadowWindowClosure/v1"},
+        "kind": {"const": "PolicyShadowWindowClosure"},
+        "canonicalProfile": {"const": "serverware.canonicalJson/ascii-integer-v1"},
+        "signatureDomain": {"const": "serverware.policyShadowWindowClosure/v1"},
+        "payload": {"$ref": "#/$defs/windowClosurePayload"},
+        "payloadSha256": {"$ref": "#/$defs/sha256"},
+        "signatureAlgorithm": {"const": "Ed25519"},
+        "signingKeyId": {"$ref": "#/$defs/sha256"},
+        "signingKeySpkiSha256": {"$ref": "#/$defs/sha256"},
+        "signature": {
+          "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/ed25519Signature"
+        }
+      }
+    },
+    "openSeal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state"],
+      "properties": {"state": {"const": "open"}}
+    },
+    "sealedSeal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "sealedAtUnixNanos",
+        "windowClosureSha256",
+        "windowClosure",
+        "sealRootSha256"
+      ],
+      "properties": {
+        "state": {"const": "sealed"},
+        "sealedAtUnixNanos": {"$ref": "#/$defs/signedI64"},
+        "windowClosureSha256": {"$ref": "#/$defs/sha256"},
+        "windowClosure": {"$ref": "#/$defs/windowClosure"},
+        "sealRootSha256": {
+          "$ref": "#/$defs/sha256",
+          "$comment": "Native verification recomputes the domain-separated seal over observation, ingress, active-decision, principal-authority, route-authority, terminal-receipt, publication-receipt, and heartbeat roots plus the verified window-closure digest and sealed time."
+        }
+      }
+    },
+    "seal": {
+      "oneOf": [
+        {"$ref": "#/$defs/openSeal"},
+        {"$ref": "#/$defs/sealedSeal"}
+      ]
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "checkpointId",
+        "assignmentSha256",
+        "assignmentPayloadSha256",
+        "assignmentRevision",
+        "authorityKeyIndependenceSha256",
+        "policyAuthorityAnalysisSha256",
+        "policyAuthorityAnalysisPayloadSha256",
+        "custodyReceiptEvidenceRequirementsSha256",
+        "loadReceiptSha256",
+        "loadReceiptPayloadSha256",
+        "canaryId",
+        "fleetId",
+        "fleetMembershipRevision",
+        "policyIdentity",
+        "runtimeIdentity",
+        "generation",
+        "checkpointSequence",
+        "previousCheckpointSha256",
+        "previousCumulativeObservationRootSha256",
+        "previousCumulativeIngressRootSha256",
+        "previousCumulativeActiveDecisionRootSha256",
+        "previousCumulativeCustodyEvidenceRootSha256",
+        "previousCumulativeTerminalReceiptRootSha256",
+        "previousCumulativePublicationReceiptRootSha256",
+        "publicationReconciliationReceiptSha256",
+        "publicationRevision",
+        "createdAtUnixNanos",
+        "cumulativeRange",
+        "cumulativeHeartbeats",
+        "cumulativeCounters",
+        "seal",
+        "issuedAtUnixNanos",
+        "expiresAtUnixNanos"
+      ],
+      "properties": {
+        "checkpointId": {"$ref": "#/$defs/sha256"},
+        "assignmentSha256": {"$ref": "#/$defs/sha256"},
+        "assignmentPayloadSha256": {"$ref": "#/$defs/sha256"},
+        "assignmentRevision": {"$ref": "#/$defs/positiveI64"},
+        "authorityKeyIndependenceSha256": {"$ref": "#/$defs/sha256"},
+        "policyAuthorityAnalysisSha256": {"$ref": "#/$defs/sha256"},
+        "policyAuthorityAnalysisPayloadSha256": {"$ref": "#/$defs/sha256"},
+        "custodyReceiptEvidenceRequirementsSha256": {"$ref": "#/$defs/sha256"},
+        "loadReceiptSha256": {"$ref": "#/$defs/sha256"},
+        "loadReceiptPayloadSha256": {"$ref": "#/$defs/sha256"},
+        "canaryId": {"$ref": "#/$defs/sha256"},
+        "fleetId": {"$ref": "#/$defs/sha256"},
+        "fleetMembershipRevision": {"$ref": "#/$defs/positiveI64"},
+        "policyIdentity": {
+          "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/policyIdentity"
+        },
+        "runtimeIdentity": {
+          "$ref": "policy-shadow-load-receipt.v1.schema.json#/$defs/runtimeIdentity"
+        },
+        "generation": {"$ref": "#/$defs/generation"},
+        "checkpointSequence": {"$ref": "#/$defs/positiveI64"},
+        "previousCheckpointSha256": {
+          "$ref": "#/$defs/sha256",
+          "$comment": "Sequence one anchors to generationId; later checkpoints bind the immediately preceding verified checkpoint envelope digest. The crate-private continuity verifier rejects forks and tombstoned generation resurrection."
+        },
+        "previousCumulativeObservationRootSha256": {"$ref": "#/$defs/sha256"},
+        "previousCumulativeIngressRootSha256": {"$ref": "#/$defs/sha256"},
+        "previousCumulativeActiveDecisionRootSha256": {"$ref": "#/$defs/sha256"},
+        "previousCumulativeCustodyEvidenceRootSha256": {"$ref": "#/$defs/sha256"},
+        "previousCumulativeTerminalReceiptRootSha256": {"$ref": "#/$defs/sha256"},
+        "previousCumulativePublicationReceiptRootSha256": {"$ref": "#/$defs/sha256"},
+        "publicationReconciliationReceiptSha256": {"$ref": "#/$defs/sha256"},
+        "publicationRevision": {"$ref": "#/$defs/positiveI64"},
+        "createdAtUnixNanos": {"$ref": "#/$defs/signedI64"},
+        "cumulativeRange": {"$ref": "#/$defs/cumulativeRange"},
+        "cumulativeHeartbeats": {"$ref": "#/$defs/cumulativeHeartbeatRange"},
+        "cumulativeCounters": {"$ref": "#/$defs/cumulativeCounters"},
+        "seal": {"$ref": "#/$defs/seal"},
+        "issuedAtUnixNanos": {"$ref": "#/$defs/signedI64"},
+        "expiresAtUnixNanos": {"$ref": "#/$defs/signedI64"}
+      }
+    }
+  }
+}

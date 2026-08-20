@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/policy-authority-portal-package-import-ack.v1.schema.json",
+  "title": "Serverware Policy Authority Portal Package Import Ack v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "ok",
+    "apiVersion",
+    "requestId",
+    "purpose",
+    "phaseState",
+    "requestClaimAuditEventHash",
+    "requestPayloadDigest",
+    "packageDigest",
+    "artifactEnvelopeDigest",
+    "assignmentEnvelopeDigest",
+    "loadReceiptEnvelopeDigest",
+    "runtimeAttestationHandoffDigest",
+    "predecessorPolicyHash",
+    "generationId",
+    "generationPublicationEnvelopeDigest",
+    "portalPackage"
+  ],
+  "properties": {
+    "ok": {"const": true},
+    "apiVersion": {
+      "const": "serverware.policyAuthorityPortalPackageImportAck/v1"
+    },
+    "requestId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "purpose": {"enum": ["handoff", "decision-gate-activation", "authority-finalization", "abort"]},
+    "phaseState": {"enum": ["executable", "executable-with-durable-external-evidence"]},
+    "requestClaimAuditEventHash": {"$ref": "#/$defs/sha256"},
+    "requestPayloadDigest": {"$ref": "#/$defs/sha256"},
+    "packageDigest": {"$ref": "#/$defs/sha256"},
+    "artifactEnvelopeDigest": {"$ref": "#/$defs/sha256"},
+    "assignmentEnvelopeDigest": {"$ref": "#/$defs/sha256"},
+    "loadReceiptEnvelopeDigest": {"$ref": "#/$defs/sha256"},
+    "runtimeAttestationHandoffDigest": {"$ref": "#/$defs/sha256"},
+    "predecessorPolicyHash": {"$ref": "#/$defs/sha256"},
+    "generationId": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]},
+    "generationPublicationEnvelopeDigest": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]},
+    "portalPackage": {
+      "$ref": "policy-authority-portal-package.v1.schema.json"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  }
+}

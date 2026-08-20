@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/policy-shadow-generation-activation-response.v1.schema.json",
+  "title": "Serverware Policy Shadow Generation Activation Response v1",
+  "$comment": "Schema validation is only structural. Admission also requires byte equality with the previously native-verified generation publication, independent Ed25519 verification of the activation receipt, and exact cross-binding of every nested digest and time bound.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "status", "requestId", "replayId", "requestSha256", "generationId", "generationPublicationEnvelope", "generationPublicationEnvelopeDigest", "activationPublicationEnvelope", "activationPublicationEnvelopeDigest", "runtimeAttestationVerifierEnvelope", "runtimeAttestationVerifierEnvelopeDigest", "trustedNowUnixNanos", "expiresAtUnixNanos"],
+  "properties": {
+    "apiVersion": {"const": "serverware.policyShadowGenerationActivationResponse/v1"},
+    "status": {"const": "published"},
+    "requestId": {"$ref": "#/$defs/uuidV4"},
+    "replayId": {"type": "string", "pattern": "^replay:[0-9a-f]{64}$"},
+    "requestSha256": {"$ref": "#/$defs/sha256"},
+    "generationId": {"$ref": "#/$defs/sha256"},
+    "generationPublicationEnvelope": {"$ref": "#/$defs/generationEnvelope"},
+    "generationPublicationEnvelopeDigest": {"$ref": "#/$defs/sha256"},
+    "activationPublicationEnvelope": {"$ref": "#/$defs/activationReceipt"},
+    "activationPublicationEnvelopeDigest": {"$ref": "#/$defs/sha256"},
+    "runtimeAttestationVerifierEnvelope": {"$ref": "policy-shadow-generation-activation-request.v1.schema.json#/$defs/runtimeVerification"},
+    "runtimeAttestationVerifierEnvelopeDigest": {"$ref": "#/$defs/sha256"},
+    "trustedNowUnixNanos": {"$ref": "#/$defs/positiveI64"},
+    "expiresAtUnixNanos": {"$ref": "#/$defs/positiveI64"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "uuidV4": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},
+    "positiveI64": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+    "generationEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["apiVersion", "kind", "canonicalProfile", "signatureDomain", "payload", "payloadSha256", "signatureAlgorithm", "signingKeyId", "signingKeySpkiSha256", "signature"],
+      "properties": {
+        "apiVersion": {"const": "serverware.policyShadowGenerationPublication/v2"},
+        "kind": {"const": "PolicyShadowGenerationPublication"},
+        "canonicalProfile": {"const": "serverware.canonicalJson/ascii-integer-v1"},
+        "signatureDomain": {"const": "serverware.policyShadowGenerationPublication/v2"},
+        "payload": {"type": "object", "minProperties": 1, "maxProperties": 64},
+        "payloadSha256": {"$ref": "#/$defs/sha256"},
+        "signatureAlgorithm": {"const": "Ed25519"},
+        "signingKeyId": {"$ref": "#/$defs/sha256"},
+        "signingKeySpkiSha256": {"$ref": "#/$defs/sha256"},
+        "signature": {"type": "string", "pattern": "^[A-Za-z0-9_-]{86}$"}
+      }
+    },
+    "activationReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["assignmentSha256", "assignmentPayloadSha256", "assignmentRevision", "readinessCoreSha256", "authorityKeyIndependenceSha256", "transactionSha256", "replacedPolicySha256", "replacedPolicySequence", "replacedRollbackEpoch", "publishedPolicySha256", "publishedPolicySequence", "publishedRollbackEpoch", "replacedPublicationRevision", "publishedPublicationRevision", "trustedObservedAtUnixNanos", "trustedTimeCheckpointSha256", "persistenceReceiptSha256", "retrievalIdSha256", "retrievalProofSha256", "signingKeyId", "signingKeySpkiSha256", "signature", "signedReceiptSha256"],
+      "properties": {
+        "assignmentSha256": {"$ref": "#/$defs/sha256"}, "assignmentPayloadSha256": {"$ref": "#/$defs/sha256"}, "assignmentRevision": {"$ref": "#/$defs/positiveI64"},
+        "readinessCoreSha256": {"$ref": "#/$defs/sha256"}, "authorityKeyIndependenceSha256": {"$ref": "#/$defs/sha256"}, "transactionSha256": {"$ref": "#/$defs/sha256"},
+        "replacedPolicySha256": {"$ref": "#/$defs/sha256"}, "replacedPolicySequence": {"$ref": "#/$defs/positiveI64"}, "replacedRollbackEpoch": {"$ref": "#/$defs/positiveI64"},
+        "publishedPolicySha256": {"$ref": "#/$defs/sha256"}, "publishedPolicySequence": {"$ref": "#/$defs/positiveI64"}, "publishedRollbackEpoch": {"$ref": "#/$defs/positiveI64"},
+        "replacedPublicationRevision": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807}, "publishedPublicationRevision": {"$ref": "#/$defs/positiveI64"},
+        "trustedObservedAtUnixNanos": {"$ref": "#/$defs/positiveI64"}, "trustedTimeCheckpointSha256": {"$ref": "#/$defs/sha256"},
+        "persistenceReceiptSha256": {"$ref": "#/$defs/sha256"}, "retrievalIdSha256": {"$ref": "#/$defs/sha256"}, "retrievalProofSha256": {"$ref": "#/$defs/sha256"},
+        "signingKeyId": {"$ref": "#/$defs/sha256"}, "signingKeySpkiSha256": {"$ref": "#/$defs/sha256"}, "signature": {"type": "string", "pattern": "^[A-Za-z0-9_-]{86}$"}, "signedReceiptSha256": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  }
+}

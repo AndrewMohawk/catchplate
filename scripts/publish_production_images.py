@@ -59,6 +59,8 @@ def load_build(path: Path) -> dict[str, Any]:
             "apiVersion",
             "kind",
             "ok",
+            "identity_mode",
+            "production_release_eligible",
             "generated_at_unix",
             "metadata",
             "images",
@@ -76,6 +78,11 @@ def load_build(path: Path) -> dict[str, Any]:
         )
     if parsed.get("ok") is not True:
         raise ValueError(f"production image build artifact is not ok: {parsed}")
+    if (
+        parsed.get("identity_mode") != build_production_images.serverware_source_tree.PRODUCTION_IDENTITY_MODE
+        or parsed.get("production_release_eligible") is not True
+    ):
+        raise ValueError("production image build artifact is not bound to a clean production commit")
     generated_at = parsed.get("generated_at_unix")
     if type(generated_at) is not int or generated_at < 0:
         raise ValueError("production image build generated_at_unix must be a non-negative integer")
@@ -87,11 +94,41 @@ def load_build(path: Path) -> dict[str, Any]:
             "created",
             "source_date_epoch",
             "source_tree_digest",
+            "source_archive_digest",
+            "source_archive_path",
+            "source_manifest_digest",
+            "source_manifest_path",
+            "source_file_list_digest",
+            "source_file_list_path",
+            "source_file_hashes_digest",
+            "source_file_hashes_path",
+            "source_file_modes_digest",
+            "source_file_modes_path",
+            "source_identity_mode",
+            "production_release_eligible",
+            "image_title_suffix",
+            "source_contract",
             *build_production_images.LAUNCH_AUTHORITY_METADATA_FIELDS,
         },
         "production image build metadata",
     )
     validate_digest(metadata.get("source_tree_digest"), "production image build metadata source_tree_digest")
+    for field in (
+        "source_archive_digest",
+        "source_manifest_digest",
+        "source_file_list_digest",
+        "source_file_hashes_digest",
+        "source_file_modes_digest",
+    ):
+        validate_digest(metadata.get(field), f"production image build metadata {field}")
+    if (
+        metadata.get("source_identity_mode")
+        != build_production_images.serverware_source_tree.PRODUCTION_IDENTITY_MODE
+        or metadata.get("production_release_eligible") is not True
+        or metadata.get("image_title_suffix") != "production"
+        or not isinstance(metadata.get("source_contract"), dict)
+    ):
+        raise ValueError("production image build metadata does not carry a production source contract")
     expected_authority = launch_authority_binding(metadata, "production image build metadata")
     no_shell = require_exact_fields(
         parsed.get("no_shell"),

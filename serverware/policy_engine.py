@@ -81,6 +81,14 @@ _RELEASE_AUTHORIZATION_ID_MAX_BYTES = 256
 _REQUEST_HEADER_NAME_MAX_BYTES = 128
 _REQUEST_HEADER_VALUE_MAX_BYTES = 16 * 1024
 _REQUEST_HEADER_NAME_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
+_COOKIE_VALUE_RE = re.compile(r"^[\x21\x23-\x2B\x2D-\x3A\x3C-\x5B\x5D-\x7E]+$")
+_CREDENTIAL_INJECTION_FIELDS = {
+    "bearer": frozenset({"type", "header", "field", "prefix"}),
+    "basic": frozenset({"type", "header", "field", "username"}),
+    "header": frozenset({"type", "name", "field", "prefix"}),
+    "query": frozenset({"type", "name", "field"}),
+    "cookie": frozenset({"type", "name", "field"}),
+}
 _MAX_REQUEST_QUERY_FIELDS = 256
 _QUERY_HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
 _UINT64_MAX = (1 << 64) - 1
@@ -822,8 +830,11 @@ def _credential_injection_collision(
 ) -> PolicyDecision | None:
     if credential_policy is None:
         return None
-    target = credential_injection_target(credential_policy.injection)
-    if target is None:
+    try:
+        _, target = _validated_credential_injection_contract(
+            credential_policy.injection
+        )
+    except ValueError:
         return PolicyDecision(
             False,
             "credential injection target is invalid",
@@ -1466,7 +1477,7 @@ def _canonical_oauth_scopes(raw_scopes: Any, *, field_name: str) -> frozenset[st
         ):
             raise ValueError(f"{field_name} contains an invalid scope")
         scopes.append(scope)
-    if len(scopes) > 30 or any(len(scope) > 200 for scope in scopes):
+    if len(scopes) > 64 or any(len(scope.encode("utf-8")) > 512 for scope in scopes):
         raise ValueError(f"{field_name} is too large")
     if len(scopes) != len(set(scopes)):
         raise ValueError(f"{field_name} contains duplicate scopes")
@@ -1573,9 +1584,6 @@ def _credential_policy_binding_decision(
             409,
             {"error": "credential_policy_binding_mismatch", "binding": "provider"},
         )
-    expected_kind = (
-        "oauth2" if credential_policy.kind == "oauth2" else credential.get("kind")
-    )
     if credential_policy.kind == "oauth2" and credential.get("kind") != "oauth2":
         return PolicyDecision(
             False,
@@ -1594,9 +1602,8 @@ def _credential_policy_binding_decision(
         )
     if (
         binding.get("credentialType") != credential_policy.kind
-        or binding.get("provider") != policy_provider
-        or credential_policy.provider_subject
-        not in set(binding.get("subjects") or [])
+        or normalized_credential_provider(binding.get("provider")) != policy_provider
+        or binding.get("subjects") != [credential_policy.provider_subject]
     ):
         return PolicyDecision(
             False,
@@ -1614,7 +1621,6 @@ def _credential_policy_binding_decision(
                 metadata,
                 ("oauth_client_id", "client_id", "x_app_id", "app_id"),
             )
-            stored_scopes_from_aliases = _credential_metadata_scopes(metadata)
         except ValueError as exc:
             return PolicyDecision(
                 False,
@@ -1623,6 +1629,25 @@ def _credential_policy_binding_decision(
                 {
                     "error": "credential_policy_binding_mismatch",
                     "binding": "credentialAliases",
+                },
+            )
+        try:
+            stored_scopes_from_aliases = _credential_metadata_scopes(metadata)
+        except ValueError as exc:
+            contradictory = "contradictory" in str(exc)
+            return PolicyDecision(
+                False,
+                str(exc),
+                409 if contradictory else 503,
+                {
+                    "error": (
+                        "credential_policy_binding_mismatch"
+                        if contradictory
+                        else "credential_policy_binding_invalid"
+                    ),
+                    "binding": (
+                        "credentialAliases" if contradictory else "scope"
+                    ),
                 },
             )
         try:
@@ -1682,8 +1707,11 @@ def _credential_policy_binding_decision(
             or not hmac.compare_digest(
                 stored_client_id, credential_policy.oauth_client_id
             )
-            or credential_policy.oauth_client_id
-            not in set(binding.get("clientIds") or [])
+            or binding.get("clientIds") != [stored_client_id]
+            or (
+                route.adapter_type == "x.v2"
+                and route.adapter_config.get("appIds") != [stored_client_id]
+            )
         ):
             return PolicyDecision(
                 False,
@@ -1715,9 +1743,35 @@ def _credential_policy_binding_decision(
                     "binding": "requiredScopes",
                 },
             )
+        oauth_injection = credential_policy.injection
+        if (
+            not isinstance(oauth_injection, dict)
+            or oauth_injection.get("type") != "bearer"
+            or str(oauth_injection.get("header") or "Authorization").lower()
+            != "authorization"
+            or oauth_injection.get("field") != "access_token"
+            or oauth_injection.get("prefix", "Bearer ") != "Bearer "
+            or (
+                metadata.get("injection_field") is not None
+                and metadata.get("injection_field") != "access_token"
+            )
+            or (
+                metadata.get("injection_prefix") is not None
+                and metadata.get("injection_prefix") != "Bearer "
+            )
+        ):
+            return PolicyDecision(
+                False,
+                "managed OAuth injection does not match the signed policy",
+                409,
+                {
+                    "error": "credential_policy_binding_mismatch",
+                    "binding": "injection",
+                },
+            )
         return None
 
-    if credential_policy.kind != "static" or expected_kind == "oauth2":
+    if credential_policy.kind != "static" or credential.get("kind") == "oauth2":
         return PolicyDecision(
             False,
             "stored credential type does not match the active signed policy",
@@ -1742,6 +1796,96 @@ def _credential_policy_binding_decision(
             {
                 "error": "credential_policy_binding_mismatch",
                 "binding": "credentialAliases",
+            },
+        )
+    try:
+        stored_scopes = _credential_metadata_scopes(metadata)
+    except ValueError as exc:
+        contradictory = "contradictory" in str(exc)
+        return PolicyDecision(
+            False,
+            str(exc),
+            409 if contradictory else 503,
+            {
+                "error": (
+                    "credential_policy_binding_mismatch"
+                    if contradictory
+                    else "credential_policy_binding_invalid"
+                ),
+                "binding": (
+                    "credentialAliases" if contradictory else "scope"
+                ),
+            },
+        )
+    policy_scopes = frozenset(credential_policy.scopes)
+    if stored_scopes != policy_scopes:
+        return PolicyDecision(
+            False,
+            "stored credential scopes do not exactly match the active signed policy",
+            409,
+            {
+                "error": "credential_policy_binding_mismatch",
+                "binding": "scope",
+            },
+        )
+    injection = credential_policy.injection
+    injection_type = injection.get("type") if isinstance(injection, dict) else None
+    if credential.get("kind") != injection_type:
+        return PolicyDecision(
+            False,
+            "stored credential kind does not match the signed injection type",
+            409,
+            {
+                "error": "credential_policy_binding_mismatch",
+                "binding": "injectionType",
+            },
+        )
+    if injection_type in {"header", "query", "cookie"} and injection.get(
+        "name"
+    ) != metadata.get("injection_name"):
+        return PolicyDecision(
+            False,
+            "stored credential injection name does not match the signed policy",
+            409,
+            {
+                "error": "credential_policy_binding_mismatch",
+                "binding": "injectionName",
+            },
+        )
+    if injection_type == "basic" and injection.get("username") != metadata.get(
+        "username"
+    ):
+        return PolicyDecision(
+            False,
+            "stored credential Basic username does not match the signed policy",
+            409,
+            {
+                "error": "credential_policy_binding_mismatch",
+                "binding": "injectionUsername",
+            },
+        )
+    if metadata.get("injection_field") is not None and injection.get(
+        "field"
+    ) != metadata.get("injection_field"):
+        return PolicyDecision(
+            False,
+            "stored credential injection field does not match the signed policy",
+            409,
+            {
+                "error": "credential_policy_binding_mismatch",
+                "binding": "injectionField",
+            },
+        )
+    if metadata.get("injection_prefix") is not None and injection.get(
+        "prefix"
+    ) != metadata.get("injection_prefix"):
+        return PolicyDecision(
+            False,
+            "stored credential injection prefix does not match the signed policy",
+            409,
+            {
+                "error": "credential_policy_binding_mismatch",
+                "binding": "injectionPrefix",
             },
         )
     if (
@@ -1797,9 +1941,111 @@ def _secret_for_injection(secret: str, injection: dict[str, Any]) -> str:
     return value
 
 
+def _validated_credential_injection_contract(
+    raw: Any,
+) -> tuple[str, tuple[str, str]]:
+    if not isinstance(raw, dict):
+        raise ValueError("credential injection must be an object")
+    injection_type = raw.get("type")
+    allowed_fields = _CREDENTIAL_INJECTION_FIELDS.get(injection_type)
+    if allowed_fields is None or set(raw) - allowed_fields:
+        raise ValueError("credential injection type or fields are invalid")
+
+    field = raw.get("field")
+    if field is not None and (
+        not isinstance(field, str)
+        or len(field) > 256
+        or SECRET_FIELD_PATH_RE.fullmatch(field) is None
+    ):
+        raise ValueError("credential injection field is invalid")
+
+    prefix = raw.get("prefix")
+    if prefix is not None and (
+        not isinstance(prefix, str)
+        or len(prefix.encode("utf-8")) > 128
+        or any(ord(character) < 32 or ord(character) == 127 for character in prefix)
+    ):
+        raise ValueError("credential injection prefix is invalid")
+
+    if injection_type == "basic":
+        username = raw.get("username")
+        if (
+            not isinstance(username, str)
+            or not username
+            or len(username.encode("utf-8")) > 256
+            or any(
+                character == ":"
+                or character.isspace()
+                or ord(character) < 32
+                or ord(character) == 127
+                for character in username
+            )
+        ):
+            raise ValueError("Basic credential username is invalid")
+
+    if injection_type in {"header", "query", "cookie"}:
+        name = raw.get("name")
+        if (
+            not isinstance(name, str)
+            or len(name.encode("ascii", errors="ignore")) != len(name)
+            or not 1 <= len(name) <= _REQUEST_HEADER_NAME_MAX_BYTES
+            or _REQUEST_HEADER_NAME_RE.fullmatch(name) is None
+        ):
+            raise ValueError("credential injection target name is invalid")
+
+    target = credential_injection_target(raw)
+    if target is None:
+        raise ValueError("credential injection has no enforceable target")
+    location, target_name = target
+    if location == "header":
+        if (
+            not target_name
+            or len(target_name.encode("ascii", errors="ignore")) != len(target_name)
+            or len(target_name) > _REQUEST_HEADER_NAME_MAX_BYTES
+            or _REQUEST_HEADER_NAME_RE.fullmatch(target_name) is None
+        ):
+            raise ValueError("credential injection header is invalid")
+        reserved_target_is_canonical = (
+            injection_type in {"bearer", "basic"}
+            and target_name == "authorization"
+        ) or (injection_type == "cookie" and target_name == "cookie")
+        if (
+            (
+                target_name in STANDARD_HOP_BY_HOP_HEADERS
+                or target_name in {"host", "content-length", "content-encoding"}
+                or target_name in SERVERWARE_SERVICE_AUTH_HEADERS
+                or target_name == RESPONSE_PROOF_NONCE_HEADER
+                or target_name == "proxy-authorization"
+                or (target_name == "cookie" and injection_type != "cookie")
+                or (target_name == "authorization" and injection_type == "header")
+                or is_serverware_internal_header(target_name)
+            )
+            and not reserved_target_is_canonical
+        ):
+            raise ValueError("credential injection header is reserved")
+    elif location != "query":
+        raise ValueError("credential injection location is invalid")
+    return str(injection_type), target
+
+
+def _bounded_credential_component(value: str, *, context: str) -> str:
+    if not value or len(value.encode("utf-8")) > _REQUEST_HEADER_VALUE_MAX_BYTES:
+        raise ValueError(f"{context} credential value is empty or too large")
+    if any(ord(character) < 32 or ord(character) == 127 for character in value):
+        raise ValueError(f"{context} credential value contains control characters")
+    return value
+
+
+def _bounded_credential_header_value(value: str, *, context: str) -> str:
+    _bounded_credential_component(value, context=context)
+    if value != value.strip(" "):
+        raise ValueError(f"{context} credential header has outer whitespace")
+    return value
+
+
 def _inject_credential(flow: http.HTTPFlow, credential_policy: CredentialPolicy, credential: dict[str, Any]) -> str:
-    injection = credential_policy.injection or {"type": credential.get("kind", "bearer")}
-    injection_type = injection.get("type", credential.get("kind", "bearer"))
+    injection = credential_policy.injection
+    injection_type, _ = _validated_credential_injection_contract(injection)
     if credential.get("kind") == "oauth2" and (
         injection_type != "bearer"
         or str(injection.get("header") or "Authorization").lower() != "authorization"
@@ -1808,24 +2054,35 @@ def _inject_credential(flow: http.HTTPFlow, credential_policy: CredentialPolicy,
     ):
         raise ValueError("managed OAuth credential injection is not canonical access-token-only bearer")
     secret = _secret_for_injection(str(credential["secret"]), injection)
+    if not secret or len(secret.encode("utf-8")) > _REQUEST_HEADER_VALUE_MAX_BYTES:
+        raise ValueError("credential value is empty or too large")
     guard = _ResponseCredentialGuard()
     guard.add_text_encodings(secret)
     installed = False
     try:
         if injection_type == "bearer":
             header = injection.get("header", "Authorization")
-            value = f"{injection.get('prefix', 'Bearer ')}{secret}"
+            _bounded_credential_header_value(secret, context="bearer")
+            value = _bounded_credential_header_value(
+                f"{injection.get('prefix', 'Bearer ')}{secret}",
+                context="bearer",
+            )
             flow.request.headers[header] = value
             guard.add_text_encodings(value)
             reason = f"injected bearer into {header}"
         elif injection_type == "header":
             name = injection.get("name", "X-Api-Key")
-            value = f"{injection.get('prefix', '')}{secret}"
+            _bounded_credential_header_value(secret, context="header")
+            value = _bounded_credential_header_value(
+                f"{injection.get('prefix', '')}{secret}",
+                context="header",
+            )
             flow.request.headers[name] = value
             guard.add_text_encodings(value)
             reason = f"injected header {name}"
         elif injection_type == "query":
             name = injection.get("name", "access_token")
+            _bounded_credential_component(secret, context="query")
             query = _strict_query_pairs(
                 validated_request_urlsplit(flow.request.pretty_url).query
             )
@@ -1837,25 +2094,26 @@ def _inject_credential(flow: http.HTTPFlow, credential_policy: CredentialPolicy,
             reason = "injected query credential"
         elif injection_type == "cookie":
             name = injection.get("name", "serverware_token")
+            _bounded_credential_component(secret, context="cookie")
+            if _COOKIE_VALUE_RE.fullmatch(secret) is None:
+                raise ValueError("cookie credential is not a canonical cookie-octet value")
             current = flow.request.headers.get("Cookie", "")
             flow.request.headers["Cookie"] = f"{current}{'; ' if current else ''}{name}={secret}"
             guard.add_text_encodings(f"{name}={secret}")
             reason = f"injected cookie {name}"
         elif injection_type == "basic":
-            username = injection.get("username") or credential.get("metadata", {}).get("username")
-            password = secret
-            try:
-                decoded = strict_json_loads(secret)
-                username = username or decoded.get("username")
-                password = decoded.get("password", password)
-            except Exception:
-                pass
-            if not username:
-                raise ValueError("basic credential missing username")
-            password_text = str(password)
+            username = injection["username"]
+            password_text = secret
+            _bounded_credential_component(
+                password_text,
+                context="Basic password",
+            )
             raw = f"{username}:{password_text}"
             token = base64.b64encode(raw.encode("utf-8")).decode("ascii")
-            value = f"Basic {token}"
+            value = _bounded_credential_header_value(
+                f"Basic {token}",
+                context="Basic",
+            )
             flow.request.headers[injection.get("header", "Authorization")] = value
             guard.add_text_encodings(password_text)
             guard.add_text_encodings(raw)
@@ -2462,13 +2720,6 @@ def _legacy_mitm_route_admission(
     flow: http.HTTPFlow,
     route: RoutePolicy,
 ) -> PolicyDecision | None:
-    if route.credential_ref and route.resolved_cidrs is None:
-        return PolicyDecision(
-            False,
-            "credential-bearing routes require explicit signed provider CIDRs",
-            503,
-            {"error": "provider_resolved_cidrs_required"},
-        )
     if flow.metadata.get(LEGACY_MITM_TRANSPORT_METADATA_KEY) is not True:
         return None
     if route.credential_ref:
@@ -3300,12 +3551,12 @@ def evaluate_request(flow: http.HTTPFlow) -> RequestEvaluation:
         )
     if (
         not atomic_mode
-        and credential_route_controlled
+        and (credential_route_controlled or jit_required)
     ):
         return block_after_reserve(
             PolicyDecision(
                 False,
-                "controlled credential authorization requires the atomic release authority",
+                "controlled authorization requires the atomic release authority",
                 503,
                 {"error": "atomic_release_authorization_required"},
             )
@@ -3668,9 +3919,10 @@ def evaluate_request(flow: http.HTTPFlow) -> RequestEvaluation:
                         "operation": operation_fields,
                         "body_sha256": canonical_request["request"]["body_sha256"],
                     },
-                    pending_ttl_seconds=int(jit.get("pendingTtlSeconds", 300)),
+                    pending_ttl_seconds=300,
                     grant_ttl_seconds=int(jit.get("ttlSeconds", 30)),
                     grant_max_uses=int(jit.get("maxUses", 1)),
+                    **db.jit_approver_policy_arguments(jit),
                 )
             except Exception:
                 return block_after_reserve(

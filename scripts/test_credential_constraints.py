@@ -9736,6 +9736,36 @@ def source_only_policy_model_fixtures(validate_schema: bool) -> None:
         validate_schema=validate_schema,
     )
 
+    expanded_oauth_clients = copy.deepcopy(base)
+    expanded_gmail_route = next(
+        route
+        for route in expanded_oauth_clients["routes"]
+        if route["id"] == "demo.gmail.recent"
+    )
+    expanded_gmail_route["adapter"]["config"]["credentialBinding"][
+        "clientIds"
+    ].append("other-client")
+    assert_policy_rejected(
+        expanded_oauth_clients,
+        "compiler accepted an extra OAuth client in an exact route binding",
+        validate_schema=validate_schema,
+    )
+
+    expanded_credential_subjects = copy.deepcopy(base)
+    expanded_subject_route = next(
+        route
+        for route in expanded_credential_subjects["routes"]
+        if route["id"] == "demo.gmail.recent"
+    )
+    expanded_subject_route["adapter"]["config"]["credentialBinding"][
+        "subjects"
+    ].append("other-subject")
+    assert_policy_rejected(
+        expanded_credential_subjects,
+        "compiler accepted an extra subject in an exact route binding",
+        validate_schema=validate_schema,
+    )
+
     typed_request_values = copy.deepcopy(base)
     typed_request = typed_request_values["routes"][0]["adapter"]["config"][
         "request"
@@ -9900,6 +9930,175 @@ def source_only_policy_model_fixtures(validate_schema: bool) -> None:
     assert (
         contradictory_alias_decision is not None
         and not contradictory_alias_decision.allowed
+    )
+
+    contradictory_subject_decision = _credential_policy_binding_decision(
+        SimpleNamespace(
+            adapter_type="x.v2",
+            adapter_config={
+                "appIds": ["x-client"],
+                "credentialBinding": {
+                    "credentialType": "oauth2",
+                    "provider": "x",
+                    "subjects": ["x-subject"],
+                    "clientIds": ["x-client"],
+                    "requiredScopes": ["tweet.read", "users.read"],
+                },
+            },
+        ),
+        CredentialPolicy(
+            id="cred-subject-conflict",
+            kind="oauth2",
+            provider="x",
+            provider_subject="x-subject",
+            oauth_client_id="x-client",
+            scopes=("tweet.read", "users.read"),
+            injection={
+                "type": "bearer",
+                "header": "Authorization",
+                "field": "access_token",
+                "prefix": "Bearer ",
+            },
+        ),
+        {
+            "kind": "oauth2",
+            "metadata": {
+                "oauth": True,
+                "provider_identity_verified": True,
+                "provider_id": "x",
+                "provider_subject": "x-subject",
+                "account_subject": "different-subject",
+                "oauth_client_id": "x-client",
+                "scopes": ["tweet.read", "users.read"],
+            },
+        },
+        "search.read",
+    )
+    assert (
+        contradictory_subject_decision is not None
+        and not contradictory_subject_decision.allowed
+        and contradictory_subject_decision.payload.get("binding")
+        == "credentialAliases"
+    )
+
+    exact_x_route = SimpleNamespace(
+        adapter_type="x.v2",
+        adapter_config={
+            "appIds": ["x-client"],
+            "credentialBinding": {
+                "credentialType": "oauth2",
+                "provider": "x",
+                "subjects": ["x-subject"],
+                "clientIds": ["x-client"],
+                "requiredScopes": ["tweet.read", "users.read"],
+            },
+        },
+    )
+    exact_x_policy = CredentialPolicy(
+        id="cred-exact-x",
+        kind="oauth2",
+        provider="x",
+        provider_subject="x-subject",
+        oauth_client_id="x-client",
+        scopes=("tweet.read", "users.read"),
+        injection={
+            "type": "bearer",
+            "header": "Authorization",
+            "field": "access_token",
+            "prefix": "Bearer ",
+        },
+    )
+    exact_x_credential = {
+        "kind": "oauth2",
+        "metadata": {
+            "oauth": True,
+            "provider_identity_verified": True,
+            "provider_id": "x",
+            "provider_subject": "x-subject",
+            "oauth_client_id": "x-client",
+            "scopes": ["tweet.read", "users.read"],
+        },
+    }
+    if (
+        _credential_policy_binding_decision(
+            exact_x_route,
+            exact_x_policy,
+            exact_x_credential,
+            "search.read",
+        )
+        is not None
+    ):
+        raise AssertionError("exact X credential binding was rejected")
+    expanded_x_route = SimpleNamespace(
+        adapter_type="x.v2",
+        adapter_config={
+            **exact_x_route.adapter_config,
+            "credentialBinding": {
+                **exact_x_route.adapter_config["credentialBinding"],
+                "clientIds": ["x-client", "other-client"],
+            },
+        },
+    )
+    expanded_x_decision = _credential_policy_binding_decision(
+        expanded_x_route,
+        exact_x_policy,
+        exact_x_credential,
+        "search.read",
+    )
+    assert expanded_x_decision is not None and not expanded_x_decision.allowed
+
+    exact_static_route = SimpleNamespace(
+        adapter_type="generic.json",
+        adapter_config={
+            "credentialBinding": {
+                "credentialType": "static",
+                "provider": "npm",
+                "subjects": ["npm-subject"],
+                "secretClass": "automationToken",
+            }
+        },
+    )
+    exact_static_policy = CredentialPolicy(
+        id="cred-exact-static",
+        kind="static",
+        provider="npm",
+        provider_subject="npm-subject",
+        scopes=("package.publish",),
+        injection={"type": "bearer"},
+    )
+    exact_static_credential = {
+        "kind": "bearer",
+        "metadata": {
+            "provider": "npm",
+            "provider_subject": "npm-subject",
+            "secret_class": "automationToken",
+            "scopes": ["package.publish"],
+        },
+    }
+    if (
+        _credential_policy_binding_decision(
+            exact_static_route,
+            exact_static_policy,
+            exact_static_credential,
+            "package.publish",
+        )
+        is not None
+    ):
+        raise AssertionError("exact static credential binding was rejected")
+    wrong_static_injection = {
+        **exact_static_credential,
+        "kind": "header",
+    }
+    static_injection_decision = _credential_policy_binding_decision(
+        exact_static_route,
+        exact_static_policy,
+        wrong_static_injection,
+        "package.publish",
+    )
+    assert (
+        static_injection_decision is not None
+        and not static_injection_decision.allowed
+        and static_injection_decision.payload.get("binding") == "injectionType"
     )
 
     duplicate_header_flow = flow("GET", "https://example.test/")

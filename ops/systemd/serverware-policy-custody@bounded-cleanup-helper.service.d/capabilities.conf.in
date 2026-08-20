@@ -1,0 +1,19 @@
+[Service]
+User=swpc-cleanup
+Group=swpc-cleanup
+StateDirectory=serverware/policy-custody/bounded-cleanup-helper/journal
+StateDirectoryMode=0700
+MemoryAccounting=yes
+MemoryHigh=384M
+MemoryMax=512M
+CPUAccounting=yes
+CPUQuota=100%
+TasksAccounting=yes
+TasksMax=96
+IOAccounting=yes
+# Linux directory descriptors must be opened O_RDONLY, but this owner-writable
+# directory FD authorizes create/rename/unlink operations through *at syscalls.
+OpenFile=%S/serverware/policy-custody/bounded-cleanup-helper/journal:journal:read-only
+InaccessiblePaths=%S/serverware/policy-custody/bounded-cleanup-helper/journal
+# Exact worker pidfds are delivered over the authenticated bootstrap exchange,
+# not guessed from numeric PIDs or declared as static activation descriptors.

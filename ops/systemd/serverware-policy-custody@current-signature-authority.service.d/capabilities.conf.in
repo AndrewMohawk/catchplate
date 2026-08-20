@@ -1,0 +1,13 @@
+[Service]
+User=swpc-signature
+Group=swpc-signature
+MemoryAccounting=yes
+MemoryHigh=192M
+MemoryMax=256M
+CPUAccounting=yes
+CPUQuota=100%
+TasksAccounting=yes
+TasksMax=16
+IOAccounting=yes
+# Current heads and historical verification keys arrive as bounded credentials
+# or provider responses; no writable state capability is implied here.

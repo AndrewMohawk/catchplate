@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.dev/schemas/coder-docker-service-instance.v12.schema.json",
+  "title": "Serverware Docker ServiceInstance V12",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contractVersion",
+    "authorityKind",
+    "authorityId",
+    "requestId",
+    "laneId",
+    "daemonGeneration",
+    "sourceSealSha256",
+    "artifactSealSha256",
+    "profile",
+    "ownerNamespace",
+    "containerLogicalId",
+    "image",
+    "entrypoint",
+    "cmd",
+    "env",
+    "user",
+    "workingDir",
+    "resources",
+    "mounts",
+    "aliases",
+    "health",
+    "endpoints",
+    "signerAuthorization",
+    "signature"
+  ],
+  "properties": {
+    "contractVersion": {
+      "const": "12"
+    },
+    "authorityKind": {
+      "const": "SERVICE_INSTANCE"
+    },
+    "authorityId": {
+      "$ref": "coder-docker-runner-execution.v12.schema.json#/$defs/id"
+    },
+    "requestId": {
+      "$ref": "coder-docker-runner-execution.v12.schema.json#/$defs/id"
+    },
+    "laneId": {
+      "$ref": "coder-docker-runner-execution.v12.schema.json#/$defs/id"
+    },
+    "daemonGeneration": {
+      "$ref": "coder-docker-runner-execution.v12.schema.json#/$defs/id"
+    },
+    "sourceSealSha256": {
+      "$ref": "coder-docker-runner-execution.v12.schema.json#/$defs/sha256"
+    },
+    "artifactSealSha256": {
+      "$ref": "coder-docker-runner-execution.v12.schema.json#/$defs/sha256"
+    },
+    "profile": {
+      "$ref": "coder-docker-runner-execution.v12.schema.json#/$defs/noBuildProfile"
+    },
+    "ownerNamespace": {
+      "$ref": "coder-docker-runner-execution.v12.schema.json#/$defs/ownerNamespace"
+    },
+    "containerLogicalId": {
+      "$ref": "coder-docker-runner-execution.v12.schema.json#/$defs/id"
+    },
+    "image": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "entrypoint": {
+      "$ref": "coder-docker-runner-execution.v12.schema.json#/$defs/argv64"
+    },
+    "cmd": {
+      "$ref": "coder-docker-runner-execution.v12.schema.json#/$defs/argv256"
+    },
+    "env": {
+      "$ref": "coder-docker-runner-execution.v12.schema.json#/$defs/environment"
+    },
+    "user": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]{0,4}:[1-9][0-9]{0,4}$"
+    },
+    "workingDir": {
+      "$ref": "coder-docker-runner-execution.v12.schema.json#/$defs/absolutePath"
+    },
+    "resources": {
+      "$ref": "coder-docker-runner-execution.v12.schema.json#/$defs/resources"
+    },
+    "mounts": {
+      "$ref": "coder-docker-runner-execution.v12.schema.json#/$defs/mounts"
+    },
+    "aliases": {
+      "$ref": "coder-docker-runner-execution.v12.schema.json#/$defs/aliases"
+    },
+    "health": {
+      "$ref": "coder-docker-runner-execution.v12.schema.json#/$defs/health"
+    },
+    "endpoints": {
+      "allOf": [
+        {
+          "$ref": "coder-docker-runner-execution.v12.schema.json#/$defs/endpoints"
+        },
+        {
+          "minItems": 1
+        }
+      ]
+    },
+    "signerAuthorization": {
+      "$ref": "coder-docker-runner-execution.v12.schema.json#/$defs/signerAuthorization"
+    },
+    "signature": {
+      "allOf": [
+        {
+          "$ref": "coder-docker-runner-execution.v12.schema.json#/$defs/signatureFields"
+        },
+        {
+          "properties": {
+            "domain": {
+              "const": "serverware/service-instance/v12"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

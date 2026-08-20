@@ -1,19 +1,57 @@
 FROM scratch AS python-production-dependency-cache
-COPY requirements.lock /dependency-cache/requirements.lock
-COPY production-dependencies/python-linux-amd64.sha256 /dependency-cache/python-linux-amd64.sha256
 COPY production-dependencies/cache/python-wheelhouse-linux-amd64.tar.gz /dependency-cache/cache/python-wheelhouse-linux-amd64.tar.gz
 
 FROM python:3.11-slim-bookworm@sha256:0030323c9ce4d6dfab5f0812577cb0abd13c806f86b3a1f5b5d8f200ebb1421c AS python-deps
 
 ARG SOURCE_DATE_EPOCH="0"
+ARG SERVERWARE_SOURCE_ARCHIVE
+ARG SERVERWARE_SOURCE_ARCHIVE_SHA256
+ARG SERVERWARE_SOURCE_MANIFEST
+ARG SERVERWARE_SOURCE_MANIFEST_SHA256
+ARG SERVERWARE_SOURCE_FILE_LIST
+ARG SERVERWARE_SOURCE_FILE_LIST_SHA256
+ARG SERVERWARE_SOURCE_FILE_HASHES
+ARG SERVERWARE_SOURCE_FILE_HASHES_SHA256
+ARG SERVERWARE_SOURCE_FILE_MODES
+ARG SERVERWARE_SOURCE_FILE_MODES_SHA256
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_INDEX=1 \
     SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
 
 WORKDIR /build
+COPY ${SERVERWARE_SOURCE_ARCHIVE} /source-contract/source.tar
+COPY ${SERVERWARE_SOURCE_MANIFEST} /source-contract/source-manifest.json
+COPY ${SERVERWARE_SOURCE_FILE_LIST} /source-contract/source.files
+COPY ${SERVERWARE_SOURCE_FILE_HASHES} /source-contract/source.files.sha256
+COPY ${SERVERWARE_SOURCE_FILE_MODES} /source-contract/source.files.mode
 COPY --from=python-production-dependency-cache /dependency-cache /dependency-cache
 RUN --network=none set -eu; \
+    test -n "${SERVERWARE_SOURCE_ARCHIVE_SHA256}"; \
+    test -n "${SERVERWARE_SOURCE_MANIFEST_SHA256}"; \
+    test -n "${SERVERWARE_SOURCE_FILE_LIST_SHA256}"; \
+    test -n "${SERVERWARE_SOURCE_FILE_HASHES_SHA256}"; \
+    test -n "${SERVERWARE_SOURCE_FILE_MODES_SHA256}"; \
+    printf '%s  %s\n' "${SERVERWARE_SOURCE_ARCHIVE_SHA256#sha256:}" /source-contract/source.tar | sha256sum -c -; \
+    printf '%s  %s\n' "${SERVERWARE_SOURCE_MANIFEST_SHA256#sha256:}" /source-contract/source-manifest.json | sha256sum -c -; \
+    printf '%s  %s\n' "${SERVERWARE_SOURCE_FILE_LIST_SHA256#sha256:}" /source-contract/source.files | sha256sum -c -; \
+    printf '%s  %s\n' "${SERVERWARE_SOURCE_FILE_HASHES_SHA256#sha256:}" /source-contract/source.files.sha256 | sha256sum -c -; \
+    printf '%s  %s\n' "${SERVERWARE_SOURCE_FILE_MODES_SHA256#sha256:}" /source-contract/source.files.mode | sha256sum -c -; \
+    tar -tf /source-contract/source.tar > /source-contract/archive.files; \
+    printf '%s  %s\n' "${SERVERWARE_SOURCE_FILE_LIST_SHA256#sha256:}" /source-contract/archive.files | sha256sum -c -; \
+    mkdir -p /source; \
+    tar --no-same-owner -xf /source-contract/source.tar -C /source; \
+    cd /source; \
+    sha256sum -c /source-contract/source.files.sha256; \
+    while read -r expected_mode relative; do \
+        test -n "${expected_mode}"; \
+        test -n "${relative}"; \
+        test -f "/source/${relative}"; \
+        test ! -L "/source/${relative}"; \
+        test "$(stat -c '%a' "/source/${relative}")" = "${expected_mode}"; \
+    done < /source-contract/source.files.mode; \
+    cp /source/requirements.lock /dependency-cache/requirements.lock; \
+    cp /source/production-dependencies/python-linux-amd64.sha256 /dependency-cache/python-linux-amd64.sha256; \
     cd /dependency-cache; \
     sha256sum -c python-linux-amd64.sha256; \
     tar -xzf cache/python-wheelhouse-linux-amd64.tar.gz; \
@@ -65,40 +103,71 @@ FROM python:3.11-slim-bookworm@sha256:0030323c9ce4d6dfab5f0812577cb0abd13c806f86
 
 ARG SOURCE_DATE_EPOCH="0"
 COPY --from=python-deps /deps /runtime/deps
-COPY serverware /runtime/app/serverware
-COPY scripts /runtime/app/scripts
-COPY schemas /runtime/app/schemas
-COPY policies /runtime/app/policies
-COPY security /runtime/app/security
-COPY docker-compose.apparmor.yml /runtime/app/docker-compose.apparmor.yml
+COPY --from=python-deps /source/serverware/authority_fd_entrypoint.py /runtime/authority-bootstrap/authority_fd_entrypoint.py
+COPY --from=python-deps /source/serverware/authority_launcher.py /runtime/authority-bootstrap/authority_launcher.py
+COPY --from=python-deps /source/serverware /runtime/app/serverware
+COPY --from=python-deps /source/scripts /runtime/app/scripts
+COPY --from=python-deps /source/schemas /runtime/app/schemas
+COPY --from=python-deps /source/policies /runtime/app/policies
+COPY --from=python-deps /source/security /runtime/app/security
+COPY --from=python-deps /source/ops/policy-custody /runtime/app/ops/policy-custody
+COPY --from=python-deps /source/ops/production-readiness.env.example /runtime/app/ops/production-readiness.env.example
+COPY --from=python-deps /source/ops/systemd/serverware-policy-custody-sockets.target /runtime/app/ops/systemd/serverware-policy-custody-sockets.target
+COPY --from=python-deps /source/ops/systemd/serverware-policy-custody.target /runtime/app/ops/systemd/serverware-policy-custody.target
+COPY --from=python-deps /source/ops/systemd/serverware-policy-custody@.socket /runtime/app/ops/systemd/serverware-policy-custody@.socket
+COPY --from=python-deps /source/ops/systemd/serverware-policy-custody@.service.in /runtime/app/ops/systemd/serverware-policy-custody@.service.in
+COPY --from=python-deps /source/ops/systemd/serverware-policy-custody@durable-recovery-store.service.d /runtime/app/ops/systemd/serverware-policy-custody@durable-recovery-store.service.d
+COPY --from=python-deps /source/ops/systemd/serverware-policy-custody@cleanup-authorization-consumer.service.d /runtime/app/ops/systemd/serverware-policy-custody@cleanup-authorization-consumer.service.d
+COPY --from=python-deps /source/ops/systemd/serverware-policy-custody@recovery-target-provider.service.d /runtime/app/ops/systemd/serverware-policy-custody@recovery-target-provider.service.d
+COPY --from=python-deps /source/ops/systemd/serverware-policy-custody@current-signature-authority.service.d /runtime/app/ops/systemd/serverware-policy-custody@current-signature-authority.service.d
+COPY --from=python-deps /source/ops/systemd/serverware-policy-custody@bounded-cleanup-helper.service.d /runtime/app/ops/systemd/serverware-policy-custody@bounded-cleanup-helper.service.d
+COPY --from=python-deps /source/docker-compose.apparmor.yml /runtime/app/docker-compose.apparmor.yml
 RUN --network=none printf 'serverware.productionImage/v1\n' > /runtime/app/.serverware-production-image \
     && mkdir -p /runtime/custody-trust /runtime/gate-materials \
+    && chmod 0555 /runtime/authority-bootstrap \
+    && chmod 0444 /runtime/authority-bootstrap/authority_fd_entrypoint.py \
+        /runtime/authority-bootstrap/authority_launcher.py \
     && chmod 0755 /runtime/custody-trust \
     && chmod 0750 /runtime/gate-materials \
+    && find /runtime/app/ops/policy-custody /runtime/app/ops/systemd -type d -exec chmod 0555 {} + \
+    && find /runtime/app/ops/policy-custody /runtime/app/ops/systemd -type f -exec chmod 0444 {} + \
+    && chmod 0444 /runtime/app/ops/production-readiness.env.example \
     && chmod 0444 /runtime/app/.serverware-production-image \
     && find /runtime -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +
 
 FROM gcr.io/distroless/python3-debian12:nonroot@sha256:7d1042ce588ab97019fe95c24ffca7bc5a82ccdac572511d5e09bda4435c89c5
 
 ARG SERVERWARE_IMAGE_SOURCE="https://github.com/example/private-deployment"
+ARG SERVERWARE_IMAGE_TITLE="invalid source identity"
 ARG SERVERWARE_IMAGE_REVISION="unknown"
 ARG SERVERWARE_IMAGE_CREATED="unknown"
 ARG SERVERWARE_SOURCE_TREE_DIGEST="unknown"
+ARG SERVERWARE_SOURCE_ARCHIVE_SHA256="unknown"
+ARG SERVERWARE_SOURCE_MANIFEST_SHA256="unknown"
+ARG SERVERWARE_SOURCE_IDENTITY_MODE="invalid"
+ARG SERVERWARE_PRODUCTION_RELEASE_ELIGIBLE="false"
 ARG SOURCE_DATE_EPOCH="0"
 
-LABEL org.opencontainers.image.title="Serverware control plane" \
+LABEL org.opencontainers.image.title="${SERVERWARE_IMAGE_TITLE}" \
       org.opencontainers.image.source="${SERVERWARE_IMAGE_SOURCE}" \
       org.opencontainers.image.revision="${SERVERWARE_IMAGE_REVISION}" \
       org.opencontainers.image.created="${SERVERWARE_IMAGE_CREATED}" \
-      dev.serverware.source_tree_digest="${SERVERWARE_SOURCE_TREE_DIGEST}"
+      dev.serverware.source_tree_digest="${SERVERWARE_SOURCE_TREE_DIGEST}" \
+      dev.serverware.source_archive_digest="${SERVERWARE_SOURCE_ARCHIVE_SHA256}" \
+      dev.serverware.source_manifest_digest="${SERVERWARE_SOURCE_MANIFEST_SHA256}" \
+      dev.serverware.source_identity_mode="${SERVERWARE_SOURCE_IDENTITY_MODE}" \
+      dev.serverware.production_release_eligible="${SERVERWARE_PRODUCTION_RELEASE_ELIGIBLE}"
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONPATH=/deps:/app \
+    PYTHONPATH=/vendor:/app \
     SERVERWARE_DATA_DIR=/data
 
-COPY --from=runtime-tree --chown=nonroot:nonroot /runtime/deps /deps
-COPY --from=runtime-tree --chown=nonroot:nonroot /runtime/app /app
+COPY --from=production-python-runtime-artifact --chown=0:0 /runtime /runtime
+COPY --from=production-python-runtime-artifact --chown=0:0 /vendor /vendor
+COPY --from=runtime-tree --chown=0:0 /runtime/authority-bootstrap /runtime/authority-bootstrap
+COPY --from=runtime-tree --chown=0:0 /runtime/app /app
+COPY --from=python-deps --chown=0:0 /source-contract/source-manifest.json /usr/share/serverware/source-manifest.json
 COPY --from=runtime-tree --chown=65532:65532 --chmod=0755 /runtime/custody-trust /run/serverware/custody-trust
 COPY --from=runtime-tree --chown=65532:65532 --chmod=0750 /runtime/gate-materials /run/serverware/gate
 WORKDIR /app
@@ -106,5 +175,5 @@ WORKDIR /app
 EXPOSE 3000
 
 USER nonroot:nonroot
-ENTRYPOINT ["/usr/bin/python3"]
+ENTRYPOINT ["/runtime/python/bin/python3"]
 CMD ["-m", "serverware.control_plane_runner"]

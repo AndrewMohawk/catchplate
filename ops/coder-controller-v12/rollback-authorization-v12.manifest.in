@@ -1,0 +1,9 @@
+document_version=12
+source_release_id=@SOURCE_RELEASE_ID@
+source_config_generation=@SOURCE_CONFIG_GENERATION@
+target_release_id=@TARGET_RELEASE_ID@
+target_config_generation=@TARGET_CONFIG_GENERATION@
+rollback_floor_generation=@ROLLBACK_FLOOR_GENERATION@
+minimum_witness_sequence=@MINIMUM_WITNESS_SEQUENCE@
+witness_checkpoint_sha256=@WITNESS_CHECKPOINT_SHA256@
+valid_until_epoch=@VALID_UNTIL_EPOCH@

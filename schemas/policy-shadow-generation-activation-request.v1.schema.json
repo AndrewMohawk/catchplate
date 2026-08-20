@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/policy-shadow-generation-activation-request.v1.schema.json",
+  "title": "Serverware Policy Shadow Generation Activation Request v1",
+  "$comment": "The portal assembles this exact request from native-verified durable records. No caller-supplied evidence or verification assertion is authoritative.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion", "requestId", "replayId", "generationId",
+    "generationPublicationEnvelopeSha256", "policyAuthorityAnalysis",
+    "members", "readiness"
+  ],
+  "properties": {
+    "apiVersion": {"const": "serverware.policyShadowGenerationActivationRequest/v1"},
+    "requestId": {"$ref": "#/$defs/uuidV4"},
+    "replayId": {"type": "string", "pattern": "^replay:[0-9a-f]{64}$"},
+    "generationId": {"$ref": "#/$defs/sha256"},
+    "generationPublicationEnvelopeSha256": {"$ref": "#/$defs/sha256"},
+    "policyAuthorityAnalysis": {"$ref": "policy-authority-analysis.v1.schema.json"},
+    "members": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 2048,
+      "items": {"$ref": "#/$defs/member"}
+    },
+    "readiness": {"$ref": "policy-activation-readiness.v2.schema.json"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "uuidV4": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},
+    "signedI64": {"type": "integer", "minimum": -9223372036854775808, "maximum": 9223372036854775807},
+    "positiveI64": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+    "signedEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["apiVersion", "kind", "canonicalProfile", "signatureDomain", "payload", "payloadSha256", "signatureAlgorithm", "signingKeyId", "signingKeySpkiSha256", "signature"],
+      "properties": {
+        "apiVersion": {"type": "string", "minLength": 1, "maxLength": 256},
+        "kind": {"type": "string", "minLength": 1, "maxLength": 256},
+        "canonicalProfile": {"const": "serverware.canonicalJson/ascii-integer-v1"},
+        "signatureDomain": {"type": "string", "minLength": 1, "maxLength": 256},
+        "payload": {"type": "object"},
+        "payloadSha256": {"$ref": "#/$defs/sha256"},
+        "signatureAlgorithm": {"const": "Ed25519"},
+        "signingKeyId": {"$ref": "#/$defs/sha256"},
+        "signingKeySpkiSha256": {"$ref": "#/$defs/sha256"},
+        "signature": {"type": "string", "pattern": "^[A-Za-z0-9_-]{86}$"}
+      }
+    },
+    "runtimeEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["apiVersion", "evidenceId", "evidenceRevision", "evidenceType", "evidenceSha256", "evidence"],
+      "properties": {
+        "apiVersion": {"const": "serverware.policyShadowRuntimeAttestationEvidence/v1"},
+        "evidenceId": {"$ref": "#/$defs/sha256"},
+        "evidenceRevision": {"$ref": "#/$defs/positiveI64"},
+        "evidenceType": {"enum": ["trusted-host-no-tee", "aws-nitro-enclave", "amd-sev-snp", "intel-tdx"]},
+        "evidenceSha256": {"$ref": "#/$defs/sha256"},
+        "evidence": {}
+      }
+    },
+    "runtimeAttestation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["apiVersion", "receiptId", "receiptRevision", "receipt", "receiptSha256", "receiptPayloadSha256", "roleAuthorizationId", "roleAuthorizationRevision", "roleAuthorization", "roleAuthorizationSha256", "roleAuthorizationPayloadSha256", "evidence", "chainSha256"],
+      "properties": {
+        "apiVersion": {"const": "serverware.policyShadowRuntimeAttestationHandoff/v2"},
+        "receiptId": {"$ref": "#/$defs/sha256"},
+        "receiptRevision": {"$ref": "#/$defs/positiveI64"},
+        "receipt": {"$ref": "#/$defs/signedEnvelope"},
+        "receiptSha256": {"$ref": "#/$defs/sha256"},
+        "receiptPayloadSha256": {"$ref": "#/$defs/sha256"},
+        "roleAuthorizationId": {"$ref": "#/$defs/sha256"},
+        "roleAuthorizationRevision": {"$ref": "#/$defs/positiveI64"},
+        "roleAuthorization": {"$ref": "#/$defs/signedEnvelope"},
+        "roleAuthorizationSha256": {"$ref": "#/$defs/sha256"},
+        "roleAuthorizationPayloadSha256": {"$ref": "#/$defs/sha256"},
+        "evidence": {"$ref": "#/$defs/runtimeEvidence"},
+        "chainSha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "runtimeVerificationPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "status", "attestationPolicySha256", "verifierExecutableSha256", "attestationMode", "hardwareAttested", "assignmentPayloadSha256", "loadReceiptPayloadSha256", "runtimeIdentitySha256", "runtimeAttestationReceiptSha256", "runtimeAttestationPayloadSha256", "roleAuthorizationSha256", "roleAuthorizationPayloadSha256", "attestationEvidenceId", "attestationEvidenceRevision", "teeEvidenceSha256", "teeMeasurementSha256", "runtimeExecutableSha256", "runtimeReleaseSha256", "runtimeConfigSha256", "runtimePolicySha256", "shadowSigningKeyId", "shadowSigningKeySpkiSha256", "trustCheckpointSha256", "revocationGeneration", "revocationRootSha256", "evidenceChainSha256", "trustedNowUnixNanos", "maximumAgeNanos", "issuedAtUnixNanos", "expiresAtUnixNanos"],
+      "properties": {
+        "schemaVersion": {"const": "serverware.policyShadowRuntimeAttestationVerification/v2"},
+        "status": {"const": "verified"},
+        "attestationPolicySha256": {"$ref": "#/$defs/sha256"}, "verifierExecutableSha256": {"$ref": "#/$defs/sha256"},
+        "attestationMode": {"enum": ["trusted-host-no-tee", "aws-nitro-enclave", "amd-sev-snp", "intel-tdx"]}, "hardwareAttested": {"type": "boolean"},
+        "assignmentPayloadSha256": {"$ref": "#/$defs/sha256"}, "loadReceiptPayloadSha256": {"$ref": "#/$defs/sha256"}, "runtimeIdentitySha256": {"$ref": "#/$defs/sha256"},
+        "runtimeAttestationReceiptSha256": {"$ref": "#/$defs/sha256"}, "runtimeAttestationPayloadSha256": {"$ref": "#/$defs/sha256"}, "roleAuthorizationSha256": {"$ref": "#/$defs/sha256"}, "roleAuthorizationPayloadSha256": {"$ref": "#/$defs/sha256"},
+        "attestationEvidenceId": {"$ref": "#/$defs/sha256"}, "attestationEvidenceRevision": {"$ref": "#/$defs/positiveI64"}, "teeEvidenceSha256": {"$ref": "#/$defs/sha256"}, "teeMeasurementSha256": {"$ref": "#/$defs/sha256"},
+        "runtimeExecutableSha256": {"$ref": "#/$defs/sha256"}, "runtimeReleaseSha256": {"$ref": "#/$defs/sha256"}, "runtimeConfigSha256": {"$ref": "#/$defs/sha256"}, "runtimePolicySha256": {"$ref": "#/$defs/sha256"},
+        "shadowSigningKeyId": {"$ref": "#/$defs/sha256"}, "shadowSigningKeySpkiSha256": {"$ref": "#/$defs/sha256"}, "trustCheckpointSha256": {"$ref": "#/$defs/sha256"},
+        "revocationGeneration": {"$ref": "#/$defs/positiveI64"}, "revocationRootSha256": {"$ref": "#/$defs/sha256"}, "evidenceChainSha256": {"$ref": "#/$defs/sha256"},
+        "trustedNowUnixNanos": {"$ref": "#/$defs/positiveI64"}, "maximumAgeNanos": {"$ref": "#/$defs/positiveI64"}, "issuedAtUnixNanos": {"$ref": "#/$defs/positiveI64"}, "expiresAtUnixNanos": {"$ref": "#/$defs/positiveI64"}
+      },
+      "allOf": [
+        {"if": {"properties": {"attestationMode": {"const": "trusted-host-no-tee"}}}, "then": {"properties": {"hardwareAttested": {"const": false}}}},
+        {"if": {"properties": {"attestationMode": {"enum": ["aws-nitro-enclave", "amd-sev-snp", "intel-tdx"]}}}, "then": {"properties": {"hardwareAttested": {"const": true}}}}
+      ]
+    },
+    "runtimeVerification": {
+      "allOf": [
+        {"$ref": "#/$defs/signedEnvelope"},
+        {"properties": {"apiVersion": {"const": "serverware.policyShadowRuntimeAttestationVerification/v2"}, "kind": {"const": "PolicyShadowRuntimeAttestationVerification"}, "signatureDomain": {"const": "serverware.policyShadowRuntimeAttestationVerification/v2"}, "payload": {"$ref": "#/$defs/runtimeVerificationPayload"}}}
+      ]
+    },
+    "member": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["loadReceipt", "runtimeAttestation", "runtimeAttestationVerification", "checkpoints"],
+      "properties": {
+        "loadReceipt": {"$ref": "policy-shadow-load-receipt.v1.schema.json"},
+        "runtimeAttestation": {"$ref": "#/$defs/runtimeAttestation"},
+        "runtimeAttestationVerification": {"$ref": "#/$defs/runtimeVerification"},
+        "checkpoints": {"type": "array", "minItems": 1, "maxItems": 65536, "items": {"$ref": "policy-shadow-checkpoint.v1.schema.json"}}
+      }
+    }
+  }
+}

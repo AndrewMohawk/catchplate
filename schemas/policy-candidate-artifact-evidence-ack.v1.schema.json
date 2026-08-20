@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/policy-candidate-artifact-evidence-ack.v1.schema.json",
+  "title": "Serverware Policy Candidate Artifact Evidence Ack v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "ok",
+    "apiVersion",
+    "requestId",
+    "requestClaimAuditEventHash",
+    "producerInstanceId",
+    "payloadDigest",
+    "candidateId",
+    "artifactEnvelopeDigest",
+    "artifactPayloadDigest",
+    "policyHash",
+    "policyBundleDigest",
+    "verificationReceiptDigest",
+    "recovered"
+  ],
+  "properties": {
+    "ok": {"const": true},
+    "apiVersion": {
+      "const": "serverware.policyCandidateArtifactEvidenceAck/v1"
+    },
+    "requestId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "requestClaimAuditEventHash": {"$ref": "#/$defs/sha256"},
+    "producerInstanceId": {"$ref": "#/$defs/identifier"},
+    "payloadDigest": {"$ref": "#/$defs/sha256"},
+    "candidateId": {"$ref": "#/$defs/identifier"},
+    "artifactEnvelopeDigest": {"$ref": "#/$defs/sha256"},
+    "artifactPayloadDigest": {"$ref": "#/$defs/sha256"},
+    "policyHash": {"$ref": "#/$defs/sha256"},
+    "policyBundleDigest": {"$ref": "#/$defs/sha256"},
+    "verificationReceiptDigest": {"$ref": "#/$defs/sha256"},
+    "recovered": {"type": "boolean"}
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    }
+  }
+}

@@ -1,0 +1,2266 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/coder-test-controller-receipt.v12.schema.json",
+  "title": "Serverware Controller Receipt Contract v12",
+  "description": "Closed ReceiptV12 wire contract layered on the canonical controller request v11. FinalSettlementArtifactV12 is also fully defined for durable lookup and settlement verification without creating a receipt digest cycle.",
+  "$ref": "#/$defs/receipt",
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,127}$"
+    },
+    "u64": {
+      "description": "Canonical unsigned 64-bit integer encoded as exactly 20 zero-padded decimal digits.",
+      "type": "string",
+      "pattern": "^[0-9]{20}$"
+    },
+    "positiveU64": {
+      "description": "Canonical positive unsigned 64-bit integer encoded as exactly 20 zero-padded decimal digits.",
+      "type": "string",
+      "pattern": "^(?!0{20}$)[0-9]{20}$"
+    },
+    "rfc3339": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-([0-2][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\\.[0-9]{1,9})?Z$"
+    },
+    "signatureBase64url": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{86}$"
+    },
+    "digestList": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "$ref": "#/$defs/sha256"
+      }
+    },
+    "receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contractVersion",
+        "requestContractVersion",
+        "receiptId",
+        "receiptSequence",
+        "requesterPrincipalId",
+        "replayIdentity",
+        "requestV11",
+        "requestAdmission",
+        "requestAdmissionSha256",
+        "requestV11Sha256",
+        "requestEnvelopeSha256",
+        "requestCanonicalBytes",
+        "receiptBody",
+        "receiptBodySha256",
+        "receiptBodyCanonicalBytes",
+        "receiptAuthenticationEnvelope",
+        "receiptAuthenticationEnvelopeSha256",
+        "previousCheckpoint",
+        "preFinalLogLeaf",
+        "signedTreeHead",
+        "signedTreeHeadEnvelopeSha256",
+        "inclusionProof",
+        "consistencyProof",
+        "externalWitnessCheckpoint",
+        "externalWitnessCheckpointEnvelopeSha256",
+        "logBundleSha256",
+        "finalTrustObservation",
+        "finalTrustObservationSha256",
+        "finalVerdictEnvelope",
+        "finalVerdictEnvelopeSha256",
+        "receiptEnvelopeSha256",
+        "receiptCanonicalBytes"
+      ],
+      "properties": {
+        "contractVersion": {
+          "const": 12
+        },
+        "requestContractVersion": {
+          "const": 11
+        },
+        "receiptId": {
+          "$ref": "#/$defs/id"
+        },
+        "receiptSequence": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "requesterPrincipalId": {
+          "$ref": "#/$defs/id"
+        },
+        "replayIdentity": {
+          "$ref": "#/$defs/replayIdentity"
+        },
+        "requestV11": {
+          "$ref": "coder-test-controller-request.v1.schema.json"
+        },
+        "requestAdmission": {
+          "$ref": "#/$defs/canonicalRequestAdmission"
+        },
+        "requestAdmissionSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "requestV11Sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "requestEnvelopeSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "requestCanonicalBytes": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "receiptBody": {
+          "$ref": "#/$defs/receiptBody"
+        },
+        "receiptBodySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "receiptBodyCanonicalBytes": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "receiptAuthenticationEnvelope": {
+          "$ref": "#/$defs/receiptAuthenticationEnvelope"
+        },
+        "receiptAuthenticationEnvelopeSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "previousCheckpoint": {
+          "$ref": "#/$defs/previousCheckpoint"
+        },
+        "preFinalLogLeaf": {
+          "$ref": "#/$defs/preFinalLogLeaf"
+        },
+        "signedTreeHead": {
+          "$ref": "#/$defs/signedTreeHead"
+        },
+        "signedTreeHeadEnvelopeSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "inclusionProof": {
+          "$ref": "#/$defs/inclusionProof"
+        },
+        "consistencyProof": {
+          "$ref": "#/$defs/consistencyProof"
+        },
+        "externalWitnessCheckpoint": {
+          "$ref": "#/$defs/externalWitnessCheckpoint"
+        },
+        "externalWitnessCheckpointEnvelopeSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "logBundleSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "finalTrustObservation": {
+          "$ref": "#/$defs/finalTrustObservation"
+        },
+        "finalTrustObservationSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "finalVerdictEnvelope": {
+          "$ref": "#/$defs/finalVerdictEnvelope"
+        },
+        "finalVerdictEnvelopeSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "receiptEnvelopeSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "receiptCanonicalBytes": {
+          "$ref": "#/$defs/positiveU64"
+        }
+      }
+    },
+    "trustedReceivePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requestV11Sha256",
+        "requestEnvelopeSha256",
+        "requestCanonicalBytes",
+        "preallocationFrameSha256",
+        "frameReceivedAtUnixMs",
+        "frameReceivedBoottimeNs",
+        "bootIdSha256",
+        "requestDeadlineUnixMs",
+        "requesterKeyLeafSha256",
+        "requesterAuthorizationSha256",
+        "requesterAuthorizationHighWater",
+        "requesterRevocationHighWater",
+        "canonicalVerifierProfileSha256",
+        "verifiedRelationshipsSha256",
+        "controllerConfigurationSha256",
+        "acceptedAt"
+      ],
+      "properties": {
+        "requestV11Sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "requestEnvelopeSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "requestCanonicalBytes": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "preallocationFrameSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "frameReceivedAtUnixMs": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "frameReceivedBoottimeNs": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "bootIdSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "requestDeadlineUnixMs": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "requesterKeyLeafSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "requesterAuthorizationSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "requesterAuthorizationHighWater": {
+          "$ref": "#/$defs/u64"
+        },
+        "requesterRevocationHighWater": {
+          "$ref": "#/$defs/u64"
+        },
+        "canonicalVerifierProfileSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "verifiedRelationshipsSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "controllerConfigurationSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "acceptedAt": {
+          "$ref": "#/$defs/rfc3339"
+        }
+      }
+    },
+    "trustedReceiveEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "domain",
+        "payload",
+        "payloadSha256",
+        "signature"
+      ],
+      "properties": {
+        "domain": {
+          "const": "serverware/controller-trusted-receive/v12"
+        },
+        "payload": {
+          "$ref": "#/$defs/trustedReceivePayload"
+        },
+        "payloadSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "signature": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/signature"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "domain": {
+                  "const": "serverware/controller-trusted-receive/v12"
+                },
+                "signerRole": {
+                  "const": "controllerIngress"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "canonicalRequestAdmission": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "preallocationFrameBase64url",
+        "exactRequestBase64url",
+        "trustedReceiveEnvelope",
+        "trustedReceiveEnvelopeSha256"
+      ],
+      "properties": {
+        "preallocationFrameBase64url": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{342}$"
+        },
+        "exactRequestBase64url": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 89478486,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "trustedReceiveEnvelope": {
+          "$ref": "#/$defs/trustedReceiveEnvelope"
+        },
+        "trustedReceiveEnvelopeSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "replayIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "replayNamespace",
+        "replayKey",
+        "replayKeySha256"
+      ],
+      "properties": {
+        "replayNamespace": {
+          "const": "serverware/controller-receipt/v12"
+        },
+        "replayKey": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._:@/-]{16,256}$"
+        },
+        "replayKeySha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "keyAuthorization": {
+      "description": "Evidence carried for joining only. Native verification must resolve the same current authorization and revocation state from an independently pinned trust source; this object cannot authorize itself.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "role",
+        "principalId",
+        "keyId",
+        "algorithm",
+        "spkiDerSha256",
+        "physicalPrivateKeyIdentitySha256",
+        "keyAuthorizationSha256",
+        "authorizationRootSha256",
+        "authorizationRevision",
+        "revocationRootSha256",
+        "revocationRevision",
+        "highWater",
+        "validFrom",
+        "validUntil",
+        "status"
+      ],
+      "properties": {
+        "role": {
+          "enum": [
+            "controllerIngress",
+            "controllerReceiptAuthentication",
+            "controllerReceiptLog",
+            "controllerReceiptExternalWitness",
+            "controllerFinalVerdict",
+            "controllerTrustRoot",
+            "controllerTrustGeneration",
+            "controllerFinalSettlement"
+          ]
+        },
+        "principalId": {
+          "$ref": "#/$defs/id"
+        },
+        "keyId": {
+          "$ref": "#/$defs/id"
+        },
+        "algorithm": {
+          "const": "Ed25519"
+        },
+        "spkiDerSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "physicalPrivateKeyIdentitySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "keyAuthorizationSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "authorizationRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "authorizationRevision": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "revocationRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "revocationRevision": {
+          "$ref": "#/$defs/u64"
+        },
+        "highWater": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "validFrom": {
+          "$ref": "#/$defs/rfc3339"
+        },
+        "validUntil": {
+          "$ref": "#/$defs/rfc3339"
+        },
+        "status": {
+          "const": "ACTIVE"
+        }
+      }
+    },
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "domain",
+        "payloadSha256",
+        "signedAt",
+        "acceptedAt",
+        "signerRole",
+        "signerPrincipalId",
+        "signerKeyId",
+        "signerSpkiDerSha256",
+        "keyAuthorization",
+        "signatureBase64url"
+      ],
+      "properties": {
+        "domain": {
+          "enum": [
+            "serverware/controller-trusted-receive/v12",
+            "serverware/receipt-authentication/v12",
+            "serverware/receipt-tree-head/v12",
+            "serverware/receipt-external-witness/v12",
+            "serverware/final-verdict/v12",
+            "serverware/trust-generation-authorization/v12",
+            "serverware/trust-generation/v12",
+            "serverware/final-settlement/v12"
+          ]
+        },
+        "payloadSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "signedAt": {
+          "$ref": "#/$defs/rfc3339"
+        },
+        "acceptedAt": {
+          "$ref": "#/$defs/rfc3339"
+        },
+        "signerRole": {
+          "enum": [
+            "controllerIngress",
+            "controllerReceiptAuthentication",
+            "controllerReceiptLog",
+            "controllerReceiptExternalWitness",
+            "controllerFinalVerdict",
+            "controllerTrustRoot",
+            "controllerTrustGeneration",
+            "controllerFinalSettlement"
+          ]
+        },
+        "signerPrincipalId": {
+          "$ref": "#/$defs/id"
+        },
+        "signerKeyId": {
+          "$ref": "#/$defs/id"
+        },
+        "signerSpkiDerSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "keyAuthorization": {
+          "$ref": "#/$defs/keyAuthorization"
+        },
+        "signatureBase64url": {
+          "$ref": "#/$defs/signatureBase64url"
+        }
+      }
+    },
+    "receiptBody": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receiptId",
+        "receiptSequence",
+        "requesterPrincipalId",
+        "replayKeySha256",
+        "requestV11Sha256",
+        "requestEnvelopeSha256",
+        "requestCanonicalBytes",
+        "terminalEvidenceRootSha256",
+        "terminalStateRootSha256",
+        "executionResultSha256",
+        "verdict",
+        "bodyTrustObservationSha256",
+        "completedAt"
+      ],
+      "properties": {
+        "receiptId": {
+          "$ref": "#/$defs/id"
+        },
+        "receiptSequence": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "requesterPrincipalId": {
+          "$ref": "#/$defs/id"
+        },
+        "replayKeySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "requestV11Sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "requestEnvelopeSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "requestCanonicalBytes": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "terminalEvidenceRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "terminalStateRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "executionResultSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "verdict": {
+          "enum": [
+            "PASS",
+            "FAIL",
+            "UNKNOWN",
+            "REJECTED"
+          ]
+        },
+        "bodyTrustObservationSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "completedAt": {
+          "$ref": "#/$defs/rfc3339"
+        }
+      }
+    },
+    "receiptAuthenticationPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receiptId",
+        "receiptSequence",
+        "requesterPrincipalId",
+        "replayKeySha256",
+        "requestV11Sha256",
+        "requestEnvelopeSha256",
+        "requestCanonicalBytes",
+        "receiptBodySha256",
+        "receiptBodyCanonicalBytes",
+        "terminalEvidenceRootSha256",
+        "terminalStateRootSha256",
+        "bodyTrustObservationSha256",
+        "authenticatedAt"
+      ],
+      "properties": {
+        "receiptId": {
+          "$ref": "#/$defs/id"
+        },
+        "receiptSequence": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "requesterPrincipalId": {
+          "$ref": "#/$defs/id"
+        },
+        "replayKeySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "requestV11Sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "requestEnvelopeSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "requestCanonicalBytes": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "receiptBodySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "receiptBodyCanonicalBytes": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "terminalEvidenceRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "terminalStateRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "bodyTrustObservationSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "authenticatedAt": {
+          "$ref": "#/$defs/rfc3339"
+        }
+      }
+    },
+    "receiptAuthenticationEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "domain",
+        "payload",
+        "payloadSha256",
+        "signature"
+      ],
+      "properties": {
+        "domain": {
+          "const": "serverware/receipt-authentication/v12"
+        },
+        "payload": {
+          "$ref": "#/$defs/receiptAuthenticationPayload"
+        },
+        "payloadSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "signature": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/signature"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "domain": {
+                  "const": "serverware/receipt-authentication/v12"
+                },
+                "signerRole": {
+                  "const": "controllerReceiptAuthentication"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "previousCheckpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "checkpointKind",
+        "treeSize",
+        "rootSha256",
+        "signedTreeHeadEnvelopeSha256"
+      ],
+      "properties": {
+        "checkpointKind": {
+          "enum": [
+            "GENESIS",
+            "SIGNED_TREE_HEAD"
+          ]
+        },
+        "treeSize": {
+          "$ref": "#/$defs/u64"
+        },
+        "rootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "signedTreeHeadEnvelopeSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "preFinalLogLeaf": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "logId",
+        "leafOrdinal",
+        "receiptId",
+        "receiptSequence",
+        "requesterPrincipalId",
+        "replayKeySha256",
+        "requestV11Sha256",
+        "requestEnvelopeSha256",
+        "receiptBodySha256",
+        "receiptAuthenticationEnvelopeSha256",
+        "terminalEvidenceRootSha256",
+        "terminalStateRootSha256",
+        "leafSha256"
+      ],
+      "properties": {
+        "logId": {
+          "$ref": "#/$defs/id"
+        },
+        "leafOrdinal": {
+          "$ref": "#/$defs/u64"
+        },
+        "receiptId": {
+          "$ref": "#/$defs/id"
+        },
+        "receiptSequence": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "requesterPrincipalId": {
+          "$ref": "#/$defs/id"
+        },
+        "replayKeySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "requestV11Sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "requestEnvelopeSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "receiptBodySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "receiptAuthenticationEnvelopeSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "terminalEvidenceRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "terminalStateRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "leafSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "treeHeadPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "logId",
+        "checkpointSequence",
+        "treeSize",
+        "rootSha256",
+        "previousSignedTreeHeadEnvelopeSha256",
+        "latestLeafSha256",
+        "latestReceiptSequence",
+        "issuedAt"
+      ],
+      "properties": {
+        "logId": {
+          "$ref": "#/$defs/id"
+        },
+        "checkpointSequence": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "treeSize": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "rootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "previousSignedTreeHeadEnvelopeSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "latestLeafSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "latestReceiptSequence": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "issuedAt": {
+          "$ref": "#/$defs/rfc3339"
+        }
+      }
+    },
+    "signedTreeHead": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "domain",
+        "payload",
+        "payloadSha256",
+        "signature"
+      ],
+      "properties": {
+        "domain": {
+          "const": "serverware/receipt-tree-head/v12"
+        },
+        "payload": {
+          "$ref": "#/$defs/treeHeadPayload"
+        },
+        "payloadSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "signature": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/signature"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "domain": {
+                  "const": "serverware/receipt-tree-head/v12"
+                },
+                "signerRole": {
+                  "const": "controllerReceiptLog"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "proofNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "direction",
+        "sha256"
+      ],
+      "properties": {
+        "direction": {
+          "enum": [
+            "LEFT",
+            "RIGHT"
+          ]
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "inclusionProof": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "treeDomain",
+        "leafOrdinal",
+        "treeSize",
+        "leafSha256",
+        "rootSha256",
+        "path"
+      ],
+      "properties": {
+        "treeDomain": {
+          "const": "SERVERWARE_CONTROLLER_RECEIPTS_V12"
+        },
+        "leafOrdinal": {
+          "$ref": "#/$defs/u64"
+        },
+        "treeSize": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "leafSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "rootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "path": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/proofNode"
+          }
+        }
+      }
+    },
+    "consistencyProof": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "treeDomain",
+        "fromTreeSize",
+        "fromRootSha256",
+        "toTreeSize",
+        "toRootSha256",
+        "nodes"
+      ],
+      "properties": {
+        "treeDomain": {
+          "const": "SERVERWARE_CONTROLLER_RECEIPTS_V12"
+        },
+        "fromTreeSize": {
+          "$ref": "#/$defs/u64"
+        },
+        "fromRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "toTreeSize": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "toRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "nodes": {
+          "$ref": "#/$defs/digestList"
+        }
+      }
+    },
+    "externalWitnessPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "witnessId",
+        "logId",
+        "signedTreeHeadEnvelopeSha256",
+        "treeSize",
+        "rootSha256",
+        "witnessSequence",
+        "previousWitnessCheckpointEnvelopeSha256",
+        "observedAt"
+      ],
+      "properties": {
+        "witnessId": {
+          "$ref": "#/$defs/id"
+        },
+        "logId": {
+          "$ref": "#/$defs/id"
+        },
+        "signedTreeHeadEnvelopeSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "treeSize": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "rootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "witnessSequence": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "previousWitnessCheckpointEnvelopeSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "observedAt": {
+          "$ref": "#/$defs/rfc3339"
+        }
+      }
+    },
+    "externalWitnessCheckpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "domain",
+        "payload",
+        "payloadSha256",
+        "signature"
+      ],
+      "properties": {
+        "domain": {
+          "const": "serverware/receipt-external-witness/v12"
+        },
+        "payload": {
+          "$ref": "#/$defs/externalWitnessPayload"
+        },
+        "payloadSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "signature": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/signature"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "domain": {
+                  "const": "serverware/receipt-external-witness/v12"
+                },
+                "signerRole": {
+                  "const": "controllerReceiptExternalWitness"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "authorityTrustObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "role",
+        "principalId",
+        "keyId",
+        "spkiDerSha256",
+        "physicalPrivateKeyIdentitySha256",
+        "keyAuthorizationSha256",
+        "authorizationRootSha256",
+        "authorizationRevision",
+        "revocationRootSha256",
+        "revocationRevision",
+        "highWater",
+        "observedAt",
+        "status"
+      ],
+      "properties": {
+        "role": {
+          "enum": [
+            "controllerIngress",
+            "controllerReceiptAuthentication",
+            "controllerReceiptLog",
+            "controllerReceiptExternalWitness",
+            "controllerFinalVerdict",
+            "controllerFinalSettlement"
+          ]
+        },
+        "principalId": {
+          "$ref": "#/$defs/id"
+        },
+        "keyId": {
+          "$ref": "#/$defs/id"
+        },
+        "spkiDerSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "physicalPrivateKeyIdentitySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "keyAuthorizationSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "authorizationRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "authorizationRevision": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "revocationRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "revocationRevision": {
+          "$ref": "#/$defs/u64"
+        },
+        "highWater": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "observedAt": {
+          "$ref": "#/$defs/rfc3339"
+        },
+        "status": {
+          "const": "ACTIVE"
+        }
+      }
+    },
+    "requesterTrustMaterial": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "principalId",
+        "keyId",
+        "verifyingKeyBase64url",
+        "spkiDerSha256",
+        "physicalPrivateKeyIdentitySha256",
+        "keyLeafSha256",
+        "trustRootSha256",
+        "trustRevision",
+        "nonRevocationRootSha256",
+        "nonRevocationRevision",
+        "authorizationHighWater",
+        "revocationHighWater",
+        "validFrom",
+        "validUntil",
+        "status"
+      ],
+      "properties": {
+        "principalId": {
+          "$ref": "#/$defs/id"
+        },
+        "keyId": {
+          "$ref": "#/$defs/id"
+        },
+        "verifyingKeyBase64url": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43}$"
+        },
+        "spkiDerSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "physicalPrivateKeyIdentitySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "keyLeafSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "trustRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "trustRevision": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "nonRevocationRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "nonRevocationRevision": {
+          "$ref": "#/$defs/u64"
+        },
+        "authorizationHighWater": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "revocationHighWater": {
+          "$ref": "#/$defs/u64"
+        },
+        "validFrom": {
+          "$ref": "#/$defs/rfc3339"
+        },
+        "validUntil": {
+          "$ref": "#/$defs/rfc3339"
+        },
+        "status": {
+          "const": "ACTIVE"
+        }
+      }
+    },
+    "authorityTrustMaterial": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "role",
+        "principalId",
+        "keyId",
+        "verifyingKeyBase64url",
+        "spkiDerSha256",
+        "physicalPrivateKeyIdentitySha256",
+        "keyAuthorizationSha256",
+        "authorizationRootSha256",
+        "authorizationRevision",
+        "revocationRootSha256",
+        "revocationRevision",
+        "authorizationHighWater",
+        "revocationHighWater",
+        "validFrom",
+        "validUntil",
+        "status"
+      ],
+      "properties": {
+        "role": {
+          "enum": [
+            "controllerIngress",
+            "controllerReceiptAuthentication",
+            "controllerReceiptLog",
+            "controllerReceiptExternalWitness",
+            "controllerFinalVerdict",
+            "controllerTrustRoot",
+            "controllerTrustGeneration",
+            "controllerFinalSettlement"
+          ]
+        },
+        "principalId": {
+          "$ref": "#/$defs/id"
+        },
+        "keyId": {
+          "$ref": "#/$defs/id"
+        },
+        "verifyingKeyBase64url": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43}$"
+        },
+        "spkiDerSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "physicalPrivateKeyIdentitySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "keyAuthorizationSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "authorizationRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "authorizationRevision": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "revocationRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "revocationRevision": {
+          "$ref": "#/$defs/u64"
+        },
+        "authorizationHighWater": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "revocationHighWater": {
+          "$ref": "#/$defs/u64"
+        },
+        "validFrom": {
+          "$ref": "#/$defs/rfc3339"
+        },
+        "validUntil": {
+          "$ref": "#/$defs/rfc3339"
+        },
+        "status": {
+          "const": "ACTIVE"
+        }
+      }
+    },
+    "trustGenerationAuthorizationPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "trustRootGeneration",
+        "generationPrincipalId",
+        "generationKeyId",
+        "generationVerifyingKeyBase64url",
+        "generationSpkiDerSha256",
+        "generationPhysicalPrivateKeyIdentitySha256",
+        "minimumGenerationSequence",
+        "maximumGenerationSequence",
+        "authorizationHighWater",
+        "revocationHighWater",
+        "validFrom",
+        "validUntil",
+        "issuedAt"
+      ],
+      "properties": {
+        "trustRootGeneration": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "generationPrincipalId": {
+          "$ref": "#/$defs/id"
+        },
+        "generationKeyId": {
+          "$ref": "#/$defs/id"
+        },
+        "generationVerifyingKeyBase64url": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43}$"
+        },
+        "generationSpkiDerSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "generationPhysicalPrivateKeyIdentitySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "minimumGenerationSequence": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "maximumGenerationSequence": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "authorizationHighWater": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "revocationHighWater": {
+          "$ref": "#/$defs/u64"
+        },
+        "validFrom": {
+          "$ref": "#/$defs/rfc3339"
+        },
+        "validUntil": {
+          "$ref": "#/$defs/rfc3339"
+        },
+        "issuedAt": {
+          "$ref": "#/$defs/rfc3339"
+        }
+      }
+    },
+    "trustGenerationAuthorizationEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "domain",
+        "payload",
+        "payloadSha256",
+        "signature"
+      ],
+      "properties": {
+        "domain": {
+          "const": "serverware/trust-generation-authorization/v12"
+        },
+        "payload": {
+          "$ref": "#/$defs/trustGenerationAuthorizationPayload"
+        },
+        "payloadSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "signature": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/signature"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "domain": {
+                  "const": "serverware/trust-generation-authorization/v12"
+                },
+                "signerRole": {
+                  "const": "controllerTrustRoot"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "trustGenerationPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "generationSequence",
+        "rollbackFloor",
+        "previousGenerationEnvelopeSha256",
+        "authorizationChainEnvelopeSha256",
+        "requestV11SchemaSha256",
+        "receiptV12SchemaSha256",
+        "requester",
+        "controllerIngress",
+        "receiptAuthentication",
+        "receiptLog",
+        "externalWitness",
+        "finalVerdict",
+        "finalSettlement",
+        "generatedAt"
+      ],
+      "properties": {
+        "generationSequence": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "rollbackFloor": {
+          "$ref": "#/$defs/u64"
+        },
+        "previousGenerationEnvelopeSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "authorizationChainEnvelopeSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "requestV11SchemaSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "receiptV12SchemaSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "requester": {
+          "$ref": "#/$defs/requesterTrustMaterial"
+        },
+        "controllerIngress": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/authorityTrustMaterial"
+            },
+            {
+              "properties": {
+                "role": {
+                  "const": "controllerIngress"
+                }
+              }
+            }
+          ]
+        },
+        "receiptAuthentication": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/authorityTrustMaterial"
+            },
+            {
+              "properties": {
+                "role": {
+                  "const": "controllerReceiptAuthentication"
+                }
+              }
+            }
+          ]
+        },
+        "receiptLog": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/authorityTrustMaterial"
+            },
+            {
+              "properties": {
+                "role": {
+                  "const": "controllerReceiptLog"
+                }
+              }
+            }
+          ]
+        },
+        "externalWitness": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/authorityTrustMaterial"
+            },
+            {
+              "properties": {
+                "role": {
+                  "const": "controllerReceiptExternalWitness"
+                }
+              }
+            }
+          ]
+        },
+        "finalVerdict": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/authorityTrustMaterial"
+            },
+            {
+              "properties": {
+                "role": {
+                  "const": "controllerFinalVerdict"
+                }
+              }
+            }
+          ]
+        },
+        "finalSettlement": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/authorityTrustMaterial"
+            },
+            {
+              "properties": {
+                "role": {
+                  "const": "controllerFinalSettlement"
+                }
+              }
+            }
+          ]
+        },
+        "generatedAt": {
+          "$ref": "#/$defs/rfc3339"
+        }
+      }
+    },
+    "signedTrustGeneration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "domain",
+        "payload",
+        "payloadSha256",
+        "signature"
+      ],
+      "properties": {
+        "domain": {
+          "const": "serverware/trust-generation/v12"
+        },
+        "payload": {
+          "$ref": "#/$defs/trustGenerationPayload"
+        },
+        "payloadSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "signature": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/signature"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "domain": {
+                  "const": "serverware/trust-generation/v12"
+                },
+                "signerRole": {
+                  "const": "controllerTrustGeneration"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "trustGenerationBundle": {
+      "description": "Retained signed authorization chain and signed generation. Native verification applies the complete Rust contract and both signature domains before any carried key material is trusted.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authorizationChain",
+        "authorizationChainEnvelopeSha256",
+        "generation",
+        "generationEnvelopeSha256"
+      ],
+      "properties": {
+        "authorizationChain": {
+          "$ref": "#/$defs/trustGenerationAuthorizationEnvelope"
+        },
+        "authorizationChainEnvelopeSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "generation": {
+          "$ref": "#/$defs/signedTrustGeneration"
+        },
+        "generationEnvelopeSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "finalTrustObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "trustGeneration",
+        "trustGenerationEnvelopeSha256",
+        "trustGenerationSequence",
+        "trustRollbackFloor",
+        "controllerIngressAuthority",
+        "receiptAuthenticationAuthority",
+        "receiptLogAuthority",
+        "externalWitnessAuthority",
+        "finalVerdictAuthority",
+        "finalSettlementAuthority",
+        "receiptSchemaSha256",
+        "requestTrustObservationSha256",
+        "bodyTrustObservationSha256",
+        "signedTreeHeadEnvelopeSha256",
+        "externalWitnessCheckpointEnvelopeSha256",
+        "minimumAcceptedReceiptSequence",
+        "minimumAcceptedTreeSize",
+        "minimumAcceptedWitnessSequence",
+        "observedAt"
+      ],
+      "properties": {
+        "trustGeneration": {
+          "$ref": "#/$defs/trustGenerationBundle"
+        },
+        "trustGenerationEnvelopeSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "trustGenerationSequence": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "trustRollbackFloor": {
+          "$ref": "#/$defs/u64"
+        },
+        "controllerIngressAuthority": {
+          "$ref": "#/$defs/authorityTrustObservation"
+        },
+        "receiptAuthenticationAuthority": {
+          "$ref": "#/$defs/authorityTrustObservation"
+        },
+        "receiptLogAuthority": {
+          "$ref": "#/$defs/authorityTrustObservation"
+        },
+        "externalWitnessAuthority": {
+          "$ref": "#/$defs/authorityTrustObservation"
+        },
+        "finalVerdictAuthority": {
+          "$ref": "#/$defs/authorityTrustObservation"
+        },
+        "finalSettlementAuthority": {
+          "$ref": "#/$defs/authorityTrustObservation"
+        },
+        "receiptSchemaSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "requestTrustObservationSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "bodyTrustObservationSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "signedTreeHeadEnvelopeSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "externalWitnessCheckpointEnvelopeSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "minimumAcceptedReceiptSequence": {
+          "$ref": "#/$defs/u64"
+        },
+        "minimumAcceptedTreeSize": {
+          "$ref": "#/$defs/u64"
+        },
+        "minimumAcceptedWitnessSequence": {
+          "$ref": "#/$defs/u64"
+        },
+        "observedAt": {
+          "$ref": "#/$defs/rfc3339"
+        }
+      }
+    },
+    "finalVerdictPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receiptId",
+        "receiptSequence",
+        "requesterPrincipalId",
+        "replayKeySha256",
+        "requestV11Sha256",
+        "requestEnvelopeSha256",
+        "requestCanonicalBytes",
+        "receiptBodySha256",
+        "receiptBodyCanonicalBytes",
+        "terminalEvidenceRootSha256",
+        "terminalStateRootSha256",
+        "receiptAuthenticationEnvelopeSha256",
+        "signedTreeHeadEnvelopeSha256",
+        "externalWitnessCheckpointEnvelopeSha256",
+        "logBundleSha256",
+        "finalTrustObservationSha256",
+        "treeSize",
+        "treeRootSha256",
+        "verdict",
+        "issuedAt"
+      ],
+      "properties": {
+        "receiptId": {
+          "$ref": "#/$defs/id"
+        },
+        "receiptSequence": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "requesterPrincipalId": {
+          "$ref": "#/$defs/id"
+        },
+        "replayKeySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "requestV11Sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "requestEnvelopeSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "requestCanonicalBytes": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "receiptBodySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "receiptBodyCanonicalBytes": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "terminalEvidenceRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "terminalStateRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "receiptAuthenticationEnvelopeSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "signedTreeHeadEnvelopeSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "externalWitnessCheckpointEnvelopeSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "logBundleSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "finalTrustObservationSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "treeSize": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "treeRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "verdict": {
+          "enum": [
+            "PASS",
+            "FAIL",
+            "UNKNOWN",
+            "REJECTED"
+          ]
+        },
+        "issuedAt": {
+          "$ref": "#/$defs/rfc3339"
+        }
+      }
+    },
+    "finalVerdictEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "domain",
+        "payload",
+        "payloadSha256",
+        "signature"
+      ],
+      "properties": {
+        "domain": {
+          "const": "serverware/final-verdict/v12"
+        },
+        "payload": {
+          "$ref": "#/$defs/finalVerdictPayload"
+        },
+        "payloadSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "signature": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/signature"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "domain": {
+                  "const": "serverware/final-verdict/v12"
+                },
+                "signerRole": {
+                  "const": "controllerFinalVerdict"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "loggedReceiptBundle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contractVersion",
+        "requestContractVersion",
+        "receiptId",
+        "receiptSequence",
+        "requesterPrincipalId",
+        "replayIdentity",
+        "requestV11",
+        "requestAdmission",
+        "requestAdmissionSha256",
+        "requestV11Sha256",
+        "requestEnvelopeSha256",
+        "requestCanonicalBytes",
+        "receiptBody",
+        "receiptBodySha256",
+        "receiptBodyCanonicalBytes",
+        "receiptAuthenticationEnvelope",
+        "receiptAuthenticationEnvelopeSha256",
+        "previousCheckpoint",
+        "preFinalLogLeaf",
+        "signedTreeHead",
+        "signedTreeHeadEnvelopeSha256",
+        "inclusionProof",
+        "consistencyProof"
+      ],
+      "properties": {
+        "contractVersion": {
+          "const": 12
+        },
+        "requestContractVersion": {
+          "const": 11
+        },
+        "receiptId": {
+          "$ref": "#/$defs/id"
+        },
+        "receiptSequence": {
+          "$ref": "#/$defs/u64"
+        },
+        "requesterPrincipalId": {
+          "$ref": "#/$defs/id"
+        },
+        "replayIdentity": {
+          "$ref": "#/$defs/replayIdentity"
+        },
+        "requestV11": {
+          "$ref": "coder-test-controller-request.v1.schema.json"
+        },
+        "requestAdmission": {
+          "$ref": "#/$defs/canonicalRequestAdmission"
+        },
+        "requestAdmissionSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "requestV11Sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "requestEnvelopeSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "requestCanonicalBytes": {
+          "$ref": "#/$defs/u64"
+        },
+        "receiptBody": {
+          "$ref": "#/$defs/receiptBody"
+        },
+        "receiptBodySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "receiptBodyCanonicalBytes": {
+          "$ref": "#/$defs/u64"
+        },
+        "receiptAuthenticationEnvelope": {
+          "$ref": "#/$defs/receiptAuthenticationEnvelope"
+        },
+        "receiptAuthenticationEnvelopeSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "previousCheckpoint": {
+          "$ref": "#/$defs/previousCheckpoint"
+        },
+        "preFinalLogLeaf": {
+          "$ref": "#/$defs/preFinalLogLeaf"
+        },
+        "signedTreeHead": {
+          "$ref": "#/$defs/signedTreeHead"
+        },
+        "signedTreeHeadEnvelopeSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "inclusionProof": {
+          "$ref": "#/$defs/inclusionProof"
+        },
+        "consistencyProof": {
+          "$ref": "#/$defs/consistencyProof"
+        }
+      }
+    },
+    "finalSettlementOutcome": {
+      "enum": [
+        "GENESIS",
+        "RECEIPT",
+        "TERMINAL_ABORT"
+      ]
+    },
+    "finalSettlementPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "outcome",
+        "receiptId",
+        "receiptSequence",
+        "requesterPrincipalId",
+        "replayKeySha256",
+        "requestV11Sha256",
+        "preFinalLogLeafSha256",
+        "receiptEnvelopeSha256",
+        "terminalAbortReasonSha256",
+        "settlementSequence",
+        "previousSettlementCheckpointEnvelopeSha256",
+        "treeSize",
+        "treeRootSha256",
+        "signedTreeHeadEnvelopeSha256",
+        "witnessSequence",
+        "witnessCheckpointEnvelopeSha256",
+        "trustGenerationEnvelopeSha256",
+        "trustGenerationSequence",
+        "settledAt"
+      ],
+      "properties": {
+        "outcome": {
+          "$ref": "#/$defs/finalSettlementOutcome"
+        },
+        "receiptId": {
+          "$ref": "#/$defs/id"
+        },
+        "receiptSequence": {
+          "$ref": "#/$defs/u64"
+        },
+        "requesterPrincipalId": {
+          "$ref": "#/$defs/id"
+        },
+        "replayKeySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "requestV11Sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "preFinalLogLeafSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "receiptEnvelopeSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "terminalAbortReasonSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "settlementSequence": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "previousSettlementCheckpointEnvelopeSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "treeSize": {
+          "$ref": "#/$defs/u64"
+        },
+        "treeRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "signedTreeHeadEnvelopeSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "witnessSequence": {
+          "$ref": "#/$defs/u64"
+        },
+        "witnessCheckpointEnvelopeSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "trustGenerationEnvelopeSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "trustGenerationSequence": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "settledAt": {
+          "$ref": "#/$defs/rfc3339"
+        }
+      }
+    },
+    "finalSettlementCheckpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "domain",
+        "payload",
+        "payloadSha256",
+        "signature"
+      ],
+      "properties": {
+        "domain": {
+          "const": "serverware/final-settlement/v12"
+        },
+        "payload": {
+          "$ref": "#/$defs/finalSettlementPayload"
+        },
+        "payloadSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "signature": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/signature"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "domain": {
+                  "const": "serverware/final-settlement/v12"
+                },
+                "signerRole": {
+                  "const": "controllerFinalSettlement"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "finalSettlementArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "outcome",
+        "loggedBundle",
+        "externalWitnessCheckpoint",
+        "receipt",
+        "terminalAbortReason",
+        "trustGeneration",
+        "finalSettlementCheckpoint",
+        "finalSettlementCheckpointEnvelopeSha256"
+      ],
+      "properties": {
+        "outcome": {
+          "$ref": "#/$defs/finalSettlementOutcome"
+        },
+        "loggedBundle": {
+          "$ref": "#/$defs/loggedReceiptBundle"
+        },
+        "externalWitnessCheckpoint": {
+          "$ref": "#/$defs/externalWitnessCheckpoint"
+        },
+        "receipt": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/receipt"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "terminalAbortReason": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "trustGeneration": {
+          "$ref": "#/$defs/trustGenerationBundle"
+        },
+        "finalSettlementCheckpoint": {
+          "$ref": "#/$defs/finalSettlementCheckpoint"
+        },
+        "finalSettlementCheckpointEnvelopeSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "outcome": {
+                "const": "RECEIPT"
+              }
+            },
+            "required": [
+              "outcome"
+            ]
+          },
+          "then": {
+            "properties": {
+              "receipt": {
+                "$ref": "#/$defs/receipt"
+              },
+              "terminalAbortReason": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "outcome": {
+                "const": "TERMINAL_ABORT"
+              }
+            },
+            "required": [
+              "outcome"
+            ]
+          },
+          "then": {
+            "properties": {
+              "receipt": {
+                "type": "null"
+              },
+              "terminalAbortReason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "outcome": {
+                "const": "GENESIS"
+              }
+            },
+            "required": [
+              "outcome"
+            ]
+          },
+          "then": {
+            "properties": {
+              "receipt": {
+                "type": "null"
+              },
+              "terminalAbortReason": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "authorityDeadline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bootIdSha256",
+        "boottimeDeadlineNs",
+        "requestDeadlineUnixMs"
+      ],
+      "properties": {
+        "bootIdSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "boottimeDeadlineNs": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "requestDeadlineUnixMs": {
+          "$ref": "#/$defs/positiveU64"
+        }
+      }
+    },
+    "destructionEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requestBindingSha256",
+        "laneGenerationSha256",
+        "acceptanceRevokedSha256",
+        "cgroupKillSha256",
+        "cgroupEmptySha256",
+        "dindDestroyedSha256",
+        "networkDestroyedSha256",
+        "mountsDestroyedSha256",
+        "socketsDestroyedSha256",
+        "cleanupTerminalSha256"
+      ],
+      "properties": {
+        "requestBindingSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "laneGenerationSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "acceptanceRevokedSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "cgroupKillSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "cgroupEmptySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "dindDestroyedSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "networkDestroyedSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "mountsDestroyedSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "socketsDestroyedSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "cleanupTerminalSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "lifecycleCleanupRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol",
+        "operation",
+        "invocationSha256",
+        "requestSha256",
+        "executorEvidenceSha256",
+        "reasonCode",
+        "bootIdSha256",
+        "cleanupDeadlineBoottimeNs",
+        "idempotencyKeySha256",
+        "requestSha256Canonical"
+      ],
+      "properties": {
+        "protocol": {
+          "const": "serverware/controller-lifecycle/v12"
+        },
+        "operation": {
+          "const": "DESTROY_AND_RECONCILE"
+        },
+        "invocationSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "requestSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "executorEvidenceSha256": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reasonCode": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "bootIdSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "cleanupDeadlineBoottimeNs": {
+          "$ref": "#/$defs/positiveU64"
+        },
+        "idempotencyKeySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "requestSha256Canonical": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "lifecycleCleanupResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol",
+        "operation",
+        "disposition",
+        "requestSha256Canonical",
+        "destruction",
+        "privilegedResponseSha256",
+        "responseSha256"
+      ],
+      "properties": {
+        "protocol": {
+          "const": "serverware/controller-lifecycle/v12"
+        },
+        "operation": {
+          "const": "DESTROY_AND_RECONCILE"
+        },
+        "disposition": {
+          "const": "DESTROYED"
+        },
+        "requestSha256Canonical": {
+          "$ref": "#/$defs/sha256"
+        },
+        "destruction": {
+          "$ref": "#/$defs/destructionEvidence"
+        },
+        "privilegedResponseSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "responseSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "lifecycleCleanupEvidence": {
+      "description": "Closed exact-request-bound cleanup record. The request carries host boot identity and CLOCK_BOOTTIME deadline; the response carries complete destruction evidence and canonical response digests.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "request",
+        "response"
+      ],
+      "properties": {
+        "request": {
+          "$ref": "#/$defs/lifecycleCleanupRequest"
+        },
+        "response": {
+          "$ref": "#/$defs/lifecycleCleanupResponse"
+        }
+      }
+    }
+  },
+  "x-canonical-v12": {
+    "json": "Every object is RFC 8785 canonical JSON encoded as UTF-8. A bounded duplicate-aware streaming preflight rejects duplicate keys, floating-point and negative values, unsafe JSON integers above 2^53-1, invalid UTF-8, noncanonical numbers, excess nesting, excess members, excess strings, trailing bytes, and inputs larger than the operation-specific bound before object allocation. All counters and lengths other than literal contractVersion use D20 strings.",
+    "clientArtifact": "The schema root remains ReceiptV12 for controller wire compatibility. The closed finalSettlementArtifact definition is used by durable lookup and settlement verification. It is non-cyclic: the artifact may carry one ReceiptV12, while ReceiptV12 never embeds the settlement artifact. finalSettlementArtifactSha256 = H12('final-settlement-artifact',JCS(finalSettlementArtifact)) is an external lookup and commit binding and is intentionally not embedded in the artifact itself.",
+    "requestV11": "requestAdmission retains the exact 256-byte canonical preallocation frame, exact canonical request v11 bytes, and a controller-ingress signature over trusted receive time, CLOCK_BOOTTIME observation, absolute request deadline, frame and request digests and limits, current requester authorization and revocation high-water, verifier profile, full relationship profile, and controller configuration. Native verification invokes the canonical v11 frame decoder and request verifier and never creates a fresh requestedAt for an expired request. requestAdmissionSha256 = H12('canonical-request-admission-v11',JCS(requestAdmission)).",
+    "digest": "H12(tag,parts...) = SHA-256(UTF8('serverware/controller/v12/') || U64BE(LEN(tag)) || UTF8(tag) || each U64BE(LEN(part)) || part). JSON parts are exact RFC 8785 bytes. Hex digest fields decode to exactly 32 bytes before entering a preimage.",
+    "signature": "A v12 signature signs H12('signature-message',UTF8(domain),HEX(payloadSha256),UTF8(signedAt),UTF8(acceptedAt),UTF8(signerRole),UTF8(signerPrincipalId),UTF8(signerKeyId),HEX(signerSpkiDerSha256),HEX(keyAuthorization.keyAuthorizationSha256)). The signature's domain, role, principal, key, SPKI, authorization, validity, revocation, and high-water must equal an independently resolved current pin; carried authorization is join evidence only.",
+    "typedEnvelope": "payloadSha256 = H12('payload',UTF8(domain),JCS(payload)). envelopeSha256 = H12('typed-envelope',UTF8(domain),HEX(payloadSha256),JCS(signature)). receiptAuthenticationEnvelopeSha256, signedTreeHeadEnvelopeSha256, externalWitnessCheckpointEnvelopeSha256, finalVerdictEnvelopeSha256, authorizationChainEnvelopeSha256, generationEnvelopeSha256, and finalSettlementCheckpointEnvelopeSha256 use this sole formula.",
+    "receiptBody": "receiptBodySha256 = H12('receipt-body',JCS(receiptBody)); receiptBodyCanonicalBytes is its exact canonical byte length. Root, body, authentication, log leaf, final trust, and final verdict fields named receiptId, receiptSequence, replayKeySha256, requestV11Sha256, requestEnvelopeSha256, requestCanonicalBytes, terminalEvidenceRootSha256, terminalStateRootSha256, bodyTrustObservationSha256, receiptBodySha256, and receiptBodyCanonicalBytes agree byte-for-byte wherever present.",
+    "replay": "replayKeySha256 = H12('replay-identity',UTF8(replayNamespace),UTF8(replayKey)). A replay key permanently identifies one prepared binding. An exact retry returns the byte-for-byte stored artifact for its settled stage; any changed request, body, terminal root, trust observation, verdict, witness checkpoint, or finalization input is a conflict.",
+    "log": "leafSha256 = H12('pre-final-log-leaf',JCS(preFinalLogLeaf with leafSha256 replaced by 64 ASCII zeroes)). The log uses RFC 6962 shape without duplicate-last: leaf node H12('merkle-leaf',UTF8(treeDomain),HEX(leafSha256)); internal node H12('merkle-node',UTF8(treeDomain),HEX(left),HEX(right)); empty root H12('merkle-empty',UTF8(treeDomain)). Inclusion and consistency proofs are verified against the exact signed head. A non-genesis head names the immediately preceding signed head and proves append-only extension; genesis uses the fixed empty root and zero tree size.",
+    "witness": "The external witness checkpoint signs the exact signed-tree-head envelope digest, tree size, root, witness sequence, and predecessor witness checkpoint. The witness key, log, rollback high-water, and current revocation state come from independent verifier pins, never from the receipt.",
+    "finalTrust": "finalTrustObservationSha256 = H12('final-trust-observation',JCS(finalTrustObservation)). Each finalization retains a trust-root-authorized signed generation, its predecessor and rollback floor, and exact requester, controller-ingress, receipt-authentication, receipt-log, external-witness, final-verdict, and final-settlement material. Historical exact-byte retries use that retained chain; fresh finalizations must also match independently resolved current policy and monotonic authorization and revocation high-water.",
+    "finalSettlement": "The final-settlement checkpoint signs outcome, receipt or terminal-abort binding, predecessor settlement checkpoint, exact log head and witness checkpoint, and retained trust generation. The checkpoint envelope digest is carried beside the checkpoint; no settlement or artifact digest is embedded in its own preimage. RECEIPT requires a receipt and no terminalAbortReason; TERMINAL_ABORT requires a reason and no receipt; GENESIS carries neither.",
+    "bootIdentity": "trustedReceivePayload.bootIdSha256 and every authorityDeadline or lifecycleCleanupRequest bootIdSha256 bind CLOCK_BOOTTIME values to one kernel boot. Native verification rejects persisted deadlines or cleanup requests whose boot identity differs from the current host boot.",
+    "cleanup": "lifecycleCleanupEvidence is a closed auxiliary evidence shape for the controller-v12 lifecycle contract. Its request binds invocation, request, idempotency key, host boot, and cleanup deadline; its response binds complete destruction evidence and canonical response digests. The current FinalSettlementArtifactV12 Rust type does not embed this object, so cleanup is committed indirectly through terminal evidence and state roots.",
+    "loggedBundle": "loggedBundleSha256 = H12('logged-receipt-bundle',JCS(loggedBundle)). This pre-witness durable bundle digest is distinct from ReceiptV12.logBundleSha256.",
+    "logBundle": "logBundleSha256 = H12('log-bundle',JCS(previousCheckpoint),JCS(preFinalLogLeaf),HEX(signedTreeHeadEnvelopeSha256),JCS(inclusionProof),JCS(consistencyProof),HEX(externalWitnessCheckpointEnvelopeSha256)).",
+    "receiptEnvelope": "receiptEnvelopeSha256 = H12('receipt-envelope',UTF8('12'),UTF8('11'),UTF8(receiptId),D20(receiptSequence),UTF8(requesterPrincipalId),HEX(replayIdentity.replayKeySha256),HEX(requestV11Sha256),HEX(requestEnvelopeSha256),D20(requestCanonicalBytes),HEX(requestAdmissionSha256),HEX(receiptBodySha256),D20(receiptBodyCanonicalBytes),HEX(receiptAuthenticationEnvelopeSha256),HEX(signedTreeHeadEnvelopeSha256),HEX(externalWitnessCheckpointEnvelopeSha256),HEX(logBundleSha256),HEX(finalTrustObservation.trustGenerationEnvelopeSha256),HEX(finalTrustObservationSha256),HEX(finalVerdictEnvelopeSha256)). receiptCanonicalBytes is the exact canonical root length after replacing only receiptEnvelopeSha256 with 64 ASCII zeroes and receiptCanonicalBytes with 20 ASCII zeroes."
+  },
+  "x-mandatory-external-trust-inputs-v12": {
+    "requestVerifier": "A separately versioned strict v11 request verifier and immutable v11 request-schema digest.",
+    "authorityPins": "Current independently resolved authorization, SPKI, validity, revocation, physical-custody, and high-water pins for controller ingress, receipt authentication, receipt logging, external witnessing, final verdict, trust root, trust generation, and final settlement.",
+    "separation": "Receipt-authentication and final-verdict private keys are held by separate processes, UIDs, credentials, and ideally separate HSM or TPM slots. Neither authority maps the other's private key.",
+    "witness": "An independently operated append-only witness with rollback-resistant high-water. A co-located witness must be reported as co-located and does not establish fault-domain independence.",
+    "ledger": "A durable single-writer ledger with FULL-style file and directory synchronization, exact-byte artifact retention, monotonic sequence allocation, startup reconciliation, and external rollback anchoring."
+  }
+}

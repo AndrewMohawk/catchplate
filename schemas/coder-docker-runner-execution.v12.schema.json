@@ -1,0 +1,459 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.dev/schemas/coder-docker-runner-execution.v12.schema.json",
+  "title": "Serverware Docker RunnerExecution V12",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contractVersion",
+    "authorityKind",
+    "authorityId",
+    "requestId",
+    "laneId",
+    "daemonGeneration",
+    "sourceSealSha256",
+    "artifactSealSha256",
+    "profile",
+    "ownerNamespace",
+    "containerLogicalId",
+    "image",
+    "entrypoint",
+    "cmd",
+    "env",
+    "user",
+    "workingDir",
+    "resources",
+    "mounts",
+    "aliases",
+    "health",
+    "endpoints",
+    "signerAuthorization",
+    "signature"
+  ],
+  "properties": {
+    "contractVersion": {
+      "const": "12"
+    },
+    "authorityKind": {
+      "const": "RUNNER_EXECUTION"
+    },
+    "authorityId": {
+      "$ref": "#/$defs/id"
+    },
+    "requestId": {
+      "$ref": "#/$defs/id"
+    },
+    "laneId": {
+      "$ref": "#/$defs/id"
+    },
+    "daemonGeneration": {
+      "$ref": "#/$defs/id"
+    },
+    "sourceSealSha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "artifactSealSha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "profile": {
+      "$ref": "#/$defs/noBuildProfile"
+    },
+    "ownerNamespace": {
+      "$ref": "#/$defs/ownerNamespace"
+    },
+    "containerLogicalId": {
+      "$ref": "#/$defs/id"
+    },
+    "image": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "entrypoint": {
+      "$ref": "#/$defs/argv64"
+    },
+    "cmd": {
+      "$ref": "#/$defs/argv256"
+    },
+    "env": {
+      "$ref": "#/$defs/environment"
+    },
+    "user": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]{0,4}:[1-9][0-9]{0,4}$"
+    },
+    "workingDir": {
+      "$ref": "#/$defs/absolutePath"
+    },
+    "resources": {
+      "$ref": "#/$defs/resources"
+    },
+    "mounts": {
+      "$ref": "#/$defs/mounts"
+    },
+    "aliases": {
+      "$ref": "#/$defs/aliases"
+    },
+    "health": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/health"
+        }
+      ]
+    },
+    "endpoints": {
+      "$ref": "#/$defs/endpoints"
+    },
+    "signerAuthorization": {
+      "$ref": "#/$defs/signerAuthorization"
+    },
+    "signature": {
+      "$ref": "#/$defs/runnerSignature"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$",
+      "maxLength": 128
+    },
+    "ownerNamespace": {
+      "type": "string",
+      "pattern": "^serverware-[a-z0-9][a-z0-9-]{7,62}$",
+      "maxLength": 63
+    },
+    "noBuildProfile": {
+      "enum": [
+        "UNIT_NO_BUILD",
+        "INTEGRATION_NO_BUILD",
+        "E2E_NO_BUILD",
+        "ATTESTATION_NO_BUILD"
+      ]
+    },
+    "absolutePath": {
+      "type": "string",
+      "pattern": "^/(?!.*(?:^|/)\\.\\.?(?:/|$))(?!.*//)[^\\u0000]{0,4095}$",
+      "maxLength": 4096
+    },
+    "argv64": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 8192
+      }
+    },
+    "argv256": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 8192
+      }
+    },
+    "environment": {
+      "type": "array",
+      "description": "Strictly sorted and unique by name.",
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "value"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"
+          },
+          "value": {
+            "type": "string",
+            "maxLength": 8192
+          }
+        }
+      }
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "memoryBytes",
+        "nanoCpus",
+        "pidsLimit",
+        "shmBytes"
+      ],
+      "properties": {
+        "memoryBytes": {
+          "type": "integer",
+          "minimum": 16777216,
+          "maximum": 17179869184
+        },
+        "nanoCpus": {
+          "type": "integer",
+          "minimum": 1000000,
+          "maximum": 16000000000
+        },
+        "pidsLimit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4096
+        },
+        "shmBytes": {
+          "type": "integer",
+          "minimum": 4194304,
+          "maximum": 1073741824
+        }
+      }
+    },
+    "mounts": {
+      "type": "array",
+      "description": "Strictly sorted and unique by target.",
+      "maxItems": 32,
+      "items": {
+        "$ref": "#/$defs/mount"
+      }
+    },
+    "mount": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mountId",
+        "kind",
+        "casSha256",
+        "subpath",
+        "target",
+        "readOnly",
+        "sizeBytes"
+      ],
+      "properties": {
+        "mountId": {
+          "$ref": "#/$defs/id"
+        },
+        "kind": {
+          "enum": [
+            "ARTIFACT_CAS",
+            "SOURCE_CAS",
+            "TMPFS"
+          ]
+        },
+        "casSha256": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/sha256"
+            }
+          ]
+        },
+        "subpath": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "target": {
+          "$ref": "#/$defs/absolutePath"
+        },
+        "readOnly": {
+          "type": "boolean"
+        },
+        "sizeBytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "aliases": {
+      "type": "array",
+      "description": "Strictly sorted and unique DNS names.",
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$",
+        "maxLength": 253
+      }
+    },
+    "health": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "test",
+        "intervalMs",
+        "timeoutMs",
+        "retries",
+        "startPeriodMs"
+      ],
+      "properties": {
+        "test": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 32,
+          "prefixItems": [
+            {
+              "enum": [
+                "CMD",
+                "CMD-SHELL"
+              ]
+            }
+          ],
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          }
+        },
+        "intervalMs": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 3600000
+        },
+        "timeoutMs": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 600000
+        },
+        "retries": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "startPeriodMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3600000
+        }
+      }
+    },
+    "endpoints": {
+      "type": "array",
+      "description": "Strictly sorted and unique by name, protocol, and containerPort.",
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "protocol",
+          "containerPort"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$",
+            "maxLength": 253
+          },
+          "protocol": {
+            "enum": [
+              "tcp",
+              "udp"
+            ]
+          },
+          "containerPort": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535
+          }
+        }
+      }
+    },
+    "signerAuthorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "role",
+        "principalId",
+        "keyId",
+        "spkiDerSha256",
+        "authorizationLeafSha256",
+        "authorizationCheckpointSha256",
+        "revocationHighwater",
+        "notBeforeBoottimeNs",
+        "notAfterBoottimeNs"
+      ],
+      "properties": {
+        "role": {
+          "const": "controller-docker-request-authority"
+        },
+        "principalId": {
+          "$ref": "#/$defs/id"
+        },
+        "keyId": {
+          "$ref": "#/$defs/id"
+        },
+        "spkiDerSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "authorizationLeafSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "authorizationCheckpointSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "revocationHighwater": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "notBeforeBoottimeNs": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "notAfterBoottimeNs": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "signatureFields": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "algorithm",
+        "domain",
+        "payloadSha256",
+        "signatureBase64url"
+      ],
+      "properties": {
+        "algorithm": {
+          "const": "Ed25519"
+        },
+        "domain": {
+          "type": "string"
+        },
+        "payloadSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "signatureBase64url": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{86}$"
+        }
+      }
+    },
+    "runnerSignature": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/signatureFields"
+        },
+        {
+          "properties": {
+            "domain": {
+              "const": "serverware/runner-execution/v12"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,354 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/response-v2-canonical-final-envelope.v1.schema.json",
+  "title": "Serverware Response v2 Canonical Final Envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "kind",
+    "schemaVersion",
+    "body",
+    "bodySha256",
+    "authorityArtifacts"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "serverware.responseV2.canonicalFinalEnvelope/v1"
+    },
+    "kind": {
+      "const": "ServerwareResponseV2CanonicalFinalEnvelope"
+    },
+    "schemaVersion": {
+      "const": "1"
+    },
+    "body": {
+      "$ref": "#/$defs/body"
+    },
+    "bodySha256": {
+      "$ref": "#/$defs/sha256",
+      "$comment": "SHA-256 over RFC 8785 JCS of body exactly as encoded, including finalizationId and authorityArtifactsRootSha256. The digest field itself and authorityArtifacts are not part of this preimage."
+    },
+    "authorityArtifacts": {
+      "type": "array",
+      "$comment": "Exactly ten ordered authority artifacts are required. Slot 1 is the durable post-CAS RELEASE_PREPARATION_RECEIPT; slots 2-10 are the signed prerequisite artifacts returned by immutable inspection. authorityArtifactsRootSha256 is SHA-256 over RFC 8785 JCS of this exact array, including every nested authentication object. The release-preparation durableCanonicalResultSha256 excludes the release-preparation artifact and outer PREPARE result, so the receipt can be signed before this envelope without a self-reference. Exact response bytes remain unavailable until the independently signed final-envelope verification succeeds.",
+      "minItems": 10,
+      "maxItems": 10,
+      "uniqueItems": true,
+      "prefixItems": [
+        {
+          "$ref": "response-v2-nested-authority-artifact.v1.schema.json#/$defs/releasePreparationReceiptArtifact"
+        },
+        {
+          "$ref": "response-v2-nested-authority-artifact.v1.schema.json#/$defs/credentialUseArtifact"
+        },
+        {
+          "$ref": "response-v2-nested-authority-artifact.v1.schema.json#/$defs/targetEffectArtifact"
+        },
+        {
+          "$ref": "response-v2-nested-authority-artifact.v1.schema.json#/$defs/policyProofArtifact"
+        },
+        {
+          "$ref": "response-v2-nested-authority-artifact.v1.schema.json#/$defs/transitionAuthorizationArtifact"
+        },
+        {
+          "$ref": "response-v2-nested-authority-artifact.v1.schema.json#/$defs/immutableInspectionArtifact"
+        },
+        {
+          "$ref": "response-v2-nested-authority-artifact.v1.schema.json#/$defs/attestationArtifact"
+        },
+        {
+          "$ref": "response-v2-nested-authority-artifact.v1.schema.json#/$defs/artifactCommitArtifact"
+        },
+        {
+          "$ref": "response-v2-nested-authority-artifact.v1.schema.json#/$defs/trustedTimeArtifact"
+        },
+        {
+          "$ref": "response-v2-nested-authority-artifact.v1.schema.json#/$defs/transparencyCheckpointArtifact"
+        }
+      ],
+      "items": false
+    }
+  },
+  "$defs": {
+    "safeUint": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "positiveSafeUint": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@-]*$"
+    },
+    "sha256": {
+      "type": "string",
+      "minLength": 71,
+      "maxLength": 71,
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "rawObjectReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "generationId",
+        "objectId",
+        "objectKind",
+        "contentSha256",
+        "contentLength",
+        "mediaType"
+      ],
+      "properties": {
+        "generationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "objectId": {
+          "type": "string",
+          "minLength": 68,
+          "maxLength": 68,
+          "pattern": "^obj:[0-9a-f]{64}$"
+        },
+        "objectKind": {
+          "$ref": "#/$defs/identifier"
+        },
+        "contentSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "contentLength": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 34603008
+        },
+        "mediaType": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255,
+          "pattern": "^[A-Za-z0-9!#$&^_.+*-]+/[A-Za-z0-9!#$&^_.+*-]+(?:;[ -~]+)?$"
+        }
+      }
+    },
+    "http11Framing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "httpVersion",
+        "informationalStatuses",
+        "finalStatus",
+        "headerSectionLength",
+        "transferCoding",
+        "declaredContentLength",
+        "decodedEntityLength",
+        "trailerSectionLength",
+        "trailerNames",
+        "physicalMessageLength",
+        "surplusLength",
+        "canonicalFramingSha256"
+      ],
+      "properties": {
+        "httpVersion": {
+          "const": "HTTP/1.1"
+        },
+        "informationalStatuses": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 199,
+            "not": {
+              "const": 101
+            }
+          }
+        },
+        "finalStatus": {
+          "type": "integer",
+          "minimum": 200,
+          "maximum": 599
+        },
+        "headerSectionLength": {
+          "type": "integer",
+          "minimum": 4,
+          "maximum": 262144
+        },
+        "transferCoding": {
+          "enum": [
+            "IDENTITY",
+            "CHUNKED"
+          ]
+        },
+        "declaredContentLength": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 33554432
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decodedEntityLength": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 33554432
+        },
+        "trailerSectionLength": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 262144
+        },
+        "trailerNames": {
+          "type": "array",
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[!#$%&'*+.^_`|~0-9a-z-]+$"
+          }
+        },
+        "physicalMessageLength": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 34603008
+        },
+        "surplusLength": {
+          "const": 0
+        },
+        "canonicalFramingSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "transferCoding": {
+                "const": "CHUNKED"
+              }
+            },
+            "required": [
+              "transferCoding"
+            ]
+          },
+          "then": {
+            "properties": {
+              "declaredContentLength": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "transferCoding": {
+                "const": "IDENTITY"
+              }
+            },
+            "required": [
+              "transferCoding"
+            ]
+          },
+          "then": {
+            "properties": {
+              "declaredContentLength": {
+                "type": "integer"
+              },
+              "trailerSectionLength": {
+                "const": 0
+              },
+              "trailerNames": {
+                "maxItems": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    "body": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "generationId",
+        "attemptId",
+        "attemptRevision",
+        "fenceToken",
+        "stableResumeId",
+        "finalizationId",
+        "stagedRequestObject",
+        "rawResponseObject",
+        "http11Framing",
+        "credentialUseId",
+        "targetEffectId",
+        "policyDecisionId",
+        "releasedProjectionSha256",
+        "transitionChainSha256",
+        "evidenceRootSha256",
+        "authorityArtifactsRootSha256"
+      ],
+      "properties": {
+        "generationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "attemptId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "attemptRevision": {
+          "$ref": "#/$defs/positiveSafeUint"
+        },
+        "fenceToken": {
+          "type": "string",
+          "minLength": 70,
+          "maxLength": 70,
+          "pattern": "^fence:[0-9a-f]{64}$"
+        },
+        "stableResumeId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "finalizationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "stagedRequestObject": {
+          "$ref": "#/$defs/rawObjectReference"
+        },
+        "rawResponseObject": {
+          "$ref": "#/$defs/rawObjectReference"
+        },
+        "http11Framing": {
+          "$ref": "#/$defs/http11Framing"
+        },
+        "credentialUseId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "targetEffectId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "policyDecisionId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "releasedProjectionSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "transitionChainSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "evidenceRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "authorityArtifactsRootSha256": {
+          "$ref": "#/$defs/sha256",
+          "$comment": "SHA-256 over the RFC 8785 JCS encoding of the exact authorityArtifacts array. bodySha256 is SHA-256 over the RFC 8785 JCS encoding of this complete body, including finalizationId and authorityArtifactsRootSha256."
+        }
+      }
+    }
+  }
+}

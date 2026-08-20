@@ -2421,8 +2421,7 @@ def _validate_route_credential_binding(
     if (
         binding.get("credentialType") != credential.kind
         or binding.get("provider") != credential.provider
-        or not isinstance(subjects, list)
-        or credential.provider_subject not in subjects
+        or subjects != [credential.provider_subject]
     ):
         raise PolicyBundleError(
             f"route {route_id} credentialBinding provider/account does not "
@@ -2432,8 +2431,7 @@ def _validate_route_credential_binding(
         client_ids = binding.get("clientIds")
         required_scopes = binding.get("requiredScopes")
         if (
-            not isinstance(client_ids, list)
-            or credential.oauth_client_id not in client_ids
+            client_ids != [credential.oauth_client_id]
             or not isinstance(required_scopes, list)
             or not required_scopes
             or not set(required_scopes).issubset(set(credential.scopes))
@@ -2478,6 +2476,26 @@ def _validate_route_credential_binding(
         raise PolicyBundleError(
             f"route {route_id} {adapter_type} requires an OAuth credential"
         )
+    else:
+        secret_class = binding.get("secretClass")
+        injection_type = credential.injection.get("type")
+        secret_class_matches = (
+            injection_type == "bearer"
+            and adapter_type == "npm.registry"
+            and secret_class
+            in {"automationToken", "granularAccessToken", "legacyToken"}
+        ) or secret_class == {
+            "bearer": "bearerToken",
+            "basic": "basicPassword",
+            "header": "customHeader",
+            "query": "queryToken",
+            "cookie": "cookie",
+        }.get(injection_type)
+        if not secret_class_matches:
+            raise PolicyBundleError(
+                f"route {route_id} credentialBinding secretClass does not "
+                "match its static credential injection"
+            )
 
 
 def _path_template_to_regex(template: str) -> re.Pattern[str]:
@@ -6313,6 +6331,10 @@ def compile_policy_bundle(
                 maximum_items=64,
                 maximum_bytes=512,
             )
+            if any(any(character.isspace() for character in scope) for scope in scopes):
+                raise PolicyBundleError(
+                    f"OAuth credential {credential_id} scopes cannot contain whitespace"
+                )
         else:
             if oauth_client_id is not None or raw_scopes is not None:
                 raise PolicyBundleError(

@@ -1628,6 +1628,56 @@ def approval_options(
     }
 
 
+def authority_approval_options(
+    *,
+    user_id: str,
+    authn_policy: dict[str, Any],
+    target_arguments: dict[str, Any],
+) -> dict[str, Any]:
+    credentials = _credential_descriptors_for_policy(
+        user_id,
+        authn_policy,
+    )
+    if not credentials:
+        raise WebAuthnError(
+            "no currently eligible WebAuthn credential is available"
+        )
+    selected = credentials[0]
+    credential_id = selected.get("id")
+    if not isinstance(credential_id, str) or not credential_id:
+        raise WebAuthnError(
+            "eligible WebAuthn credential identity is invalid"
+        )
+    challenge = db.issue_policy_authority_webauthn_challenge(
+        operation="jit.decide",
+        input_value=target_arguments,
+        user_id=user_id,
+        credential_id=credential_id,
+    )
+    if (
+        not isinstance(challenge, dict)
+        or not isinstance(challenge.get("id"), str)
+        or not isinstance(challenge.get("challenge"), str)
+    ):
+        raise WebAuthnError(
+            "policy-authority challenge issuance failed"
+        )
+    return {
+        "publicKey": {
+            "challenge": challenge["challenge"],
+            "rpId": WEBAUTHN_RP_ID,
+            "allowCredentials": [selected],
+            "timeout": 120000,
+            "userVerification":
+                authn_policy.get("userVerification", "required"),
+        },
+        "serverware": {
+            "authorityChallengeId": challenge["id"],
+            "operation": "jit.decide",
+        },
+    }
+
+
 def control_plane_mutation_options(
     *,
     user_id: str,

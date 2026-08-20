@@ -5564,7 +5564,7 @@ fn read_framed_request_with_fds(
             cmsg = libc::CMSG_NXTHDR(&message, cmsg);
         }
     }
-    if count as usize < header.len() {
+    if (count as usize) < header.len() {
         read_exact_deadline(
             stream,
             &mut header[count as usize..],

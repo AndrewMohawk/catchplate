@@ -14,48 +14,52 @@ pub(super) mod production;
 pub(super) mod recovery_target_provider;
 pub(super) mod wire;
 
-pub(super) use self::bounded_cleanup_helper::{
+use self::bounded_cleanup_helper::{
     CleanupHelperServerProgress, CleanupHelperSigningAuthorityV3,
     TrustedHostCleanupEffectOperationV3,
     TrustedHostNoTeeBoundedCleanupHelperClient,
     TrustedHostNoTeeBoundedCleanupHelperServer,
     ValidatedCleanupHelperHandshakeV3,
 };
-pub(super) use self::cleanup_authorization_consumer::{
+use self::cleanup_authorization_consumer::{
     TrustedHostNoTeeCleanupAuthorizationConsumerClient,
     TrustedHostNoTeeCleanupAuthorizationConsumerServer,
     TrustedHostNoTeeCleanupAuthorizationVerifier,
     TrustedHostNoTeeCleanupConsumerSigningIdentity,
     TrustedHostNoTeeCurrentHeadVerifier,
 };
+use self::common::{
+    perform_client_handshake, ReceivedSeqpacket,
+    ServiceRequestFrameV3, ServiceResponseFrameV3,
+    TrustedHostNoTeeServiceReportV3, MAX_SERVICE_FRAME_BYTES,
+    MAX_SERVICE_RIGHTS,
+};
 pub(super) use self::common::{
     decode_canonical_frame, encode_canonical_frame,
-    perform_client_handshake,
     AuthenticatedInheritedSeqpacket, ExpectedPeerCredentials,
-    ReceivedSeqpacket, ServiceError, ServiceHandshakeReplyV3,
-    ServiceHandshakeRequestV3, ServiceRequestFrameV3,
-    ServiceResponseFrameV3,
-    TrustedHostNoTeeServiceReportV3, TrustedHostServiceRoleV3,
-    MAX_SERVICE_FRAME_BYTES, MAX_SERVICE_RIGHTS,
+    ServiceError, ServiceHandshakeReplyV3, ServiceHandshakeRequestV3,
+    TrustedHostServiceRoleV3,
 };
-pub(super) use self::current_signature_authority::{
+use self::current_signature_authority::{
     SharedCurrentSignatureAuthorityClient,
     TrustedHostNoTeeCurrentSignatureAuthorityClient,
     TrustedHostNoTeeCurrentSignatureAuthorityServer,
 };
-pub(super) use self::durable_recovery_store::{
+use self::durable_recovery_store::{
     recovery_material_to_runtime, wire_owner_to_runtime,
-    DurableRecoveryStoreSeedV3, RecoveryRuntimeMaterialV3,
+    DurableRecoveryStoreSeedV3,
     RecoveryStoreCurrentHeadRequestBindingV3,
-    TrustedHostNoTeeDurableRecoveryStoreClient,
     TrustedHostNoTeeDurableRecoveryStoreServer,
     TrustedHostNoTeeRecoveryStoreSigningAuthority,
     VerifiedRecoveryStoreCurrentHeadProvider,
 };
-pub(super) use self::production::{
+pub(super) use self::durable_recovery_store::{
+    RecoveryRuntimeMaterialV3,
+    TrustedHostNoTeeDurableRecoveryStoreClient,
+};
+use self::production::{
     authenticate_production_rpc_session,
     run_production_rpc_service,
-    run_production_rpc_service_from_env,
     ExistingFiveServiceProductionAuthoritiesV4,
     ProductionPrimitiveRejectionV4,
     ProductionParentSignerEndpointConfigV4,
@@ -64,12 +68,13 @@ pub(super) use self::production::{
     ProductionRpcServiceBridgeV4,
     ProductionServiceHistoricalKeyringsV4,
 };
-pub(super) use self::recovery_target_provider::{
+pub(super) use self::production::run_production_rpc_service_from_env;
+use self::recovery_target_provider::{
     SignedDurableReapLineageProofV3,
     TrustedHostNoTeeRecoveryTargetProviderClient,
     TrustedHostNoTeeRecoveryTargetProviderServer,
 };
-pub(super) use self::wire::{
+use self::wire::{
     CleanupEffectIntentV3, CurrentAuthoritySubjectV3,
     DurableOwnershipRecordV3, RecoveryMaterialV3,
 };
@@ -248,7 +253,7 @@ impl ExpectedPeerCredentialV3 {
                 self.configuration_generation_sha256.clone(),
         })
         .and_then(|expected| {
-            expected.validate_claim().map_err(Into::into)?;
+            expected.validate_claim()?;
             Ok(expected)
         })
     }
@@ -373,7 +378,7 @@ impl RuntimeConfigHeaderV3 {
             ));
         }
         let manifest: AuthorityHistoryManifestV3 =
-            decode_exact_canonical_json(&bytes)?;
+            common::decode_canonical_frame(&bytes)?;
         let history = RuntimeAuthorityHistory::from_manifest(
             manifest,
             &self.authority_history_root_key_id,
@@ -1290,7 +1295,7 @@ pub(crate) fn run_cleanup_authorization_consumer_from_env(
         revocation_root_sha256:
             loaded.value.revocation_root_sha256.clone(),
         signing_key_id: loaded.value.signing_key_id.clone(),
-        signing_key_spki_sha256,
+        signing_key_spki_sha256: signing_spki_sha256,
     };
     let endpoint_role =
         identity.endpoint_process_identity.endpoint_role;
@@ -1616,7 +1621,7 @@ pub(crate) fn run_recovery_target_provider_from_env(
         let exact = encode_canonical_frame(&prepared.frame)?;
         let response_deadline = prepared
             .frame
-            .binding
+            .request_binding
             .deadline
             .absolute_boottime_nanos();
         if response_deadline != deadline {
@@ -1785,7 +1790,7 @@ pub(crate) fn run_current_signature_authority_from_env(
         let exact = encode_canonical_frame(&prepared.frame)?;
         let deadline = prepared
             .frame
-            .binding
+            .request_binding
             .deadline
             .absolute_boottime_nanos();
         send_packet_until(
@@ -1919,6 +1924,10 @@ pub(crate) fn run_bounded_cleanup_helper_from_env(
                 journal,
                 signer,
                 report,
+                loaded
+                    .value
+                    .runtime
+                    .maximum_durability_worker_nanos,
                 loaded.value.runtime.operation_generation,
                 loaded
                     .value
@@ -2415,7 +2424,7 @@ where
         let frame: ServiceResponseFrameV3 =
             decode_canonical_frame(&response)?;
         let deadline =
-            frame.binding.deadline.absolute_boottime_nanos();
+            frame.request_binding.deadline.absolute_boottime_nanos();
         send_packet_until(
             connection.as_raw_fd(),
             &response,

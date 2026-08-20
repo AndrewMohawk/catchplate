@@ -1,5 +1,5 @@
 use base64::{engine::general_purpose, Engine as _};
-use ed25519_dalek::pkcs8::DecodePrivateKey;
+use ed25519_dalek::pkcs8::{DecodePrivateKey, EncodePublicKey};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use ring::rand::{SecureRandom, SystemRandom};
 use rustls::pki_types::pem::PemObject;
@@ -7,8 +7,7 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use serde_json::{json, Map, Value};
 use serverware_decision_gate::{
-    validate_response_statement, ControlPlaneAuthorizationReceipt, ProxyResponseStatement,
-    ReleaseAuthority,
+    ControlPlaneAuthorizationReceipt, ProxyResponseStatement, ReleaseAuthority,
 };
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -23,6 +22,7 @@ use std::os::unix::io::{AsRawFd, FromRawFd};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use time::{Date, Duration as TimeDuration, Month, OffsetDateTime};
 use url::Url;
 use x509_parser::extensions::GeneralName;
 use x509_parser::prelude::{FromDer, X509Certificate};
@@ -81,6 +81,7 @@ struct Args {
     request_body: Option<PathBuf>,
     collector_key: PathBuf,
     verifier_key: Option<PathBuf>,
+    control_plane_response_key: PathBuf,
     expected_server_instance_id: Option<String>,
     client_nonce: Option<[u8; 32]>,
     expected_principal_id: String,
@@ -140,6 +141,7 @@ struct RuntimeProofExpectations<'a> {
     peer_leaf_digest: &'a str,
     client_request_digest: &'a str,
     principal_id: &'a str,
+    control_plane_response_key: &'a VerifyingKey,
     max_age_seconds: u64,
 }
 
@@ -213,6 +215,7 @@ struct ObservationExpectations<'a> {
     peer_leaf_digest: &'a str,
     expected_server_instance_id: Option<&'a str>,
     expected_principal_id: &'a str,
+    control_plane_response_key: &'a VerifyingKey,
     request: &'a ObservationRequestCommitment,
     max_age_seconds: u64,
 }
@@ -221,7 +224,6 @@ fn canonical_json(value: &Value) -> String {
     serde_json::to_string(value).expect("canonical JSON serialization failed")
 }
 
-#[cfg(test)]
 fn canonical_json_ensure_ascii(value: &Value) -> String {
     let encoded = canonical_json(value);
     let mut ascii = String::with_capacity(encoded.len());
@@ -340,6 +342,7 @@ where
     let mut request_body = None;
     let mut collector_key = None;
     let mut verifier_key = None;
+    let mut control_plane_response_key = None;
     let mut expected_server_instance_id = None;
     let mut expected_principal_id = None;
     let mut client_nonce = None;
@@ -391,6 +394,9 @@ where
             "--request-body" => request_body = Some(PathBuf::from(value)),
             "--collector-key" => collector_key = Some(PathBuf::from(value)),
             "--verifier-key" => verifier_key = Some(PathBuf::from(value)),
+            "--control-plane-response-key" => {
+                control_plane_response_key = Some(PathBuf::from(value))
+            }
             "--expected-server-instance-id" => expected_server_instance_id = Some(value),
             "--expected-principal-id" => expected_principal_id = Some(value),
             "--nonce" => {
@@ -601,6 +607,8 @@ where
         request_body,
         collector_key: collector_key.ok_or("--collector-key is required")?,
         verifier_key,
+        control_plane_response_key: control_plane_response_key
+            .ok_or("--control-plane-response-key is required")?,
         expected_server_instance_id,
         client_nonce,
         expected_principal_id,
@@ -623,11 +631,14 @@ fn parse_proxy_endpoint(
     }
     let default_scheme = if raw_development { "http" } else { "https" };
     let explicit_scheme = raw.contains("://");
-    let parsed = Url::parse(if explicit_scheme {
+    let normalized_endpoint;
+    let endpoint = if explicit_scheme {
         raw
     } else {
-        &format!("{default_scheme}://{raw}")
-    })
+        normalized_endpoint = format!("{default_scheme}://{raw}");
+        &normalized_endpoint
+    };
+    let parsed = Url::parse(endpoint)
     .map_err(|err| format!("parse --proxy: {err}"))?;
     if parsed.scheme() != default_scheme {
         return Err(if raw_development {
@@ -1763,6 +1774,11 @@ fn validate_stream_output_paths(
         {
             return Err("stream output aliases --verifier-key".to_string());
         }
+    }
+    if output_target_aliases_path(&body_target, &args.control_plane_response_key)
+        || output_target_aliases_path(&proof_target, &args.control_plane_response_key)
+    {
+        return Err("stream output aliases --control-plane-response-key".to_string());
     }
     if let Some(path) = args.request_body.as_deref() {
         if output_target_aliases_path(&body_target, path)
@@ -3030,6 +3046,18 @@ fn load_verifier_key(path: &Path) -> Result<(VerifyingKey, String), String> {
     decode_public_key_pem(pem)
 }
 
+fn load_control_plane_response_key(path: &Path) -> Result<(VerifyingKey, String), String> {
+    let bytes = read_trusted_input_snapshot(
+        path,
+        "control-plane response public key",
+        false,
+        MAX_TRUST_KEY_BYTES,
+    )?;
+    let pem = std::str::from_utf8(&bytes)
+        .map_err(|_| "control-plane response public key must be valid UTF-8 PEM".to_string())?;
+    decode_public_key_pem(pem)
+}
+
 fn is_sha256_digest(value: &str) -> bool {
     value.len() == 71
         && value.starts_with("sha256:")
@@ -3387,7 +3415,7 @@ where
     Ok(body_path)
 }
 
-fn peer_identity<T>(
+fn peer_identity<T: Read + Write>(
     tls: &StreamOwned<ClientConnection, T>,
 ) -> Result<(String, String), String> {
     let certificate = tls
@@ -3452,14 +3480,15 @@ fn require_exact_fields(
     Ok(())
 }
 
-fn validate_strict_response_statement(statement: &Value) -> Result<(), String> {
-    let typed: ProxyResponseStatement = serde_json::from_value(statement.clone())
-        .map_err(|err| format!("server response statement schema is invalid: {err}"))?;
-    validate_response_statement(&typed)
-        .map_err(|err| format!("server response statement contract is invalid: {err}"))
+fn decode_response_statement_schema(statement: &Value) -> Result<ProxyResponseStatement, String> {
+    serde_json::from_value(statement.clone())
+        .map_err(|err| format!("server response statement schema is invalid: {err}"))
 }
 
-fn validated_control_plane_authorization_receipt(statement: &Value) -> Result<Value, String> {
+fn validated_control_plane_authorization_receipt(
+    statement: &Value,
+    control_plane_response_key: &VerifyingKey,
+) -> Result<Value, String> {
     const FIELDS: [&str; 7] = [
         "apiVersion",
         "kind",
@@ -3477,7 +3506,856 @@ fn validated_control_plane_authorization_receipt(statement: &Value) -> Result<Va
     {
         return Err("control-plane authorization receipt has unexpected fields".to_string());
     }
+    if receipt.get("apiVersion").and_then(Value::as_str)
+        != Some("serverware.controlPlaneAuthorizationReceipt/v1")
+        || receipt.get("kind").and_then(Value::as_str)
+            != Some("ControlPlaneAuthorizationReceipt")
+        || receipt.get("principal_id") != statement.get("principal_id")
+        || receipt.get("route_id") != statement.get("route_id")
+        || receipt.get("release_authority") != statement.get("release_authority")
+    {
+        return Err(
+            "control-plane authorization receipt authority substitution".to_string(),
+        );
+    }
+    for field in ["principal_id", "route_id"] {
+        if !receipt
+            .get(field)
+            .and_then(Value::as_str)
+            .is_some_and(valid_bounded_identity)
+        {
+            return Err(format!(
+                "control-plane authorization receipt {field} is invalid"
+            ));
+        }
+    }
+
+    let authority = required_object(statement, "release_authority")?;
+    let receipt_value = Value::Object(receipt.clone());
+    let request = required_object(&receipt_value, "request")?;
+    require_exact_fields(
+        request,
+        &["method", "path", "query", "nonce", "body_b64", "body_sha256"],
+        "control-plane authorization receipt request",
+    )?;
+    if request.get("method").and_then(Value::as_str) != Some("POST")
+        || request.get("path").and_then(Value::as_str)
+            != Some("/api/data-plane/release-authorizations/dispatch")
+        || request.get("query").and_then(Value::as_str) != Some("")
+    {
+        return Err(
+            "control-plane authorization receipt request context mismatch".to_string(),
+        );
+    }
+    let nonce = required_string(&Value::Object(request.clone()), "nonce")?;
+    let nonce_bytes = decode_base64url(nonce, "authorization receipt nonce", 32)?;
+    if nonce_bytes.len() != 32 || general_purpose::URL_SAFE_NO_PAD.encode(&nonce_bytes) != nonce {
+        return Err("control-plane authorization receipt nonce is invalid".to_string());
+    }
+    let request_body = decode_canonical_receipt_json(
+        request,
+        "body_b64",
+        "body_sha256",
+        4 * 1024,
+        "authorization receipt request body",
+    )?;
+    let request_object = request_body
+        .as_object()
+        .ok_or("authorization receipt request body is not an object")?;
+    let request_version = request_object
+        .get("apiVersion")
+        .and_then(Value::as_str)
+        .ok_or("authorization receipt request body version is missing")?;
+    let durable_request = request_object.get("durablePolicy");
+    match request_version {
+        "serverware.releaseAuthorizationDispatch/v1" => {
+            require_exact_fields(
+                request_object,
+                &["apiVersion", "attemptId", "bindingDigest"],
+                "authorization receipt v1 request body",
+            )?;
+            if durable_request.is_some() {
+                return Err("authorization receipt v1 request carries durable policy".to_string());
+            }
+        }
+        "serverware.releaseAuthorizationDispatch/v2" => {
+            require_exact_fields(
+                request_object,
+                &["apiVersion", "attemptId", "bindingDigest", "durablePolicy"],
+                "authorization receipt v2 request body",
+            )?;
+            let durable = durable_request
+                .and_then(Value::as_object)
+                .ok_or("authorization receipt durable policy request is invalid")?;
+            require_exact_fields(
+                durable,
+                &[
+                    "actorId",
+                    "attemptId",
+                    "claimDigest",
+                    "reservationId",
+                    "dispatchDeadlineAtEpochMs",
+                ],
+                "authorization receipt durable policy request",
+            )?;
+            for field in ["actorId", "reservationId"] {
+                if !durable
+                    .get(field)
+                    .and_then(Value::as_str)
+                    .is_some_and(valid_bounded_identity)
+                {
+                    return Err(format!(
+                        "authorization receipt durable policy request {field} is invalid"
+                    ));
+                }
+            }
+            if durable.get("attemptId") != authority.get("attempt_id")
+                || durable
+                    .get("claimDigest")
+                    .and_then(Value::as_str)
+                    .is_none_or(|value| !is_sha256_digest(value))
+                || durable.get("dispatchDeadlineAtEpochMs")
+                    != authority.get("dispatch_expires_at_epoch_ms")
+            {
+                return Err(
+                    "authorization receipt durable policy request binding mismatch".to_string(),
+                );
+            }
+        }
+        _ => return Err("authorization receipt request protocol is unsupported".to_string()),
+    }
+    if request_object.get("attemptId") != authority.get("attempt_id")
+        || request_object.get("bindingDigest")
+            != authority.get("consumption_identity_digest")
+    {
+        return Err("authorization receipt dispatch request mismatch".to_string());
+    }
+
+    let response = required_object(&receipt_value, "response")?;
+    require_exact_fields(
+        response,
+        &[
+            "status",
+            "body_b64",
+            "body_sha256",
+            "response_headers",
+            "response_signing_key_id",
+            "statement_b64",
+            "statement_sha256",
+            "signature",
+        ],
+        "control-plane authorization receipt response",
+    )?;
+    let response_value = Value::Object(response.clone());
+    if required_u64(&response_value, "status")? != 200 {
+        return Err(
+            "control-plane authorization receipt response status mismatch".to_string(),
+        );
+    }
+    let response_key_id = required_digest(&response_value, "response_signing_key_id")?;
+    let pinned_response_key_der = control_plane_response_key
+        .to_public_key_der()
+        .map_err(|err| format!("encode pinned control-plane response key: {err}"))?;
+    let pinned_response_key_id = sha256_prefixed(pinned_response_key_der.as_bytes());
+    if response_key_id != pinned_response_key_id {
+        return Err(
+            "control-plane authorization receipt response key does not match the pinned key"
+                .to_string(),
+        );
+    }
+    let response_body = decode_canonical_receipt_json(
+        response,
+        "body_b64",
+        "body_sha256",
+        32 * 1024,
+        "authorization receipt response body",
+    )?;
+    let response_object = response_body
+        .as_object()
+        .ok_or("authorization receipt response body is not an object")?;
+    let response_version = response_object
+        .get("apiVersion")
+        .and_then(Value::as_str)
+        .ok_or("authorization receipt response body version is missing")?;
+    let expected_response_version = match request_version {
+        "serverware.releaseAuthorizationDispatch/v1" => "serverware.releaseAuthorization/v1",
+        "serverware.releaseAuthorizationDispatch/v2" => "serverware.releaseAuthorization/v2",
+        _ => unreachable!("request version was checked above"),
+    };
+    if response_version != expected_response_version {
+        return Err("authorization receipt response protocol is inconsistent".to_string());
+    }
+    let mut response_fields = vec![
+        "apiVersion",
+        "ok",
+        "authorized",
+        "state",
+        "reason",
+        "attemptId",
+        "bindingDigest",
+        "idempotentReplay",
+        "grantId",
+        "approvalRequestId",
+        "reservationExpiresAtEpochMs",
+        "dispatchStartedAtEpochMs",
+        "dispatchExpiresAtEpochMs",
+        "completionOutcome",
+        "retryAfterSeconds",
+        "quotas",
+        "store",
+    ];
+    if response_version == "serverware.releaseAuthorization/v2" {
+        response_fields.push("durablePolicy");
+    }
+    require_exact_fields(
+        response_object,
+        &response_fields,
+        "authorization receipt response body",
+    )?;
+    let store = response_object
+        .get("store")
+        .and_then(Value::as_object)
+        .ok_or("authorization receipt response store is invalid")?;
+    require_exact_fields(store, &["backend", "ha"], "authorization receipt response store")?;
+    if !store
+        .get("backend")
+        .and_then(Value::as_str)
+        .is_some_and(valid_bounded_identity)
+        || store.get("ha").and_then(Value::as_bool) != Some(true)
+    {
+        return Err("authorization receipt response store is not HA".to_string());
+    }
+    let dispatch_started = response_object
+        .get("dispatchStartedAtEpochMs")
+        .and_then(Value::as_u64)
+        .ok_or("authorization receipt response is missing dispatch start")?;
+    let dispatch_expires = response_object
+        .get("dispatchExpiresAtEpochMs")
+        .and_then(Value::as_u64)
+        .ok_or("authorization receipt response is missing dispatch expiry")?;
+    let reservation_expires = response_object
+        .get("reservationExpiresAtEpochMs")
+        .and_then(Value::as_u64)
+        .ok_or("authorization receipt response is missing reservation expiry")?;
+    validate_attested_dispatch_quotas(
+        response_object,
+        response_version,
+        dispatch_started,
+        reservation_expires,
+    )?;
+    if response_object.get("ok").and_then(Value::as_bool) != Some(true)
+        || response_object.get("authorized").and_then(Value::as_bool) != Some(true)
+        || response_object.get("idempotentReplay").and_then(Value::as_bool).is_none()
+        || response_object.get("state").and_then(Value::as_str) != Some("dispatching")
+        || response_object.get("reason").and_then(Value::as_str) != Some("dispatching")
+        || response_object.get("completionOutcome") != Some(&Value::Null)
+        || response_object.get("retryAfterSeconds").and_then(Value::as_u64) != Some(0)
+        || response_object.get("grantId") != authority.get("grant_id")
+        || response_object.get("approvalRequestId") != authority.get("approval_id")
+        || response_object.get("attemptId") != authority.get("attempt_id")
+        || response_object.get("bindingDigest")
+            != authority.get("consumption_identity_digest")
+        || Some(reservation_expires)
+            != authority
+                .get("reservation_expires_at_epoch_ms")
+                .and_then(Value::as_u64)
+        || Some(dispatch_expires)
+            != authority
+                .get("dispatch_expires_at_epoch_ms")
+                .and_then(Value::as_u64)
+        || Some(dispatch_started)
+            != authority
+                .get("authorization_state_observed_at_epoch_ms")
+                .and_then(Value::as_u64)
+        || dispatch_started >= dispatch_expires
+        || dispatch_started >= reservation_expires
+    {
+        return Err(
+            "control-plane authorization receipt body and authority mismatch".to_string(),
+        );
+    }
+    match (durable_request, response_object.get("durablePolicy")) {
+        (None, None) => {}
+        (Some(request_durable), Some(Value::Object(response_durable))) => {
+            require_exact_fields(
+                response_durable,
+                &[
+                    "state",
+                    "attemptId",
+                    "claimDigest",
+                    "reservationId",
+                    "actorId",
+                    "reservationDeadlineAtEpochMs",
+                    "dispatchDeadlineAtEpochMs",
+                    "responseEvidenceDigest",
+                    "failureReason",
+                    "responseBodySha256",
+                    "uncertainty",
+                ],
+                "authorization receipt durable policy response",
+            )?;
+            if response_durable.get("state").and_then(Value::as_str) != Some("dispatched")
+                || response_durable.get("attemptId") != authority.get("attempt_id")
+                || response_durable.get("attemptId") != request_durable.get("attemptId")
+                || response_durable.get("claimDigest") != request_durable.get("claimDigest")
+                || response_durable.get("actorId") != request_durable.get("actorId")
+                || response_durable.get("reservationId") != request_durable.get("reservationId")
+                || response_durable.get("reservationDeadlineAtEpochMs")
+                    != authority.get("reservation_expires_at_epoch_ms")
+                || response_durable.get("dispatchDeadlineAtEpochMs")
+                    != authority.get("dispatch_expires_at_epoch_ms")
+                || [
+                    "responseEvidenceDigest",
+                    "failureReason",
+                    "responseBodySha256",
+                    "uncertainty",
+                ]
+                .iter()
+                .any(|field| response_durable.get(*field) != Some(&Value::Null))
+            {
+                return Err(
+                    "control-plane authorization receipt durable policy lifecycle mismatch"
+                        .to_string(),
+                );
+            }
+        }
+        _ => {
+            return Err(
+                "control-plane authorization receipt durable policy lifecycle mismatch"
+                    .to_string(),
+            )
+        }
+    }
+
+    let statement_bytes = decode_canonical_receipt_json(
+        response,
+        "statement_b64",
+        "statement_sha256",
+        8 * 1024,
+        "authorization receipt signed statement",
+    )?;
+    let signed_statement = statement_bytes
+        .as_object()
+        .ok_or("authorization receipt signed statement is not an object")?;
+    require_exact_fields(
+        signed_statement,
+        &[
+            "version",
+            "issued_at_ms",
+            "request",
+            "status_code",
+            "body_sha256",
+            "response_headers_sha256",
+            "response_header_count",
+            "nonce",
+            "response_signing_key_id",
+            "context",
+        ],
+        "authorization receipt signed statement",
+    )?;
+    let signed_request = signed_statement
+        .get("request")
+        .and_then(Value::as_object)
+        .ok_or("authorization receipt signed request is invalid")?;
+    require_exact_fields(
+        signed_request,
+        &["method", "path", "query_sha256"],
+        "authorization receipt signed request",
+    )?;
+    let headers = validated_receipt_response_headers(response)?;
+    let headers_digest = sha256_prefixed(canonical_json(&Value::Array(headers.clone())).as_bytes());
+    let empty_query_digest = sha256_prefixed(b"");
+    if signed_statement.get("version").and_then(Value::as_str)
+        != Some("serverware.responseSignature/v3")
+        || signed_statement.get("nonce").and_then(Value::as_str) != Some(nonce)
+        || signed_request.get("method") != request.get("method")
+        || signed_request.get("path") != request.get("path")
+        || signed_request.get("query_sha256").and_then(Value::as_str)
+            != Some(empty_query_digest.as_str())
+        || signed_statement.get("status_code").and_then(Value::as_u64) != Some(200)
+        || signed_statement.get("body_sha256") != response.get("body_sha256")
+        || signed_statement
+            .get("response_signing_key_id")
+            .and_then(Value::as_str)
+            != Some(response_key_id)
+        || signed_statement
+            .get("response_header_count")
+            .and_then(Value::as_u64)
+            != Some(headers.len() as u64)
+        || signed_statement
+            .get("response_headers_sha256")
+            .and_then(Value::as_str)
+            != Some(headers_digest.as_str())
+    {
+        return Err(
+            "control-plane authorization receipt signed statement mismatch".to_string(),
+        );
+    }
+    let context = signed_statement
+        .get("context")
+        .and_then(Value::as_object)
+        .ok_or("authorization receipt signed context is invalid")?;
+    require_exact_fields(
+        context,
+        &[
+            "runtime_manifest_digest",
+            "policy_bundle_digest",
+            "provenance_digest",
+            "image_signatures_digest",
+            "source_tree_digest",
+        ],
+        "authorization receipt signed context",
+    )?;
+    let context_value = Value::Object(context.clone());
+    for field in ["runtime_manifest_digest", "policy_bundle_digest"] {
+        required_digest(&context_value, field).map_err(|_| {
+            format!("authorization receipt signed context {field} is invalid")
+        })?;
+    }
+    for field in [
+        "provenance_digest",
+        "image_signatures_digest",
+        "source_tree_digest",
+    ] {
+        match context.get(field) {
+            Some(Value::Null) => {}
+            Some(Value::String(value)) if is_sha256_digest(value) => {}
+            _ => {
+                return Err(format!(
+                    "authorization receipt signed context {field} is invalid"
+                ))
+            }
+        }
+    }
+    if context.get("policy_bundle_digest") != statement.get("policy_digest")
+        || context.get("provenance_digest") != statement.get("release_digest")
+    {
+        return Err("control-plane authorization receipt context mismatch".to_string());
+    }
+    let signed_at = signed_statement
+        .get("issued_at_ms")
+        .and_then(Value::as_u64)
+        .ok_or("authorization receipt signed time is missing")?;
+    let statement_end = required_u64(statement, "issued_at_unix")?
+        .saturating_add(1)
+        .saturating_mul(1000)
+        .saturating_sub(1);
+    if signed_at < dispatch_started
+        || signed_at >= dispatch_expires
+        || signed_at >= reservation_expires
+        || signed_at > statement_end
+        || statement_end.saturating_sub(dispatch_started) > 300_000
+        || dispatch_expires <= now_unix().saturating_mul(1000)
+    {
+        return Err(
+            "control-plane authorization receipt temporal relation is invalid".to_string(),
+        );
+    }
+    let signature = required_string(&response_value, "signature")?
+        .strip_prefix("ed25519:")
+        .ok_or("authorization receipt signature must use ed25519")?;
+    let signature_bytes = decode_base64url(signature, "authorization receipt signature", 64)?;
+    if signature_bytes.len() != 64
+        || general_purpose::URL_SAFE_NO_PAD.encode(&signature_bytes) != signature
+    {
+        return Err("authorization receipt signature is not canonical".to_string());
+    }
+    let signature_bytes: [u8; 64] = signature_bytes
+        .try_into()
+        .map_err(|_| "authorization receipt signature must contain 64 bytes".to_string())?;
+    control_plane_response_key
+        .verify_strict(
+            canonical_json_ensure_ascii(&Value::Object(signed_statement.clone())).as_bytes(),
+            &Signature::from_bytes(&signature_bytes),
+        )
+        .map_err(|_| {
+            "control-plane authorization receipt response signature verification failed"
+                .to_string()
+        })?;
     Ok(Value::Object(receipt.clone()))
+}
+
+fn validate_attested_dispatch_quotas(
+    response: &Map<String, Value>,
+    response_version: &str,
+    dispatch_started_at_epoch_ms: u64,
+    reservation_expires_at_epoch_ms: u64,
+) -> Result<(), String> {
+    const LEGACY_FIXED_FIELDS: [&str; 9] = [
+        "counterKey",
+        "constraintId",
+        "operation",
+        "windowStartEpochMs",
+        "windowSeconds",
+        "max",
+        "count",
+        "remaining",
+        "reservationState",
+    ];
+    const CURRENT_FIXED_FIELDS: [&str; 11] = [
+        "counterKey",
+        "constraintId",
+        "operation",
+        "windowKind",
+        "windowStartEpochMs",
+        "windowEndEpochMs",
+        "windowSeconds",
+        "max",
+        "count",
+        "remaining",
+        "reservationState",
+    ];
+    const CURRENT_CALENDAR_FIELDS: [&str; 11] = [
+        "counterKey",
+        "constraintId",
+        "operation",
+        "windowKind",
+        "windowStartEpochMs",
+        "windowEndEpochMs",
+        "calendarWindow",
+        "max",
+        "count",
+        "remaining",
+        "reservationState",
+    ];
+
+    let quotas = response
+        .get("quotas")
+        .and_then(Value::as_array)
+        .filter(|quotas| quotas.len() <= 256)
+        .ok_or("authorization receipt response quotas are invalid")?;
+    let mut previous_counter_key: Option<&str> = None;
+    for quota in quotas {
+        let quota = quota
+            .as_object()
+            .ok_or("authorization receipt response quota is not an object")?;
+        let window_kind = quota.get("windowKind").and_then(Value::as_str);
+        let fields = match (response_version, window_kind) {
+            ("serverware.releaseAuthorization/v1", None) => &LEGACY_FIXED_FIELDS[..],
+            (_, Some("fixed")) => &CURRENT_FIXED_FIELDS[..],
+            (_, Some("utcDay" | "utcIsoWeek" | "utcMonth")) => {
+                &CURRENT_CALENDAR_FIELDS[..]
+            }
+            _ => return Err("authorization receipt quota window contract is invalid".to_string()),
+        };
+        require_exact_fields(quota, fields, "authorization receipt response quota")?;
+        let counter_key = quota
+            .get("counterKey")
+            .and_then(Value::as_str)
+            .filter(|value| is_sha256_digest(value))
+            .ok_or("authorization receipt quota counter key is invalid")?;
+        if previous_counter_key.is_some_and(|previous| previous >= counter_key) {
+            return Err("authorization receipt quotas are not uniquely sorted".to_string());
+        }
+        previous_counter_key = Some(counter_key);
+        let operation_is_valid = match quota.get("operation") {
+            Some(Value::Null) => true,
+            Some(Value::String(value)) => valid_bounded_identity(value),
+            _ => false,
+        };
+        if !quota
+            .get("constraintId")
+            .and_then(Value::as_str)
+            .is_some_and(valid_bounded_identity)
+            || !operation_is_valid
+            || quota
+                .get("reservationState")
+                .and_then(Value::as_str)
+                .is_none_or(|state| state != "reserved")
+        {
+            return Err("authorization receipt quota identity or state is invalid".to_string());
+        }
+        for field in ["windowStartEpochMs", "windowEndEpochMs", "max", "count", "remaining"] {
+            if quota.contains_key(field) && quota.get(field).and_then(Value::as_u64).is_none() {
+                return Err(format!("authorization receipt quota {field} is invalid"));
+            }
+        }
+        let window_start = quota
+            .get("windowStartEpochMs")
+            .and_then(Value::as_u64)
+            .ok_or("authorization receipt quota window start is invalid")?;
+        let maximum = quota
+            .get("max")
+            .and_then(Value::as_u64)
+            .filter(|value| (1..=1_000_000_000).contains(value))
+            .ok_or("authorization receipt quota maximum is invalid")?;
+        let count = quota
+            .get("count")
+            .and_then(Value::as_u64)
+            .filter(|value| *value <= maximum)
+            .ok_or("authorization receipt quota count is invalid")?;
+        if quota.get("remaining").and_then(Value::as_u64) != Some(maximum - count) {
+            return Err("authorization receipt quota remaining count is invalid".to_string());
+        }
+        if quota.get("windowKind").and_then(Value::as_str) == Some("fixed")
+            || !quota.contains_key("windowKind")
+        {
+            let window_seconds = quota
+                .get("windowSeconds")
+                .and_then(Value::as_u64)
+                .filter(|seconds| (1..=31_536_000).contains(seconds))
+                .ok_or("authorization receipt fixed quota window is invalid")?;
+            let calculated_end = window_start
+                .checked_add(window_seconds.saturating_mul(1000))
+                .ok_or("authorization receipt fixed quota window overflows")?;
+            if quota
+                .get("windowEndEpochMs")
+                .and_then(Value::as_u64)
+                .is_some_and(|window_end| window_end != calculated_end)
+                || response_version == "serverware.releaseAuthorization/v2"
+                    && quota.get("windowEndEpochMs").and_then(Value::as_u64)
+                        != Some(calculated_end)
+                || dispatch_started_at_epoch_ms < window_start
+                || dispatch_started_at_epoch_ms >= calculated_end
+            {
+                return Err("authorization receipt fixed quota window is invalid".to_string());
+            }
+        } else {
+            let window_end = quota
+                .get("windowEndEpochMs")
+                .and_then(Value::as_u64)
+                .filter(|end| *end > window_start)
+                .ok_or("authorization receipt calendar quota window is invalid")?;
+            let window_kind = quota
+                .get("windowKind")
+                .and_then(Value::as_str)
+                .expect("calendar quota kind was matched above");
+            if quota.get("calendarWindow") != quota.get("windowKind")
+                || utc_calendar_window_bounds(window_kind, window_start)?
+                    != (window_start, window_end)
+                || dispatch_started_at_epoch_ms < window_start
+                || dispatch_started_at_epoch_ms >= window_end
+                || reservation_expires_at_epoch_ms > window_end
+            {
+                return Err("authorization receipt calendar quota window is invalid".to_string());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn utc_epoch_ms(timestamp: OffsetDateTime) -> Result<u64, String> {
+    u64::try_from(timestamp.unix_timestamp_nanos() / 1_000_000)
+        .map_err(|_| "authorization receipt calendar quota is outside the supported epoch".to_string())
+}
+
+fn utc_calendar_window_bounds(kind: &str, epoch_ms: u64) -> Result<(u64, u64), String> {
+    let timestamp = OffsetDateTime::from_unix_timestamp_nanos(i128::from(epoch_ms) * 1_000_000)
+        .map_err(|_| {
+            "authorization receipt calendar quota timestamp is outside the supported epoch"
+                .to_string()
+        })?;
+    let date = timestamp.date();
+    let start_date = match kind {
+        "utcDay" => date,
+        "utcIsoWeek" => {
+            date - TimeDuration::days(i64::from(date.weekday().number_days_from_monday()))
+        }
+        "utcMonth" => Date::from_calendar_date(date.year(), date.month(), 1)
+            .map_err(|_| "authorization receipt calendar month start is invalid".to_string())?,
+        _ => return Err("authorization receipt calendar quota kind is invalid".to_string()),
+    };
+    let end_date = match kind {
+        "utcDay" => start_date
+            .next_day()
+            .ok_or("authorization receipt calendar day end is outside range")?,
+        "utcIsoWeek" => start_date
+            .checked_add(TimeDuration::days(7))
+            .ok_or("authorization receipt calendar week end is outside range")?,
+        "utcMonth" => {
+            let (year, month) = if start_date.month() == Month::December {
+                (
+                    start_date
+                        .year()
+                        .checked_add(1)
+                        .ok_or("authorization receipt calendar month end is outside range")?,
+                    Month::January,
+                )
+            } else {
+                (
+                    start_date.year(),
+                    Month::try_from(u8::from(start_date.month()) + 1)
+                        .map_err(|_| "authorization receipt calendar month end is invalid")?,
+                )
+            };
+            Date::from_calendar_date(year, month, 1)
+                .map_err(|_| "authorization receipt calendar month end is invalid".to_string())?
+        }
+        _ => return Err("authorization receipt calendar quota kind is invalid".to_string()),
+    };
+    Ok((
+        utc_epoch_ms(start_date.midnight().assume_utc())?,
+        utc_epoch_ms(end_date.midnight().assume_utc())?,
+    ))
+}
+
+fn validate_streaming_receipt_quotas_against_binding(
+    receipt: &Value,
+    binding: &Value,
+) -> Result<(), String> {
+    let response = required_object(receipt, "response")?;
+    let response_body = decode_canonical_receipt_json(
+        response,
+        "body_b64",
+        "body_sha256",
+        32 * 1024,
+        "authorization receipt response body",
+    )?;
+    let actual_quotas = response_body
+        .get("quotas")
+        .and_then(Value::as_array)
+        .ok_or("streaming authorization receipt quotas are invalid")?;
+    let expected_quotas = binding
+        .get("shared_quotas")
+        .and_then(Value::as_array)
+        .ok_or("streaming authorization binding quotas are invalid")?;
+    if actual_quotas.len() != expected_quotas.len() {
+        return Err("streaming authorization receipt quota set mismatch".to_string());
+    }
+    for (actual, expected) in actual_quotas.iter().zip(expected_quotas) {
+        let actual = actual
+            .as_object()
+            .ok_or("streaming authorization receipt quota is invalid")?;
+        let expected = expected
+            .as_object()
+            .ok_or("streaming authorization binding quota is invalid")?;
+        let actual_kind = actual
+            .get("windowKind")
+            .and_then(Value::as_str)
+            .unwrap_or("fixed");
+        if actual.get("counterKey") != expected.get("counter_key")
+            || actual.get("constraintId") != expected.get("constraint_id")
+            || actual.get("operation") != expected.get("operation")
+            || Some(actual_kind) != expected.get("window_kind").and_then(Value::as_str)
+            || actual.get("windowSeconds") != expected.get("window_seconds")
+            || actual.get("max") != expected.get("max_count")
+        {
+            return Err("streaming authorization receipt quota claim substitution".to_string());
+        }
+    }
+    Ok(())
+}
+
+fn decode_canonical_receipt_json(
+    object: &Map<String, Value>,
+    body_field: &str,
+    digest_field: &str,
+    maximum_bytes: usize,
+    label: &str,
+) -> Result<Value, String> {
+    let value = Value::Object(object.clone());
+    let encoded = required_string(&value, body_field)?;
+    let bytes = decode_base64url(encoded, label, 1)?;
+    if bytes.len() > maximum_bytes || general_purpose::URL_SAFE_NO_PAD.encode(&bytes) != encoded {
+        return Err(format!("{label} is oversized or noncanonical base64url"));
+    }
+    if required_digest(&value, digest_field)? != sha256_prefixed(&bytes) {
+        return Err(format!("{label} digest mismatch"));
+    }
+    let decoded: Value = serde_json::from_slice(&bytes)
+        .map_err(|err| format!("{label} is invalid JSON: {err}"))?;
+    if canonical_json_ensure_ascii(&decoded).as_bytes() != bytes {
+        return Err(format!("{label} is not canonical JSON"));
+    }
+    Ok(decoded)
+}
+
+fn validated_receipt_response_headers(
+    response: &Map<String, Value>,
+) -> Result<Vec<Value>, String> {
+    let headers = response
+        .get("response_headers")
+        .and_then(Value::as_array)
+        .filter(|headers| !headers.is_empty() && headers.len() <= 128)
+        .ok_or("authorization receipt response header count is invalid")?;
+    let mut previous_name: Option<&str> = None;
+    let mut total_bytes = 0usize;
+    for header in headers {
+        let header = header
+            .as_object()
+            .ok_or("authorization receipt response header is not an object")?;
+        require_exact_fields(
+            header,
+            &["name", "value_b64"],
+            "authorization receipt response header",
+        )?;
+        let name = header
+            .get("name")
+            .and_then(Value::as_str)
+            .ok_or("authorization receipt response header name is invalid")?;
+        let valid_name = !name.is_empty()
+            && name.len() <= 256
+            && name.bytes().all(|byte| {
+                byte.is_ascii_lowercase()
+                    || byte.is_ascii_digit()
+                    || matches!(
+                        byte,
+                        b'!' | b'#' | b'$' | b'%' | b'&' | b'\'' | b'*' | b'+' | b'-'
+                            | b'.' | b'^' | b'_' | b'`' | b'|' | b'~'
+                    )
+            });
+        if !valid_name
+            || name.starts_with("x-serverware-response-")
+            || [
+                "authorization",
+                "cookie",
+                "secret",
+                "token",
+                "password",
+                "passwd",
+                "api-key",
+                "apikey",
+                "private-key",
+            ]
+            .iter()
+            .any(|marker| name.contains(marker))
+            || matches!(
+                name,
+                "connection"
+                    | "keep-alive"
+                    | "proxy-authenticate"
+                    | "proxy-authorization"
+                    | "te"
+                    | "trailer"
+                    | "transfer-encoding"
+                    | "upgrade"
+            )
+        {
+            return Err("authorization receipt response header name is unsafe".to_string());
+        }
+        if previous_name.is_some_and(|previous| previous > name)
+            || previous_name.is_some_and(|previous| {
+                previous == name
+                    && !matches!(name, "link" | "set-cookie" | "warning" | "www-authenticate")
+            })
+        {
+            return Err(
+                "authorization receipt response headers are not canonically ordered".to_string(),
+            );
+        }
+        let encoded = header
+            .get("value_b64")
+            .and_then(Value::as_str)
+            .ok_or("authorization receipt response header value is invalid")?;
+        let bytes = decode_base64url(encoded, "authorization receipt response header", 0)?;
+        if bytes.len() > 64 * 1024
+            || general_purpose::URL_SAFE_NO_PAD.encode(&bytes) != encoded
+            || bytes
+                .iter()
+                .any(|byte| *byte <= 0x08 || (0x0a..=0x1f).contains(byte) || *byte == 0x7f)
+        {
+            return Err("authorization receipt response header value is invalid".to_string());
+        }
+        total_bytes = total_bytes
+            .checked_add(name.len())
+            .and_then(|value| value.checked_add(bytes.len()))
+            .ok_or("authorization receipt response headers exceed their bound")?;
+        if total_bytes > 64 * 1024 {
+            return Err("authorization receipt response headers exceed their bound".to_string());
+        }
+        previous_name = Some(name);
+    }
+    Ok(headers.clone())
 }
 
 fn optional_authority_identifier(
@@ -3935,7 +4813,10 @@ fn validate_streaming_authorization_binding(statement: &Value) -> Result<Value, 
     Ok(binding_value)
 }
 
-fn validate_streaming_statement_with_shared_contract(statement: &Value) -> Result<(), String> {
+fn validate_streaming_statement_with_shared_contract(
+    statement: &Value,
+    control_plane_response_key: &VerifyingKey,
+) -> Result<(), String> {
     const STATEMENT_FIELDS: [&str; 20] = [
         "apiVersion",
         "issued_at_unix",
@@ -3972,8 +4853,10 @@ fn validate_streaming_statement_with_shared_contract(statement: &Value) -> Resul
         return Err("streaming server response statement has the wrong version".to_string());
     }
 
-    validate_streaming_authorization_binding(statement)?;
-    let receipt = validated_control_plane_authorization_receipt(statement)?;
+    let authorization_binding = validate_streaming_authorization_binding(statement)?;
+    let receipt =
+        validated_control_plane_authorization_receipt(statement, control_plane_response_key)?;
+    validate_streaming_receipt_quotas_against_binding(&receipt, &authorization_binding)?;
     let receipt_digest = sha256_prefixed(canonical_json(&receipt).as_bytes());
     if statement
         .get("control_plane_authorization_receipt_sha256")
@@ -4116,7 +4999,8 @@ fn validate_streaming_statement_with_shared_contract(statement: &Value) -> Resul
         .and_then(Value::as_object_mut)
         .ok_or("streaming TLS channel binding is not an object")?;
     surrogate_tls.remove("exporter_label");
-    validate_strict_response_statement(&surrogate)
+    decode_response_statement_schema(&surrogate)
+        .map(|_| ())
         .map_err(|err| format!("streaming shared response contract is invalid: {err}"))
 }
 
@@ -4125,6 +5009,7 @@ fn verify_vendor_tee_for_mode(
     statement: &Value,
     nonce_bytes: &[u8],
     verifier_key_path: Option<&Path>,
+    control_plane_response_key: &VerifyingKey,
     expected_server_instance_id: Option<&str>,
     max_age_seconds: u64,
     streaming: bool,
@@ -4294,8 +5179,10 @@ fn verify_vendor_tee_for_mode(
     )?;
     let response_value = Value::Object(response.clone());
     let release_authority = validated_release_authority(statement)?;
-    let control_plane_authorization_receipt =
-        validated_control_plane_authorization_receipt(statement)?;
+    let control_plane_authorization_receipt = validated_control_plane_authorization_receipt(
+        statement,
+        control_plane_response_key,
+    )?;
     let control_plane_authorization_receipt_sha256 =
         sha256_prefixed(canonical_json(&control_plane_authorization_receipt).as_bytes());
     let upstream_response = if streaming {
@@ -4399,6 +5286,7 @@ fn verify_vendor_tee(
     statement: &Value,
     nonce_bytes: &[u8],
     verifier_key_path: Option<&Path>,
+    control_plane_response_key: &VerifyingKey,
     expected_server_instance_id: Option<&str>,
     max_age_seconds: u64,
 ) -> Result<&'static str, String> {
@@ -4407,6 +5295,7 @@ fn verify_vendor_tee(
         statement,
         nonce_bytes,
         verifier_key_path,
+        control_plane_response_key,
         expected_server_instance_id,
         max_age_seconds,
         false,
@@ -4440,7 +5329,7 @@ fn verify_runtime_proof(
     {
         return Err("server response statement has the wrong version".to_string());
     }
-    validate_strict_response_statement(statement)?;
+    let typed_statement = decode_response_statement_schema(statement)?;
     let canonical_statement = canonical_json(statement);
     let statement_digest = sha256_prefixed(canonical_statement.as_bytes());
     if required_string(proof, "server_statement_sha256")? != statement_digest {
@@ -4476,6 +5365,10 @@ fn verify_runtime_proof(
         )
         .map_err(|_| "server response signature verification failed")?;
 
+    if !(200..300).contains(&typed_statement.response.status) {
+        return Err("server response statement status is not successful".to_string());
+    }
+
     if required_string(statement, "client_nonce")? != nonce {
         return Err("server response statement nonce mismatch".to_string());
     }
@@ -4487,18 +5380,25 @@ fn verify_runtime_proof(
     if required_digest(statement, "client_request_digest")? != expected_client_request_digest {
         return Err("server response statement client request digest mismatch".to_string());
     }
-    if required_string(statement, "principal_id")? != expected_principal_id {
+    if required_string(statement, "principal_id")? != expected_principal_id
+        || !valid_bounded_identity(expected_principal_id)
+    {
         return Err(
             "server response statement principal does not match --expected-principal-id"
                 .to_string(),
         );
     }
     let route_id = required_string(statement, "route_id")?;
+    if !valid_bounded_identity(route_id) {
+        return Err("server response statement route identity is invalid".to_string());
+    }
     required_digest(statement, "request_digest")?;
     required_digest(statement, "operation_digest")?;
     let release_authority = validated_release_authority(statement)?;
-    let control_plane_authorization_receipt =
-        validated_control_plane_authorization_receipt(statement)?;
+    let control_plane_authorization_receipt = validated_control_plane_authorization_receipt(
+        statement,
+        expectations.control_plane_response_key,
+    )?;
     let upstream_response = validated_upstream_response(statement)?;
     required_digest(statement, "policy_digest")?;
     required_digest(statement, "runtime_manifest_digest")?;
@@ -5108,7 +6008,10 @@ fn verify_stream_runtime_proof(
         .get("streaming_response_statement")
         .filter(|value| value.is_object())
         .ok_or("stream runtime proof is missing streaming_response_statement")?;
-    validate_streaming_statement_with_shared_contract(statement)?;
+    validate_streaming_statement_with_shared_contract(
+        statement,
+        expectations.control_plane_response_key,
+    )?;
     let canonical_statement = canonical_json(statement);
     let statement_digest = sha256_prefixed(canonical_statement.as_bytes());
     if required_digest(proof, "streaming_response_statement_sha256")? != statement_digest {
@@ -5173,8 +6076,10 @@ fn verify_stream_runtime_proof(
     required_digest(statement, "operation_digest")?;
     let release_authority = validated_release_authority(statement)?;
     let authorization_binding = validate_streaming_authorization_binding(statement)?;
-    let control_plane_authorization_receipt =
-        validated_control_plane_authorization_receipt(statement)?;
+    let control_plane_authorization_receipt = validated_control_plane_authorization_receipt(
+        statement,
+        expectations.control_plane_response_key,
+    )?;
     let upstream_response = validated_streaming_upstream_response(statement)?;
     required_digest(statement, "policy_digest")?;
     required_digest(statement, "runtime_manifest_digest")?;
@@ -5422,7 +6327,10 @@ fn validate_observation_authorization_receipt(receipt: &Value) -> Result<(), Str
     Ok(())
 }
 
-fn validate_observation_state_invariants(statement: &Value) -> Result<(), String> {
+fn validate_observation_state_invariants(
+    statement: &Value,
+    control_plane_response_key: &VerifyingKey,
+) -> Result<(), String> {
     let policy = required_object(statement, "policy")?;
     let policy_value = Value::Object(policy.clone());
     required_digest(&policy_value, "digest")?;
@@ -5690,7 +6598,10 @@ fn validate_observation_state_invariants(statement: &Value) -> Result<(), String
                 }
             }
         }
-        let validated_receipt = validated_control_plane_authorization_receipt(&wrapper)?;
+        let validated_receipt = validated_control_plane_authorization_receipt(
+            &wrapper,
+            control_plane_response_key,
+        )?;
         if validated_receipt.get("release_authority") != Some(&validated_authority)
             || validated_receipt
                 .get("principal_id")
@@ -6011,7 +6922,7 @@ fn verify_observation_runtime_proof(
     if request != &expectations.request.statement_value() {
         return Err("observation statement request commitments mismatch".to_string());
     }
-    validate_observation_state_invariants(statement)?;
+    validate_observation_state_invariants(statement, expectations.control_plane_response_key)?;
 
     let headers_value = serde_json::to_value(&response.headers)
         .map_err(|err| format!("serialize observation response headers: {err}"))?;
@@ -6120,6 +7031,8 @@ fn finish_stream_collection<T: Read + Write>(
     let tls_exporter = general_purpose::URL_SAFE_NO_PAD.encode(exporter);
     let (peer_spiffe_id, peer_leaf_digest) = peer_identity(&tls)?;
     let (runtime_proof, runtime_proof_digest) = decode_stream_runtime_proof(&response)?;
+    let (control_plane_response_key, _) =
+        load_control_plane_response_key(&args.control_plane_response_key)?;
     let mut external_capture = verify_stream_runtime_proof(
         &runtime_proof,
         &response,
@@ -6130,6 +7043,7 @@ fn finish_stream_collection<T: Read + Write>(
             peer_leaf_digest: &peer_leaf_digest,
             client_request_digest: &expected_client_request_digest,
             principal_id: &args.expected_principal_id,
+            control_plane_response_key: &control_plane_response_key,
             max_age_seconds: args.max_age_seconds,
         },
     )?;
@@ -6142,6 +7056,7 @@ fn finish_stream_collection<T: Read + Write>(
         statement,
         &nonce_bytes,
         args.verifier_key.as_deref(),
+        &control_plane_response_key,
         args.expected_server_instance_id.as_deref(),
         args.max_age_seconds,
         true,
@@ -6240,6 +7155,8 @@ fn finish_observation_collection<T: Read + Write>(
     let tls_exporter = general_purpose::URL_SAFE_NO_PAD.encode(exporter);
     let (peer_spiffe_id, peer_leaf_digest) = peer_identity(&tls)?;
     let (runtime_proof, runtime_proof_digest) = decode_observation_runtime_proof(&response)?;
+    let (control_plane_response_key, _) =
+        load_control_plane_response_key(&args.control_plane_response_key)?;
     let verified = verify_observation_runtime_proof(
         &runtime_proof,
         &response,
@@ -6251,6 +7168,7 @@ fn finish_observation_collection<T: Read + Write>(
             peer_leaf_digest: &peer_leaf_digest,
             expected_server_instance_id: args.expected_server_instance_id.as_deref(),
             expected_principal_id: &args.expected_principal_id,
+            control_plane_response_key: &control_plane_response_key,
             request: &request,
             max_age_seconds: args.max_age_seconds,
         },
@@ -6500,6 +7418,8 @@ fn collect(args: Args) -> Result<Value, String> {
     }
     let runtime_proof: Value = serde_json::from_slice(&runtime_proof_bytes)
         .map_err(|err| format!("parse runtime response proof: {err}"))?;
+    let (control_plane_response_key, _) =
+        load_control_plane_response_key(&args.control_plane_response_key)?;
     let external_capture = verify_runtime_proof(
         &runtime_proof,
         &response,
@@ -6512,6 +7432,7 @@ fn collect(args: Args) -> Result<Value, String> {
                 .as_deref()
                 .ok_or("buffered client request digest was not initialized")?,
             principal_id: &args.expected_principal_id,
+            control_plane_response_key: &control_plane_response_key,
             max_age_seconds: args.max_age_seconds,
         },
     )?;
@@ -6524,6 +7445,7 @@ fn collect(args: Args) -> Result<Value, String> {
         statement,
         &nonce_bytes,
         args.verifier_key.as_deref(),
+        &control_plane_response_key,
         args.expected_server_instance_id.as_deref(),
         args.max_age_seconds,
     )?;
@@ -6598,6 +7520,96 @@ mod tests {
         sha256_prefixed(&[byte; 32])
     }
 
+    fn control_plane_response_signing_key() -> SigningKey {
+        SigningKey::from_bytes(&[21u8; 32])
+    }
+
+    #[test]
+    fn calendar_quota_windows_require_exact_utc_boundaries() {
+        const JANUARY_1_2024_UTC_MS: u64 = 1_704_067_200_000;
+        const JANUARY_2_2024_UTC_MS: u64 = 1_704_153_600_000;
+        const JANUARY_8_2024_UTC_MS: u64 = 1_704_672_000_000;
+        const FEBRUARY_1_2024_UTC_MS: u64 = 1_706_745_600_000;
+        let midday = JANUARY_1_2024_UTC_MS + 12 * 60 * 60 * 1000;
+        assert_eq!(
+            utc_calendar_window_bounds("utcDay", midday).expect("UTC day bounds"),
+            (JANUARY_1_2024_UTC_MS, JANUARY_2_2024_UTC_MS)
+        );
+        assert_eq!(
+            utc_calendar_window_bounds("utcIsoWeek", midday).expect("UTC week bounds"),
+            (JANUARY_1_2024_UTC_MS, JANUARY_8_2024_UTC_MS)
+        );
+        assert_eq!(
+            utc_calendar_window_bounds("utcMonth", midday).expect("UTC month bounds"),
+            (JANUARY_1_2024_UTC_MS, FEBRUARY_1_2024_UTC_MS)
+        );
+
+        let invalid_response = json!({
+            "quotas":[{
+                "counterKey":digest(40),
+                "constraintId":"quota:calendar",
+                "operation":"tweets.create",
+                "windowKind":"utcDay",
+                "windowStartEpochMs":JANUARY_1_2024_UTC_MS + 1,
+                "windowEndEpochMs":JANUARY_2_2024_UTC_MS + 1,
+                "calendarWindow":"utcDay",
+                "max":1,
+                "count":1,
+                "remaining":0,
+                "reservationState":"reserved",
+            }]
+        });
+        assert!(validate_attested_dispatch_quotas(
+            invalid_response.as_object().expect("quota response"),
+            "serverware.releaseAuthorization/v2",
+            midday,
+            midday + 1_000,
+        )
+        .expect_err("shifted UTC calendar window must fail closed")
+        .contains("calendar quota window"));
+    }
+
+    #[test]
+    fn streaming_receipt_quotas_must_match_the_authorization_binding() {
+        let actual_quota = json!({
+            "counterKey":digest(41),
+            "constraintId":"quota:tweet",
+            "operation":"tweets.create",
+            "windowKind":"fixed",
+            "windowStartEpochMs":1_704_067_200_000u64,
+            "windowEndEpochMs":1_704_067_260_000u64,
+            "windowSeconds":60,
+            "max":1,
+            "count":1,
+            "remaining":0,
+            "reservationState":"reserved",
+        });
+        let response_body = json!({"quotas":[actual_quota]});
+        let response_bytes = canonical_json_ensure_ascii(&response_body).into_bytes();
+        let receipt = json!({
+            "response":{
+                "body_b64":general_purpose::URL_SAFE_NO_PAD.encode(&response_bytes),
+                "body_sha256":sha256_prefixed(&response_bytes),
+            }
+        });
+        let mut binding = json!({
+            "shared_quotas":[{
+                "counter_key":digest(41),
+                "constraint_id":"quota:tweet",
+                "operation":"tweets.create",
+                "window_kind":"fixed",
+                "window_seconds":60,
+                "max_count":1,
+            }]
+        });
+        validate_streaming_receipt_quotas_against_binding(&receipt, &binding)
+            .expect("matching streaming quota claim");
+        binding["shared_quotas"][0]["max_count"] = json!(2);
+        assert!(validate_streaming_receipt_quotas_against_binding(&receipt, &binding)
+            .expect_err("substituted streaming quota maximum must fail closed")
+            .contains("claim substitution"));
+    }
+
     #[test]
     fn client_request_digest_is_computed_from_client_observable_material() {
         let url = Url::parse("https://EXAMPLE.com.:443/a%20b?z=2&a=one%20two&a=one").unwrap();
@@ -6652,6 +7664,8 @@ mod tests {
             "/tmp/serverware-proof.json",
             "--collector-key",
             "/tmp/serverware-collector.pem",
+            "--control-plane-response-key",
+            "/tmp/serverware-control-plane-response.pem",
             "--expected-principal-id",
             "demo-agent",
             "--proxy-header",
@@ -7313,7 +8327,8 @@ mod tests {
         }))
         .into_bytes();
         let control_plane_nonce = general_purpose::URL_SAFE_NO_PAD.encode([20u8; 32]);
-        let control_plane_key_id = digest(21);
+        let control_plane_response_key = SigningKey::from_bytes(&[21u8; 32]);
+        let (_, control_plane_key_id) = public_key_material(&control_plane_response_key);
         let control_plane_response_headers = json!([
             {
                 "name":"content-type",
@@ -7376,7 +8391,11 @@ mod tests {
                 "response_signing_key_id":control_plane_key_id,
                 "statement_b64":general_purpose::URL_SAFE_NO_PAD.encode(&control_plane_response_statement),
                 "statement_sha256":sha256_prefixed(&control_plane_response_statement),
-                "signature":format!("ed25519:{}", general_purpose::URL_SAFE_NO_PAD.encode([26u8; 64])),
+                "signature":format!("ed25519:{}", general_purpose::URL_SAFE_NO_PAD.encode(
+                    control_plane_response_key
+                        .sign(&control_plane_response_statement)
+                        .to_bytes()
+                )),
             },
         });
         let selected_raw_policy_headers_b64 = json!({
@@ -7874,6 +8893,7 @@ mod tests {
     fn streaming_expectations<'a>(
         nonce: &'a str,
         exporter: &'a str,
+        control_plane_response_key: &'a VerifyingKey,
     ) -> RuntimeProofExpectations<'a> {
         RuntimeProofExpectations {
             nonce,
@@ -7882,6 +8902,7 @@ mod tests {
             peer_leaf_digest: Box::leak(Box::new(digest(9))),
             client_request_digest: Box::leak(Box::new(digest(0))),
             principal_id: "demo-agent",
+            control_plane_response_key,
             max_age_seconds: 300,
         }
     }
@@ -7893,7 +8914,9 @@ mod tests {
         let response = captured_stream_response();
         let nonce = general_purpose::URL_SAFE_NO_PAD.encode(nonce_bytes);
         let exporter = general_purpose::URL_SAFE_NO_PAD.encode([8u8; 32]);
-        let expectations = streaming_expectations(&nonce, &exporter);
+        let control_plane_response_key = control_plane_response_signing_key().verifying_key();
+        let expectations =
+            streaming_expectations(&nonce, &exporter, &control_plane_response_key);
         let capture = verify_stream_runtime_proof(&proof, &response, &expectations)
             .expect("valid streaming runtime proof");
         assert_eq!(
@@ -7911,6 +8934,7 @@ mod tests {
                 statement,
                 &nonce_bytes,
                 Some(&verifier_path),
+                &control_plane_response_key,
                 Some("spiffe://prod.serverware/decision-gate/test"),
                 300,
                 true,
@@ -7936,6 +8960,7 @@ mod tests {
             &wrong_attestation["streaming_response_statement"],
             &nonce_bytes,
             Some(&verifier_path),
+            &control_plane_response_key,
             Some("spiffe://prod.serverware/decision-gate/test"),
             300,
             true,
@@ -8010,7 +9035,9 @@ mod tests {
         let response = captured_stream_response();
         let nonce = general_purpose::URL_SAFE_NO_PAD.encode(nonce_bytes);
         let exporter = general_purpose::URL_SAFE_NO_PAD.encode([8u8; 32]);
-        let expectations = streaming_expectations(&nonce, &exporter);
+        let control_plane_response_key = control_plane_response_signing_key().verifying_key();
+        let expectations =
+            streaming_expectations(&nonce, &exporter, &control_plane_response_key);
         let directory = test_directory("staging");
         let target = directory.join("verified.body");
 
@@ -8790,6 +9817,7 @@ mod tests {
         let key_path = key_directory.join("verifier.pem");
         fs::write(&key_path, verifier_pem).expect("write test verifier key");
         let (proof, nonce_bytes, _) = production_proof(&verifier_key);
+        let control_plane_response_key = control_plane_response_signing_key().verifying_key();
         let statement = proof.get("server_statement").expect("statement");
         assert_eq!(
             verify_vendor_tee(
@@ -8797,6 +9825,7 @@ mod tests {
                 statement,
                 &nonce_bytes,
                 Some(&key_path),
+                &control_plane_response_key,
                 Some("spiffe://prod.serverware/decision-gate/test"),
                 300,
             )
@@ -8808,6 +9837,7 @@ mod tests {
             statement,
             &nonce_bytes,
             None,
+            &control_plane_response_key,
             Some("spiffe://prod.serverware/decision-gate/test"),
             300,
         )
@@ -8828,6 +9858,7 @@ mod tests {
             tampered.get("server_statement").expect("statement"),
             &nonce_bytes,
             Some(&key_path),
+            &control_plane_response_key,
             Some("spiffe://prod.serverware/decision-gate/test"),
             300,
         )
@@ -8858,6 +9889,7 @@ mod tests {
         };
         let nonce = general_purpose::URL_SAFE_NO_PAD.encode(nonce_bytes);
         let tls_exporter = general_purpose::URL_SAFE_NO_PAD.encode([8u8; 32]);
+        let control_plane_response_key = control_plane_response_signing_key().verifying_key();
         let expectations = RuntimeProofExpectations {
             nonce: &nonce,
             tls_exporter: &tls_exporter,
@@ -8865,6 +9897,7 @@ mod tests {
             peer_leaf_digest: &digest(9),
             client_request_digest: &digest(0),
             principal_id: "demo-agent",
+            control_plane_response_key: &control_plane_response_key,
             max_age_seconds: 300,
         };
         let capture = verify_runtime_proof(&proof, &response, &expectations)
@@ -8878,6 +9911,33 @@ mod tests {
             capture["upstream_response"],
             proof["server_statement"]["upstream_response"]
         );
+
+        let wrong_control_plane_response_key =
+            SigningKey::from_bytes(&[31u8; 32]).verifying_key();
+        let wrong_key_expectations = RuntimeProofExpectations {
+            nonce: expectations.nonce,
+            tls_exporter: expectations.tls_exporter,
+            peer_spiffe_id: expectations.peer_spiffe_id,
+            peer_leaf_digest: expectations.peer_leaf_digest,
+            client_request_digest: expectations.client_request_digest,
+            principal_id: expectations.principal_id,
+            control_plane_response_key: &wrong_control_plane_response_key,
+            max_age_seconds: expectations.max_age_seconds,
+        };
+        assert!(verify_runtime_proof(&proof, &response, &wrong_key_expectations)
+            .expect_err("substituted control-plane response key must fail closed")
+            .contains("does not match the pinned key"));
+
+        let mut invalid_receipt_signature = proof.clone();
+        invalid_receipt_signature["server_statement"]["control_plane_authorization_receipt"]
+            ["response"]["signature"] = Value::String(format!(
+            "ed25519:{}",
+            general_purpose::URL_SAFE_NO_PAD.encode([0u8; 64])
+        ));
+        resign_server_statement(&mut invalid_receipt_signature, &response_key);
+        assert!(verify_runtime_proof(&invalid_receipt_signature, &response, &expectations)
+            .expect_err("invalid control-plane response signature must fail closed")
+            .contains("signature verification failed"));
 
         let mut missing = proof.clone();
         missing["server_statement"]
@@ -9172,6 +10232,7 @@ mod tests {
     }
 
     fn verify_observation_fixture(fixture: &ObservationFixture) -> Result<Value, String> {
+        let control_plane_response_key = control_plane_response_signing_key().verifying_key();
         verify_observation_runtime_proof(
             &fixture.proof,
             &fixture.response,
@@ -9183,6 +10244,7 @@ mod tests {
                 peer_leaf_digest: &fixture.peer_leaf_digest,
                 expected_server_instance_id: None,
                 expected_principal_id: "demo-agent",
+                control_plane_response_key: &control_plane_response_key,
                 request: &fixture.request,
                 max_age_seconds: 300,
             },

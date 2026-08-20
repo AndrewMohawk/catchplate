@@ -1050,6 +1050,8 @@ impl CanonicalControllerRequestV11 {
         )?;
         let source_tree_sha256 =
             parse_hex_digest_v11(json_string_v11(source, "treeSha256")?)?;
+        let accepted_at =
+            json_string_v11(signature, "acceptedAt")?.to_owned();
         Ok(Self {
             exact_bytes: Arc::new(exact_bytes),
             root,
@@ -1057,7 +1059,7 @@ impl CanonicalControllerRequestV11 {
             raw_nonce,
             request_id,
             request_id_text,
-            accepted_at: json_string_v11(signature, "acceptedAt")?.to_owned(),
+            accepted_at,
             deadline_unix_ms,
             request_envelope_sha256: envelope_sha256,
             plan_configuration_sha256,

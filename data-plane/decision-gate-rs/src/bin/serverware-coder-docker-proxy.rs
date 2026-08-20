@@ -2,6 +2,9 @@
 #[path = "../coder_controller_v11.rs"]
 mod coder_controller_v11;
 #[cfg(target_os = "linux")]
+#[path = "../plan_protocol.rs"]
+mod plan_protocol;
+#[cfg(target_os = "linux")]
 #[path = "../docker_contract.rs"]
 mod docker_contract;
 #[cfg(target_os = "linux")]
@@ -19,6 +22,12 @@ mod dind_lifecycle;
 #[cfg(target_os = "linux")]
 #[path = "../receipt_contract_v12.rs"]
 mod receipt_contract_v12;
+#[cfg(target_os = "linux")]
+#[path = "../readiness.rs"]
+mod readiness;
+#[cfg(target_os = "linux")]
+#[path = "../runtime_evidence.rs"]
+mod runtime_evidence;
 
 #[cfg(not(target_os = "linux"))]
 fn main() {

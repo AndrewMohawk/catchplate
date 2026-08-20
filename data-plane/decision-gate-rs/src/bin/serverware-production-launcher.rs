@@ -252,7 +252,7 @@ struct GlobalRoleRegistryBinding {
     pins_file: FileRecord,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct GlobalRoleRegistry {
     api_version: String,
@@ -489,7 +489,7 @@ struct ReceiptEnvironment {
     sha256: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct LaunchAuthorizationRequest {
     api_version: String,
@@ -5109,7 +5109,7 @@ mod linux {
             "bootstrap receipt descriptor reservation",
         )?;
         if reservation.as_raw_fd() == RECEIPT_FD {
-            return Ok(reservation);
+            return Ok(reservation.into());
         }
         // SAFETY: dup3 atomically replaces any inherited fixed descriptor and
         // keeps the reservation closed across exec until the receipt is ready.

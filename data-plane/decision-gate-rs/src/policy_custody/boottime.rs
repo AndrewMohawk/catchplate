@@ -199,7 +199,7 @@ impl BoottimeDomain {
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[must_use]
-pub(super) struct BoottimeDeadline {
+pub(crate) struct BoottimeDeadline {
     domain: BoottimeDomain,
     absolute_nanos: u64,
 }
@@ -242,7 +242,7 @@ impl BoottimeDeadline {
         Ok(boottime_now_nanos()? >= self.absolute_nanos)
     }
 
-    pub(super) fn require_live(self) -> BoottimeResult<()> {
+    pub(crate) fn require_live(self) -> BoottimeResult<()> {
         self.live_observation().map(|_| ())
     }
 

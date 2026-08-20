@@ -1597,7 +1597,10 @@ fn validate_container_create(
     validate_exact_health(field(object, "Healthcheck")?, authority)?;
     validate_exact_endpoints(field(object, "ExposedPorts")?, authority)?;
     validate_labels(field(object, "Labels")?, required_labels)?;
-    let host = object(field(object, "HostConfig")?, "HostConfig is not an object")?;
+    let host = self::object(
+        field(object, "HostConfig")?,
+        "HostConfig is not an object",
+    )?;
     require_object_keys(
         host,
         &[
@@ -1850,7 +1853,11 @@ fn validate_network_create(
         || !boolean(object, "CheckDuplicate")?
         || boolean(object, "EnableIPv6")?
         || !boolean(object, "Internal")?
-        || !object(field(object, "Options")?, "network options are not an object")?.is_empty()
+        || !self::object(
+            field(object, "Options")?,
+            "network options are not an object",
+        )?
+        .is_empty()
     {
         return Err(ControllerError::Rejected(
             "network create body differs from the fixed internal bridge",
@@ -1903,7 +1910,7 @@ fn validate_network_membership(
             ));
         }
         require_object_keys(object, &["Container", "EndpointConfig"])?;
-        let endpoint = object(
+        let endpoint = self::object(
             field(object, "EndpointConfig")?,
             "EndpointConfig is not an object",
         )?;
@@ -1919,7 +1926,7 @@ fn validate_network_membership(
                 "network aliases differ from the signed membership",
             ));
         }
-        let ipam = object(
+        let ipam = self::object(
             field(endpoint, "IPAMConfig")?,
             "network IPAMConfig is not an object",
         )?;
@@ -1963,7 +1970,10 @@ fn validate_volume_create(
     require_object_keys(object, &["Driver", "DriverOpts", "Labels", "Name"])?;
     if string(object, "Name")? != request.target.logical_id
         || string(object, "Driver")? != "local"
-        || !object(field(object, "DriverOpts")?, "DriverOpts is not an object")?
+        || !self::object(
+            field(object, "DriverOpts")?,
+            "DriverOpts is not an object",
+        )?
             .is_empty()
     {
         return Err(ControllerError::Rejected(

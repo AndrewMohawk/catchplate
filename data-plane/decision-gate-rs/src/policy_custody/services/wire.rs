@@ -70,7 +70,7 @@ pub(super) const CLEANUP_EFFECT_INTENT_RECEIPT_DOMAIN: &[u8] =
     b"serverware.policyCustodyCleanupEffectIntentReceipt/v3";
 pub(super) const CLEANUP_EFFECT_RESULT_RECORD_DOMAIN: &[u8] =
     b"serverware.policyCustodyCleanupEffectResultRecord/v3";
-pub(super) const CLEANUP_EFFECT_EXECUTION_RECORD_DOMAIN: &[u8] =
+pub(in crate::policy_shadow::policy_custody) const CLEANUP_EFFECT_EXECUTION_RECORD_DOMAIN: &[u8] =
     b"serverware.policyCustodyCleanupEffectExecutionRecord/v3";
 const CLEANUP_HELPER_BOOTSTRAP_MANIFEST_DOMAIN: &[u8] =
     b"serverware.policyCustodyCleanupHelperBootstrapManifest/v3";
@@ -2374,15 +2374,15 @@ impl CleanupEffectKeyV3 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct CleanupEffectIntentV3 {
+pub(in crate::policy_shadow::policy_custody) struct CleanupEffectIntentV3 {
     pub(super) api_version: String,
-    pub(super) action: CleanupAction,
+    pub(in crate::policy_shadow::policy_custody) action: CleanupAction,
     pub(super) ownership_id_sha256: Sha256Digest,
-    pub(super) operation: PolicyCustodyOperation,
-    pub(super) operation_id_sha256: Sha256Digest,
-    pub(super) durable_request_sha256: Sha256Digest,
-    pub(super) request_sha256: Sha256Digest,
-    pub(super) termination_fence_sha256: Sha256Digest,
+    pub(in crate::policy_shadow::policy_custody) operation: PolicyCustodyOperation,
+    pub(in crate::policy_shadow::policy_custody) operation_id_sha256: Sha256Digest,
+    pub(in crate::policy_shadow::policy_custody) durable_request_sha256: Sha256Digest,
+    pub(in crate::policy_shadow::policy_custody) request_sha256: Sha256Digest,
+    pub(in crate::policy_shadow::policy_custody) termination_fence_sha256: Sha256Digest,
     pub(super) worker: WatchdogProcessIdentityV3,
     pub(super) cgroup: WatchdogRetainedCgroupIdentityV3,
     pub(super) retained_descriptors: RetainedDescriptorIdentitySetV3,
@@ -2390,13 +2390,13 @@ pub(super) struct CleanupEffectIntentV3 {
     pub(super) cgroup_fd_identity_sha256: Sha256Digest,
     pub(super) retained_fd_manifest_sha256: Sha256Digest,
     pub(super) authorization: SignedCleanupAuthorizationV3,
-    pub(super) authorization_consumption:
+    pub(in crate::policy_shadow::policy_custody) authorization_consumption:
         PersistedCleanupAuthorizationConsumptionV3,
-    pub(super) predecessor: CleanupPredecessor,
-    pub(super) operation_deadline: ProtocolBoottimeDeadline,
-    pub(super) cleanup_deadline: ProtocolBoottimeDeadline,
+    pub(in crate::policy_shadow::policy_custody) predecessor: CleanupPredecessor,
+    pub(in crate::policy_shadow::policy_custody) operation_deadline: ProtocolBoottimeDeadline,
+    pub(in crate::policy_shadow::policy_custody) cleanup_deadline: ProtocolBoottimeDeadline,
     pub(super) evidence_query_deadline: ProtocolBoottimeDeadline,
-    pub(super) expected_result_sequence: u64,
+    pub(in crate::policy_shadow::policy_custody) expected_result_sequence: u64,
     pub(super) intent_nonce_sha256: Sha256Digest,
     pub(super) intent_sha256: Sha256Digest,
 }
@@ -2587,25 +2587,25 @@ impl CleanupEffectIntentV3 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct PersistedCleanupEffectIntentV3 {
-    pub(super) intent: CleanupEffectIntentV3,
-    pub(super) exact_canonical_intent_bytes: Vec<u8>,
-    pub(super) persisted_at_boottime_nanos: u64,
-    pub(super) endpoint_process_identity_sha256: Sha256Digest,
-    pub(super) endpoint_generation: u64,
-    pub(super) helper_generation: u64,
-    pub(super) signing_key_id: Sha256Digest,
-    pub(super) signing_key_spki_sha256: Sha256Digest,
-    pub(super) current_key_authorization_checkpoint_sha256:
+pub(in crate::policy_shadow::policy_custody) struct PersistedCleanupEffectIntentV3 {
+    pub(in crate::policy_shadow::policy_custody) intent: CleanupEffectIntentV3,
+    pub(in crate::policy_shadow::policy_custody) exact_canonical_intent_bytes: Vec<u8>,
+    pub(in crate::policy_shadow::policy_custody) persisted_at_boottime_nanos: u64,
+    pub(in crate::policy_shadow::policy_custody) endpoint_process_identity_sha256: Sha256Digest,
+    pub(in crate::policy_shadow::policy_custody) endpoint_generation: u64,
+    pub(in crate::policy_shadow::policy_custody) helper_generation: u64,
+    pub(in crate::policy_shadow::policy_custody) signing_key_id: Sha256Digest,
+    pub(in crate::policy_shadow::policy_custody) signing_key_spki_sha256: Sha256Digest,
+    pub(in crate::policy_shadow::policy_custody) current_key_authorization_checkpoint_sha256:
         Sha256Digest,
-    pub(super) revocation_generation: u64,
-    pub(super) revocation_root_sha256: Sha256Digest,
-    pub(super) signature_base64: String,
-    pub(super) intent_receipt_sha256: Sha256Digest,
+    pub(in crate::policy_shadow::policy_custody) revocation_generation: u64,
+    pub(in crate::policy_shadow::policy_custody) revocation_root_sha256: Sha256Digest,
+    pub(in crate::policy_shadow::policy_custody) signature_base64: String,
+    pub(in crate::policy_shadow::policy_custody) intent_receipt_sha256: Sha256Digest,
 }
 
 impl PersistedCleanupEffectIntentV3 {
-    pub(super) fn canonical_signature_payload(
+    pub(in crate::policy_shadow::policy_custody) fn canonical_signature_payload(
         &self,
     ) -> Result<Vec<u8>, ProtocolError> {
         canonical_json_bytes(&(
@@ -2836,7 +2836,7 @@ impl PersistedCleanupWorkerParentProofV3 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct PersistedCleanupEffectExecutionV3 {
+pub(in crate::policy_shadow::policy_custody) struct PersistedCleanupEffectExecutionV3 {
     pub(super) api_version: String,
     pub(super) key: CleanupEffectKeyV3,
     pub(super) intent_receipt_sha256: Sha256Digest,
@@ -2848,18 +2848,18 @@ pub(super) struct PersistedCleanupEffectExecutionV3 {
     pub(super) cgroup_fd_identity: WatchdogRetainedFdIdentityV3,
     pub(super) parent_proof:
         Option<PersistedCleanupWorkerParentProofV3>,
-    pub(super) entered_at_boottime_nanos: u64,
+    pub(in crate::policy_shadow::policy_custody) entered_at_boottime_nanos: u64,
     pub(super) evidence_query_deadline: ProtocolBoottimeDeadline,
-    pub(super) endpoint_process_identity_sha256: Sha256Digest,
-    pub(super) endpoint_generation: u64,
-    pub(super) helper_generation: u64,
-    pub(super) signing_key_id: Sha256Digest,
-    pub(super) signing_key_spki_sha256: Sha256Digest,
-    pub(super) current_key_authorization_checkpoint_sha256:
+    pub(in crate::policy_shadow::policy_custody) endpoint_process_identity_sha256: Sha256Digest,
+    pub(in crate::policy_shadow::policy_custody) endpoint_generation: u64,
+    pub(in crate::policy_shadow::policy_custody) helper_generation: u64,
+    pub(in crate::policy_shadow::policy_custody) signing_key_id: Sha256Digest,
+    pub(in crate::policy_shadow::policy_custody) signing_key_spki_sha256: Sha256Digest,
+    pub(in crate::policy_shadow::policy_custody) current_key_authorization_checkpoint_sha256:
         Sha256Digest,
-    pub(super) revocation_generation: u64,
-    pub(super) revocation_root_sha256: Sha256Digest,
-    pub(super) signature_base64: String,
+    pub(in crate::policy_shadow::policy_custody) revocation_generation: u64,
+    pub(in crate::policy_shadow::policy_custody) revocation_root_sha256: Sha256Digest,
+    pub(in crate::policy_shadow::policy_custody) signature_base64: String,
     pub(super) execution_record_sha256: Sha256Digest,
 }
 
@@ -2889,7 +2889,7 @@ struct CleanupEffectExecutionSignaturePreimage<'a> {
 }
 
 impl PersistedCleanupEffectExecutionV3 {
-    pub(super) fn canonical_signature_payload(
+    pub(in crate::policy_shadow::policy_custody) fn canonical_signature_payload(
         &self,
     ) -> Result<Vec<u8>, ProtocolError> {
         canonical_json_bytes(
@@ -3062,11 +3062,11 @@ impl PersistedCleanupEffectExecutionV3 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct PersistedCleanupEffectResultV3 {
+pub(in crate::policy_shadow::policy_custody) struct PersistedCleanupEffectResultV3 {
     pub(super) key: CleanupEffectKeyV3,
     pub(super) intent_receipt_sha256: Sha256Digest,
     pub(super) execution_record_sha256: Sha256Digest,
-    pub(super) signed_result: SignedCleanupResultV3,
+    pub(in crate::policy_shadow::policy_custody) signed_result: SignedCleanupResultV3,
     pub(super) exact_signed_result_bytes: Vec<u8>,
     pub(super) persisted_at_boottime_nanos: u64,
     pub(super) result_record_sha256: Sha256Digest,
@@ -3202,14 +3202,14 @@ impl PersistedCleanupEffectResultV3 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct DurableCleanupEffectEvidenceV3 {
-    pub(super) intent: PersistedCleanupEffectIntentV3,
-    pub(super) execution: PersistedCleanupEffectExecutionV3,
-    pub(super) result: PersistedCleanupEffectResultV3,
+pub(in crate::policy_shadow::policy_custody) struct DurableCleanupEffectEvidenceV3 {
+    pub(in crate::policy_shadow::policy_custody) intent: PersistedCleanupEffectIntentV3,
+    pub(in crate::policy_shadow::policy_custody) execution: PersistedCleanupEffectExecutionV3,
+    pub(in crate::policy_shadow::policy_custody) result: PersistedCleanupEffectResultV3,
 }
 
 impl DurableCleanupEffectEvidenceV3 {
-    pub(super) fn validate(&self) -> Result<(), ProtocolError> {
+    pub(in crate::policy_shadow::policy_custody) fn validate(&self) -> Result<(), ProtocolError> {
         self.result
             .validate_against(&self.intent, &self.execution)
     }

@@ -22,6 +22,7 @@ cp "$verified_ca_source" "$TMP_DIR/serverware-ca.pem"
 chmod 0600 "$TMP_DIR/serverware-ca.pem"
 collector_key="$TMP_DIR/dev-proof-collector-key.pem"
 collector_public_der="$TMP_DIR/dev-proof-collector-public.der"
+control_plane_response_key="$TMP_DIR/control-plane-response-signing.pub.pem"
 stream_dir="$TMP_DIR/stream-proof"
 stream_proof="$stream_dir/dev-streaming-proxy-response-proof.json"
 stream_body="$stream_dir/dev-streaming-body.bin"
@@ -59,7 +60,8 @@ rm -f \
   "$stream_body" \
   "$stream_summary" \
   "$collector_key" \
-  "$collector_public_der"
+  "$collector_public_der" \
+  "$control_plane_response_key"
 observation_outage_gate="serverware-observation-outage-$observation_container_suffix"
 observation_custody="serverware-observation-custody-$observation_container_suffix"
 observation_custody_gate="serverware-observation-custody-gate-$observation_container_suffix"
@@ -141,6 +143,18 @@ PY
 openssl genpkey -algorithm ED25519 -out "$collector_key" >/dev/null 2>&1
 chmod 0600 "$collector_key"
 openssl pkey -in "$collector_key" -pubout -outform DER -out "$collector_public_der"
+docker compose exec -T serverware python - <<'PY' > "$control_plane_response_key"
+import json
+import urllib.request
+
+with urllib.request.urlopen(
+    "http://127.0.0.1:3000/attestation?nonce=proof-client-control-plane-key",
+    timeout=5,
+) as response:
+    attestation = json.load(response)
+print(attestation["response_signing_public_key_pem"], end="")
+PY
+chmod 0600 "$control_plane_response_key"
 
 docker compose run --rm --no-deps \
   --user "$(id -u):$(id -g)" \
@@ -152,6 +166,7 @@ docker compose run --rm --no-deps \
   --ca /proof/serverware-ca.pem \
   --out /proof/dev-proxy-response-proof.json \
   --collector-key /proof/dev-proof-collector-key.pem \
+  --control-plane-response-key /proof/control-plane-response-signing.pub.pem \
   --expected-principal-id agent:demo \
   --proxy-header "X-Serverware-Agent: demo-agent" \
   --header "X-Serverware-Agent: demo-agent" \
@@ -484,6 +499,7 @@ docker compose run --rm --no-deps \
   --out /proof/stream-proof/dev-streaming-proxy-response-proof.json \
   --body-out /proof/stream-proof/dev-streaming-body.bin \
   --collector-key /proof/dev-proof-collector-key.pem \
+  --control-plane-response-key /proof/control-plane-response-signing.pub.pem \
   --expected-principal-id agent:demo \
   --proxy-header "X-Serverware-Agent: demo-agent" \
   --header "X-Serverware-Agent: demo-agent" \
@@ -619,6 +635,7 @@ for stream_mode in "${structured_stream_modes[@]}"; do
     --out "/proof/structured-stream-proofs/$stream_mode/proof.json" \
     --body-out "/proof/structured-stream-proofs/$stream_mode/body.bin" \
     --collector-key /proof/dev-proof-collector-key.pem \
+    --control-plane-response-key /proof/control-plane-response-signing.pub.pem \
     --expected-principal-id agent:demo \
     --proxy-header "X-Serverware-Agent: demo-agent" \
     --header "X-Serverware-Agent: demo-agent" \
@@ -817,6 +834,7 @@ docker compose run --rm --no-deps \
   --body-out /proof/response-observation-proofs/post-success/body.bin \
   --request-body /proof/response-observation-proofs/post-success/request.bin \
   --collector-key /proof/dev-proof-collector-key.pem \
+  --control-plane-response-key /proof/control-plane-response-signing.pub.pem \
   --expected-principal-id agent:demo \
   --proxy-header "X-Serverware-Agent: demo-agent" \
   --header "X-Serverware-Agent: demo-agent" \
@@ -838,6 +856,7 @@ docker compose run --rm --no-deps \
   --out /proof/response-observation-proofs/local-denial/proof.json \
   --body-out /proof/response-observation-proofs/local-denial/body.bin \
   --collector-key /proof/dev-proof-collector-key.pem \
+  --control-plane-response-key /proof/control-plane-response-signing.pub.pem \
   --expected-principal-id agent:demo \
   --proxy-header "X-Serverware-Agent: demo-agent" \
   --header "X-Serverware-Agent: demo-agent" \
@@ -857,6 +876,7 @@ docker compose run --rm --no-deps \
   --out /proof/response-observation-proofs/validation-block/proof.json \
   --body-out /proof/response-observation-proofs/validation-block/body.bin \
   --collector-key /proof/dev-proof-collector-key.pem \
+  --control-plane-response-key /proof/control-plane-response-signing.pub.pem \
   --expected-principal-id agent:demo \
   --proxy-header "X-Serverware-Agent: demo-agent" \
   --header "X-Serverware-Agent: demo-agent" \
@@ -874,6 +894,7 @@ docker compose run --rm --no-deps \
   --out /proof/response-observation-proofs/upstream-error/proof.json \
   --body-out /proof/response-observation-proofs/upstream-error/body.bin \
   --collector-key /proof/dev-proof-collector-key.pem \
+  --control-plane-response-key /proof/control-plane-response-signing.pub.pem \
   --expected-principal-id agent:demo \
   --proxy-header "X-Serverware-Agent: demo-agent" \
   --header "X-Serverware-Agent: demo-agent" \
@@ -892,6 +913,7 @@ if docker compose run --rm --no-deps \
   --body-out /proof/response-observation-proofs/body-limit-retry/body.bin \
   --max-observation-body-bytes 1 \
   --collector-key /proof/dev-proof-collector-key.pem \
+  --control-plane-response-key /proof/control-plane-response-signing.pub.pem \
   --expected-principal-id agent:demo \
   --proxy-header "X-Serverware-Agent: demo-agent" \
   --header "X-Serverware-Agent: demo-agent" \
@@ -937,6 +959,7 @@ docker compose run --rm --no-deps \
   --body-out /proof/response-observation-proofs/body-limit-retry/body.bin \
   --max-observation-body-bytes 16777216 \
   --collector-key /proof/dev-proof-collector-key.pem \
+  --control-plane-response-key /proof/control-plane-response-signing.pub.pem \
   --expected-principal-id agent:demo \
   --proxy-header "X-Serverware-Agent: demo-agent" \
   --header "X-Serverware-Agent: demo-agent" \
@@ -1146,6 +1169,7 @@ if docker compose run --rm --no-deps \
   --out /proof/response-observation-proofs/attestation-outage/proof.json \
   --body-out /proof/response-observation-proofs/attestation-outage/body.bin \
   --collector-key /proof/dev-proof-collector-key.pem \
+  --control-plane-response-key /proof/control-plane-response-signing.pub.pem \
   --expected-principal-id agent:demo \
   --proxy-header "X-Serverware-Agent: demo-agent" \
   --header "X-Serverware-Agent: demo-agent" \
@@ -1228,6 +1252,7 @@ docker compose run --rm --no-deps \
   --out /proof/response-observation-proofs/replay-first/proof.json \
   --body-out /proof/response-observation-proofs/replay-first/body.bin \
   --collector-key /proof/dev-proof-collector-key.pem \
+  --control-plane-response-key /proof/control-plane-response-signing.pub.pem \
   --expected-principal-id agent:demo \
   --proxy-header "X-Serverware-Agent: demo-agent" \
   --header "X-Serverware-Agent: demo-agent" \
@@ -1260,6 +1285,7 @@ if docker compose run --rm --no-deps \
   --out /proof/response-observation-proofs/replay-second/proof.json \
   --body-out /proof/response-observation-proofs/replay-second/body.bin \
   --collector-key /proof/dev-proof-collector-key.pem \
+  --control-plane-response-key /proof/control-plane-response-signing.pub.pem \
   --expected-principal-id agent:demo \
   --proxy-header "X-Serverware-Agent: demo-agent" \
   --header "X-Serverware-Agent: demo-agent" \

@@ -1771,33 +1771,40 @@ struct CleanupDurabilityJournal {
 impl CleanupDurabilityJournal {
     fn start(
         mut journal: DurableAppendJournal,
+        maximum_work_nanos: u64,
     ) -> Result<Self, ServiceError> {
         let worker = super::BoundedServiceWorker::start(
             "policy-custody-cleanup-durability",
-            move |command| match command {
-                CleanupJournalCommand::RepairLookup {
-                    idempotency_sha256,
-                } => journal
-                    .repair_and_lookup_persisted_exact_response(
-                        &idempotency_sha256,
-                    )
-                    .map(CleanupJournalReply::Lookup),
-                CleanupJournalCommand::Append {
-                    idempotency_sha256,
-                    exact_request,
-                    exact_response,
-                } => journal
-                    .append_exact_exchange(
+            maximum_work_nanos,
+            move |command, fence: &super::BoundedDurabilityFence| {
+                fence.require_open()?;
+                let result = match command {
+                    CleanupJournalCommand::RepairLookup {
                         idempotency_sha256,
-                        &exact_request,
-                        &exact_response,
-                    )
-                    .map(CleanupJournalReply::Append),
-                CleanupJournalCommand::CurrentHead => Ok(
-                    CleanupJournalReply::CurrentHead(
-                        journal.current_head_sha256().cloned(),
+                    } => journal
+                        .repair_and_lookup_persisted_exact_response(
+                            &idempotency_sha256,
+                        )
+                        .map(CleanupJournalReply::Lookup),
+                    CleanupJournalCommand::Append {
+                        idempotency_sha256,
+                        exact_request,
+                        exact_response,
+                    } => journal
+                        .append_exact_exchange(
+                            idempotency_sha256,
+                            &exact_request,
+                            &exact_response,
+                        )
+                        .map(CleanupJournalReply::Append),
+                    CleanupJournalCommand::CurrentHead => Ok(
+                        CleanupJournalReply::CurrentHead(
+                            journal.current_head_sha256().cloned(),
+                        ),
                     ),
-                ),
+                };
+                fence.require_open()?;
+                result
             },
         )
         .map_err(|error| {
@@ -2035,6 +2042,7 @@ impl TrustedHostNoTeeBoundedCleanupHelperServer {
         journal_directory: OwnedFd,
         signer: CleanupHelperSigningAuthorityV3,
         report: TrustedHostNoTeeServiceReportV3,
+        maximum_durability_worker_nanos: u64,
         operation_generation: u64,
         shared_configuration_sha256: Sha256Digest,
     ) -> Result<Self, ServiceError> {
@@ -2070,7 +2078,10 @@ impl TrustedHostNoTeeBoundedCleanupHelperServer {
             MAX_CLEANUP_JOURNAL_RECORDS,
             MAX_CLEANUP_JOURNAL_RECOVERY_BYTES,
         )?;
-        let journal = CleanupDurabilityJournal::start(journal)?;
+        let journal = CleanupDurabilityJournal::start(
+            journal,
+            maximum_durability_worker_nanos,
+        )?;
         Ok(Self {
             socket,
             peer_authentication,
@@ -2722,7 +2733,7 @@ impl TrustedHostNoTeeBoundedCleanupHelperServer {
                 decode_canonical_frame(reply)?;
             return Ok(Some(
                 response
-                    .binding
+                    .request_binding
                     .deadline
                     .absolute_boottime_nanos(),
             ));
@@ -2873,6 +2884,7 @@ impl TrustedHostNoTeeBoundedCleanupHelperServer {
                 request_id_sha256,
                 key,
                 deadline,
+                ..
             } => {
                 if request.binding.idempotency_sha256
                     != query_idempotency_for_request(
@@ -3019,6 +3031,7 @@ impl TrustedHostNoTeeBoundedCleanupHelperServer {
                 key,
                 prepared_intent_receipt_sha256,
                 deadline,
+                ..
             } => {
                 if !self.readiness_sealed {
                     return Err(ServiceError::Invalid(
@@ -4013,7 +4026,7 @@ fn validate_server_socket(
             &mut peer_length,
         )
     } != 0
-        || peer_length as usize < size_of::<libc::sa_family_t>()
+        || (peer_length as usize) < size_of::<libc::sa_family_t>()
         || peer_address.ss_family as i32 != libc::AF_UNIX
     {
         return Err(ServiceError::Invalid(

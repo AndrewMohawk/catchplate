@@ -237,7 +237,7 @@ impl<'de> Deserialize<'de> for Sha256Digest {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(transparent)]
 pub(crate) struct HmacSha256Digest(String);
 
@@ -647,7 +647,7 @@ impl PolicyShadowCustodySignerRole {
 /// Assignment-selected persistence and retrieval authority. The constructor
 /// remains private to `ProductionCustodyConfiguration`; endpoint adapters can
 /// inspect the exact scope but cannot substitute a different realm.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct ProductionCustodyProofScope {
     assignment_id: Sha256Digest,
     assignment_payload_sha256: Sha256Digest,
@@ -4449,7 +4449,7 @@ impl ShadowGenerationIdentity {
         Ok(hash_domain_frames(
             b"serverware.policyShadowGeneration/v1",
             &[
-                &canonical_json_bytes(&(
+                &canonical_json_bytes(&serde_json::json!([
                     self.generation_epoch,
                     self.minimum_generation_tombstone_epoch,
                     self.generation_tombstone_epoch,
@@ -4467,7 +4467,7 @@ impl ShadowGenerationIdentity {
                     self.candidate_rollback_epoch,
                     &self.candidate_compiled_snapshot_sha256,
                     &self.runtime_boot_id_sha256,
-                ))?,
+                ]))?,
                 &canonical_json_bytes(&(
                     self.assignment_starts_at_unix_nanos,
                     self.assignment_ends_at_unix_nanos,
@@ -5019,7 +5019,7 @@ pub(crate) enum PublicationReconciliationState {
     Retired,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct PublicationReconciliationReceiptWire {
     state: PublicationReconciliationState,
     publication_revision: u64,
@@ -5131,8 +5131,37 @@ impl PublicationReconciliationReceiptWire {
         Ok(receipt)
     }
 
+    fn validate_deserialized_invariants(&self) -> Result<(), ShadowError> {
+        let reconstructed = Self::from_custody(
+            self.state,
+            self.publication_revision,
+            self.predecessor_generation_sha256.clone(),
+            self.committed_generation_sha256.clone(),
+            self.published_generation_sha256.clone(),
+            self.first_ingress_sequence,
+            self.last_ingress_sequence,
+            self.ledger_event_ordinal,
+            self.ledger_head_sha256.clone(),
+            self.spool_root_sha256.clone(),
+            self.prepared_publication_sha256.clone(),
+            self.trusted_observed_at_unix_nanos,
+            self.trusted_time_checkpoint_sha256.clone(),
+            self.persistence_receipt_sha256.clone(),
+            self.retrieval_id_sha256.clone(),
+            self.retrieval_proof_sha256.clone(),
+            self.signing_key_id.clone(),
+            self.signing_key_spki_sha256.clone(),
+            self.signature.0.clone(),
+            self.signed_receipt_sha256.clone(),
+        )?;
+        if reconstructed != *self {
+            return Err(ShadowError::PayloadDigestMismatch);
+        }
+        Ok(())
+    }
+
     fn canonical_payload(&self) -> Result<Vec<u8>, ShadowError> {
-        canonical_json_bytes(&(
+        canonical_json_bytes(&serde_json::json!([
             self.state,
             self.publication_revision,
             &self.predecessor_generation_sha256,
@@ -5152,7 +5181,7 @@ impl PublicationReconciliationReceiptWire {
             self.signer_role,
             &self.signing_key_id,
             &self.signing_key_spki_sha256,
-        ))
+        ]))
     }
 }
 
@@ -5172,6 +5201,7 @@ fn verify_publication_reconciliation_receipt(
     proof_verifier: &dyn PolicyShadowPersistenceProofVerifier,
     maximum_age_nanos: i64,
 ) -> Result<VerifiedPublicationReconciliationReceipt, ShadowError> {
+    wire.validate_deserialized_invariants()?;
     let canonical_payload = wire.canonical_payload()?;
     let verified_trust_checkpoint = verify_custody_receipt_authority(
         wire.signer_role,
@@ -5204,6 +5234,7 @@ pub(in crate::policy_shadow) fn verify_production_publication_reconciliation_rec
     trusted_time: &dyn TrustedTime,
     proof_verifier: &dyn PolicyShadowPersistenceProofVerifier,
 ) -> Result<VerifiedPublicationReconciliationReceipt, ShadowError> {
+    wire.validate_deserialized_invariants()?;
     let role = PolicyShadowCustodySignerRole::PublicationReconciliation;
     if wire.signer_role != role {
         return Err(ShadowError::SignerBindingMismatch);
@@ -5344,7 +5375,7 @@ pub(crate) enum ActiveEffectCommitState {
     ReconcileRequired,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ActiveEffectPreparation {
     generation_id: Sha256Digest,
@@ -5387,6 +5418,20 @@ impl ActiveEffectPreparation {
         })
     }
 
+    fn validate_deserialized_invariants(&self) -> Result<(), ShadowError> {
+        let reconstructed = Self::new(
+            self.generation_id.clone(),
+            self.ingress_sequence,
+            self.effect_kind,
+            self.effect_intent_sha256.clone(),
+            self.prepared_state_sha256.clone(),
+        )?;
+        if reconstructed != *self {
+            return Err(ShadowError::PayloadDigestMismatch);
+        }
+        Ok(())
+    }
+
     pub(crate) fn effect_id_sha256(&self) -> &Sha256Digest {
         &self.effect_id_sha256
     }
@@ -5407,7 +5452,7 @@ impl ActiveEffectPreparation {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ActiveEffectBarrierReceiptWire {
     preparation: ActiveEffectPreparation,
     barrier_ordinal: u64,
@@ -5479,6 +5524,29 @@ impl ActiveEffectBarrierReceiptWire {
         Ok(wire)
     }
 
+    fn validate_deserialized_invariants(&self) -> Result<(), ShadowError> {
+        self.preparation.validate_deserialized_invariants()?;
+        let reconstructed = Self::from_custody(
+            self.preparation.clone(),
+            self.barrier_ordinal,
+            self.predecessor_head_sha256.clone(),
+            self.resulting_head_sha256.clone(),
+            self.trusted_observed_at_unix_nanos,
+            self.trusted_time_checkpoint_sha256.clone(),
+            self.persistence_receipt_sha256.clone(),
+            self.retrieval_id_sha256.clone(),
+            self.retrieval_proof_sha256.clone(),
+            self.signing_key_id.clone(),
+            self.signing_key_spki_sha256.clone(),
+            self.signature.0.clone(),
+            self.signed_receipt_sha256.clone(),
+        )?;
+        if reconstructed != *self {
+            return Err(ShadowError::PayloadDigestMismatch);
+        }
+        Ok(())
+    }
+
     fn canonical_payload(&self) -> Result<Vec<u8>, ShadowError> {
         canonical_json_bytes(&(
             &self.preparation,
@@ -5517,6 +5585,7 @@ fn verify_active_effect_barrier(
     proof_verifier: &dyn PolicyShadowPersistenceProofVerifier,
     maximum_age_nanos: i64,
 ) -> Result<VerifiedActiveEffectPermit, ShadowError> {
+    wire.validate_deserialized_invariants()?;
     if wire.preparation != *expected_preparation {
         return Err(ShadowError::BindingDrift);
     }
@@ -5553,6 +5622,7 @@ pub(in crate::policy_shadow) fn verify_production_active_effect_barrier(
     trusted_time: &dyn TrustedTime,
     proof_verifier: &dyn PolicyShadowPersistenceProofVerifier,
 ) -> Result<VerifiedActiveEffectPermit, ShadowError> {
+    wire.validate_deserialized_invariants()?;
     if wire.preparation != *expected_preparation {
         return Err(ShadowError::BindingDrift);
     }
@@ -5593,7 +5663,7 @@ impl VerifiedActiveEffectPermit {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ActiveEffectCommitReceiptWire {
     effect_id_sha256: Sha256Digest,
     barrier_receipt_sha256: Sha256Digest,
@@ -5668,6 +5738,28 @@ impl ActiveEffectCommitReceiptWire {
         Ok(wire)
     }
 
+    fn validate_deserialized_invariants(&self) -> Result<(), ShadowError> {
+        let reconstructed = Self::from_custody(
+            self.effect_id_sha256.clone(),
+            self.barrier_receipt_sha256.clone(),
+            self.terminal_state,
+            self.result_sha256.clone(),
+            self.trusted_observed_at_unix_nanos,
+            self.trusted_time_checkpoint_sha256.clone(),
+            self.persistence_receipt_sha256.clone(),
+            self.retrieval_id_sha256.clone(),
+            self.retrieval_proof_sha256.clone(),
+            self.signing_key_id.clone(),
+            self.signing_key_spki_sha256.clone(),
+            self.signature.0.clone(),
+            self.signed_receipt_sha256.clone(),
+        )?;
+        if reconstructed != *self {
+            return Err(ShadowError::PayloadDigestMismatch);
+        }
+        Ok(())
+    }
+
     fn canonical_payload(&self) -> Result<Vec<u8>, ShadowError> {
         canonical_json_bytes(&(
             &self.effect_id_sha256,
@@ -5705,6 +5797,7 @@ fn verify_active_effect_commit(
     proof_verifier: &dyn PolicyShadowPersistenceProofVerifier,
     maximum_age_nanos: i64,
 ) -> Result<VerifiedActiveEffectCommitReceipt, ShadowError> {
+    wire.validate_deserialized_invariants()?;
     if wire.effect_id_sha256
             != *permit.preparation().effect_id_sha256()
         || wire.barrier_receipt_sha256
@@ -5756,6 +5849,7 @@ pub(in crate::policy_shadow) fn verify_production_active_effect_commit(
     trusted_time: &dyn TrustedTime,
     proof_verifier: &dyn PolicyShadowPersistenceProofVerifier,
 ) -> Result<VerifiedActiveEffectCommitReceipt, ShadowError> {
+    wire.validate_deserialized_invariants()?;
     if wire.effect_id_sha256
             != *permit.preparation().effect_id_sha256()
         || wire.barrier_receipt_sha256
@@ -5809,6 +5903,7 @@ fn verify_reconciled_active_effect_commit(
     proof_verifier: &dyn PolicyShadowPersistenceProofVerifier,
     maximum_age_nanos: i64,
 ) -> Result<VerifiedActiveEffectCommitReceipt, ShadowError> {
+    wire.validate_deserialized_invariants()?;
     if wire.effect_id_sha256 != *expected_effect_id_sha256
         || !wire.reconcile_required
         || !matches!(
@@ -5852,6 +5947,7 @@ pub(in crate::policy_shadow) fn verify_production_reconciled_active_effect_commi
     trusted_time: &dyn TrustedTime,
     proof_verifier: &dyn PolicyShadowPersistenceProofVerifier,
 ) -> Result<VerifiedActiveEffectCommitReceipt, ShadowError> {
+    wire.validate_deserialized_invariants()?;
     if wire.effect_id_sha256 != *expected_effect_id_sha256
         || !wire.reconcile_required
         || !matches!(
@@ -6003,7 +6099,7 @@ pub(crate) fn authority_role_for_custody_signer(
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct ProductionCustodyKeyBinding {
     role: AuthorityRole,
     key_id: Sha256Digest,
@@ -6330,7 +6426,7 @@ impl CustodyTrustedHostVerifierResultWire {
     }
 
     fn canonical_payload(&self) -> Result<Vec<u8>, ShadowError> {
-        canonical_json_bytes(&(
+        canonical_json_bytes(&serde_json::json!([
             "serverware.policyShadowCustodyTrustedHostResult/v1",
             &self.host_evidence_sha256,
             &self.host_evidence_profile_sha256,
@@ -6348,7 +6444,7 @@ impl CustodyTrustedHostVerifierResultWire {
             &self.trust_revocation_root_sha256,
             &self.signing_key_id,
             &self.signing_key_spki_sha256,
-        ))
+        ]))
     }
 }
 
@@ -10732,7 +10828,7 @@ pub(crate) struct VerifiedSpoolAppendReservation {
     verified_trust_checkpoint: AtomicTrustCheckpoint,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct SpoolAppendReservationReceiptWire {
     generation_id: Sha256Digest,
     ingress_sequence: u64,
@@ -10822,6 +10918,31 @@ impl SpoolAppendReservationReceiptWire {
         Ok(receipt)
     }
 
+    fn validate_deserialized_invariants(&self) -> Result<(), ShadowError> {
+        let reconstructed = Self::from_custody(
+            self.generation_id.clone(),
+            self.ingress_sequence,
+            self.lane,
+            self.event_ordinal,
+            self.predecessor_event_ordinal,
+            self.predecessor_head_sha256.clone(),
+            self.event_sha256.clone(),
+            self.trusted_observed_at_unix_nanos,
+            self.trusted_time_checkpoint_sha256.clone(),
+            self.persistence_receipt_sha256.clone(),
+            self.retrieval_id_sha256.clone(),
+            self.retrieval_proof_sha256.clone(),
+            self.signing_key_id.clone(),
+            self.signing_key_spki_sha256.clone(),
+            self.signature.0.clone(),
+            self.signed_receipt_sha256.clone(),
+        )?;
+        if reconstructed != *self {
+            return Err(ShadowError::PayloadDigestMismatch);
+        }
+        Ok(())
+    }
+
     fn canonical_signature_payload(&self) -> Result<Vec<u8>, ShadowError> {
         canonical_json_bytes(&(
             &self.generation_id,
@@ -10853,6 +10974,7 @@ fn verify_spool_append_reservation_receipt(
     proof_verifier: &dyn PolicyShadowPersistenceProofVerifier,
     maximum_age_nanos: i64,
 ) -> Result<VerifiedSpoolAppendReservation, ShadowError> {
+    wire.validate_deserialized_invariants()?;
     if wire.generation_id != event.generation_id
         || wire.ingress_sequence != event.ingress_sequence
         || wire.event_sha256 != event.event_sha256
@@ -10892,6 +11014,7 @@ pub(in crate::policy_shadow) fn verify_production_spool_append_reservation_recei
     trusted_time: &dyn TrustedTime,
     proof_verifier: &dyn PolicyShadowPersistenceProofVerifier,
 ) -> Result<VerifiedSpoolAppendReservation, ShadowError> {
+    wire.validate_deserialized_invariants()?;
     if wire.generation_id != event.generation_id
         || wire.ingress_sequence != event.ingress_sequence
         || wire.event_sha256 != event.event_sha256
@@ -11314,7 +11437,7 @@ impl SignedUnavailableGenerationReceipt {
     }
 
     fn canonical_signature_payload(&self) -> Result<Vec<u8>, ShadowError> {
-        canonical_json_bytes(&(
+        canonical_json_bytes(&serde_json::json!([
             &self.request_binding_sha256,
             &self.request_commitment_sha256,
             &self.generation_id,
@@ -11332,7 +11455,7 @@ impl SignedUnavailableGenerationReceipt {
             PolicyShadowCustodySignerRole::UnavailableIngress,
             &self.signing_key_id,
             &self.signing_key_spki_sha256,
-        ))
+        ]))
     }
 }
 
@@ -11532,7 +11655,7 @@ pub(crate) enum IngressCustodyAdmission {
     Unavailable(VerifiedUnavailableGenerationReceipt),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum ShadowSpoolPhase {
     IngressOpen,
@@ -11546,7 +11669,7 @@ pub(crate) enum ShadowSpoolPhase {
     RangeClosure,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum ShadowSpoolDisposition {
     Appended,
@@ -11637,7 +11760,7 @@ impl ShadowSpoolEvent {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct SignedShadowSpillReceipt {
     generation_id: Sha256Digest,
     ingress_sequence: u64,
@@ -11766,6 +11889,39 @@ impl SignedShadowSpillReceipt {
         })
     }
 
+    fn validate_deserialized_invariants(&self) -> Result<(), ShadowError> {
+        let event = ShadowSpoolEvent::new(
+            self.generation_id.clone(),
+            self.ingress_sequence,
+            self.request_binding_sha256.clone(),
+            self.request_commitment_sha256.clone(),
+            self.event_phase,
+            self.event_sha256.clone(),
+            self.canonical_event_bytes.clone(),
+        )?;
+        let reconstructed = Self::from_custody(
+            &event,
+            self.event_ordinal,
+            self.disposition,
+            self.predecessor_event_ordinal,
+            self.predecessor_head_sha256.clone(),
+            self.resulting_head_sha256.clone(),
+            self.trusted_observed_at_unix_nanos,
+            self.trusted_time_checkpoint_sha256.clone(),
+            self.persistence_receipt_sha256.clone(),
+            self.retrieval_id_sha256.clone(),
+            self.retrieval_proof_sha256.clone(),
+            self.signing_key_id.clone(),
+            self.signing_key_spki_sha256.clone(),
+            self.signature.0.clone(),
+            self.signed_receipt_sha256.clone(),
+        )?;
+        if reconstructed != *self {
+            return Err(ShadowError::PayloadDigestMismatch);
+        }
+        Ok(())
+    }
+
     pub(crate) fn matches_opening(
         &self,
         generation_id: &Sha256Digest,
@@ -11871,7 +12027,7 @@ impl SignedShadowSpillReceipt {
     }
 
     fn canonical_signature_payload(&self) -> Result<Vec<u8>, ShadowError> {
-        canonical_json_bytes(&(
+        canonical_json_bytes(&serde_json::json!([
             &self.generation_id,
             self.ingress_sequence,
             &self.request_binding_sha256,
@@ -11892,7 +12048,7 @@ impl SignedShadowSpillReceipt {
             self.signer_role(),
             &self.signing_key_id,
             &self.signing_key_spki_sha256,
-        ))
+        ]))
     }
 }
 
@@ -11913,6 +12069,7 @@ fn verify_shadow_spill_receipt(
     proof_verifier: &dyn PolicyShadowPersistenceProofVerifier,
     maximum_age_nanos: i64,
 ) -> Result<VerifiedShadowSpillReceipt, ShadowError> {
+    wire.validate_deserialized_invariants()?;
     if !wire.matches_event(expected_event) {
         return Err(ShadowError::BindingDrift);
     }
@@ -11949,6 +12106,7 @@ pub(in crate::policy_shadow) fn verify_production_shadow_spill_receipt(
     trusted_time: &dyn TrustedTime,
     proof_verifier: &dyn PolicyShadowPersistenceProofVerifier,
 ) -> Result<VerifiedShadowSpillReceipt, ShadowError> {
+    wire.validate_deserialized_invariants()?;
     if !wire.matches_event(expected_event) {
         return Err(ShadowError::BindingDrift);
     }
@@ -12066,7 +12224,7 @@ impl AuthenticatedSpoolCompactionRequest {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct AuthenticatedSpoolCompactionReceipt {
     generation_id: Sha256Digest,
     old_spool_head_sha256: Sha256Digest,
@@ -12110,7 +12268,7 @@ impl AuthenticatedSpoolCompactionReceipt {
         signature.decode()?;
         let expected_signed_receipt = hash_domain_frames(
             b"serverware.policyShadowSpoolCompactionReceipt/v1",
-            &[&canonical_json_bytes(&(
+            &[&canonical_json_bytes(&serde_json::json!([
                 &request.generation_id,
                 &request.old_spool_head_sha256,
                 request.compacted_first_event_ordinal,
@@ -12129,7 +12287,7 @@ impl AuthenticatedSpoolCompactionReceipt {
                 &signing_key_id,
                 &signing_key_spki_sha256,
                 &signature,
-            ))?],
+            ]))?],
         );
         if signed_receipt_sha256 != expected_signed_receipt {
             return Err(ShadowError::PayloadDigestMismatch);
@@ -12164,6 +12322,37 @@ impl AuthenticatedSpoolCompactionReceipt {
             signature,
             signed_receipt_sha256,
         })
+    }
+
+    fn validate_deserialized_invariants(&self) -> Result<(), ShadowError> {
+        let request = AuthenticatedSpoolCompactionRequest::new(
+            self.generation_id.clone(),
+            self.old_spool_head_sha256.clone(),
+            self.compacted_first_event_ordinal,
+            self.compacted_last_event_ordinal,
+            self.compacted_ordered_range_root_sha256.clone(),
+            self.compacted_record_count,
+            self.compacted_through_spill_receipt_sha256.clone(),
+            self.retained_successor_event_ordinal,
+            self.retained_successor_head_sha256.clone(),
+            self.new_spool_root_sha256.clone(),
+        )?;
+        let reconstructed = Self::from_custody(
+            &request,
+            self.trusted_observed_at_unix_nanos,
+            self.trusted_time_checkpoint_sha256.clone(),
+            self.persistence_receipt_sha256.clone(),
+            self.retrieval_id_sha256.clone(),
+            self.retrieval_proof_sha256.clone(),
+            self.signing_key_id.clone(),
+            self.signing_key_spki_sha256.clone(),
+            self.signature.0.clone(),
+            self.signed_receipt_sha256.clone(),
+        )?;
+        if reconstructed != *self {
+            return Err(ShadowError::PayloadDigestMismatch);
+        }
+        Ok(())
     }
 
     pub(crate) fn generation_id(&self) -> &Sha256Digest {
@@ -12243,7 +12432,7 @@ impl AuthenticatedSpoolCompactionReceipt {
     }
 
     fn canonical_signature_payload(&self) -> Result<Vec<u8>, ShadowError> {
-        canonical_json_bytes(&(
+        canonical_json_bytes(&serde_json::json!([
             &self.generation_id,
             &self.old_spool_head_sha256,
             self.compacted_first_event_ordinal,
@@ -12262,7 +12451,7 @@ impl AuthenticatedSpoolCompactionReceipt {
             PolicyShadowCustodySignerRole::SpoolCompaction,
             &self.signing_key_id,
             &self.signing_key_spki_sha256,
-        ))
+        ]))
     }
 }
 
@@ -12283,6 +12472,7 @@ fn verify_spool_compaction_receipt(
     proof_verifier: &dyn PolicyShadowPersistenceProofVerifier,
     maximum_age_nanos: i64,
 ) -> Result<VerifiedSpoolCompactionReceipt, ShadowError> {
+    wire.validate_deserialized_invariants()?;
     if !wire.matches_request(expected_request) {
         return Err(ShadowError::BindingDrift);
     }
@@ -12319,6 +12509,7 @@ pub(in crate::policy_shadow) fn verify_production_spool_compaction_receipt(
     trusted_time: &dyn TrustedTime,
     proof_verifier: &dyn PolicyShadowPersistenceProofVerifier,
 ) -> Result<VerifiedSpoolCompactionReceipt, ShadowError> {
+    wire.validate_deserialized_invariants()?;
     if !wire.matches_request(expected_request) {
         return Err(ShadowError::BindingDrift);
     }
@@ -14320,7 +14511,7 @@ fn active_finalization_binding_sha256(
 ) -> Result<Sha256Digest, ShadowError> {
     Ok(hash_domain_frames(
         b"serverware.policyShadowActiveFinalizationBinding/v1",
-        &[&canonical_json_bytes(&(
+        &[&canonical_json_bytes(&serde_json::json!([
             assignment_sha256,
             assignment_payload_sha256,
             assignment_revision,
@@ -14340,7 +14531,7 @@ fn active_finalization_binding_sha256(
             &pure_active_evaluation.policy_plan_sha256,
             &pure_active_evaluation.effect_intents_sha256,
             &pure_active_evaluation.dispatch_commitment_sha256,
-        ))?],
+        ]))?],
     ))
 }
 
@@ -15641,7 +15832,7 @@ impl CustodyEvidenceBinding {
         }
         let expected = hash_domain_frames(
             b"serverware.policyShadowCustodyEvidenceBinding/v1",
-            &[&canonical_json_bytes(&(
+            &[&canonical_json_bytes(&serde_json::json!([
                 &self.admitted_ingress_receipt_sha256,
                 &self.unavailable_ingress_receipt_sha256,
                 &self.dispatch_barrier_receipt_sha256,
@@ -15666,7 +15857,7 @@ impl CustodyEvidenceBinding {
                 &self.last_spool_root_sha256,
                 &self.publication_reconciliation_receipt_sha256,
                 self.publication_revision,
-            ))?],
+            ]))?],
         );
         if expected != self.custody_evidence_root_sha256 {
             return Err(ShadowError::PayloadDigestMismatch);
@@ -17930,6 +18121,14 @@ impl<'a> UnsignedCheckpointPayloadBuilder<'a> {
             assignment_sha256: self.assignment_sha256,
             assignment_payload_sha256: self.assignment_payload_sha256,
             assignment_revision: self.assignment_revision,
+            authority_key_independence_sha256:
+                self.authority_key_independence_sha256,
+            policy_authority_analysis_sha256:
+                self.policy_authority_analysis_sha256,
+            policy_authority_analysis_payload_sha256:
+                self.policy_authority_analysis_payload_sha256,
+            custody_receipt_evidence_requirements_sha256:
+                self.custody_receipt_evidence_requirements_sha256,
             load_receipt_sha256: self.load_receipt_sha256,
             load_receipt_payload_sha256: self.load_receipt_payload_sha256,
             canary_id: self.canary_id,
@@ -20971,7 +21170,7 @@ impl ActivationPublicationTransaction {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ActivationPublicationReceiptWire {
     pub(crate) assignment_sha256: Sha256Digest,
@@ -21092,8 +21291,40 @@ impl ActivationPublicationReceiptWire {
         Ok(wire)
     }
 
+    fn validate_deserialized_invariants(&self) -> Result<(), ShadowError> {
+        let reconstructed = Self::from_custody(
+            self.assignment_sha256.clone(),
+            self.assignment_payload_sha256.clone(),
+            self.assignment_revision,
+            self.readiness_core_sha256.clone(),
+            self.authority_key_independence_sha256.clone(),
+            self.transaction_sha256.clone(),
+            self.replaced_policy_sha256.clone(),
+            self.replaced_policy_sequence,
+            self.replaced_rollback_epoch,
+            self.published_policy_sha256.clone(),
+            self.published_policy_sequence,
+            self.published_rollback_epoch,
+            self.replaced_publication_revision,
+            self.published_publication_revision,
+            self.trusted_observed_at_unix_nanos,
+            self.trusted_time_checkpoint_sha256.clone(),
+            self.persistence_receipt_sha256.clone(),
+            self.retrieval_id_sha256.clone(),
+            self.retrieval_proof_sha256.clone(),
+            self.signing_key_id.clone(),
+            self.signing_key_spki_sha256.clone(),
+            self.signature.0.clone(),
+            self.signed_receipt_sha256.clone(),
+        )?;
+        if reconstructed != *self {
+            return Err(ShadowError::PayloadDigestMismatch);
+        }
+        Ok(())
+    }
+
     fn canonical_payload(&self) -> Result<Vec<u8>, ShadowError> {
-        canonical_json_bytes(&(
+        canonical_json_bytes(&serde_json::json!([
             &self.assignment_sha256,
             &self.assignment_payload_sha256,
             self.assignment_revision,
@@ -21116,7 +21347,7 @@ impl ActivationPublicationReceiptWire {
             PolicyShadowCustodySignerRole::ActivationPublication,
             &self.signing_key_id,
             &self.signing_key_spki_sha256,
-        ))
+        ]))
     }
 }
 
@@ -21138,6 +21369,7 @@ fn verify_activation_publication_receipt(
     proof_verifier: &dyn PolicyShadowPersistenceProofVerifier,
     maximum_age_nanos: i64,
 ) -> Result<VerifiedActivationPublicationReceipt, ShadowError> {
+    wire.validate_deserialized_invariants()?;
     if wire.assignment_sha256
             != expected_transaction.assignment_sha256
         || wire.assignment_payload_sha256
@@ -21210,6 +21442,7 @@ pub(in crate::policy_shadow) fn verify_production_activation_publication_receipt
     trusted_time: &dyn TrustedTime,
     proof_verifier: &dyn PolicyShadowPersistenceProofVerifier,
 ) -> Result<VerifiedActivationPublicationReceipt, ShadowError> {
+    wire.validate_deserialized_invariants()?;
     if wire.assignment_sha256
             != expected_transaction.assignment_sha256
         || wire.assignment_payload_sha256

@@ -5,6 +5,12 @@ mod artifact_cas;
 #[path = "../coder_controller_v11.rs"]
 mod coder_controller_v11;
 #[cfg(target_os = "linux")]
+#[path = "../controller_v12.rs"]
+mod controller_v12;
+#[cfg(target_os = "linux")]
+#[path = "../docker_contract.rs"]
+mod docker_contract;
+#[cfg(target_os = "linux")]
 #[path = "../plan_executor.rs"]
 mod plan_executor;
 #[cfg(target_os = "linux")]

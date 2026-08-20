@@ -621,7 +621,7 @@ impl AuthenticatedDirectoryInput {
         let mut bytes = Vec::with_capacity(
             expected_size.min(usize::MAX as u64) as usize,
         );
-        file.by_ref()
+        std::io::Read::by_ref(&mut file)
             .take(maximum_size.saturating_add(1))
             .read_to_end(&mut bytes)?;
         if bytes.len() as u64 != expected_size
@@ -1293,7 +1293,7 @@ impl DirectoryCasStore {
         }
         let mut file = File::from(metadata);
         let mut bytes = Vec::with_capacity(identity.size as usize);
-        file.by_ref()
+        std::io::Read::by_ref(&mut file)
             .take(maximum_metadata_bytes.saturating_add(1))
             .read_to_end(&mut bytes)?;
         if bytes.len() as u64 != identity.size
@@ -1347,7 +1347,7 @@ impl DirectoryCasStore {
             return Err(std::io::Error::last_os_error().into());
         }
         if pid == 0 {
-            let child_result = (|| {
+            let child_result: PlanResult<bool> = (|| {
                 append_publication_record(
                     &self.journal_root,
                     control,
@@ -1932,8 +1932,7 @@ fn verify_published_object(
     let mut metadata_file = File::from(metadata);
     let mut actual_metadata =
         Vec::with_capacity(expected_metadata.len());
-    metadata_file
-        .by_ref()
+    std::io::Read::by_ref(&mut metadata_file)
         .take(expected_metadata.len() as u64 + 1)
         .read_to_end(&mut actual_metadata)?;
     if actual_metadata != expected_metadata {

@@ -2364,7 +2364,7 @@ fn execute_no_build_phases<T: LaneProxyTransport>(
     for lane in lanes {
         let mut services_active = false;
         let mut runner_active = false;
-        let lane_result = (|| {
+        let lane_result: PlanResult<LaneExecutionEvidenceV12> = (|| {
             if !lane.prepare.services.is_empty() {
                 create_services(plan, lane, session)?;
                 services_active = true;

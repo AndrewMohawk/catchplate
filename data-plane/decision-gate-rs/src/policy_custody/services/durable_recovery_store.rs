@@ -995,11 +995,11 @@ pub(super) fn wire_owner_to_runtime(
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct RecoveryRuntimeMaterialV3 {
-    pub(super) owner: DurableOwnershipRecord,
-    pub(super) settlement_chain: Vec<DurableSettlementRecord>,
-    pub(super) authorized_cleanup_steps: Vec<AuthorizedCleanupStep>,
-    pub(super) stored_cleanup_evidence: Vec<StoredCleanupEvidence>,
+pub(in crate::policy_shadow::policy_custody) struct RecoveryRuntimeMaterialV3 {
+    pub(in crate::policy_shadow::policy_custody) owner: DurableOwnershipRecord,
+    pub(in crate::policy_shadow::policy_custody) settlement_chain: Vec<DurableSettlementRecord>,
+    pub(in crate::policy_shadow::policy_custody) authorized_cleanup_steps: Vec<AuthorizedCleanupStep>,
+    pub(in crate::policy_shadow::policy_custody) stored_cleanup_evidence: Vec<StoredCleanupEvidence>,
 }
 
 fn cleanup_binding_from_step(
@@ -2009,7 +2009,7 @@ struct PendingCurrentHeadFlight {
 }
 
 /// Concrete local authenticated UDS adapter used by watchdog recovery.
-pub(super) struct TrustedHostNoTeeDurableRecoveryStoreClient {
+pub(in crate::policy_shadow::policy_custody) struct TrustedHostNoTeeDurableRecoveryStoreClient {
     exchange: NonblockingRequestReplyExchange,
     progress_socket: OwnedFd,
     progress: LinuxAbsoluteBoottimePoller,
@@ -2584,7 +2584,7 @@ impl TrustedHostNoTeeDurableRecoveryStoreClient {
         .transpose()
     }
 
-    pub(super) fn try_recovery_runtime_material_nonblocking(
+    pub(in crate::policy_shadow::policy_custody) fn try_recovery_runtime_material_nonblocking(
         &mut self,
         ownership_id_sha256: &RecoveryDigest,
         deadline: &AbsoluteBoottimeDeadline,

@@ -6161,7 +6161,7 @@ fn current_boot_id_sha256_v12() -> Result<Digest> {
     Ok(digest)
 }
 
-fn validate_relative_cas_subpath_v12(value: &str) -> Result<()> {
+pub(crate) fn validate_relative_cas_subpath_v12(value: &str) -> Result<()> {
     let path = Path::new(value);
     if value.len() > 4096
         || path.is_absolute()

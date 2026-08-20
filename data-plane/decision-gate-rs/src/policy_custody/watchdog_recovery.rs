@@ -559,7 +559,12 @@ impl ExactCleanupBinding {
                 "cleanup authorization v3 exact binding mismatch",
             ));
         }
-        self.cgroup.validate()
+        self.cgroup.validate().map_err(|error| {
+            protocol_error(
+                error,
+                "cleanup cgroup identity is invalid",
+            )
+        })
     }
 
     fn validate_authorization(
@@ -1208,13 +1213,13 @@ fn verify_cleanup_result<V: CurrentSignatureAuthority>(
                 ..
             },
         ) => {
-            !digest_is_zero(reap_observation_sha256)
-                && *reaped_at_boottime_nanos
+            !digest_is_zero(&reap_observation_sha256)
+                && reaped_at_boottime_nanos
                     >= consumed
                         .persisted
                         .statement
                         .consumed_at_boottime_nanos
-                && *reaped_at_boottime_nanos
+                && reaped_at_boottime_nanos
                     < owner.cleanup_deadline.absolute_nanos()
         }
         (CleanupAction::ReapWorker, _) => false,
@@ -1232,13 +1237,13 @@ fn verify_cleanup_result<V: CurrentSignatureAuthority>(
                 observed_at_boottime_nanos,
             },
         ) => {
-            !digest_is_zero(cgroup_events_sha256)
-                && *observed_at_boottime_nanos
+            !digest_is_zero(&cgroup_events_sha256)
+                && observed_at_boottime_nanos
                     >= consumed
                         .persisted
                         .statement
                         .consumed_at_boottime_nanos
-                && *observed_at_boottime_nanos
+                && observed_at_boottime_nanos
                     < owner.cleanup_deadline.absolute_nanos()
         }
         (CleanupAction::KillCgroup, _) => false,
@@ -2236,10 +2241,10 @@ where
         ))
     }
 
-    fn ownership_conflict<T>(
+    fn ownership_conflict<R>(
         &self,
         message: &'static str,
-    ) -> Result<T, RecoveryError> {
+    ) -> Result<R, RecoveryError> {
         self.hard_unready
             .latch(HardUnreadyReason::DurableConflict);
         Err(RecoveryError::Conflict(message))
@@ -3107,11 +3112,11 @@ where
         })
     }
 
-    fn with_bounded_retry<T>(
+    fn with_bounded_retry<R>(
         &mut self,
         deadline: &AbsoluteBoottimeDeadline,
-        mut operation: impl FnMut(&mut S) -> Result<T, RecoveryError>,
-    ) -> Result<T, RecoveryError> {
+        mut operation: impl FnMut(&mut S) -> Result<R, RecoveryError>,
+    ) -> Result<R, RecoveryError> {
         let mut backoff = BoottimeBackoff::new(
             self.limits.initial_backoff_nanos,
             self.limits.maximum_backoff_nanos,

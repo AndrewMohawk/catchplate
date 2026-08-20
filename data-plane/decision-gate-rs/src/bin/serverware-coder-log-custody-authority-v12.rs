@@ -2,10 +2,13 @@
 
 #[path = "../receipt_contract_v12.rs"]
 mod receipt_contract_v12;
+#[path = "../coder_controller_v11.rs"]
+mod coder_controller_v11;
 #[path = "../receipt_verifier_v12.rs"]
 mod receipt_verifier_v12;
 
-use ed25519_dalek::SigningKey;
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use ed25519_dalek::{pkcs8::DecodePublicKey, SigningKey, VerifyingKey};
 use receipt_contract_v12::{
     build_consistency_proof, build_inclusion_proof, canonical_json,
     ed25519_spki_sha256, envelope_digest,
@@ -18,7 +21,9 @@ use receipt_contract_v12::{
     VerificationHighWaterV12, RECEIPT_TREE_HEAD_DOMAIN,
     MAX_AUTHORITY_REQUEST_BYTES, MAX_AUTHORITY_RESPONSE_BYTES,
 };
-use receipt_verifier_v12::verify_receipt_authentication_envelope_v12;
+use receipt_verifier_v12::{
+    verify_receipt_authentication_envelope_v12, AuthorityPinV12,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
@@ -47,10 +52,11 @@ struct LogCustodyConfigV12 {
     signing_key_path: PathBuf,
     key_authorization_path: PathBuf,
     receipt_authentication_authorization_path: PathBuf,
+    receipt_authentication_public_key_path: PathBuf,
     genesis_checkpoint_path: PathBuf,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct LogHighWaterV12 {
     checkpoint_sequence: CanonicalU64,
@@ -101,6 +107,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         || !config
             .receipt_authentication_authorization_path
             .is_absolute()
+        || !config.receipt_authentication_public_key_path.is_absolute()
         || !config.genesis_checkpoint_path.is_absolute()
     {
         return Err(
@@ -108,6 +115,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .into(),
         );
     }
+    load_receipt_authentication_material(&config)?;
     verify_genesis_checkpoint(&config)?;
     fs::create_dir_all(&config.state_root)?;
     fs::set_permissions(&config.state_root, fs::Permissions::from_mode(0o700))?;
@@ -461,25 +469,29 @@ fn validate_authenticated_append(
     request: &LogAuthorityRequestV12,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if request.log_id != config.log_id
-        || receipt_body_digest(&request.receipt_body)?
+        || receipt_body_digest(&request.receipt_body)?.0
             != request.receipt_body_sha256
         || envelope_digest(&request.receipt_authentication_envelope)?
             != request.receipt_authentication_envelope_sha256
     {
         return Err("log append body or authentication digest is invalid".into());
     }
-    let receipt_authorization: KeyAuthorizationV12 = parse_canonical_json(
-        &secure_read(
-            &config.receipt_authentication_authorization_path,
-            MAX_CONFIG_BYTES,
-            0,
-            false,
-        )?,
-        MAX_CONFIG_BYTES,
-    )?;
+    let (receipt_authorization, receipt_authentication_pin) =
+        load_receipt_authentication_material(config)?;
+    if request
+        .receipt_authentication_envelope
+        .signature
+        .key_authorization
+        != receipt_authorization
+    {
+        return Err(
+            "receipt authentication differs from the root-owned authorization"
+                .into(),
+        );
+    }
     verify_receipt_authentication_envelope_v12(
         &request.receipt_authentication_envelope,
-        &receipt_authorization,
+        &receipt_authentication_pin,
     )?;
     let payload = &request.receipt_authentication_envelope.payload;
     let body = &request.receipt_body;
@@ -516,6 +528,70 @@ fn validate_authenticated_append(
         return Err("log append binding is not canonical".into());
     }
     Ok(())
+}
+
+fn load_receipt_authentication_material(
+    config: &LogCustodyConfigV12,
+) -> Result<(KeyAuthorizationV12, AuthorityPinV12), Box<dyn std::error::Error>> {
+    let authorization: KeyAuthorizationV12 = parse_canonical_json(
+        &secure_read(
+            &config.receipt_authentication_authorization_path,
+            MAX_CONFIG_BYTES,
+            0,
+            false,
+        )?,
+        MAX_CONFIG_BYTES,
+    )?;
+    if authorization.role != AuthorityRoleV12::ReceiptAuthentication
+        || authorization.algorithm != "Ed25519"
+    {
+        return Err("receipt authentication authorization is invalid".into());
+    }
+    let public_key_bytes = secure_read(
+        &config.receipt_authentication_public_key_path,
+        64 * 1024,
+        0,
+        false,
+    )?;
+    let public_key = if public_key_bytes.len() == 32 {
+        VerifyingKey::from_bytes(
+            &public_key_bytes
+                .as_slice()
+                .try_into()
+                .map_err(|_| "receipt authentication public key length changed")?,
+        )?
+    } else {
+        VerifyingKey::from_public_key_pem(std::str::from_utf8(
+            &public_key_bytes,
+        )?)?
+    };
+    if ed25519_spki_sha256(&public_key) != authorization.spki_der_sha256 {
+        return Err(
+            "receipt authentication public key does not match its authorization"
+                .into(),
+        );
+    }
+    let pin = AuthorityPinV12 {
+        role: authorization.role,
+        principal_id: authorization.principal_id.clone(),
+        key_id: authorization.key_id.clone(),
+        verifying_key_base64url: URL_SAFE_NO_PAD.encode(public_key.to_bytes()),
+        spki_der_sha256: authorization.spki_der_sha256.clone(),
+        physical_private_key_identity_sha256: authorization
+            .physical_private_key_identity_sha256
+            .clone(),
+        key_authorization_sha256: authorization.key_authorization_sha256.clone(),
+        authorization_root_sha256: authorization.authorization_root_sha256.clone(),
+        authorization_revision: authorization.authorization_revision.clone(),
+        revocation_root_sha256: authorization.revocation_root_sha256.clone(),
+        revocation_revision: authorization.revocation_revision.clone(),
+        high_water: authorization.high_water.clone(),
+        valid_from: authorization.valid_from.clone(),
+        valid_until: authorization.valid_until.clone(),
+        status: authorization.status.clone(),
+    };
+    pin.verifying_key()?;
+    Ok((authorization, pin))
 }
 
 fn load_log_ledger(

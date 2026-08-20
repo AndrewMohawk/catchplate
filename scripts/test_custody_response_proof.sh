@@ -426,6 +426,7 @@ mkdir -p "$TMP_DIR"
 TMP_DIR="$(cd "$TMP_DIR" && pwd -P)"
 ARTIFACT_DIR="$(mktemp -d "$TMP_DIR/custody-response-proof.XXXXXX")"
 COLLECTOR_KEY="$ARTIFACT_DIR/collector-key.pem"
+CONTROL_PLANE_RESPONSE_KEY="$ARTIFACT_DIR/control-plane-response-signing.pub.pem"
 FIRST_PROOF="$ARTIFACT_DIR/proof-before/response-proof.json"
 FIRST_SUMMARY="$ARTIFACT_DIR/proof-before-summary.json"
 STREAMING_PROOF="$ARTIFACT_DIR/stream-proof-before/response-proof.json"
@@ -549,6 +550,10 @@ chmod 0644 "$UPSTREAM_CA"
 curl -fsS \
   -H "X-Serverware-Admin-Token: ${SERVERWARE_ADMIN_TOKEN:-dev-admin-token}" \
   -X POST "$CONTROL_BASE/api/demo/seed" >/dev/null
+curl -fsS "$CONTROL_BASE/attestation?nonce=custody-proof-client-control-plane-key" \
+  | python3 -c 'import json,sys; sys.stdout.write(json.load(sys.stdin)["response_signing_public_key_pem"])' \
+  > "$CONTROL_PLANE_RESPONSE_KEY"
+chmod 0600 "$CONTROL_PLANE_RESPONSE_KEY"
 
 run_proof() {
   local output_path="$1"
@@ -561,6 +566,7 @@ run_proof() {
     --user "$(id -u):$(id -g)" \
     -v "$GATE_CA:/proof/decision-gate-ca-cert.pem:ro" \
     -v "$COLLECTOR_KEY:/proof/collector-key.pem:ro" \
+    -v "$CONTROL_PLANE_RESPONSE_KEY:/proof/control-plane-response-signing.pub.pem:ro" \
     -v "$output_directory:/proof/output" \
     --entrypoint /usr/local/bin/serverware-proof-client \
     "$GATE_IMAGE" \
@@ -569,6 +575,7 @@ run_proof() {
     --ca /proof/decision-gate-ca-cert.pem \
     --out /proof/output/response-proof.json \
     --collector-key /proof/collector-key.pem \
+    --control-plane-response-key /proof/control-plane-response-signing.pub.pem \
     --expected-principal-id agent:demo \
     --proxy-header "X-Serverware-Agent: demo-agent" \
     --header "X-Serverware-Agent: demo-agent" \
@@ -592,6 +599,7 @@ run_stream_proof() {
     --user "$(id -u):$(id -g)" \
     -v "$GATE_CA:/proof/decision-gate-ca-cert.pem:ro" \
     -v "$COLLECTOR_KEY:/proof/collector-key.pem:ro" \
+    -v "$CONTROL_PLANE_RESPONSE_KEY:/proof/control-plane-response-signing.pub.pem:ro" \
     -v "$output_directory:/proof/output" \
     --entrypoint /usr/local/bin/serverware-proof-client \
     "$GATE_IMAGE" \
@@ -602,6 +610,7 @@ run_stream_proof() {
     --out "/proof/output/$(basename "$output_path")" \
     --body-out "/proof/output/$(basename "$body_path")" \
     --collector-key /proof/collector-key.pem \
+    --control-plane-response-key /proof/control-plane-response-signing.pub.pem \
     --expected-principal-id agent:demo \
     --proxy-header "X-Serverware-Agent: demo-agent" \
     --header "X-Serverware-Agent: demo-agent" \

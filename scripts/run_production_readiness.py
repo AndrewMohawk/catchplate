@@ -3960,6 +3960,8 @@ def collector_command(args: argparse.Namespace) -> dict[str, Any]:
         args.proxy_collector_key,
         "--verifier-key",
         args.proxy_proof_verifier_public_key,
+        "--control-plane-response-key",
+        args.control_plane_response_signing_public_key,
         "--expected-server-instance-id",
         args.proxy_server_instance_id,
         "--expected-principal-id",

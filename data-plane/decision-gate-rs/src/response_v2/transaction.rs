@@ -1426,7 +1426,7 @@ pub(super) fn execute_response_observation_v2_transaction(
             ),
             exact_bytes,
             ..
-        }) if exact_bytes.is_empty()
+        } if exact_bytes.is_empty()
             && attempt.attempt_id == cursor.attempt.attempt_id
             && attempt.state == V2AttemptState::Finalized
             && attempt.attempt_revision

@@ -2054,7 +2054,7 @@ pub(super) fn authenticate_production_rpc_session(
         .map_err(Into::into)
 }
 
-pub(super) fn run_production_rpc_service_from_env(
+pub(in crate::policy_shadow::policy_custody) fn run_production_rpc_service_from_env(
 ) -> Result<(), ServiceRunnerError> {
     super::close_unlisted_ambient_descriptors()?;
     let loaded: super::LoadedConfig<ProductionRpcRuntimeConfigV4> =

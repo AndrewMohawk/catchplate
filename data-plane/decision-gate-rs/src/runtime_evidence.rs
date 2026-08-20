@@ -14,6 +14,7 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::mem;
 use std::os::fd::{AsRawFd, FromRawFd, RawFd};
+use std::path::Path;
 
 pub const TRUSTED_HOST_CLAIM: &str =
     "userspace-digest/no-IMA-appraisal";
@@ -126,7 +127,7 @@ impl RuntimeNamespaceIdentityV12 {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeMappingObservationV12 {
     pub host_start: u64,
@@ -163,7 +164,7 @@ impl RuntimeMappingObservationV12 {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct AuthoritativeObserverEvidenceV12 {
     pub version: String,
@@ -334,7 +335,7 @@ impl RuntimeObserverPolicy {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RunnerRuntimeEvidenceV12 {
     pub runner: OciObjectReference,
@@ -822,13 +823,15 @@ impl RunnerRuntimeEvidenceV12 {
 pub fn validate_executable_file_v12(path: &Path) -> Result<(), EvidenceError> {
     use std::os::unix::fs::MetadataExt as _;
 
-    let metadata = std::fs::metadata(path)?;
+    let mut file = File::open(path)?;
+    let metadata = file.metadata()?;
     if !metadata.file_type().is_file() || metadata.mode() & 0o111 == 0 {
         return Err(EvidenceError::Invariant(
             "trusted executable must be a regular file with an execute bit".into(),
         ));
     }
-    let bytes = std::fs::read(path)?;
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.read_to_end(&mut bytes)?;
     if bytes.len() < 64
         || &bytes[..4] != b"\x7fELF"
         || bytes[4] != 2
@@ -897,7 +900,11 @@ pub fn validate_executable_file_v12(path: &Path) -> Result<(), EvidenceError> {
             "ELF entrypoint is not inside an executable PT_LOAD segment".into(),
         ));
     }
-    parse_static_elf(&bytes).map(|_| ())
+    parse_static_elf(&mut file, metadata.len()).map(|_| ())
+}
+
+fn canonical_digest<T: Serialize>(value: &T) -> PlanResult<Digest> {
+    Ok(sha256_bytes(&canonical_bytes(value)?))
 }
 
 fn parse_static_elf(

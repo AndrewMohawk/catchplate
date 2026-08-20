@@ -3533,6 +3533,10 @@ def main() -> None:
         if (
             collector_argv[collector_argv.index("--verifier-key") + 1]
             != str(tmp / "proxy-verifier.pub.pem")
+            or collector_argv[
+                collector_argv.index("--control-plane-response-key") + 1
+            ]
+            != str(trust_paths["control_plane_response_signing_public_key"])
             or collector_argv[collector_argv.index("--expected-server-instance-id") + 1]
             != "spiffe://prod.serverware.internal/decision-gate/instance-01"
             or collector_argv[collector_argv.index("--expected-principal-id") + 1]

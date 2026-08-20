@@ -2226,7 +2226,7 @@ mod linux {
                 cmsg = libc::CMSG_NXTHDR(&message, cmsg);
             }
         }
-        if count as usize < header.len() {
+        if (count as usize) < header.len() {
             stream
                 .read_exact(&mut header[count as usize..])
                 .map_err(|error| error.to_string())?;

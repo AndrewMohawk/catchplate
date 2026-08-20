@@ -52,7 +52,8 @@ use crate::receipt_contract_v12::{
     envelope_digest, extract_request_v11_summary, final_trust_observation_digest,
     finalization_binding_digest, h11, h12, logged_receipt_bundle_digest,
     now_utc_rfc3339, parse_canonical_json,
-    receipt_authority_submission_digest, request_admission_digest, sha256_bytes,
+    receipt_authority_submission_digest, request_admission_digest,
+    sha256_bytes as receipt_sha256_bytes,
     sign_envelope, trust_generation_bundle_digest, AuthorityDeadlineV12,
     AuthorityFrameHeaderV12, AuthorityRoleV12, CanonicalRequestAdmissionV12,
     CanonicalU64, DigestHex, FinalSettlementArtifactV12,
@@ -1045,7 +1046,7 @@ fn require_committed_digest(
     bytes: &[u8],
 ) -> Result<()> {
     let expected = DigestHex::parse(required(values, name)?.to_owned())?;
-    if expected != sha256_bytes(bytes) {
+    if expected != receipt_sha256_bytes(bytes) {
         return Err(RuntimeError::rejected(format!(
             "{name} differs from the signed configuration generation"
         )));
@@ -2009,7 +2010,7 @@ fn framed_rpc_exact(
         .map_err(|_| RuntimeError::invalid("response length exceeds usize"))?;
     let mut bytes = vec![0u8; response_len];
     read_exact_deadline(&mut stream, &mut bytes, deadline)?;
-    if sha256_bytes(&bytes) != response.payload_sha256.decode()? {
+    if receipt_sha256_bytes(&bytes) != response.payload_sha256 {
         return Err(RuntimeError::rejected(
             "service response payload digest mismatch",
         ));
@@ -2086,7 +2087,7 @@ where
         response.payload_bytes,
         MAX_INTERNAL_BYTES as u64,
     )?;
-    if sha256_bytes(&bytes) != response.payload_sha256.decode()? {
+    if receipt_sha256_bytes(&bytes) != response.payload_sha256 {
         return Err(RuntimeError::rejected(
             "executor response payload digest mismatch",
         ));
@@ -2159,7 +2160,7 @@ where
         response.payload_bytes,
         MAX_INTERNAL_BYTES as u64,
     )?;
-    if sha256_bytes(&bytes) != response.payload_sha256.decode()? {
+    if receipt_sha256_bytes(&bytes) != response.payload_sha256 {
         return Err(RuntimeError::rejected(
             "executor response payload digest mismatch",
         ));
@@ -2173,7 +2174,10 @@ fn lifecycle_rpc(
 ) -> Result<LifecycleCleanupResponseV12> {
     loop {
         require_live(request.cleanup_deadline_boottime_ns)?;
-        match framed_rpc_retry(
+        match framed_rpc_retry::<
+            LifecycleCleanupRequestV12,
+            LifecycleCleanupResponseV12,
+        >(
             &context.config.lifecycle_socket,
             context.trust.identities.lifecycle_uid,
             request,
@@ -2521,7 +2525,7 @@ fn issue_ticket(
         workflow_id: request.workflow_id.clone(),
         deadline_profile_id: request.deadline_profile_id.clone(),
         selection: request.selection,
-        raw_nonce_sha256: sha256_bytes(&raw_nonce),
+        raw_nonce_sha256: receipt_sha256_bytes(&raw_nonce),
         boot_id_sha256: boot_id_sha256_v12()?,
         peer_uid: peer.uid,
         peer_pid: peer.pid,
@@ -2621,7 +2625,7 @@ fn receive_seqpacket_json<T: DeserializeOwned>(
             "seqpacket JSON body differs from preallocation",
         ));
     }
-    if sha256_bytes(&body) != header.payload_sha256.decode()? {
+    if receipt_sha256_bytes(&body) != header.payload_sha256 {
         return Err(RuntimeError::rejected(
             "seqpacket JSON payload digest mismatch",
         ));
@@ -2671,7 +2675,8 @@ fn enforce_ticket_request_join(
         || request.workflow_id != ticket.workflow_id
         || request.deadline_profile_id != ticket.deadline_profile_id
         || request.selection != ticket.selection
-        || ticket.raw_nonce_sha256 != sha256_bytes(&canonical.raw_nonce)
+        || ticket.raw_nonce_sha256
+            != receipt_sha256_bytes(&canonical.raw_nonce)
         || canonical.deadline_unix_ms != ticket.request_deadline_unix_ms.get()?
     {
         return Err(RuntimeError::rejected(
@@ -4047,7 +4052,7 @@ fn send_receipt_reply(
         verify_current_or_historical(exact_receipt, pins, prior_high_water)?;
     let reply = ControllerReceiptReplyV12 {
         protocol: CONTROLLER_RUNTIME_PROTOCOL_V12.to_owned(),
-        exact_receipt_sha256: sha256_bytes(exact_receipt),
+        exact_receipt_sha256: receipt_sha256_bytes(exact_receipt),
         exact_receipt_bytes: CanonicalU64::new(exact_receipt.len() as u64),
         request_v11_sha256: verified.receipt.request_v11_sha256.clone(),
         receipt_envelope_sha256: verified.receipt.receipt_envelope_sha256.clone(),
@@ -4121,7 +4126,7 @@ pub fn run_client_cli() -> Result<i32> {
         receive_seqpacket_json(socket.as_raw_fd(), MAX_TICKET_BYTES, transport_deadline)?;
     if ticket.operation != "ADMISSION_TICKET"
         || ticket.selection != selection
-        || ticket.raw_nonce_sha256 != sha256_bytes(&raw_nonce)
+        || ticket.raw_nonce_sha256 != receipt_sha256_bytes(&raw_nonce)
         || ticket.boot_id_sha256 != boot_id_sha256_v12()?
         || ticket.peer_uid != unsafe { libc::geteuid() }
         || ticket.peer_pid != unsafe { libc::getpid() } as u32
@@ -4193,7 +4198,8 @@ pub fn run_client_cli() -> Result<i32> {
     )?;
     if reply.protocol != CONTROLLER_RUNTIME_PROTOCOL_V12
         || reply.exact_receipt_bytes.get()? != exact_receipt.len() as u64
-        || reply.exact_receipt_sha256 != sha256_bytes(&exact_receipt)
+        || reply.exact_receipt_sha256
+            != receipt_sha256_bytes(&exact_receipt)
     {
         return Err(RuntimeError::rejected(
             "controller receipt reply metadata differs from exact bytes",
@@ -4627,7 +4633,7 @@ fn load_lifecycle_config(path: &Path) -> Result<LifecycleConfigV12> {
     let committed_lifecycle_config = DigestHex::parse(
         required(&release, "lifecycle_config_sha256")?.to_owned(),
     )?;
-    if committed_lifecycle_config != sha256_bytes(&bytes) {
+    if committed_lifecycle_config != receipt_sha256_bytes(&bytes) {
         return Err(RuntimeError::rejected(
             "lifecycle config differs from the signed release manifest",
         ));
@@ -4686,7 +4692,7 @@ fn load_lifecycle_config(path: &Path) -> Result<LifecycleConfigV12> {
         allowed_peer_uids,
         controller_uid,
         docker_proxy_uid,
-        configuration_generation_sha256: sha256_bytes(
+        configuration_generation_sha256: sha256(
             &generation_bytes,
         ),
         controller_signer_spki_sha256,
@@ -4842,7 +4848,7 @@ fn settle_lifecycle_intent(
             "lifecycle intent belongs to a different host boot",
         ));
     }
-    let expected_plan_id = sha256_bytes(
+    let expected_plan_id = sha256(
         &[
             b"serverware/controller-plan-id/v12\0".as_slice(),
             request.request_sha256.as_slice(),
@@ -5030,7 +5036,7 @@ fn verify_privileged_lifecycle_response_v12(
         || privileged.exact_plan_terminal_aggregate.is_empty()
         || privileged.exact_plan_terminal_aggregate.len()
             > MAX_LIFECYCLE_BYTES
-        || sha256_bytes(
+        || sha256(
             &privileged.exact_plan_terminal_aggregate,
         ) != privileged.plan_terminal_aggregate_sha256
         || privileged.plan_terminal_aggregate_sha256 == [0; 32]
@@ -5043,7 +5049,7 @@ fn verify_privileged_lifecycle_response_v12(
     }
     let mut privileged_projection = privileged.clone();
     privileged_projection.privileged_response_sha256 = [0; 32];
-    if sha256_bytes(&canonical_json(
+    if sha256(&canonical_json(
         &privileged_projection,
         MAX_LIFECYCLE_BYTES,
     )?) != privileged.privileged_response_sha256
@@ -5060,7 +5066,7 @@ fn verify_privileged_lifecycle_response_v12(
             "privileged lifecycle cleanup public key is invalid",
         )
     })?;
-    if sha256_bytes(
+    if sha256(
         &privileged.root_signer_public_key_spki_der,
     ) != privileged.root_signer_spki_sha256
     {
@@ -5132,7 +5138,7 @@ fn verify_plan_terminal_aggregate_v12(
             .iter()
             .zip(&aggregate.exact_terminal_receipts)
             .any(|(digest, exact)| {
-                exact.is_empty() || sha256_bytes(exact) != *digest
+                exact.is_empty() || sha256(exact) != *digest
             })
         || aggregate.root_signer_spki_sha256
             != privileged.root_signer_spki_sha256
@@ -5148,7 +5154,7 @@ fn verify_plan_terminal_aggregate_v12(
     }
     let mut digest_projection = aggregate.clone();
     digest_projection.aggregate_sha256 = [0; 32];
-    if sha256_bytes(&canonical_json(
+    if sha256(&canonical_json(
         &digest_projection,
         MAX_LIFECYCLE_BYTES,
     )?) != aggregate.aggregate_sha256
@@ -5247,7 +5253,7 @@ fn verify_delegated_private_dind_response(
         || response.request_sha256 != request.request_sha256
         || response.proxy_request_sha256
             != request.proxy_request.request_sha256
-        || response.result_sha256 != sha256_bytes(&response.result)
+        || response.result_sha256 != sha256(&response.result)
         || response.observed_state_sha256 == [0; 32]
         || response.root_signer_spki_sha256
             != config.privileged_root_signer_spki_sha256
@@ -5274,7 +5280,7 @@ fn verify_delegated_private_dind_response(
             "private DinD root response public key is invalid",
         )
     })?;
-    if sha256_bytes(&response.root_signer_public_key_spki_der)
+    if sha256(&response.root_signer_public_key_spki_der)
         != response.root_signer_spki_sha256
     {
         return Err(RuntimeError::rejected(
@@ -5283,7 +5289,7 @@ fn verify_delegated_private_dind_response(
     }
     let mut digest_projection = response.clone();
     digest_projection.response_sha256 = [0; 32];
-    if sha256_bytes(&canonical_json(
+    if sha256(&canonical_json(
         &digest_projection,
         MAX_LIFECYCLE_BYTES,
     )?) != response.response_sha256
@@ -5411,7 +5417,7 @@ fn verify_delegated_terminal_receipt(
         || receipt.signer_spki_sha256
             != config.privileged_root_signer_spki_sha256
         || receipt.signer_public_key_spki_der.is_empty()
-        || sha256_bytes(&receipt.signer_public_key_spki_der)
+        || sha256(&receipt.signer_public_key_spki_der)
             != receipt.signer_spki_sha256
         || receipt.observed_at_boottime_ns == 0
         || receipt.observed_at_boottime_ns
@@ -5423,7 +5429,7 @@ fn verify_delegated_terminal_receipt(
     }
     let mut digest_projection = receipt.clone();
     digest_projection.receipt_sha256 = [0; 32];
-    if sha256_bytes(&canonical_json(
+    if sha256(&canonical_json(
         &digest_projection,
         MAX_LIFECYCLE_BYTES,
     )?) != receipt.receipt_sha256
@@ -5580,7 +5586,7 @@ fn read_framed_request_with_fds(
             .map_err(|_| RuntimeError::invalid("framed request length exceeds usize"))?
     ];
     read_exact_deadline(stream, &mut bytes, header.boottime_deadline_ns)?;
-    if sha256_bytes(&bytes) != header.payload_sha256.decode()? {
+    if receipt_sha256_bytes(&bytes) != header.payload_sha256 {
         return Err(RuntimeError::rejected(
             "lifecycle request payload digest mismatch",
         ));

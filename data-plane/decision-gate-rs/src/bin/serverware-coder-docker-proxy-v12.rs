@@ -13,6 +13,12 @@ mod docker_contract;
 #[cfg(target_os = "linux")]
 #[path = "../docker_policy.rs"]
 mod docker_policy;
+#[cfg(target_os = "linux")]
+#[path = "../readiness.rs"]
+mod readiness;
+#[cfg(target_os = "linux")]
+#[path = "../runtime_evidence.rs"]
+mod runtime_evidence;
 
 #[cfg(not(target_os = "linux"))]
 fn main() {
@@ -1292,7 +1298,7 @@ mod linux {
                 cmsg = libc::CMSG_NXTHDR(&message, cmsg);
             }
         }
-        if count as usize < header.len() {
+        if (count as usize) < header.len() {
             stream
                 .read_exact(&mut header[count as usize..])
                 .map_err(|error| error.to_string())?;

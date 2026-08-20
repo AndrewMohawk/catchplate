@@ -25,6 +25,7 @@ use crate::docker_ledger::{
     DockerGenerationRecordV12,
     DockerLaneLedgerV12, DockerLaneOperationRecordV12,
     DockerLaneOperationStatusV12, DockerOwnershipLedgerV11,
+    validate_relative_cas_subpath_v12,
 };
 use crate::docker_policy::{
     authorize_lane_operation_v12, ARTIFACT_SEAL_LABEL_V11,
@@ -5758,7 +5759,7 @@ impl PrivateDindLifecycleV12 {
             "networks": receipt.networks,
             "planId": operation.request.plan_id,
             "proxyAccepting": receipt.proxy_accepting,
-            "resultSha256": [0u8; 32],
+            "resultSha256": ([0u8; 32]),
             "terminalReceiptSha256": sha256(&exact_receipt),
             "stateRootAbsent": receipt.state_root_absent,
             "version": PRIVATE_DIND_RESULT_VERSION_V12,
@@ -8172,7 +8173,9 @@ fn read_sealed_cas_file_v12(
         ));
     }
     let mut bytes = Vec::with_capacity(before.len() as usize);
-    file.take(before.len() + 1).read_to_end(&mut bytes)?;
+    std::io::Read::by_ref(&mut file)
+        .take(before.len() + 1)
+        .read_to_end(&mut bytes)?;
     let after = file.metadata()?;
     if bytes.len() as u64 != before.len()
         || before.dev() != after.dev()
@@ -8366,7 +8369,7 @@ fn publish_cas_file(
     File::open(final_path)?.sync_all()?;
     File::open(final_path.parent().ok_or(
         ControllerError::Invalid("OCI CAS path has no parent"),
-    ))?
+    )?)?
     .sync_all()?;
     verify_pinned_file(final_path, expected_sha256)
 }

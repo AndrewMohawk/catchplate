@@ -4,9 +4,7 @@ use crate::coder_controller_v11::{
     constant_time_eq, digest_hex, ed25519_spki_der_sha256_v11, sha256,
     ControllerError, Digest, Result,
 };
-#[path = "plan_protocol.rs"]
-mod docker_plan_protocol_v12;
-pub use docker_plan_protocol_v12::{
+pub use crate::plan_protocol::{
     canonical_bytes as canonical_plan_bytes, sha256_bytes as plan_sha256_bytes,
     ArtifactCasReference,
     AuthoritativeLaneState, BodyContract, ContainerCommand,
@@ -2136,7 +2134,8 @@ fn parse_fixed_headers(value: &Value) -> Result<Vec<DockerFixedHeaderV11>> {
             "Docker fixed header set is empty or oversized",
         ));
     }
-    let mut result = Vec::with_capacity(values.len());
+    let mut result: Vec<DockerFixedHeaderV11> =
+        Vec::with_capacity(values.len());
     for value in values {
         let header = object(value, "Docker fixed header is not an object")?;
         require_fields(header, &["name", "value"])?;
@@ -2202,7 +2201,8 @@ fn parse_environment_v12(value: &Value) -> Result<Vec<DockerEnvironmentV12>> {
             "Docker environment authority is oversized",
         ));
     }
-    let mut result = Vec::with_capacity(values.len());
+    let mut result: Vec<DockerEnvironmentV12> =
+        Vec::with_capacity(values.len());
     for value in values {
         let item = object(value, "Docker environment item is not an object")?;
         require_fields(item, &["name", "value"])?;

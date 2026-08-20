@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 #[path = "../coder_controller_v11.rs"]
 mod coder_controller_v11;
 #[path = "../receipt_contract_v12.rs"]
@@ -158,7 +156,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     listener.set_nonblocking(true)?;
     notify_systemd_v12("receipt-authentication-v12 ledger reconciled")?;
     loop {
-        if let Err(error) = reconcile_next_finalization(config, &ledger) {
+        if let Err(error) = reconcile_next_finalization(&config, &ledger) {
             eprintln!("receipt finalization reconciliation deferred: {error}");
         }
         let (stream, _) = match listener.accept() {

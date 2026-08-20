@@ -960,7 +960,7 @@ impl CleanupAuthorizationConsumer
                 fingerprint: fingerprint.clone(),
                 authorization: authorization.clone(),
                 trace: trace_requests.clone(),
-                deadline: protocol_deadline,
+                deadline: protocol_deadline.clone(),
                 step: ClientStep::BeforeQuery,
                 active_request: before_request,
                 before_reply: None,
@@ -1673,7 +1673,8 @@ impl DurableCleanupConsumerState {
             authoritative.endpoint_role,
             authoritative.endpoint_generation,
         )?;
-        let legacy = read_optional_canonical_file(
+        let legacy: Option<DurableCleanupConsumerStateV3> =
+            read_optional_canonical_file(
             directory.as_raw_fd(),
             DURABLE_STATE_FILE,
             MAX_DURABLE_STATE_BYTES,

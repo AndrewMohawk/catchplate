@@ -2037,7 +2037,8 @@ impl PolicyCustodyEndpointClient {
         query.validate()?;
         self.require_role(PolicyCustodyEndpointRole::SettlementStore)?;
         let command = SettlementCommand::Query(query.clone());
-        let response = self.round_trip(
+        let response: VerifiedEndpointResponse<SettlementQueryReply> =
+            self.round_trip(
             current_trust,
             EndpointRequestKind::SettlementQuery,
             &query.query_nonce_sha256,
@@ -3771,7 +3772,7 @@ fn decode_trusted_host_response(
             "trusted-host endpoint response digest or bound is invalid",
         ));
     }
-    let response =
+    let response: TrustedHostNoTeeTrustResponseWire =
         decode_exact_canonical_json(&canonical_response)?;
     response.validate_shape()?;
     let signature_payload =

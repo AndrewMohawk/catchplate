@@ -31,7 +31,7 @@ use std::fs::File;
 use std::io::{self, Read, Write};
 use std::mem::{size_of, zeroed};
 use std::os::fd::{
-    AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd,
+    AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd,
 };
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
@@ -70,7 +70,7 @@ const PEER_PROCESS_IDENTITY_DOMAIN: &[u8] =
     b"serverware.policyCustodyPeerProcessIdentity/v4";
 
 #[derive(Debug)]
-pub(super) enum ServiceError {
+pub(in crate::policy_shadow::policy_custody) enum ServiceError {
     Io(io::Error),
     Protocol(ProtocolError),
     Invalid(&'static str),
@@ -122,7 +122,7 @@ impl From<ProtocolError> for ServiceError {
     Deserialize,
 )]
 #[serde(rename_all = "kebab-case")]
-pub(super) enum TrustedHostServiceRoleV3 {
+pub(in crate::policy_shadow::policy_custody) enum TrustedHostServiceRoleV3 {
     DurableRecoveryStore,
     CleanupAuthorizationConsumer,
     RecoveryTargetProvider,
@@ -182,7 +182,7 @@ pub(super) enum TrustedHostTransportV3 {
 /// makes no TEE, hardware-key, or hardware-attestation claim.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct TrustedHostNoTeeServiceReportV3 {
+pub(in crate::policy_shadow::policy_custody) struct TrustedHostNoTeeServiceReportV3 {
     pub(in crate::policy_shadow::policy_custody) api_version: String,
     pub(in crate::policy_shadow::policy_custody)
         policy_custody_protocol_version: String,
@@ -698,7 +698,7 @@ impl ServiceResponseFrameV3 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct ServiceHandshakeRequestV3 {
+pub(in crate::policy_shadow::policy_custody) struct ServiceHandshakeRequestV3 {
     pub(in crate::policy_shadow::policy_custody) api_version: String,
     pub(in crate::policy_shadow::policy_custody)
         service_role: TrustedHostServiceRoleV3,
@@ -825,7 +825,7 @@ impl ServiceHandshakeRequestV3 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct ServiceHandshakeReplyV3 {
+pub(in crate::policy_shadow::policy_custody) struct ServiceHandshakeReplyV3 {
     pub(in crate::policy_shadow::policy_custody) api_version: String,
     pub(in crate::policy_shadow::policy_custody)
         service_role: TrustedHostServiceRoleV3,
@@ -1156,7 +1156,7 @@ pub(super) fn validate_exact_peer_path(
     Ok(())
 }
 
-pub(super) fn encode_canonical_frame<T>(
+pub(in crate::policy_shadow::policy_custody) fn encode_canonical_frame<T>(
     value: &T,
 ) -> Result<Vec<u8>, ServiceError>
 where
@@ -1183,7 +1183,7 @@ where
     Ok(frame)
 }
 
-pub(super) fn decode_canonical_frame<T>(
+pub(in crate::policy_shadow::policy_custody) fn decode_canonical_frame<T>(
     frame: &[u8],
 ) -> Result<T, ServiceError>
 where
@@ -1263,21 +1263,21 @@ pub(super) struct PeerCredentialsV3 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct ExpectedPeerCredentials {
-    pub(super) pid: i32,
-    pub(super) uid: u32,
-    pub(super) gid: u32,
-    pub(super) process_identity_sha256: Sha256Digest,
-    pub(super) start_time_ticks: u64,
-    pub(super) executable_device: u64,
-    pub(super) executable_inode: u64,
-    pub(super) executable_length: u64,
-    pub(super) executable_sha256: [u8; 32],
-    pub(super) cgroup_path_sha256: Sha256Digest,
-    pub(super) cgroup_mount_id: u64,
-    pub(super) cgroup_inode: u64,
-    pub(super) security_label_sha256: Sha256Digest,
-    pub(super) configuration_generation_sha256: Sha256Digest,
+pub(in crate::policy_shadow::policy_custody) struct ExpectedPeerCredentials {
+    pub(in crate::policy_shadow::policy_custody) pid: i32,
+    pub(in crate::policy_shadow::policy_custody) uid: u32,
+    pub(in crate::policy_shadow::policy_custody) gid: u32,
+    pub(in crate::policy_shadow::policy_custody) process_identity_sha256: Sha256Digest,
+    pub(in crate::policy_shadow::policy_custody) start_time_ticks: u64,
+    pub(in crate::policy_shadow::policy_custody) executable_device: u64,
+    pub(in crate::policy_shadow::policy_custody) executable_inode: u64,
+    pub(in crate::policy_shadow::policy_custody) executable_length: u64,
+    pub(in crate::policy_shadow::policy_custody) executable_sha256: [u8; 32],
+    pub(in crate::policy_shadow::policy_custody) cgroup_path_sha256: Sha256Digest,
+    pub(in crate::policy_shadow::policy_custody) cgroup_mount_id: u64,
+    pub(in crate::policy_shadow::policy_custody) cgroup_inode: u64,
+    pub(in crate::policy_shadow::policy_custody) security_label_sha256: Sha256Digest,
+    pub(in crate::policy_shadow::policy_custody) configuration_generation_sha256: Sha256Digest,
 }
 
 impl ExpectedPeerCredentials {
@@ -1306,7 +1306,7 @@ impl ExpectedPeerCredentials {
         )
     }
 
-    pub(super) fn validate_claim(&self) -> Result<(), ServiceError> {
+    pub(in crate::policy_shadow::policy_custody) fn validate_claim(&self) -> Result<(), ServiceError> {
         require_nonzero_digest(
             "expectedPeer.processIdentitySha256",
             &self.process_identity_sha256,
@@ -1360,9 +1360,9 @@ impl ExpectedPeerCredentials {
     }
 }
 
-pub(super) struct ReceivedSeqpacket {
-    pub(super) frame: Vec<u8>,
-    pub(super) rights: Vec<OwnedFd>,
+pub(in crate::policy_shadow::policy_custody) struct ReceivedSeqpacket {
+    pub(in crate::policy_shadow::policy_custody) frame: Vec<u8>,
+    pub(in crate::policy_shadow::policy_custody) rights: Vec<OwnedFd>,
 }
 
 #[repr(align(16))]
@@ -1370,7 +1370,7 @@ struct AncillaryBuffer([u8; 512]);
 
 /// A connected, inherited service socket. Construction rejects listeners,
 /// streams, non-UNIX sockets, and peers outside the configured uid/gid/pid.
-pub(super) struct AuthenticatedInheritedSeqpacket {
+pub(in crate::policy_shadow::policy_custody) struct AuthenticatedInheritedSeqpacket {
     socket: OwnedFd,
     peer_credentials: PeerCredentialsV3,
     peer_pidfd: OwnedFd,
@@ -1385,7 +1385,7 @@ pub(super) struct AuthenticatedInheritedSeqpacket {
 }
 
 impl AuthenticatedInheritedSeqpacket {
-    pub(super) fn from_inherited(
+    pub(in crate::policy_shadow::policy_custody) fn from_inherited(
         socket: OwnedFd,
         expected_peer: ExpectedPeerCredentials,
     ) -> Result<Self, ServiceError> {
@@ -1486,11 +1486,11 @@ impl AuthenticatedInheritedSeqpacket {
         &self.peer_configuration_generation_sha256
     }
 
-    pub(super) fn progress_fd(&self) -> BorrowedFd<'_> {
+    pub(in crate::policy_shadow::policy_custody) fn progress_fd(&self) -> BorrowedFd<'_> {
         self.socket.as_fd()
     }
 
-    pub(super) fn try_send(
+    pub(in crate::policy_shadow::policy_custody) fn try_send(
         &self,
         frame: &[u8],
         rights: &[OwnedFd],
@@ -1517,7 +1517,7 @@ impl AuthenticatedInheritedSeqpacket {
         )
     }
 
-    pub(super) fn try_receive(
+    pub(in crate::policy_shadow::policy_custody) fn try_receive(
         &self,
         exact_rights_count: usize,
     ) -> Result<Option<ReceivedSeqpacket>, ServiceError> {
@@ -1539,7 +1539,7 @@ impl AuthenticatedInheritedSeqpacket {
         self.socket
     }
 
-    pub(super) fn revalidate_peer(&self) -> Result<(), ServiceError> {
+    pub(in crate::policy_shadow::policy_custody) fn revalidate_peer(&self) -> Result<(), ServiceError> {
         let observed = read_peer_credentials(self.socket.as_raw_fd())?;
         if observed != self.peer_credentials {
             return Err(ServiceError::Invalid(
@@ -2471,7 +2471,7 @@ fn validate_connected_unix_seqpacket(
     }
     if socket_type != libc::SOCK_SEQPACKET
         || accepting != 0
-        || peer_length as usize
+        || (peer_length as usize)
             < size_of::<libc::sa_family_t>()
         || peer_address.ss_family as i32 != libc::AF_UNIX
     {
@@ -4293,7 +4293,7 @@ where
         .ok_or(ServiceError::Invalid(
             "journal read bound overflow",
         ))?;
-    file.by_ref()
+    std::io::Read::by_ref(&mut file)
         .take(read_limit)
         .read_to_end(&mut bytes)?;
     if bytes.is_empty() || bytes.len() > maximum_bytes {

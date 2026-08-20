@@ -635,7 +635,11 @@ impl<T: ReadinessTransport> ReadinessRunner<T> {
                 "readiness execution deadline is invalid",
             ));
         }
-        let primary = (|| {
+        let primary: PlanResult<(
+            ReadinessResponseV12,
+            ReadinessResponseV12,
+            ReadinessResponseV12,
+        )> = (|| {
             let docker = self.run_probe(
                 fixture,
                 1,

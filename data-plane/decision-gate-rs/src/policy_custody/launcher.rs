@@ -3160,7 +3160,11 @@ fn verify_read_only_mount_root(
     if unsafe { libc::fstatfs(fd, &mut filesystem) } != 0 {
         return Err(io::Error::last_os_error().into());
     }
-    if filesystem.f_flags as libc::c_ulong & ST_RDONLY_FLAG == 0 {
+    let mut mount: libc::statvfs = unsafe { zeroed() };
+    if unsafe { libc::fstatvfs(fd, &mut mount) } != 0 {
+        return Err(io::Error::last_os_error().into());
+    }
+    if mount.f_flag as libc::c_ulong & ST_RDONLY_FLAG == 0 {
         return Err(LauncherError::Invalid(
             "verified root filesystem is not mounted read-only",
         ));
@@ -4299,12 +4303,12 @@ fn send_seqpacket_until(
             deadline,
         )?;
         if child_terminal && !socket_ready {
-            return terminal_child_error(
+            return Err(terminal_child_error(
                 child_pidfd.ok_or(LauncherError::Invalid(
                     "watchdog wait lost its child pidfd",
                 ))?,
                 ready_proved,
-            );
+            ));
         }
     }
 }
@@ -4469,12 +4473,12 @@ fn receive_seqpacket_frame_until(
             deadline,
         )?;
         if child_terminal && !socket_ready {
-            return terminal_child_error(
+            return Err(terminal_child_error(
                 child_pidfd.ok_or(LauncherError::Invalid(
                     "watchdog wait lost its child pidfd",
                 ))?,
                 ready_proved,
-            );
+            ));
         }
     }
 }
@@ -4526,12 +4530,12 @@ fn receive_seqpacket_until<const N: usize>(
             deadline,
         )?;
         if child_terminal && !socket_ready {
-            return terminal_child_error(
+            return Err(terminal_child_error(
                 child_pidfd.ok_or(LauncherError::Invalid(
                     "watchdog wait lost its child pidfd",
                 ))?,
                 ready_proved,
-            );
+            ));
         }
     }
 }

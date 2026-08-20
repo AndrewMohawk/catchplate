@@ -9360,7 +9360,8 @@ use std::fs::{File, OpenOptions};
                         .create_new(true)
                         .open(&destination)?;
                     let copied = std::io::copy(
-                        &mut input.by_ref().take(entry.size),
+                        &mut std::io::Read::by_ref(&mut input)
+                            .take(entry.size),
                         &mut output,
                     )?;
                     if copied != entry.size {
@@ -14322,7 +14323,7 @@ use std::fs::{File, OpenOptions};
             {
                 return false;
             }
-            unsafe {
+            (unsafe {
                 libc::syscall(
                     libc::SYS_pidfd_send_signal,
                     pidfd,
@@ -14330,7 +14331,7 @@ use std::fs::{File, OpenOptions};
                     std::ptr::null::<libc::siginfo_t>(),
                     0,
                 )
-            } == 0
+            }) == 0
         }
 
         fn live_group_identity(

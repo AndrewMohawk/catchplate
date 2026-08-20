@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 #[path = "../coder_controller_v11.rs"]
 mod coder_controller_v11;
 #[path = "../receipt_contract_v12.rs"]

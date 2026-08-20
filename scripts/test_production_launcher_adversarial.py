@@ -47,9 +47,22 @@ PYTHON_SLIM_BASE = (
 )
 MUSL_APK = ROOT / "production-dependencies/cache/musl-1.2.5-r12.apk"
 MUSL_DEV_APK = ROOT / "production-dependencies/cache/musl-dev-1.2.5-r12.apk"
-OFFLINE_APK_SHA256 = {
+PYTHON_WHEELHOUSE = (
+    ROOT
+    / "production-dependencies/cache/python-wheelhouse-linux-amd64.tar.gz"
+)
+REQUIREMENTS_LOCK = ROOT / "requirements.lock"
+PYTHON_WHEELHOUSE_SHA256 = (
+    "812ea96c673527dd1dca4297af07d25383ecb8630e448648a152055f9fe79836"
+)
+REQUIREMENTS_LOCK_SHA256 = (
+    "d8634b6db76c1c3ee6d22f4b8b2d8cb803ef8dabcf7a43fc084806b5fbadd692"
+)
+OFFLINE_BUILD_INPUT_SHA256 = {
     MUSL_APK: "4990a5e0ba312e478f94cfe431a70efef1538004eb361c8ae424516848be45bb",
     MUSL_DEV_APK: "1c2068d910cfdbbcb4eb107a5a478f8b48edf3a6311953c8fa5180c5190efab3",
+    PYTHON_WHEELHOUSE: PYTHON_WHEELHOUSE_SHA256,
+    REQUIREMENTS_LOCK: REQUIREMENTS_LOCK_SHA256,
 }
 BUILDER_NAME_RE = re.compile(
     r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z"
@@ -3063,6 +3076,26 @@ def dockerfile() -> str:
             && test "$(readelf -l /src/target/release/serverware-production-launcher | grep -c INTERP)" -eq 0 \\
             && test "$(readelf -d /src/target/release/serverware-production-launcher | grep -c NEEDED)" -eq 0
 
+        FROM --platform=linux/amd64 {PYTHON_SLIM_BASE} AS fixture-python-deps
+        ENV PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_INDEX=1
+        WORKDIR /dependency-cache
+        COPY requirements.lock ./requirements.lock
+        COPY python-wheelhouse-linux-amd64.tar.gz ./python-wheelhouse-linux-amd64.tar.gz
+        RUN --network=none set -eu; \\
+            printf '%s  %s\\n' {REQUIREMENTS_LOCK_SHA256} requirements.lock | sha256sum -c -; \\
+            printf '%s  %s\\n' {PYTHON_WHEELHOUSE_SHA256} python-wheelhouse-linux-amd64.tar.gz | sha256sum -c -; \\
+            tar -xzf python-wheelhouse-linux-amd64.tar.gz; \\
+            test -n "$(find wheelhouse -maxdepth 1 -type f -name '*.whl' -print -quit)"; \\
+            python3 -m pip install \\
+                --no-cache-dir \\
+                --no-compile \\
+                --no-index \\
+                --only-binary=:all: \\
+                --find-links=/dependency-cache/wheelhouse \\
+                --require-hashes \\
+                --target=/deps \\
+                -r requirements.lock
+
         FROM --platform=linux/amd64 {PYTHON_SLIM_BASE}
         COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-production-launcher /opt/serverware/bin/serverware-production-launcher-test
         COPY --chown=0:0 --chmod=0555 generate_production_launch_manifest.py /usr/local/libexec/generate_production_launch_manifest.py
@@ -3080,6 +3113,7 @@ def dockerfile() -> str:
         COPY --chown=0:0 --chmod=0400 runner.py /opt/serverware/release/scripts/runner.py
         COPY --chown=0:0 --chmod=0500 fixture_driver.py /usr/local/libexec/fixture_driver.py
         COPY --from=hostile-build --chown=0:0 --chmod=0555 /hostile.so /opt/serverware/hostile/hostile.so
+        COPY --from=fixture-python-deps --chown=0:0 /deps/. /opt/serverware/release/vendor/
         RUN set -eu; \\
             openssl version; \\
             mkdir -p /run/serverware \\
@@ -3103,6 +3137,8 @@ def dockerfile() -> str:
             test -f /opt/serverware/release/runtime/python/lib/libpython3.11.so.1.0; \\
             test -n "$(find /opt/serverware/release/runtime/python/lib/python3.11/lib-dynload -maxdepth 1 -type f -name '*.so' -print -quit)"; \\
             printf '__all__ = []\\n' > /opt/serverware/release/vendor/serverware_vendor.py; \\
+            find /opt/serverware/release/vendor -type d -exec chmod 0755 {{}} +; \\
+            find /opt/serverware/release/vendor -type f -exec chmod 0444 {{}} +; \\
             chmod 0444 /opt/serverware/release/vendor/serverware_vendor.py; \\
             chown -R 0:0 /opt/serverware /var/lib/serverware/production-proof /run/serverware; \\
             chmod 0500 /opt/serverware/release/runtime/python/bin/python3; \\
@@ -3126,7 +3162,8 @@ def dockerfile() -> str:
             cp /opt/serverware/hostile/python/sitecustomize.py /usr/local/lib/python3.11/sitecustomize.py; \\
             chmod 0444 /opt/serverware/hostile/python/sitecustomize.py /usr/local/lib/python3.11/sitecustomize.py; \\
             python3 -I -S /usr/local/libexec/launch_authority_fixture.py generate-fixture-trust; \\
-            python3 /usr/local/libexec/generate_production_launch_manifest.py \\
+            PYTHONPATH=/opt/serverware/release/vendor \\
+            python3 -S /usr/local/libexec/generate_production_launch_manifest.py \\
                 --output /etc/serverware/production-release-launch.json \\
                 --release-root /opt/serverware/release \\
                 --state-directory /var/lib/serverware/production-proof \\
@@ -3352,7 +3389,12 @@ def write_context_manifest(
                     (context / "decision-gate-rs/Cargo.lock").read_bytes()
                 ).hexdigest(),
                 "cargo_mode": "--release --locked",
-                "registry_payloads": "Cargo.lock package checksums",
+                "python_mode": "--no-index --only-binary=:all: --require-hashes",
+                "python_requirements_lock_sha256": REQUIREMENTS_LOCK_SHA256,
+                "python_wheelhouse_sha256": PYTHON_WHEELHOUSE_SHA256,
+                "registry_payloads": (
+                    "Cargo.lock package checksums and requirements.lock hashes"
+                ),
             },
             "schema": "serverware.launcher-adversarial-build-inputs.v1",
         }
@@ -3376,6 +3418,8 @@ def write_context(context: Path, public_key_hex: str, authority_key_id: str) -> 
     shutil.copyfile(GENERATOR, context / "generate_production_launch_manifest.py")
     shutil.copyfile(MUSL_APK, context / MUSL_APK.name)
     shutil.copyfile(MUSL_DEV_APK, context / MUSL_DEV_APK.name)
+    shutil.copyfile(PYTHON_WHEELHOUSE, context / PYTHON_WHEELHOUSE.name)
+    shutil.copyfile(REQUIREMENTS_LOCK, context / REQUIREMENTS_LOCK.name)
     files = {
         "Dockerfile": dockerfile(),
         "hostile.c": HOSTILE_C,
@@ -3620,7 +3664,7 @@ def build_fixture_image(
         raise RuntimeError(f"production launch authority trust root is missing: {PRODUCTION_TRUST}")
     if not GENERATOR.is_file():
         raise RuntimeError(f"manifest generator is missing: {GENERATOR}")
-    for dependency, expected_sha256 in OFFLINE_APK_SHA256.items():
+    for dependency, expected_sha256 in OFFLINE_BUILD_INPUT_SHA256.items():
         if not dependency.is_file():
             raise RuntimeError(
                 f"offline launcher build dependency is missing: {dependency}"

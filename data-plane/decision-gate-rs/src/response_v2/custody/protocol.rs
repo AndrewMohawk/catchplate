@@ -313,6 +313,7 @@ pub enum LifecycleTransitionV1 {
     Dispatch,
     TerminalCompleted,
     TerminalFailed,
+    TerminalReleasePrepared,
     TerminalOutcomeUnknown,
     Finalize,
     Attest,
@@ -1102,7 +1103,7 @@ fn canonical_artifact_array_sha256(
 ) -> Result<String, super::V2RuntimeError> {
     let canonical =
         super::super::state_authority::canonical::canonical_jcs_bytes(
-            artifacts,
+            &artifacts,
         )
         .map_err(|error| {
             super::V2RuntimeError::new(
@@ -2147,10 +2148,13 @@ pub struct SignedDurableTerminalReceiptV1 {
     pub reconciled: bool,
     pub authority_sequence: u64,
     pub settlement_receipt_sha256: String,
-    pub reconciliation_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reconciliation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reconciliation_artifact:
-        super::super::state_authority::rpc::SignedAuthorityArtifact,
-    pub reconciliation_artifact_sha256: String,
+        Option<super::super::state_authority::rpc::SignedAuthorityArtifact>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reconciliation_artifact_sha256: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recovery_artifact:
         Option<super::super::state_authority::rpc::SignedAuthorityArtifact>,

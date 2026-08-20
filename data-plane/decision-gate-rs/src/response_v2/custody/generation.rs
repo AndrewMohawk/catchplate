@@ -3,12 +3,23 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
+#[cfg(target_os = "linux")]
+use std::ffi::CString;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
+#[cfg(target_os = "linux")]
+use std::io::{self, Seek, SeekFrom};
+#[cfg(target_os = "linux")]
+use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+#[cfg(target_os = "linux")]
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
+#[cfg(target_os = "linux")]
+use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
+use zeroize::Zeroizing;
 
 use super::config::{
     CustodyAttestationProfile, CustodyServiceRole,
@@ -85,6 +96,11 @@ const NITRO_EVIDENCE_FORMAT: &str =
     "serverware.teeEvidence.nitroDocumentBundle.cbor/v1";
 const LOCAL_TEE_TOPOLOGY_PROFILE: &str =
     "local-single-node-1-of-1";
+#[cfg(target_os = "linux")]
+const MAX_TEE_GENERATION_VERIFIER_BYTES: u64 = 64 * 1024 * 1024;
+#[cfg(target_os = "linux")]
+const TEE_GENERATION_VERIFIER_TIMEOUT: Duration =
+    Duration::from_secs(10);
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -181,6 +197,703 @@ struct TeeGenerationVerificationClaimsV2 {
     verified_at_epoch_ms: u64,
     expires_at_epoch_ms: u64,
 }
+
+#[derive(Clone, Debug)]
+struct PinnedGenerationVerifierCommand {
+    executable: PathBuf,
+    arguments: Vec<String>,
+    expected_sha256: String,
+}
+
+fn validate_pinned_generation_verifier_path(
+    command: &PinnedGenerationVerifierCommand,
+) -> Result<(), String> {
+    if !command.executable.is_absolute()
+        || !command.arguments.is_empty()
+        || !command.executable.components().all(|component| {
+            matches!(
+                component,
+                std::path::Component::RootDir
+                    | std::path::Component::Normal(_)
+            )
+        })
+        || !is_sha256(&command.expected_sha256)
+    {
+        return Err(
+            "TEE generation verifier must be one normalized absolute descriptor-pinned executable with no arguments"
+                .to_owned(),
+        );
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn generation_verifier_elf_u16(
+    bytes: &[u8],
+    offset: usize,
+) -> Result<u16, String> {
+    let raw: [u8; 2] = bytes
+        .get(offset..offset.saturating_add(2))
+        .ok_or("TEE generation verifier has a truncated ELF header")?
+        .try_into()
+        .map_err(|_| {
+            "TEE generation verifier has an invalid ELF header"
+                .to_owned()
+        })?;
+    Ok(u16::from_le_bytes(raw))
+}
+
+#[cfg(target_os = "linux")]
+fn generation_verifier_elf_u32(
+    bytes: &[u8],
+    offset: usize,
+) -> Result<u32, String> {
+    let raw: [u8; 4] = bytes
+        .get(offset..offset.saturating_add(4))
+        .ok_or("TEE generation verifier has a truncated ELF header")?
+        .try_into()
+        .map_err(|_| {
+            "TEE generation verifier has an invalid ELF header"
+                .to_owned()
+        })?;
+    Ok(u32::from_le_bytes(raw))
+}
+
+#[cfg(target_os = "linux")]
+fn generation_verifier_elf_u64(
+    bytes: &[u8],
+    offset: usize,
+) -> Result<u64, String> {
+    let raw: [u8; 8] = bytes
+        .get(offset..offset.saturating_add(8))
+        .ok_or("TEE generation verifier has a truncated ELF header")?
+        .try_into()
+        .map_err(|_| {
+            "TEE generation verifier has an invalid ELF header"
+                .to_owned()
+        })?;
+    Ok(u64::from_le_bytes(raw))
+}
+
+#[cfg(target_os = "linux")]
+fn validate_static_amd64_generation_verifier(
+    bytes: &[u8],
+) -> Result<(), String> {
+    const PT_LOAD: u32 = 1;
+    const PT_DYNAMIC: u32 = 2;
+    const PT_INTERP: u32 = 3;
+    const DT_NULL: u64 = 0;
+    const DT_NEEDED: u64 = 1;
+
+    if bytes.len() < 64
+        || &bytes[0..4] != b"\x7fELF"
+        || bytes[4] != 2
+        || bytes[5] != 1
+        || bytes[6] != 1
+        || !matches!(generation_verifier_elf_u16(bytes, 16)?, 2 | 3)
+        || generation_verifier_elf_u16(bytes, 18)? != 62
+        || generation_verifier_elf_u32(bytes, 20)? != 1
+    {
+        return Err(
+            "TEE generation verifier must be a little-endian static x86-64 ELF"
+                .to_owned(),
+        );
+    }
+    let program_offset = usize::try_from(
+        generation_verifier_elf_u64(bytes, 32)?,
+    )
+    .map_err(|_| {
+        "TEE generation verifier ELF program table is out of range"
+            .to_owned()
+    })?;
+    let program_entry_bytes =
+        usize::from(generation_verifier_elf_u16(bytes, 54)?);
+    let program_entries =
+        usize::from(generation_verifier_elf_u16(bytes, 56)?);
+    if program_entry_bytes != 56 || !(1..=256).contains(&program_entries) {
+        return Err(
+            "TEE generation verifier has an invalid ELF program table"
+                .to_owned(),
+        );
+    }
+    let program_bytes = program_entry_bytes
+        .checked_mul(program_entries)
+        .and_then(|size| program_offset.checked_add(size))
+        .ok_or("TEE generation verifier ELF program table overflows")?;
+    if program_bytes > bytes.len() {
+        return Err(
+            "TEE generation verifier ELF program table is truncated"
+                .to_owned(),
+        );
+    }
+    let mut load_segment_seen = false;
+    for index in 0..program_entries {
+        let offset = program_offset + index * program_entry_bytes;
+        let program_type = generation_verifier_elf_u32(bytes, offset)?;
+        if program_type == PT_INTERP {
+            return Err(
+                "TEE generation verifier must not use a runtime interpreter"
+                    .to_owned(),
+            );
+        }
+        if program_type == PT_LOAD {
+            load_segment_seen = true;
+        }
+        if program_type != PT_DYNAMIC {
+            continue;
+        }
+        let dynamic_offset = usize::try_from(
+            generation_verifier_elf_u64(bytes, offset + 8)?,
+        )
+        .map_err(|_| {
+            "TEE generation verifier dynamic segment is out of range"
+                .to_owned()
+        })?;
+        let dynamic_bytes = usize::try_from(
+            generation_verifier_elf_u64(bytes, offset + 32)?,
+        )
+        .map_err(|_| {
+            "TEE generation verifier dynamic segment is out of range"
+                .to_owned()
+        })?;
+        let dynamic_end = dynamic_offset
+            .checked_add(dynamic_bytes)
+            .ok_or(
+                "TEE generation verifier dynamic segment overflows",
+            )?;
+        if dynamic_bytes % 16 != 0 || dynamic_end > bytes.len() {
+            return Err(
+                "TEE generation verifier dynamic segment is invalid"
+                    .to_owned(),
+            );
+        }
+        for entry in (dynamic_offset..dynamic_end).step_by(16) {
+            let tag = generation_verifier_elf_u64(bytes, entry)?;
+            if tag == DT_NEEDED {
+                return Err(
+                    "TEE generation verifier must not load shared libraries"
+                        .to_owned(),
+                );
+            }
+            if tag == DT_NULL {
+                break;
+            }
+        }
+    }
+    if !load_segment_seen {
+        return Err(
+            "TEE generation verifier ELF has no loadable segment"
+                .to_owned(),
+        );
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn read_authenticated_generation_verifier_bytes(
+    command: &PinnedGenerationVerifierCommand,
+) -> Result<Vec<u8>, String> {
+    validate_pinned_generation_verifier_path(command)?;
+    let path_metadata = fs::symlink_metadata(&command.executable)
+        .map_err(|error| {
+            format!("inspect TEE generation verifier executable: {error}")
+        })?;
+    if path_metadata.file_type().is_symlink() {
+        return Err(
+            "TEE generation verifier executable must not be a symlink"
+                .to_owned(),
+        );
+    }
+    let mut executable = OpenOptions::new()
+        .read(true)
+        .custom_flags(
+            libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
+        )
+        .open(&command.executable)
+        .map_err(|error| {
+            format!(
+                "open TEE generation verifier executable without following symlinks: {error}"
+            )
+        })?;
+    let before = executable.metadata().map_err(|error| {
+        format!("inspect opened TEE generation verifier: {error}")
+    })?;
+    if !before.file_type().is_file() {
+        return Err(
+            "TEE generation verifier executable must be a regular file"
+                .to_owned(),
+        );
+    }
+    if before.permissions().mode() & 0o111 == 0 {
+        return Err(
+            "TEE generation verifier executable is not executable"
+                .to_owned(),
+        );
+    }
+    if before.len() == 0
+        || before.len() > MAX_TEE_GENERATION_VERIFIER_BYTES
+    {
+        return Err(format!(
+            "TEE generation verifier executable must contain 1-{MAX_TEE_GENERATION_VERIFIER_BYTES} bytes"
+        ));
+    }
+    let mut bytes = Vec::with_capacity(
+        usize::try_from(before.len()).unwrap_or(0),
+    );
+    Read::by_ref(&mut executable)
+        .take(MAX_TEE_GENERATION_VERIFIER_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| {
+            format!("read opened TEE generation verifier: {error}")
+        })?;
+    let after = executable.metadata().map_err(|error| {
+        format!("reinspect opened TEE generation verifier: {error}")
+    })?;
+    if bytes.len() as u64 != before.len()
+        || before.dev() != after.dev()
+        || before.ino() != after.ino()
+        || before.len() != after.len()
+        || before.mode() != after.mode()
+        || before.mtime() != after.mtime()
+        || before.mtime_nsec() != after.mtime_nsec()
+        || before.ctime() != after.ctime()
+        || before.ctime_nsec() != after.ctime_nsec()
+    {
+        return Err(
+            "TEE generation verifier executable changed while it was read"
+                .to_owned(),
+        );
+    }
+    let actual_sha256 =
+        format!("sha256:{:x}", Sha256::digest(&bytes));
+    if actual_sha256 != command.expected_sha256 {
+        return Err(
+            "TEE generation verifier executable SHA-256 mismatch"
+                .to_owned(),
+        );
+    }
+    validate_static_amd64_generation_verifier(&bytes)?;
+    Ok(bytes)
+}
+
+#[cfg(target_os = "linux")]
+fn sealed_authenticated_generation_verifier_snapshot(
+    command: &PinnedGenerationVerifierCommand,
+) -> Result<File, String> {
+    let bytes = read_authenticated_generation_verifier_bytes(command)?;
+    let name = CString::new("serverware-tee-generation-verifier")
+        .expect("static memfd name contains no NUL");
+    let fd = unsafe {
+        libc::memfd_create(
+            name.as_ptr(),
+            libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING,
+        )
+    };
+    if fd < 0 {
+        return Err(format!(
+            "create sealed TEE generation verifier snapshot: {}",
+            io::Error::last_os_error()
+        ));
+    }
+    // SAFETY: memfd_create returned a new descriptor owned here.
+    let mut snapshot = unsafe { File::from_raw_fd(fd) };
+    snapshot
+        .set_permissions(fs::Permissions::from_mode(0o500))
+        .map_err(|error| {
+            format!("mark TEE generation verifier snapshot executable: {error}")
+        })?;
+    snapshot.write_all(&bytes).map_err(|error| {
+        format!("write TEE generation verifier snapshot: {error}")
+    })?;
+    snapshot.seek(SeekFrom::Start(0)).map_err(|error| {
+        format!("reset TEE generation verifier snapshot: {error}")
+    })?;
+    let seals = libc::F_SEAL_SEAL
+        | libc::F_SEAL_SHRINK
+        | libc::F_SEAL_GROW
+        | libc::F_SEAL_WRITE;
+    if unsafe {
+        libc::fcntl(snapshot.as_raw_fd(), libc::F_ADD_SEALS, seals)
+    } != 0
+    {
+        return Err(format!(
+            "seal TEE generation verifier snapshot: {}",
+            io::Error::last_os_error()
+        ));
+    }
+    Ok(snapshot)
+}
+
+fn run_pinned_bounded_generation_verifier(
+    command: &PinnedGenerationVerifierCommand,
+    request: &serde_json::Value,
+    maximum_output_bytes: usize,
+) -> Result<Zeroizing<Vec<u8>>, String> {
+    validate_pinned_generation_verifier_path(command)?;
+    if maximum_output_bytes == 0
+        || maximum_output_bytes > 8 * 1024 * 1024
+    {
+        return Err(
+            "TEE generation verifier output limit is outside the fixed 1-8388608 byte bound"
+                .to_owned(),
+        );
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let snapshot =
+            sealed_authenticated_generation_verifier_snapshot(command)?;
+        let result = run_bounded_generation_verifier_snapshot(
+            command,
+            request,
+            snapshot.as_raw_fd(),
+            maximum_output_bytes,
+        );
+        drop(snapshot);
+        result
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (request, maximum_output_bytes);
+        Err(
+            "descriptor-pinned TEE generation verifier execution requires Linux"
+                .to_owned(),
+        )
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn run_bounded_generation_verifier_snapshot(
+    command: &PinnedGenerationVerifierCommand,
+    request: &serde_json::Value,
+    executable_fd: std::os::fd::RawFd,
+    maximum_output_bytes: usize,
+) -> Result<Zeroizing<Vec<u8>>, String> {
+    let request_wire = Zeroizing::new(
+        canonical_jcs_bytes(request).map_err(|_| {
+            "serialize TEE generation verifier request".to_owned()
+        })?,
+    );
+    let mut process = Command::new("/proc/self/exe");
+    process
+        .args(&command.arguments)
+        .env_clear()
+        .env("LANG", "C")
+        .env("LC_ALL", "C")
+        .env("TZ", "UTC")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .process_group(0);
+    let argv = std::iter::once(
+        command
+            .executable
+            .to_str()
+            .ok_or("TEE generation verifier path is not UTF-8")?
+            .to_owned(),
+    )
+    .chain(command.arguments.iter().cloned())
+    .map(|value| {
+        CString::new(value).map_err(|_| {
+            "TEE generation verifier argument contains an embedded NUL"
+                .to_owned()
+        })
+    })
+    .collect::<Result<Vec<_>, _>>()?;
+    let argv_pointers = argv
+        .iter()
+        .map(|value| value.as_ptr() as usize)
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let environment = ["LANG=C", "LC_ALL=C", "TZ=UTC"]
+        .into_iter()
+        .map(|value| {
+            CString::new(value).expect("fixed environment contains no NUL")
+        })
+        .collect::<Vec<_>>();
+    let environment_pointers = environment
+        .iter()
+        .map(|value| value.as_ptr() as usize)
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    unsafe {
+        process.pre_exec(move || {
+            let _keep_storage_alive = (&argv, &environment);
+            if libc::fcntl(executable_fd, libc::F_SETFD, 0) != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            libc::syscall(
+                libc::SYS_execveat,
+                executable_fd,
+                c"".as_ptr(),
+                argv_pointers.as_ptr()
+                    as *const *const libc::c_char,
+                environment_pointers.as_ptr()
+                    as *const *const libc::c_char,
+                libc::AT_EMPTY_PATH,
+            );
+            Err(io::Error::last_os_error())
+        });
+    }
+    let mut child = process.spawn().map_err(|error| {
+        format!("start TEE generation verifier: {error}")
+    })?;
+    let deadline = Instant::now() + TEE_GENERATION_VERIFIER_TIMEOUT;
+    let mut stdout = child.stdout.take().ok_or_else(|| {
+        terminate_generation_verifier_process_group(&mut child);
+        "TEE generation verifier stdout unavailable".to_owned()
+    })?;
+    let mut child_stdin = child.stdin.take().ok_or_else(|| {
+        terminate_generation_verifier_process_group(&mut child);
+        "TEE generation verifier stdin unavailable".to_owned()
+    })?;
+    if let Err(error) = set_generation_verifier_nonblocking(
+        child_stdin.as_raw_fd(),
+        "stdin",
+    )
+    .and_then(|_| {
+        set_generation_verifier_nonblocking(stdout.as_raw_fd(), "stdout")
+    }) {
+        terminate_generation_verifier_process_group(&mut child);
+        return Err(error);
+    }
+    let mut child_stdin = Some(child_stdin);
+
+    let result = (|| {
+        let mut input_offset = 0usize;
+        let mut input_complete = request_wire.is_empty();
+        if input_complete {
+            child_stdin.take();
+        }
+        let mut output_complete = false;
+        let mut output = Zeroizing::new(Vec::with_capacity(
+            maximum_output_bytes.min(64 * 1024),
+        ));
+        let mut status = None;
+        let mut buffer = [0u8; 16 * 1024];
+        let status = loop {
+            if !input_complete {
+                match child_stdin
+                    .as_mut()
+                    .expect("incomplete input retains verifier stdin")
+                    .write(&request_wire[input_offset..])
+                {
+                    Ok(0) => {
+                        return Err(
+                            "TEE generation verifier closed stdin before the request was written"
+                                .to_owned(),
+                        )
+                    }
+                    Ok(written) => {
+                        input_offset = input_offset.saturating_add(written);
+                        input_complete = input_offset == request_wire.len();
+                    }
+                    Err(error)
+                        if error.kind() == io::ErrorKind::WouldBlock
+                            || error.kind()
+                                == io::ErrorKind::Interrupted => {}
+                    Err(_) => {
+                        return Err(
+                            "write TEE generation verifier request"
+                                .to_owned(),
+                        )
+                    }
+                }
+                if input_complete {
+                    child_stdin.take();
+                }
+            }
+            if !output_complete {
+                match stdout.read(&mut buffer) {
+                    Ok(0) => output_complete = true,
+                    Ok(read) => {
+                        if output.len().saturating_add(read)
+                            > maximum_output_bytes
+                        {
+                            return Err(
+                                "TEE generation verifier output is too large"
+                                    .to_owned(),
+                            );
+                        }
+                        output.extend_from_slice(&buffer[..read]);
+                    }
+                    Err(error)
+                        if error.kind() == io::ErrorKind::WouldBlock
+                            || error.kind()
+                                == io::ErrorKind::Interrupted => {}
+                    Err(_) => {
+                        return Err(
+                            "read TEE generation verifier output"
+                                .to_owned(),
+                        )
+                    }
+                }
+            }
+            if status.is_none() {
+                match child.try_wait() {
+                    Ok(observed) => status = observed,
+                    Err(error) => {
+                        return Err(format!(
+                            "wait for TEE generation verifier: {error}"
+                        ));
+                    }
+                }
+            }
+            if input_complete && output_complete {
+                if let Some(status) = status {
+                    break status;
+                }
+            }
+            if Instant::now() >= deadline {
+                return Err(
+                    "TEE generation verifier command timed out"
+                        .to_owned(),
+                );
+            }
+            thread::sleep(Duration::from_millis(10));
+        };
+        if !status.success() {
+            return Err(
+                "TEE generation verifier rejected request".to_owned(),
+            );
+        }
+        if output.is_empty() {
+            return Err(
+                "TEE generation verifier produced no output".to_owned(),
+            );
+        }
+        Ok(output)
+    })();
+    terminate_generation_verifier_process_group(&mut child);
+    result
+}
+
+#[cfg(target_os = "linux")]
+fn set_generation_verifier_nonblocking(
+    fd: std::os::fd::RawFd,
+    stream: &str,
+) -> Result<(), String> {
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags < 0
+        || unsafe {
+            libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK)
+        } != 0
+    {
+        return Err(format!(
+            "configure TEE generation verifier {stream}: {}",
+            io::Error::last_os_error()
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn terminate_generation_verifier_process_group(
+    child: &mut std::process::Child,
+) {
+    let process_group = -(child.id() as i32);
+    unsafe {
+        libc::kill(process_group, libc::SIGKILL);
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+fn decode_tee_generation_verifier_result(
+    bytes: &[u8],
+) -> Result<TeeGenerationVerificationResultV2, serde_json::Error> {
+    if contains_integer_negative_zero(bytes) {
+        return Err(<serde_json::Error as serde::de::Error>::custom(
+            "integer -0 is not permitted in strict JSON",
+        ));
+    }
+    let mut deserializer = serde_json::Deserializer::from_slice(bytes);
+    let result =
+        TeeGenerationVerificationResultV2::deserialize(&mut deserializer)?;
+    deserializer.end()?;
+    Ok(result)
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum IntegerNegativeZeroState {
+    #[default]
+    None,
+    Minus,
+    NegativeZero,
+}
+
+#[derive(Default)]
+struct IntegerNegativeZeroDetector {
+    in_string: bool,
+    escaped: bool,
+    state: IntegerNegativeZeroState,
+}
+
+impl IntegerNegativeZeroDetector {
+    fn scan(&mut self, input: &[u8]) -> bool {
+        input.iter().copied().any(|byte| self.scan_byte(byte))
+    }
+
+    fn finish(&self) -> bool {
+        !self.in_string
+            && self.state == IntegerNegativeZeroState::NegativeZero
+    }
+
+    fn scan_byte(&mut self, byte: u8) -> bool {
+        if self.in_string {
+            if self.escaped {
+                self.escaped = false;
+            } else if byte == b'\\' {
+                self.escaped = true;
+            } else if byte == b'"' {
+                self.in_string = false;
+            }
+            return false;
+        }
+        match self.state {
+            IntegerNegativeZeroState::None => {
+                self.scan_value_start(byte)
+            }
+            IntegerNegativeZeroState::Minus => {
+                self.state = IntegerNegativeZeroState::None;
+                if byte == b'0' {
+                    self.state =
+                        IntegerNegativeZeroState::NegativeZero;
+                    false
+                } else {
+                    self.scan_value_start(byte)
+                }
+            }
+            IntegerNegativeZeroState::NegativeZero => {
+                self.state = IntegerNegativeZeroState::None;
+                if matches!(byte, b' ' | b'\t' | b'\r' | b'\n')
+                    || matches!(byte, b',' | b']' | b'}')
+                {
+                    true
+                } else if matches!(byte, b'.' | b'e' | b'E') {
+                    false
+                } else {
+                    self.scan_value_start(byte)
+                }
+            }
+        }
+    }
+
+    fn scan_value_start(&mut self, byte: u8) -> bool {
+        if byte == b'"' {
+            self.in_string = true;
+            self.escaped = false;
+        } else if byte == b'-' {
+            self.state = IntegerNegativeZeroState::Minus;
+        }
+        false
+    }
+}
+
+fn contains_integer_negative_zero(input: &[u8]) -> bool {
+    let mut detector = IntegerNegativeZeroDetector::default();
+    detector.scan(input) || detector.finish()
+}
+
 const ROLE_MANIFEST_API_VERSION: &str =
     "serverware.responseV2.roleManifest/v1";
 const ROLE_MANIFEST_KIND: &str = "ServerwareResponseV2RoleManifest";
@@ -3090,15 +3803,14 @@ fn verify_tee_hardware_generation(
             "trustRoots":&verifier.trust_roots,
         },
     });
-    let command = crate::PinnedVerifierCommand {
+    let command = PinnedGenerationVerifierCommand {
         executable: verifier.executable.clone(),
         arguments: verifier.arguments.clone(),
         expected_sha256: verifier.executable_sha256.clone(),
     };
-    let result = crate::run_pinned_bounded_json_command_with_output_limit(
+    let result = run_pinned_bounded_generation_verifier(
         &command,
         &request,
-        "response-observation v2 TEE generation verifier",
         128 * 1024,
     )
     .map_err(|error| {
@@ -3107,8 +3819,8 @@ fn verify_tee_hardware_generation(
             error,
         )
     })?;
-    let result: TeeGenerationVerificationResultV2 =
-        serde_json::from_value(result).map_err(|_| {
+    let result = decode_tee_generation_verifier_result(&result)
+        .map_err(|_| {
             V2RuntimeError::new(
                 "tee_generation_verifier_result_invalid",
                 "TEE generation verifier returned an open or invalid result contract",

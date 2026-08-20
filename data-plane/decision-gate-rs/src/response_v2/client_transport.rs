@@ -1880,6 +1880,9 @@ pub(super) fn response_observation_v2_validate_operation_result_binding(
                 V2TerminalKind::Completed => {
                     V2AttemptState::Completed
                 }
+                V2TerminalKind::ReleasePrepared => {
+                    V2AttemptState::ReleasePrepared
+                }
                 V2TerminalKind::OutcomeUnknown => {
                     V2AttemptState::OutcomeUnknown
                 }

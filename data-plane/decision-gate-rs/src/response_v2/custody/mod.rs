@@ -5760,36 +5760,12 @@ impl InstalledProviderGeneration {
                 .values()
                 .map(|object| object.descriptor.clone())
                 .collect::<Vec<_>>();
-            let envelope = ProviderRpcRequestEnvelope {
-                api_version: PROVIDER_RPC_API_VERSION.to_owned(),
+            let envelope = provider_rpc_request_envelope(
+                binding,
                 operation,
-                role: binding.role.clone(),
-                provider_id: binding.provider_id.clone(),
-                provider_generation: binding.provider_generation,
-                provider_operation_id:
-                    binding.provider_operation_id.clone(),
-                provider_operation_binding_sha256:
-                    provider_operation_binding_sha256(binding),
-                request_sha256: binding.request_sha256.clone(),
-                descriptor_manifest_sha256:
-                    descriptor_manifest_sha256(&descriptors),
-                attempt_id: binding.attempt_id.clone(),
-                attempt_revision: binding.attempt_revision,
-                fencing_token: binding.fencing_token,
-                predecessor_state_sha256:
-                    binding.predecessor_state_sha256.clone(),
-                deadline_at_epoch_ms:
-                    binding.deadline_at_epoch_ms,
-                launch_nonce: binding.launch_nonce.clone(),
-                canonical_payload_base64:
-                    base64::engine::general_purpose::STANDARD
-                        .encode(&canonical_payload),
-                canonical_payload_sha256: format!(
-                    "sha256:{:x}",
-                    Sha256::digest(&canonical_payload)
-                ),
-                exact_objects: descriptors,
-            };
+                &canonical_payload,
+                descriptors,
+            );
             let request_bytes =
                 crate::canonical_json_bytes(&envelope).map_err(
                     |_| {
@@ -6247,7 +6223,8 @@ impl InstalledProviderGeneration {
                 fence.durable_fence_receipt_sha256,
             namespace_quarantine_receipt_sha256:
                 cleanup_receipt
-                    .namespace_quarantine_receipt_sha256,
+                    .namespace_quarantine_receipt_sha256
+                    .clone(),
             cgroup_kill_receipt_sha256:
                 local.cgroup_kill_receipt_sha256,
             pidfd_kill_receipt_sha256:
@@ -6549,7 +6526,7 @@ impl InstalledProviderGeneration {
             operation_name,
             &attempt_id,
             target.fencing_token,
-            pin,
+            &pin.pin,
         );
         let launch_nonce = generate_hardware_proof_challenge()?;
         let (mut call, hello) = launch_measured_provider_subprocess(
@@ -10625,7 +10602,7 @@ pub(crate) enum RuntimeProviderStartDecision {
     Started(RuntimeProviderWatchdogJob),
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct VerifiedProviderNeverStarted {
     provider_operation_id: String,
@@ -10649,6 +10626,7 @@ pub(crate) struct VerifiedProviderNeverStarted {
     _seal: VerifiedProviderNeverStartedSeal,
 }
 
+#[derive(Clone)]
 struct VerifiedProviderNeverStartedSeal;
 
 pub(crate) struct RuntimeReadOnlyWatchdogJob {
@@ -10982,7 +10960,10 @@ impl InstalledProviderGeneration {
         }
         let authorization_binding_sha256 = match &request.authorization {
             VerifiedReadOnlyAuthorization::Retrieve(capability) => {
-                capability.release_request_commitment_sha256.clone()
+                capability
+                    .release_request_commitment
+                    .commitment_sha256
+                    .clone()
             }
             VerifiedReadOnlyAuthorization::VerifyArchive(capability) => {
                 capability.verifier_operation_binding_sha256.clone()
@@ -11166,7 +11147,8 @@ impl InstalledProviderGeneration {
         };
         let files = fds.into_iter().map(File::from).collect::<Vec<_>>();
         let mut observed_terminal = None;
-        let parsed = (|| {
+        let parsed: Result<ProviderTerminalWithFiles, V2RuntimeError> =
+            (|| {
             let envelope: ProviderRpcTerminalEnvelope =
                 crate::decode_canonical_json(&bytes).map_err(|_| {
                     V2RuntimeError::new(
@@ -11191,7 +11173,7 @@ impl InstalledProviderGeneration {
                 envelope,
                 output_files: validated.into_files(),
             })
-        })();
+            })();
         let cleanup_deadline =
             call.lifecycle_deadline.clone();
         let cleanup = self.cleanup_provider_call(
@@ -13096,7 +13078,7 @@ pub(crate) struct DurableStartReceiptBinding<'a> {
     pub deadline_at_epoch_ms: u64,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct FreshHardwareProofBinding<'a> {
     request_sha256: &'a str,
@@ -13586,9 +13568,12 @@ impl ConfiguredProviderAggregate {
             record.key.stable.fencing_token,
             deadline,
         )?;
-        let trusted_now = self
-            .installed
-            .trusted_now_epoch_ms(&time_binding, deadline)?;
+        let trusted_now =
+            PublicReleaseTrustedTimeProvider::trusted_now_epoch_ms(
+                &self.installed,
+                &time_binding,
+                deadline,
+            )?;
         validate_signed_replay_record_receipt(
             receipt,
             record,
@@ -13606,9 +13591,9 @@ impl ConfiguredProviderAggregate {
             record.key.stable.fencing_token,
             deadline,
         )?;
-        let revoked = match self
-            .installed
-            .authorization_is_revoked(
+        let revoked = match
+            PublicReleaseRevocationProvider::authorization_is_revoked(
+                &self.installed,
                 &revocation_binding,
                 &receipt.authority_receipt_sha256,
                 receipt.revocation_epoch,
@@ -13679,9 +13664,12 @@ impl ConfiguredProviderAggregate {
             record.key.stable.fencing_token,
             deadline,
         )?;
-        let trusted_now = self
-            .installed
-            .trusted_now_epoch_ms(&time_binding, deadline)?;
+        let trusted_now =
+            PublicReleaseTrustedTimeProvider::trusted_now_epoch_ms(
+                &self.installed,
+                &time_binding,
+                deadline,
+            )?;
         validate_signed_replay_retrieval_receipt(
             receipt,
             record,
@@ -13700,9 +13688,9 @@ impl ConfiguredProviderAggregate {
             record.key.stable.fencing_token,
             deadline,
         )?;
-        let revoked = match self
-            .installed
-            .authorization_is_revoked(
+        let revoked = match
+            PublicReleaseRevocationProvider::authorization_is_revoked(
+                &self.installed,
                 &revocation_binding,
                 &receipt.retrieval_receipt_sha256,
                 receipt.revocation_epoch,
@@ -13999,9 +13987,12 @@ impl ConfiguredProviderAggregate {
             params.binding.fencing_token,
             deadline,
         )?;
-        let now = self
-            .installed
-            .trusted_now_epoch_ms(&time_binding, deadline)?;
+        let now =
+            PublicReleaseTrustedTimeProvider::trusted_now_epoch_ms(
+                &self.installed,
+                &time_binding,
+                deadline,
+            )?;
         let signature = authorization.signature.clone();
         let mut unsigned_authorization = authorization.clone();
         unsigned_authorization.signature.clear();
@@ -14058,9 +14049,9 @@ impl ConfiguredProviderAggregate {
             params.binding.fencing_token,
             deadline,
         )?;
-        let release_revoked = match self
-            .installed
-            .authorization_is_revoked(
+        let release_revoked = match
+            PublicReleaseRevocationProvider::authorization_is_revoked(
+                &self.installed,
             &revocation_binding,
             &authorization.authorization_id,
             authorization.revocation_epoch,
@@ -14345,6 +14336,7 @@ impl ConfiguredProviderAggregate {
                     &'a SignedV2CrossBootRecoveryAuthorizationV1,
             },
         }
+        let signer = &self.verified_construction.recovery;
         let (
             authorization_id,
             authorization_client_identity_sha256,
@@ -14467,8 +14459,6 @@ impl ConfiguredProviderAggregate {
                 validate_digest(
                     &authorization.signer_key_material_sha256,
                 )?;
-                let signer =
-                    &self.verified_construction.recovery;
                 let trusted_time_binding =
                     self.bind_authority_call(
                         "trusted-time",
@@ -14479,9 +14469,9 @@ impl ConfiguredProviderAggregate {
                         params.stable_request.fencing_token,
                         deadline,
                     )?;
-                let trusted_now = self
-                    .installed
-                    .trusted_now_epoch_ms(
+                let trusted_now =
+                    RecoveryAuthorizationVerifier::trusted_now_epoch_ms(
+                        &self.installed,
                         &trusted_time_binding,
                         deadline,
                     )?;
@@ -14602,9 +14592,9 @@ impl ConfiguredProviderAggregate {
                         params.stable_request.fencing_token,
                         deadline,
                     )?;
-                let recovery_revoked = match self
-                    .installed
-                    .authorization_is_revoked(
+                let recovery_revoked = match
+                    RecoveryAuthorizationVerifier::authorization_is_revoked(
+                        &self.installed,
                         &revocation_binding,
                         &authorization.authorization_id,
                         authorization.revocation_epoch,
@@ -14748,10 +14738,12 @@ impl ConfiguredProviderAggregate {
             params.stable_request.fencing_token,
             deadline,
         )?;
-        let current_trusted_now = self.installed.trusted_now_epoch_ms(
-            &current_time_binding,
-            deadline,
-        )?;
+        let current_trusted_now =
+            RecoveryAuthorizationVerifier::trusted_now_epoch_ms(
+                &self.installed,
+                &current_time_binding,
+                deadline,
+            )?;
         let terminal_revocation_binding = self.bind_authority_call(
             "evidence-trust",
             ProviderSubchannelOperation::Revocation,
@@ -14761,9 +14753,9 @@ impl ConfiguredProviderAggregate {
             params.stable_request.fencing_token,
             deadline,
         )?;
-        let terminal_receipt_revoked = self
-            .installed
-            .authorization_is_revoked(
+        let terminal_receipt_revoked =
+            RecoveryAuthorizationVerifier::authorization_is_revoked(
+                &self.installed,
                 &terminal_revocation_binding,
                 &decision.terminal.authority_receipt_sha256,
                 self.proof_independent_pins.revocation_epoch,
@@ -14786,9 +14778,9 @@ impl ConfiguredProviderAggregate {
                 params.stable_request.fencing_token,
                 deadline,
             )?;
-        let resolution_revoked = self
-            .installed
-            .authorization_is_revoked(
+        let resolution_revoked =
+            RecoveryAuthorizationVerifier::authorization_is_revoked(
+                &self.installed,
                 &resolution_revocation_binding,
                 &resolution.reconciliation.retrieval_id,
                 self.proof_independent_pins.revocation_epoch,
@@ -15239,9 +15231,9 @@ impl ConfiguredProviderAggregate {
             1,
             deadline,
         )?;
-        let trusted_now = self
-            .installed
-            .trusted_now_epoch_ms(
+        let trusted_now =
+            PublicReleaseTrustedTimeProvider::trusted_now_epoch_ms(
+                &self.installed,
                 &trusted_time_binding,
                 deadline,
             )?;
@@ -15484,9 +15476,9 @@ impl ConfiguredProviderAggregate {
             1,
             deadline,
         )?;
-        let verified_now = self
-            .installed
-            .trusted_now_epoch_ms(
+        let verified_now =
+            PublicReleaseTrustedTimeProvider::trusted_now_epoch_ms(
+                &self.installed,
                 &verification_time_binding,
                 deadline,
             )?;
@@ -15500,9 +15492,9 @@ impl ConfiguredProviderAggregate {
                 1,
                 deadline,
             )?;
-        let signer_revoked = self
-            .installed
-            .authorization_is_revoked(
+        let signer_revoked =
+            PublicReleaseRevocationProvider::authorization_is_revoked(
+                &self.installed,
                 &signer_revocation_binding,
                 &proof.signer_key_id,
                 self.proof_independent_pins.revocation_epoch,
@@ -16679,7 +16671,7 @@ impl ResponseObservationV2Runtime {
             ));
         }
         let providers =
-            self.providers.configured().ok_or_else(|| {
+            self.providers.configured_arc().ok_or_else(|| {
                 V2RuntimeError::new(
                     "providers_unconfigured",
                     "durable replay authority is not configured",
@@ -17105,7 +17097,7 @@ impl ResponseObservationV2Runtime {
                     expected_revision:
                         context.binding.attempt_revision,
                     expected_state: String::from_utf8_lossy(
-                        lifecycle_state_tag(
+                        lifecycle_state_label(
                             context
                                 .binding
                                 .predecessor_lifecycle_state,
@@ -17760,33 +17752,14 @@ fn validate_canonical_final_envelope_input(
             "canonical final envelope raw response length is invalid",
         ));
     }
-    let verification_request =
-        protocol::FinalEnvelopeVerificationRequestV1 {
-            api_version:
-                protocol::FINAL_ENVELOPE_VERIFICATION_API_VERSION
-                    .to_owned(),
-            operation_id: format!(
-                "final-envelope-verify:{}",
-                request.request_id()
-            ),
-            envelope: envelope.clone(),
-            canonical_envelope_bytes_sha256:
-                params.proof_document.sha256.clone(),
-            // The policy-proof-verifier reconstructs the complete signed
-            // transition chain from state-authority and immutable-ledger
-            // custody. Supplying caller-selected transition records here
-            // would reintroduce the reviewed authority-bypass class.
-            transition_authorizations: Vec::new(),
-            deadline_boottime_ns:
-                deadline.absolute_boottime_ns,
-        };
-    services::verify_final_envelope(
-        config,
-        request.request_id(),
-        &verification_request,
+    // This legacy control request cannot carry the independently signed
+    // inspection required by the V2 authority-envelope verifier. Exact V2
+    // finalization is handled by the response-data validation operation.
+    Err(V2RuntimeError::new(
+        "canonical_authority_envelope_required",
+        "legacy final-envelope verification without the signed immutable inspection and complete authority artifact set is disabled",
     )
-    .map_err(V2RuntimeError::suppress_response)?;
-    Ok(())
+    .suppress_response())
 }
 
 fn provider_operation_id(
@@ -19771,6 +19744,9 @@ fn validate_result_semantics(
                 V2TerminalKind::Cancelled => V2AttemptState::Cancelled,
                 V2TerminalKind::Failed => V2AttemptState::Failed,
                 V2TerminalKind::Completed => V2AttemptState::Completed,
+                V2TerminalKind::ReleasePrepared => {
+                    V2AttemptState::ReleasePrepared
+                }
                 V2TerminalKind::OutcomeUnknown => {
                     V2AttemptState::OutcomeUnknown
                 }
@@ -20297,9 +20273,9 @@ fn validate_recover_result_basic(
     Ok(())
 }
 
-fn result_binding(
-    binding: &Option<&V2OperationBinding>,
-) -> Result<&V2OperationBinding, V2RuntimeError> {
+fn result_binding<'a>(
+    binding: &Option<&'a V2OperationBinding>,
+) -> Result<&'a V2OperationBinding, V2RuntimeError> {
     binding.as_ref().copied().ok_or_else(|| {
         V2RuntimeError::new(
             "operation_result_binding_missing",
@@ -20415,6 +20391,7 @@ fn lifecycle_state_label(state: V2AttemptState) -> &'static [u8] {
         V2AttemptState::Cancelled => b"CANCELLED",
         V2AttemptState::Failed => b"FAILED",
         V2AttemptState::Completed => b"COMPLETED",
+        V2AttemptState::ReleasePrepared => b"RELEASE_PREPARED",
         V2AttemptState::OutcomeUnknown => b"OUTCOME_UNKNOWN",
         V2AttemptState::Terminalized => b"TERMINALIZED",
         V2AttemptState::Finalized => b"FINALIZED",
@@ -20459,6 +20436,7 @@ fn lifecycle_transition_allowed(
                     V2AttemptState::Cancelled
                         | V2AttemptState::Failed
                         | V2AttemptState::Completed
+                        | V2AttemptState::ReleasePrepared
                         | V2AttemptState::OutcomeUnknown
                 )
         }
@@ -20470,6 +20448,7 @@ fn lifecycle_transition_allowed(
                     | V2AttemptState::Cancelled
                     | V2AttemptState::Failed
                     | V2AttemptState::Completed
+                    | V2AttemptState::ReleasePrepared
                     | V2AttemptState::OutcomeUnknown
             ) && successor == V2AttemptState::Finalized
         }
@@ -20515,6 +20494,9 @@ fn lifecycle_transition_for_request(
                 }
                 V2TerminalKind::OutcomeUnknown => {
                     protocol::LifecycleTransitionV1::TerminalOutcomeUnknown
+                }
+                V2TerminalKind::ReleasePrepared => {
+                    protocol::LifecycleTransitionV1::TerminalReleasePrepared
                 }
             }
         }
@@ -20915,6 +20897,7 @@ fn request_predecessor_allowed(
                 | V2AttemptState::Cancelled
                 | V2AttemptState::Failed
                 | V2AttemptState::Completed
+                | V2AttemptState::ReleasePrepared
                 | V2AttemptState::OutcomeUnknown
         ),
         V2OperationRequest::Attest { .. } => {
@@ -21438,18 +21421,6 @@ fn validate_release_consume_outcome(
             != expected_cas.expected_authority_revision
         || signed.consume.expected_unconsumed_state_sha256
             != expected_cas.expected_unconsumed_state_sha256
-        || signed
-            .consume
-            .release_request_commitment
-            .commitment
-            .request_sha256
-            != request_sha256
-        || signed
-            .consume
-            .release_request_commitment
-            .commitment
-            .descriptor_manifest_sha256
-            != descriptor_manifest_sha256
         || signed
             .consume
             .release_request_commitment
@@ -23996,8 +23967,6 @@ impl EvidenceSignatureVerifier for VerifiedContractVerifierAdapter {
                 "sha256:0000000000000000000000000000000000000000000000000000000000000000"
                     .to_owned(),
                 String::new(),
-                "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-                    .to_owned(),
                 "sha256:0000000000000000000000000000000000000000000000000000000000000000"
                     .to_owned(),
                 "sha256:0000000000000000000000000000000000000000000000000000000000000000"
@@ -27626,17 +27595,19 @@ fn run_legacy_provider_rpc_worker_from_env(
         &deadline,
     );
     if request.operation
-            == ProviderSubchannelOperation::LifecycleDispatch
-        && let Ok(payload) = &operation_result
-        && let Err(error) = mark_provider_mutation_terminal(
-            &config,
-            &environment,
-            &payload.canonical_payload,
-            &signing_key,
-            &deadline,
-        )
+        == ProviderSubchannelOperation::LifecycleDispatch
     {
-        operation_result = Err(error);
+        if let Ok(payload) = &operation_result {
+            if let Err(error) = mark_provider_mutation_terminal(
+                &config,
+                &environment,
+                &payload.canonical_payload,
+                &signing_key,
+                &deadline,
+            ) {
+                operation_result = Err(error);
+            }
+        }
     }
     let operation_observed_at_epoch_ms =
         system_time_epoch_ms()?;
@@ -30841,7 +30812,7 @@ fn execute_provider_emergency_manifest(
                     events: libc::POLLIN,
                     revents: 0,
                 };
-                unsafe { libc::poll(&mut pollfd, 1, 0) } == 1
+                (unsafe { libc::poll(&mut pollfd, 1, 0) }) == 1
                     && pollfd.revents
                         & (libc::POLLIN
                             | libc::POLLHUP

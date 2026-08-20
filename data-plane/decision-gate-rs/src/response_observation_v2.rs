@@ -2292,7 +2292,8 @@ pub enum EvidenceType {
     ArtifactTimeCheckpoint,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
 pub enum EvidenceRole {
     RouteSemanticProfile,
     Reserve,
@@ -3081,7 +3082,8 @@ pub(crate) fn verify_historically_attested_runtime<
     })
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct PinnedReconciliationQuorumMember {
     key_id: String,
     key_material_sha256: String,
@@ -3117,7 +3119,8 @@ impl PinnedReconciliationQuorumMember {
 
 /// Independently provisioned reconciliation authority. None of these values
 /// may be learned from the response-observation proof being verified.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct PinnedReconciliationWitnessAuthority {
     linearizable_store_id: String,
     linearizable_store_cluster_id: String,
@@ -4714,7 +4717,7 @@ macro_rules! evidence_payload {
         $evidence_role:expr,
         $payload_domain:expr,
         $signature_domain:expr,
-        $attempt:expr,
+        $attempt_field:ident,
         $action:expr,
         $validate:expr
     ) => {
@@ -4735,7 +4738,7 @@ macro_rules! evidence_payload {
             }
 
             fn attempt_id(&self) -> &str {
-                ($attempt)(self)
+                self.$attempt_field.as_str()
             }
 
             fn action_epoch_ms(&self) -> u64 {
@@ -4755,7 +4758,7 @@ evidence_payload!(
     EvidenceRole::RouteSemanticProfile,
     "serverware.response-observation-v2/route-semantic-profile-evidence-payload",
     "serverware.response-observation-v2/route-semantic-profile-evidence-signature",
-    |value: &RouteSemanticProfileEvidencePayload| value.attempt_id.as_str(),
+    attempt_id,
     |value: &RouteSemanticProfileEvidencePayload| value.signed_at_epoch_ms,
     validate_route_semantic_profile_payload
 );
@@ -4766,7 +4769,7 @@ evidence_payload!(
     EvidenceRole::Reserve,
     "serverware.response-observation-v2/reserve-payload",
     "serverware.response-observation-v2/reserve-signature",
-    |value: &ReserveEvidencePayload| value.attempt_id.as_str(),
+    attempt_id,
     |value: &ReserveEvidencePayload| value.reserved_at_epoch_ms,
     validate_reserve_payload
 );
@@ -4813,7 +4816,7 @@ evidence_payload!(
     EvidenceRole::DurableRecoverySeal,
     "serverware.response-observation-v2/durable-recovery-seal-payload",
     "serverware.response-observation-v2/durable-recovery-seal-signature",
-    |value: &DurableRecoverySealPayload| value.attempt_id.as_str(),
+    attempt_id,
     |value: &DurableRecoverySealPayload| value.armed_at_epoch_ms,
     validate_durable_recovery_seal_payload
 );
@@ -4824,7 +4827,7 @@ evidence_payload!(
     EvidenceRole::Dispatch,
     "serverware.response-observation-v2/dispatch-payload",
     "serverware.response-observation-v2/dispatch-signature",
-    |value: &DispatchEvidencePayload| value.attempt_id.as_str(),
+    attempt_id,
     |value: &DispatchEvidencePayload| value.authorized_at_epoch_ms,
     validate_dispatch_payload
 );
@@ -4940,7 +4943,7 @@ evidence_payload!(
     EvidenceRole::CustodyAuthority,
     "serverware.response-observation-v2/custody-authority-payload",
     "serverware.response-observation-v2/custody-authority-signature",
-    |value: &CustodyAuthorityEvidencePayload| value.attempt_id.as_str(),
+    attempt_id,
     |value: &CustodyAuthorityEvidencePayload| value.measured_at_epoch_ms,
     validate_custody_authority_payload
 );
@@ -4951,7 +4954,7 @@ evidence_payload!(
     EvidenceRole::LocalReconciliationContinuity,
     "serverware.response-observation-v2/local-reconciliation-continuity-payload",
     "serverware.response-observation-v2/local-reconciliation-continuity-signature",
-    |value: &LocalReconciliationContinuityEvidencePayload| value.attempt_id.as_str(),
+    attempt_id,
     |value: &LocalReconciliationContinuityEvidencePayload| value.signed_at_epoch_ms,
     validate_local_reconciliation_continuity_payload
 );
@@ -4962,7 +4965,7 @@ evidence_payload!(
     EvidenceRole::LocalReconciliationLedgerWitness,
     "serverware.response-observation-v2/local-reconciliation-ledger-witness-payload",
     "serverware.response-observation-v2/local-reconciliation-ledger-witness-signature",
-    |value: &LocalReconciliationLedgerWitness| value.attempt_id.as_str(),
+    attempt_id,
     |value: &LocalReconciliationLedgerWitness| value.witnessed_at_epoch_ms,
     validate_local_reconciliation_ledger_witness
 );
@@ -4973,7 +4976,7 @@ evidence_payload!(
     EvidenceRole::LocalReconciliationGenesisAbsence,
     "serverware.response-observation-v2/local-reconciliation-genesis-absence-payload",
     "serverware.response-observation-v2/local-reconciliation-genesis-absence-signature",
-    |value: &LocalReconciliationGenesisAbsenceEvidencePayload| value.attempt_id.as_str(),
+    attempt_id,
     |value: &LocalReconciliationGenesisAbsenceEvidencePayload| value.signed_at_epoch_ms,
     validate_local_reconciliation_genesis_absence_payload
 );
@@ -4984,7 +4987,7 @@ evidence_payload!(
     EvidenceRole::LocalReconciliationRecovery,
     "serverware.response-observation-v2/local-reconciliation-recovery-payload",
     "serverware.response-observation-v2/local-reconciliation-recovery-signature",
-    |value: &LocalReconciliationRecoveryEvidencePayload| value.attempt_id.as_str(),
+    attempt_id,
     |value: &LocalReconciliationRecoveryEvidencePayload| value.signed_at_epoch_ms,
     validate_local_reconciliation_recovery_payload
 );
@@ -4995,7 +4998,7 @@ evidence_payload!(
     EvidenceRole::Persistence,
     "serverware.response-observation-v2/persistence-payload",
     "serverware.response-observation-v2/persistence-signature",
-    |value: &PersistenceEvidencePayload| value.attempt_id.as_str(),
+    attempt_id,
     |value: &PersistenceEvidencePayload| value.persisted_at_epoch_ms,
     validate_persistence_payload
 );
@@ -5006,7 +5009,7 @@ evidence_payload!(
     EvidenceRole::FinalizationCheckpoint,
     "serverware.response-observation-v2/finalization-checkpoint-payload",
     "serverware.response-observation-v2/finalization-checkpoint-signature",
-    |value: &FinalizationCheckpointEvidencePayload| value.attempt_id.as_str(),
+    attempt_id,
     |value: &FinalizationCheckpointEvidencePayload| value.finalized_at_epoch_ms,
     validate_finalization_checkpoint_payload
 );
@@ -5017,7 +5020,7 @@ evidence_payload!(
     EvidenceRole::ArtifactTimeCheckpoint,
     "serverware.response-observation-v2/artifact-time-checkpoint-payload",
     "serverware.response-observation-v2/artifact-time-checkpoint-signature",
-    |value: &ArtifactTimeCheckpointEvidencePayload| value.attempt_id.as_str(),
+    attempt_id,
     |value: &ArtifactTimeCheckpointEvidencePayload| value.signed_at_epoch_ms,
     validate_artifact_time_checkpoint_payload
 );
@@ -6377,7 +6380,7 @@ fn verify_body_evidence<V: EvidenceSignatureVerifier>(
         credential_authority.last(),
         recovery_seal.as_ref(),
         dispatch.as_ref(),
-        local_reconciliation_continuity,
+        exact_local_reconciliation_continuity,
         local_reconciliation_recovery.as_ref(),
         &terminal,
         credential_authority_roots.evidence_root_sha256.as_deref(),
@@ -10399,6 +10402,7 @@ fn verify_artifact_time_checkpoint_evidence<
             signature_verification.trust_checkpoint_sha256,
         revocation_epoch: signature_verification.revocation_epoch,
         key_material_sha256: signature_verification.key_material_sha256,
+        revoked_at_epoch_ms: signature_verification.revoked_at_epoch_ms,
         _seal: VerifiedSeal,
     })
 }

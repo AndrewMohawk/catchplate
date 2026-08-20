@@ -2,7 +2,7 @@
 use crate::{
     canonical_json_bytes, decode_canonical_json,
     load_root_owned_v2_config,
-    AuthenticatedClientIdentity, AuthenticatedSessionIdentity,
+    AuthenticatedClientIdentity, V2ConsumeAndRetrieveExactParams,
     ResponseObservationV2Runtime,
     RootOwnedResponseObservationV2Config,
     V2OperationRequest,
@@ -10,6 +10,8 @@ use crate::{
     RESPONSE_OBSERVATION_V2_API_VERSION,
     RESPONSE_OBSERVATION_V2_MAX_CONTROL_BYTES,
 };
+#[cfg(target_os = "linux")]
+use super::AuthenticatedSessionIdentity;
 use std::error::Error;
 use std::path::PathBuf;
 
@@ -868,14 +870,27 @@ mod linux_runtime {
                 api_version,
                 params,
                 ..
-            } => (
-                api_version,
-                Some((
-                    params.binding.request_id.as_str(),
-                    params.binding.custody_boot_id.as_str(),
-                    params.binding.client_identity_sha256.as_str(),
-                )),
-            ),
+            } => {
+                let binding = match params {
+                    V2ConsumeAndRetrieveExactParams::Prepare {
+                        binding,
+                        ..
+                    } => (
+                        binding.request_id.as_str(),
+                        binding.custody_boot_id.as_str(),
+                        binding.client_identity_sha256.as_str(),
+                    ),
+                    V2ConsumeAndRetrieveExactParams::Retrieve {
+                        binding,
+                        ..
+                    } => (
+                        binding.request_id.as_str(),
+                        binding.custody_boot_id.as_str(),
+                        binding.client_identity_sha256.as_str(),
+                    ),
+                };
+                (api_version, Some(binding))
+            }
             Request::ResolveExactReplay { api_version, .. }
             | Request::SettleAttempt { api_version, .. } => {
                 (api_version, None)

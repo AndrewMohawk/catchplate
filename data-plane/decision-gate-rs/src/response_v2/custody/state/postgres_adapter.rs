@@ -745,7 +745,7 @@ fn bounded_read(
         }
     };
     let mut bytes = Vec::new();
-    file.by_ref()
+    Read::by_ref(&mut file)
         .take(maximum_bytes as u64 + 1)
         .read_to_end(&mut bytes)
         .map_err(|error| {
@@ -1155,7 +1155,11 @@ fn encode_parameter(value: &PgValue) -> AuthorityResult<Option<Vec<u8>>> {
             Some(value.to_string().into_bytes())
         }
         PgValue::Bool(value) => {
-            Some(if *value { b"true" } else { b"false" }.to_vec())
+            Some(if *value {
+                b"true".to_vec()
+            } else {
+                b"false".to_vec()
+            })
         }
         PgValue::Bytes(value) => {
             Some(format!("\\x{}", hex::encode(value)).into_bytes())

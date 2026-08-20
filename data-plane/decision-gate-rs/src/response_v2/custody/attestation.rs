@@ -1271,6 +1271,61 @@ pub fn verify_durable_terminal_receipt(
     service_role: CustodyServiceRole,
     receipt: &SignedDurableTerminalReceiptV1,
 ) -> Result<(), V2RuntimeError> {
+    let reconciliation_evidence_valid = match (
+        receipt.reconciliation_id.as_deref(),
+        receipt.reconciliation_artifact.as_ref(),
+        receipt.reconciliation_artifact_sha256.as_deref(),
+    ) {
+        (Some(id), Some(artifact), Some(expected_sha256)) => {
+            let payload_matches = matches!(
+                &artifact.body.payload,
+                super::super::state_authority::rpc::
+                    NestedAuthorityPayload::Reconciliation(value)
+                    if value.reconciliation_job_id.0.as_str() == id
+            );
+            artifact.validate_contract().is_ok()
+                && payload_matches
+                && artifact.body.generation_id.0
+                    == receipt.generation_id
+                && artifact.body.attempt_id.0 == receipt.attempt_id
+                && artifact.body.fence_token.0
+                    == receipt.authority_scope.fencing_token.to_string()
+                && canonical_sha256(artifact)? == expected_sha256
+        }
+        (None, None, None) => true,
+        _ => false,
+    };
+    let recovery_evidence_valid = match (
+        receipt.recovery_artifact.as_ref(),
+        receipt.recovery_artifact_sha256.as_deref(),
+    ) {
+        (Some(artifact), Some(expected_sha256)) => {
+            artifact.validate_contract().is_ok()
+                && matches!(
+                    &artifact.body.payload,
+                    super::super::state_authority::rpc::
+                        NestedAuthorityPayload::Recovery(_)
+                )
+                && artifact.body.generation_id.0
+                    == receipt.generation_id
+                && artifact.body.attempt_id.0 == receipt.attempt_id
+                && artifact.body.fence_token.0
+                    == receipt.authority_scope.fencing_token.to_string()
+                && canonical_sha256(artifact)? == expected_sha256
+        }
+        (None, None) => true,
+        _ => false,
+    };
+    let operation_evidence_valid = match receipt.operation {
+        ServiceOperationV1::Reconcile => {
+            receipt.reconciliation_artifact.is_some()
+        }
+        ServiceOperationV1::Cleanup => {
+            receipt.reconciliation_artifact.is_none()
+                && receipt.recovery_artifact.is_some()
+        }
+        _ => false,
+    };
     if receipt.api_version != SETTLEMENT_API_VERSION
         || receipt.generation_id != topology.generation_id
         || receipt.generation != topology.generation
@@ -1288,6 +1343,9 @@ pub fn verify_durable_terminal_receipt(
         || !is_sha256(&receipt.stable_resume_id)
         || !is_sha256(&receipt.terminal_state_sha256)
         || !is_sha256(&receipt.settlement_receipt_sha256)
+        || !reconciliation_evidence_valid
+        || !recovery_evidence_valid
+        || !operation_evidence_valid
     {
         return Err(V2RuntimeError::new(
             "durable_terminal_receipt_invalid",
@@ -1490,6 +1548,18 @@ fn is_sha256(value: &str) -> bool {
     value.len() == 71
         && value.starts_with("sha256:")
         && value[7..].bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn canonical_sha256<T: Serialize>(
+    value: &T,
+) -> Result<String, V2RuntimeError> {
+    let canonical = crate::canonical_json_bytes(value).map_err(|_| {
+        V2RuntimeError::new(
+            "custody_canonical_hash_invalid",
+            "signed custody evidence cannot be canonicalized",
+        )
+    })?;
+    Ok(format!("sha256:{:x}", Sha256::digest(canonical)))
 }
 
 fn verify_with_descriptor<T: Serialize>(

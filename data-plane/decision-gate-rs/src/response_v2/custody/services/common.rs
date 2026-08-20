@@ -4,7 +4,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::fd::{AsRawFd, OwnedFd};
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{
+    FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt,
+};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -1537,6 +1539,42 @@ fn sign_nested_authority_result(
                         "settlement engine did not return the closed receipt",
                     )
                 })?;
+            let reconciliation_evidence_valid = match (
+                settlement.reconciliation_id.as_deref(),
+                settlement.reconciliation_artifact.as_ref(),
+                settlement.reconciliation_artifact_sha256.as_deref(),
+            ) {
+                (Some(id), Some(artifact), Some(expected_sha256)) => {
+                    !id.is_empty()
+                        && is_sha256(expected_sha256)
+                        && canonical_sha256(artifact)?
+                            == expected_sha256
+                }
+                (None, None, None) => true,
+                _ => false,
+            };
+            let recovery_evidence_valid = match (
+                settlement.recovery_artifact.as_ref(),
+                settlement.recovery_artifact_sha256.as_deref(),
+            ) {
+                (Some(artifact), Some(expected_sha256)) => {
+                    is_sha256(expected_sha256)
+                        && canonical_sha256(artifact)?
+                            == expected_sha256
+                }
+                (None, None) => true,
+                _ => false,
+            };
+            let operation_evidence_valid = match operation {
+                ServiceOperationV1::Reconcile => {
+                    settlement.reconciliation_artifact.is_some()
+                }
+                ServiceOperationV1::Cleanup => {
+                    settlement.reconciliation_artifact.is_none()
+                        && settlement.recovery_artifact.is_some()
+                }
+                _ => false,
+            };
             if settlement.api_version
                     != super::super::protocol::SETTLEMENT_API_VERSION
                 || settlement.generation_id != request.generation_id
@@ -1555,18 +1593,27 @@ fn sign_nested_authority_result(
                 || !is_sha256(
                     &settlement.settlement_receipt_sha256,
                 )
+                || !reconciliation_evidence_valid
+                || !recovery_evidence_valid
+                || !operation_evidence_valid
             {
                 return Err(V2RuntimeError::new(
                     "settlement_result_mismatch",
                     "settlement receipt is not the exact durable terminal result",
                 ));
             }
-            let service_role =
-                if operation == ServiceOperationV1::Cleanup {
-                    CustodyServiceRole::CleanupWatchdog
-                } else {
-                    CustodyServiceRole::StateAuthority
-                };
+            let service_role = topology
+                .logical_role(signer.logical_role())
+                .map(|binding| binding.service_role)
+                .filter(|role| {
+                    *role == CustodyServiceRole::CleanupWatchdog
+                })
+                .ok_or_else(|| {
+                    V2RuntimeError::new(
+                        "settlement_signer_role_invalid",
+                        "settlement receipts require a cleanup-watchdog reconciliation or cleanup signer",
+                    )
+                })?;
             settlement.authority_scope = provider_authority_scope(
                 topology,
                 service_role,

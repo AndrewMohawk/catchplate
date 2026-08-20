@@ -4,6 +4,7 @@ use crate::{
     V2ParsedHttp11ResponseCommitmentV1,
     RESPONSE_OBSERVATION_V2_MAX_OBJECT_BYTES,
 };
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use zeroize::Zeroizing;
@@ -316,7 +317,7 @@ fn response_observation_v2_finish_http11(
         canonical_framing_sha256: String::new(),
     };
     let framing_preimage =
-        custody_canonical_json_bytes(&framing).map_err(|_| {
+        http11_canonical_json_bytes(&framing).map_err(|_| {
             "canonicalize response-observation v2 framing result"
                 .to_string()
         })?;
@@ -749,6 +750,17 @@ fn response_observation_v2_parse_chunked(
 
 fn http11_sha256_prefixed(bytes: &[u8]) -> String {
     format!("sha256:{:x}", Sha256::digest(bytes))
+}
+
+fn http11_canonical_json_bytes<T: Serialize>(
+    value: &T,
+) -> Result<Vec<u8>, serde_json::Error> {
+    serde_json::to_vec(&serde_json::to_value(value)?)
+}
+
+fn is_http_token_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric()
+        || b"!#$%&'*+-.^_`|~".contains(&byte)
 }
 
 fn http11_is_sha256_digest(value: &str) -> bool {

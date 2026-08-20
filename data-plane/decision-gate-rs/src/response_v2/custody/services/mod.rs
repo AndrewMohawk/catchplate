@@ -5,7 +5,7 @@ mod immutable_artifact_ledger;
 mod engine;
 mod policy_proof_verifier;
 mod release_attestor_publisher;
-mod router;
+pub(super) mod router;
 mod state_authority;
 
 pub(crate) use policy_proof_verifier::verify_final_envelope;

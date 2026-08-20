@@ -374,9 +374,6 @@ fn command_signer_role(
     command: &StateAuthorityCommandV1,
 ) -> &'static str {
     match command {
-        StateAuthorityCommandV1::ConsumeRelease(_) => {
-            "public-release-consumption"
-        }
         StateAuthorityCommandV1::ResolveReplay { .. } => {
             "outcome-reconciliation"
         }
@@ -405,9 +402,6 @@ fn command_deadline(
         StateAuthorityCommandV1::AllocateFence(value) => &value.deadline,
         StateAuthorityCommandV1::RevokeFence(value) => &value.deadline,
         StateAuthorityCommandV1::ObserveQuiescence(value) => {
-            &value.deadline
-        }
-        StateAuthorityCommandV1::ConsumeRelease(value) => {
             &value.deadline
         }
     };

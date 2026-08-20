@@ -490,7 +490,8 @@ fn execute_public_release_transparency(
         ));
     }
 
-    let observation_request = |suffix: &str, include_proof_material| {
+    let observation_request =
+        |suffix: &str, include_proof_material: bool| {
         AttemptStateQueryRequestV1 {
             api_version:
                 ATTEMPT_STATE_OBSERVATION_API_VERSION.to_owned(),
@@ -3166,11 +3167,11 @@ fn execute_public_settlement(
         authority_sequence: post.attempt_revision,
         settlement_receipt_sha256:
             settlement_result_sha256.clone(),
-        reconciliation_id: reconciliation_id.clone(),
+        reconciliation_id: Some(reconciliation_id.clone()),
         reconciliation_artifact:
-            reconciliation_evidence.clone(),
+            Some(reconciliation_evidence.clone()),
         reconciliation_artifact_sha256:
-            reconciliation_evidence_sha256.clone(),
+            Some(reconciliation_evidence_sha256.clone()),
         recovery_artifact: recovery_evidence.clone(),
         recovery_artifact_sha256:
             recovery_evidence_sha256.clone(),
@@ -3347,7 +3348,10 @@ fn execute_public_final_envelope_validation(
     )?;
     verify_state_mutation_receipt(
         config.custody_topology(),
-        &params.release_preparation.state_authority_receipt,
+        &params
+            .release_preparation
+            .authority_receipt
+            .state_authority_receipt,
     )?;
     if params.release_preparation.attempt_id
             != params.binding.attempt_id
@@ -3358,6 +3362,7 @@ fn execute_public_final_envelope_validation(
         || params.release_preparation.stable_resume_id
             != params.stable_resume_id
         || params.release_preparation
+            .authority_receipt
             .release_preparation_artifact
             .body
             .attempt_id
@@ -3500,6 +3505,8 @@ fn execute_public_final_envelope_validation(
         None,
         deadline_boottime_ns,
     )?;
+    let verification_artifact_sha256 =
+        canonical_sha256(&verification_artifact)?;
     let artifact_ledger_evidence = authority_envelope
         .authority_envelope
         .authority_artifacts
@@ -3520,7 +3527,7 @@ fn execute_public_final_envelope_validation(
             final_envelope:
                 authority_envelope.authority_envelope.clone(),
             final_envelope_verification:
-                verification_artifact,
+                verification_artifact.clone(),
             artifact_ledger_evidence,
         }),
     };
@@ -3637,6 +3644,10 @@ fn execute_public_final_envelope_validation(
             verification_sequence: post.attempt_revision,
             verification_result_sha256:
                 result_sha256.clone(),
+            final_envelope_verification_artifact:
+                verification_artifact,
+            final_envelope_verification_artifact_sha256:
+                verification_artifact_sha256,
             signer_logical_role:
                 proof_key.logical_role().to_owned(),
             signer_key_id: proof_key.key_id().to_owned(),
@@ -4688,7 +4699,7 @@ fn execute_inspection(
         ));
     }
     let proof_material =
-        observation.proof_material.ok_or_else(|| {
+        observation.proof_material.clone().ok_or_else(|| {
             V2RuntimeError::new(
                 "immutable_raw_inspection_proof_material_missing",
                 "state authority omitted persisted proof material",
@@ -4752,7 +4763,7 @@ fn execute_inspection(
             attempt_id: request.attempt_id.clone(),
             attempt_revision: observation.attempt_revision,
             fencing_token: observation.fencing_token,
-            stable_resume_id: observation.stable_resume_id,
+            stable_resume_id: observation.stable_resume_id.clone(),
             staged_request_object:
                 proof_material.staged_request_object,
             raw_response_object:
@@ -4805,7 +4816,8 @@ fn execute_inspection(
             inspection_sequence:
                 state.receipt.authoritative_revision,
             inspection_receipt_sha256,
-            state_authority_receipt: state.receipt,
+            state_observation: observation,
+            state_authority_receipt: Some(state.receipt),
             authority_proof_seed,
             signer_logical_role: String::new(),
             signer_key_id: String::new(),
@@ -4870,14 +4882,16 @@ fn execute_release_authorization(
                 ),
             },
         )?;
-        let expected_state = internal_attempt_state(
-            &preauthorization.mutation_binding.expected_state,
-        )?;
-        let successor_state = internal_attempt_state(
-            &preauthorization.mutation_binding.successor_state,
-        )?;
-        if expected_state != AttemptState::Observed
-            || successor_state != AttemptState::ReleasePrepared
+        if preauthorization
+                .mutation_binding
+                .expected_state
+                .as_str()
+                != AttemptState::Observed.as_str()
+            || preauthorization
+                .mutation_binding
+                .successor_state
+                .as_str()
+                != AttemptState::ReleasePrepared.as_str()
             || preauthorization.attempt_revision
                 != preauthorization
                     .mutation_binding
@@ -4949,11 +4963,12 @@ fn execute_release_authorization(
                         expected_revision: preauthorization
                             .mutation_binding
                             .expected_revision,
-                        expected_state,
+                        expected_state: AttemptState::Observed,
                         successor_revision: preauthorization
                             .mutation_binding
                             .successor_revision,
-                        successor_state,
+                        successor_state:
+                            AttemptState::ReleasePrepared,
                     },
                 ),
             None,
@@ -5226,6 +5241,46 @@ fn execute_settlement(
 ) -> Result<EngineResult, V2RuntimeError> {
     let request: SettlementRequestV1 = decode_payload(request)?;
     validate_settlement_state_intent(&request)?;
+    use super::super::super::state_authority::rpc::MutationPayload;
+    let (
+        reconciliation_id,
+        reconciliation_artifact,
+        reconciliation_artifact_sha256,
+        recovery_artifact,
+        recovery_artifact_sha256,
+    ) = match (operation, &request.state_authority_intent.payload) {
+        (ServiceOperationV1::Reconcile, MutationPayload::Reconcile(mutation)) => {
+            let artifact = mutation.reconciliation_evidence.clone();
+            let artifact_sha256 = canonical_sha256(&artifact)?;
+            (
+                Some(mutation.reconciliation_job_id.0.clone()),
+                Some(artifact),
+                Some(artifact_sha256),
+                None,
+                None,
+            )
+        }
+        (
+            ServiceOperationV1::Cleanup,
+            MutationPayload::TerminalizeExpiredAttempt(mutation),
+        ) => {
+            let artifact = mutation.recovery_evidence.clone();
+            let artifact_sha256 = canonical_sha256(&artifact)?;
+            (
+                None,
+                None,
+                None,
+                Some(artifact),
+                Some(artifact_sha256),
+            )
+        }
+        _ => {
+            return Err(V2RuntimeError::new(
+                "settlement_state_mutation_mismatch",
+                "reconciliation requires signed reconciliation evidence and cleanup requires signed deadline-recovery evidence",
+            ));
+        }
+    };
     let frame = signed_state_authority_frame(
         config,
         scoped,
@@ -5307,6 +5362,11 @@ fn execute_settlement(
             reconciled: true,
             authority_sequence: state.authoritative_revision,
             settlement_receipt_sha256: receipt_sha256,
+            reconciliation_id,
+            reconciliation_artifact,
+            reconciliation_artifact_sha256,
+            recovery_artifact,
+            recovery_artifact_sha256,
             state_authority_receipt: state,
             signer_logical_role: String::new(),
             signer_key_id: String::new(),
@@ -5411,7 +5471,7 @@ fn validate_settlement_state_intent(
     ) {
         return Err(V2RuntimeError::new(
             "settlement_state_mutation_mismatch",
-            "settlement accepts only reconciliation or durable deadline terminalization",
+            "settlement requires independently signed reconciliation or deadline-recovery evidence",
         ));
     }
     Ok(())

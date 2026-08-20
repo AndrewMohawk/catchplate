@@ -498,7 +498,12 @@ fn send_frame_with_fds(
     message.msg_iov = &mut iovec;
     message.msg_iovlen = 1;
     message.msg_control = ancillary.as_mut_ptr().cast();
-    message.msg_controllen = ancillary_bytes;
+    message.msg_controllen = ancillary_bytes.try_into().map_err(|_| {
+        V2RuntimeError::new(
+            "custody_service_ancillary_overflow",
+            "service descriptor ancillary size exceeds native msg_controllen",
+        )
+    })?;
     let header = unsafe { libc::CMSG_FIRSTHDR(&message) };
     if header.is_null() {
         return Err(V2RuntimeError::new(
@@ -509,9 +514,7 @@ fn send_frame_with_fds(
     unsafe {
         (*header).cmsg_level = libc::SOL_SOCKET;
         (*header).cmsg_type = libc::SCM_RIGHTS;
-        (*header).cmsg_len =
-            usize::try_from(libc::CMSG_LEN(payload_bytes))
-                .expect("CMSG_LEN fits usize");
+        (*header).cmsg_len = libc::CMSG_LEN(payload_bytes);
         std::ptr::copy_nonoverlapping(
             raw_fds.as_ptr(),
             libc::CMSG_DATA(header).cast::<RawFd>(),
@@ -594,7 +597,12 @@ fn receive_prefix_with_fds(
     message.msg_iov = &mut iovec;
     message.msg_iovlen = 1;
     message.msg_control = ancillary.as_mut_ptr().cast();
-    message.msg_controllen = ancillary_bytes;
+    message.msg_controllen = ancillary_bytes.try_into().map_err(|_| {
+        V2RuntimeError::new(
+            "custody_service_ancillary_overflow",
+            "service receive ancillary size exceeds native msg_controllen",
+        )
+    })?;
     let received = unsafe {
         libc::recvmsg(
             stream.as_raw_fd(),
@@ -602,9 +610,16 @@ fn receive_prefix_with_fds(
             libc::MSG_DONTWAIT | libc::MSG_CMSG_CLOEXEC,
         )
     };
+    let returned_ancillary = usize::try_from(message.msg_controllen)
+        .map_err(|_| {
+            V2RuntimeError::new(
+                "custody_service_ancillary_receive_failed",
+                "service returned an unsupported ancillary size",
+            )
+        })?;
     if received <= 0
         || message.msg_flags & libc::MSG_CTRUNC != 0
-        || message.msg_controllen > ancillary_bytes
+        || returned_ancillary > ancillary_bytes
     {
         return Err(V2RuntimeError::new(
             "custody_service_ancillary_receive_failed",
@@ -619,7 +634,7 @@ fn receive_prefix_with_fds(
     })?;
     let fds = parse_rights_ancillary(
         ancillary.as_ptr().cast::<u8>(),
-        message.msg_controllen,
+        returned_ancillary,
         max_fds,
     )?;
     Ok((received, fds))
@@ -649,17 +664,23 @@ fn parse_rights_ancillary(
                 "service ancillary header length is unsupported",
             )
         })?;
+    let header_length = usize::try_from(header.cmsg_len).map_err(|_| {
+        V2RuntimeError::new(
+            "custody_service_ancillary_invalid",
+            "service ancillary record length exceeds usize",
+        )
+    })?;
     if header.cmsg_level != libc::SOL_SOCKET
         || header.cmsg_type != libc::SCM_RIGHTS
-        || header.cmsg_len < data_offset
-        || header.cmsg_len > returned_length
+        || header_length < data_offset
+        || header_length > returned_length
     {
         return Err(V2RuntimeError::new(
             "custody_service_ancillary_invalid",
             "service ancillary record is not exact SCM_RIGHTS",
         ));
     }
-    let payload_length = header.cmsg_len - data_offset;
+    let payload_length = header_length - data_offset;
     let descriptor_count = payload_length / size_of::<RawFd>();
     let expected_space = usize::try_from(unsafe {
         libc::CMSG_SPACE(

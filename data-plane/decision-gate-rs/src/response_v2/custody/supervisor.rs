@@ -395,6 +395,9 @@ mod linux_runtime {
     const AT_EMPTY_PATH_FLAG: libc::c_int = 0x1000;
     const STATX_BASIC_STATS_MASK: libc::c_uint = 0x0000_07ff;
     const STATX_ATTR_VERITY_FLAG: u64 = 0x0010_0000;
+    const STATX_BUFFER_BYTES: usize = 256;
+    const STATX_ATTRIBUTES_OFFSET: usize = 8;
+    const STATX_ATTRIBUTES_MASK_OFFSET: usize = 56;
     const IMA_XATTR_NAME: &[u8] = b"security.ima\0";
     const CLONE_PIDFD_FLAG: u64 = 0x0000_1000;
 
@@ -411,6 +414,20 @@ mod linux_runtime {
         set_tid: u64,
         set_tid_size: u64,
         cgroup: u64,
+    }
+
+    #[repr(C, align(8))]
+    struct StatxBuffer {
+        bytes: [u8; STATX_BUFFER_BYTES],
+    }
+
+    impl StatxBuffer {
+        fn native_u64_at(&self, offset: usize) -> u64 {
+            let mut bytes = [0u8; size_of::<u64>()];
+            let end = offset + size_of::<u64>();
+            bytes.copy_from_slice(&self.bytes[offset..end]);
+            u64::from_ne_bytes(bytes)
+        }
     }
 
     pub(super) fn run(
@@ -1200,14 +1217,14 @@ mod linux_runtime {
         message.msg_iov = &mut iovec;
         message.msg_iovlen = 1;
         message.msg_control = ancillary_base.cast();
-        message.msg_controllen = ancillary_capacity;
+        set_msg_controllen(&mut message, ancillary_capacity)?;
         // SAFETY: all msghdr buffers are valid for the duration of recvmsg.
         let received =
             unsafe { libc::recvmsg(socket, &mut message, libc::MSG_CMSG_CLOEXEC) };
         if received < 0 {
             return Err(io::Error::last_os_error());
         }
-        let returned_ancillary = message.msg_controllen;
+        let returned_ancillary = msg_controllen(&message)?;
         if message.msg_flags & libc::MSG_CTRUNC != 0 {
             if message.msg_control == ancillary_base.cast() {
                 let cleanup_length =
@@ -1453,7 +1470,11 @@ mod linux_runtime {
             // SAFETY: address alignment and a complete in-region header were
             // proven before this dereference.
             let current = unsafe { &*header };
-            let current_length = current.cmsg_len;
+            let Ok(current_length) = usize::try_from(current.cmsg_len) else {
+                scan.violation =
+                    Some("ancillary header length exceeds usize");
+                break;
+            };
             if current_length < minimum_length {
                 scan.violation =
                     Some("ancillary header is shorter than CMSG_LEN(0)");
@@ -1709,7 +1730,10 @@ mod linux_runtime {
             ancillary =
                 aligned_ancillary_buffer(cmsg_space(payload_length)?);
             message.msg_control = ancillary.as_mut_ptr().cast();
-            message.msg_controllen = cmsg_space(payload_length)?;
+            set_msg_controllen(
+                &mut message,
+                cmsg_space(payload_length)?,
+            )?;
             // SAFETY: ancillary contains enough CMSG_SPACE for this payload.
             let header = unsafe { libc::CMSG_FIRSTHDR(&message) };
             if header.is_null() {
@@ -1719,17 +1743,21 @@ mod linux_runtime {
                 ));
             }
             // SAFETY: header and payload lie within ancillary.
+            let header_length = cmsg_len(payload_length)?;
+            set_cmsg_len(header, header_length)?;
             unsafe {
                 (*header).cmsg_level = libc::SOL_SOCKET;
                 (*header).cmsg_type = libc::SCM_RIGHTS;
-                (*header).cmsg_len = cmsg_len(payload_length)?;
                 std::ptr::copy_nonoverlapping(
                     files.as_ptr(),
                     libc::CMSG_DATA(header).cast::<RawFd>(),
                     files.len(),
                 );
             }
-            message.msg_controllen = cmsg_space(payload_length)?;
+            set_msg_controllen(
+                &mut message,
+                cmsg_space(payload_length)?,
+            )?;
         }
         // SAFETY: msghdr and all referenced buffers remain valid for sendmsg.
         let sent =
@@ -1755,6 +1783,45 @@ mod linux_runtime {
         })?;
         // SAFETY: CMSG_SPACE is a pure size calculation.
         Ok(unsafe { libc::CMSG_SPACE(payload) as usize })
+    }
+
+    fn set_msg_controllen(
+        message: &mut libc::msghdr,
+        length: usize,
+    ) -> io::Result<()> {
+        message.msg_controllen = length.try_into().map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "ancillary region exceeds native msg_controllen",
+            )
+        })?;
+        Ok(())
+    }
+
+    fn msg_controllen(message: &libc::msghdr) -> io::Result<usize> {
+        usize::try_from(message.msg_controllen).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "kernel msg_controllen exceeds usize",
+            )
+        })
+    }
+
+    fn set_cmsg_len(
+        header: *mut libc::cmsghdr,
+        length: usize,
+    ) -> io::Result<()> {
+        // SAFETY: callers pass a non-null header inside a CMSG_SPACE-bounded
+        // ancillary buffer.
+        unsafe {
+            (*header).cmsg_len = length.try_into().map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "ancillary record exceeds native cmsg_len",
+                )
+            })?;
+        }
+        Ok(())
     }
 
     fn aligned_ancillary_buffer(byte_length: usize) -> Vec<libc::size_t> {
@@ -2811,18 +2878,21 @@ mod linux_runtime {
     }
 
     fn executable_has_fs_verity(executable: &File) -> io::Result<bool> {
-        // SAFETY: zeroed statx is writable and initialized by statx.
-        let mut status: libc::statx = unsafe { zeroed() };
+        let mut status = StatxBuffer {
+            bytes: [0u8; STATX_BUFFER_BYTES],
+        };
         let empty_path = b"\0";
         // SAFETY: executable is live, empty_path is NUL-terminated, and
-        // AT_EMPTY_PATH asks statx to inspect that descriptor.
+        // AT_EMPTY_PATH asks statx to inspect that descriptor. StatxBuffer is
+        // the Linux ABI's fixed 256-byte, eight-byte-aligned output region.
         let result = unsafe {
-            libc::statx(
+            libc::syscall(
+                libc::SYS_statx,
                 executable.as_raw_fd(),
                 empty_path.as_ptr().cast(),
                 AT_EMPTY_PATH_FLAG | libc::AT_SYMLINK_NOFOLLOW,
                 STATX_BASIC_STATS_MASK,
-                &mut status,
+                &mut status as *mut StatxBuffer,
             )
         };
         if result != 0 {
@@ -2837,8 +2907,12 @@ mod linux_runtime {
             }
             return Err(error);
         }
-        Ok(status.stx_attributes_mask & STATX_ATTR_VERITY_FLAG != 0
-            && status.stx_attributes & STATX_ATTR_VERITY_FLAG != 0)
+        let attributes =
+            status.native_u64_at(STATX_ATTRIBUTES_OFFSET);
+        let attributes_mask =
+            status.native_u64_at(STATX_ATTRIBUTES_MASK_OFFSET);
+        Ok(attributes_mask & STATX_ATTR_VERITY_FLAG != 0
+            && attributes & STATX_ATTR_VERITY_FLAG != 0)
     }
 
     fn read_ima_xattr(executable: &File) -> io::Result<Option<Vec<u8>>> {

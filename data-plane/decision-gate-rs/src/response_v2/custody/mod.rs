@@ -9491,7 +9491,12 @@ fn send_provider_frame_raw_fds(
     if !raw_fds.is_empty() {
         message.msg_control =
             ancillary_words.as_mut_ptr().cast();
-        message.msg_controllen = ancillary_bytes;
+        message.msg_controllen = ancillary_bytes.try_into().map_err(|_| {
+            V2RuntimeError::new(
+                "provider_rpc_ancillary_overflow",
+                "provider ancillary size exceeds native msg_controllen",
+            )
+        })?;
         // SAFETY: ancillary storage is suitably aligned and sized by
         // CMSG_SPACE for the exact descriptor payload.
         let header = unsafe { libc::CMSG_FIRSTHDR(&message) };
@@ -9516,9 +9521,7 @@ fn send_provider_frame_raw_fds(
         unsafe {
             (*header).cmsg_level = libc::SOL_SOCKET;
             (*header).cmsg_type = libc::SCM_RIGHTS;
-            (*header).cmsg_len =
-                usize::try_from(libc::CMSG_LEN(payload_bytes))
-                    .expect("CMSG_LEN fits usize");
+            (*header).cmsg_len = libc::CMSG_LEN(payload_bytes);
             std::ptr::copy_nonoverlapping(
                 raw_fds.as_ptr(),
                 libc::CMSG_DATA(header).cast::<RawFd>(),
@@ -9681,7 +9684,12 @@ fn receive_provider_frame(
     message.msg_iov = &mut iovec;
     message.msg_iovlen = 1;
     message.msg_control = ancillary.as_mut_ptr().cast();
-    message.msg_controllen = ancillary_bytes;
+    message.msg_controllen = ancillary_bytes.try_into().map_err(|_| {
+        V2RuntimeError::new(
+            "provider_rpc_ancillary_overflow",
+            "provider receive ancillary size exceeds native msg_controllen",
+        )
+    })?;
     // SAFETY: message points to valid writable frame and ancillary buffers.
     let received = unsafe {
         libc::recvmsg(
@@ -9711,7 +9719,14 @@ fn receive_provider_frame(
             "provider frame length is invalid",
         )
     })?;
-    if message.msg_controllen > ancillary_bytes {
+    let returned_ancillary = usize::try_from(message.msg_controllen)
+        .map_err(|_| {
+            V2RuntimeError::new(
+                "provider_rpc_ancillary_invalid",
+                "kernel returned an unsupported ancillary length",
+            )
+        })?;
+    if returned_ancillary > ancillary_bytes {
         return Err(V2RuntimeError::new(
             "provider_rpc_ancillary_invalid",
             "kernel returned ancillary length beyond its buffer",
@@ -9719,7 +9734,7 @@ fn receive_provider_frame(
     }
     let delivered_fds = parse_provider_rights_ancillary(
         ancillary.as_ptr().cast::<u8>(),
-        message.msg_controllen,
+        returned_ancillary,
     )?;
     if message.msg_flags & libc::MSG_CTRUNC != 0 {
         drop(delivered_fds);
@@ -9816,14 +9831,21 @@ fn parse_provider_rights_ancillary(
         }
         // SAFETY: every byte of header was initialized above.
         let header = unsafe { header.assume_init() };
-        if header.cmsg_len < data_offset {
+        let header_length = usize::try_from(header.cmsg_len)
+            .map_err(|_| {
+                V2RuntimeError::new(
+                    "provider_rpc_ancillary_invalid",
+                    "provider ancillary header length exceeds usize",
+                )
+            })?;
+        if header_length < data_offset {
             return Err(V2RuntimeError::new(
                 "provider_rpc_ancillary_invalid",
                 "provider ancillary header is shorter than CMSG_LEN(0)",
             ));
         }
         let cmsg_end =
-            offset.checked_add(header.cmsg_len).ok_or_else(|| {
+            offset.checked_add(header_length).ok_or_else(|| {
                 V2RuntimeError::new(
                     "provider_rpc_ancillary_invalid",
                     "provider ancillary length overflowed",
@@ -9838,8 +9860,7 @@ fn parse_provider_rights_ancillary(
                 "provider ancillary record is out of bounds or is not exact SOL_SOCKET/SCM_RIGHTS",
             ));
         }
-        let payload_length = header
-            .cmsg_len
+        let payload_length = header_length
             .checked_sub(data_offset)
             .ok_or_else(|| {
                 V2RuntimeError::new(

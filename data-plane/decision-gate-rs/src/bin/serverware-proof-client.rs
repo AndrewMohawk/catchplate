@@ -3547,7 +3547,8 @@ fn validated_control_plane_authorization_receipt(
             "control-plane authorization receipt request context mismatch".to_string(),
         );
     }
-    let nonce = required_string(&Value::Object(request.clone()), "nonce")?;
+    let request_value = Value::Object(request.clone());
+    let nonce = required_string(&request_value, "nonce")?;
     let nonce_bytes = decode_base64url(nonce, "authorization receipt nonce", 32)?;
     if nonce_bytes.len() != 32 || general_purpose::URL_SAFE_NO_PAD.encode(&nonce_bytes) != nonce {
         return Err("control-plane authorization receipt nonce is invalid".to_string());

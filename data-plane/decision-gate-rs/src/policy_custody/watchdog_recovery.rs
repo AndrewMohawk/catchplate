@@ -1214,12 +1214,12 @@ fn verify_cleanup_result<V: CurrentSignatureAuthority>(
             },
         ) => {
             !digest_is_zero(&reap_observation_sha256)
-                && reaped_at_boottime_nanos
+                && *reaped_at_boottime_nanos
                     >= consumed
                         .persisted
                         .statement
                         .consumed_at_boottime_nanos
-                && reaped_at_boottime_nanos
+                && *reaped_at_boottime_nanos
                     < owner.cleanup_deadline.absolute_nanos()
         }
         (CleanupAction::ReapWorker, _) => false,
@@ -1238,12 +1238,12 @@ fn verify_cleanup_result<V: CurrentSignatureAuthority>(
             },
         ) => {
             !digest_is_zero(&cgroup_events_sha256)
-                && observed_at_boottime_nanos
+                && *observed_at_boottime_nanos
                     >= consumed
                         .persisted
                         .statement
                         .consumed_at_boottime_nanos
-                && observed_at_boottime_nanos
+                && *observed_at_boottime_nanos
                     < owner.cleanup_deadline.absolute_nanos()
         }
         (CleanupAction::KillCgroup, _) => false,

@@ -406,7 +406,7 @@ impl BoundedCanonicalRpcClient {
         loop {
             match completed.try_recv() {
                 Ok(result) => {
-                    let response = decode_canonical_frame(&result?)
+                    let response: ProductionRpcResponseV4 = decode_canonical_frame(&result?)
                         .map_err(|_| ShadowError::CustodyUnavailable)?;
                     response
                         .validate_for_request(request)

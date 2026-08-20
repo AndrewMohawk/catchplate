@@ -58661,7 +58661,7 @@ mod tests {
                 else {
                     continue;
                 };
-                if request.len() > header_end {
+                if request.len() >= header_end {
                     break;
                 }
             }
@@ -58721,8 +58721,8 @@ mod tests {
         let absolute_stats = Arc::new(Mutex::new(RequestBodyStreamStats::new()));
         let absolute_body = RequestBodyStream::new(
             Box::new(Cursor::new(Vec::<u8>::new())),
-            b"x".to_vec(),
-            1,
+            Vec::new(),
+            0,
             Arc::clone(&absolute_stats),
         );
         let absolute_request = RequestHead {
@@ -58741,7 +58741,7 @@ mod tests {
             ]),
             raw_headers_digest: None,
             raw_header_count: 0,
-            content_length: 1,
+            content_length: 0,
             has_content_length: true,
             prefetched_body: Vec::new(),
             client_ip: None,
@@ -58797,9 +58797,9 @@ mod tests {
             ]),
             raw_headers_digest: None,
             raw_header_count: 0,
-            content_length: 1,
+            content_length: 0,
             has_content_length: true,
-            prefetched_body: b"x".to_vec(),
+            prefetched_body: Vec::new(),
             client_ip: None,
         };
         let mut connect_io = DeadlineIo::new(

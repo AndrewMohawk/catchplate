@@ -9521,7 +9521,14 @@ fn send_provider_frame_raw_fds(
         unsafe {
             (*header).cmsg_level = libc::SOL_SOCKET;
             (*header).cmsg_type = libc::SCM_RIGHTS;
-            (*header).cmsg_len = libc::CMSG_LEN(payload_bytes);
+            (*header).cmsg_len = libc::CMSG_LEN(payload_bytes)
+                .try_into()
+                .map_err(|_| {
+                    V2RuntimeError::new(
+                        "provider_rpc_ancillary_overflow",
+                        "provider descriptor ancillary length exceeds native cmsg_len",
+                    )
+                })?;
             std::ptr::copy_nonoverlapping(
                 raw_fds.as_ptr(),
                 libc::CMSG_DATA(header).cast::<RawFd>(),

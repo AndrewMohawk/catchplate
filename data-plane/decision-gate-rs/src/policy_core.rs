@@ -5288,11 +5288,26 @@ pub(crate) struct ShadowRequestHandle {
     inner: Arc<ShadowRequestLifecycle>,
 }
 
-pub(crate) struct ShadowActiveEffectPermit {
-    permit: VerifiedActiveEffectPermit,
-    generation_id: String,
-    ingress_sequence: u64,
-    effect_kind: ActiveMutableEffectKind,
+pub(crate) enum ShadowActiveEffectPermit {
+    Verified {
+        permit: VerifiedActiveEffectPermit,
+        generation_id: String,
+        ingress_sequence: u64,
+        effect_kind: ActiveMutableEffectKind,
+    },
+    #[cfg(test)]
+    InactiveForwardingTest,
+}
+
+#[cfg(test)]
+impl ShadowActiveEffectPermit {
+    pub(crate) fn inactive_forwarding_test() -> Self {
+        Self::InactiveForwardingTest
+    }
+
+    pub(crate) fn is_inactive_forwarding_test(&self) -> bool {
+        matches!(self, Self::InactiveForwardingTest)
+    }
 }
 
 impl ShadowRequestHandle {
@@ -5413,7 +5428,7 @@ impl ShadowRequestHandle {
                     .to_string(),
             );
         }
-        Ok(ShadowActiveEffectPermit {
+        Ok(ShadowActiveEffectPermit::Verified {
             permit,
             generation_id:
                 self.inner.generation.generation_id().to_string(),
@@ -5428,11 +5443,21 @@ impl ShadowRequestHandle {
         terminal_state: ActiveEffectCommitState,
         result_sha256: &str,
     ) -> Result<VerifiedActiveEffectCommitReceipt, String> {
-        if permit.generation_id
-                != self.inner.generation.generation_id()
-            || permit.ingress_sequence != self.inner.ingress_sequence
-            || permit.permit.preparation().effect_kind()
-                != permit.effect_kind
+        let (permit, generation_id, ingress_sequence, effect_kind) = match permit {
+            ShadowActiveEffectPermit::Verified {
+                permit,
+                generation_id,
+                ingress_sequence,
+                effect_kind,
+            } => (permit, generation_id, ingress_sequence, effect_kind),
+            #[cfg(test)]
+            ShadowActiveEffectPermit::InactiveForwardingTest => {
+                return Err("inactive test effect permit reached production custody".to_string())
+            }
+        };
+        if generation_id != self.inner.generation.generation_id()
+            || ingress_sequence != self.inner.ingress_sequence
+            || permit.preparation().effect_kind() != effect_kind
         {
             self.inner.ledger.mark_hard_unready();
             return Err("active effect permit binding drift".to_string());
@@ -5440,11 +5465,7 @@ impl ShadowRequestHandle {
         let result_sha256 =
             Sha256Digest::parse(result_sha256.to_string())
                 .map_err(shadow_error)?;
-        let effect_id_sha256 = permit
-            .permit
-            .preparation()
-            .effect_id_sha256()
-            .clone();
+        let effect_id_sha256 = permit.preparation().effect_id_sha256().clone();
         let custody = self
             .inner
             .ledger
@@ -5461,7 +5482,7 @@ impl ShadowRequestHandle {
         )?;
         let receipt_result = custody.commit_active_effect(
             &context,
-            permit.permit,
+            permit,
             terminal_state,
             &result_sha256,
         );

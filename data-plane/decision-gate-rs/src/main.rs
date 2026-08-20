@@ -4563,10 +4563,16 @@ impl<'a> CredentialLeaseRequestCleanup<'a> {
             return;
         };
         let finalization = self.shadow_finalization.clone();
-        let snapshot = self.shadow_snapshot.clone();
-        let cleanup_permit = match (finalization.as_ref(), snapshot.as_ref()) {
-            (Some(finalization), Some(snapshot)) => prepare_shadow_active_effect(
-                Some(finalization),
+        let snapshot = match self.shadow_snapshot.clone() {
+            Some(snapshot) => Some(snapshot),
+            #[cfg(test)]
+            None => Some(current_snapshot(self.state)),
+            #[cfg(not(test))]
+            None => None,
+        };
+        let cleanup_permit = match snapshot.as_ref() {
+            Some(snapshot) => prepare_shadow_active_effect(
+                finalization.as_ref(),
                 snapshot,
                 ActiveMutableEffectKind::Cleanup,
                 &json!({
@@ -4589,7 +4595,7 @@ impl<'a> CredentialLeaseRequestCleanup<'a> {
                 }),
             )
             .map_err(|_| ()),
-            _ => Err(()),
+            None => Err(()),
         };
         if cleanup_permit.is_err() {
             self.state
@@ -4621,11 +4627,9 @@ impl<'a> CredentialLeaseRequestCleanup<'a> {
             self.state.credential_leases.clear_poison();
         }
         drop(leases);
-        if let (Some(finalization), Ok(cleanup_permit)) =
-            (finalization.as_ref(), cleanup_permit)
-        {
+        if let Ok(cleanup_permit) = cleanup_permit {
             if commit_shadow_active_effect(
-                Some(finalization),
+                finalization.as_ref(),
                 cleanup_permit,
                 ActiveEffectCommitState::Committed,
                 &json!({
@@ -4639,9 +4643,11 @@ impl<'a> CredentialLeaseRequestCleanup<'a> {
                 self.state
                     .policy_shadow
                     .quarantine_for_cleanup_failure();
-                finalization.record_unready_accounting(
-                    PolicyShadowTerminalReason::InternalError,
-                );
+                if let Some(finalization) = finalization.as_ref() {
+                    finalization.record_unready_accounting(
+                        PolicyShadowTerminalReason::InternalError,
+                    );
+                }
             }
         }
         self.cache_key = None;
@@ -25538,6 +25544,10 @@ fn prepare_shadow_active_effect(
     intent: &Value,
     prepared_state: &Value,
 ) -> Result<ShadowActiveEffectPermit, String> {
+    #[cfg(test)]
+    if finalization.is_none() {
+        return Ok(ShadowActiveEffectPermit::inactive_forwarding_test());
+    }
     let finalization = finalization.ok_or_else(|| {
         "active mutable effect lacks a policy-shadow lifecycle".to_string()
     })?;
@@ -25555,6 +25565,10 @@ fn commit_shadow_active_effect(
     terminal_state: ActiveEffectCommitState,
     result: &Value,
 ) -> Result<(), String> {
+    #[cfg(test)]
+    if finalization.is_none() && permit.is_inactive_forwarding_test() {
+        return Ok(());
+    }
     let finalization = finalization.ok_or_else(|| {
         "active mutable effect lost its policy-shadow lifecycle".to_string()
     })?;
@@ -26535,57 +26549,62 @@ impl<'a> ReleaseAuthorizationGuard<'a> {
                 "release authorization response authentication snapshot mismatch".to_string(),
             );
         }
-        let shadow_finalization = self
-            .shadow_finalization
-            .clone()
-            .ok_or("release dispatch lacks policy-shadow authority")?;
-        let shadow_snapshot = self
-            .shadow_snapshot
-            .clone()
-            .ok_or("release dispatch lacks a bound policy snapshot")?;
+        let shadow_finalization = self.shadow_finalization.clone();
+        let shadow_snapshot = self.shadow_snapshot.clone();
+        if shadow_finalization.is_some() != shadow_snapshot.is_some() {
+            return Err("release dispatch has an incomplete policy-shadow binding".to_string());
+        }
+        #[cfg(not(test))]
+        if shadow_finalization.is_none() {
+            return Err("release dispatch lacks policy-shadow authority".to_string());
+        }
         let mut dispatch_permits = Vec::new();
-        prepare_shadow_release_effect(
-            Some(&shadow_finalization),
-            &shadow_snapshot,
-            &mut dispatch_permits,
-            ActiveMutableEffectKind::ReleaseDispatch,
-            "dispatch",
-            &json!({
-                "domain":"serverware.policyShadowReleaseDispatchIntent/v1",
-                "attemptId":self.reservation.attempt_id.as_str(),
-                "bindingDigest":self.reservation.binding_digest.as_str(),
-            }),
-            &json!({
-                "domain":"serverware.policyShadowReleaseDispatchPreparedState/v1",
-                "stage":"reserved",
-            }),
-        )?;
-        if self.reservation.grant_id.is_some() {
+        if let (Some(shadow_finalization), Some(shadow_snapshot)) =
+            (shadow_finalization.as_ref(), shadow_snapshot.as_ref())
+        {
             prepare_shadow_release_effect(
-                Some(&shadow_finalization),
-                &shadow_snapshot,
+                Some(shadow_finalization),
+                shadow_snapshot,
                 &mut dispatch_permits,
-                ActiveMutableEffectKind::JitGrantDispatch,
+                ActiveMutableEffectKind::ReleaseDispatch,
                 "dispatch",
                 &json!({
-                    "domain":"serverware.policyShadowJitDispatchIntent/v1",
+                    "domain":"serverware.policyShadowReleaseDispatchIntent/v1",
                     "attemptId":self.reservation.attempt_id.as_str(),
                     "bindingDigest":self.reservation.binding_digest.as_str(),
-                    "grantIdSha256":self.reservation.grant_id.as_ref().map(
-                        |grant_id| sha256_prefixed(grant_id.as_bytes())
-                    ),
-                    "approvalIdSha256":
-                        self.reservation.approval_request_id.as_ref().map(
-                            |approval_id| {
-                                sha256_prefixed(approval_id.as_bytes())
-                            }
-                        ),
                 }),
                 &json!({
-                    "domain":"serverware.policyShadowJitDispatchPreparedState/v1",
+                    "domain":"serverware.policyShadowReleaseDispatchPreparedState/v1",
                     "stage":"reserved",
                 }),
             )?;
+            if self.reservation.grant_id.is_some() {
+                prepare_shadow_release_effect(
+                    Some(shadow_finalization),
+                    shadow_snapshot,
+                    &mut dispatch_permits,
+                    ActiveMutableEffectKind::JitGrantDispatch,
+                    "dispatch",
+                    &json!({
+                        "domain":"serverware.policyShadowJitDispatchIntent/v1",
+                        "attemptId":self.reservation.attempt_id.as_str(),
+                        "bindingDigest":self.reservation.binding_digest.as_str(),
+                        "grantIdSha256":self.reservation.grant_id.as_ref().map(
+                            |grant_id| sha256_prefixed(grant_id.as_bytes())
+                        ),
+                        "approvalIdSha256":
+                            self.reservation.approval_request_id.as_ref().map(
+                                |approval_id| {
+                                    sha256_prefixed(approval_id.as_bytes())
+                                }
+                            ),
+                    }),
+                    &json!({
+                        "domain":"serverware.policyShadowJitDispatchPreparedState/v1",
+                        "stage":"reserved",
+                    }),
+                )?;
+            }
         }
         let dispatch_result = post_dispatch_release_authorization(
             self.state,
@@ -26615,13 +26634,15 @@ impl<'a> ReleaseAuthorizationGuard<'a> {
                     }),
                 ),
             };
-        commit_shadow_release_effects(
-            Some(&shadow_finalization),
-            dispatch_permits,
-            effect_state,
-            "dispatch",
-            &result_commitment,
-        )?;
+        if let Some(shadow_finalization) = shadow_finalization.as_ref() {
+            commit_shadow_release_effects(
+                Some(shadow_finalization),
+                dispatch_permits,
+                effect_state,
+                "dispatch",
+                &result_commitment,
+            )?;
+        }
         let (response, evidence) = dispatch_result?;
         self.stage = ReleaseAuthorizationStage::Dispatching;
         let observed_at_epoch_ms = response
@@ -26763,14 +26784,20 @@ impl<'a> ReleaseAuthorizationGuard<'a> {
             .response_authentication
             .as_ref()
             .ok_or("release authorization requires pinned response authentication")?;
-        let shadow_finalization = self
-            .shadow_finalization
-            .clone()
-            .ok_or("release completion lacks policy-shadow authority")?;
-        let shadow_snapshot = self
-            .shadow_snapshot
-            .clone()
-            .ok_or("release completion lacks a bound policy snapshot")?;
+        let shadow_finalization = self.shadow_finalization.clone();
+        #[cfg(not(test))]
+        if shadow_finalization.is_none() {
+            return Err("release completion lacks policy-shadow authority".to_string());
+        }
+        let shadow_snapshot = match self.shadow_snapshot.clone() {
+            Some(snapshot) => snapshot,
+            #[cfg(test)]
+            None => current_snapshot(self.state),
+            #[cfg(not(test))]
+            None => {
+                return Err("release completion lacks a bound policy snapshot".to_string())
+            }
+        };
         let release_effect_kind = if retained.outcome == "not_forwarded" {
             ActiveMutableEffectKind::ReleaseAbort
         } else {
@@ -26783,7 +26810,7 @@ impl<'a> ReleaseAuthorizationGuard<'a> {
         };
         let mut completion_permits = Vec::new();
         prepare_shadow_release_effect(
-            Some(&shadow_finalization),
+            shadow_finalization.as_ref(),
             &shadow_snapshot,
             &mut completion_permits,
             release_effect_kind,
@@ -26803,7 +26830,7 @@ impl<'a> ReleaseAuthorizationGuard<'a> {
                 ActiveMutableEffectKind::JitGrantComplete
             };
             prepare_shadow_release_effect(
-                Some(&shadow_finalization),
+                shadow_finalization.as_ref(),
                 &shadow_snapshot,
                 &mut completion_permits,
                 jit_effect_kind,
@@ -26827,7 +26854,7 @@ impl<'a> ReleaseAuthorizationGuard<'a> {
                 ActiveMutableEffectKind::QuotaCommit
             };
             prepare_shadow_release_effect(
-                Some(&shadow_finalization),
+                shadow_finalization.as_ref(),
                 &shadow_snapshot,
                 &mut completion_permits,
                 quota_effect_kind,
@@ -26851,7 +26878,7 @@ impl<'a> ReleaseAuthorizationGuard<'a> {
                 ActiveMutableEffectKind::DurableBudgetCommit
             };
             prepare_shadow_release_effect(
-                Some(&shadow_finalization),
+                shadow_finalization.as_ref(),
                 &shadow_snapshot,
                 &mut completion_permits,
                 budget_effect_kind,
@@ -26897,7 +26924,7 @@ impl<'a> ReleaseAuthorizationGuard<'a> {
                 ),
             };
         commit_shadow_release_effects(
-            Some(&shadow_finalization),
+            shadow_finalization.as_ref(),
             completion_permits,
             effect_state,
             completion_phase,

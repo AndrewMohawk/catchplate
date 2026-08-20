@@ -564,7 +564,7 @@ mod tests {
             "completionOutcome":null,
             "retryAfterSeconds":0,
             "quotas":[],
-            "store":{"backend":"sqlite","ha":false},
+            "store":{"backend":"sqlite","ha":true},
         }))
         .expect("dispatch response body");
         let response_nonce = general_purpose::URL_SAFE_NO_PAD.encode([13u8; 32]);

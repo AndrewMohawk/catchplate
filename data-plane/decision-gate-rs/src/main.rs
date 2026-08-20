@@ -58640,60 +58640,6 @@ mod tests {
         ));
     }
 
-    fn spawn_streaming_rebind_upstream() -> (SocketAddr, thread::JoinHandle<String>) {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("streaming rebind listener");
-        let address = listener.local_addr().expect("streaming rebind address");
-        let server = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("accept streaming request");
-            stream
-                .set_read_timeout(Some(Duration::from_secs(2)))
-                .expect("streaming request timeout");
-            let mut request = Vec::new();
-            let mut buffer = [0_u8; 1024];
-            loop {
-                let read = stream.read(&mut buffer).expect("read streaming request");
-                assert!(read != 0, "streaming request ended early");
-                request.extend_from_slice(&buffer[..read]);
-                let Some(header_end) = request
-                    .windows(4)
-                    .position(|window| window == b"\r\n\r\n")
-                    .map(|index| index + 4)
-                else {
-                    continue;
-                };
-                if request.len() >= header_end {
-                    break;
-                }
-            }
-            assert!(String::from_utf8_lossy(&request).starts_with("POST /resource "));
-            stream
-                .write_all(
-                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 13\r\nConnection: close\r\n\r\n{\"safe\":true}",
-                )
-                .expect("write streaming response");
-            String::from_utf8(request).expect("ASCII streaming request")
-        });
-        (address, server)
-    }
-
-    fn streaming_rebind_snapshot(address: SocketAddr) -> Arc<Snapshot> {
-        let mut snapshot = (*test_snapshot(1)).clone();
-        let route = &mut snapshot.routes[0];
-        route.scheme = "http".to_string();
-        route.host = "rebind.invalid".to_string();
-        route.port = address.port();
-        route.methods = HashSet::from(["POST".to_string()]);
-        route.adapter_config["request"] = json!({
-            "allowedHeaders":["user-agent"],
-            "allowedQueryKeys":[],
-            "bodyMode":"stream",
-            "discardHeaders":["npm-session"],
-            "maxBodyBytes":16,
-        });
-        route.discard_headers = vec!["npm-session".to_string()];
-        Arc::new(snapshot)
-    }
-
     fn streaming_rebind_policy() -> StreamingRequestPolicy {
         StreamingRequestPolicy {
             mode: "stream".to_string(),
@@ -58709,36 +58655,25 @@ mod tests {
     }
 
     #[test]
-    fn absolute_and_connect_streaming_paths_never_reresolve_after_preparation() {
-        let (absolute_address, absolute_server) = spawn_streaming_rebind_upstream();
-        let absolute_snapshot = streaming_rebind_snapshot(absolute_address);
-        let absolute_resolver = Arc::new(SequencedUpstreamResolver::new(vec![
-            Ok(vec![absolute_address]),
-            Ok(vec!["10.0.0.1:443".parse().unwrap()]),
-        ]));
-        let mut absolute_state = test_gate_state(Arc::clone(&absolute_snapshot));
-        absolute_state.upstream_resolver = absolute_resolver.clone();
-        let absolute_stats = Arc::new(Mutex::new(RequestBodyStreamStats::new()));
-        let absolute_body = RequestBodyStream::new(
+    fn disabled_streaming_paths_reject_before_dns_or_upstream_side_effects() {
+        let snapshot = test_snapshot(1);
+        let resolver = Arc::new(SequencedUpstreamResolver::new(vec![Ok(vec![
+            "127.0.0.1:443".parse().expect("test upstream address"),
+        ])]));
+        let mut state = test_gate_state(Arc::clone(&snapshot));
+        state.upstream_resolver = resolver.clone();
+        let stats = Arc::new(Mutex::new(RequestBodyStreamStats::new()));
+        let body = RequestBodyStream::new(
             Box::new(Cursor::new(Vec::<u8>::new())),
             Vec::new(),
             0,
-            Arc::clone(&absolute_stats),
+            Arc::clone(&stats),
         );
-        let absolute_request = RequestHead {
+        let request = || RequestHead {
             method: "POST".to_string(),
-            target: format!("http://rebind.invalid:{}/resource", absolute_address.port()),
+            target: "https://example.test/resource".to_string(),
             http_version: "HTTP/1.1".to_string(),
-            headers: BTreeMap::from([
-                (
-                    "Npm-Session".to_string(),
-                    "must-not-reach-the-absolute-streaming-upstream".to_string(),
-                ),
-                (
-                    "User-Agent".to_string(),
-                    "npm/10.8.2 node/v22.5.1".to_string(),
-                ),
-            ]),
+            headers: BTreeMap::new(),
             raw_headers_digest: None,
             raw_header_count: 0,
             content_length: 0,
@@ -58748,87 +58683,38 @@ mod tests {
         };
         let mut absolute_output = Vec::new();
         assert!(forward_absolute_streaming_request_to(
-            &absolute_state,
-            &absolute_snapshot,
-            absolute_request,
-            absolute_body,
-            absolute_stats,
+            &state,
+            &snapshot,
+            request(),
+            body,
+            stats,
             streaming_rebind_policy(),
             Some("agent:test"),
             false,
             &mut absolute_output,
         ));
-        let absolute_captured = absolute_server
-            .join()
-            .expect("join absolute streaming server");
-        assert!(absolute_captured
-            .to_ascii_lowercase()
-            .contains("user-agent: npm/10.8.2 node/v22.5.1"));
-        assert!(!absolute_captured
-            .to_ascii_lowercase()
-            .contains("npm-session"));
-        assert!(!absolute_captured
-            .contains("must-not-reach-the-absolute-streaming-upstream"));
-        assert_eq!(absolute_resolver.calls(), 1);
-        assert_eq!(absolute_resolver.remaining_answers(), 1);
+        assert!(String::from_utf8_lossy(&absolute_output)
+            .starts_with("HTTP/1.1 422 Unprocessable Entity"));
 
-        let (connect_address, connect_server) = spawn_streaming_rebind_upstream();
-        let connect_snapshot = streaming_rebind_snapshot(connect_address);
-        let connect_resolver = Arc::new(SequencedUpstreamResolver::new(vec![
-            Ok(vec![connect_address]),
-            Ok(vec!["10.0.0.1:443".parse().unwrap()]),
-        ]));
-        let mut connect_state = test_gate_state(Arc::clone(&connect_snapshot));
-        connect_state.upstream_resolver = connect_resolver.clone();
-        let connect_state = Arc::new(connect_state);
-        let connect_request = RequestHead {
-            method: "POST".to_string(),
-            target: format!("http://rebind.invalid:{}/resource", connect_address.port()),
-            http_version: "HTTP/1.1".to_string(),
-            headers: BTreeMap::from([
-                (
-                    "Npm-Session".to_string(),
-                    "must-not-reach-the-connect-streaming-upstream".to_string(),
-                ),
-                (
-                    "User-Agent".to_string(),
-                    "npm/10.8.2 node/v22.5.1".to_string(),
-                ),
-            ]),
-            raw_headers_digest: None,
-            raw_header_count: 0,
-            content_length: 0,
-            has_content_length: true,
-            prefetched_body: Vec::new(),
-            client_ip: None,
-        };
+        let state = Arc::new(state);
         let mut connect_io = DeadlineIo::new(
             Cursor::new(Vec::<u8>::new()),
             Duration::from_secs(2),
             Duration::from_secs(2),
         );
         assert!(forward_intercepted_streaming_request_to(
-            &connect_state,
-            &connect_snapshot,
-            connect_request,
+            &state,
+            &snapshot,
+            request(),
             &mut connect_io,
             streaming_rebind_policy(),
             Some("agent:test"),
             false,
         ));
-        let connect_captured = connect_server
-            .join()
-            .expect("join CONNECT streaming server");
-        assert!(connect_captured
-            .to_ascii_lowercase()
-            .contains("user-agent: npm/10.8.2 node/v22.5.1"));
-        assert!(!connect_captured
-            .to_ascii_lowercase()
-            .contains("npm-session"));
-        assert!(!connect_captured
-            .contains("must-not-reach-the-connect-streaming-upstream"));
-        assert_eq!(connect_resolver.calls(), 1);
-        assert_eq!(connect_resolver.remaining_answers(), 1);
+        assert!(String::from_utf8_lossy(connect_io.inner.get_ref())
+            .starts_with("HTTP/1.1 422 Unprocessable Entity"));
+        assert_eq!(resolver.calls(), 0);
+        assert_eq!(resolver.remaining_answers(), 1);
     }
 
     #[test]

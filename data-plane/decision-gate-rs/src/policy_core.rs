@@ -1893,7 +1893,9 @@ impl ShadowAdmission {
             ),
         ) {
             Ok(active) => {
-                if let Some(handle) = self.finalization.as_ref() {
+                let finalization_error: Option<(&'static [u8], bool)> = if let Some(handle) =
+                    self.finalization.as_ref()
+                {
                     if let Ok(mut state) = handle.inner.state.try_lock() {
                         let requirements = active
                             .active_plan()
@@ -1907,25 +1909,26 @@ impl ShadowAdmission {
                                     effect_requirements,
                                     active_evaluation: active.clone(),
                                 });
+                            None
                         } else {
-                            self.capture_error_sha256 = Some(sha256_prefixed(
-                                b"decision-time active plan is unavailable",
-                            ));
-                            self.active_evaluation = None;
-                            return self;
+                            Some((b"decision-time active plan is unavailable", false))
                         }
                     } else {
-                        if !handle.record_failure(
-                            PolicyShadowTerminalReason::TerminalStateContention,
-                        ) {
-                            self.custody_fail_closed = true;
-                        }
-                        self.capture_error_sha256 = Some(sha256_prefixed(
+                        let custody_fail_closed = !handle
+                            .record_failure(PolicyShadowTerminalReason::TerminalStateContention);
+                        Some((
                             b"decision-time lifecycle state is busy",
-                        ));
-                        self.active_evaluation = None;
-                        return self;
+                            custody_fail_closed,
+                        ))
                     }
+                } else {
+                    None
+                };
+                if let Some((error, custody_fail_closed)) = finalization_error {
+                    self.custody_fail_closed |= custody_fail_closed;
+                    self.capture_error_sha256 = Some(sha256_prefixed(error));
+                    self.active_evaluation = None;
+                    return self;
                 }
                 self.active_evaluation = Some(active);
             }
@@ -4394,7 +4397,7 @@ impl AccountingLedger {
                 };
             let receipt_arena_lane =
                 state.generations[index].receipt_arena_lane;
-            if let Some(cached) = state
+            let cached = state
                 .receipt_index
                 .spill_iter(receipt_arena_lane)
                 .find(|cached| {
@@ -4403,8 +4406,8 @@ impl AccountingLedger {
                             .signed_receipt_sha256()
                             .matches_digest(receipt.signed_receipt_sha256())
                 })
-                .copied()
-            {
+                .copied();
+            if let Some(cached) = cached {
                 if terminal_phase
                     && cached.event_ordinal() == receipt.event_ordinal()
                     && cached
@@ -9964,7 +9967,7 @@ fn evaluate_candidate_response(
     let content_type = headers
         .get("content-type")
         .and_then(|value| value.to_str().ok())
-        .map(canonical_response_content_type);
+        .map(|value| canonical_response_content_type(Some(value)));
     let validation = (|| -> Result<CandidateResponseBehavior, Value> {
         validate_response_envelopes(
             route,

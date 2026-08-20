@@ -33234,8 +33234,9 @@ fn decide_internal_with_mode_and_shadow<'a>(
             let reason = payload
                 .get("error")
                 .and_then(Value::as_str)
-                .unwrap_or("legacy_release_requires_atomic_authority");
-            return deny_for_route(503, reason, payload, route, started);
+                .unwrap_or("legacy_release_requires_atomic_authority")
+                .to_string();
+            return deny_for_route(503, &reason, payload, route, started);
         }
     }
     let (credential_version, mut secret_available) = if let (Some(credential_id), Some(scope)) =

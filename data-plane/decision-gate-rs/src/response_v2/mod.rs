@@ -14,14 +14,13 @@ mod transparency_contract;
 mod transaction;
 
 pub(super) use attestation::*;
-pub(super) use client_transport::*;
+use client_transport::*;
 pub(super) use envelope_authentication::*;
 pub(super) use envelope_semantics::*;
 pub(super) use http11::*;
-pub(super) use integration::*;
 pub(super) use release::*;
 pub(super) use transparency_contract::*;
-pub(super) use transaction::*;
+use transaction::*;
 
 use crate::*;
 use serverware_decision_gate::{
@@ -39,6 +38,51 @@ use serverware_decision_gate::{
     V2_STAGE_OPERATION, V2_TERMINAL_OPERATION,
     V2_VERIFY_ARCHIVE_OPERATION,
 };
+
+pub(super) fn initialize_response_observation_v2_client(
+    is_production: bool,
+) -> Result<Option<ResponseObservationV2Client>, String> {
+    client_transport::initialize_response_observation_v2_client(
+        is_production,
+    )
+}
+
+pub(super) fn start_response_observation_v2_health_probe(
+    client: Option<ResponseObservationV2Client>,
+) {
+    integration::start_response_observation_v2_health_probe(client);
+}
+
+pub(super) fn execute_response_observation_v2_transaction(
+    state: &GateState,
+    snapshot: &Arc<Snapshot>,
+    decision: &Value,
+    request: &IncomingRequest,
+    upstream_url: &Url,
+    provider_headers: &BTreeMap<String, String>,
+    injection_plan: &Value,
+    release_authorization: &mut Option<ReleaseAuthorizationGuard<'_>>,
+    execution: &ResponseObservationV2Execution<'_>,
+    shadow_finalization: Option<&policy_core::ShadowRequestHandle>,
+    shadow_dispatch_barrier_crossed: &mut bool,
+) -> Result<
+    SensitiveResponseBytes,
+    ResponseObservationV2TransactionError,
+> {
+    transaction::execute_response_observation_v2_transaction(
+        state,
+        snapshot,
+        decision,
+        request,
+        upstream_url,
+        provider_headers,
+        injection_plan,
+        release_authorization,
+        execution,
+        shadow_finalization,
+        shadow_dispatch_barrier_crossed,
+    )
+}
 
 #[derive(Clone, Copy)]
 pub(super) struct ResponseObservationV2Deadline {

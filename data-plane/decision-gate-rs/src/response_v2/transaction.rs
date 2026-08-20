@@ -323,7 +323,7 @@ pub(super) fn execute_response_observation_v2_transaction(
             fencing_token: 0,
         },
         transaction: transaction.clone(),
-        monotonic_deadline,
+        monotonic_deadline: monotonic_deadline.clone(),
         deadline_at_epoch_ms,
     };
 
@@ -440,7 +440,7 @@ pub(super) fn execute_response_observation_v2_transaction(
                 &reserve,
                 V2AttemptState::Reserved,
                 &reservation_evidence.evidence_sha256,
-                attempt,
+                attempt.clone(),
             ) => reservation_evidence,
             V2OperationResult::Reserve(
                 V2ReserveResult::Denied {
@@ -451,7 +451,7 @@ pub(super) fn execute_response_observation_v2_transaction(
                 &reserve,
                 V2AttemptState::Denied,
                 &terminal_evidence.evidence_sha256,
-                attempt,
+                attempt.clone(),
             ) => {
                 return Err(
                     ResponseObservationV2TransactionError::Denied
@@ -547,7 +547,7 @@ pub(super) fn execute_response_observation_v2_transaction(
                 &authority,
                 V2AttemptState::AuthorityReady,
                 &authority_state.evidence_sha256,
-                attempt,
+                attempt.clone(),
             ) => {
                 (authority_evidence_root, authority_state)
             }
@@ -560,7 +560,7 @@ pub(super) fn execute_response_observation_v2_transaction(
                 &authority,
                 V2AttemptState::Terminalized,
                 &terminal_evidence.evidence_sha256,
-                attempt,
+                attempt.clone(),
             ) => {
                 return Err(
                     ResponseObservationV2TransactionError::Denied,
@@ -652,7 +652,7 @@ pub(super) fn execute_response_observation_v2_transaction(
                 &stage,
                 V2AttemptState::Staged,
                 &staging_evidence.evidence_sha256,
-                attempt,
+                attempt.clone(),
             ) => {
                 (staged_request, staging_evidence)
             }
@@ -795,7 +795,7 @@ pub(super) fn execute_response_observation_v2_transaction(
                 &dispatch,
                 V2AttemptState::Dispatched,
                 &dispatch_evidence.evidence_sha256,
-                attempt,
+                attempt.clone(),
             ) => {
                 if let Some(permit) =
                     shadow_dispatch_permit.take()
@@ -900,7 +900,7 @@ pub(super) fn execute_response_observation_v2_transaction(
                 &terminal,
                 V2AttemptState::Completed,
                 &terminal_evidence.evidence_sha256,
-                attempt,
+                attempt.clone(),
             ) => terminal_evidence,
             _ => {
                 return Err(

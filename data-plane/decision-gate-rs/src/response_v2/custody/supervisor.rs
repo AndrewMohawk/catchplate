@@ -2889,7 +2889,7 @@ mod linux_runtime {
             libc::syscall(
                 libc::SYS_statx,
                 executable.as_raw_fd(),
-                empty_path.as_ptr().cast(),
+                empty_path.as_ptr().cast::<libc::c_char>(),
                 AT_EMPTY_PATH_FLAG | libc::AT_SYMLINK_NOFOLLOW,
                 STATX_BASIC_STATS_MASK,
                 &mut status as *mut StatxBuffer,

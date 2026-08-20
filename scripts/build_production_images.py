@@ -40,11 +40,19 @@ LAUNCH_AUTHORITY_METADATA_FIELDS = (
 PRIVATE_CONTEXT_FILES = (
     "Dockerfile.production",
     "data-plane/decision-gate-rs/Dockerfile.production",
+    "requirements.lock",
+    "production-dependencies/python-linux-amd64.sha256",
     "production-dependencies/cache/python-wheelhouse-linux-amd64.tar.gz",
     "production-dependencies/cache/cargo-vendor.tar.gz",
     "production-dependencies/cache/musl-1.2.5-r12.apk",
     "production-dependencies/cache/musl-dev-1.2.5-r12.apk",
 )
+PRODUCTION_ARTIFACT_TARGETS = {
+    (
+        "data-plane/decision-gate-rs/Dockerfile.production",
+        "production-launcher-artifact",
+    ),
+}
 
 
 def canonical_json(value: Any) -> str:
@@ -359,49 +367,78 @@ def build_command(
     ]
     component = "control plane" if dockerfile == "Dockerfile.production" else "decision gate"
     image_title = f"Serverware {component} {metadata['image_title_suffix']}"
-    command.extend(
-        [
-            "--build-arg",
-            f"SERVERWARE_IMAGE_SOURCE={metadata['source']}",
-            "--build-arg",
-            f"SERVERWARE_IMAGE_REVISION={metadata['revision']}",
-            "--build-arg",
-            f"SERVERWARE_IMAGE_CREATED={metadata['created']}",
-            "--build-arg",
-            f"SERVERWARE_IMAGE_TITLE={image_title}",
-            "--build-arg",
-            f"SERVERWARE_SOURCE_TREE_DIGEST={metadata['source_tree_digest']}",
-            "--build-arg",
-            f"SERVERWARE_SOURCE_ARCHIVE={metadata['source_archive_path']}",
-            "--build-arg",
-            f"SERVERWARE_SOURCE_ARCHIVE_SHA256={metadata['source_archive_digest']}",
-            "--build-arg",
-            f"SERVERWARE_SOURCE_MANIFEST={metadata['source_manifest_path']}",
-            "--build-arg",
-            f"SERVERWARE_SOURCE_MANIFEST_SHA256={metadata['source_manifest_digest']}",
-            "--build-arg",
-            f"SERVERWARE_SOURCE_FILE_LIST={metadata['source_file_list_path']}",
-            "--build-arg",
-            f"SERVERWARE_SOURCE_FILE_LIST_SHA256={metadata['source_file_list_digest']}",
-            "--build-arg",
-            f"SERVERWARE_SOURCE_FILE_HASHES={metadata['source_file_hashes_path']}",
-            "--build-arg",
-            f"SERVERWARE_SOURCE_FILE_HASHES_SHA256={metadata['source_file_hashes_digest']}",
-            "--build-arg",
-            f"SERVERWARE_SOURCE_FILE_MODES={metadata['source_file_modes_path']}",
-            "--build-arg",
-            f"SERVERWARE_SOURCE_FILE_MODES_SHA256={metadata['source_file_modes_digest']}",
-            "--build-arg",
-            f"SERVERWARE_SOURCE_IDENTITY_MODE={metadata['source_identity_mode']}",
-            "--build-arg",
-            "SERVERWARE_PRODUCTION_RELEASE_ELIGIBLE="
-            + ("true" if metadata["production_release_eligible"] else "false"),
-            "--build-arg",
-            f"SOURCE_DATE_EPOCH={metadata['source_date_epoch']}",
-        ]
-    )
+    command.extend(source_build_arguments(metadata, image_title=image_title))
     command.append(str(context))
     return command
+
+
+def source_build_arguments(
+    metadata: dict[str, Any], *, image_title: str | None = None
+) -> list[str]:
+    values = [
+        ("SERVERWARE_IMAGE_SOURCE", metadata["source"]),
+        ("SERVERWARE_IMAGE_REVISION", metadata["revision"]),
+        ("SERVERWARE_IMAGE_CREATED", metadata["created"]),
+        ("SERVERWARE_SOURCE_TREE_DIGEST", metadata["source_tree_digest"]),
+        ("SERVERWARE_SOURCE_ARCHIVE", metadata["source_archive_path"]),
+        ("SERVERWARE_SOURCE_ARCHIVE_SHA256", metadata["source_archive_digest"]),
+        ("SERVERWARE_SOURCE_MANIFEST", metadata["source_manifest_path"]),
+        ("SERVERWARE_SOURCE_MANIFEST_SHA256", metadata["source_manifest_digest"]),
+        ("SERVERWARE_SOURCE_FILE_LIST", metadata["source_file_list_path"]),
+        ("SERVERWARE_SOURCE_FILE_LIST_SHA256", metadata["source_file_list_digest"]),
+        ("SERVERWARE_SOURCE_FILE_HASHES", metadata["source_file_hashes_path"]),
+        ("SERVERWARE_SOURCE_FILE_HASHES_SHA256", metadata["source_file_hashes_digest"]),
+        ("SERVERWARE_SOURCE_FILE_MODES", metadata["source_file_modes_path"]),
+        ("SERVERWARE_SOURCE_FILE_MODES_SHA256", metadata["source_file_modes_digest"]),
+        ("SERVERWARE_SOURCE_IDENTITY_MODE", metadata["source_identity_mode"]),
+        (
+            "SERVERWARE_PRODUCTION_RELEASE_ELIGIBLE",
+            "true" if metadata["production_release_eligible"] else "false",
+        ),
+        ("SOURCE_DATE_EPOCH", metadata["source_date_epoch"]),
+    ]
+    if image_title is not None:
+        values.insert(3, ("SERVERWARE_IMAGE_TITLE", image_title))
+    arguments: list[str] = []
+    for name, value in values:
+        arguments.extend(("--build-arg", f"{name}={value}"))
+    return arguments
+
+
+def artifact_build_command(
+    dockerfile: str,
+    target: str,
+    output: str,
+    *,
+    network: str,
+    platform: str,
+    metadata: dict[str, Any],
+    context: Path,
+) -> list[str]:
+    if (dockerfile, target) not in PRODUCTION_ARTIFACT_TARGETS:
+        raise RuntimeError("unsupported production artifact Dockerfile/target pair")
+    if network != "none":
+        raise RuntimeError("production artifact builds require network=none")
+    if platform != PRODUCTION_PLATFORM:
+        raise RuntimeError(f"production artifact platform must be {PRODUCTION_PLATFORM}")
+    if not output.startswith("type=local,dest=") or output == "type=local,dest=":
+        raise RuntimeError("production artifact output must be a non-empty local destination")
+    return [
+        "docker",
+        "buildx",
+        "build",
+        "--network=none",
+        "--platform",
+        platform,
+        "--target",
+        target,
+        "--output",
+        output,
+        "-f",
+        str(context / dockerfile),
+        *source_build_arguments(metadata),
+        str(context),
+    ]
 
 
 def verify_no_shell(image_ids: list[str]) -> dict[str, Any]:
@@ -487,6 +524,10 @@ def main() -> None:
     parser.add_argument("--decision-gate-tag")
     parser.add_argument("--platform", default=PRODUCTION_PLATFORM, choices=(PRODUCTION_PLATFORM,))
     parser.add_argument("--out")
+    parser.add_argument("--dockerfile")
+    parser.add_argument("--target")
+    parser.add_argument("--output")
+    parser.add_argument("--network", choices=("none",))
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
         "--development-dirty-tree",
@@ -494,6 +535,58 @@ def main() -> None:
         help="Build an explicitly non-production image from dirty/untracked filesystem bytes.",
     )
     args = parser.parse_args()
+
+    artifact_values = (args.dockerfile, args.target, args.output, args.network)
+    if any(value is not None for value in artifact_values):
+        if not all(value is not None for value in artifact_values):
+            parser.error("--dockerfile, --target, --output, and --network are required together")
+        if any((args.control_tag, args.decision_gate_tag, args.out, args.development_dirty_tree)):
+            parser.error("production artifact mode cannot be combined with image build options")
+        metadata = build_metadata()
+        placeholder_context = Path("/private/serverware-build-context")
+        if args.dry_run:
+            print(
+                canonical_json(
+                    {
+                        "ok": True,
+                        "argv": artifact_build_command(
+                            args.dockerfile,
+                            args.target,
+                            args.output,
+                            network=args.network,
+                            platform=args.platform,
+                            metadata=metadata,
+                            context=placeholder_context,
+                        ),
+                        "metadata": metadata,
+                    }
+                )
+            )
+            return
+        verify_dependency_cache()
+        with private_build_context(metadata) as context:
+            command = artifact_build_command(
+                args.dockerfile,
+                args.target,
+                args.output,
+                network=args.network,
+                platform=args.platform,
+                metadata=metadata,
+                context=context,
+            )
+            run(command)
+        print(
+            canonical_json(
+                {
+                    "ok": True,
+                    "dockerfile": args.dockerfile,
+                    "target": args.target,
+                    "output": args.output,
+                    "source_tree_digest": metadata["source_tree_digest"],
+                }
+            )
+        )
+        return
 
     if args.development_dirty_tree:
         control_tag = args.control_tag or "serverware/control:development-dirty-tree"

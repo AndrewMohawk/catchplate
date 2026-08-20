@@ -6612,7 +6612,7 @@ deploy-production:
 
 build-production-python-runtime: verify-production-dependency-cache
 	@test -n "$(PRODUCTION_PYTHON_RUNTIME_ARTIFACT_DIRECTORY)" && test "$(PRODUCTION_PYTHON_RUNTIME_ARTIFACT_DIRECTORY)" != / || { echo "PRODUCTION_PYTHON_RUNTIME_ARTIFACT_DIRECTORY is unsafe" >&2; exit 2; }
-	rm -rf "$(PRODUCTION_PYTHON_RUNTIME_ARTIFACT_DIRECTORY)"
+	@test ! -e "$(PRODUCTION_PYTHON_RUNTIME_ARTIFACT_DIRECTORY)" || { echo "PRODUCTION_PYTHON_RUNTIME_ARTIFACT_DIRECTORY must not already exist" >&2; exit 2; }
 	mkdir -p "$(PRODUCTION_PYTHON_RUNTIME_ARTIFACT_DIRECTORY)"
 	docker buildx build --network=none --platform "$(PRODUCTION_PLATFORM)" --target production-python-runtime-artifact --output "type=local,dest=$(PRODUCTION_PYTHON_RUNTIME_ARTIFACT_DIRECTORY)" -f Dockerfile.production .
 	test -x "$(PRODUCTION_PYTHON_RUNTIME_ARTIFACT_DIRECTORY)/runtime/python/bin/python3"
@@ -6621,8 +6621,10 @@ build-production-python-runtime: verify-production-dependency-cache
 	test -d "$(PRODUCTION_PYTHON_RUNTIME_ARTIFACT_DIRECTORY)/vendor"
 
 build-production-launcher: verify-production-dependency-cache
+	@test -n "$(PRODUCTION_LAUNCHER_BUILD_DIRECTORY)" && test "$(PRODUCTION_LAUNCHER_BUILD_DIRECTORY)" != / || { echo "PRODUCTION_LAUNCHER_BUILD_DIRECTORY is unsafe" >&2; exit 2; }
+	@test ! -e "$(PRODUCTION_LAUNCHER_BUILD_DIRECTORY)" || { echo "PRODUCTION_LAUNCHER_BUILD_DIRECTORY must not already exist" >&2; exit 2; }
 	mkdir -p "$(PRODUCTION_LAUNCHER_BUILD_DIRECTORY)"
-	docker buildx build --network=none --platform "$(PRODUCTION_PLATFORM)" --target production-launcher-artifact --output "type=local,dest=$(PRODUCTION_LAUNCHER_BUILD_DIRECTORY)" -f data-plane/decision-gate-rs/Dockerfile.production .
+	python3 scripts/build_production_images.py --network=none --platform "$(PRODUCTION_PLATFORM)" --target production-launcher-artifact --output "type=local,dest=$(PRODUCTION_LAUNCHER_BUILD_DIRECTORY)" --dockerfile data-plane/decision-gate-rs/Dockerfile.production
 	test -x "$(PRODUCTION_LAUNCHER_BUILD_PATH)"
 
 install-production-launcher:

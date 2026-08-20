@@ -208,8 +208,23 @@ def assert_python_runtime_docker_contract() -> None:
     dockerfile_path = ROOT / "Dockerfile.production"
     dockerfile = dockerfile_path.read_text(encoding="utf-8")
     lines = [line.strip() for line in dockerfile.splitlines() if line.strip()]
+    dependency_stage = dockerfile_stage(lines, "python-deps")
+    source_stage = dockerfile_stage(lines, "verified-production-source")
     runtime_stage = dockerfile_stage(lines, "production-python-runtime-tree")
     artifact_stage = dockerfile_stage(lines, "production-python-runtime-artifact")
+    dependency_text = "\n".join(dependency_stage)
+    if "SERVERWARE_SOURCE_" in dependency_text or "/source-contract" in dependency_text:
+        raise AssertionError("standalone Python dependency closure still requires application source")
+    source_text = "\n".join(source_stage)
+    for required in (
+        "ARG SERVERWARE_SOURCE_ARCHIVE",
+        "COPY ${SERVERWARE_SOURCE_ARCHIVE} /source-contract/source.tar",
+        "sha256sum -c /source-contract/source.files.sha256",
+    ):
+        if required not in source_text:
+            raise AssertionError(f"verified production source stage omits {required}")
+    if "COPY --from=verified-production-source /source/serverware /runtime/app/serverware" not in dockerfile:
+        raise AssertionError("production runtime does not consume the verified source stage")
     required_runtime = (
         "FROM python:3.11-slim-bookworm@sha256:0030323c9ce4d6dfab5f0812577cb0abd13c806f86b3a1f5b5d8f200ebb1421c AS production-python-runtime-tree",
         "COPY --from=python-deps /deps /deps",
@@ -234,6 +249,8 @@ def assert_python_runtime_docker_contract() -> None:
         "build-production-python-runtime:",
         "--target production-python-runtime-artifact",
         "PRODUCTION_PYTHON_RUNTIME_ARTIFACT_DIRECTORY",
+        "PRODUCTION_PYTHON_RUNTIME_ARTIFACT_DIRECTORY must not already exist",
+        "PRODUCTION_LAUNCHER_BUILD_DIRECTORY must not already exist",
         "SERVERWARE_PRODUCTION_PYTHON_RUNTIME_ARTIFACT=",
         "$(MAKE) build-production-python-runtime",
     ):
@@ -244,6 +261,44 @@ def assert_python_runtime_docker_contract() -> None:
     runtime_position = makefile.find("\n\t$(MAKE) build-production-python-runtime", proof_position)
     if proof_position < 0 or runtime_position < 0 or deploy_position < 0 or runtime_position > deploy_position:
         raise AssertionError("production release proof does not build the Python runtime before deploy")
+
+
+def assert_production_artifact_build_contract() -> None:
+    metadata = build_metadata_fixture()
+    command = build_production_images.artifact_build_command(
+        "data-plane/decision-gate-rs/Dockerfile.production",
+        "production-launcher-artifact",
+        "type=local,dest=/tmp/launcher",
+        network="none",
+        platform="linux/amd64",
+        metadata=metadata,
+        context=Path("/private/serverware-build-context"),
+    )
+    serialized = "\0".join(command)
+    for required in (
+        "docker\0buildx\0build",
+        "--network=none",
+        "--target\0production-launcher-artifact",
+        f"SERVERWARE_SOURCE_ARCHIVE={metadata['source_archive_path']}",
+        f"SERVERWARE_SOURCE_ARCHIVE_SHA256={metadata['source_archive_digest']}",
+        f"SERVERWARE_SOURCE_TREE_DIGEST={metadata['source_tree_digest']}",
+    ):
+        if required not in serialized:
+            raise AssertionError(f"production artifact command omits {required}")
+    try:
+        build_production_images.artifact_build_command(
+            "Dockerfile.production",
+            "production-launcher-artifact",
+            "type=local,dest=/tmp/launcher",
+            network="none",
+            platform="linux/amd64",
+            metadata=metadata,
+            context=Path("/private/serverware-build-context"),
+        )
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("production artifact helper accepted an unapproved Dockerfile/target pair")
 
 
 def assert_deploy_receives_runtime_artifact() -> None:
@@ -394,6 +449,7 @@ def main() -> None:
     assert_launch_authority_is_not_a_build_arg()
     assert_dockerfile_copies_trust_into_rust_builds()
     assert_python_runtime_docker_contract()
+    assert_production_artifact_build_contract()
     assert_deploy_receives_runtime_artifact()
     assert_exported_python_runtime()
     print(json.dumps({"ok": True, "build_production_images": "pass"}, sort_keys=True))

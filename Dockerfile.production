@@ -1,9 +1,37 @@
 FROM scratch AS python-production-dependency-cache
+COPY requirements.lock /dependency-cache/requirements.lock
+COPY production-dependencies/python-linux-amd64.sha256 /dependency-cache/python-linux-amd64.sha256
 COPY production-dependencies/cache/python-wheelhouse-linux-amd64.tar.gz /dependency-cache/cache/python-wheelhouse-linux-amd64.tar.gz
 
 FROM python:3.11-slim-bookworm@sha256:0030323c9ce4d6dfab5f0812577cb0abd13c806f86b3a1f5b5d8f200ebb1421c AS python-deps
 
 ARG SOURCE_DATE_EPOCH="0"
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_INDEX=1 \
+    SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
+
+WORKDIR /build
+COPY --from=python-production-dependency-cache /dependency-cache /dependency-cache
+RUN --network=none set -eu; \
+    cd /dependency-cache; \
+    test "$(grep -Ec '^[0-9a-f]{64}  ' python-linux-amd64.sha256)" -eq 2; \
+    grep -E '^[0-9a-f]{64}  ' python-linux-amd64.sha256 | sha256sum -c -; \
+    tar -xzf cache/python-wheelhouse-linux-amd64.tar.gz; \
+    test -n "$(find wheelhouse -maxdepth 1 -type f -name '*.whl' -print -quit)"; \
+    python -m pip install \
+        --no-cache-dir \
+        --no-compile \
+        --no-index \
+        --only-binary=:all: \
+        --find-links=/dependency-cache/wheelhouse \
+        --require-hashes \
+        --target=/deps \
+        -r /dependency-cache/requirements.lock; \
+    find /deps -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +
+
+FROM python:3.11-slim-bookworm@sha256:0030323c9ce4d6dfab5f0812577cb0abd13c806f86b3a1f5b5d8f200ebb1421c AS verified-production-source
+
 ARG SERVERWARE_SOURCE_ARCHIVE
 ARG SERVERWARE_SOURCE_ARCHIVE_SHA256
 ARG SERVERWARE_SOURCE_MANIFEST
@@ -14,10 +42,6 @@ ARG SERVERWARE_SOURCE_FILE_HASHES
 ARG SERVERWARE_SOURCE_FILE_HASHES_SHA256
 ARG SERVERWARE_SOURCE_FILE_MODES
 ARG SERVERWARE_SOURCE_FILE_MODES_SHA256
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PIP_NO_INDEX=1 \
-    SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
 
 WORKDIR /build
 COPY ${SERVERWARE_SOURCE_ARCHIVE} /source-contract/source.tar
@@ -25,7 +49,6 @@ COPY ${SERVERWARE_SOURCE_MANIFEST} /source-contract/source-manifest.json
 COPY ${SERVERWARE_SOURCE_FILE_LIST} /source-contract/source.files
 COPY ${SERVERWARE_SOURCE_FILE_HASHES} /source-contract/source.files.sha256
 COPY ${SERVERWARE_SOURCE_FILE_MODES} /source-contract/source.files.mode
-COPY --from=python-production-dependency-cache /dependency-cache /dependency-cache
 RUN --network=none set -eu; \
     test -n "${SERVERWARE_SOURCE_ARCHIVE_SHA256}"; \
     test -n "${SERVERWARE_SOURCE_MANIFEST_SHA256}"; \
@@ -49,23 +72,7 @@ RUN --network=none set -eu; \
         test -f "/source/${relative}"; \
         test ! -L "/source/${relative}"; \
         test "$(stat -c '%a' "/source/${relative}")" = "${expected_mode}"; \
-    done < /source-contract/source.files.mode; \
-    cp /source/requirements.lock /dependency-cache/requirements.lock; \
-    cp /source/production-dependencies/python-linux-amd64.sha256 /dependency-cache/python-linux-amd64.sha256; \
-    cd /dependency-cache; \
-    sha256sum -c python-linux-amd64.sha256; \
-    tar -xzf cache/python-wheelhouse-linux-amd64.tar.gz; \
-    test -n "$(find wheelhouse -maxdepth 1 -type f -name '*.whl' -print -quit)"; \
-    python -m pip install \
-        --no-cache-dir \
-        --no-compile \
-        --no-index \
-        --only-binary=:all: \
-        --find-links=/dependency-cache/wheelhouse \
-        --require-hashes \
-        --target=/deps \
-        -r /dependency-cache/requirements.lock; \
-    find /deps -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +
+    done < /source-contract/source.files.mode
 
 FROM python:3.11-slim-bookworm@sha256:0030323c9ce4d6dfab5f0812577cb0abd13c806f86b3a1f5b5d8f200ebb1421c AS production-python-runtime-tree
 
@@ -103,25 +110,25 @@ FROM python:3.11-slim-bookworm@sha256:0030323c9ce4d6dfab5f0812577cb0abd13c806f86
 
 ARG SOURCE_DATE_EPOCH="0"
 COPY --from=python-deps /deps /runtime/deps
-COPY --from=python-deps /source/serverware/authority_fd_entrypoint.py /runtime/authority-bootstrap/authority_fd_entrypoint.py
-COPY --from=python-deps /source/serverware/authority_launcher.py /runtime/authority-bootstrap/authority_launcher.py
-COPY --from=python-deps /source/serverware /runtime/app/serverware
-COPY --from=python-deps /source/scripts /runtime/app/scripts
-COPY --from=python-deps /source/schemas /runtime/app/schemas
-COPY --from=python-deps /source/policies /runtime/app/policies
-COPY --from=python-deps /source/security /runtime/app/security
-COPY --from=python-deps /source/ops/policy-custody /runtime/app/ops/policy-custody
-COPY --from=python-deps /source/ops/production-readiness.env.example /runtime/app/ops/production-readiness.env.example
-COPY --from=python-deps /source/ops/systemd/serverware-policy-custody-sockets.target /runtime/app/ops/systemd/serverware-policy-custody-sockets.target
-COPY --from=python-deps /source/ops/systemd/serverware-policy-custody.target /runtime/app/ops/systemd/serverware-policy-custody.target
-COPY --from=python-deps /source/ops/systemd/serverware-policy-custody@.socket /runtime/app/ops/systemd/serverware-policy-custody@.socket
-COPY --from=python-deps /source/ops/systemd/serverware-policy-custody@.service.in /runtime/app/ops/systemd/serverware-policy-custody@.service.in
-COPY --from=python-deps /source/ops/systemd/serverware-policy-custody@durable-recovery-store.service.d /runtime/app/ops/systemd/serverware-policy-custody@durable-recovery-store.service.d
-COPY --from=python-deps /source/ops/systemd/serverware-policy-custody@cleanup-authorization-consumer.service.d /runtime/app/ops/systemd/serverware-policy-custody@cleanup-authorization-consumer.service.d
-COPY --from=python-deps /source/ops/systemd/serverware-policy-custody@recovery-target-provider.service.d /runtime/app/ops/systemd/serverware-policy-custody@recovery-target-provider.service.d
-COPY --from=python-deps /source/ops/systemd/serverware-policy-custody@current-signature-authority.service.d /runtime/app/ops/systemd/serverware-policy-custody@current-signature-authority.service.d
-COPY --from=python-deps /source/ops/systemd/serverware-policy-custody@bounded-cleanup-helper.service.d /runtime/app/ops/systemd/serverware-policy-custody@bounded-cleanup-helper.service.d
-COPY --from=python-deps /source/docker-compose.apparmor.yml /runtime/app/docker-compose.apparmor.yml
+COPY --from=verified-production-source /source/serverware/authority_fd_entrypoint.py /runtime/authority-bootstrap/authority_fd_entrypoint.py
+COPY --from=verified-production-source /source/serverware/authority_launcher.py /runtime/authority-bootstrap/authority_launcher.py
+COPY --from=verified-production-source /source/serverware /runtime/app/serverware
+COPY --from=verified-production-source /source/scripts /runtime/app/scripts
+COPY --from=verified-production-source /source/schemas /runtime/app/schemas
+COPY --from=verified-production-source /source/policies /runtime/app/policies
+COPY --from=verified-production-source /source/security /runtime/app/security
+COPY --from=verified-production-source /source/ops/policy-custody /runtime/app/ops/policy-custody
+COPY --from=verified-production-source /source/ops/production-readiness.env.example /runtime/app/ops/production-readiness.env.example
+COPY --from=verified-production-source /source/ops/systemd/serverware-policy-custody-sockets.target /runtime/app/ops/systemd/serverware-policy-custody-sockets.target
+COPY --from=verified-production-source /source/ops/systemd/serverware-policy-custody.target /runtime/app/ops/systemd/serverware-policy-custody.target
+COPY --from=verified-production-source /source/ops/systemd/serverware-policy-custody@.socket /runtime/app/ops/systemd/serverware-policy-custody@.socket
+COPY --from=verified-production-source /source/ops/systemd/serverware-policy-custody@.service.in /runtime/app/ops/systemd/serverware-policy-custody@.service.in
+COPY --from=verified-production-source /source/ops/systemd/serverware-policy-custody@durable-recovery-store.service.d /runtime/app/ops/systemd/serverware-policy-custody@durable-recovery-store.service.d
+COPY --from=verified-production-source /source/ops/systemd/serverware-policy-custody@cleanup-authorization-consumer.service.d /runtime/app/ops/systemd/serverware-policy-custody@cleanup-authorization-consumer.service.d
+COPY --from=verified-production-source /source/ops/systemd/serverware-policy-custody@recovery-target-provider.service.d /runtime/app/ops/systemd/serverware-policy-custody@recovery-target-provider.service.d
+COPY --from=verified-production-source /source/ops/systemd/serverware-policy-custody@current-signature-authority.service.d /runtime/app/ops/systemd/serverware-policy-custody@current-signature-authority.service.d
+COPY --from=verified-production-source /source/ops/systemd/serverware-policy-custody@bounded-cleanup-helper.service.d /runtime/app/ops/systemd/serverware-policy-custody@bounded-cleanup-helper.service.d
+COPY --from=verified-production-source /source/docker-compose.apparmor.yml /runtime/app/docker-compose.apparmor.yml
 RUN --network=none printf 'serverware.productionImage/v1\n' > /runtime/app/.serverware-production-image \
     && mkdir -p /runtime/custody-trust /runtime/gate-materials \
     && chmod 0555 /runtime/authority-bootstrap \
@@ -167,7 +174,7 @@ COPY --from=production-python-runtime-artifact --chown=0:0 /runtime /runtime
 COPY --from=production-python-runtime-artifact --chown=0:0 /vendor /vendor
 COPY --from=runtime-tree --chown=0:0 /runtime/authority-bootstrap /runtime/authority-bootstrap
 COPY --from=runtime-tree --chown=0:0 /runtime/app /app
-COPY --from=python-deps --chown=0:0 /source-contract/source-manifest.json /usr/share/serverware/source-manifest.json
+COPY --from=verified-production-source --chown=0:0 /source-contract/source-manifest.json /usr/share/serverware/source-manifest.json
 COPY --from=runtime-tree --chown=65532:65532 --chmod=0755 /runtime/custody-trust /run/serverware/custody-trust
 COPY --from=runtime-tree --chown=65532:65532 --chmod=0750 /runtime/gate-materials /run/serverware/gate
 WORKDIR /app

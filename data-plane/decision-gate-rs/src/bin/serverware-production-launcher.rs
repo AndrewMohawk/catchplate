@@ -4919,7 +4919,7 @@ mod linux {
         })
     }
 
-    fn recovered_request_matches_current_launch(
+    pub(super) fn recovered_request_matches_current_launch(
         recovered: &LaunchAuthorizationRequest,
         current: &LaunchAuthorizationRequest,
     ) -> bool {
@@ -7401,11 +7401,11 @@ mod tests {
             launch_attempt_recovery_identity_sha256(&current_boot_request)
                 .unwrap();
 
-        assert!(!recovered_request_matches_current_launch(
+        assert!(!linux::recovered_request_matches_current_launch(
             &prior_boot_request,
             &current_boot_request,
         ));
-        assert!(recovered_request_matches_current_launch(
+        assert!(linux::recovered_request_matches_current_launch(
             &current_boot_request,
             &current_boot_request,
         ));

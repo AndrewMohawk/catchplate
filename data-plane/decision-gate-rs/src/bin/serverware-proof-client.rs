@@ -10419,19 +10419,26 @@ mod tests {
     fn observation_local_unknown_and_complete_state_invariants_fail_closed() {
         let fixture = observation_fixture();
         let statement = fixture.proof["server_statement"].clone();
+        let control_plane_response_key = control_plane_response_signing_key().verifying_key();
 
         let mut local = statement.clone();
         local["upstream_attempt"] = Value::String("started-no-response".to_string());
-        assert!(validate_observation_state_invariants(&local).is_err());
+        assert!(
+            validate_observation_state_invariants(&local, &control_plane_response_key).is_err()
+        );
 
         let mut unknown = statement.clone();
         unknown["response_path"] = Value::String("upstream-attempt-outcome-unknown".to_string());
-        assert!(validate_observation_state_invariants(&unknown).is_err());
+        assert!(
+            validate_observation_state_invariants(&unknown, &control_plane_response_key).is_err()
+        );
 
         let mut complete = statement;
         complete["response_path"] =
             Value::String("complete-upstream-response-released".to_string());
-        assert!(validate_observation_state_invariants(&complete).is_err());
+        assert!(
+            validate_observation_state_invariants(&complete, &control_plane_response_key).is_err()
+        );
     }
 
     #[test]

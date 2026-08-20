@@ -56657,11 +56657,9 @@ mod tests {
         ])]));
         let mut invalid_state = test_gate_state(Arc::clone(&invalid_snapshot));
         invalid_state.upstream_resolver = invalid_resolver.clone();
-        let valid_head = RequestHead {
-            headers: BTreeMap::new(),
-            raw_header_count: 0,
-            ..ambiguous
-        };
+        let mut valid_head = ambiguous;
+        replace_string_map(&mut valid_head.headers, BTreeMap::new());
+        valid_head.raw_header_count = 0;
         assert!(prepare_upstream_for_forward(
             &invalid_state,
             &invalid_snapshot,
@@ -60689,7 +60687,8 @@ mod tests {
         duplicate_wire.push_str("\r\n");
         assert_eq!(
             parse_head(duplicate_wire.as_bytes())
-                .expect_err("duplicate physical npm-session fields must fail"),
+                .err()
+                .expect("duplicate physical npm-session fields must fail"),
             "request_header_ambiguous"
         );
 
@@ -62266,7 +62265,7 @@ mod tests {
             route: &route,
             params: BTreeMap::new(),
         };
-        let req = DecisionRequest {
+        let mut req = DecisionRequest {
             client_ip: None,
             method: "POST".to_string(),
             url: "https://example.test/resource".to_string(),
@@ -62292,11 +62291,9 @@ mod tests {
         .expect_err("zero maxBodyBytes must reject one byte");
         assert_eq!(body_error["error"], "generic_body_too_large");
 
+        req.body.zeroize();
         let header_error = validate_adapter(
-            &DecisionRequest {
-                body: String::new(),
-                ..req
-            },
+            &req,
             &BTreeMap::from([
                 ("host".to_string(), "example.test".to_string()),
                 ("x-not-allowed".to_string(), "value".to_string()),
@@ -62562,7 +62559,8 @@ mod tests {
             "GET / HTTP/1.1\r\nHost: example.test\r\nX-Provider-Secret: first\r\nx-provider-secret: {secret_value}\r\n\r\n"
         );
         let error = parse_head(wire.as_bytes())
-            .expect_err("duplicate provider-controlled header must fail");
+            .err()
+            .expect("duplicate provider-controlled header must fail");
         assert_eq!(error, "request_header_ambiguous");
         let response = request_head_error_response(&error);
         let response = std::str::from_utf8(&response).expect("fixed HTTP denial is UTF-8");
@@ -63139,12 +63137,6 @@ mod tests {
                     client_ip: Some("127.0.0.1".to_string()),
                 },
                 Some("agent:test"),
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
                 None,
                 None,
                 None,
@@ -64005,7 +63997,7 @@ mod tests {
             &url,
             StatusCode::OK,
             Some("text/plain"),
-            &[],
+            &SensitiveReleasedHeaders::new(),
             b"must-not-release".to_vec().into(),
             &ResponseSecretGuard::default(),
             json!({"ok":true}),
@@ -64029,7 +64021,7 @@ mod tests {
             &url,
             StatusCode::OK,
             Some("text/plain"),
-            &[],
+            &SensitiveReleasedHeaders::new(),
             b"must-not-release".to_vec().into(),
             &ResponseSecretGuard::default(),
             json!({"ok":true}),
@@ -64401,7 +64393,8 @@ mod tests {
                 "POST /resource HTTP/1.1\r\nHost: example.test\r\nContent-Encoding: {encoding}\r\nContent-Length: 0\r\n\r\n"
             );
             let denied = parse_head(request.as_bytes())
-                .expect_err("noncanonical request encoding must fail before body admission");
+                .err()
+                .expect("noncanonical request encoding must fail before body admission");
             assert!(denied.contains("must be absent or exactly identity"));
         }
 
@@ -64433,7 +64426,8 @@ mod tests {
         let compressed_wire = parse_head(
             b"POST /resource HTTP/1.1\r\nHost: example.test\r\nContent-Encoding: gzip\r\nContent-Length: 0\r\n\r\n",
         )
-        .expect_err("non-identity request encoding must fail before body admission");
+        .err()
+        .expect("non-identity request encoding must fail before body admission");
         assert!(compressed_wire.contains("must be absent or exactly identity"));
     }
 
@@ -65375,7 +65369,7 @@ mod tests {
             &url,
             StatusCode::OK,
             Some("application/json"),
-            &[],
+            &SensitiveReleasedHeaders::new(),
             body.into(),
             &ResponseSecretGuard::default(),
             Some(&execution),
@@ -65384,7 +65378,10 @@ mod tests {
         let response = String::from_utf8(response.to_vec()).expect("Gmail response HTTP");
         assert!(response.starts_with("HTTP/1.1 200"), "{response}");
         assert!(!response.contains("redact-me"));
-        assert_eq!(pending, Some(vec!["message-1".to_string()]));
+        assert!(matches!(
+            pending.as_deref(),
+            Some([message_id]) if message_id.as_str() == "message-1"
+        ));
         assert!(state.gmail_proofs.lock().expect("Gmail cache").is_empty());
         commit_gmail_response_proofs(
             &state,
@@ -65415,7 +65412,7 @@ mod tests {
             &url,
             StatusCode::OK,
             Some("application/json"),
-            &[],
+            &SensitiveReleasedHeaders::new(),
             reflected_body.into(),
             &guard,
             Some(&execution),
@@ -65666,7 +65663,7 @@ mod tests {
             &url,
             StatusCode::OK,
             Some("application/json"),
-            &[],
+            &SensitiveReleasedHeaders::new(),
             body.clone().into(),
             &ResponseSecretGuard::default(),
             None,
@@ -65705,7 +65702,7 @@ mod tests {
                 &url,
                 StatusCode::OK,
                 Some("application/json"),
-                &[],
+                &SensitiveReleasedHeaders::new(),
                 br#"{"safe":{"id":"visible"}}"#.to_vec().into(),
                 &ResponseSecretGuard::default(),
                 None,
@@ -65737,7 +65734,7 @@ mod tests {
             &url,
             StatusCode::OK,
             Some("application/json"),
-            &[],
+            &SensitiveReleasedHeaders::new(),
             body.into(),
             &ResponseSecretGuard::default(),
             None,
@@ -65775,7 +65772,7 @@ mod tests {
                 &url,
                 StatusCode::OK,
                 Some("application/json"),
-                &[],
+                &SensitiveReleasedHeaders::new(),
                 body.to_vec().into(),
                 &ResponseSecretGuard::default(),
                 None,
@@ -66742,21 +66739,25 @@ mod tests {
             params: BTreeMap::new(),
         };
         for path in ["/2/tweets/search/all", "/2/tweets/counts/all"] {
-            let request = DecisionRequest {
-                method: "GET".to_string(),
-                url: format!("https://api.x.com{path}?query=serverware"),
-                ..decision_request_with_body("")
-            };
+            let mut request = decision_request_with_body("");
+            request.method.zeroize();
+            request.method.push_str("GET");
+            request.url.zeroize();
+            request
+                .url
+                .push_str(&format!("https://api.x.com{path}?query=serverware"));
             let url = Url::parse(&request.url).expect("historical X URL");
             let denied = validate_adapter(&request, &BTreeMap::new(), &url, &route_match)
                 .expect_err("recent-search mode must deny historical endpoints");
             assert_eq!(denied["error"], "x_recent_search_endpoint_denied");
         }
-        let request = DecisionRequest {
-            method: "GET".to_string(),
-            url: "https://api.x.com/2/tweets/counts/recent?query=serverware".to_string(),
-            ..decision_request_with_body("")
-        };
+        let mut request = decision_request_with_body("");
+        request.method.zeroize();
+        request.method.push_str("GET");
+        request.url.zeroize();
+        request
+            .url
+            .push_str("https://api.x.com/2/tweets/counts/recent?query=serverware");
         let url = Url::parse(&request.url).expect("recent X URL");
         validate_adapter(&request, &BTreeMap::new(), &url, &route_match)
             .expect("recent-search mode permits the exact recent counts endpoint");
@@ -68226,6 +68227,7 @@ mod tests {
             Err("stream_response_proof_requires_streaming_response_route")
         );
 
+        drop(buffered_match);
         let mut streaming = buffered;
         streaming.adapter_config["response"] =
             json!({"mode":"jsonArrayStream","maxBodyBytes":1024,"allowedFields":["safe"]});
@@ -68250,6 +68252,7 @@ mod tests {
             Err("response_proof_requires_buffered_response_route")
         );
 
+        drop(streaming_match);
         let mut gmail = streaming;
         gmail.adapter_type = "gmail.v1".to_string();
         gmail.adapter_config = json!({
@@ -69498,7 +69501,7 @@ mod tests {
             &url,
             StatusCode::OK,
             Some("application/json"),
-            &[],
+            &SensitiveReleasedHeaders::new(),
             br#"{"data":"demo-token-from-vault"}"#.to_vec().into(),
             &guard,
             json!({"ok":true}),
@@ -69532,7 +69535,7 @@ mod tests {
             &url,
             StatusCode::OK,
             Some("application/json"),
-            &[],
+            &SensitiveReleasedHeaders::new(),
             br#"{"safe":true}"#.to_vec().into(),
             &ResponseSecretGuard::default(),
             json!({"ok":true}),
@@ -73292,7 +73295,11 @@ mod tests {
             .credential_leases
             .lock()
             .expect("credential lease cache")
-            .remove(&binding.scope);
+            .remove(&CredentialLeaseCacheKey::new_bound(
+                &binding.scope,
+                binding.request_authority.as_ref(),
+                binding.release_authorization.as_ref(),
+            ));
         drop(blocking_permit);
         transition.join().expect("custody health transition");
         let error = send
@@ -73484,7 +73491,11 @@ mod tests {
             .credential_leases
             .lock()
             .expect("credential lease cache")
-            .remove(&binding.scope);
+            .remove(&CredentialLeaseCacheKey::new_bound(
+                &binding.scope,
+                binding.request_authority.as_ref(),
+                binding.release_authorization.as_ref(),
+            ));
         state
             .credential_generations
             .lock()
@@ -74264,10 +74275,13 @@ mod tests {
         assert_eq!(
             released,
             vec![
-                ("retry-after".to_string(), "30".to_string()),
+                (
+                    "retry-after".to_string(),
+                    SensitiveString::new("30".to_string())
+                ),
                 (
                     "www-authenticate".to_string(),
-                    "Bearer realm=\"test\"".to_string()
+                    SensitiveString::new("Bearer realm=\"test\"".to_string())
                 )
             ]
         );
@@ -75625,7 +75639,8 @@ mod tests {
                 &json!({"type":"header","name":"x-serverware-secret"}),
                 &lease,
             )
-            .expect_err("reserved injection header must fail")
+            .err()
+            .expect("reserved injection header must fail")
             .contains("reserved for Serverware internals"));
             drop(lease);
             drop(release);
@@ -78757,7 +78772,7 @@ mod tests {
             StatusCode::OK,
             Some("application/octet-stream"),
             source,
-            &[],
+            &SensitiveReleasedHeaders::new(),
         );
         let mut recording_wire = Vec::new();
         recording_wire.extend_from_slice(&staged);

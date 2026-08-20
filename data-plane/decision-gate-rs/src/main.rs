@@ -1,4 +1,5 @@
 #![allow(clippy::too_many_arguments)]
+#![recursion_limit = "256"]
 
 mod policy_core;
 mod policy_shadow;

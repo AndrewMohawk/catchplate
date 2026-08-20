@@ -246,6 +246,10 @@ impl BoottimeDeadline {
         self.live_observation().map(|_| ())
     }
 
+    pub(crate) fn is_live(self) -> bool {
+        self.live_observation().is_ok()
+    }
+
     pub(super) fn require_expected_domain(
         self,
         expected_domain: BoottimeDomain,

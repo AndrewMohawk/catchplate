@@ -8068,7 +8068,7 @@ impl ProductionCustodyMutationPermit {
         if self.operation != operation
             || self.operation_id_sha256 != *operation_id_sha256
             || !self.fence_open.load(Ordering::Acquire)
-            || self.authorization_deadline.require_live().is_err()
+            || !self.authorization_deadline.is_live()
             || !self.operation_deadline.authorizes_operation_at(
                 production_now_boottime_nanos()?,
             )
@@ -8086,7 +8086,7 @@ impl ProductionCustodyMutationPermit {
         if self.operation != operation
             || self.operation_id_sha256 != *operation_id_sha256
             || self.fence_open.load(Ordering::Acquire)
-            || self.authorization_deadline.require_live().is_err()
+            || !self.authorization_deadline.is_live()
             || !self.operation_deadline.authorizes_cleanup_at(
                 production_now_boottime_nanos()?,
             )

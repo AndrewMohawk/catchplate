@@ -30,7 +30,7 @@ def _metadata() -> bytes:
         f"Version: {VERSION}\n"
         "Summary: Clean-room Serverware enrollment and attestation verification commands\n"
         "Requires-Python: >=3.11\n"
-        "Requires-Dist: cryptography==48.0.1\n"
+        "Requires-Dist: cryptography==50.0.0\n"
         "\n"
     ).encode("ascii")
 

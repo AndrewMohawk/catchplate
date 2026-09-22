@@ -8,7 +8,7 @@ name = "serverware-enrollment"
 version = "0.2.0"
 description = "Clean-room Serverware enrollment and attestation verification commands"
 requires-python = ">=3.11"
-dependencies = ["cryptography==48.0.1"]
+dependencies = ["cryptography==50.0.0"]
 
 [project.scripts]
 serverware-enrollment = "serverware_agent_trust.enrollment:console_main"
@@ -16,4 +16,4 @@ serverware-attestation = "serverware_agent_trust.attestation:console_main"
 
 [tool.serverware-agent-trust]
 runtime-lock = "serverware_agent_trust/requirements.lock"
-runtime-dependencies = ["cryptography==48.0.1"]
+runtime-dependencies = ["cryptography==50.0.0"]

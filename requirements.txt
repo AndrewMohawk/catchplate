@@ -1,6 +1,6 @@
 fastapi==0.136.1
 cbor2==5.9.0
-cryptography==48.0.1
+cryptography==50.0.0
 jsonschema==4.23.0
 psycopg[binary]==3.2.3
 python-multipart==0.0.31

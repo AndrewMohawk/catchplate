@@ -587,7 +587,7 @@ def main() -> None:
         package_wheel = wheelhouse / package_wheel_name
         package_wheel_bytes = b"package wheel bytes"
         package_wheel.write_bytes(package_wheel_bytes)
-        cryptography_wheel = wheelhouse / "cryptography-48.0.1-cp311-manylinux2014_x86_64.whl"
+        cryptography_wheel = wheelhouse / "cryptography-50.0.0-cp311-manylinux2014_x86_64.whl"
         cryptography_wheel_bytes = b"cryptography wheel bytes"
         cryptography_wheel.write_bytes(
             cryptography_wheel_bytes

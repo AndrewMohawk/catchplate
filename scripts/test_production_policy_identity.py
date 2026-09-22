@@ -25,7 +25,12 @@ sys.path.insert(0, str(ROOT))
 
 verifier = importlib.import_module("verify_production_policy_identity")
 
-from serverware.policy_bundle import canonical_json, demo_policy_bundle, signature_payload  # noqa: E402
+from serverware.policy_bundle import (  # noqa: E402
+    canonical_json,
+    compile_policy_bundle,
+    demo_policy_bundle,
+    signature_payload,
+)
 
 
 def b64e(value: bytes) -> str:
@@ -130,6 +135,35 @@ class ProductionPolicyIdentityVerifierTests(unittest.TestCase):
         self.assertFalse(result["identity"]["nonSpoofable"])
         self.assertIn("mTLS/SPIFFE workload identity is not implemented", " ".join(result["identity"]["limitations"]))
         self.assertEqual(result["identity"]["principalCount"], 1)
+
+    def test_signed_baseline_satisfies_current_policy_admission(self) -> None:
+        bundle = self.bundle()
+        request = bundle["routes"][0]["adapter"]["config"]["request"]
+        self.assertEqual(request["allowedFields"], ["audit_marker"])
+        snapshot = compile_policy_bundle(bundle, validate_schema=True)
+        self.assertEqual(snapshot.hash, verifier.policy_hash(bundle))
+
+    def test_valid_identity_does_not_bypass_route_schema_rejection(self) -> None:
+        bundle = self.mutate_and_sign(
+            lambda candidate: candidate["routes"][0]["adapter"]["config"]["request"].pop("allowedFields")
+        )
+        result = self.assert_rejected(bundle, "policy_validation_failed")
+        self.assertIsNone(result["policy"])
+
+    def test_identity_diagnostics_do_not_admit_a_schema_rejected_policy(self) -> None:
+        bundle = self.bundle(
+            [{"id": "agent:header", "requiredHeaders": {"X-Agent-Identity": "header-value-123"}}]
+        )
+        bundle["routes"][0]["adapter"]["config"]["request"].pop("allowedFields")
+        result = self.assert_rejected(self.sign(bundle), "header_only_principal")
+        self.assertIsNone(result["policy"])
+        self.assertEqual(result["identity"]["principals"], [])
+
+    def test_malformed_selector_diagnostics_remain_redacted_and_fail_closed(self) -> None:
+        selector = "not-a-cidr-sensitive-fixture"
+        principal = self.principal(source_cidrs=[selector])
+        result = self.assert_rejected(self.bundle([principal]), "policy_validation_failed")
+        self.assertNotIn(selector, json.dumps(result, sort_keys=True))
 
     def test_rejects_header_only_principal(self) -> None:
         bundle = self.bundle([{"id": "agent:header", "requiredHeaders": {"X-Agent-Identity": "header-value-123"}}])

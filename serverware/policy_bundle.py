@@ -7414,6 +7414,7 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                             "allowedMediaTypes": ["application/json"],
                             "bodyMode": "json",
                             "maxBodyBytes": 65536,
+                            "allowedFields": ["audit_marker"],
                         },
                         "response": {
                             "mode": "json",

@@ -62,6 +62,19 @@ def recursive_make_targets(body: str) -> list[str]:
     return [match.group(1) for line in body.splitlines() if (match := invocation.match(line))]
 
 
+def target_dependencies(makefile: str, target: str) -> list[str]:
+    declaration = re.compile(rf"^{re.escape(target)}\s*:\s*(.*)$", re.MULTILINE)
+    matches = declaration.findall(makefile)
+    if len(matches) != 1:
+        raise AssertionError(f"expected exactly one declaration for {target}")
+    return matches[0].split()
+
+
+def assert_consolidated_alias(makefile: str, target: str, dependency: str) -> None:
+    if target_dependencies(makefile, target) != [dependency] or target_body(makefile, target):
+        raise AssertionError(f"{target} must only delegate to {dependency}")
+
+
 def main() -> None:
     makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
     body = target_body(makefile, "production-release-proof")
@@ -132,7 +145,7 @@ def main() -> None:
         raise AssertionError("verify-production-release-proof omits the custody proof lifecycle")
     for required in (
         "verify-onboarding-evidence-tooling",
-        "build-agent-enrollment-wheel",
+        "verify-agent-enrollment-wheel-clean-room",
     ):
         if required not in aggregate_declaration:
             raise AssertionError(
@@ -147,13 +160,26 @@ def main() -> None:
     if "scripts/test_webauthn_recovery.py" not in recovery_body:
         raise AssertionError("WebAuthn recovery verification omits its race and rollback test")
 
-    browser_body = target_body(makefile, "verify-portal-browser-oauth")
-    for required in (
-        "python -m playwright install chromium",
-        "scripts/test_portal_browser_oauth.py",
+    for target in (
+        "verify-portal-browser-oauth", "verify-portal-browser-oauth-no-build",
+        "verify-agent-enrollment-wheel-clean-room",
     ):
-        if required not in browser_body:
-            raise AssertionError(f"portal browser OAuth verification omits {required}")
+        assert_consolidated_alias(makefile, target, "verify-consolidated-no-build")
+    no_build_body = target_body(makefile, "verify-consolidated-no-build")
+    for required in (
+        '$(CONSOLIDATED_TRUSTED_LAUNCHER)" verify',
+        "--promotion-receipt", "--promotion-public-key",
+        "--expected-candidate-index-sha256", "--expected-manifest-file-sha256",
+        "--expected-python-sha256", "--trusted-runtime-manifest",
+    ):
+        if required not in no_build_body:
+            raise AssertionError(f"promoted no-build verification omits {required}")
+    for forbidden in ("pip install", "pip download", "playwright install", "docker build", "$(MAKE)"):
+        if forbidden in no_build_body:
+            raise AssertionError(f"no-build verification must not prepare dependencies: {forbidden}")
+    lane_source = (ROOT / "scripts" / "oci_lane_entrypoint.py").read_text(encoding="utf-8")
+    if '"portal-browser-oauth": ("scripts/test_portal_browser_oauth.py", ())' not in lane_source:
+        raise AssertionError("fixed promoted OCI lanes omit the browser OAuth test")
     for target in ("bench-gate-rs", "verify-oauth-credentials"):
         if "$(MAKE) verify-portal-browser-oauth" not in target_body(makefile, target):
             raise AssertionError(f"{target} omits the portal browser OAuth proof")
@@ -489,50 +515,24 @@ def main() -> None:
                     f"{dockerfile.relative_to(ROOT)} resolves {forbidden.strip()} during production build"
                 )
 
-    wheel_body = target_body(makefile, "build-agent-enrollment-wheel")
-    if (
-        "AGENT_ENROLLMENT_WHEEL_FILENAME ?= $(shell python3 -c "
-        "'from serverware_agent_trust.build_backend import WHEEL_NAME; print(WHEEL_NAME)')"
-        not in makefile
-    ):
-        raise AssertionError("agent enrollment wheel filename is not sourced from build_backend.WHEEL_NAME")
+    for target in ("build-agent-enrollment-wheel", "build-portal-browser-artifacts"):
+        assert_consolidated_alias(makefile, target, "build-consolidated-test-artifacts")
+    preparation_body = target_body(makefile, "build-consolidated-test-artifacts")
     for required in (
-        "AGENT_ENROLLMENT_WHEEL_DIRECTORY must resolve below the repository .tmp directory",
-        "pip download",
-        "--require-hashes",
-        "--only-binary=:all:",
-        '--platform "$(AGENT_ENROLLMENT_TARGET_PLATFORM)"',
-        "--implementation cp",
-        '--python-version "$(AGENT_ENROLLMENT_TARGET_PYTHON)"',
-        '--abi "$(AGENT_ENROLLMENT_TARGET_ABI)"',
-        "$(AGENT_ENROLLMENT_RUNTIME_LOCK)",
-        '"$(AGENT_ENROLLMENT_WHEEL_DIRECTORY)/requirements.lock"',
-        "--no-build-isolation",
-        "--no-deps",
-        "$(AGENT_ENROLLMENT_WHEEL_FILENAME)",
-        "generate_offline_artifact_manifest.py",
-        "verify_offline_artifact_manifest.py",
-        "$(AGENT_ENROLLMENT_WHEEL_MANIFEST)",
-        "$(AGENT_ENROLLMENT_WHEEL_CHECKSUMS)",
-        "--checksums",
-        "SHA256SUMS",
-        "shasum -a 256 -c SHA256SUMS",
-        "sha256sum -c SHA256SUMS",
-        "--python-tag cp311",
-        '"$(AGENT_ENROLLMENT_TARGET_PLATFORM)"',
-        "--architecture amd64",
+        "supervise-build-lease-v4", "--expected-client-sha256",
+        "--expected-contract-sha256", "--expected-capability-sha256",
+        "--expected-source-input-manifest-sha256",
+        "_build-consolidated-test-artifacts-locked",
     ):
-        if required not in wheel_body:
-            raise AssertionError(f"clean-room wheel build target omits {required}")
-    if wheel_body.index("must resolve below") > wheel_body.index('rm -rf "'):
-        raise AssertionError(
-            "wheelhouse path guard must execute before recursive cleanup"
-        )
-    generate_position = wheel_body.index("generate_offline_artifact_manifest.py")
-    checksum_position = wheel_body.index("shasum -a 256 -c SHA256SUMS")
-    verify_position = wheel_body.index("verify_offline_artifact_manifest.py")
-    if not generate_position < checksum_position < verify_position:
-        raise AssertionError("wheel build must generate, standard-verify, then Python-verify SHA256SUMS")
+        if required not in preparation_body:
+            raise AssertionError(f"candidate preparation omits its independent build owner: {required}")
+    locked_preparation = target_body(makefile, "_build-consolidated-test-artifacts-locked")
+    for required in (
+        "--all-images-before-return", "--network none", "--no-behavioral-probes",
+        "--deterministic-oci-archives", "record-candidate-manifest",
+    ):
+        if required not in locked_preparation:
+            raise AssertionError(f"frozen batch preparation omits {required}")
     with tempfile.TemporaryDirectory(prefix="serverware-release-contract-") as temporary_directory:
         wheelhouse = Path(temporary_directory)
         package_wheel_name = subprocess.check_output(

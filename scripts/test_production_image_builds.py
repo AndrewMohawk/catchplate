@@ -145,8 +145,6 @@ def assert_production_dependencies() -> None:
     compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
     if "SERVERWARE_INSTALL_PROTOTYPE_MITMPROXY" in compose:
         raise AssertionError("default docker-compose.yml must not enable the mitmproxy prototype")
-    if '"127.0.0.1:8080:9090"' not in compose:
-        raise AssertionError("default docker-compose.yml must expose the Rust decision gate on a loopback-only agent proxy port")
     dev_result = subprocess.run(
         ["docker", "compose", "--env-file", "/dev/null", "--profile", "custody", "config", "--format", "json"],
         cwd=ROOT,
@@ -160,6 +158,13 @@ def assert_production_dependencies() -> None:
             f"development Compose model did not parse: {dev_result.stderr.decode(errors='replace')}"
         )
     dev_model = json.loads(dev_result.stdout)
+    dev_proxy_ports = [
+        binding
+        for binding in dev_model["services"]["decision-gate-rs"].get("ports", [])
+        if int(binding["target"]) == 9090 and str(binding.get("published")) == "8080"
+    ]
+    if len(dev_proxy_ports) != 1 or dev_proxy_ports[0].get("host_ip") != "127.0.0.1":
+        raise AssertionError("default development agent proxy must publish 8080 only on loopback")
     try:
         generate_release_provenance.development_compose_services(
             dev_model, ["docker-compose.yml"], ["custody"]
@@ -295,7 +300,7 @@ def assert_production_dependencies() -> None:
         raise AssertionError("production decision gate must not mount control-plane private state")
     if "serverware-gate-materials:/run/serverware/gate:ro" not in production_compose:
         raise AssertionError("production decision gate must mount only the scoped gate-material volume")
-    compose_env = os.environ.copy()
+    compose_env = clean_environment()
     for name in re.findall(r"\$\{([A-Z0-9_]+):\?[^}]*\}", production_compose):
         compose_env.setdefault(name, "serverware-compose-test-value")
     bind_mount_fixtures = {
@@ -319,7 +324,7 @@ def assert_production_dependencies() -> None:
     compose_env["SERVERWARE_CONTROL_PLANE_IMAGE"] = "registry.test/serverware-control@sha256:" + "1" * 64
     compose_env["SERVERWARE_DECISION_GATE_IMAGE"] = "registry.test/serverware-gate@sha256:" + "2" * 64
     result = subprocess.run(
-        ["docker", "compose", "-f", str(production_compose_path), "config", "--format", "json"],
+        ["docker", "compose", "--env-file", "/dev/null", "-f", str(production_compose_path), "config", "--format", "json"],
         cwd=ROOT,
         env=compose_env,
         stdout=subprocess.PIPE,
@@ -419,8 +424,22 @@ def assert_production_dependencies() -> None:
     if set(model["services"]) != {
         "serverware",
         "audit-anchor",
+        "policy-authority-runtime",
+        "policy-authority-verifier",
+        "policy-authority-issuer",
+        "policy-authority-executor",
+        "policy-authority-external-witness-ready",
         "custody-runtime",
         "decision-gate-rs",
+        "response-v2-generation-bootstrap",
+        "response-v2-state-authority",
+        "response-v2-credential-transport",
+        "response-v2-policy-proof-verifier",
+        "response-v2-immutable-artifact-ledger",
+        "response-v2-release-attestor-publisher",
+        "response-v2-cleanup-watchdog",
+        "response-v2-custody-router",
+        "response-v2-generation-activation",
     }:
         raise AssertionError(f"production Compose service set is not closed and complete: {sorted(model['services'])}")
     custody = model["services"]["custody-runtime"]

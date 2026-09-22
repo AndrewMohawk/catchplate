@@ -34,7 +34,8 @@ def _merge_kernels() -> dict[
         overlap = set(merged) & set(registry)
         if overlap:
             raise RuntimeError(
-                "authority transition kernel registries overlap"
+                "authority transition kernel registries overlap: "
+                + ", ".join(sorted(overlap))
             )
         merged.update(registry)
     return merged
@@ -75,30 +76,76 @@ _EXPECTED_TRANSITION_OPERATIONS = (
     - set(WEBAUTHN_CHALLENGE_OPERATIONS)
     - set(INTENTIONALLY_DISABLED_OPERATIONS)
 )
-if (
-    set(KERNELS) != _EXPECTED_TRANSITION_OPERATIONS
-    or set(PLANNABLE_OPERATIONS)
-    & set(INTENTIONALLY_DISABLED_OPERATIONS)
-    or any(
-        kernel.operation != operation
-        or authority_contract.operation_spec(operation)["handler"]
-            != kernel.handler
-        or authority_contract.transition_program_id(operation)
-            != kernel.program_id
-        or not isinstance(kernel.permits_empty_mutation, bool)
-        or authority_contract.operation_spec(operation)["planningMode"]
-            != "typed-pure-transition"
-        for operation, kernel in KERNELS.items()
+
+
+def _registry_closure_errors() -> tuple[str, ...]:
+    errors: list[str] = []
+    for label, operations in (
+        (
+            "missing transition kernels",
+            _EXPECTED_TRANSITION_OPERATIONS - set(KERNELS),
+        ),
+        (
+            "unexpected transition kernels",
+            set(KERNELS) - _EXPECTED_TRANSITION_OPERATIONS,
+        ),
+        (
+            "disabled operations are plannable",
+            set(PLANNABLE_OPERATIONS)
+            & set(INTENTIONALLY_DISABLED_OPERATIONS),
+        ),
+    ):
+        if operations:
+            errors.append(f"{label}=[{', '.join(sorted(operations))}]")
+
+    for operation, kernel in sorted(KERNELS.items()):
+        # Unknown operations already fail coverage above. Do not hide that
+        # diagnostic behind a lookup error from the operation contract.
+        if operation not in authority_contract.OPERATION_REGISTRY:
+            continue
+        spec = authority_contract.operation_spec(operation)
+        invalid_fields = tuple(
+            label
+            for label, valid in (
+                ("operation", kernel.operation == operation),
+                ("handler", spec["handler"] == kernel.handler),
+                (
+                    "program-id",
+                    authority_contract.transition_program_id(operation)
+                    == kernel.program_id,
+                ),
+                (
+                    "permits-empty-mutation",
+                    isinstance(kernel.permits_empty_mutation, bool),
+                ),
+                ("planning-mode", spec["planningMode"] == "typed-pure-transition"),
+            )
+            if not valid
+        )
+        if invalid_fields:
+            errors.append(
+                f"invalid transition kernel {operation}"
+                f"=[{', '.join(invalid_fields)}]"
+            )
+
+    for operations, expected_mode in (
+        (WEBAUTHN_CHALLENGE_OPERATIONS, "typed-webauthn-challenge"),
+        (INTENTIONALLY_DISABLED_OPERATIONS, "intentionally-disabled"),
+    ):
+        for operation in sorted(operations):
+            if operation not in authority_contract.OPERATION_REGISTRY:
+                errors.append(f"missing operation contract=[{operation}]")
+            elif (
+                authority_contract.operation_spec(operation)["planningMode"]
+                != expected_mode
+            ):
+                errors.append(f"invalid planning mode=[{operation}]")
+    return tuple(errors)
+
+
+_CLOSURE_ERRORS = _registry_closure_errors()
+if _CLOSURE_ERRORS:
+    raise RuntimeError(
+        "authority transition registry is not closed: "
+        + "; ".join(_CLOSURE_ERRORS)
     )
-    or any(
-        authority_contract.operation_spec(operation)["planningMode"]
-            != "typed-webauthn-challenge"
-        for operation in WEBAUTHN_CHALLENGE_OPERATIONS
-    )
-    or any(
-        authority_contract.operation_spec(operation)["planningMode"]
-            != "intentionally-disabled"
-        for operation in INTENTIONALLY_DISABLED_OPERATIONS
-    )
-):
-    raise RuntimeError("authority transition registry is not closed")

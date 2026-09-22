@@ -81,6 +81,8 @@ def release_security_fixture(
     policy_key_path = tmp / "policy-signing.pub.pem"
     policy_key_path.write_text(fixture.public_key_pem, encoding="ascii")
     identity_result = fixture.verify(bundle)
+    if identity_result.get("ok") is not True:
+        raise AssertionError(f"release security fixture policy identity was rejected: {identity_result}")
     identity_path = tmp / "production-policy-identity-verification.json"
     verify_production_policy_identity.write_private(
         identity_path,

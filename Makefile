@@ -7204,7 +7204,7 @@ verify-launch-authorization:
 	$(CRYPTO_SCHEMA_PYTHON_RUN) scripts/test_launch_authorization.py
 	$(CRYPTO_PYTHON_RUN) scripts/test_launch_authority_service.py
 
-verify-production-release-proof: verify-production-launch-assets verify-launch-authorization verify-production-image-builds verify-production-release-input-preflight verify-production-host-preflight verify-production-readiness-runner verify-release-completion verify-custody-response-proof verify-onboarding-evidence-tooling build-agent-enrollment-wheel
+verify-production-release-proof: verify-production-launch-assets verify-launch-authorization verify-production-image-builds verify-production-release-input-preflight verify-production-host-preflight verify-production-readiness-runner verify-release-completion verify-custody-response-proof verify-onboarding-evidence-tooling verify-agent-enrollment-wheel-clean-room
 	python3 scripts/test_production_release_proof_target.py
 
 verify-credential-policy-contracts:

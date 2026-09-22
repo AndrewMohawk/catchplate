@@ -594,6 +594,18 @@ def verify_production_policy_identity(
         except (PolicyBundleError, KeyError, TypeError, ValueError) as exc:
             if shape_issues:
                 return report(ok=False, issues=shape_issues)
+            # Schema/semantic admission also rejects some weak identity shapes.
+            # Preserve their redacted identity diagnostics without treating the
+            # diagnostic-only inspector as policy admission. Malformed selectors
+            # that the inspector cannot parse retain the generic rejection.
+            try:
+                identity_issues, _ = inspect_production_identities(
+                    bundle, now_epoch_ms=now_ms
+                )
+            except (KeyError, TypeError, ValueError):
+                identity_issues = []
+            if identity_issues:
+                return report(ok=False, issues=identity_issues)
             raise VerificationError(
                 "policy_validation_failed",
                 "signed policy bundle failed existing schema or semantic validation",

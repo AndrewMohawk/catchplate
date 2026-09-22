@@ -8,6 +8,13 @@ For the operator OAuth flow, policy assignment screenshots, and copy-pasteable a
 
 ## Run
 
+Current source does **not** pass control-plane startup: four declared WebAuthn
+authority transitions and their evidence/admission adapters are missing. The
+registry fails closed before startup. See
+[the exact implementation blocker](docs/authority-transition-startup-blocker.md).
+The commands below describe the intended development workflow, not a verified
+working deployment.
+
 ```bash
 make up
 open http://localhost:3000
@@ -44,7 +51,7 @@ service, build the application images once, and start without rebuilding:
 
 ```bash
 docker compose pull grant-store
-docker compose build serverware demo-upstream audit-anchor
+docker compose build serverware demo-upstream audit-anchor decision-gate-rs
 docker compose up -d --no-build serverware demo-upstream audit-anchor
 docker compose ps
 curl -fsS http://127.0.0.1:3000/healthz
@@ -79,6 +86,12 @@ new credential-free HTTPS snapshot, and commit its reviewed snapshot ID and
 SHA-256 values. Do not edit the manifest merely to match the new lock, reuse the
 old wheelhouse, disable verification, or allow network access inside the
 production build.
+
+An unpublished candidate can be prepared with the bounded
+[dependency-snapshot producer](docs/production-dependency-snapshot.md).
+It checks carried-forward Rust artifacts and validates fresh Python wheels in
+a separate offline container. It does not publish anything, change reviewed
+pins, or supply release authority.
 
 Once that dependency-snapshot commit is on `main`, use its exact immutable URL
 and build all production artifacts before running any verification lane:

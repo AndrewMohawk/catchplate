@@ -6418,7 +6418,7 @@ def verify_verifier_state_read_response(
         and (
             expected_state is None
             or state["document"] == expected_state["document"]
-        )
+        ),
         f"{label} is substituted or crossed",
     )
     return {

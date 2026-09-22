@@ -62,6 +62,14 @@ def file_digest(path: Path) -> str:
 
 
 def strict_json(path: Path, label: str) -> dict[str, Any]:
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        raise ValueError(f"{label} could not be read: {path}") from exc
+    return strict_json_bytes(raw, label)
+
+
+def strict_json_bytes(raw: bytes, label: str) -> dict[str, Any]:
     def reject_constant(value: str) -> None:
         raise ValueError(f"{label} must use strict JSON values")
 
@@ -75,12 +83,12 @@ def strict_json(path: Path, label: str) -> dict[str, Any]:
 
     try:
         value = json.loads(
-            path.read_text(encoding="utf-8"),
+            raw.decode("utf-8"),
             object_pairs_hook=reject_duplicates,
             parse_constant=reject_constant,
         )
-    except OSError as exc:
-        raise ValueError(f"{label} could not be read: {path}") from exc
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"{label} must be UTF-8 JSON") from exc
     if not isinstance(value, dict):
         raise ValueError(f"{label} must be a JSON object")
     return value
@@ -99,10 +107,17 @@ def external_signature_payload(*, purpose: str, artifact_sha256: str) -> bytes:
 def public_key(path: Path, label: str) -> tuple[Ed25519PublicKey, str]:
     try:
         raw = path.read_bytes()
+    except OSError as exc:
+        raise ValueError(f"{label} is not a valid Ed25519 public key") from exc
+    return public_key_bytes(raw, label)
+
+
+def public_key_bytes(raw: bytes, label: str) -> tuple[Ed25519PublicKey, str]:
+    try:
         if b"PRIVATE KEY" in raw:
             raise ValueError(f"{label} must contain public key material only")
         key = serialization.load_pem_public_key(raw)
-    except (OSError, TypeError, ValueError) as exc:
+    except (TypeError, ValueError) as exc:
         raise ValueError(f"{label} is not a valid Ed25519 public key") from exc
     if not isinstance(key, Ed25519PublicKey):
         raise ValueError(f"{label} must be an Ed25519 public key")
@@ -119,10 +134,37 @@ def verify_externally_signed_report(
     api_version: str,
     kind: str,
 ) -> dict[str, Any]:
-    report = strict_json(report_path, f"{purpose} report")
+    # Parsing, signature verification, and returned digests share these bytes.
+    # Callers with an existing input snapshot use the bytes entry point below.
+    try:
+        report_bytes = report_path.read_bytes()
+        signature_bytes = signature_path.read_bytes()
+        trusted_public_key_bytes = trusted_public_key_path.read_bytes()
+    except OSError as exc:
+        raise ValueError(f"{purpose} evidence could not be read") from exc
+    return verify_externally_signed_report_bytes(
+        report_bytes=report_bytes,
+        signature_bytes=signature_bytes,
+        trusted_public_key_bytes=trusted_public_key_bytes,
+        purpose=purpose,
+        api_version=api_version,
+        kind=kind,
+    )
+
+
+def verify_externally_signed_report_bytes(
+    *,
+    report_bytes: bytes,
+    signature_bytes: bytes,
+    trusted_public_key_bytes: bytes,
+    purpose: str,
+    api_version: str,
+    kind: str,
+) -> dict[str, Any]:
+    report = strict_json_bytes(report_bytes, f"{purpose} report")
     if report.get("apiVersion") != api_version or report.get("kind") != kind or report.get("ok") is not True:
         raise ValueError(f"{purpose} report is not a successful {api_version} artifact")
-    signature_document = strict_json(signature_path, f"{purpose} detached signature")
+    signature_document = strict_json_bytes(signature_bytes, f"{purpose} detached signature")
     expected_fields = {
         "apiVersion",
         "kind",
@@ -134,8 +176,8 @@ def verify_externally_signed_report(
     }
     if set(signature_document) != expected_fields:
         raise ValueError(f"{purpose} detached signature has unexpected or missing fields")
-    artifact_sha256 = file_digest(report_path)
-    key, key_id = public_key(trusted_public_key_path, f"{purpose} trusted public key")
+    artifact_sha256 = sha256_prefixed(report_bytes)
+    key, key_id = public_key_bytes(trusted_public_key_bytes, f"{purpose} trusted public key")
     if (
         signature_document.get("apiVersion") != EXTERNAL_SIGNATURE_API_VERSION
         or signature_document.get("kind") != EXTERNAL_SIGNATURE_KIND
@@ -157,8 +199,8 @@ def verify_externally_signed_report(
         "ok": True,
         "purpose": purpose,
         "reportSha256": artifact_sha256,
-        "signatureSha256": file_digest(signature_path),
-        "trustedPublicKeySha256": file_digest(trusted_public_key_path),
+        "signatureSha256": sha256_prefixed(signature_bytes),
+        "trustedPublicKeySha256": sha256_prefixed(trusted_public_key_bytes),
         "signerKeyId": key_id,
         "report": report,
     }

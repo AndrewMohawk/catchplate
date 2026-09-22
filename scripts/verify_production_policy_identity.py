@@ -147,6 +147,10 @@ def load_policy_bundle(path: Path) -> dict[str, Any]:
         raw = path.read_bytes()
     except OSError as exc:
         raise VerificationError("input_read_failed", "policy bundle could not be read") from exc
+    return load_policy_bundle_bytes(raw)
+
+
+def load_policy_bundle_bytes(raw: bytes) -> dict[str, Any]:
     if len(raw) > MAX_INPUT_BYTES:
         raise VerificationError("input_too_large", "policy bundle exceeds the verifier input limit")
     try:
@@ -177,6 +181,10 @@ def load_trusted_public_key(path: Path) -> tuple[str, str]:
         raw = path.read_bytes()
     except OSError as exc:
         raise VerificationError("trust_root_read_failed", "trusted policy public key could not be read") from exc
+    return load_trusted_public_key_bytes(raw)
+
+
+def load_trusted_public_key_bytes(raw: bytes) -> tuple[str, str]:
     if len(raw) > MAX_PUBLIC_KEY_BYTES:
         raise VerificationError("trust_root_invalid", "trusted policy public key is invalid")
     if b"PRIVATE KEY" in raw:
@@ -632,14 +640,29 @@ def persisted_report(
     trusted_public_key_path: Path,
     trusted_public_key_hash: str,
 ) -> dict[str, Any]:
+    return persisted_report_bytes(
+        result,
+        bundle_bytes=bundle_path.read_bytes(),
+        trusted_public_key_bytes=trusted_public_key_path.read_bytes(),
+        trusted_public_key_hash=trusted_public_key_hash,
+    )
+
+
+def persisted_report_bytes(
+    result: dict[str, Any],
+    *,
+    bundle_bytes: bytes,
+    trusted_public_key_bytes: bytes,
+    trusted_public_key_hash: str,
+) -> dict[str, Any]:
     bound = dict(result)
     bound["artifactBindings"] = {
         "policyBundle": {
-            "sha256": file_digest(bundle_path),
+            "sha256": "sha256:" + hashlib.sha256(bundle_bytes).hexdigest(),
             "runtimePolicyHash": (result.get("policy") or {}).get("hash"),
         },
         "trustedPublicKey": {
-            "sha256": file_digest(trusted_public_key_path),
+            "sha256": "sha256:" + hashlib.sha256(trusted_public_key_bytes).hexdigest(),
             "spkiSha256": trusted_public_key_hash,
         },
     }
@@ -660,8 +683,27 @@ def verify_persisted_report(
     trusted_public_key_path: Path,
     report_path: Path,
 ) -> dict[str, Any]:
-    bundle = load_policy_bundle(bundle_path)
-    public_key_pem, public_key_hash = load_trusted_public_key(trusted_public_key_path)
+    try:
+        bundle_bytes = bundle_path.read_bytes()
+        trusted_public_key_bytes = trusted_public_key_path.read_bytes()
+        report_bytes = report_path.read_bytes()
+    except OSError as exc:
+        raise VerificationError("input_read_failed", "policy identity evidence could not be read") from exc
+    return verify_persisted_report_bytes(
+        bundle_bytes=bundle_bytes,
+        trusted_public_key_bytes=trusted_public_key_bytes,
+        report_bytes=report_bytes,
+    )
+
+
+def verify_persisted_report_bytes(
+    *,
+    bundle_bytes: bytes,
+    trusted_public_key_bytes: bytes,
+    report_bytes: bytes,
+) -> dict[str, Any]:
+    bundle = load_policy_bundle_bytes(bundle_bytes)
+    public_key_pem, public_key_hash = load_trusted_public_key_bytes(trusted_public_key_bytes)
     current = verify_production_policy_identity(
         bundle,
         public_key_pem,
@@ -669,13 +711,13 @@ def verify_persisted_report(
     )
     if current.get("ok") is not True:
         raise VerificationError("policy_identity_rejected", "current production policy identity verification failed")
-    expected = persisted_report(
+    expected = persisted_report_bytes(
         current,
-        bundle_path=bundle_path,
-        trusted_public_key_path=trusted_public_key_path,
+        bundle_bytes=bundle_bytes,
+        trusted_public_key_bytes=trusted_public_key_bytes,
         trusted_public_key_hash=public_key_hash,
     )
-    actual = load_policy_bundle(report_path)
+    actual = load_policy_bundle_bytes(report_bytes)
     if actual != expected:
         raise VerificationError(
             "stale_identity_verification",
@@ -685,7 +727,7 @@ def verify_persisted_report(
     bindings = expected["artifactBindings"]
     return {
         "ok": True,
-        "reportSha256": file_digest(report_path),
+        "reportSha256": "sha256:" + hashlib.sha256(report_bytes).hexdigest(),
         "policyBundleSha256": bindings["policyBundle"]["sha256"],
         "policyHash": policy.get("hash"),
         "policyId": policy.get("id"),
@@ -703,17 +745,25 @@ def main(argv: list[str] | None = None) -> int:
     args: argparse.Namespace | None = None
     try:
         args = build_parser().parse_args(argv)
-        bundle = load_policy_bundle(args.bundle)
-        public_key_pem, public_key_hash = load_trusted_public_key(args.trusted_public_key)
+        try:
+            bundle_bytes = args.bundle.read_bytes()
+        except OSError as exc:
+            raise VerificationError("input_read_failed", "policy bundle could not be read") from exc
+        try:
+            trusted_public_key_bytes = args.trusted_public_key.read_bytes()
+        except OSError as exc:
+            raise VerificationError("trust_root_read_failed", "trusted policy public key could not be read") from exc
+        bundle = load_policy_bundle_bytes(bundle_bytes)
+        public_key_pem, public_key_hash = load_trusted_public_key_bytes(trusted_public_key_bytes)
         result = verify_production_policy_identity(
             bundle,
             public_key_pem,
             trusted_public_key_hash=public_key_hash,
         )
-        result = persisted_report(
+        result = persisted_report_bytes(
             result,
-            bundle_path=args.bundle,
-            trusted_public_key_path=args.trusted_public_key,
+            bundle_bytes=bundle_bytes,
+            trusted_public_key_bytes=trusted_public_key_bytes,
             trusted_public_key_hash=public_key_hash,
         )
     except VerificationError as exc:

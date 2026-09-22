@@ -1060,6 +1060,7 @@ def production_commands(
     deployment_identity_sha256: str,
     release_sequence: str,
     rollback_epoch: str,
+    artifact_paths: dict[str, Path],
 ) -> dict[str, Any]:
     source_tree_digest = str(
         (build.get("metadata") or {}).get("source_tree_digest") or ""
@@ -1072,94 +1073,113 @@ def production_commands(
         release_sequence=release_sequence,
         rollback_epoch=rollback_epoch,
     )
-    commands = [
-        ["make", "build-production-images"],
-        [
-            "make",
-            "decision-gate-bench-evidence",
-            "DECISION_GATE_BENCH_FILE=.tmp/decision-gate-rs-bench.json",
-        ],
+    artifact_variables = [f"{name}={path}" for name, path in sorted(artifact_paths.items())]
+    release_variables = [
+        f"PRODUCTION_RELEASE_ROOT={release_root}",
+        f"PRODUCTION_SOURCE_TREE_DIGEST={source_tree_digest}",
     ]
+    registry_variables = (
+        [f"PRODUCTION_IMAGE_REGISTRY_PREFIX={registry_prefix}", f"PRODUCTION_IMAGE_TAG={tag}"]
+        if registry_prefix
+        else []
+    )
     publish_plan: list[dict[str, Any]] = []
     if registry_prefix:
         publish_plan = publish_production_images.command_plan(
             build, registry_prefix=registry_prefix, tag=tag
         )
-        commands.append(
-            [
-                "make",
-                "publish-production-images",
-                f"PRODUCTION_IMAGE_REGISTRY_PREFIX={registry_prefix}",
-                f"PRODUCTION_IMAGE_TAG={tag}",
-            ]
-        )
-    commands.extend(
-        [
-            [
-                "make",
-                "merge-production-images-env",
-                "PRODUCTION_IMAGES_ENV_OUT=.tmp/production-images.env",
-                f"PRODUCTION_READINESS_ENV={env_file}",
+    stages = [
+        {
+            "name": "publish",
+            "trust_domain": "release-publisher",
+            "prerequisites": [
+                "all image, Python-runtime, and launcher artifacts built once from the same clean commit",
+                "sequential engineering verification of the exact prepared artifacts",
+                "operator-controlled registry and separately scoped publication authority",
             ],
-            ["make", "build-production-launcher"],
-            [
-                "make",
-                "production-release-provenance",
-                "RELEASE_PROVENANCE_SUMMARY_FILE=.tmp/release-provenance-summary.json",
-                "RELEASE_PROVENANCE_FILE=.tmp/release-provenance.json",
-                "PRODUCTION_IMAGES_ENV_OUT=.tmp/production-images.env",
-                f"PRODUCTION_READINESS_ENV={env_file}",
+            "commands": [
+                ["make", "production-release-publish", *registry_variables,
+                 f"PRODUCTION_READINESS_ENV={env_file}", *artifact_variables]
+            ] if registry_prefix else [],
+        },
+        {
+            "name": "sign",
+            "trust_domain": "release-signing-owner",
+            "prerequisites": [
+                "published digest-pinned image records and verified no-shell image measurements",
+                "independently signed reproducible-build captures and pinned builder identities",
+                "configured production signing and independently witnessed transparency services",
             ],
-            [
-                "make",
-                "sign-production-images",
-                "PRODUCTION_IMAGES_ENV_OUT=.tmp/production-images.env",
-                f"PRODUCTION_READINESS_ENV={env_file}",
-                "IMAGE_SIGNATURES_SUMMARY_FILE=.tmp/image-signatures-summary.json",
-                "IMAGE_SIGNATURES_FILE=.tmp/image-signatures.json",
+            "commands": [
+                ["make", "production-release-sign", f"PRODUCTION_READINESS_ENV={env_file}",
+                 *artifact_variables]
             ],
-            [
-                "make",
-                "prepare-aws-kms-materials",
-                f"AWS_KMS_MATERIALS_SPEC={kms_spec}",
-                f"AWS_KMS_MATERIALS_OUT={kms_out}",
+        },
+        {
+            "name": "deploy",
+            "trust_domain": "production-operator",
+            "prerequisites": [
+                "published and independently signed release artifacts",
+                "verified enrollment, policy activation, and reproducibility evidence",
+                "configured PRODUCTION_DEPLOY_COMMAND, production host, KMS materials, and launch-authority pins",
+                "prepared Python runtime and launcher artifacts retained with their original build record",
             ],
-            ["make", "deploy-production"],
-            ["make", "install-production-launcher", *launch_variables],
-            [
-                "make",
-                "generate-production-launch-manifest",
-                f"PRODUCTION_RELEASE_ROOT={release_root}",
-                f"PRODUCTION_SOURCE_TREE_DIGEST={source_tree_digest}",
-                *launch_variables,
+            "commands": [
+                ["make", "production-release-deploy", *registry_variables,
+                 f"PRODUCTION_READINESS_ENV={env_file}", f"AWS_KMS_MATERIALS_SPEC={kms_spec}",
+                 f"AWS_KMS_MATERIALS_OUT={kms_out}", *artifact_variables,
+                 *release_variables, *launch_variables]
             ],
-            ["make", "run-production-readiness-final"],
-        ]
-    )
-    one_shot = ["make", "production-release-proof"]
-    if registry_prefix:
-        one_shot.extend(
-            [
-                f"PRODUCTION_IMAGE_REGISTRY_PREFIX={registry_prefix}",
-                f"PRODUCTION_IMAGE_TAG={tag}",
-            ]
-        )
-    one_shot.extend(
-        [
-            f"PRODUCTION_READINESS_ENV={env_file}",
-            f"AWS_KMS_MATERIALS_SPEC={kms_spec}",
-            f"AWS_KMS_MATERIALS_OUT={kms_out}",
-            f"PRODUCTION_RELEASE_ROOT={release_root}",
-            f"PRODUCTION_SOURCE_TREE_DIGEST={source_tree_digest}",
-            *launch_variables,
-        ]
-    )
+        },
+        {
+            "name": "prepare-final-request",
+            "trust_domain": "independent-production-verifier",
+            "prerequisites": [
+                "immutable installed release and its frozen Python runtime on the verifier host",
+                "independently authenticated public Nitro evidence, expectations, trust roots, and signed verifier result",
+                "all PRODUCTION_FINAL_V1 inputs and global role-registry pins configured independently",
+            ],
+            "commands": [["make", "prepare-production-final-v1", *release_variables]],
+        },
+        {
+            "name": "authorize-final-result",
+            "trust_domain": "independent-final-authority",
+            "prerequisites": [
+                "retained exact signing request from prepare-production-final-v1",
+                "external authority verifies the request and returns its matching signed response",
+            ],
+            "commands": [],
+        },
+        {
+            "name": "verify-final-result",
+            "trust_domain": "independent-production-verifier",
+            "prerequisites": [
+                "PRODUCTION_FINAL_V1_RETAINED_SIGNING_REQUEST and matching PRODUCTION_FINAL_V1_SIGNING_RESPONSE",
+                "the same independently pinned public Nitro inputs, global role registry, and final-authority public key",
+            ],
+            "commands": [["make", "production-release-proof", *release_variables]],
+        },
+    ]
     return {
         "registry_prefix": registry_prefix,
         "tag": tag,
-        "one_shot_command": one_shot,
         "publish_plan": publish_plan,
-        "commands": commands,
+        "scope": "stage reference for operators; inspect retained evidence before rerunning any completed stage",
+        "execution": "run each stage separately in its named trust domain after satisfying its prerequisites",
+        "build_preparation": {
+            "command": ["make", "production-release-build"],
+            "scope": "fresh release workspace before any verification lane",
+            "current_image_build_verified": True,
+            "repeat_for_current_build": False,
+            "note": "This handoff already consumes built images. Retain them; finish any missing Python-runtime or launcher artifact before verification. Their completion is not verified by this handoff.",
+        },
+        "stages": stages,
+        "legacy_readiness": {
+            "commands": [["make", "run-production-readiness-final", *release_variables, *launch_variables]],
+            "scope": "trusted-host-readiness-only",
+            "production_completion_evidence": False,
+            "prerequisites": ["explicit operator selection of the legacy Linux /dev/nsm and AppArmor readiness lane"],
+        },
     }
 
 
@@ -1309,6 +1329,14 @@ def main() -> None:
             deployment_identity_sha256=args.deployment_identity_sha256,
             release_sequence=args.release_sequence,
             rollback_epoch=args.rollback_epoch,
+            artifact_paths={
+                "PRODUCTION_IMAGES_BUILD_FILE": build_path,
+                "PRODUCTION_IMAGES_ENV_OUT": Path(args.production_images_env),
+                "RELEASE_PROVENANCE_FILE": Path(args.release_provenance),
+                "RELEASE_PROVENANCE_SUMMARY_FILE": Path(args.release_provenance_summary),
+                "IMAGE_SIGNATURES_FILE": Path(args.image_signatures),
+                "IMAGE_SIGNATURES_SUMMARY_FILE": Path(args.image_signatures_summary),
+            },
         )
         remaining = []
         if not registry_prefix:
@@ -1319,31 +1347,27 @@ def main() -> None:
             remaining.append(
                 "create a non-placeholder ops/production-readiness.env on the production host"
             )
-        if (
-            not host["linux"]
-            or not host["nitro_nsm_device"]
-            or not host["apparmor_sysfs"]
-        ):
-            remaining.append(
-                "run final readiness on a Linux Nitro host with /dev/nsm and AppArmor"
-            )
+        if not host["linux"]:
+            remaining.append("provision the Linux production verifier host and its immutable release runtime")
         if published_images_env["status"] != "valid":
             remaining.append(
-                "publish production images to create .tmp/production-images.env, then run make sign-production-images"
+                "publish production images and merge their digest-pinned env fragment with make production-release-publish, then complete the separate release signing stage"
             )
         elif signatures["covers_published_production_images"] is not True:
             remaining.append(
-                "run make sign-production-images with .tmp/production-images.env after registry publish"
+                "run make production-release-sign with the published image env fragment and independently authenticated reproducibility inputs"
             )
         remaining.append(
-            "install the immutable release tree and run make production-release-proof so systemd produces the final completion proof"
+            "install the immutable release tree and provide independently pinned public Nitro evidence and verifier results"
         )
+        remaining.append("run make prepare-production-final-v1 on the verifier host, retain its exact request, and obtain the independent final authority's matching signed response")
+        remaining.append("run make production-release-proof on the verifier host to consume those retained inputs and emit the final result; legacy systemd readiness cannot substitute for final-v1")
         result = {
-            "apiVersion": "serverware.productionHandoff/v1",
+            "apiVersion": "serverware.productionHandoff/v2",
             "kind": "ProductionHandoff",
             "ok": True,
             "generated_at_unix": int(time.time()),
-            "completion_state": "pending-production-host",
+            "completion_state": "pending-independent-production-verification",
             "local_evidence": {
                 "production_images": production_images,
                 "bench": bench,

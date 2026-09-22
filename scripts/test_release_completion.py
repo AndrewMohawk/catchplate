@@ -384,6 +384,105 @@ def test_final_file_snapshots() -> None:
         else:
             raise AssertionError("final verification accepted an oversized input")
 
+        empty_body = tmp / "empty-response-body"
+        empty_body.write_bytes(b"")
+        registry = verify_release_completion.InputSnapshots()
+        body_snapshot = registry.capture(
+            "proxy_stream_body", empty_body, "response body", max_bytes=1024,
+            allow_empty=True,
+        )
+        if body_snapshot.data != b"":
+            raise AssertionError("an empty response body did not retain its exact bytes")
+        try:
+            registry.capture("report", empty_body, "verification report", max_bytes=1024)
+        except ValueError as exc:
+            if "must not be empty" not in str(exc):
+                raise
+        else:
+            raise AssertionError("cached response bytes bypassed a report's nonempty requirement")
+
+
+def test_release_report_single_read() -> None:
+    with tempfile.TemporaryDirectory() as tmp_raw:
+        paths, policy_hash = test_production_release_input_preflight.release_security_fixture(
+            Path(tmp_raw)
+        )
+        original_bytes = {path: path.read_bytes() for path in paths.values()}
+        read_counts = dict.fromkeys(original_bytes, 0)
+        original_read_bytes = Path.read_bytes
+
+        def read_input_once(path: Path) -> bytes:
+            if path in read_counts:
+                read_counts[path] += 1
+                if read_counts[path] != 1:
+                    raise AssertionError("verification reopened a captured evidence file")
+            return original_read_bytes(path)
+
+        Path.read_bytes = read_input_once
+        try:
+            identity = verify_production_policy_identity.verify_persisted_report(
+                bundle_path=paths["policy_bundle"],
+                trusted_public_key_path=paths["policy_key"],
+                report_path=paths["policy_identity"],
+            )
+            reports = {}
+            for prefix, purpose, api_version, kind in (
+                (
+                    "activation",
+                    production_release_input_preflight.ACTIVATION_PURPOSE,
+                    production_release_input_preflight.ACTIVATION_API_VERSION,
+                    production_release_input_preflight.ACTIVATION_KIND,
+                ),
+                (
+                    "reproducibility",
+                    production_release_input_preflight.REPRODUCIBILITY_PURPOSE,
+                    production_release_input_preflight.REPRODUCIBILITY_API_VERSION,
+                    production_release_input_preflight.REPRODUCIBILITY_KIND,
+                ),
+            ):
+                report = production_release_input_preflight.verify_externally_signed_report(
+                    report_path=paths[f"{prefix}_report"],
+                    signature_path=paths[f"{prefix}_signature"],
+                    trusted_public_key_path=paths[f"{prefix}_key"],
+                    purpose=purpose,
+                    api_version=api_version,
+                    kind=kind,
+                )
+                reports[prefix] = report
+                for result_key, source_suffix in (
+                    ("reportSha256", "report"),
+                    ("signatureSha256", "signature"),
+                    ("trustedPublicKeySha256", "key"),
+                ):
+                    expected = sha256_prefixed_bytes(
+                        original_bytes[paths[f"{prefix}_{source_suffix}"]]
+                    )
+                    if report[result_key] != expected:
+                        raise AssertionError("signed report verification did not bind captured bytes")
+        finally:
+            Path.read_bytes = original_read_bytes
+        if set(read_counts.values()) != {1} or identity["policyHash"] != policy_hash:
+            raise AssertionError("release evidence was not verified from exactly one read per input")
+
+        # Retained bytes must remain sufficient after the source files go away.
+        for path in original_bytes:
+            path.unlink()
+        retained_identity = verify_production_policy_identity.verify_persisted_report_bytes(
+            bundle_bytes=original_bytes[paths["policy_bundle"]],
+            trusted_public_key_bytes=original_bytes[paths["policy_key"]],
+            report_bytes=original_bytes[paths["policy_identity"]],
+        )
+        retained_activation = production_release_input_preflight.verify_externally_signed_report_bytes(
+            report_bytes=original_bytes[paths["activation_report"]],
+            signature_bytes=original_bytes[paths["activation_signature"]],
+            trusted_public_key_bytes=original_bytes[paths["activation_key"]],
+            purpose=production_release_input_preflight.ACTIVATION_PURPOSE,
+            api_version=production_release_input_preflight.ACTIVATION_API_VERSION,
+            kind=production_release_input_preflight.ACTIVATION_KIND,
+        )
+        if retained_identity != identity or retained_activation != reports["activation"]:
+            raise AssertionError("retained evidence bytes changed the verification result")
+
 
 def test_final_mode_observation_signing_key_dereference() -> None:
     source_tree = ast.parse(
@@ -11056,6 +11155,7 @@ def main() -> None:
     verify_ed25519_signature_canonicalization()
     test_route_authorization_evidence_contract()
     test_final_file_snapshots()
+    test_release_report_single_read()
     test_final_mode_observation_signing_key_dereference()
     test_release_provenance_input_snapshot()
     test_measured_preflight_module_replacement_race()

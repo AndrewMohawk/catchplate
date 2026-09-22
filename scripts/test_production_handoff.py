@@ -645,6 +645,83 @@ def assert_release_input_bindings(paths: dict[str, Path]) -> None:
         write_json(paths["reproducible"], reproducible_document)
 
 
+def assert_staged_commands(output: dict[str, object], paths: dict[str, Path]) -> None:
+    plan = output.get("production_commands") or {}
+    if "one_shot_command" in plan or "commands" in plan:
+        raise AssertionError("handoff still exposes a monolithic executable release plan")
+    build = plan.get("build_preparation") or {}
+    if (
+        build.get("command") != ["make", "production-release-build"]
+        or build.get("repeat_for_current_build") is not False
+        or build.get("current_image_build_verified") is not True
+    ):
+        raise AssertionError("handoff must keep fresh-workspace build preparation separate from its existing images")
+    expected_stages = {
+        "publish": ("release-publisher", "production-release-publish"),
+        "sign": ("release-signing-owner", "production-release-sign"),
+        "deploy": ("production-operator", "production-release-deploy"),
+        "prepare-final-request": ("independent-production-verifier", "prepare-production-final-v1"),
+        "authorize-final-result": ("independent-final-authority", None),
+        "verify-final-result": ("independent-production-verifier", "production-release-proof"),
+    }
+    stages = plan.get("stages") or []
+    if [stage.get("name") for stage in stages] != list(expected_stages):
+        raise AssertionError("handoff stages omit or reorder an independent release authority boundary")
+    by_name = {stage["name"]: stage for stage in stages}
+    for name, (domain, target) in expected_stages.items():
+        stage = by_name[name]
+        if stage.get("trust_domain") != domain or not stage.get("prerequisites"):
+            raise AssertionError(f"handoff stage {name} omits its owner or prerequisites")
+        commands = stage.get("commands")
+        if target is None:
+            if commands != []:
+                raise AssertionError("handoff must obtain final signing from the external authority")
+        elif len(commands or []) != 1 or commands[0][:2] != ["make", target]:
+            raise AssertionError(f"handoff stage {name} has an incorrect operation: {commands}")
+
+    launch_variables = {
+        f"PRODUCTION_DEPLOYMENT_AUDIENCE={DEPLOYMENT_AUDIENCE}",
+        f"PRODUCTION_DEPLOYMENT_IDENTITY_SHA256={DEPLOYMENT_IDENTITY_SHA256}",
+        f"PRODUCTION_RELEASE_SEQUENCE={RELEASE_SEQUENCE}",
+        f"PRODUCTION_ROLLBACK_EPOCH={ROLLBACK_EPOCH}",
+    }
+    source_digest = output["local_evidence"]["production_images"]["source_tree_digest"]
+    release_variables = {
+        f"PRODUCTION_RELEASE_ROOT=/opt/serverware/releases/{source_digest.replace(':', '-', 1)}",
+        f"PRODUCTION_SOURCE_TREE_DIGEST={source_digest}",
+    }
+    deployment = by_name["deploy"]["commands"][0]
+    if not (launch_variables | release_variables).issubset(deployment):
+        raise AssertionError("handoff deployment lost its exact source or deployment identity")
+    for name in ("publish", "sign", "deploy"):
+        command = by_name[name]["commands"][0]
+        if not {
+            f"PRODUCTION_READINESS_ENV={paths['env']}",
+            f"PRODUCTION_IMAGES_BUILD_FILE={paths['build']}",
+            f"PRODUCTION_IMAGES_ENV_OUT={paths['images_env']}",
+        }.issubset(command):
+            raise AssertionError(f"handoff {name} stage replaced explicit input paths with defaults")
+    signing = by_name["sign"]["commands"][0]
+    if not {
+        f"RELEASE_PROVENANCE_FILE={paths['provenance']}",
+        f"IMAGE_SIGNATURES_FILE={paths['image_signatures']}",
+    }.issubset(signing):
+        raise AssertionError("handoff signing stage lost its explicit evidence paths")
+    for name in ("prepare-final-request", "verify-final-result"):
+        command = by_name[name]["commands"][0]
+        if set(command[2:]) != release_variables:
+            raise AssertionError("final-v1 plan must consume separately configured verifier inputs, not deployment credentials")
+    legacy = plan.get("legacy_readiness") or {}
+    if (
+        legacy.get("scope") != "trusted-host-readiness-only"
+        or legacy.get("production_completion_evidence") is not False
+        or legacy.get("commands", [[]])[0][:2] != ["make", "run-production-readiness-final"]
+    ):
+        raise AssertionError("legacy readiness must remain explicitly separate from production final-v1")
+    if any("so systemd produces the final completion proof" in item for item in output.get("remaining", [])):
+        raise AssertionError("handoff still describes legacy readiness as final production proof")
+
+
 def main() -> None:
     if generate_release_provenance.PRODUCTION_PROVENANCE_VERSION != 2:
         raise AssertionError(
@@ -668,7 +745,8 @@ def main() -> None:
         output = json.loads(result.stdout.decode("utf-8"))
         if (
             output.get("ok") is not True
-            or output.get("completion_state") != "pending-production-host"
+            or output.get("apiVersion") != "serverware.productionHandoff/v2"
+            or output.get("completion_state") != "pending-independent-production-verification"
         ):
             raise AssertionError(
                 f"handoff output did not describe pending production completion: {output}"
@@ -703,21 +781,7 @@ def main() -> None:
             raise AssertionError(
                 f"handoff did not include a concrete publish plan: {output}"
             )
-        one_shot = output.get("production_commands", {}).get("one_shot_command") or []
-        if one_shot[:2] != ["make", "production-release-proof"]:
-            raise AssertionError(
-                f"handoff did not include the one-shot production proof command: {output}"
-            )
-        expected_launch_variables = {
-            f"PRODUCTION_DEPLOYMENT_AUDIENCE={DEPLOYMENT_AUDIENCE}",
-            f"PRODUCTION_DEPLOYMENT_IDENTITY_SHA256={DEPLOYMENT_IDENTITY_SHA256}",
-            f"PRODUCTION_RELEASE_SEQUENCE={RELEASE_SEQUENCE}",
-            f"PRODUCTION_ROLLBACK_EPOCH={ROLLBACK_EPOCH}",
-        }
-        if not expected_launch_variables.issubset(one_shot):
-            raise AssertionError(
-                f"one-shot production proof omitted launch-manifest inputs: {output}"
-            )
+        assert_staged_commands(output, paths)
         if output.get("production_images_env", {}).get("status") != "valid":
             raise AssertionError(
                 f"handoff did not validate the production images env fragment: {output}"
@@ -731,99 +795,6 @@ def main() -> None:
             raise AssertionError(
                 f"handoff did not verify signatures against published image digest refs: {output}"
             )
-        commands = output.get("production_commands", {}).get("commands") or []
-        required_order = [
-            "build-production-images",
-            "decision-gate-bench-evidence",
-            "publish-production-images",
-            "merge-production-images-env",
-            "build-production-launcher",
-            "production-release-provenance",
-            "sign-production-images",
-            "prepare-aws-kms-materials",
-            "deploy-production",
-            "install-production-launcher",
-            "generate-production-launch-manifest",
-            "run-production-readiness-final",
-        ]
-        actual_order = [
-            command[1]
-            for command in commands
-            if isinstance(command, list) and len(command) >= 2 and command[0] == "make"
-        ]
-        positions = [
-            actual_order.index(target) if target in actual_order else -1
-            for target in required_order
-        ]
-        if any(position < 0 for position in positions) or positions != sorted(
-            positions
-        ):
-            raise AssertionError(
-                f"handoff command list does not match the production proof order: {output}"
-            )
-        sign_runs = [
-            command
-            for command in commands
-            if command[:2] == ["make", "sign-production-images"]
-        ]
-        if not sign_runs:
-            raise AssertionError(
-                f"handoff did not include the checked production image signing target: {output}"
-            )
-        if not any(
-            item.startswith("PRODUCTION_READINESS_ENV=") for item in sign_runs[0]
-        ):
-            raise AssertionError(
-                f"handoff image signing command did not preserve the production env path: {output}"
-            )
-        if not any(
-            command[:2] == ["make", "merge-production-images-env"]
-            for command in commands
-        ):
-            raise AssertionError(
-                f"handoff did not include the checked production image env merge target: {output}"
-            )
-        manifest_runs = [
-            command
-            for command in commands
-            if command[:2] == ["make", "generate-production-launch-manifest"]
-        ]
-        if (
-            not manifest_runs
-            or not any(
-                item.startswith(
-                    "PRODUCTION_RELEASE_ROOT=/opt/serverware/releases/sha256-"
-                )
-                for item in manifest_runs[0]
-            )
-            or not any(
-                item.startswith("PRODUCTION_SOURCE_TREE_DIGEST=sha256:")
-                for item in manifest_runs[0]
-            )
-            or not expected_launch_variables.issubset(manifest_runs[0])
-        ):
-            raise AssertionError(
-                f"handoff did not bind the installed release tree to the source digest: {output}"
-            )
-        install_runs = [
-            command
-            for command in commands
-            if command[:2] == ["make", "install-production-launcher"]
-        ]
-        if not install_runs or not expected_launch_variables.issubset(install_runs[0]):
-            raise AssertionError(
-                f"handoff launcher install omitted launch-manifest inputs: {output}"
-            )
-        final_runs = [
-            command
-            for command in commands
-            if command[:2] == ["make", "run-production-readiness-final"]
-        ]
-        if not final_runs:
-            raise AssertionError(
-                f"handoff omitted the systemd final readiness command: {output}"
-            )
-
         placeholder = run_handoff(
             paths, "--registry-prefix", "registry.example/serverware"
         )
@@ -849,13 +820,7 @@ def main() -> None:
                 f"handoff rejected valid env-backed launch inputs: {detail(env_backed)}"
             )
         env_output = json.loads(env_backed.stdout.decode("utf-8"))
-        env_one_shot = (
-            env_output.get("production_commands", {}).get("one_shot_command") or []
-        )
-        if not expected_launch_variables.issubset(env_one_shot):
-            raise AssertionError(
-                f"handoff did not propagate env-backed launch inputs: {env_output}"
-            )
+        assert_staged_commands(env_output, paths)
 
         missing_launch_inputs = run_handoff(paths, launch_arguments=())
         if (

@@ -20,6 +20,7 @@ import generate_release_provenance
 import serverware_source_tree
 import verify_codebase_attestation
 import verify_reproducible_builds
+from test_development_compose import clean_environment, custody_environment
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -136,16 +137,20 @@ def assert_production_dependencies() -> None:
     if not (ROOT / "requirements.lock").is_file():
         raise AssertionError("production hash-locked requirements file is missing")
     prototype = (ROOT / "Dockerfile").read_text(encoding="utf-8")
-    if "SERVERWARE_INSTALL_PROTOTYPE_MITMPROXY=0" not in prototype:
-        raise AssertionError("prototype Dockerfile must default mitmproxy installation off")
+    if (
+        "FROM production-dependencies AS production-runtime" not in prototype
+        or final_stage_lines(ROOT / "Dockerfile")[0] != "FROM production-runtime AS runtime"
+    ):
+        raise AssertionError("default development image must use the production dependency stage, not proxy-test dependencies")
     compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
     if "SERVERWARE_INSTALL_PROTOTYPE_MITMPROXY" in compose:
         raise AssertionError("default docker-compose.yml must not enable the mitmproxy prototype")
     if '"127.0.0.1:8080:9090"' not in compose:
         raise AssertionError("default docker-compose.yml must expose the Rust decision gate on a loopback-only agent proxy port")
     dev_result = subprocess.run(
-        ["docker", "compose", "--profile", "custody", "config", "--format", "json"],
+        ["docker", "compose", "--env-file", "/dev/null", "--profile", "custody", "config", "--format", "json"],
         cwd=ROOT,
+        env=clean_environment(),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         check=False,
@@ -169,6 +174,8 @@ def assert_production_dependencies() -> None:
         [
             "docker",
             "compose",
+            "--env-file",
+            "/dev/null",
             "--profile",
             "custody",
             "-f",
@@ -180,6 +187,7 @@ def assert_production_dependencies() -> None:
             "json",
         ],
         cwd=ROOT,
+        env=custody_environment(),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         check=False,
@@ -505,12 +513,12 @@ def assert_development_image_identity_validation() -> None:
     shared_image_id = "sha256:" + "1" * 64
     other_image_id = "sha256:" + "2" * 64
     images = {
-        "custody-runtime": {"image_id": shared_image_id},
-        "decision-gate-rs": {"image_id": shared_image_id},
+        service: {"image_id": shared_image_id}
+        for service in generate_release_provenance.CUSTODY_DEV_SERVICES
     }
     containers = {
-        "custody-runtime": {"image": shared_image_id},
-        "decision-gate-rs": {"image": shared_image_id},
+        service: {"image": shared_image_id}
+        for service in generate_release_provenance.CUSTODY_DEV_SERVICES
     }
     generate_release_provenance.verify_development_image_identity(
         generate_release_provenance.CUSTODY_DEV_SERVICES,
@@ -519,6 +527,18 @@ def assert_development_image_identity_validation() -> None:
     )
 
     mutations = (
+        (
+            "missing v2 activation image",
+            lambda candidate_images, _candidate_containers: candidate_images.pop(
+                "response-v2-generation-activation"
+            ),
+        ),
+        (
+            "different v2 transport container image",
+            lambda _candidate_images, candidate_containers: candidate_containers[
+                "response-v2-credential-transport"
+            ].__setitem__("image", other_image_id),
+        ),
         (
             "unequal image inventory IDs",
             lambda candidate_images, _candidate_containers: candidate_images[
@@ -570,19 +590,86 @@ def assert_reproducible_rust_binary_config() -> None:
         raise AssertionError("Rust release binaries must strip nondeterministic symbol tables")
 
 
+def assert_deterministic_development_ledger_seed(dockerfile: str) -> None:
+    expected_payload = {
+        "apiVersion": "serverware.custodyAttemptLedger/v2",
+        "commitSequence": 0,
+        "activeBindingCount": 0,
+        "activeBindingsAccumulator": "A" * 43,
+        "prunedThroughEpochMs": 0,
+        "maxObservedEpochMs": 0,
+    }
+    payloads = re.findall(r"^\s*ledger_payload='([^']+)';", dockerfile, re.MULTILINE)
+    if len(payloads) != 1:
+        raise AssertionError("development image must define one literal empty ledger payload")
+    expected_bytes = json.dumps(expected_payload, sort_keys=True, separators=(",", ":"))
+    if payloads[0] != expected_bytes:
+        raise AssertionError("development ledger seed must be the canonical empty v2 manifest payload")
+    required = (
+        "ledger_directory=/runtime-layout/serverware-custody-state;",
+        'install -d -m 0700 "$ledger_directory";',
+        'ledger_checksum="$(printf \'%s\' "$ledger_payload" | sha256sum)";',
+        'ledger_checksum="${ledger_checksum%% *}";',
+        'test "${#ledger_checksum}" -eq 64;',
+        "*[!0-9a-f]*)",
+        'printf \'{"checksum":"sha256:%s","payload":%s}\'',
+        '"$ledger_checksum" "$ledger_payload" > "$ledger_directory/manifest.json";',
+        'chmod 0600 "$ledger_directory/manifest.json";',
+        'install -m 0600 /dev/null "$ledger_directory/ledger.lock";',
+        'test "$(wc -c < "$ledger_directory/ledger.lock")" -eq 0;',
+        'test "$(wc -c < "$ledger_directory/manifest.json")" -le 1024;',
+    )
+    missing = [value for value in required if value not in dockerfile]
+    if missing:
+        raise AssertionError(f"development ledger seed lost checksum, permissions, or empty-lock checks: {missing}")
+    envelope = json.dumps(
+        {"checksum": "sha256:" + hashlib.sha256(expected_bytes.encode("ascii")).hexdigest(), "payload": expected_payload},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("ascii")
+    if len(envelope) > 1024:
+        raise AssertionError("canonical empty ledger envelope exceeds the image seed bound")
+
+
 def assert_custody_ledger_image_seed() -> None:
+    # Production still runs the Rust initializer; development constructs its
+    # canonical empty state without executing a freshly built runtime at build
+    # time. Both paths must retain the same private runtime volume contract.
     for relative, ownership in (
         ("data-plane/decision-gate-rs/Dockerfile", "10002:10003"),
         ("data-plane/decision-gate-rs/Dockerfile.production", "65531:65530"),
     ):
         dockerfile = (ROOT / relative).read_text(encoding="utf-8")
         required = (
-            "SERVERWARE_CUSTODY_ATTEMPT_LEDGER_DIRECTORY=/runtime-layout/serverware-custody-state",
-            "/src/target/release/serverware-custody-runtime --initialize-attempt-ledger",
             f"COPY --from=build --chown={ownership} --chmod=0700 /runtime-layout/serverware-custody-state /var/lib/serverware-custody",
             f"COPY --from=build --chown={ownership} --chmod=0600 /runtime-layout/serverware-custody-state/manifest.json /var/lib/serverware-custody/manifest.json",
             f"COPY --from=build --chown={ownership} --chmod=0600 /runtime-layout/serverware-custody-state/ledger.lock /var/lib/serverware-custody/ledger.lock",
         )
+        if relative.endswith("Dockerfile.production"):
+            required += (
+                "SERVERWARE_CUSTODY_ATTEMPT_LEDGER_DIRECTORY=/runtime-layout/serverware-custody-state",
+                "/src/target/release/serverware-custody-runtime --initialize-attempt-ledger",
+            )
+        else:
+            assert_deterministic_development_ledger_seed(dockerfile)
+            for old, replacement in (
+                ('"activeBindingCount":0', '"activeBindingCount":1'),
+                ('"commitSequence":0', '"commitSequence":1'),
+                ('"maxObservedEpochMs":0', '"maxObservedEpochMs":1'),
+                ('"prunedThroughEpochMs":0', '"prunedThroughEpochMs":1'),
+                ("A" * 43, "B" + "A" * 42),
+                ("custodyAttemptLedger/v2", "custodyAttemptLedger/v1"),
+                ("| sha256sum", "| sha512sum"),
+                ('chmod 0600 "$ledger_directory/manifest.json"', 'chmod 0644 "$ledger_directory/manifest.json"'),
+                ("install -m 0600 /dev/null", "install -m 0644 /dev/null"),
+            ):
+                changed = dockerfile.replace(old, replacement, 1)
+                try:
+                    assert_deterministic_development_ledger_seed(changed)
+                except AssertionError:
+                    pass
+                else:
+                    raise AssertionError(f"ledger seed regression checker accepted changed {old!r}")
         missing = [value for value in required if value not in dockerfile]
         if missing:
             raise AssertionError(

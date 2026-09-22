@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -52,18 +53,35 @@ PYTHON_WHEELHOUSE = (
     / "production-dependencies/cache/python-wheelhouse-linux-amd64.tar.gz"
 )
 REQUIREMENTS_LOCK = ROOT / "requirements.lock"
-PYTHON_WHEELHOUSE_SHA256 = (
-    "812ea96c673527dd1dca4297af07d25383ecb8630e448648a152055f9fe79836"
-)
-REQUIREMENTS_LOCK_SHA256 = (
-    "d8634b6db76c1c3ee6d22f4b8b2d8cb803ef8dabcf7a43fc084806b5fbadd692"
-)
-OFFLINE_BUILD_INPUT_SHA256 = {
-    MUSL_APK: "4990a5e0ba312e478f94cfe431a70efef1538004eb361c8ae424516848be45bb",
-    MUSL_DEV_APK: "1c2068d910cfdbbcb4eb107a5a478f8b48edf3a6311953c8fa5180c5190efab3",
-    PYTHON_WHEELHOUSE: PYTHON_WHEELHOUSE_SHA256,
-    REQUIREMENTS_LOCK: REQUIREMENTS_LOCK_SHA256,
-}
+
+
+def offline_build_input_sha256() -> dict[Path, str]:
+    # Expected digests come only from the reviewed snapshot manifests. Hashing
+    # the current cache to choose acceptance pins would trust substituted bytes.
+    spec = importlib.util.spec_from_file_location(
+        "serverware_production_dependency_prefetch",
+        ROOT / "production-dependencies/prefetch.py",
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError("could not load production dependency manifest verifier")
+    prefetch = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(prefetch)
+    entries = {
+        relative: digest
+        for manifest in prefetch.manifests()
+        for relative, digest in manifest["entries"].items()
+    }
+    return {
+        MUSL_APK: entries[prefetch.MUSL_APK],
+        MUSL_DEV_APK: entries[prefetch.MUSL_DEV_APK],
+        PYTHON_WHEELHOUSE: entries[prefetch.PYTHON_ARCHIVE],
+        REQUIREMENTS_LOCK: entries["requirements.lock"],
+    }
+
+
+OFFLINE_BUILD_INPUT_SHA256 = offline_build_input_sha256()
+PYTHON_WHEELHOUSE_SHA256 = OFFLINE_BUILD_INPUT_SHA256[PYTHON_WHEELHOUSE]
+REQUIREMENTS_LOCK_SHA256 = OFFLINE_BUILD_INPUT_SHA256[REQUIREMENTS_LOCK]
 BUILDER_NAME_RE = re.compile(
     r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z"
 )

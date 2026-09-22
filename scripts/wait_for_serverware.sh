@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BASE="${BASE:-http://localhost:3000}"
+BASE="${BASE:-http://localhost:${SERVERWARE_CONTROL_PLANE_HOST_PORT:-3000}}"
 RETRIES="${SERVERWARE_WAIT_RETRIES:-60}"
 
 for _ in $(seq 1 "$RETRIES"); do

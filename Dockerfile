@@ -70,4 +70,14 @@ RUN mkdir -p /opt/serverware/host-tools
 
 USER serverware
 
+FROM production-runtime AS development-test-runtime
+
+# Engineering checks need Git for clean-source capture and isolated fixture
+# repositories. These tools never enter the default or production runtime.
+USER root
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git make \
+    && rm -rf /var/lib/apt/lists/*
+USER serverware
+
 FROM production-runtime AS runtime

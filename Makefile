@@ -25,6 +25,8 @@ SHELL := /bin/sh
 .PHONY: coder-controller-v12-package-prepare coder-controller-v12-provision coder-controller-v12-install coder-controller-v12-provision-local-trusted-host coder-controller-v12-provision-external-production
 .PHONY: render-policy-custody-assets verify-policy-custody-host-ready
 .PHONY: verify-production-proxy-ingress-materials
+.PHONY: production-source-capture production-release-build production-release-publish production-release-sign production-release-deploy
+.NOTPARALLEL: production-release-build production-release-publish production-release-sign production-release-deploy production-release-proof
 
 .NOTPARALLEL: build-consolidated-test-artifacts verify-consolidated-no-build verify-consolidated _build-consolidated-test-artifacts-locked _verify-consolidated-source-snapshot-locked coder-build-all coder-test-no-build coder-ci _coder-build-all-locked _coder-test-no-build-locked _coder-ci-locked _coder-require-clean _coder-require-lock _coder-require-disposable-daemon _coder-cleanup coder-trusted-sequential coder-v12-sequential coder-v12-build coder-v12-unit-no-build coder-v12-integration-no-build coder-v12-e2e-no-build coder-v12-attestation-no-build coder-controller-v12-build-phase coder-controller-v12-unit-phase coder-controller-v12-integration-phase coder-controller-v12-e2e-phase coder-controller-v12-attestation-phase coder-controller-v12-package-prepare coder-controller-v12-provision coder-controller-v12-install coder-controller-v12-provision-local-trusted-host coder-controller-v12-provision-external-production
 
@@ -7080,35 +7082,43 @@ run-production-readiness-final:
 		test "$$receipt_identity_before" = "$$receipt_identity_after" || fail "readiness invocation receipt changed after publication"; \
 		printf 'readiness_invocation_id=%s\nreadiness_invocation_receipt_sha256=sha256:%s\n' "$$invocation_id" "$${receipt_digest_line%% *}"
 
-production-release-proof:
-	$(MAKE) verify-credential-policy-contracts
-	$(MAKE) verify-custody-response-proof
-	$(MAKE) verify-control-plane-startup
-	$(MAKE) verify-control-plane-oidc
-	$(MAKE) verify-webauthn-recovery
-	$(MAKE) verify-portal-browser-oauth
-	$(MAKE) verify-onboarding-evidence-tooling
-	$(MAKE) verify-agent-enrollment
-	$(MAKE) build-agent-enrollment-wheel
-	$(MAKE) verify-setup-session-api
+# Each release stage is an explicit operation in its owner's trust domain.
+# There is deliberately no aggregate target that builds, publishes, signs,
+# deploys, and then calls its own output production proof. See docs/release-stages.md.
+production-source-capture:
+	python3 -c 'import json; from scripts.serverware_source_tree import production_source_contract; print(json.dumps(production_source_contract(), sort_keys=True))'
+
+production-release-build:
+	@test ! -e "$(PRODUCTION_IMAGES_BUILD_FILE)" || { echo "release build record already exists; use a fresh release workspace" >&2; exit 2; }
+	@test ! -e "$(PRODUCTION_PYTHON_RUNTIME_ARTIFACT_DIRECTORY)" || { echo "release Python artifact already exists; use a fresh release workspace" >&2; exit 2; }
+	@test ! -e "$(PRODUCTION_LAUNCHER_BUILD_DIRECTORY)" || { echo "release launcher artifact already exists; use a fresh release workspace" >&2; exit 2; }
+	$(MAKE) production-source-capture
+	$(MAKE) verify-production-dependency-cache
 	$(MAKE) validate-production-policy-identity
-	$(MAKE) verify-production-agent-enrollment-evidence
-	$(MAKE) validate-policy-activation-evidence
-	$(MAKE) validate-reproducible-builds
-	$(MAKE) production-release-input-preflight
 	$(MAKE) build-production-images
-	$(MAKE) decision-gate-bench-evidence
-	$(MAKE) publish-production-images
-	$(MAKE) merge-production-images-env
 	$(MAKE) build-production-python-runtime
 	$(MAKE) build-production-launcher
+
+production-release-publish:
+	$(MAKE) publish-production-images
+	$(MAKE) merge-production-images-env
+
+production-release-sign:
 	$(MAKE) production-release-provenance
 	$(MAKE) sign-production-images
+
+production-release-deploy:
+	$(MAKE) verify-production-agent-enrollment-evidence
+	$(MAKE) production-release-input-preflight
 	$(MAKE) prepare-aws-kms-materials
 	$(MAKE) deploy-production
 	$(MAKE) install-production-launcher
 	$(MAKE) generate-production-launch-manifest
-	$(MAKE) run-production-readiness-final
+
+# Consumes already produced, independently signed evidence. It never prepares
+# a signing request, signs, builds, installs, deploys, or runs the legacy NSM lane.
+production-release-proof:
+	$(MAKE) finalize-production-final-v1
 
 capture-reproducible-build:
 	@if [ -z "$(REPRODUCIBLE_BUILD_BUILDER_ID)" ] || [ -z "$(REPRODUCIBLE_BUILD_SIGNING_KEY)" ]; then echo "REPRODUCIBLE_BUILD_BUILDER_ID and REPRODUCIBLE_BUILD_SIGNING_KEY are required" >&2; exit 2; fi
@@ -7423,7 +7433,7 @@ verify-codebase-attestation:
 install-ca:
 	docker compose up -d --build serverware demo-upstream
 	./scripts/wait_for_serverware.sh
-	curl -fsS -H "X-Serverware-Admin-Token: $${SERVERWARE_ADMIN_TOKEN:-dev-admin-token}" -X POST http://localhost:3000/api/demo/seed >/dev/null
+	curl -fsS -H "X-Serverware-Admin-Token: $${SERVERWARE_ADMIN_TOKEN:-dev-admin-token}" -X POST "http://localhost:$${SERVERWARE_CONTROL_PLANE_HOST_PORT:-3000}/api/demo/seed" >/dev/null
 	SERVERWARE_CA_OUT=.tmp/serverware-ca.pem SERVERWARE_VERIFY_OUT=.tmp/attestation-verify.json ./scripts/install_verified_ca.sh
 	docker compose up -d --force-recreate decision-gate-rs
 	./scripts/wait_for_decision_gate.sh

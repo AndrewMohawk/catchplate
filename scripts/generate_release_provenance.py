@@ -48,7 +48,25 @@ DEV_SERVICES = (
     "demo-upstream",
     "decision-gate-rs",
 )
-CUSTODY_DEV_SERVICES = (*DEV_SERVICES[:-1], "custody-runtime", DEV_SERVICES[-1])
+CUSTODY_V2_ROLES = {
+    "state-authority": ("65521:65519", "state"),
+    "credential-transport": ("65522:65519", "credential-transport"),
+    "policy-proof-verifier": ("65523:65519", "policy-proof-verifier"),
+    "immutable-artifact-ledger": ("65524:65519", "immutable-artifact-ledger"),
+    "release-attestor-publisher": ("65525:65519", "release-attestor-publisher"),
+    "cleanup-watchdog": ("65526:65519", "cleanup-watchdog"),
+    "custody-router": ("65520:65519", "router"),
+}
+CUSTODY_ONESHOT_SERVICES = frozenset({
+    "response-v2-generation-bootstrap", "response-v2-generation-activation",
+})
+CUSTODY_V2_SERVICES = (
+    "response-v2-generation-bootstrap",
+    *(f"response-v2-{role}" for role in CUSTODY_V2_ROLES),
+    "response-v2-generation-activation",
+)
+CUSTODY_GATE_IMAGE_SERVICES = ("custody-runtime", *CUSTODY_V2_SERVICES, "decision-gate-rs")
+CUSTODY_DEV_SERVICES = (*DEV_SERVICES[:-1], *CUSTODY_GATE_IMAGE_SERVICES)
 PRODUCTION_CONTROL_HEALTHCHECK_SHA256 = (
     "sha256:edbdc5b8790e94a6e3ccd62f190763d5ba2ef3acc17d93a8a38a8bd4aa1b33df"
 )
@@ -819,6 +837,43 @@ def image_inventory(
     return images
 
 
+def development_container_execution(
+    service: str, inspected: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Require live daemons or successful terminal instances of the two one-shots."""
+    labels = (inspected.get("Config") or {}).get("Labels") or {}
+    state = inspected.get("State") or {}
+    oneshot = service in CUSTODY_ONESHOT_SERVICES
+    if (
+        labels.get("com.docker.compose.service") != service
+        or state.get("Running") is not (not oneshot)
+        or state.get("Status") != ("exited" if oneshot else "running")
+        or state.get("OOMKilled") is not False
+        or state.get("Dead") is not False
+        or state.get("Restarting") is not False
+        or state.get("Error") != ""
+        or not isinstance(state.get("StartedAt"), str)
+        or not state["StartedAt"]
+        or state["StartedAt"].startswith("0001-")
+    ):
+        return None
+    if oneshot and (
+        type(state.get("ExitCode")) is not int
+        or state["ExitCode"] != 0
+        or not isinstance(state.get("FinishedAt"), str)
+        or not state["FinishedAt"]
+        or state["FinishedAt"].startswith("0001-")
+        or inspected.get("RestartCount") != 0
+    ):
+        return None
+    return {
+        "lifecycle": "completed-successfully" if oneshot else "running",
+        "started_at": state["StartedAt"],
+        "finished_at": state.get("FinishedAt") if oneshot else None,
+        "exit_code": state["ExitCode"] if oneshot else None,
+    }
+
+
 def container_inventory(
     services: tuple[str, ...] = DEV_SERVICES,
     *,
@@ -829,36 +884,42 @@ def container_inventory(
     for _ in range(50):
         candidate: dict[str, dict[str, Any]] = {}
         for service in services:
+            status = "exited" if service in CUSTODY_ONESHOT_SERVICES else "running"
             container_ids = run(
-                [*compose_command, "ps", "--status", "running", "-q", service]
+                [*compose_command, "ps", "--all", "--status", status, "-q", service]
             ).splitlines()
             if len(container_ids) != 1:
                 candidate = {}
                 break
             inspect = json.loads(run(["docker", "inspect", container_ids[0]]))[0]
-            labels = (inspect.get("Config") or {}).get("Labels") or {}
-            if (
-                inspect.get("State", {}).get("Running") is not True
-                or labels.get("com.docker.compose.service") != service
-            ):
+            if development_container_execution(service, inspect) is None:
                 candidate = {}
                 break
             candidate[service] = inspect
-        if len(candidate) == len(services) and all(
-            run([*compose_command, "ps", "--status", "running", "-q", service])
-            == candidate[service]["Id"]
-            and json.loads(run(["docker", "inspect", candidate[service]["Id"]]))[0]
-            .get("State", {})
-            .get("Running")
-            is True
-            for service in services
-        ):
+        stable = len(candidate) == len(services)
+        for service, initial in candidate.items():
+            status = "exited" if service in CUSTODY_ONESHOT_SERVICES else "running"
+            if run([*compose_command, "ps", "--all", "--status", status, "-q", service]) != initial["Id"]:
+                stable = False
+                break
+            current = json.loads(run(["docker", "inspect", initial["Id"]]))[0]
+            if (
+                current.get("Id") != initial.get("Id")
+                or current.get("Image") != initial.get("Image")
+                or development_container_execution(service, current) is None
+                or development_container_execution(service, current)
+                != development_container_execution(service, initial)
+            ):
+                stable = False
+                break
+        if stable:
             inspected = candidate
             break
         time.sleep(0.1)
     if inspected is None:
         raise RuntimeError(
-            "development Compose containers did not provide one stable running generation"
+            "development Compose containers did not provide one stable generation "
+            "with running services and successful completed one-shots"
         )
 
     containers = {}
@@ -869,6 +930,7 @@ def container_inventory(
         containers[service] = {
             "container_id": inspect["Id"],
             "image": inspect["Image"],
+            "execution": development_container_execution(service, inspect),
             "user": config.get("User") or "",
             "readonly_rootfs": bool(host.get("ReadonlyRootfs")),
             "cap_drop": host.get("CapDrop") or [],
@@ -886,6 +948,138 @@ def container_inventory(
             ],
         }
     return containers
+
+
+def development_custody_mount(
+    service: dict[str, Any], target: str, *, read_only: bool
+) -> str:
+    mounts = [
+        mount for mount in service.get("volumes", [])
+        if isinstance(mount, dict) and mount.get("target") == target
+    ]
+    if (
+        len(mounts) != 1
+        or mounts[0].get("type") not in {"bind", "volume"}
+        or bool(mounts[0].get("read_only", False)) != read_only
+        or not isinstance(mounts[0].get("source"), str)
+        or mounts[0]["source"] in {"", "/", "/dev/null"}
+    ):
+        raise ValueError(f"development custody requires one correctly scoped mount at {target}")
+    return mounts[0]["source"]
+
+
+def verify_development_v2_topology(services: dict[str, Any]) -> None:
+    gate = services["decision-gate-rs"]
+    gate_env = gate.get("environment") or {}
+    if (
+        gate_env.get("SERVERWARE_RESPONSE_OBSERVATION_V2_SOCKET") != "/run/serverware-response-v2/router/custody.sock"
+        or gate_env.get("SERVERWARE_RESPONSE_OBSERVATION_V2_EXPECTED_UID") != "65520"
+        or gate_env.get("SERVERWARE_RESPONSE_OBSERVATION_V2_ATTESTATION_MODE") != "trusted-host-no-tee"
+    ):
+        raise ValueError("development gate must pin the trusted-host v2 router identity")
+    config_path = "/run/serverware-response-v2/config/custody.json"
+    socket_sources: dict[str, str] = {}
+    data_sources: dict[str, str] = {}
+    key_sources: set[str] = set()
+    public_config_sources: set[str] = set()
+    for name in CUSTODY_V2_SERVICES:
+        service = services[name]
+        role = name.removeprefix("response-v2-")
+        oneshot = name in CUSTODY_ONESHOT_SERVICES
+        user = "65521:65519" if oneshot else CUSTODY_V2_ROLES[role][0]
+        expected_command = (
+            ["--bootstrap-generation" if role == "generation-bootstrap" else "--activate-generation", "--config", config_path]
+            if oneshot else ["--service", role, "--config", config_path]
+        )
+        network_ok = (
+            not service.get("network_mode") and set(service.get("networks") or {}) == {"response-v2-egress"}
+            if role == "credential-transport" else service.get("network_mode") == "none" and not service.get("networks")
+        )
+        if (
+            service.get("image") != gate.get("image")
+            or service.get("build") is not None
+            or service.get("pull_policy") != "never"
+            or service.get("user") != user
+            or service.get("read_only") is not True
+            or service.get("privileged", False)
+            or set(service.get("cap_drop") or []) != {"ALL"}
+            or set(service.get("cap_add") or []) != ({"KILL"} if role == "cleanup-watchdog" else set())
+            or "no-new-privileges:true" not in (service.get("security_opt") or [])
+            or service.get("entrypoint") != ["/usr/local/bin/serverware-response-observation-v2-custody"]
+            or service.get("command") != expected_command
+            or not network_ok
+            or (oneshot and service.get("restart") != "no")
+        ):
+            raise ValueError(f"development custody role has invalid identity, isolation, or command: {name}")
+        public_config_sources.add(development_custody_mount(
+            service, "/run/serverware-response-v2/config", read_only=True
+        ))
+        if not oneshot:
+            socket_sources[role] = development_custody_mount(
+                service, f"/run/serverware-response-v2/{CUSTODY_V2_ROLES[role][1]}", read_only=False
+            )
+            data_sources[role] = development_custody_mount(
+                service, f"/var/lib/serverware-response-v2/{role}", read_only=False
+            )
+            expected_health = ["CMD", "/usr/local/bin/serverware-response-observation-v2-custody", *expected_command, "--check-readiness"]
+            if (service.get("healthcheck") or {}).get("test") != expected_health:
+                raise ValueError(f"development custody role lacks exact readiness check: {name}")
+            if role != "custody-router":
+                credential_path = f"/run/credentials/serverware-response-v2-{role}"
+                if (service.get("environment") or {}).get("CREDENTIALS_DIRECTORY") != credential_path:
+                    raise ValueError(f"development custody role has wrong credential directory: {name}")
+                key_source = development_custody_mount(service, credential_path, read_only=True)
+                if key_source in key_sources:
+                    raise ValueError("development custody roles must not share private credential mounts")
+                key_sources.add(key_source)
+    if len(public_config_sources) != 1 or len(set(socket_sources.values())) != len(CUSTODY_V2_ROLES) or len(set(data_sources.values())) != len(CUSTODY_V2_ROLES):
+        raise ValueError("development custody requires shared public config and distinct role sockets/state")
+    state = services["response-v2-state-authority"]
+    state_environment = state.get("environment") or {}
+    generation_pin = require_sha256(
+        state_environment.get("SERVERWARE_RESPONSE_V2_PROVIDER_GENERATION_SHA256"),
+        "development custody provider generation",
+    )
+    public_credentials = "/run/credentials/serverware-response-v2-generation-public"
+    if state_environment.get("SERVERWARE_RESPONSE_V2_GENERATION_PUBLIC_CREDENTIALS_DIRECTORY") != public_credentials:
+        raise ValueError("development custody state authority lacks generation trust credentials")
+    public_source = development_custody_mount(state, public_credentials, read_only=True)
+    bootstrap_sources = set()
+    for name in CUSTODY_ONESHOT_SERVICES:
+        service = services[name]
+        environment = service.get("environment") or {}
+        credential_path = "/run/credentials/serverware-response-v2-generation-bootstrap"
+        if environment.get("SERVERWARE_RESPONSE_V2_PROVIDER_GENERATION_SHA256") != generation_pin or environment.get("CREDENTIALS_DIRECTORY") != credential_path:
+            raise ValueError("development custody one-shots must share the state generation pin")
+        bootstrap_sources.add(development_custody_mount(service, credential_path, read_only=True))
+        if development_custody_mount(service, "/var/lib/serverware-response-v2/state-authority", read_only=False) != data_sources["state-authority"]:
+            raise ValueError("development custody one-shot uses another state authority")
+    if len(bootstrap_sources) != 1 or bootstrap_sources & (key_sources | {public_source}):
+        raise ValueError("development custody bootstrap authority must be isolated from role/public credentials")
+    activation = services["response-v2-generation-activation"]
+    for role, (_, socket_name) in CUSTODY_V2_ROLES.items():
+        if development_custody_mount(activation, f"/run/serverware-response-v2/{socket_name}", read_only=role != "state-authority") != socket_sources[role]:
+            raise ValueError(f"development generation activation uses another role socket: {role}")
+        if development_custody_mount(activation, f"/var/lib/serverware-response-v2/{role}", read_only=role != "state-authority") != data_sources[role]:
+            raise ValueError(f"development generation activation uses another role state: {role}")
+        if role != "state-authority" and development_custody_mount(services[f"response-v2-{role}"], "/run/serverware-response-v2/state", read_only=True) != socket_sources["state-authority"]:
+            raise ValueError(f"development custody role uses another state-authority socket: {role}")
+    router = services["response-v2-custody-router"]
+    for role, (_, socket_name) in CUSTODY_V2_ROLES.items():
+        if role != "custody-router" and development_custody_mount(router, f"/run/serverware-response-v2/{socket_name}", read_only=True) != socket_sources[role]:
+            raise ValueError(f"development custody router uses another role socket: {role}")
+    if development_custody_mount(gate, "/run/serverware-response-v2/router", read_only=True) != socket_sources["custody-router"]:
+        raise ValueError("development gate uses another custody router socket")
+    dependencies = (
+        ("response-v2-state-authority", "response-v2-generation-bootstrap", "service_completed_successfully"),
+        ("response-v2-generation-activation", "response-v2-custody-router", "service_healthy"),
+        ("decision-gate-rs", "response-v2-generation-activation", "service_completed_successfully"),
+        ("decision-gate-rs", "response-v2-custody-router", "service_healthy"),
+        *(("response-v2-custody-router", f"response-v2-{role}", "service_healthy") for role in CUSTODY_V2_ROLES if role != "custody-router"),
+    )
+    for consumer, provider, condition in dependencies:
+        if ((services[consumer].get("depends_on") or {}).get(provider) or {}).get("condition") != condition:
+            raise ValueError(f"development custody requires {consumer} to wait for {provider} {condition}")
 
 
 def development_compose_services(
@@ -915,6 +1109,16 @@ def development_compose_services(
     gate_env = gate.get("environment") or {}
     custody_image = custody.get("image")
     gate_image = gate.get("image")
+    host_contract = model.get("x-serverware-policy-custody-host-contract") or {}
+    driver_gid = str(host_contract.get("driverGroupGid", ""))
+    if (
+        not re.fullmatch(r"[1-9][0-9]{0,9}", driver_gid)
+        or int(driver_gid) > 4294967294
+        or driver_gid in {"10003", "65519"}
+        or host_contract.get("assuranceClass") != "trusted-host-no-tee"
+        or host_contract.get("socketActivation") != "systemd-inherited-seqpacket"
+    ):
+        raise ValueError("development custody requires a distinct declared host driver group")
     if (
         custody.get("network_mode") != "none"
         or custody.get("user") != "10002:10003"
@@ -929,7 +1133,7 @@ def development_compose_services(
         or gate_env.get("SERVERWARE_RESPONSE_PROOF_CUSTODY_SOCKET")
         != "/run/serverware-custody/custody.sock"
         or gate_env.get("SERVERWARE_RESPONSE_PROOF_CUSTODY_EXPECTED_UID") != "10002"
-        or {str(value) for value in (gate.get("group_add") or [])} != {"10003"}
+        or {str(value) for value in (gate.get("group_add") or [])} != {"10003", "65519", driver_gid}
         or ((gate.get("depends_on") or {}).get("custody-runtime") or {}).get(
             "condition"
         )
@@ -946,6 +1150,7 @@ def development_compose_services(
         for item in (gate.get("volumes") or [])
     ):
         raise ValueError("rendered development gate lacks the read-only custody socket mount")
+    verify_development_v2_topology(services)
     return CUSTODY_DEV_SERVICES
 
 
@@ -956,30 +1161,14 @@ def verify_development_image_identity(
 ) -> None:
     if services != CUSTODY_DEV_SERVICES:
         return
-    custody_image_id = (images.get("custody-runtime") or {}).get("image_id")
-    gate_image_id = (images.get("decision-gate-rs") or {}).get("image_id")
-    if (
-        not isinstance(custody_image_id, str)
-        or not custody_image_id
-        or custody_image_id != gate_image_id
-    ):
-        raise ValueError(
-            "development custody and gate image inventories must resolve to one image ID"
-        )
-    custody_container_image = (containers.get("custody-runtime") or {}).get("image")
-    gate_container_image = (containers.get("decision-gate-rs") or {}).get("image")
-    if (
-        not isinstance(custody_container_image, str)
-        or not custody_container_image
-        or custody_container_image != gate_container_image
-    ):
-        raise ValueError(
-            "running development custody and gate containers must use one image ID"
-        )
-    if custody_container_image != custody_image_id:
-        raise ValueError(
-            "running development custody and gate image ID must match the image inventory"
-        )
+    if set(images) != set(services) or set(containers) != set(services):
+        raise ValueError("development custody inventories must cover the exact v2 topology")
+    gate_image_id = require_sha256(
+        (images.get("decision-gate-rs") or {}).get("image_id"), "development gate image ID"
+    )
+    for name in CUSTODY_GATE_IMAGE_SERVICES:
+        if (images.get(name) or {}).get("image_id") != gate_image_id or (containers.get(name) or {}).get("image") != gate_image_id:
+            raise ValueError(f"development custody service must use the measured gate image: {name}")
 
 
 def closed_production_service_map(value: Any, label: str) -> dict[str, dict[str, Any]]:
@@ -2137,13 +2326,13 @@ def main() -> None:
             "commands": [
                 *(
                     [
+                        "make production-source-capture",
                         "make build-production-images",
-                        "make decision-gate-bench-evidence",
-                        "make publish-production-images",
-                        "make merge-production-images-env",
+                        "make build-production-python-runtime",
                         "make build-production-launcher",
-                        "make production-release-provenance",
-                        "make sign-production-images",
+                        "make production-release-publish",
+                        "make validate-reproducible-builds",
+                        "make production-release-sign",
                     ]
                     if args.production
                     else [

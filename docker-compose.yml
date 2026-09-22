@@ -19,7 +19,7 @@ services:
         hard: 0
     environment:
       SERVERWARE_DATA_DIR: /data
-      SERVERWARE_PUBLIC_URL: ${SERVERWARE_PUBLIC_URL:-http://localhost:3000}
+      SERVERWARE_PUBLIC_URL: ${SERVERWARE_PUBLIC_URL:-http://localhost:${SERVERWARE_CONTROL_PLANE_HOST_PORT:-3000}}
       SERVERWARE_OAUTH_STATE_TTL_SECONDS: ${SERVERWARE_OAUTH_STATE_TTL_SECONDS:-600}
       SERVERWARE_OAUTH_PENDING_CREDENTIAL_TTL_SECONDS: ${SERVERWARE_OAUTH_PENDING_CREDENTIAL_TTL_SECONDS:-900}
       SERVERWARE_OAUTH_PENDING_CREDENTIAL_MAX_COUNT: ${SERVERWARE_OAUTH_PENDING_CREDENTIAL_MAX_COUNT:-1000}
@@ -51,11 +51,11 @@ services:
       SERVERWARE_GOOGLE_OAUTH_CLIENT_ID: ${SERVERWARE_GOOGLE_OAUTH_CLIENT_ID:-}
       SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET: ${SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET:-}
       SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET_FILE: ${SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET_FILE:+/run/secrets/serverware-google-oauth-client-secret}
-      SERVERWARE_GOOGLE_OAUTH_REDIRECT_URI: ${SERVERWARE_GOOGLE_OAUTH_REDIRECT_URI:-http://localhost:3000/api/oauth/callback/google}
+      SERVERWARE_GOOGLE_OAUTH_REDIRECT_URI: ${SERVERWARE_GOOGLE_OAUTH_REDIRECT_URI:-${SERVERWARE_PUBLIC_URL:-http://localhost:${SERVERWARE_CONTROL_PLANE_HOST_PORT:-3000}}/api/oauth/callback/google}
       SERVERWARE_X_OAUTH_CLIENT_ID: ${SERVERWARE_X_OAUTH_CLIENT_ID:-}
       SERVERWARE_X_OAUTH_CLIENT_SECRET: ${SERVERWARE_X_OAUTH_CLIENT_SECRET:-}
       SERVERWARE_X_OAUTH_CLIENT_SECRET_FILE: ${SERVERWARE_X_OAUTH_CLIENT_SECRET_FILE:+/run/secrets/serverware-x-oauth-client-secret}
-      SERVERWARE_X_OAUTH_REDIRECT_URI: ${SERVERWARE_X_OAUTH_REDIRECT_URI:-http://localhost:3000/api/oauth/callback/x}
+      SERVERWARE_X_OAUTH_REDIRECT_URI: ${SERVERWARE_X_OAUTH_REDIRECT_URI:-${SERVERWARE_PUBLIC_URL:-http://localhost:${SERVERWARE_CONTROL_PLANE_HOST_PORT:-3000}}/api/oauth/callback/x}
       SERVERWARE_OIDC_ENABLED: ${SERVERWARE_OIDC_ENABLED:-0}
       SERVERWARE_OIDC_BROWSER_LOGIN_ENABLED: ${SERVERWARE_OIDC_BROWSER_LOGIN_ENABLED:-0}
       SERVERWARE_OIDC_ISSUER: ${SERVERWARE_OIDC_ISSUER:-}
@@ -66,7 +66,7 @@ services:
       SERVERWARE_OIDC_CLIENT_ID: ${SERVERWARE_OIDC_CLIENT_ID:-}
       SERVERWARE_OIDC_CLIENT_SECRET: ${SERVERWARE_OIDC_CLIENT_SECRET:-}
       SERVERWARE_OIDC_CLIENT_SECRET_FILE: ${SERVERWARE_OIDC_CLIENT_SECRET_FILE:+/run/secrets/serverware-oidc-client-secret}
-      SERVERWARE_OIDC_REDIRECT_URI: ${SERVERWARE_OIDC_REDIRECT_URI:-http://localhost:3000/api/auth/oidc/callback}
+      SERVERWARE_OIDC_REDIRECT_URI: ${SERVERWARE_OIDC_REDIRECT_URI:-${SERVERWARE_PUBLIC_URL:-http://localhost:${SERVERWARE_CONTROL_PLANE_HOST_PORT:-3000}}/api/auth/oidc/callback}
       SERVERWARE_OIDC_BROWSER_SCOPES: ${SERVERWARE_OIDC_BROWSER_SCOPES:-openid,profile,email}
       SERVERWARE_OIDC_TOKEN_AUTH_METHOD: ${SERVERWARE_OIDC_TOKEN_AUTH_METHOD:-client_secret_basic}
       SERVERWARE_OIDC_LOGIN_STATE_TTL_SECONDS: ${SERVERWARE_OIDC_LOGIN_STATE_TTL_SECONDS:-300}
@@ -264,6 +264,9 @@ services:
       serverware:
         condition: service_healthy
 
+  # Required generation pins and credential mounts live in the opt-in custody
+  # override: Compose interpolates even services whose profiles are disabled.
+  # A profile alone does not provision authority material or enable gate custody.
   response-v2-generation-bootstrap:
     profiles: ["custody"]
     platform: linux/amd64
@@ -283,13 +286,11 @@ services:
     command: ["--bootstrap-generation", "--config", "/run/serverware-response-v2/config/custody.json"]
     environment:
       CREDENTIALS_DIRECTORY: /run/credentials/serverware-response-v2-generation-bootstrap
-      SERVERWARE_RESPONSE_V2_PROVIDER_GENERATION_SHA256: ${SERVERWARE_RESPONSE_V2_PROVIDER_GENERATION_SHA256:?set verified provider-generation digest}
       SERVERWARE_RESPONSE_V2_CGROUP_ROOT: /sys/fs/cgroup/serverware-response-v2
     volumes:
       - ${SERVERWARE_RESPONSE_OBSERVATION_V2_STATE_DATA_DIR:-serverware-response-v2-state-data}:/var/lib/serverware-response-v2/state-authority
       - ${SERVERWARE_RESPONSE_OBSERVATION_V2_LEDGER_DATA_DIR:-serverware-response-v2-ledger-data}:/var/lib/serverware-response-v2/immutable-artifact-ledger:ro
       - ${SERVERWARE_RESPONSE_OBSERVATION_V2_PUBLIC_CONFIG_DIR:-/dev/null}:/run/serverware-response-v2/config:ro
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_BOOTSTRAP_KEY_DIR:?set one-shot generation bootstrap credential directory}:/run/credentials/serverware-response-v2-generation-bootstrap:ro
       - ${SERVERWARE_RESPONSE_OBSERVATION_V2_POSTGRES_SOCKET_DIR:-/dev/null}:/run/postgresql:ro
       - ${SERVERWARE_RESPONSE_OBSERVATION_V2_CGROUP_ROOT:-/dev/null}:/sys/fs/cgroup/serverware-response-v2:ro
     cgroup: host
@@ -317,7 +318,6 @@ services:
     environment:
       CREDENTIALS_DIRECTORY: /run/credentials/serverware-response-v2-state-authority
       SERVERWARE_RESPONSE_V2_GENERATION_PUBLIC_CREDENTIALS_DIRECTORY: /run/credentials/serverware-response-v2-generation-public
-      SERVERWARE_RESPONSE_V2_PROVIDER_GENERATION_SHA256: ${SERVERWARE_RESPONSE_V2_PROVIDER_GENERATION_SHA256:?set verified provider-generation digest}
       SERVERWARE_RESPONSE_V2_CGROUP_ROOT: /sys/fs/cgroup/serverware-response-v2
     healthcheck:
       test: ["CMD", "/usr/local/bin/serverware-response-observation-v2-custody", "--service", "state-authority", "--config", "/run/serverware-response-v2/config/custody.json", "--check-readiness"]
@@ -330,7 +330,6 @@ services:
       - ${SERVERWARE_RESPONSE_OBSERVATION_V2_STATE_DATA_DIR:-serverware-response-v2-state-data}:/var/lib/serverware-response-v2/state-authority
       - ${SERVERWARE_RESPONSE_OBSERVATION_V2_PUBLIC_CONFIG_DIR:-/dev/null}:/run/serverware-response-v2/config:ro
       - ${SERVERWARE_RESPONSE_OBSERVATION_V2_STATE_KEY_DIR:-/dev/null}:/run/credentials/serverware-response-v2-state-authority:ro
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_GENERATION_PUBLIC_CREDENTIAL_DIR:?set public generation and trust-anchor credential directory}:/run/credentials/serverware-response-v2-generation-public:ro
       - ${SERVERWARE_RESPONSE_OBSERVATION_V2_POSTGRES_SOCKET_DIR:-/dev/null}:/run/postgresql:ro
       - ${SERVERWARE_RESPONSE_OBSERVATION_V2_CGROUP_ROOT:-/dev/null}:/sys/fs/cgroup/serverware-response-v2:ro
     cgroup: host

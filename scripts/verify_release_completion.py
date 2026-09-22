@@ -802,6 +802,7 @@ class InputSnapshots:
             self._path_by_inode[inode] = absolute
         else:
             require(len(snapshot.data) <= max_bytes, f"{label} exceeds the {max_bytes}-byte size limit")
+            require(allow_empty or snapshot.data, f"{label} must not be empty")
         self.by_key[key] = snapshot
         return snapshot
 
@@ -13881,25 +13882,25 @@ def verify_final_challenge_receipt(
 
 def verify_release_security_evidence(
     *,
-    paths: dict[str, Path],
+    snapshots: dict[str, FileSnapshot],
     production_build: dict[str, Any],
     benchmark: dict[str, Any],
     attested_runtime: dict[str, Any],
     preflight: dict[str, Any],
     directly_verified_builders: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    identity = verify_production_policy_identity.verify_persisted_report(
-        bundle_path=paths["policy_bundle"],
-        trusted_public_key_path=paths["policy_trusted_public_key"],
-        report_path=paths["policy_identity_verification"],
+    identity = verify_production_policy_identity.verify_persisted_report_bytes(
+        bundle_bytes=snapshots["policy_bundle"].data,
+        trusted_public_key_bytes=snapshots["policy_trusted_public_key"].data,
+        report_bytes=snapshots["policy_identity_verification"].data,
     )
     require(identity["policyHash"] == benchmark["policy_hash"], "identity-verified policy does not match benchmark policy")
     require(identity["policyHash"] == attested_runtime["policy_digest"], "identity-verified policy does not match Nitro-attested policy")
 
-    activation = production_release_input_preflight.verify_externally_signed_report(
-        report_path=paths["policy_activation_verification"],
-        signature_path=paths["policy_activation_signature"],
-        trusted_public_key_path=paths["policy_activation_trusted_public_key"],
+    activation = production_release_input_preflight.verify_externally_signed_report_bytes(
+        report_bytes=snapshots["policy_activation_verification"].data,
+        signature_bytes=snapshots["policy_activation_signature"].data,
+        trusted_public_key_bytes=snapshots["policy_activation_trusted_public_key"].data,
         purpose=production_release_input_preflight.ACTIVATION_PURPOSE,
         api_version=production_release_input_preflight.ACTIVATION_API_VERSION,
         kind=production_release_input_preflight.ACTIVATION_KIND,
@@ -13912,10 +13913,10 @@ def verify_release_security_evidence(
         "activated candidate does not match the identity-verified policy",
     )
 
-    reproducibility = production_release_input_preflight.verify_externally_signed_report(
-        report_path=paths["reproducible_build_verification"],
-        signature_path=paths["reproducible_build_signature"],
-        trusted_public_key_path=paths["reproducible_build_trusted_public_key"],
+    reproducibility = production_release_input_preflight.verify_externally_signed_report_bytes(
+        report_bytes=snapshots["reproducible_build_verification"].data,
+        signature_bytes=snapshots["reproducible_build_signature"].data,
+        trusted_public_key_bytes=snapshots["reproducible_build_trusted_public_key"].data,
         purpose=production_release_input_preflight.REPRODUCIBILITY_PURPOSE,
         api_version=REPRODUCIBLE_BUILD_VERIFICATION_API_VERSION,
         kind=production_release_input_preflight.REPRODUCIBILITY_KIND,
@@ -21130,7 +21131,7 @@ def main() -> None:
     final_file_snapshots = input_snapshots.capture_many(paths, input_limits)
     stable_input_directory, stable_paths = materialize_snapshots(
         final_file_snapshots,
-        tuple(paths),
+        ("production_readiness_env", "compose_file"),
     )
 
     readiness = load_json_snapshot(final_file_snapshots["production_readiness"], "production readiness")
@@ -21590,7 +21591,7 @@ def main() -> None:
             "Manifest v6 EIF identity or PCRs differ from hardware assurance",
         )
     release_security_summary = verify_release_security_evidence(
-        paths=stable_paths,
+        snapshots=final_file_snapshots,
         production_build=production_images_build_summary,
         benchmark=benchmark_summary,
         attested_runtime=attested_runtime,

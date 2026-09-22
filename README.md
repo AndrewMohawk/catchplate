@@ -55,6 +55,20 @@ curl -fsS http://127.0.0.1:3000/healthz
 development credentials and loopback-only published ports. It is not a
 production deployment or TEE claim. Stop it with `make down`.
 
+If port 3000 is occupied, export `SERVERWARE_CONTROL_PLANE_HOST_PORT=13000`
+before those commands and use `http://127.0.0.1:13000/healthz`. Default public
+URLs and OAuth/OIDC callbacks follow that port; explicitly configured URLs take
+precedence. The default stack needs no custody credentials. Custody requires
+both `docker-compose.yml` and `docker-compose.custody.yml`, the `custody` profile,
+and the real required generation and authority inputs. Profile selection alone
+does not provision them.
+
+`python3 scripts/test_development_compose.py` checks this configuration without
+Docker daemon access. For prepared Python engineering checks that need Git,
+build the `development-test-runtime` Dockerfile target during preparation and
+run it against the frozen source afterward. It adds test tooling only; the
+default application image remains unchanged.
+
 Production candidates are intentionally built without network access from one
 separately published, immutable dependency snapshot. At this handoff,
 `requirements.lock` contains the patched `cryptography==50.0.0`, while
@@ -616,7 +630,7 @@ make verify-apparmor-runtime
 
 `verify-apparmor-contract` checks the profile and Compose override everywhere, including Docker Desktop. `verify-apparmor-runtime` is intentionally Linux-only: it checks that the profile is loaded, starts the full override stack, verifies each container's Docker `security_opt`, reads `/proc/self/attr/current` inside every service, and proves AppArmor denies a normally readable `/proc/sys/kernel/hostname` probe.
 
-`make production-release-proof` is currently a monolithic development/readiness mutation graph, not the authoritative production pipeline. It combines direct tests, builds, publication, deployment, and verification and therefore must not be used as production completion evidence. The replacement workflow separates exact clean-source capture, build-once/sequential-no-build engineering verification, isolated SLSA release build, digest-pinned publication and SBOM, KMS-backed Cosign/transparency, independent source-to-OCI and OCI-to-EIF reproduction, signed release-record creation, Nitro deployment, and off-host witness/CAS verification. Coder participates only in the untrusted engineering phase. `make run-production-readiness` remains a developer/readiness entry point, not a trusted final bootstrap.
+`make production-release-proof` only finalizes independently prepared final-v1 evidence. Build, publication, signing, and deployment use separate explicit targets documented in [docs/release-stages.md](docs/release-stages.md); no aggregate target crosses those stages. The release owners must still supply isolated SLSA provenance, independent source-to-OCI and OCI-to-EIF reproduction, the signed release record, real Nitro deployment, and off-host witness/CAS evidence. Coder participates only in the engineering phase. `make run-production-readiness` remains a developer/readiness entry point, not a trusted final bootstrap.
 
 Production deployment is an evidence pipeline, not `docker compose up` with different environment variables:
 
@@ -626,14 +640,14 @@ Production deployment is an evidence pipeline, not `docker compose up` with diff
 4. Publish and externally verify the signed PolicyBundle, candidate activation/canary evidence, audit checkpoint, and two independent signed build captures. A developer signature or two labels on one reused build does not count as independence.
 5. Initialize the off-host launch-authority ledger once, enroll the exact release and relay leaf certificate in its monotonic registry, and operate its signing key in HSM/KMS custody with an external high-water witness.
 6. On the target Linux/TEE host, install AppArmor and the measured helper binaries, provision KMS Recipient material, immutable release storage, registry credentials, systemd, the exact production trust keys, and the independently authenticated canonical nonce-rollback-assurance pin contract below `/etc/serverware`.
-7. After the production target has been split as described above, run the resulting production pipeline with the complete evidence paths. Do not promote a release for which preflight, build, publication, signing, deployment, launcher authorization, response proof, or final verification is skipped.
+7. Run each release stage separately in its owner's environment with the complete evidence paths. Retain exact independently signed reports when transferring them; do not regenerate a signed report in a later stage. Do not promote a release for which preflight, build, publication, signing, deployment, launcher authorization, response proof, or final verification is skipped.
 8. From an independently administered verifier, pin the release/image/hardware/final-authority keys, verify the completion and response-proof artifacts, then issue short-lived enrollment packets and install the CA on each agent through the verifier-mediated flow.
 
-The following invocation records the current unsplit target's required inputs. It is not an instruction for the current frozen Coder build/no-build pass and is not yet the resource-conscious production procedure:
+The following invocation prepares deployment from already built, published and signed artifacts. It is separate from Coder engineering checks and from final-v1 verification:
 
 ```bash
 cp ops/production-readiness.env.example ops/production-readiness.env
-make production-release-proof \
+make production-release-deploy \
   PRODUCTION_POLICY_BUNDLE=/evidence/policy-bundle.json \
   PRODUCTION_POLICY_TRUSTED_PUBLIC_KEY=/evidence/policy-signing.pub.pem \
   PRODUCTION_POLICY_IDENTITY_VERIFICATION_OUT=/evidence/policy-identity.json \
@@ -719,7 +733,7 @@ make production-host-preflight PRODUCTION_READINESS_ENV=ops/production-readiness
 make run-production-readiness PRODUCTION_READINESS_ENV=ops/production-readiness.env AWS_KMS_MATERIALS_OUT=/etc/serverware/kms-materials.json
 ```
 
-The existing monolithic `make production-release-proof` target is retained as a historical development/readiness mutation graph. It is not the final verifier and must not be used as production completion evidence.
+`make production-release-proof` invokes `finalize-production-final-v1` with the same independently supplied inputs as the finalization command above. It does not prepare the signing request or run the legacy host-readiness service.
 
 [Dockerfile.production](Dockerfile.production) builds the Python control-plane/audit-anchor image on a distroless Python nonroot base, and [data-plane/decision-gate-rs/Dockerfile.production](data-plane/decision-gate-rs/Dockerfile.production) builds the Rust data plane on a distroless cc nonroot base plus the static production-launcher artifact. Production installs only the control-plane requirements and starts `serverware.control_plane_runner`; the control plane serves TLS from `serverware.crt` and `serverware.key` in `SERVERWARE_CONTROL_PLANE_TLS_DIR`, while `ca.pem` in the same directory pins that channel for Rust. `SERVERWARE_ATTESTATION_HELPER_DIR` must contain the executable basenames configured by the six attestation/proof command settings plus the response-proof collector, mounted read-only as `/opt/serverware/bin`. Host preflight checks the pinned certificates, helpers, images, Compose model, and release artifacts, but its signed result remains trusted-host readiness context. Local image IDs and host measurements are not accepted as final Nitro authority.
 
@@ -727,7 +741,7 @@ The production image helper, Python runtime export, static launcher build, and p
 
 Production dependency resolution is split from production building. On a connected staging host, set `SERVERWARE_PRODUCTION_DEPENDENCY_SNAPSHOT_URL` to the credential-free HTTPS URL of the immutable snapshot named by the committed manifests, then run `make fetch-production-dependency-cache`. The fetcher accepts no redirect and installs the CPython wheelhouse, Cargo vendor tree, and launcher APKs only when every artifact matches its committed SHA-256. Updating those manifests and publishing a replacement snapshot is a separate, explicitly reviewed dependency-release operation; this checkout intentionally has no target that refreshes trust pins. Every production image, Python runtime, and launcher build runs `make verify-production-dependency-cache` first, passes `--network=none` to Docker, and uses only `pip --no-index --require-hashes` or Cargo `--frozen` inputs inside the Dockerfiles. `make build-agent-enrollment-wheel` is a compatibility name for the consolidated preparation phase. That phase produces distinct CPython 3.11 host and `manylinux2014_x86_64` wheelhouses under `.tmp/consolidated-test/`; each closed manifest records the package wheel, dependency wheels, lock files, sizes, SHA-256 digests, and exact Python/platform target.
 
-The historical `production-release-proof` graph also requires externally supplied `PRODUCTION_AGENT_*` inputs and fails before mutation when they are absent. Those checks remain useful readiness gates, but they do not turn the native launcher into the independent Manifest-v6 final verifier.
+The `production-release-deploy` stage requires externally supplied `PRODUCTION_AGENT_*` inputs and checks them before deployment. Those checks remain readiness gates; they do not turn the native launcher into the independent Manifest-v6 final verifier.
 
 For two independently produced image builds, capture and compare normalized rootfs contents and the extracted Rust binary:
 

@@ -12,6 +12,72 @@ x-serverware-policy-custody-host-contract:
     bounded-cleanup-helper: {user: swpc-cleanup, socket: /run/serverware/policy-custody/bounded-cleanup-helper.sock}
 
 services:
+  # Keep authority inputs mandatory only when this custody override is selected.
+  # Omitting the override leaves the profiled services without these credentials;
+  # their runtime validation still rejects an unprovisioned generation.
+  response-v2-generation-bootstrap:
+    environment:
+      SERVERWARE_RESPONSE_V2_PROVIDER_GENERATION_SHA256: ${SERVERWARE_RESPONSE_V2_PROVIDER_GENERATION_SHA256:?set verified provider-generation digest}
+    volumes:
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_BOOTSTRAP_KEY_DIR:?set one-shot generation bootstrap credential directory}:/run/credentials/serverware-response-v2-generation-bootstrap:ro
+
+  response-v2-state-authority:
+    environment:
+      SERVERWARE_RESPONSE_V2_PROVIDER_GENERATION_SHA256: ${SERVERWARE_RESPONSE_V2_PROVIDER_GENERATION_SHA256:?set verified provider-generation digest}
+    volumes:
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_GENERATION_PUBLIC_CREDENTIAL_DIR:?set public generation and trust-anchor credential directory}:/run/credentials/serverware-response-v2-generation-public:ro
+
+  response-v2-generation-activation:
+    profiles: ["custody"]
+    platform: linux/amd64
+    image: ${SERVERWARE_DECISION_GATE_DEV_IMAGE:-serverware-decision-gate:dev}
+    pull_policy: never
+    user: "65521:65519"
+    init: true
+    read_only: true
+    network_mode: none
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=${SERVERWARE_RESPONSE_OBSERVATION_V2_SECCOMP_PROFILE:-./security/seccomp/serverware-deny-dangerous.json}
+    pids_limit: 32
+    mem_limit: 192m
+    ulimits:
+      core: {soft: 0, hard: 0}
+    entrypoint: ["/usr/local/bin/serverware-response-observation-v2-custody"]
+    command: ["--activate-generation", "--config", "/run/serverware-response-v2/config/custody.json"]
+    environment:
+      CREDENTIALS_DIRECTORY: /run/credentials/serverware-response-v2-generation-bootstrap
+      SERVERWARE_RESPONSE_V2_PROVIDER_GENERATION_SHA256: ${SERVERWARE_RESPONSE_V2_PROVIDER_GENERATION_SHA256:?set verified provider-generation digest}
+      SERVERWARE_RESPONSE_V2_CGROUP_ROOT: /sys/fs/cgroup/serverware-response-v2
+      SERVERWARE_RESPONSE_V2_GENERATION_ACTIVATION_TIMEOUT_MS: ${SERVERWARE_RESPONSE_V2_GENERATION_ACTIVATION_TIMEOUT_MS:-300000}
+    volumes:
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_STATE_SOCKET_DIR:-serverware-response-v2-state-socket}:/run/serverware-response-v2/state
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_CREDENTIAL_SOCKET_DIR:-serverware-response-v2-credential-socket}:/run/serverware-response-v2/credential-transport:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_POLICY_SOCKET_DIR:-serverware-response-v2-policy-socket}:/run/serverware-response-v2/policy-proof-verifier:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_LEDGER_SOCKET_DIR:-serverware-response-v2-ledger-socket}:/run/serverware-response-v2/immutable-artifact-ledger:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_RELEASE_SOCKET_DIR:-serverware-response-v2-release-socket}:/run/serverware-response-v2/release-attestor-publisher:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_WATCHDOG_SOCKET_DIR:-serverware-response-v2-watchdog-socket}:/run/serverware-response-v2/cleanup-watchdog:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_ROUTER_SOCKET_DIR:-serverware-response-v2-router-socket}:/run/serverware-response-v2/router:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_STATE_DATA_DIR:-serverware-response-v2-state-data}:/var/lib/serverware-response-v2/state-authority
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_CREDENTIAL_DATA_DIR:-serverware-response-v2-credential-data}:/var/lib/serverware-response-v2/credential-transport:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_POLICY_DATA_DIR:-serverware-response-v2-policy-data}:/var/lib/serverware-response-v2/policy-proof-verifier:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_LEDGER_DATA_DIR:-serverware-response-v2-ledger-data}:/var/lib/serverware-response-v2/immutable-artifact-ledger:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_RELEASE_DATA_DIR:-serverware-response-v2-release-data}:/var/lib/serverware-response-v2/release-attestor-publisher:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_WATCHDOG_DATA_DIR:-serverware-response-v2-watchdog-data}:/var/lib/serverware-response-v2/cleanup-watchdog:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_ROUTER_DATA_DIR:-serverware-response-v2-router-data}:/var/lib/serverware-response-v2/custody-router:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_PUBLIC_CONFIG_DIR:-/dev/null}:/run/serverware-response-v2/config:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_BOOTSTRAP_KEY_DIR:?set one-shot generation bootstrap credential directory}:/run/credentials/serverware-response-v2-generation-bootstrap:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_POSTGRES_SOCKET_DIR:-/dev/null}:/run/postgresql:ro
+      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_CGROUP_ROOT:-/dev/null}:/sys/fs/cgroup/serverware-response-v2:ro
+    cgroup: host
+    depends_on:
+      response-v2-custody-router:
+        condition: service_healthy
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=8m
+    restart: "no"
+
   decision-gate-rs:
     group_add:
       - "10003"

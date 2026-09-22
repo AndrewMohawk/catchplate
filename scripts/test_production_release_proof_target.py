@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import importlib.util
 import re
 import shutil
 import subprocess
@@ -68,51 +67,44 @@ def main() -> None:
     body = target_body(makefile, "production-release-proof")
     if "AWS_KMS_MATERIALS_OUT ?= /etc/serverware/kms-materials.json" not in makefile:
         raise AssertionError("production release proof does not default KMS materials to the production /etc path")
-    required_order = [
-        "verify-credential-policy-contracts",
-        "verify-custody-response-proof",
-        "verify-control-plane-startup",
-        "verify-control-plane-oidc",
-        "verify-webauthn-recovery",
-        "verify-portal-browser-oauth",
-        "verify-onboarding-evidence-tooling",
-        "verify-agent-enrollment",
-        "build-agent-enrollment-wheel",
-        "verify-setup-session-api",
-        "validate-production-policy-identity",
-        "verify-production-agent-enrollment-evidence",
-        "validate-policy-activation-evidence",
-        "validate-reproducible-builds",
-        "production-release-input-preflight",
-        "build-production-images",
-        "decision-gate-bench-evidence",
-        "publish-production-images",
-        "merge-production-images-env",
-        "build-production-launcher",
-        "production-release-provenance",
-        "sign-production-images",
-        "prepare-aws-kms-materials",
-        "deploy-production",
-        "install-production-launcher",
-        "generate-production-launch-manifest",
-        "run-production-readiness-final",
-    ]
     release_targets = recursive_make_targets(body)
-    positions = []
-    for item in required_order:
-        if item not in release_targets:
-            raise AssertionError(f"production-release-proof omits {item}")
-        positions.append(release_targets.index(item))
-    if positions != sorted(positions):
-        raise AssertionError(f"production-release-proof runs steps in the wrong order: {body}")
+    if release_targets != ["finalize-production-final-v1"]:
+        raise AssertionError("production-release-proof must only verify independently prepared final evidence")
+    stage_targets = {
+        "production-release-build": [
+            "production-source-capture", "verify-production-dependency-cache",
+            "validate-production-policy-identity", "build-production-images",
+            "build-production-python-runtime", "build-production-launcher",
+        ],
+        "production-release-publish": ["publish-production-images", "merge-production-images-env"],
+        "production-release-sign": [
+            "production-release-provenance", "sign-production-images",
+        ],
+        "production-release-deploy": [
+            "verify-production-agent-enrollment-evidence",
+            "production-release-input-preflight", "prepare-aws-kms-materials",
+            "deploy-production", "install-production-launcher", "generate-production-launch-manifest",
+        ],
+    }
+    for stage, expected_targets in stage_targets.items():
+        if recursive_make_targets(target_body(makefile, stage)) != expected_targets:
+            raise AssertionError(f"{stage} crosses its explicit release-stage boundary")
+    build_body = target_body(makefile, "production-release-build")
+    for artifact in (
+        "PRODUCTION_IMAGES_BUILD_FILE", "PRODUCTION_PYTHON_RUNTIME_ARTIFACT_DIRECTORY",
+        "PRODUCTION_LAUNCHER_BUILD_DIRECTORY",
+    ):
+        guard = f'test ! -e "$({artifact})"'
+        if guard not in build_body or build_body.index(guard) > build_body.index("$(MAKE)"):
+            raise AssertionError("release build must reject existing output before starting any stage")
+    if "production_source_contract()" not in target_body(makefile, "production-source-capture"):
+        raise AssertionError("release source capture must require the clean Git source contract")
     if "PRODUCTION_READINESS_PREFLIGHT=0" in body:
         raise AssertionError("production-release-proof disables final preflight")
     if "SERVERWARE_TEST_ONLY_ALLOW_PREFLIGHT_BYPASS" in body:
         raise AssertionError("production-release-proof enables the test-only preflight bypass")
     if "production-host-preflight" in release_targets or "run-production-readiness" in release_targets:
         raise AssertionError("production-release-proof bypasses the closed native launcher path")
-    if release_targets.index("validate-production-policy-identity") > release_targets.index("build-production-images"):
-        raise AssertionError("production-release-proof builds before validating production principal identity")
 
     policy_contract_body = target_body(makefile, "verify-credential-policy-contracts")
     for required in (
@@ -478,41 +470,9 @@ def main() -> None:
     fetch_cache_body = target_body(makefile, "fetch-production-dependency-cache")
     if "production-dependencies/prefetch.py fetch" not in fetch_cache_body:
         raise AssertionError("production cache fetch rewrites pins instead of verifying them")
-    prefetch_path = ROOT / "production-dependencies" / "prefetch.py"
-    prefetch_spec = importlib.util.spec_from_file_location(
-        "serverware_production_dependency_prefetch", prefetch_path
-    )
-    if prefetch_spec is None or prefetch_spec.loader is None:
-        raise AssertionError("could not load production dependency cache verifier")
-    prefetch = importlib.util.module_from_spec(prefetch_spec)
-    prefetch_spec.loader.exec_module(prefetch)
-    (ROOT / ".tmp").mkdir(exist_ok=True)
-    with tempfile.TemporaryDirectory(dir=ROOT / ".tmp") as temporary_directory:
-        temporary_root = Path(temporary_directory)
-        first_input = temporary_root / "requirements.lock"
-        second_input = temporary_root / "cache.tar.gz"
-        first_input.write_bytes(b"locked dependency\n")
-        second_input.write_bytes(b"pinned cache archive\n")
-        inputs = ("requirements.lock", "cache/archive.tar.gz")
-        paths = {
-            "requirements.lock": first_input,
-            "cache/archive.tar.gz": second_input,
-        }
-        prefetch.input_path = paths.__getitem__
-        valid_manifest = temporary_root / "valid.sha256"
-        valid_manifest.write_text(prefetch.manifest_text(inputs), encoding="ascii")
-        prefetch.verify_manifest(valid_manifest, inputs)
-        substituted_manifest = temporary_root / "substituted.sha256"
-        substituted_manifest.write_text(
-            "0" * 64 + "  requirements.lock\n", encoding="ascii"
-        )
-        try:
-            prefetch.verify_manifest(substituted_manifest, inputs)
-        except RuntimeError as exc:
-            if "does not match" not in str(exc):
-                raise AssertionError(f"unexpected dependency drift rejection: {exc}") from exc
-        else:
-            raise AssertionError("production dependency verifier accepted a substituted manifest")
+    from test_production_dependency_snapshot import verify_dependency_snapshot_contract
+
+    verify_dependency_snapshot_contract()
 
     production_dockerfiles = (
         ROOT / "Dockerfile.production",
@@ -573,7 +533,7 @@ def main() -> None:
     verify_position = wheel_body.index("verify_offline_artifact_manifest.py")
     if not generate_position < checksum_position < verify_position:
         raise AssertionError("wheel build must generate, standard-verify, then Python-verify SHA256SUMS")
-    with tempfile.TemporaryDirectory(dir=ROOT / ".tmp") as temporary_directory:
+    with tempfile.TemporaryDirectory(prefix="serverware-release-contract-") as temporary_directory:
         wheelhouse = Path(temporary_directory)
         package_wheel_name = subprocess.check_output(
             [

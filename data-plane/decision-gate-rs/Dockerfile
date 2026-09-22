@@ -25,6 +25,8 @@ COPY ops/systemd/serverware-policy-custody@bounded-cleanup-helper.service.d /pol
 
 FROM rust-source AS build
 
+ARG CARGO_BUILD_JOBS=2
+
 RUN set -eu; \
     cargo build --release --locked; \
     ledger_directory=/runtime-layout/serverware-custody-state; \

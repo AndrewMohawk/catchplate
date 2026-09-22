@@ -163,6 +163,34 @@ def input_path(relative: str) -> Path:
     return path
 
 
+def _strict_metadata_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            raise RuntimeError("dependency manifest metadata contains a duplicate field")
+        value[key] = item
+    return value
+
+
+def expected_artifact_descriptor(relative: str, entries: dict[str, str]) -> dict[str, str]:
+    if relative == PYTHON_ARCHIVE:
+        return {
+            "kind": "python-wheelhouse",
+            "name": "requirements.lock",
+            "version": "sha256:" + entries["requirements.lock"],
+        }
+    if relative == CARGO_ARCHIVE:
+        return {
+            "kind": "cargo-vendor",
+            "name": "Cargo.lock",
+            "version": "sha256:" + entries["data-plane/decision-gate-rs/Cargo.lock"],
+        }
+    return {
+        MUSL_APK: {"kind": "alpine-apk", "name": "musl", "version": "1.2.5-r12"},
+        MUSL_DEV_APK: {"kind": "alpine-apk", "name": "musl-dev", "version": "1.2.5-r12"},
+    }[relative]
+
+
 def parse_manifest(path: Path, expected_inputs: tuple[str, ...]) -> dict[str, Any]:
     if not path.is_file():
         raise RuntimeError(f"missing pinned dependency manifest: {path.relative_to(ROOT)}")
@@ -177,7 +205,10 @@ def parse_manifest(path: Path, expected_inputs: tuple[str, ...]) -> dict[str, An
     if not lines or not lines[0].startswith("# metadata="):
         raise RuntimeError(f"dependency manifest lacks closed metadata: {path.relative_to(ROOT)}")
     try:
-        metadata = json.loads(lines[0].removeprefix("# metadata="))
+        metadata = json.loads(
+            lines[0].removeprefix("# metadata="),
+            object_pairs_hook=_strict_metadata_object,
+        )
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"dependency manifest metadata is invalid: {path.relative_to(ROOT)}") from exc
     if not isinstance(metadata, dict) or set(metadata) != {
@@ -221,6 +252,8 @@ def parse_manifest(path: Path, expected_inputs: tuple[str, ...]) -> dict[str, An
             raise RuntimeError(f"dependency artifact descriptor is not exact: {relative}")
         if not all(isinstance(descriptor[field], str) and descriptor[field] for field in descriptor):
             raise RuntimeError(f"dependency artifact descriptor is invalid: {relative}")
+        if descriptor != expected_artifact_descriptor(relative, entries):
+            raise RuntimeError(f"dependency artifact descriptor differs from its pinned inputs: {relative}")
         if not SHA256_RE.fullmatch(entries[relative]):
             raise RuntimeError(f"dependency artifact digest is invalid: {relative}")
     return {"metadata": metadata, "entries": entries, "sha256": hashlib.sha256(raw).hexdigest()}
@@ -251,12 +284,18 @@ def expected_cache_entries(parsed: list[dict[str, Any]]) -> dict[str, str]:
     return entries
 
 
-def verify() -> None:
-    parsed = manifests()
+def verify_source_inputs(parsed: list[dict[str, Any]]) -> None:
     for manifest in parsed:
         for relative, expected in manifest["entries"].items():
-            path = input_path(relative)
-            _verify_regular_input(path, relative, expected)
+            if relative not in CACHE_INPUTS:
+                _verify_regular_input(input_path(relative), relative, expected)
+
+
+def verify() -> None:
+    parsed = manifests()
+    verify_source_inputs(parsed)
+    for relative, expected in expected_cache_entries(parsed).items():
+        _verify_regular_input(input_path(relative), relative, expected)
 
 
 def validated_snapshot_url(raw: str, snapshot_id: str) -> str:
@@ -314,6 +353,9 @@ def fetch_one(snapshot_url: str, relative: str, expected_sha256: str) -> None:
 
 def fetch(snapshot_url_raw: str) -> None:
     parsed = manifests()
+    # Source pins are available before any downloads. A stale reviewed snapshot
+    # must not consume network or replace otherwise usable cached artifacts.
+    verify_source_inputs(parsed)
     snapshot_id = parsed[0]["metadata"]["snapshotId"]
     snapshot_url = validated_snapshot_url(snapshot_url_raw, snapshot_id)
     for relative, digest in sorted(expected_cache_entries(parsed).items()):

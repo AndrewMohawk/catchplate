@@ -7410,7 +7410,7 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                     "config": {
                         "request": {
                             "allowedQueryKeys": ["reflectCredential"],
-                            "allowedHeaders": ["accept", "content-type", "user-agent"],
+                            "allowedHeaders": ["accept", "user-agent"],
                             "allowedMediaTypes": ["application/json"],
                             "bodyMode": "json",
                             "maxBodyBytes": 65536,
@@ -7488,7 +7488,7 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                     "config": {
                         "request": {
                             "allowedQueryKeys": [],
-                            "allowedHeaders": ["accept", "content-type", "user-agent"],
+                            "allowedHeaders": ["accept", "user-agent"],
                             "allowedMediaTypes": ["application/octet-stream"],
                             "bodyMode": "stream",
                             "maxBodyBytes": 1048576,
@@ -7523,7 +7523,7 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                     "config": {
                         "request": {
                             "allowedQueryKeys": [],
-                            "allowedHeaders": ["accept", "content-type", "user-agent"],
+                            "allowedHeaders": ["accept", "user-agent"],
                             "allowedMediaTypes": ["application/x-ndjson"],
                             "allowedFields": ["index", "kept", "nested.safe"],
                             "bodyMode": "jsonlStream",
@@ -7561,7 +7561,7 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                     "config": {
                         "request": {
                             "allowedQueryKeys": [],
-                            "allowedHeaders": ["accept", "content-type", "user-agent"],
+                            "allowedHeaders": ["accept", "user-agent"],
                             "allowedMediaTypes": ["application/json"],
                             "allowedFields": ["index", "kept", "nested.safe"],
                             "bodyMode": "jsonArrayStream",
@@ -7599,7 +7599,7 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                     "config": {
                         "request": {
                             "allowedQueryKeys": [],
-                            "allowedHeaders": ["accept", "content-type", "user-agent"],
+                            "allowedHeaders": ["accept", "user-agent"],
                             "allowedMediaTypes": ["text/event-stream"],
                             "allowedFields": ["index", "kept", "nested.safe"],
                             "bodyMode": "jsonSseStream",
@@ -7639,7 +7639,7 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                     "config": {
                         "request": {
                             "allowedQueryKeys": [],
-                            "allowedHeaders": ["accept", "content-type", "user-agent"],
+                            "allowedHeaders": ["accept", "user-agent"],
                             "allowedMediaTypes": ["application/json"],
                             "allowedFields": [
                                 "requestId",
@@ -7687,7 +7687,7 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                     "config": {
                         "request": {
                             "allowedQueryKeys": [],
-                            "allowedHeaders": ["accept", "content-type", "user-agent"],
+                            "allowedHeaders": ["accept", "user-agent"],
                             "allowedMediaTypes": [
                                 "application/x-www-form-urlencoded"
                             ],
@@ -7726,7 +7726,7 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                     "config": {
                         "request": {
                             "allowedQueryKeys": [],
-                            "allowedHeaders": ["accept", "content-type", "user-agent"],
+                            "allowedHeaders": ["accept", "user-agent"],
                             "allowedMediaTypes": ["text/csv"],
                             "allowedFields": ["id", "public", "safe_note"],
                             "bodyMode": "csvStream",

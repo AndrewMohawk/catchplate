@@ -639,6 +639,10 @@ class ApiAdapter:
             name = str(raw_name).strip().lower()
             if name in _GENERIC_NON_FORWARDED_HEADERS or is_serverware_internal_header(name):
                 continue
+            # Content-Type is mediated by the physical-header and media-type
+            # checks below, not by the agent-forwardable header allowlist.
+            if name == "content-type":
+                continue
             if name not in allowed_headers:
                 return PolicyDecision(
                     allowed=False,

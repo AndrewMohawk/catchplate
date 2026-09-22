@@ -139,7 +139,10 @@ def write_fixture_artifacts(tmp: Path, *, p99_ms: float = 6.0) -> dict[str, Path
     sigstore_trust_root = tmp / "sigstore-signing.pub.pem"
     rekor_trust_root = tmp / "rekor.pub.pem"
     external_trust_root = tmp / "external-checkpoint.pub.pem"
-    source_tree_digest = build_production_images.source_tree_digest()
+    source_contract = build_production_images.source_contract(
+        development_dirty_tree=False
+    )
+    source_tree_digest = source_contract["digest"]
     control_ref = "registry.prod.serverware.dev/serverware/control@" + digest("a")
     gate_ref = "registry.prod.serverware.dev/serverware/decision-gate@" + digest("b")
 
@@ -210,7 +213,15 @@ def write_fixture_artifacts(tmp: Path, *, p99_ms: float = 6.0) -> dict[str, Path
             "kind": build_production_images.BUILD_KIND,
             "ok": True,
             "metadata": {
+                "revision": source_contract["commit"],
                 "source_tree_digest": source_tree_digest,
+                "source_archive_digest": source_contract["archive"]["sha256"],
+                "source_manifest_digest": source_contract["manifest"]["sha256"],
+                "source_identity_mode": source_contract["identityMode"],
+                "production_release_eligible": source_contract[
+                    "productionReleaseEligible"
+                ],
+                "source_contract": source_contract,
                 "launch_authority_key_id": LAUNCH_AUTHORITY_KEY_ID,
                 "launch_authority_root_sha256": LAUNCH_AUTHORITY_ROOT_SHA256,
             },
@@ -576,6 +587,9 @@ def expect_value_error(callback: object, expected: str) -> None:
 def assert_release_input_bindings(paths: dict[str, Path]) -> None:
     build = json.loads(paths["build"].read_text(encoding="utf-8"))
     source_tree_digest = build["metadata"]["source_tree_digest"]
+    source_contract = build_production_images.source_contract(
+        development_dirty_tree=False
+    )
 
     def inventory() -> dict[str, object]:
         return generate_release_provenance.production_image_inventory(
@@ -583,6 +597,7 @@ def assert_release_input_bindings(paths: dict[str, Path]) -> None:
             published_path=paths["published"],
             images_env_path=paths["images_env"],
             expected_source_tree_digest=source_tree_digest,
+            expected_source_contract=source_contract,
         )
 
     production_images = inventory()
@@ -609,6 +624,37 @@ def assert_release_input_bindings(paths: dict[str, Path]) -> None:
     reproducible_document = json.loads(
         paths["reproducible"].read_text(encoding="utf-8")
     )
+    for field, substituted in (
+        ("revision", "substituted-source-revision"),
+        ("source_archive_digest", digest("8")),
+        ("source_manifest_digest", digest("8")),
+        ("source_identity_mode", "development-dirty-tree"),
+        ("production_release_eligible", False),
+    ):
+        original = build["metadata"][field]
+        try:
+            build["metadata"][field] = substituted
+            write_json(paths["build"], build)
+            expect_value_error(
+                inventory,
+                f"metadata {field} does not match the exact clean source contract",
+            )
+        finally:
+            build["metadata"][field] = original
+            write_json(paths["build"], build)
+
+    original_contract = build["metadata"]["source_contract"]
+    try:
+        build["metadata"]["source_contract"] = {
+            **original_contract,
+            "productionReleaseEligible": False,
+        }
+        write_json(paths["build"], build)
+        expect_value_error(inventory, "embedded a different source archive contract")
+    finally:
+        build["metadata"]["source_contract"] = original_contract
+        write_json(paths["build"], build)
+
     try:
         build["images"][1]["launch_authority_key_id"] = digest("8")
         write_json(paths["build"], build)

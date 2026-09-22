@@ -53,6 +53,8 @@ RUN set -eu; \
 
 FROM rust-source AS coder-test-build
 
+ARG CARGO_BUILD_JOBS=2
+
 RUN set -eu; \
     test_target=/cargo-test-target; \
     messages=/tmp/cargo-test-messages.jsonl; \

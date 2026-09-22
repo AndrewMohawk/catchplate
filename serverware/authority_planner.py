@@ -1194,7 +1194,7 @@ PLANNING_PROGRAMS: Mapping[str, PlanningProgram] = MappingProxyType(
         )
         for operation, kernel
         in sorted(authority_transition_registry.KERNELS.items())
-    )
+    }
 )
 
 

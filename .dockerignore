@@ -12,6 +12,14 @@
 **/*.pyc
 **/*.pyo
 **/build
+**/cache
+# Only fixed offline build inputs may cross the generic cache exclusion.
+!production-dependencies/cache
+production-dependencies/cache/**
+!production-dependencies/cache/python-wheelhouse-linux-amd64.tar.gz
+!production-dependencies/cache/cargo-vendor.tar.gz
+!production-dependencies/cache/musl-1.2.5-r12.apk
+!production-dependencies/cache/musl-dev-1.2.5-r12.apk
 **/dist
 **/target
 **/venv

@@ -374,8 +374,8 @@ def main() -> None:
             launcher_source,
             (
                 'serverware.bootstrapReceipt/v3',
-                'nonceRollbackAssuranceContractSha256',
-                'nonceRollbackAssurancePinsSha256',
+                'nonce_rollback_assurance_contract_sha256: String',
+                'nonce_rollback_assurance_pins_sha256: String',
                 '--launcher-nonce-rollback-assurance-pins',
                 'legacy v2 launch manifests are readiness-only',
                 'nonce_authority_verifier_state_store_attestation_public_key_spki_der_base64url',
@@ -434,6 +434,19 @@ def main() -> None:
                 raise AssertionError(
                     f"{label} omits nonce rollback assurance source marker: {marker}"
                 )
+    authorization_request = re.search(
+        r'#\[serde\(rename_all = "camelCase"\)\]\s*struct LaunchAuthorizationRequest \{([^}]+)\}',
+        launcher_source,
+        re.DOTALL,
+    )
+    if authorization_request is None or not all(
+        field in authorization_request.group(1)
+        for field in (
+            "nonce_rollback_assurance_contract_sha256: String",
+            "nonce_rollback_assurance_pins_sha256: String",
+        )
+    ):
+        raise AssertionError("native launcher must serialize both nonce rollback bindings as camelCase request fields")
 
     bench_body = target_body(makefile, "decision-gate-bench-evidence")
     if "$(DECISION_GATE_BENCH_FILE)" not in bench_body or "bench_decision_gate.py --self-test" not in bench_body:

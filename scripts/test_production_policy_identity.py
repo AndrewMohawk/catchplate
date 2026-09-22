@@ -140,8 +140,17 @@ class ProductionPolicyIdentityVerifierTests(unittest.TestCase):
         bundle = self.bundle()
         request = bundle["routes"][0]["adapter"]["config"]["request"]
         self.assertEqual(request["allowedFields"], ["audit_marker"])
+        self.assertEqual(request["allowedMediaTypes"], ["application/json"])
+        self.assertNotIn("content-type", request["allowedHeaders"])
         snapshot = compile_policy_bundle(bundle, validate_schema=True)
         self.assertEqual(snapshot.hash, verifier.policy_hash(bundle))
+
+    def test_content_type_cannot_be_an_agent_forwardable_header(self) -> None:
+        bundle = self.mutate_and_sign(
+            lambda candidate: candidate["routes"][0]["adapter"]["config"]["request"]["allowedHeaders"].append("content-type")
+        )
+        result = self.assert_rejected(bundle, "policy_validation_failed")
+        self.assertIsNone(result["policy"])
 
     def test_valid_identity_does_not_bypass_route_schema_rejection(self) -> None:
         bundle = self.mutate_and_sign(

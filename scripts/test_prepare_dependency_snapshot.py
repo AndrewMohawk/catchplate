@@ -134,6 +134,7 @@ class ProducerTests(unittest.TestCase):
             self.assertIn("--read-only", command)
             self.assertIn("--cap-drop=ALL", command)
             self.assertIn("--memory=2g", command)
+            self.assertIn("--memory-swap=2g", command)
             self.assertIn("--pids-limit=128", command)
             self.assertIn("--cpus=1", command)
             self.assertIn(producer.PYTHON_IMAGE, command)
@@ -143,8 +144,62 @@ class ProducerTests(unittest.TestCase):
             self.assertNotIn("--env-file", command)
             mounts = [command[index + 1] for index, value in enumerate(command) if value == "--mount"]
             self.assertTrue(all(",readonly" in mount or "dst=/output" in mount for mount in mounts))
+            tmpfs = [command[index + 1] for index, value in enumerate(command) if value == "--tmpfs"]
+            expected_tmpfs = ["/tmp:rw,nosuid,nodev,noexec,size=1536m,mode=1777"] if phase == "download" else [
+                "/tmp:rw,nosuid,nodev,noexec,size=1024m,mode=1777",
+                "/installed:rw,nosuid,nodev,exec,size=512m,mode=1777",
+            ]
+            self.assertEqual(tmpfs, expected_tmpfs)
         with self.assertRaises(ValueError):
             producer.docker_command("arbitrary-command", self.directory, "fixed-task-name")
+
+    def test_offline_install_inventory_and_native_import_use_only_exec_tmpfs(self) -> None:
+        inventory = producer.wheel_inventory(self.wheels, self.locked)
+        cases = (
+            {"cryptography": "50.0.0"},
+            {"cryptography": "49.0.0"},
+            {"cryptography": "50.0.0", "unexpected": "1.0"},
+        )
+        for index, packages in enumerate(cases):
+            with self.subTest(packages=packages):
+                scratch = self.directory / f"verify-{index}"
+                scratch.mkdir()
+                distributions = [mock.Mock(metadata={"Name": name}, version=version)
+                                 for name, version in packages.items()]
+                with mock.patch.object(producer, "read_small", return_value=self.lock), \
+                     mock.patch.object(producer.tempfile, "TemporaryDirectory") as temporary, \
+                     mock.patch.object(producer, "unpack_wheels") as unpack, \
+                     mock.patch.object(producer, "wheel_inventory", return_value=inventory), \
+                     mock.patch.object(producer, "run_pip") as pip, \
+                     mock.patch.object(producer.importlib.metadata, "distributions", return_value=distributions) as installed, \
+                     mock.patch.object(producer.importlib.metadata, "version", return_value="24.0"), \
+                     mock.patch.object(producer.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "50.0.0\n")) as smoke, \
+                     mock.patch.object(producer.Path, "write_bytes") as report:
+                    temporary.return_value.__enter__.return_value = str(scratch)
+                    if index:
+                        with self.assertRaisesRegex(ValueError, "installed package inventory"):
+                            producer.container_phase("verify")
+                        self.assertEqual(pip.call_count, 1)
+                        smoke.assert_not_called()
+                        report.assert_not_called()
+                    else:
+                        producer.container_phase("verify")
+                        self.assertEqual(pip.call_count, 2)
+                        self.assertEqual(pip.call_args_list[1].args, (["check"],))
+                        self.assertEqual(pip.call_args_list[1].kwargs["env"]["PYTHONPATH"], "/installed")
+                        self.assertEqual(smoke.call_args.kwargs["env"]["PYTHONPATH"], "/installed")
+                        self.assertIn("from cryptography.hazmat.bindings import _rust", smoke.call_args.args[0][2])
+                        result = json.loads(report.call_args.args[0])
+                        self.assertEqual(result["installed"], packages)
+                        self.assertEqual(result["cryptography_import"], "50.0.0")
+                    temporary.assert_called_once_with(dir="/tmp", prefix="snapshot-")
+                    unpack.assert_called_once_with(Path("/archive/python-wheelhouse-linux-amd64.tar.gz"), scratch / "wheelhouse")
+                    arguments = pip.call_args_list[0].args[0]
+                    self.assertEqual(arguments[arguments.index("--target") + 1], "/installed")
+                    self.assertEqual(arguments[arguments.index("--find-links") + 1], str(scratch / "wheelhouse"))
+                    self.assertIn("--no-index", arguments)
+                    self.assertIn("--require-hashes", arguments)
+                    installed.assert_called_once_with(path=["/installed"])
 
     def test_timeout_cleans_only_its_named_container(self) -> None:
         (self.directory / "work/download").mkdir(parents=True)

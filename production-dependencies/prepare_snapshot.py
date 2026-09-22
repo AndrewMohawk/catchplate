@@ -255,7 +255,10 @@ def container_phase(phase: str) -> None:
         else:
             unpack_wheels(Path("/archive/python-wheelhouse-linux-amd64.tar.gz"), wheelhouse)
             inventory = wheel_inventory(wheelhouse, locked)
-            installed = scratch / "installed"
+            # Native extensions require executable mappings. Only this offline
+            # install target gets an executable tmpfs; wheel/download scratch
+            # stays on the separate noexec /tmp mount in both fixed phases.
+            installed = Path("/installed")
             run_pip(["install", "--quiet", "--no-cache-dir", "--no-compile", "--no-index",
                      "--only-binary=:all:", "--require-hashes", "--ignore-installed",
                      "--find-links", str(wheelhouse), "--target", str(installed), "-r", str(lock_path)])
@@ -332,8 +335,13 @@ def docker_command(phase: str, candidate: Path, name: str) -> list[str]:
                "--platform", "linux/amd64", "--network", "bridge" if phase == "download" else "none",
                "--user", f"{os.geteuid()}:{os.getegid()}", "--read-only", "--cap-drop=ALL",
                "--security-opt=no-new-privileges", "--cpus=1", "--memory=2g", "--memory-swap=2g",
-               "--pids-limit=128", "--tmpfs", "/tmp:rw,nosuid,nodev,size=1536m,mode=1777",
+               "--pids-limit=128", "--tmpfs",
+               "/tmp:rw,nosuid,nodev,noexec,size=" + ("1536m" if phase == "download" else "1024m") + ",mode=1777",
                "--env", "PYTHONDONTWRITEBYTECODE=1", "--env", "PIP_DISABLE_PIP_VERSION_CHECK=1"]
+    if phase == "verify":
+        # Keep the combined tmpfs budget at 1536 MiB, within the unchanged
+        # 2 GiB container memory cap, and never expose executable download space.
+        command.extend(["--tmpfs", "/installed:rw,nosuid,nodev,exec,size=512m,mode=1777"])
     for source, destination, readonly in mounts:
         if any(character in str(source) for character in (",", "\n", "\r")):
             raise ValueError("candidate paths must not contain Docker mount separators")

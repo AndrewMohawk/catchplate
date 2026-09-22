@@ -85,6 +85,16 @@ def assert_dockerignore() -> None:
     missing = sorted(required - ignored)
     if missing:
         raise AssertionError(f".dockerignore does not exclude local build/secrets material: {missing}")
+    allowed_cache_inputs = {
+        "!production-dependencies/cache",
+        "!production-dependencies/cache/python-wheelhouse-linux-amd64.tar.gz",
+        "!production-dependencies/cache/cargo-vendor.tar.gz",
+        "!production-dependencies/cache/musl-1.2.5-r12.apk",
+        "!production-dependencies/cache/musl-dev-1.2.5-r12.apk",
+    }
+    exceptions = {line for line in ignored if line.startswith("!") and "cache" in line}
+    if exceptions != allowed_cache_inputs or "production-dependencies/cache/**" not in ignored:
+        raise AssertionError("Docker context must include only the fixed offline cache inputs")
 
 
 def services_mounting_source(model: dict[str, object], source: str) -> set[str]:

@@ -27,6 +27,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import test_production_handoff  # noqa: E402
 import test_production_release_input_preflight  # noqa: E402
 import test_production_readiness  # noqa: E402
+import build_production_images  # noqa: E402
 import generate_release_provenance  # noqa: E402
 import production_host_preflight  # noqa: E402
 import run_production_readiness  # noqa: E402
@@ -2021,6 +2022,9 @@ def main() -> None:
             published_path=paths["published"],
             images_env_path=paths["images_env"],
             expected_source_tree_digest=source_digest,
+            expected_source_contract=build_production_images.source_contract(
+                development_dirty_tree=False
+            ),
         )
         _, compose_summary = generate_release_provenance.production_compose_model(
             compose_file=ROOT / "docker-compose.production.yml",

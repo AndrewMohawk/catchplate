@@ -79,6 +79,14 @@ locked cryptography package and its Rust extension. Wheel tar entries have fixed
 ordering, ownership, modes, and timestamps; the gzip header has no filename and a
 zero timestamp. A second packaging pass must produce the same archive digest.
 
+Both phases keep download/unpack scratch on an explicit `noexec,nosuid,nodev`
+`/tmp` tmpfs. Only the offline verification container receives a separate
+`/installed` executable tmpfs, needed to load installed native extensions. It
+uses that same directory for pip installation, inventory checks, and imports.
+Verification splits the 1536 MiB tmpfs budget into 1024 MiB for `/tmp` and 512 MiB
+for `/installed`; download keeps the full 1536 MiB on `/tmp`. Both containers
+retain the 2 GiB memory limit, disabled extra swap, and one-CPU/PID/time bounds.
+
 ## Candidate output and review
 
 ```text

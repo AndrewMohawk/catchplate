@@ -1217,7 +1217,9 @@ def bootstrap_receipt_fixture(
         },
         "argv": {"preflightSha256": digest("c"), "readinessSha256": digest("d")},
         "environment": {
-            "names": run_production_readiness.BOOTSTRAP_RECEIPT_COMMITTED_ENV_NAMES,
+            "names": list(
+                run_production_readiness.BOOTSTRAP_RECEIPT_COMMITTED_ENV_NAMES
+            ),
             "sha256": digest("e"),
         },
     }
@@ -2080,7 +2082,67 @@ def verify_release_proof_schemas() -> tuple[Any, dict[str, Any]]:
     Draft202012Validator.check_schema(signing_request_schema)
     Draft202012Validator.check_schema(signing_response_schema)
     receipt = bootstrap_receipt_fixture()
-    Draft202012Validator(receipt_schema).validate(receipt)
+    receipt_validator = Draft202012Validator(receipt_schema)
+    receipt_validator.validate(receipt)
+    expected_environment_names = [
+        "LANG",
+        "LC_ALL",
+        "PATH",
+        "SERVERWARE_BOOTSTRAP_RECEIPT_API_VERSION",
+        "SERVERWARE_BOOTSTRAP_RECEIPT_FD",
+        "SERVERWARE_BOOTSTRAP_RECEIPT_SHA256",
+        "SERVERWARE_LAUNCHER_IMPORT_MODE",
+        "TZ",
+    ]
+    if receipt["environment"]["names"] != expected_environment_names:
+        raise AssertionError(
+            "bootstrap receipt fixture diverged from the retained-fd launcher environment"
+        )
+    run_production_readiness.validate_bootstrap_receipt_summary(
+        bootstrap_receipt_summary(receipt)
+    )
+    for label, names in (
+        (
+            "missing import mode",
+            [
+                name for name in expected_environment_names
+                if name != "SERVERWARE_LAUNCHER_IMPORT_MODE"
+            ],
+        ),
+        ("extra name", sorted(expected_environment_names + ["UNEXPECTED_NAME"])),
+        ("reordered names", list(reversed(expected_environment_names))),
+        ("duplicate name", expected_environment_names + ["TZ"]),
+    ):
+        invalid_receipt = clone_document(receipt)
+        invalid_receipt["environment"]["names"] = names
+        if not list(receipt_validator.iter_errors(invalid_receipt)):
+            raise AssertionError(f"bootstrap receipt schema accepted {label}")
+        try:
+            run_production_readiness.validate_bootstrap_receipt_summary(
+                bootstrap_receipt_summary(invalid_receipt)
+            )
+        except ValueError as exc:
+            if "environment names do not match" not in str(exc):
+                raise AssertionError(
+                    f"bootstrap receipt {label} failed for the wrong reason: {exc}"
+                ) from exc
+        else:
+            raise AssertionError(f"bootstrap receipt runtime accepted {label}")
+    invalid_environment_digest = clone_document(receipt)
+    invalid_environment_digest["environment"]["sha256"] = "not-a-sha256"
+    if not list(receipt_validator.iter_errors(invalid_environment_digest)):
+        raise AssertionError("bootstrap receipt schema accepted invalid environment digest")
+    try:
+        run_production_readiness.validate_bootstrap_receipt_summary(
+            bootstrap_receipt_summary(invalid_environment_digest)
+        )
+    except ValueError as exc:
+        if "environment digest is invalid" not in str(exc):
+            raise AssertionError(
+                f"bootstrap receipt environment digest failed for the wrong reason: {exc}"
+            ) from exc
+    else:
+        raise AssertionError("bootstrap receipt runtime accepted invalid environment digest")
     completion_registry = Registry().with_resource(
         completion_schema["$id"],
         Resource.from_contents(completion_schema),

@@ -28778,7 +28778,12 @@ fn validate_adapter_with_gmail_proof_mode(
                 };
                 validate_required_request_headers(request_config, forwarded_headers)?;
                 for name in forwarded_headers.keys() {
-                    if name != "host" && name != "content-length" && !allowed_headers.contains(name)
+                    // Content-Type is mediated by the media admission below;
+                    // it is not an agent-forwardable allowlist field.
+                    if name != "host"
+                        && name != "content-length"
+                        && name != "content-type"
+                        && !allowed_headers.contains(name)
                     {
                         return Err(json!({
                             "error":"generic_header_not_allowed",
@@ -62218,7 +62223,6 @@ mod tests {
         assert_eq!(header_error["error"], "generic_header_not_allowed");
 
         let mut media_route = route.clone();
-        media_route.adapter_config["request"]["allowedHeaders"] = json!(["content-type"]);
         media_route.adapter_config["request"]["allowedMediaTypes"] = json!([]);
         let media_route_match = RouteMatch {
             route: &media_route,
@@ -62254,16 +62258,73 @@ mod tests {
     }
 
     #[test]
+    fn generic_content_type_is_mediated_outside_header_allowlist() {
+        let snapshot = load_compiled_test_snapshot(
+            policy_with_route(generic_policy_route("json", json!(1024))),
+            "generic-content-type-admission",
+            1,
+        );
+        let route = &snapshot.routes[0];
+        assert_eq!(route.adapter_config["request"]["allowedHeaders"], json!([]));
+        let body = r#"{"safe":true}"#;
+        let url = Url::parse("https://example.test/resource").expect("test URL");
+        let validate = |headers: BTreeMap<String, String>| -> Result<(Value, Value), Value> {
+            let request = provider_test_request(
+                "POST",
+                url.as_str(),
+                headers,
+                body,
+                Some(body.len() as u64),
+            );
+            let forwarded = canonical_forwarded_request_headers(
+                &request.headers,
+                &url,
+                Some(body.len() as u64),
+                &Value::Null,
+            )
+            .map_err(|error| json!({"error":error}))?;
+            validate_adapter(
+                &request,
+                &forwarded,
+                &url,
+                &RouteMatch { route, params: BTreeMap::new() },
+            )
+        };
+        for content_type in ["application/json", "Application/JSON; charset=utf-8"] {
+            validate(BTreeMap::from([("content-type".to_string(), content_type.to_string())]))
+                .expect("schema-admitted JSON media contract must accept its content type");
+        }
+        for content_type in [
+            "text/plain",
+            "application/json;",
+            "application/json; charset=utf-8; CHARSET=utf-8",
+        ] {
+            let denied = validate(BTreeMap::from([("content-type".to_string(), content_type.to_string())]))
+                .expect_err("unapproved or malformed media type must remain denied");
+            assert_eq!(denied["error"], "generic_request_content_type_denied");
+            assert_eq!(denied["status_code"], 415);
+        }
+        let missing = validate(BTreeMap::new()).expect_err("body requires Content-Type");
+        assert_eq!(missing["error"], "generic_request_content_type_required");
+        let duplicate = validate(BTreeMap::from([
+            ("content-type".to_string(), "application/json".to_string()),
+            ("Content-Type".to_string(), "application/json".to_string()),
+        ]))
+        .expect_err("duplicate normalized headers must fail before adapter admission");
+        assert_eq!(duplicate["error"], "request_header_ambiguous");
+        let unknown = validate(BTreeMap::from([
+            ("content-type".to_string(), "application/json".to_string()),
+            ("x-not-allowed".to_string(), "local-unit".to_string()),
+        ]))
+        .expect_err("ordinary headers still require the exact allowlist");
+        assert_eq!(unknown["error"], "generic_header_not_allowed");
+    }
+
+    #[test]
     fn generic_buffered_json_enforces_content_type_utf8_and_syntax() {
         let mut route = test_snapshot(1).routes[0].clone();
         route.methods = HashSet::from(["POST".to_string()]);
-        route.adapter_config = json!({"request":{
-            "allowedHeaders":["content-type"],
-            "allowedQueryKeys":[],
-            "allowedMediaTypes":["application/json"],
-            "bodyMode":"json",
-            "maxBodyBytes":1024
-        }});
+        route.adapter_config = generic_policy_route("json", json!(1024))["adapter"]["config"].clone();
         let validate = |route: &Route,
                         body: &str,
                         content_type: &str,

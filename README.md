@@ -13,6 +13,87 @@ make up
 open http://localhost:3000
 ```
 
+## catchplate-host Developer Handoff
+
+The private `AndrewMohawk/serverware` repository is the canonical handoff. The
+requirements and acceptance boundaries are in [goal.md](goal.md), the current
+security gaps are in [docs/security-review.md](docs/security-review.md), and the
+credential-policy language and implemented examples are in
+[docs/credential-constraints.md](docs/credential-constraints.md). Build only a
+clean, recorded `main` commit from a fresh checkout:
+
+```bash
+git clone git@github.com:AndrewMohawk/serverware.git
+cd serverware
+git switch main
+git pull --ff-only
+test -z "$(git status --porcelain)"
+git rev-parse 'HEAD^{commit}'
+git rev-parse 'HEAD^{tree}'
+docker version
+docker buildx version
+docker compose version
+```
+
+catchplate-host must be a Linux/amd64 host with Git, Make, Python 3.11, Docker Engine,
+Buildx, and Docker Compose v2. Do not put production credentials, signing keys,
+KMS/HSM authority, or registry-promotion credentials in the checkout.
+
+For one development build followed by startup, pull the one immutable base
+service, build the application images once, and start without rebuilding:
+
+```bash
+docker compose pull grant-store
+docker compose build serverware demo-upstream audit-anchor
+docker compose up -d --no-build serverware demo-upstream audit-anchor
+docker compose ps
+curl -fsS http://127.0.0.1:3000/healthz
+```
+
+`make up` is the shorter development convenience command, but it includes
+`--build`; do not run it after the explicit build above. The Compose stack uses
+development credentials and loopback-only published ports. It is not a
+production deployment or TEE claim. Stop it with `make down`.
+
+Production candidates are intentionally built without network access from one
+separately published, immutable dependency snapshot. At this handoff,
+`requirements.lock` contains the patched `cryptography==50.0.0`, while
+`production-dependencies/python-linux-amd64.sha256` still identifies the prior
+lock and wheelhouse. The dependency-release owner must first create a new
+Linux/amd64 wheelhouse from the committed hash-locked requirements, publish a
+new credential-free HTTPS snapshot, and commit its reviewed snapshot ID and
+SHA-256 values. Do not edit the manifest merely to match the new lock, reuse the
+old wheelhouse, disable verification, or allow network access inside the
+production build.
+
+Once that dependency-snapshot commit is on `main`, use its exact immutable URL
+and build all production artifacts before running any verification lane:
+
+```bash
+export SERVERWARE_PRODUCTION_DEPENDENCY_SNAPSHOT_URL='https://artifacts.example/serverware-production-dependencies-linux-amd64-v2'
+make fetch-production-dependency-cache
+make verify-production-dependency-cache
+make build-production-images
+make build-production-python-runtime
+make build-production-launcher
+make production-handoff \
+  PRODUCTION_IMAGE_REGISTRY_PREFIX=registry.example/serverware \
+  PRODUCTION_IMAGE_TAG="$(git rev-parse --short=12 HEAD)"
+```
+
+Replace both example hosts with operator-controlled infrastructure. Keep the
+resulting `.tmp/production-images-build.json`, production runtime and launcher
+artifact directories, and `.tmp/production-handoff.json` together with the
+recorded commit and tree. Publishing, signing, deployment, host readiness,
+Nitro/KMS evidence, and independent final verification are later trust-domain
+steps; a successful build does not establish them.
+
+The `coder-*` targets are not ordinary developer build commands. The current
+workflow requires the separately installed root-owned v12 controller and its
+signed fixed-operation bundle; the older `coder-build-all` path also remains
+fail-closed on the prerequisites listed below. Do not grant repository code a
+Docker socket or replace these controls with an ad hoc privileged runner.
+
 ## Build And Verification Boundary
 
 Finish source, schema, documentation, and review work before any expensive execution. Then freeze one clean commit, run `make coder-build-all` once on catchplate-host, and run `make coder-test-no-build` sequentially without rebuilding or pulling. Coder output is cooperative engineering diagnostics only; it is not hostile-source containment, release provenance, server identity, or attestation.

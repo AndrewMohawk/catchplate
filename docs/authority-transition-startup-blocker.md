@@ -267,9 +267,12 @@ These are separate from provisioning the production services:
   not add independent currentness, completeness or a missing WebAuthn kernel.
   Source `.28` adds [distinct complete-index query declarations](authority-complete-query-contract.md)
   for explicit revocation, committed by the operation/handler manifests. The
-  reader rejects them before business/proof SQL until actual frontier acquisition
-  is implemented. [Storage, all-writer maintenance and bootstrap](authority-index-storage-integration.md)
-  remain requirements, not installed capabilities.
+  planner reader rejects them before business/proof SQL. A standalone bounded
+  SQL reader now acquires inside leaves and canonical outside-prefix nodes,
+  checks primary lookup commitments and performs real range reconstruction
+  relative to a supplied root. It does not admit current heads, perform the
+  primary-row join or activate the planner. [Storage, all-writer maintenance and bootstrap](authority-index-storage-integration.md)
+  remain requirements, not installed capabilities; this source is unexecuted.
 - The planner reads root revisions and digests from PostgreSQL; the executor
   locks and compares those database roots. This establishes a same-database
   compare-and-swap boundary, not an independently retained current-root

@@ -99,15 +99,17 @@ the staged-reference path. Full final verification remains mandatory.
 Query records are currently ephemeral planner state. They are not committed by
 the existing Snapshot/v3, persisted as a new evidence protocol, or independently
 admitted by the SQL executor. The [fixed index join](authority-index-primary-join.md)
-still needs an explicit complete-query primitive, source operation/query/index
-declarations, retained proof frontiers, same-checkpoint root-pair authority and
-closed versioned Python/SQL transport admission. Existing exact-page metadata
+still needs integration of the source complete-query declarations, retained
+proof frontiers, same-checkpoint root-pair authority and closed versioned
+Python/SQL transport admission. Existing exact-page metadata
 does not gain completeness authority from these records.
 
 The [distinct complete-index declarations](authority-complete-query-contract.md)
 now have their own source-bound schema and can be retained as observations
 without legacy ordering or absence synthesis. The planner reader rejects this
-kind before business/proof SQL while actual frontier acquisition is missing.
+kind before business/proof SQL. The standalone bounded frontier reader performs
+real root-relative reconstruction, but maintained storage, admitted root pairs,
+primary joins and versioned retained-evidence integration remain missing.
 Retention does not turn that declaration into proof evidence.
 
 The original retention slice added 24 query-record component methods, nine

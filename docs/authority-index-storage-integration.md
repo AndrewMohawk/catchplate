@@ -4,10 +4,13 @@
 
 This is a source implementation contract, not installed storage or execution
 evidence. The current tree has a pure [range reconstructor](authority-index-range.md),
-fixed projection codecs and an actual [primary-row join](authority-index-primary-join.md).
-It does not yet have counted-index SQL storage, an authenticated population,
-all-writer maintenance, a frontier reader, or independently admitted current
-index/primary root pairs. Existing startup and verification gates remain closed.
+fixed projection codecs, an actual [primary-row join](authority-index-primary-join.md)
+and a standalone bounded SQL frontier reader. The reader reconstructs against a
+supplied root; it does not authenticate that root or its currentness. There is
+still no installed counted-index schema, authenticated population, all-writer
+maintenance or independently admitted current index/primary root pair. The
+planner still rejects complete-index queries before business/proof SQL. Existing
+startup and verification gates remain closed.
 
 The existing `policy_authority_secondary_index_heads` declaration is metadata,
 not an implementation of the counted profile. Its relation/index names, column
@@ -19,14 +22,39 @@ proof without the coordinated changes below.
 
 ## Source-owned storage shape
 
+The standalone reader fixes two transport relations in `serverware_metadata`;
+it accepts no caller namespace or table name:
+
+- `policy_authority_counted_index_leaves`: `index_id`, `projection_digest`,
+  `index_key`, `primary_id`, `primary_key_digest`, `primary_row_digest`,
+  `index_revision`.
+- `policy_authority_counted_index_nodes`: `index_id`, `projection_digest`,
+  `depth`, `path_prefix`, `node_digest`, `subtree_count`, `index_revision`.
+
+The expected scalar types are exact PostgreSQL `text`, `int4` for node depth,
+and `int8` for revisions and counts. CASE projections check those types and
+bounded text byte lengths or integer ranges before returning values; malformed
+values become rejecting NULL sentinels or fail the query. Index keys are 160
+lowercase hex digits, digests are canonical 71-byte SHA-256 strings, primary IDs
+are exact UTF-8 text of at most 4096 bytes (including the permitted empty ID),
+and node prefixes have 1–160 digits matching their depth. Positive record
+revisions may not exceed the supplied index revision. The reader additionally
+checks each primary ID's BusinessKey/v1 digest and the index-key suffix. This
+authenticates lookup material only relative to the reconstructed counted root;
+primary membership and semantic projection still require the real row join.
+
+These are implemented acquisition shapes, not DDL or catalog/ACL admission.
+The SQL comparisons explicitly use `C` collation; installed storage must still
+admit the matching column/index ordering and constraints below.
+
 The schema must bind the exact counted profile, projection descriptor and
 projection manifest. The eleven source profiles cover six base relations:
 credentials and trust publications have three profiles each, challenges have
 two, and sessions, grants and control-plane approvals have one each. No caller
 supplies a projection program, table name or SQL predicate.
 
-A minimal storage contract needs these logical records, with exact names and
-constraints fixed before installation:
+A complete storage contract also needs these logical records and constraints
+fixed before installation:
 
 - A head for each source index: profile/descriptor identity, counted root digest,
   nonnegative count, revision and a defined association with the base relation's
@@ -66,19 +94,31 @@ the fixed UTF-8 codec, not merely an approximately equivalent JSONB spelling.
 
 ## Bounded frontier production
 
-The source query primitive selects an admitted index and a closed selector.
-The actual projection codec derives `[lower, upper)`; the producer must not
-accept independently caller-chosen interval bounds. Deferred selector fields
-must pass the existing staged primary verifier before influencing these reads.
+[`read_complete_frontier`](../serverware/authority_index_reader.py) now accepts
+an actual `CompleteIndexQuery`, supplied counted root/revision, cursor and trace.
+It returns immutable `AcquiredIndexFrontier` observation data: the revalidated
+query, root, interval, actual frontier, ordered primary lookup IDs and metrics.
+It invokes the real range reconstructor before returning; no caller-supplied
+successful verifier result or callback is accepted. The current declaration
+family admits at most 32 inside leaves. This component does not bind the query
+to the consumer's actual operation arguments/time, select or authenticate a
+head, acquire primary rows, invoke the primary join, or authorize a kernel.
 
-Capture the source-admitted index head and primary roots in the same planning
-transaction before frontier reads. If the existing secondary-head relation is
-used, verify that head row's genuine primary proof too, under its own relation's
-captured root; the base-row join does not perform this extra authentication.
+The source query primitive selects an admitted index and a closed selector.
+The actual projection codec derives `[lower, upper)`; the implemented reader
+accepts no independently caller-chosen interval or resource limits. Future
+deferred selector fields must pass the existing staged primary verifier before
+influencing these reads.
+
+Production integration must capture the source-admitted index head and primary
+roots in the same planning transaction before frontier reads. If the existing
+secondary-head relation is used, verify that head row's genuine primary proof
+too, under its own relation's captured root; the base-row join does not perform
+this extra authentication.
 Retain the exact head/profile/root association for executor lock/CAS admission.
 None of these same-database associations replaces an independent checkpoint.
 
-Acquire two different kinds of evidence:
+The implemented reader acquires two different kinds of evidence:
 
 1. Read all leaves inside the derived interval in exact key order, with a source
    leaf ceiling and `LIMIT ceiling + 1`. Any overflow rejects the whole complete
@@ -94,8 +134,10 @@ For a contiguous 160-nibble interval, its two complement sides require at most
 `2 * 160 * 15 = 4800` prefix slots. An empty interval can use the sixteen
 depth-one slots; a whole-keyspace interval has no outside prefixes. An opaque
 root is always forbidden. Chunking at most 256 exact node identities per SQL
-statement gives at most 19 outside-node reads plus one leaf-range read. This is
-a proposed source profile, not an existing registered SQL trace contract.
+statement gives at most 19 outside-node reads plus one leaf-range read. The
+reader implements this fixed bound and emits one trace entry per physical
+SELECT under `serverware.policyAuthorityCountedIndexRead/v1`. That profile is
+not admitted by the production planner's trace contract.
 
 Each node query uses bound identities, exact index/depth/prefix joins, a bounded
 `LIMIT requested + 1`, and a bounded fetch. Reject duplicate, unexpected, crossed,
@@ -104,13 +146,22 @@ candidate only: the actual reconstruction against the separately admitted root
 must still succeed. Missing populated evidence must change that root and deny.
 No response filter may convert corruption into successful absence.
 
-Merge inside leaves and outside opaque subtrees into a sorted, unique,
-prefix-free frontier. At 256 returned leaves, the conservative entry ceiling is
-5056, below the pure component's 8192 ceiling. A conservative proper-ancestor
-bound is `1 + 160N + 320`, below 65536 at `N <= 256`; charging at most 16 hashes
-per opened branch plus one per leaf is also below the component's 1048576 hash
-ceiling. These are source upper bounds, not measured execution results. The
-actual scalar-framed byte accounting and 4 MiB range ceiling remain mandatory.
+The reader merges inside leaves and outside opaque subtrees into a sorted,
+prefix-free frontier and performs actual reconstruction. Its source-derived
+limits are `4800 + maximum_rows` entries, `1 + 160 * maximum_rows + 320`
+opened nodes, and `16 * opened_limit + maximum_rows` reconstruction hashes.
+At the current 32-leaf declaration ceiling these are 4832, 5441 and 87088,
+respectively, within the pure reconstructor's larger component ceilings. These
+are conservative source bounds, not measured execution results.
+
+Returned scalar accounting has a separate 4 MiB cap: record kind followed by
+the fixed-order column values, each UTF-8 encoded (integers in decimal) with an
+eight-byte length prefix. It excludes PostgreSQL wire framing, driver/parser
+memory, outbound parameters and database execution cost. Reconstruction also
+enforces its own 4 MiB scalar-framed input budget; neither metric substitutes
+for the other. Reader hash metrics charge four context hashes, one BusinessKey
+hash per inside leaf and the actual reconstructor hash count. Missing nodes
+never bypass that reconstruction.
 
 Fetch the exact primary rows named by the acquired leaf key material using
 bounded exact-key reads, not by trusting the original SQL predicate result.
@@ -237,6 +288,11 @@ enrollment, current-root authority, trusted expiry time or witness durability.
 
 Current implementation anchors:
 
+- [`authority_index_reader.py`](../serverware/authority_index_reader.py) and
+  [`authority_index_frontier.py`](../serverware/authority_index_frontier.py):
+  fixed standalone SQL acquisition, bounded canonical outside identities and
+  actual reconstruction relative to a supplied root; no storage installation
+  or planner activation.
 - [`authority_index_contract.py`](../serverware/authority_index_contract.py),
   [`authority_index_range.py`](../serverware/authority_index_range.py),
   [`authority_index_projection.py`](../serverware/authority_index_projection.py)
@@ -266,3 +322,11 @@ records, overlimit results, empty intervals, all writer transition categories,
 full-row-only updates, rollback, head exactly-once effects and bootstrap in both
 directions. Native verification remains a later frozen, prepared, no-build phase;
 this document records no executed test or production installation.
+
+The standalone [frontier fixture](../scripts/test_authority_index_frontier.py)
+contains 24 authored, unrun methods using independent integer-prefix tiling and
+counted-tree encodings. A deterministic stored-row cursor exercises the actual
+reader and reconstructor, including omissions, overflow and changed commitments.
+Emitted-SQL assertions and private accounting-boundary checks are supplemental;
+they do not execute PostgreSQL or establish its types, collation, query plan,
+installed schema, transactional maintenance or independent root authority.

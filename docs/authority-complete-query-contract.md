@@ -6,7 +6,9 @@ This is unexecuted source implementation, not installed indexes or a working
 WebAuthn operation. It gives the unregistered explicit-revocation candidate a
 distinct complete-query declaration and removes its reliance on ordinary page
 metadata. The planner rejects this query kind before any business or proof read
-until actual frontier acquisition and evidence admission are implemented.
+until frontier acquisition is integrated with maintained storage, admitted
+roots and versioned evidence. A standalone bounded SQL reader now reconstructs
+its frontier against a supplied root; it does not satisfy those integration gates.
 The earlier database-clock read still occurs; it is not trusted time authority.
 
 ## Distinct query kind
@@ -93,10 +95,11 @@ admission; real proof reconstruction and source rebinding are separate duties.
 
 The [storage integration contract](authority-index-storage-integration.md)
 defines the next coordinated work: fixed storage/hash/projection admission,
-bounded inside-leaf/outside-frontier acquisition, real joined verification,
-all-writer full-row maintenance, exactly-once primary effects of index heads,
-and authenticated bidirectional initial population. Independent root pairs,
-trusted time, witness/fence authority and receipt reconciliation remain required.
+integration of the standalone inside-leaf/outside-frontier reader with real
+joined verification, all-writer full-row maintenance, exactly-once primary
+effects of index heads, and authenticated bidirectional initial population.
+Independent root pairs, trusted time, witness/fence authority and receipt
+reconciliation remain required.
 
 Registration's conditional first-enrollment history and trust staging's replay,
 generation and aggregate-withdrawal semantics need their own source roles and

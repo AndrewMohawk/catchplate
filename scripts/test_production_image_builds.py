@@ -10,6 +10,7 @@ import os
 import re
 import subprocess
 import sys
+import tarfile
 import tempfile
 from pathlib import Path
 from unittest import mock
@@ -1481,89 +1482,191 @@ def assert_source_tree_covers_production_copy_surface() -> None:
             raise AssertionError("source-tree digest did not bind every byte of an opaque untracked policy file")
 
 
-def assert_source_tree_manifest_metadata_and_git_fallback() -> None:
+def source_fixture_git(checkout: Path, *arguments: str) -> bytes:
+    return subprocess.run(
+        [
+            str(serverware_source_tree.GIT_EXECUTABLE),
+            "-C", str(checkout),
+            "-c", "core.hooksPath=/dev/null",
+            "-c", "commit.gpgsign=false",
+            "-c", "user.name=Serverware Test",
+            "-c", "user.email=serverware@example.invalid",
+            *arguments,
+        ],
+        env=serverware_source_tree.GIT_ENVIRONMENT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+    ).stdout
+
+
+def assert_production_source_tree_manifest() -> None:
     with tempfile.TemporaryDirectory() as checkout_raw:
         checkout = Path(checkout_raw)
-        (checkout / "ops").mkdir()
-        (checkout / "scripts").mkdir()
-        (checkout / ".buildrc").write_text("strict=true\n", encoding="utf-8")
-        (checkout / "ops" / "production-readiness.env.example").write_text("MODE=production\n", encoding="utf-8")
+        expected = {
+            ".gitignore": b".tmp/\n",
+            ".buildrc": b"strict=true\n",
+            "ops/production-readiness.env.example": b"MODE=production\n",
+            "scripts/release-tool": b"#!/bin/sh\nexit 0\n",
+            "tracked-build-input.opaque": b"tracked opaque build input\n",
+        }
+        for relative, content in expected.items():
+            path = checkout / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(content)
         executable = checkout / "scripts" / "release-tool"
-        executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         executable.chmod(0o755)
         opaque = checkout / "tracked-build-input.opaque"
-        opaque.write_bytes(b"tracked opaque build input\n")
-        subprocess.run(["git", "init", "-q", str(checkout)], check=True)
-        subprocess.run(["git", "-C", str(checkout), "add", "-A"], check=True)
+        source_fixture_git(checkout, "init", "--object-format=sha1", "-q")
+        source_fixture_git(checkout, "add", "-A")
+        source_fixture_git(checkout, "commit", "-q", "-m", "production source fixture")
+        output = checkout / ".tmp" / "source-contract"
 
-        first = serverware_source_tree.source_tree_summary(checkout)
-        second = serverware_source_tree.source_tree_summary(checkout)
+        first = serverware_source_tree.production_source_contract(checkout, output)
+        archive_bytes = (checkout / first["archivePath"]).read_bytes()
+        second = serverware_source_tree.production_source_contract(checkout, output)
         if first != second:
-            raise AssertionError("source-tree manifest is not deterministic inside a Git checkout")
-        entries = {item["path"]: item for item in first["files"]}
-        expected = {
-            ".buildrc",
-            "ops/production-readiness.env.example",
-            "scripts/release-tool",
-            "tracked-build-input.opaque",
-        }
-        if not expected.issubset(entries):
-            raise AssertionError(f"source-tree manifest omitted tracked inputs: {sorted(expected - set(entries))}")
-        if entries["scripts/release-tool"].get("mode") != "100755":
-            raise AssertionError(f"source-tree manifest omitted executable mode: {entries['scripts/release-tool']}")
-        if any(item["path"].startswith(".git/") for item in first["files"]):
-            raise AssertionError("source-tree manifest included Git metadata")
+            raise AssertionError("production source contract is not deterministic at the same clean commit")
+        if (checkout / second["archivePath"]).read_bytes() != archive_bytes:
+            raise AssertionError("production source archive bytes are not deterministic")
+        manifest = first["sourceTreeManifest"]
+        if (
+            manifest["version"] != "serverware.sourceTree/v3"
+            or first["identityMode"] != "production-commit"
+            or manifest["identityMode"] != first["identityMode"]
+            or first["productionReleaseEligible"] is not True
+            or manifest["productionReleaseEligible"] is not True
+            or first["commit"] != source_fixture_git(checkout, "rev-parse", "HEAD").decode("ascii").strip()
+            or first["gitTree"] != source_fixture_git(checkout, "rev-parse", "HEAD^{tree}").decode("ascii").strip()
+            or manifest["commit"] != first["commit"]
+            or manifest["gitTree"] != first["gitTree"]
+        ):
+            raise AssertionError("production source contract lost its exact v3 commit identity")
+        entries = {item["path"]: item for item in manifest["files"]}
+        if set(entries) != set(expected) or len(manifest["files"]) != len(expected):
+            raise AssertionError(f"production manifest changed the exact tracked inventory: {sorted(entries)}")
+        for relative, content in expected.items():
+            entry = entries[relative]
+            if (
+                entry["type"] != "file"
+                or entry["mode"] != ("100755" if relative == "scripts/release-tool" else "100644")
+                or entry["bytes"] != len(content)
+                or entry["sha256"] != "sha256:" + hashlib.sha256(content).hexdigest()
+                or entry["gitBlob"] != source_fixture_git(checkout, "rev-parse", f"HEAD:{relative}").decode("ascii").strip()
+            ):
+                raise AssertionError(f"production manifest lost tracked bytes/mode/blob identity: {relative}")
+        with tarfile.open(checkout / first["archivePath"], "r:") as archive:
+            members = archive.getmembers()
+            if [member.name for member in members] != [item["path"] for item in manifest["files"]]:
+                raise AssertionError("production archive inventory differs from the committed manifest")
+            for member in members:
+                if not member.isfile() or member.mode != (0o755 if member.name == "scripts/release-tool" else 0o644):
+                    raise AssertionError(f"production archive lost regular-file mode: {member.name}")
+                content = archive.extractfile(member)
+                if content is None or content.read() != expected[member.name]:
+                    raise AssertionError(f"production archive lost committed input bytes: {member.name}")
 
+        def rejected(expected_error: str) -> None:
+            try:
+                serverware_source_tree.production_source_contract(checkout, output)
+            except ValueError as exc:
+                if expected_error not in str(exc):
+                    raise AssertionError(f"production source failed at the wrong guard: {exc}") from exc
+            else:
+                raise AssertionError(f"production source accepted invalid input: {expected_error}")
+
+        dirty_error = "requires a clean index and worktree at the exact commit"
+        executable.write_bytes(b"#!/bin/sh\nexit 1\n")
+        rejected(dirty_error)
+        executable.write_bytes(expected["scripts/release-tool"])
         executable.chmod(0o644)
-        mode_digest = serverware_source_tree.source_tree_digest(
-            checkout,
-            production=False,
-        )
-        if mode_digest == first["digest"]:
-            raise AssertionError("source-tree digest did not commit to executable mode")
+        rejected(dirty_error)
         executable.chmod(0o755)
+        opaque.unlink()
+        rejected(dirty_error)
+        opaque.write_bytes(expected["tracked-build-input.opaque"])
+        untracked = checkout / "scripts" / "untracked-input"
+        untracked.write_bytes(b"uncommitted source\n")
+        rejected(dirty_error)
+        untracked.unlink()
+        opaque.write_bytes(b"staged different input\n")
+        source_fixture_git(checkout, "add", "tracked-build-input.opaque")
+        opaque.write_bytes(expected["tracked-build-input.opaque"])
+        rejected("index differs from the exact HEAD tree")
+        source_fixture_git(checkout, "add", "tracked-build-input.opaque")
+        if serverware_source_tree.production_source_contract(checkout, output) != first:
+            raise AssertionError("restoring source fixture bytes/index did not restore the original contract")
+
+        # Commit the symlink so the regular-tracked-file guard, not dirtiness, rejects it.
         symlink = checkout / "scripts" / "release-tool-link"
         symlink.symlink_to("release-tool")
-        try:
-            serverware_source_tree.source_tree_summary(checkout)
-        except ValueError as exc:
-            if "forbids symlinks" not in str(exc):
-                raise AssertionError(
-                    f"development source symlink failed for the wrong reason: {exc}"
-                ) from exc
-        else:
-            raise AssertionError("development source unexpectedly accepted a symlink")
-        symlink.unlink()
-        opaque.unlink()
-        missing = serverware_source_tree.source_tree_summary(checkout)
-        if (
-            any(item["path"] == "tracked-build-input.opaque" for item in missing["files"])
-            or missing["digest"] == first["digest"]
-        ):
-            raise AssertionError(
-                "development source snapshot did not reflect a removed filesystem input"
-            )
+        source_fixture_git(checkout, "add", "scripts/release-tool-link")
+        source_fixture_git(checkout, "commit", "-q", "-m", "forbidden tracked symlink fixture")
+        rejected("symlinks, submodules, and special Git entries are forbidden: scripts/release-tool-link")
 
+
+def assert_development_source_tree_manifest() -> None:
     with tempfile.TemporaryDirectory() as export_raw:
         exported = Path(export_raw)
         (exported / "ops").mkdir()
         (exported / "scripts").mkdir()
-        (exported / ".buildrc").write_text("strict=true\n", encoding="utf-8")
+        # A declared build input, unlike the arbitrary tracked-only production names.
+        (exported / ".dockerignore").write_text(".git\n.tmp\n", encoding="utf-8")
         (exported / "ops" / "production-readiness.env.example").write_text("MODE=production\n", encoding="utf-8")
         (exported / "ops" / "production-readiness.env").write_text("SECRET=runtime-only\n", encoding="utf-8")
         launcher = exported / "scripts" / "release-tool"
         launcher.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         launcher.chmod(0o755)
-        first = serverware_source_tree.source_tree_summary(exported)
-        second = serverware_source_tree.source_tree_summary(exported)
+        first = serverware_source_tree.source_tree_summary(exported, production=False)
+        second = serverware_source_tree.source_tree_summary(exported, production=False)
         if first != second:
-            raise AssertionError("source-tree manifest is not deterministic outside a Git checkout")
+            raise AssertionError("development source manifest is not deterministic outside a Git checkout")
+        if (
+            first["version"] != "serverware.sourceTree/v3"
+            or first["identityMode"] != "development-dirty-tree"
+            or first["productionReleaseEligible"] is not False
+            or any(first[key] is not None for key in ("commit", "commitTimestamp", "gitTree"))
+        ):
+            raise AssertionError("development filesystem identity acquired production release eligibility")
         entries = {item["path"]: item for item in first["files"]}
-        for required in (".buildrc", "ops/production-readiness.env.example", "scripts/release-tool"):
-            if required not in entries:
-                raise AssertionError(f"Git-independent source-tree manifest omitted {required}")
-        if "ops/production-readiness.env" in entries:
-            raise AssertionError("Git-independent source-tree manifest included the runtime production secret env")
+        expected = {".dockerignore", "ops/production-readiness.env.example", "scripts/release-tool"}
+        if set(entries) != expected or len(first["files"]) != len(expected):
+            raise AssertionError(f"development source selection changed: {sorted(entries)}")
+        if entries["scripts/release-tool"]["mode"] != "100755":
+            raise AssertionError("development source manifest omitted executable mode")
+        source_fixture_git(exported, "init", "--object-format=sha1", "-q")
+        source_fixture_git(exported, "add", ".dockerignore", "ops/production-readiness.env.example", "scripts/release-tool")
+        if serverware_source_tree.source_tree_summary(exported, production=False) != first:
+            raise AssertionError("development filesystem identity changed after Git metadata/index creation")
+        launcher.chmod(0o644)
+        if serverware_source_tree.source_tree_digest(exported, production=False) == first["digest"]:
+            raise AssertionError("development source digest did not commit to executable mode")
+        launcher.chmod(0o755)
+        symlink = exported / "scripts" / "release-tool-link"
+        symlink.symlink_to("release-tool")
+        try:
+            serverware_source_tree.source_tree_summary(exported, production=False)
+        except ValueError as exc:
+            if "development source forbids symlinks: scripts/release-tool-link" not in str(exc):
+                raise AssertionError(f"development source symlink failed at the wrong guard: {exc}") from exc
+        else:
+            raise AssertionError("development source unexpectedly accepted a symlink")
+        symlink.unlink()
+        launcher.unlink()
+        missing = serverware_source_tree.source_tree_summary(exported, production=False)
+        if (
+            any(item["path"] == "scripts/release-tool" for item in missing["files"])
+            or missing["digest"] == first["digest"]
+            or missing["productionReleaseEligible"] is not False
+        ):
+            raise AssertionError("development source snapshot did not reflect a removed selected input")
+
+
+def assert_source_tree_manifest_metadata_and_git_fallback() -> None:
+    # Preserve the original coverage selector while testing the two v3 modes
+    # independently; production identity never falls back to filesystem input.
+    assert_production_source_tree_manifest()
+    assert_development_source_tree_manifest()
 
 
 def assert_source_contract_output_hardening() -> None:
@@ -1574,24 +1677,10 @@ def assert_source_contract_output_hardening() -> None:
             "VALUE = 1\n",
             encoding="utf-8",
         )
-        subprocess.run(["git", "init", "-q", str(checkout)], check=True)
-        subprocess.run(["git", "-C", str(checkout), "add", "scripts/release-tool.py"], check=True)
-        subprocess.run(
-            [
-                "git",
-                "-C",
-                str(checkout),
-                "-c",
-                "user.name=Serverware Test",
-                "-c",
-                "user.email=serverware@example.invalid",
-                "commit",
-                "-q",
-                "-m",
-                "source contract fixture",
-            ],
-            check=True,
-        )
+        (checkout / ".gitignore").write_text(".tmp/\n", encoding="utf-8")
+        source_fixture_git(checkout, "init", "--object-format=sha1", "-q")
+        source_fixture_git(checkout, "add", ".gitignore", "scripts/release-tool.py")
+        source_fixture_git(checkout, "commit", "-q", "-m", "source contract fixture")
 
         valid_output = checkout / ".tmp" / "source-contract"
         contract = serverware_source_tree.production_source_contract(
@@ -1627,14 +1716,15 @@ def assert_source_contract_output_hardening() -> None:
 
 def assert_release_source_tree_digest_callers_agree() -> None:
     build_digest = build_production_images.source_tree_digest()
-    provenance_digest = generate_release_provenance.source_tree(production=True)["digest"]
+    provenance_source = generate_release_provenance.source_tree(production=True)
+    provenance_digest = provenance_source["digest"]
     attestation_digest = verify_codebase_attestation.source_tree_digest(ROOT)
     if len({build_digest, provenance_digest, attestation_digest}) != 1:
         raise AssertionError(
             "release source-tree digest callers disagree: "
             f"build={build_digest} provenance={provenance_digest} attestation={attestation_digest}"
         )
-    entries = {item["path"]: item for item in serverware_source_tree.source_tree_files(ROOT)}
+    entries = {item["path"]: item for item in provenance_source["sourceTreeManifest"]["files"]}
     for required in (".dockerignore", ".gitignore", "ops/production-readiness.env.example"):
         if required not in entries:
             raise AssertionError(f"release source-tree digest omitted required tracked input: {required}")

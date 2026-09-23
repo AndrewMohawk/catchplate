@@ -10,6 +10,7 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from serverware import authority_contract
+from serverware.authority_store import postgres_trigger_manifest
 
 _EXTRACTED_NAMES = frozenset(
     {
@@ -645,45 +646,16 @@ def _policy_candidate_authority_table_manifest(
             }
             for row in index_rows
         ]
-        trigger_rows = conn.execute(
-            """
-            SELECT
-                trigger_record.tgname AS trigger_name,
-                function_record.proname AS function_name,
-                relation_owner.rolname AS owner_name,
-                pg_catalog.pg_get_triggerdef(trigger_record.oid, true)
-                    AS definition
-            FROM pg_catalog.pg_trigger AS trigger_record
-            JOIN pg_catalog.pg_class AS relation
-              ON relation.oid = trigger_record.tgrelid
-            JOIN pg_catalog.pg_namespace AS namespace
-              ON namespace.oid = relation.relnamespace
-            JOIN pg_catalog.pg_proc AS function_record
-              ON function_record.oid = trigger_record.tgfoid
-            JOIN pg_catalog.pg_roles AS relation_owner
-              ON relation_owner.oid = relation.relowner
-            WHERE namespace.nspname = pg_catalog.current_schema()
-              AND relation.relname = ?
-              AND NOT trigger_record.tgisinternal
-            ORDER BY trigger_record.tgname
-            """,
-            (table,),
-        ).fetchall()
-        triggers = [
-            {
-                "name": str(row["trigger_name"]),
-                "function": str(row["function_name"]),
-                "authority": {
-                    "owner": "table-owner",
-                    "acl": "not-applicable",
-                },
-                **_policy_candidate_authority_object_definition(
-                    name=str(row["trigger_name"]),
-                    definition=canonical_definition(row["definition"]),
-                ),
-            }
-            for row in trigger_rows
-        ]
+        try:
+            triggers = postgres_trigger_manifest.table_trigger_manifest(
+                conn.raw_connection,
+                namespace=actual_namespace,
+                table=table,
+                canonical_definition=canonical_definition,
+                object_definition=_policy_candidate_authority_object_definition,
+            )
+        except ValueError as exc:
+            raise PolicyCandidateAuthorityError(str(exc)) from exc
         table_definition = ""
     else:
         table_authority = None
@@ -1004,31 +976,12 @@ def _policy_candidate_authority_postgres_object_authority(
                 "acl": function_acl,
             }
         )
-    triggers = [
-        {
-            "name": str(row["trigger_name"]),
-            "table": str(row["table_name"]),
-            "function": str(row["function_name"]),
-            "owner": "table-owner",
-            "acl": "not-applicable",
-        }
-        for row in conn.execute(
-            "SELECT trigger_record.tgname AS trigger_name, "
-            "relation.relname AS table_name, "
-            "function_record.proname AS function_name "
-            "FROM pg_catalog.pg_trigger AS trigger_record "
-            "JOIN pg_catalog.pg_class AS relation "
-            "ON relation.oid = trigger_record.tgrelid "
-            "JOIN pg_catalog.pg_namespace AS namespace_record "
-            "ON namespace_record.oid = relation.relnamespace "
-            "JOIN pg_catalog.pg_proc AS function_record "
-            "ON function_record.oid = trigger_record.tgfoid "
-            "WHERE namespace_record.nspname = ? "
-            "AND NOT trigger_record.tgisinternal "
-            "ORDER BY relation.relname, trigger_record.tgname",
-            (namespace,),
-        ).fetchall()
-    ]
+    try:
+        triggers = postgres_trigger_manifest.schema_trigger_manifest(
+            conn.raw_connection, namespace=namespace,
+        )
+    except ValueError as exc:
+        raise PolicyCandidateAuthorityError(str(exc)) from exc
     return {
         "namespace": {
             "owner": "schema-owner",

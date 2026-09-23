@@ -699,6 +699,8 @@ override CODER_EXCLUDED_TEST_SCRIPTS := \
 	scripts/test_checkpoint_sequence.py \
 	scripts/test_provider_policy_parity.py \
 	scripts/test_webauthn_trust_projection_postgres.py \
+	scripts/test_postgres_trigger_manifest.py \
+	scripts/test_traversal_response_evidence.py \
 	scripts/test_webauthn_recovery.py
 CODER_TIMEOUT ?= timeout
 CODER_BUILD_TIMEOUT ?= 3600s
@@ -7249,12 +7251,14 @@ verify-transparency-checkpoint:
 
 verify-provider-policy-parity:
 	python3 scripts/test_provider_policy_parity.py
+	python3 scripts/test_traversal_response_evidence.py
 
 # The prepared external runner owns this disposable Unix-socket test cluster.
 # This target neither starts a server nor falls back to a production DSN.
 verify-webauthn-trust-projection:
 	test -n "$${SERVERWARE_TEST_POSTGRES_DSN:-}"
 	python3 scripts/test_webauthn_trust_projection_postgres.py --postgres-dsn "$$SERVERWARE_TEST_POSTGRES_DSN"
+	python3 scripts/test_postgres_trigger_manifest.py --postgres-dsn "$$SERVERWARE_TEST_POSTGRES_DSN"
 
 verify-nitro-nsm-attest:
 	python3 scripts/test_nitro_nsm_attest.py

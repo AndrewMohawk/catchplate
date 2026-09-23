@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import importlib.util
 import json
 import sys
@@ -10,12 +11,22 @@ import unittest
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest import mock
+from urllib.parse import parse_qsl
 
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware.policy_bundle import PolicyBundleError, compile_policy_bundle, provider_request_profile
+from serverware.policy_bundle import (
+    PolicyBundleError,
+    adapter_operation_query_fields,
+    compile_policy_bundle,
+    demo_policy_bundle,
+    provider_request_profile,
+    valid_traversal_query_name,
+    valid_traversal_request_field,
+    validate_raw_absolute_target,
+)
 
 
 def unavailable_dependency(name: str) -> ModuleType:
@@ -38,6 +49,29 @@ with mock.patch.dict(sys.modules, {
     "serverware.runtime": unavailable_dependency("serverware.runtime"),
 }):
     SPEC.loader.exec_module(adapters)
+
+CONSTRAINT_SPEC = importlib.util.spec_from_file_location(
+    "provider_policy_parity_constraints_unit", ROOT / "serverware/constraints.py")
+assert CONSTRAINT_SPEC is not None and CONSTRAINT_SPEC.loader is not None
+constraints = importlib.util.module_from_spec(CONSTRAINT_SPEC)
+with mock.patch.dict(sys.modules, {
+    CONSTRAINT_SPEC.name: constraints,
+    "serverware.db": unavailable_dependency("serverware.db"),
+}):
+    CONSTRAINT_SPEC.loader.exec_module(constraints)
+
+ENGINE_SPEC = importlib.util.spec_from_file_location(
+    "provider_policy_parity_policy_engine_unit", ROOT / "serverware/policy_engine.py")
+assert ENGINE_SPEC is not None and ENGINE_SPEC.loader is not None
+policy_engine = importlib.util.module_from_spec(ENGINE_SPEC)
+with mock.patch.dict(sys.modules, {
+    ENGINE_SPEC.name: policy_engine,
+    "serverware.adapters": adapters,
+    "serverware.constraints": constraints,
+    "serverware.db": unavailable_dependency("serverware.db"),
+    "serverware.runtime": unavailable_dependency("serverware.runtime"),
+}):
+    ENGINE_SPEC.loader.exec_module(policy_engine)
 
 
 class HeaderFields:
@@ -78,6 +112,44 @@ class ProviderPolicyParityTests(unittest.TestCase):
 
     def compiled_route(self, adapter_type: str, mode: str | None = None):
         return compile_policy_bundle(self.bundle(adapter_type, mode), validate_schema=True).routes[0]
+
+    def traversal_bundle(self) -> dict:
+        bundle = json.loads((ROOT / "policies/credential-limits.examples.json").read_text())
+        route = next(item for item in bundle["routes"]
+                     if item["id"] == "example.google_calendar.events.last_30_days")
+        bundle["routes"] = [route]
+        bundle["credentials"] = [item for item in bundle["credentials"]
+                                 if item["id"] == route["credentialRef"]]
+        bundle["principals"] = [item for item in bundle["principals"]
+                                if item["id"] in route["principals"]]
+        route["id"] = "route.traversal-parity"
+        route["match"]["paths"] = ["/resource"]
+        request = route["adapter"]["config"]["request"]
+        request.update(allowedQueryKeys=["page[token]", "$.xgafv", "tweet.fields"],
+                       allowedHeaders=["x-page!token"], valueRules=[],
+                       operation={"name": "generic.write"})
+        route["constraints"] = [item for item in route["constraints"]
+                                if item["type"] in {"traversalBudget", "responseEnvelope"}]
+        for item in route["constraints"]:
+            item["operations"] = ["generic.write"]
+            if item["type"] == "traversalBudget":
+                item["id"] = "literal-selector-traversal"
+                item["traversal"]["cursor"]["requestField"] = "page[token]"
+                item["traversal"]["lineage"]["queryFields"] = ["$.xgafv", "tweet.fields"]
+        return bundle
+
+    def traversal_claim(self, route, *, query=None, cursors=None) -> dict:
+        # Real shared claim producer, with no DB, authority, or provider access.
+        claims = constraints.traversal_budget_claims(
+            route, principal_id="agent:fixture", credential_ref="credential:fixture",
+            credential_version=7, policy_hash="sha256:" + "0" * 64,
+            operation_fields={"operation": "generic.write"},
+            canonical_query_fields={"$.xgafv": "1", "tweet.fields": "id,text"}
+                if query is None else query,
+            request_cursor_values={} if cursors is None else cursors,
+        )
+        self.assertEqual(len(claims), 1)
+        return claims[0]
 
     def flow(self, fields: list[tuple[str, str]], body: bytes = b"{}") -> SimpleNamespace:
         return SimpleNamespace(request=SimpleNamespace(
@@ -174,6 +246,154 @@ class ProviderPolicyParityTests(unittest.TestCase):
             else:
                 with self.assertRaisesRegex(PolicyBundleError, "operationField messageId is not emitted"):
                     compile_policy_bundle(candidate, validate_schema=True)
+
+    def test_traversal_literal_selectors_compile_in_examples_and_generated_gmail(self) -> None:
+        generated = demo_policy_bundle()
+        gmail = next(route for route in generated["routes"] if route["adapter"]["type"] == "gmail.v1")
+        generated["routes"] = [gmail]
+        generated["credentials"] = [item for item in generated["credentials"]
+                                    if item["id"] == gmail["credentialRef"]]
+        generated["principals"] = [item for item in generated["principals"]
+                                   if item["id"] in gmail["principals"]]
+        for bundle in (generated, self.bundle("gmail.v1"), self.bundle("x.v2", "recentSearchOnly"),
+                       self.traversal_bundle()):
+            for schema in (True, False):
+                with self.subTest(route=bundle["routes"][0]["id"], schema=schema):
+                    route = compile_policy_bundle(bundle, validate_schema=schema).routes[0]
+                    traversal = next(item["traversal"] for item in route.constraints
+                                     if item["type"] == "traversalBudget")
+                    fields = traversal["lineage"]["queryFields"]
+                    self.assertTrue("$.xgafv" in fields or "tweet.fields" in fields)
+
+    def test_traversal_selector_types_byte_bounds_and_header_tokens(self) -> None:
+        for name in ("$.xgafv", "tweet.fields", "page[token]", "é" * 128):
+            self.assertTrue(valid_traversal_query_name(name), repr(name))
+            self.assertTrue(valid_traversal_request_field("query", name), repr(name))
+        for name in ("", "x\x00", "x\x1f", "x\x7f", "x\x85", "é" * 129, "\ud800", None):
+            self.assertFalse(valid_traversal_query_name(name), repr(name))
+        self.assertTrue(valid_traversal_request_field("header", "x-page!token"))
+        for name in ("X-page-token", "x page", "page[token]", "é", "x:page"):
+            self.assertFalse(valid_traversal_request_field("header", name), repr(name))
+        self.assertFalse(valid_traversal_request_field("jsonBody", "pageToken"))
+        for name in ("é" * 128, "é" * 129, "x\x85", ""):
+            bundle = self.traversal_bundle()
+            route = bundle["routes"][0]
+            route["adapter"]["config"]["request"]["allowedQueryKeys"][1] = name
+            next(item for item in route["constraints"] if item["type"] == "traversalBudget")[
+                "traversal"]["lineage"]["queryFields"][0] = name
+            for schema in (True, False):
+                with self.subTest(name=repr(name), schema=schema):
+                    if name == "é" * 128:
+                        compile_policy_bundle(bundle, validate_schema=schema)
+                    else:
+                        with self.assertRaises(PolicyBundleError):
+                            compile_policy_bundle(bundle, validate_schema=schema)
+
+    def test_traversal_adapter_catalog_and_selector_domains_stay_closed(self) -> None:
+        base = self.traversal_bundle()
+        for source, name, accepted in (("header", "x-page!token", True),
+                                       ("header", "x-missing", False),
+                                       ("header", "X-page!token", False),
+                                       ("query", "unknown", False),
+                                       ("jsonBody", "pageToken", False)):
+            candidate = copy.deepcopy(base)
+            traversal = next(item["traversal"] for item in candidate["routes"][0]["constraints"]
+                             if item["type"] == "traversalBudget")
+            traversal["cursor"].update(requestSource=source, requestField=name)
+            if source == "header":
+                traversal["lineage"]["queryFields"].append("page[token]")
+            for schema in (True, False):
+                with self.subTest(source=source, name=name, schema=schema):
+                    if accepted:
+                        compile_policy_bundle(candidate, validate_schema=schema)
+                    else:
+                        with self.assertRaises(PolicyBundleError):
+                            compile_policy_bundle(candidate, validate_schema=schema)
+        for section, field in (("cursor", "responseField"), ("accounting", "recordCountField")):
+            candidate = copy.deepcopy(base)
+            traversal = next(item["traversal"] for item in candidate["routes"][0]["constraints"]
+                             if item["type"] == "traversalBudget")
+            traversal[section][field] = "$.xgafv"
+            for schema in (True, False):
+                with self.subTest(section=section, schema=schema), self.assertRaises(PolicyBundleError):
+                    compile_policy_bundle(candidate, validate_schema=schema)
+
+    def test_traversal_cursor_must_belong_to_the_exact_operation_catalog(self) -> None:
+        bundle = self.bundle("gmail.v1")
+        route = compile_policy_bundle(bundle, validate_schema=True).routes[0]
+        flow = SimpleNamespace(request=SimpleNamespace(
+            pretty_url="https://gmail.googleapis.com/gmail/v1/users/me/messages?%24.xgafv=1&pageToken=cursor-1"))
+        arguments = dict(snapshot=SimpleNamespace(hash="sha256:" + "0" * 64),
+                         principal=SimpleNamespace(id="agent:fixture"), credential_version=7)
+        positive = policy_engine._durable_policy_claims(
+            flow, route=route, operation_fields={"operation": "gmail.messages.list"}, **arguments)
+        self.assertEqual(len(positive), 1)
+        self.assertEqual(positive[0]["request_cursor_digest"], "sha256:" + hashlib.sha256(b"cursor-1").hexdigest())
+        get_fields = adapter_operation_query_fields("gmail.v1", route.adapter_config, "gmail.message.get")
+        self.assertIsNotNone(get_fields)
+        self.assertNotIn("pageToken", get_fields)
+        constraint = next(item for item in bundle["routes"][0]["constraints"] if item["type"] == "traversalBudget")
+        constraint["operations"] = ["gmail.message.get"]
+        constraint["traversal"]["lineage"]["queryFields"] = sorted(get_fields)
+        for schema in (True, False):
+            with self.subTest(schema=schema), self.assertRaisesRegex(
+                    PolicyBundleError, "pageToken is not admitted for operation gmail.message.get"):
+                compile_policy_bundle(bundle, validate_schema=schema)
+        # Exercise the real producer after an explicit admission bypass. Its
+        # independent operation catalog must reject the list-only cursor too.
+        malformed = SimpleNamespace(id=route.id, credential_ref=route.credential_ref,
+                                    adapter_type=route.adapter_type, adapter_config=route.adapter_config,
+                                    constraints=(constraint,))
+        with self.assertRaisesRegex(ValueError, "cursor query is not admitted for operation gmail.message.get"):
+            policy_engine._durable_policy_claims(
+                flow, route=malformed, operation_fields={"operation": "gmail.message.get"}, **arguments)
+
+    def test_traversal_wire_decoding_preserves_literal_names(self) -> None:
+        target = "https://example.test/resource?%24.xgafv=1&page%5Btoken%5D=cursor-1&tweet.fields=id%2Ctext"
+        parsed = validate_raw_absolute_target(target)
+        pairs = parse_qsl(parsed.query, keep_blank_values=True, strict_parsing=True, errors="strict")
+        self.assertEqual(pairs, [("$.xgafv", "1"), ("page[token]", "cursor-1"), ("tweet.fields", "id,text")])
+        for query in ("$.xgafv=1", "%2524.xgafv=1", "tweet.fields=id+text", "x=%FF", "x=%", "x=%2ctext"):
+            with self.subTest(query=query), self.assertRaises(ValueError):
+                validate_raw_absolute_target("https://example.test/resource?" + query)
+
+    def test_traversal_shared_claim_literal_digest_matches_rust_vector(self) -> None:
+        route = compile_policy_bundle(self.traversal_bundle(), validate_schema=True).routes[0]
+        claim = self.traversal_claim(route, cursors={"page[token]": "cursor-1"})
+        # Identical explicit canonical bytes in Rust's literal-selector test.
+        material = ('{"credential":"credential:fixture","credentialVersion":7,'
+                    '"operation":"generic.write","policyHash":"sha256:' + "0" * 64 + '",'
+                    '"principal":"agent:fixture","query":{"$.xgafv":"1","tweet.fields":"id,text"},'
+                    '"route":"route.traversal-parity"}')
+        self.assertEqual(claim["lineage_digest"], "sha256:" + hashlib.sha256(material.encode()).hexdigest())
+        self.assertEqual(claim["request_cursor_digest"], "sha256:" + hashlib.sha256(b"cursor-1").hexdigest())
+        self.assertEqual(claim["request_cursor_field"], "page[token]")
+        changed = self.traversal_claim(route, query={"$.xgafv": "2", "tweet.fields": "id,text"})
+        absent = self.traversal_claim(route, query={"$.xgafv": None, "tweet.fields": "id,text"})
+        self.assertNotEqual(claim["lineage_digest"], changed["lineage_digest"])
+        self.assertNotEqual(claim["lineage_digest"], absent["lineage_digest"])
+        self.assertIsNone(absent["request_cursor_digest"])
+        for query in ({"$.xgafv": "1"}, {"$.xgafv": "1", "tweet.fields": "id,text", "other": "x"}):
+            with self.assertRaisesRegex(ValueError, "traversal lineage contract is invalid"):
+                self.traversal_claim(route, query=query)
+        for cursor, error in (({"page[token]": ""}, "request cursor is invalid"),
+                              ({"page[token]": "é" * 2049}, "request cursor is invalid"),
+                              ({"unknown": "x"}, "unbound cursor")):
+            with self.assertRaisesRegex(ValueError, error):
+                self.traversal_claim(route, cursors=cursor)
+        for source, field in (("jsonBody", "pageToken"), ("header", "X-page-token")):
+            malformed = copy.deepcopy(list(route.constraints))
+            next(item for item in malformed if item["type"] == "traversalBudget")[
+                "traversal"]["cursor"].update(requestSource=source, requestField=field)
+            with self.assertRaisesRegex(ValueError, "traversal cursor contract is invalid"):
+                self.traversal_claim(SimpleNamespace(id=route.id, constraints=malformed))
+        for field in ("é" * 129, "x\x85", "", "page[token]"):
+            malformed = copy.deepcopy(list(route.constraints))
+            next(item for item in malformed if item["type"] == "traversalBudget")[
+                "traversal"]["lineage"]["queryFields"][0] = field
+            with self.subTest(field=repr(field)), self.assertRaisesRegex(ValueError, "traversal lineage contract is invalid"):
+                self.traversal_claim(SimpleNamespace(id=route.id, constraints=malformed),
+                                     query={field: "1", "tweet.fields": "id,text"})
 
 
 if __name__ == "__main__":

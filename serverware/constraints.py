@@ -12,7 +12,13 @@ from urllib.parse import parse_qs, parse_qsl, urlsplit
 
 from serverware import db
 from serverware.policies import PolicyDecision
-from serverware.policy_bundle import bounded_pattern_matches, canonical_json, strict_json_loads
+from serverware.policy_bundle import (
+    bounded_pattern_matches,
+    canonical_json,
+    strict_json_loads,
+    valid_traversal_query_name,
+    valid_traversal_request_field,
+)
 
 
 SECONDS_PER_DAY = 86_400
@@ -1003,10 +1009,11 @@ def traversal_budget_claims(
                 "digest",
                 "firstPageMayOmit",
             }
-            or cursor.get("requestSource") not in {"query", "header", "jsonBody"}
-            or not isinstance(cursor.get("requestField"), str)
-            or re.fullmatch(field_pattern, cursor["requestField"]) is None
+            or not valid_traversal_request_field(
+                cursor.get("requestSource"), cursor.get("requestField")
+            )
             or not isinstance(cursor.get("responseField"), str)
+            or len(cursor["responseField"]) > 256
             or re.fullmatch(field_pattern, cursor["responseField"]) is None
             or cursor.get("digest") != "sha256"
             or cursor.get("firstPageMayOmit") is not True
@@ -1029,8 +1036,7 @@ def traversal_budget_claims(
                 }
             )
             or any(
-                not isinstance(field, str)
-                or re.fullmatch(field_pattern, field) is None
+                not valid_traversal_query_name(field)
                 for field in query_fields
             )
             or (
@@ -1056,6 +1062,7 @@ def traversal_budget_claims(
         if (
             set(accounting) != {"recordCountField", "byteSource", "commit"}
             or not isinstance(accounting.get("recordCountField"), str)
+            or len(accounting["recordCountField"]) > 256
             or re.fullmatch(field_pattern, accounting["recordCountField"]) is None
             or accounting.get("byteSource") != "validatedDecodedResponseBytes"
             or accounting.get("commit") != "atomicAfterResponseValidation"

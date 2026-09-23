@@ -8099,6 +8099,22 @@ fn valid_response_json_path(path: &str) -> bool {
         })
 }
 
+fn valid_traversal_query_name(name: &str) -> bool {
+    !name.is_empty() && name.len() <= 256 && !name.chars().any(char::is_control)
+}
+
+fn valid_traversal_request_field(source: &str, field: &str) -> bool {
+    valid_traversal_query_name(field)
+        && match source {
+            "query" => true,
+            "header" => {
+                field == field.to_ascii_lowercase()
+                    && HeaderName::from_bytes(field.as_bytes()).is_ok()
+            }
+            _ => false,
+        }
+}
+
 fn valid_operation_field(path: &str) -> bool {
     let mut bytes = path.bytes();
     matches!(bytes.next(), Some(first) if first.is_ascii_alphabetic())
@@ -12979,7 +12995,10 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                     || cursor
                         .get("requestField")
                         .and_then(Value::as_str)
-                        .is_none_or(|field| !valid_response_json_path(field))
+                        .is_none_or(|field| !valid_traversal_request_field(
+                            cursor.get("requestSource").and_then(Value::as_str).unwrap_or(""),
+                            field,
+                        ))
                     || cursor
                         .get("responseField")
                         .and_then(Value::as_str)
@@ -13122,6 +13141,11 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                         )
                     })?;
                     if request_source == "query" {
+                        if !admitted.contains(request_field) {
+                            return Err(format!(
+                                "route {route_id} traversalBudget {constraint_id} cursor query {request_field} is not admitted for operation {operation}"
+                            ));
+                        }
                         admitted.remove(request_field);
                     }
                     if expected_query_fields
@@ -24802,7 +24826,7 @@ fn traversal_budget_claim(
     let response_field = cursor.get("responseField").and_then(Value::as_str).unwrap_or("");
     if !object_has_exact_fields(cursor, &cursor_fields)
         || !matches!(request_source, "query" | "header")
-        || !valid_response_json_path(request_field)
+        || !valid_traversal_request_field(request_source, request_field)
         || !valid_response_json_path(response_field)
         || cursor.get("digest").and_then(Value::as_str) != Some("sha256")
         || cursor.get("firstPageMayOmit").and_then(Value::as_bool) != Some(true)
@@ -24824,7 +24848,17 @@ fn traversal_budget_claim(
     }
     let mut expected_query_fields = traversal_admitted_query_fields(route, operation_name)?;
     if request_source == "query" {
+        if !expected_query_fields.contains(request_field) {
+            return Err("traversal cursor query is not admitted by the adapter".to_string());
+        }
         expected_query_fields.remove(request_field);
+    } else if !route.adapter_config
+        .get("request")
+        .and_then(|request| request.get("allowedHeaders"))
+        .and_then(Value::as_array)
+        .is_some_and(|headers| headers.iter().any(|name| name.as_str() == Some(request_field)))
+    {
+        return Err("traversal cursor header is not admitted by the adapter".to_string());
     }
     if configured_query_fields.iter().cloned().collect::<HashSet<_>>() != expected_query_fields {
         return Err("traversal query lineage is incomplete".to_string());
@@ -32215,16 +32249,17 @@ fn enforce_response_binding(
     Ok(())
 }
 
-fn object_value_at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
+fn raw_object_value_at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
     let mut current = value;
     for segment in path.split('.') {
         current = current.as_object()?.get(segment)?;
     }
-    if current.is_array() || current.is_object() {
-        None
-    } else {
-        Some(current)
-    }
+    Some(current)
+}
+
+fn object_value_at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
+    raw_object_value_at_path(value, path)
+        .filter(|current| !current.is_array() && !current.is_object())
 }
 
 fn response_constraint_applies_to_operation(
@@ -32528,23 +32563,25 @@ fn durable_policy_response_evidence(
             .get("response_cursor_field")
             .and_then(Value::as_str)
             .ok_or_else(|| json!({"error":"traversal_response_evidence_invalid"}))?;
-        let cursor = object_value_at_path(payload, cursor_field);
-        if cursor.is_some_and(|cursor| {
-            cursor
-                .as_str()
-                .is_none_or(|cursor| cursor.is_empty() || cursor.len() > 4096)
-        }) {
-            return Err(json!({
+        // Match the Python producer and completion wire: missing/null means no
+        // continuation. Preserve terminal types so a structured cursor cannot
+        // be mistaken for absence by the scalar-only request/binding helper.
+        let cursor = match raw_object_value_at_path(payload, cursor_field) {
+            None | Some(Value::Null) => None,
+            Some(Value::String(cursor)) if !cursor.is_empty() && cursor.len() <= 4096 => {
+                Some(cursor.as_str())
+            }
+            Some(_) => return Err(json!({
                 "error":"traversal_response_evidence_invalid",
                 "detail":"next cursor is not a bounded non-empty string",
                 "status_code":502,
-            }));
-        }
+            })),
+        };
         let record_field = claim
             .get("record_count_field")
             .and_then(Value::as_str)
             .ok_or_else(|| json!({"error":"traversal_response_evidence_invalid"}))?;
-        let records = object_value_at_path(payload, record_field)
+        let records = raw_object_value_at_path(payload, record_field)
             .and_then(Value::as_array)
             .ok_or_else(|| {
                 json!({
@@ -32558,7 +32595,7 @@ fn durable_policy_response_evidence(
             "lineage_digest":claim.get("lineage_digest").cloned().unwrap_or(Value::Null),
             "request_cursor_digest":claim.get("request_cursor_digest").cloned().unwrap_or(Value::Null),
             "response_digest":response_body_sha256,
-            "next_cursor_digest":cursor.and_then(Value::as_str).map(|cursor| sha256_prefixed(cursor.as_bytes())),
+            "next_cursor_digest":cursor.map(|cursor| sha256_prefixed(cursor.as_bytes())),
             "record_count":records.len(),
             "decoded_bytes":body.len(),
             "validation":"passed",
@@ -78478,6 +78515,200 @@ mod tests {
         }
     }
 
+    fn literal_selector_traversal_route() -> Value {
+        let mut route = generic_route_with_durable_claim("traversalBudget");
+        route["id"] = json!("route.traversal-parity");
+        route["adapter"]["config"]["request"]["allowedQueryKeys"] =
+            json!(["page[token]", "$.xgafv", "tweet.fields"]);
+        route["adapter"]["config"]["request"]["allowedHeaders"] = json!(["x-page!token"]);
+        route["constraints"][0]["id"] = json!("literal-selector-traversal");
+        route["constraints"][0]["traversal"]["cursor"]["requestField"] = json!("page[token]");
+        route["constraints"][0]["traversal"]["lineage"]["queryFields"] =
+            json!(["$.xgafv", "tweet.fields"]);
+        route
+    }
+
+    fn literal_selector_traversal_claim(
+        route: &Route,
+        request: &DecisionRequest,
+        canonical: &Value,
+    ) -> Result<Value, String> {
+        traversal_budget_claim(
+            &route.constraints[0], route, request, canonical,
+            "agent:fixture", Some("credential:fixture"), 7,
+            &format!("sha256:{}", "0".repeat(64)),
+            &json!({"operation":"generic.write"}),
+        )?.ok_or_else(|| "fixture traversal operation was not selected".to_string())
+    }
+
+    #[test]
+    fn traversal_query_selectors_keep_literal_names_and_strict_wire_decoding() {
+        for name in ["$.xgafv", "tweet.fields", "page[token]", &"é".repeat(128)] {
+            assert!(valid_traversal_query_name(name), "{name:?}");
+            assert!(valid_traversal_request_field("query", name), "{name:?}");
+        }
+        for name in ["", "x\u{0}", "x\u{1f}", "x\u{7f}", "x\u{85}", &"é".repeat(129)] {
+            assert!(!valid_traversal_query_name(name), "{name:?}");
+        }
+        assert!(valid_traversal_request_field("header", "x-page!token"));
+        for name in ["X-page-token", "x page", "page[token]", "é", "x:page"] {
+            assert!(!valid_traversal_request_field("header", name), "{name:?}");
+        }
+        assert!(!valid_traversal_request_field("jsonBody", "pageToken"));
+        assert!(!valid_response_json_path("$.xgafv"));
+        assert!(valid_response_json_path("page.next"));
+
+        let target = "https://example.test/resource?%24.xgafv=1&page%5Btoken%5D=cursor-1&tweet.fields=id%2Ctext";
+        validate_raw_absolute_target(target).expect("canonical encoded literal keys");
+        let url = Url::parse(target).expect("already admitted target");
+        assert_eq!(url.query_pairs().into_owned().collect::<Vec<_>>(), vec![
+            ("$.xgafv".to_string(), "1".to_string()),
+            ("page[token]".to_string(), "cursor-1".to_string()),
+            ("tweet.fields".to_string(), "id,text".to_string()),
+        ]);
+        for query in ["$.xgafv=1", "%2524.xgafv=1", "tweet.fields=id+text", "x=%FF", "x=%", "x=%2ctext"] {
+            assert!(validate_raw_absolute_target(&format!("https://example.test/resource?{query}")).is_err(), "{query}");
+        }
+    }
+
+    #[test]
+    fn traversal_query_selectors_signed_admission_and_shared_claim_digest_parity() {
+        let snapshot = load_compiled_test_snapshot(
+            policy_with_credential_route(literal_selector_traversal_route()),
+            "literal-traversal-selector", 1,
+        );
+        let route = &snapshot.routes[0];
+        let mut request = decision_request_with_body("");
+        request.url = "https://example.test/resource?%24.xgafv=1&page%5Btoken%5D=cursor-1&tweet.fields=id%2Ctext".to_string();
+        request.method = "GET".to_string();
+        validate_raw_absolute_target(&request.url).expect("strict canonical query target");
+        let query = Url::parse(&request.url).expect("admitted URL")
+            .query_pairs().into_owned().map(|(name, value)| json!([name, value])).collect::<Vec<_>>();
+        let canonical = json!({"request":{"query":query}});
+        let claim = literal_selector_traversal_claim(route, &request, &canonical).expect("real shared claim");
+        // Identical explicit canonical bytes in test_provider_policy_parity.py.
+        let material = concat!(
+            "{\"credential\":\"credential:fixture\",\"credentialVersion\":7,",
+            "\"operation\":\"generic.write\",\"policyHash\":\"sha256:",
+            "0000000000000000000000000000000000000000000000000000000000000000\",",
+            "\"principal\":\"agent:fixture\",\"query\":{\"$.xgafv\":\"1\",\"tweet.fields\":\"id,text\"},",
+            "\"route\":\"route.traversal-parity\"}",
+        );
+        assert_eq!(claim["lineage_digest"], json!(sha256_prefixed(material.as_bytes())));
+        assert_eq!(claim["request_cursor_digest"], json!(sha256_prefixed(b"cursor-1")));
+        assert_eq!(claim["request_cursor_field"], json!("page[token]"));
+        let mut changed = canonical.clone();
+        changed["request"]["query"][0][1] = json!("2");
+        assert_ne!(claim["lineage_digest"], literal_selector_traversal_claim(route, &request, &changed).unwrap()["lineage_digest"]);
+        let absent = json!({"request":{"query":[["tweet.fields","id,text"]]}});
+        let absent_claim = literal_selector_traversal_claim(route, &request, &absent).unwrap();
+        assert_ne!(claim["lineage_digest"], absent_claim["lineage_digest"]);
+        assert_eq!(absent_claim["request_cursor_digest"], Value::Null);
+
+        for (pairs, expected) in [
+            (json!([["$.xgafv","1"],["$.xgafv","1"]]), "traversal query lineage is ambiguous"),
+            (json!([["page[token]","one"],["page[token]","two"]]), "traversal request cursor is ambiguous"),
+            (json!([["unknown","x"]]), "traversal request contains an unbound shaping query"),
+            (json!([["page[token]",""]]), "traversal request cursor is invalid"),
+            (json!([["page[token]","é".repeat(2049)]]), "traversal request cursor is invalid"),
+        ] {
+            assert_eq!(literal_selector_traversal_claim(route, &request, &json!({"request":{"query":pairs}})).unwrap_err(), expected);
+        }
+
+        let mut header_route = route.clone();
+        header_route.adapter_config["request"]["allowedQueryKeys"] = json!(["$.xgafv", "tweet.fields"]);
+        header_route.constraints[0]["traversal"]["cursor"]["requestSource"] = json!("header");
+        header_route.constraints[0]["traversal"]["cursor"]["requestField"] = json!("x-page!token");
+        request.headers.insert("x-page!token".to_string(), "cursor-1".to_string());
+        let stable = json!({"request":{"query":[["$.xgafv","1"],["tweet.fields","id,text"]]}});
+        let header_claim = literal_selector_traversal_claim(&header_route, &request, &stable).unwrap();
+        assert_eq!(header_claim["lineage_digest"], claim["lineage_digest"]);
+        assert_eq!(header_claim["request_cursor_digest"], claim["request_cursor_digest"]);
+        request.headers.insert("X-Page!Token".to_string(), "cursor-1".to_string());
+        assert_eq!(literal_selector_traversal_claim(&header_route, &request, &stable).unwrap_err(), "traversal request cursor is ambiguous");
+        request.headers.remove("X-Page!Token");
+        header_route.adapter_config["request"]["allowedHeaders"] = json!([]);
+        assert_eq!(literal_selector_traversal_claim(&header_route, &request, &stable).unwrap_err(), "traversal cursor header is not admitted by the adapter");
+
+        let mut unadmitted = route.clone();
+        unadmitted.constraints[0]["traversal"]["cursor"]["requestField"] = json!("unknown");
+        assert_eq!(literal_selector_traversal_claim(&unadmitted, &request, &canonical).unwrap_err(), "traversal cursor query is not admitted by the adapter");
+        unadmitted.constraints[0]["traversal"]["cursor"]["requestSource"] = json!("jsonBody");
+        assert_eq!(literal_selector_traversal_claim(&unadmitted, &request, &canonical).unwrap_err(), "traversal cursor contract is invalid");
+    }
+
+    #[test]
+    fn traversal_query_selectors_bind_cursor_to_the_exact_operation_catalog() {
+        let examples = strict_json_value_from_str(include_str!(
+            "../../../policies/credential-limits.examples.json"
+        )).expect("checked-in provider policy examples");
+        let mut route_value = examples["routes"].as_array().unwrap().iter()
+            .find(|route| route.pointer("/adapter/type").and_then(Value::as_str) == Some("gmail.v1"))
+            .expect("real Gmail route").clone();
+        route_value["principals"] = json!(["agent:test"]);
+        let policy = policy_with_route(route_value);
+        validate_policy_capabilities(&policy).expect("unchanged Gmail traversal catalog is admitted");
+        let snapshot = load_compiled_test_snapshot(policy.clone(), "gmail-traversal-catalog", 1);
+        let route = &snapshot.routes[0];
+        let constraint = route.constraints.iter()
+            .find(|item| item["type"] == "traversalBudget").expect("real Gmail traversal");
+        let request = decision_request_with_body("");
+        let canonical = json!({"request":{"query":[["$.xgafv","1"],["pageToken","cursor-1"]]}});
+        let policy_hash = format!("sha256:{}", "0".repeat(64));
+        let positive = traversal_budget_claim(
+            constraint, route, &request, &canonical, "agent:fixture", Some("credential:fixture"), 7,
+            &policy_hash, &json!({"operation":"gmail.messages.list"}),
+        ).expect("real list claim").expect("list operation is selected");
+        assert_eq!(positive["request_cursor_digest"], json!(sha256_prefixed(b"cursor-1")));
+        let mut get_fields = traversal_admitted_query_fields(route, "gmail.message.get")
+            .expect("exact get catalog").into_iter().collect::<Vec<_>>();
+        get_fields.sort();
+        assert!(!get_fields.iter().any(|field| field == "pageToken"));
+        let mut invalid = policy;
+        let malformed = invalid["routes"][0]["constraints"].as_array_mut().unwrap().iter_mut()
+            .find(|item| item["type"] == "traversalBudget").unwrap();
+        malformed["operations"] = json!(["gmail.message.get"]);
+        malformed["traversal"]["lineage"]["queryFields"] = json!(get_fields);
+        let malformed_constraint = malformed.clone();
+        let error = validate_policy_capabilities(&invalid).unwrap_err();
+        assert!(error.contains("pageToken is not admitted for operation gmail.message.get"), "{error}");
+        assert_eq!(traversal_budget_claim(
+            &malformed_constraint, route, &request, &canonical,
+            "agent:fixture", Some("credential:fixture"), 7, &policy_hash,
+            &json!({"operation":"gmail.message.get"}),
+        ).unwrap_err(), "traversal cursor query is not admitted by the adapter");
+    }
+
+    #[test]
+    fn traversal_query_selectors_admission_keeps_byte_bounds_and_response_path_domain() {
+        let mut header = literal_selector_traversal_route();
+        header["adapter"]["config"]["request"]["allowedQueryKeys"] = json!(["$.xgafv", "tweet.fields"]);
+        header["constraints"][0]["traversal"]["cursor"]["requestSource"] = json!("header");
+        header["constraints"][0]["traversal"]["cursor"]["requestField"] = json!("x-page!token");
+        validate_policy_capabilities(&policy_with_credential_route(header.clone()))
+            .expect("an admitted lowercase HTTP token is a valid header cursor");
+        header["constraints"][0]["traversal"]["cursor"]["requestField"] = json!("X-page!token");
+        let error = validate_policy_capabilities(&policy_with_credential_route(header)).unwrap_err();
+        assert!(error.contains("invalid cursor, lineage, limits, or accounting contract"), "{error}");
+        for name in ["é".repeat(128), "é".repeat(129), "x\u{85}".to_string(), String::new()] {
+            let mut route = literal_selector_traversal_route();
+            route["adapter"]["config"]["request"]["allowedQueryKeys"][1] = json!(name);
+            route["constraints"][0]["traversal"]["lineage"]["queryFields"][0] = json!(name);
+            let result = validate_policy_capabilities(&policy_with_credential_route(route));
+            if name == "é".repeat(128) {
+                result.expect("256 UTF-8 bytes are admitted without normalization");
+            } else {
+                assert!(result.is_err(), "{name:?}");
+            }
+        }
+        for (section, field) in [("cursor", "responseField"), ("accounting", "recordCountField")] {
+            let mut route = literal_selector_traversal_route();
+            route["constraints"][0]["traversal"][section][field] = json!("$.xgafv");
+            let error = validate_policy_capabilities(&policy_with_credential_route(route)).unwrap_err();
+            assert!(error.contains("invalid cursor, lineage, limits, or accounting contract"), "{error}");
+        }
+    }
+
     #[test]
     fn traversal_policy_admission_binds_cursor_sources_and_exact_query_lineage() {
         let traversal = json!({
@@ -79125,6 +79356,213 @@ mod tests {
         assert_eq!(upstream_unknown["providerOperationMayHaveCommitted"], true);
         assert_eq!(upstream_unknown["retryProviderRequest"], false);
         assert!(gate_durable_buffered_release(ForwardResult::Streamed, Ok(true)).is_err());
+    }
+
+    // Pure response-evidence fixtures. These do not fabricate authenticated
+    // reserve/dispatch/commit receipts or claim a live authority transition.
+    fn traversal_response_fixture_reservation(
+        cursor_field: &str,
+        record_field: &str,
+    ) -> ValidatedDurablePolicyReservation {
+        let claims = vec![json!({
+            "type":"traversalBudget",
+            "constraint_id":"traversal-response",
+            "lineage_digest":format!("sha256:{}", "a".repeat(64)),
+            "request_cursor_digest":format!("sha256:{}", "b".repeat(64)),
+            "response_cursor_field":cursor_field,
+            "record_count_field":record_field,
+        })];
+        ValidatedDurablePolicyReservation {
+            actor_id: "spiffe://serverware/policy-engine".to_string(),
+            claim_digest: digest_json_ensure_ascii(&Value::Array(claims.clone())),
+            claims,
+            reservation_id: "reservation:response-fixture".to_string(),
+            reservation_deadline_at_epoch_ms: u64::MAX,
+            dispatch_deadline_at_epoch_ms: Some(u64::MAX),
+        }
+    }
+
+    fn assert_traversal_response_fixture(
+        body: &[u8],
+        cursor_field: &str,
+        record_field: &str,
+        record_count: usize,
+        next_cursor: Option<&str>,
+    ) {
+        let reservation = traversal_response_fixture_reservation(cursor_field, record_field);
+        let drop_before = SENSITIVE_JSON_DROP_ZEROIZE_COUNT.load(Ordering::Relaxed);
+        let completion = durable_policy_response_evidence(&reservation, body)
+            .expect("valid exact traversal response evidence");
+        let response_digest = format!("sha256:{:x}", Sha256::digest(body));
+        let next_digest = next_cursor
+            .map(|cursor| format!("sha256:{:x}", Sha256::digest(cursor.as_bytes())));
+        let lineage_digest = format!("sha256:{}", "a".repeat(64));
+        let request_cursor_digest = format!("sha256:{}", "b".repeat(64));
+        assert!(completion.validated);
+        assert_eq!(completion.response_body_sha256, response_digest);
+        assert_eq!(completion.response_evidence, vec![json!({
+            "constraint_id":"traversal-response",
+            "lineage_digest":lineage_digest,
+            "request_cursor_digest":request_cursor_digest,
+            "response_digest":response_digest,
+            "next_cursor_digest":next_digest,
+            "record_count":record_count,
+            "decoded_bytes":body.len(),
+            "validation":"passed",
+        })]);
+        // Spell out the independently expected canonical preimage. Rehashing
+        // completion.response_evidence would not detect an incorrect projection.
+        let canonical_evidence = format!(concat!(
+            "[{{\"constraint_id\":\"traversal-response\",",
+            "\"decoded_bytes\":{},\"lineage_digest\":\"{}\",",
+            "\"next_cursor_digest\":{},\"record_count\":{},",
+            "\"request_cursor_digest\":\"{}\",\"response_digest\":\"{}\",",
+            "\"validation\":\"passed\"}}]"
+        ), body.len(), lineage_digest,
+            serde_json::to_string(&next_digest).expect("nullable digest JSON"),
+            record_count, request_cursor_digest, response_digest);
+        assert_eq!(completion.response_evidence_digest,
+            format!("sha256:{:x}", Sha256::digest(canonical_evidence.as_bytes())));
+        assert!(SENSITIVE_JSON_DROP_ZEROIZE_COUNT.load(Ordering::Relaxed)
+            >= drop_before.saturating_add(1));
+    }
+
+    #[test]
+    fn raw_object_path_retains_structure_without_relaxing_scalar_consumers() {
+        let payload = SensitiveJsonValue::new(json!({
+            "page":{"items":[{"secret":"record-marker"}],"next":null,"object":{"id":"one"}},
+            "value":"one",
+        }));
+        let array = raw_object_value_at_path(&payload, "page.items").expect("borrowed array");
+        assert!(std::ptr::eq(array, &payload["page"]["items"]));
+        assert!(array.is_array());
+        assert!(raw_object_value_at_path(&payload, "page.object").unwrap().is_object());
+        assert!(object_value_at_path(&payload, "page.items").is_none());
+        assert!(object_value_at_path(&payload, "page.object").is_none());
+        assert_eq!(object_value_at_path(&payload, "value").and_then(Value::as_str), Some("one"));
+        assert_eq!(object_value_at_path(&payload, "page.next"), Some(&Value::Null));
+        for path in ["missing", "page.missing", "page.items.0", "value.child"] {
+            assert!(raw_object_value_at_path(&payload, path).is_none(), "{path}");
+            assert!(object_value_at_path(&payload, path).is_none(), "{path}");
+        }
+    }
+
+    #[test]
+    fn traversal_raw_lookup_does_not_relax_request_value_or_response_binding() {
+        let request_constraint = json!({
+            "id":"scalar-request", "type":"requestValue", "rules":[{
+                "source":"jsonBody", "name":"item.id",
+                "predicate":{"kind":"equals","value":"one"},
+            }],
+        });
+        let response_constraint = json!({
+            "id":"scalar-response", "type":"responseBinding", "phase":"response",
+            "bindings":[{
+                "id":"identity", "operationField":"itemId",
+                "responseField":"item.id", "comparison":"exactString",
+            }],
+        });
+        let url = Url::parse("https://example.test/items").unwrap();
+        for (body, allowed) in [
+            (r#"{"item":{"id":"one"}}"#, true),
+            (r#"{"item":{"id":["one"]}}"#, false),
+            (r#"{"item":{"id":{"value":"one"}}}"#, false),
+        ] {
+            let request = provider_test_request("POST", url.as_str(), BTreeMap::new(),
+                body, Some(body.len() as u64));
+            let mut operation = json!({"operation":"items.write","itemId":"one"});
+            let request_result = enforce_request_value(&request_constraint, &request,
+                &request.headers, &url, &BTreeMap::new(), &mut operation);
+            let response_result = enforce_response_binding(&response_constraint,
+                body.as_bytes(), &operation);
+            if allowed {
+                request_result.expect("scalar request remains admitted");
+                response_result.expect("scalar response remains admitted");
+            } else {
+                assert_eq!(request_result.expect_err("structured request must deny")["error"],
+                    "request_value_missing");
+                assert_eq!(response_result.expect_err("structured response must deny")["error"],
+                    "response_binding_field_ambiguous");
+            }
+            assert_eq!(operation, json!({"operation":"items.write","itemId":"one"}));
+        }
+    }
+
+    #[test]
+    fn traversal_response_evidence_accepts_exact_arrays_and_optional_cursors() {
+        for body in [br#"{"items":[]}"#.as_slice(), br#"{"items":[],"next":null}"#.as_slice()] {
+            assert_traversal_response_fixture(body, "next", "items", 0, None);
+        }
+        assert_traversal_response_fixture(
+            br#"{"items":[{"id":"one"}],"next":"c2"}"#,
+            "next", "items", 1, Some("c2"));
+        assert_traversal_response_fixture(
+            "{\"page\":{\"items\":[{\"id\":\"é\"},null,[1,2]],\"next\":\"café\"}}".as_bytes(),
+            "page.next", "page.items", 3, Some("café"));
+        // Object-only paths treat a missing/nonobject intermediate as absent in
+        // both runtimes. They do not perform array traversal or JSONPath search.
+        for body in [
+            br#"{"items":[],"page":null}"#.as_slice(),
+            br#"{"items":[],"page":[]}"#.as_slice(),
+            br#"{"items":[],"page":"scalar"}"#.as_slice(),
+        ] {
+            assert_traversal_response_fixture(body, "page.next", "items", 0, None);
+        }
+        let cursor = "é".repeat(2048);
+        let body = serde_json::to_vec(&json!({"items":[],"next":cursor})).unwrap();
+        assert_traversal_response_fixture(&body, "next", "items", 0, Some(&cursor));
+    }
+
+    #[test]
+    fn traversal_response_evidence_rejects_invalid_records_and_cursors() {
+        let reservation = traversal_response_fixture_reservation("next", "items");
+        let cursor_error = "next cursor is not a bounded non-empty string";
+        let record_error = "record-count evidence is missing or is not an array";
+        let mut cases = vec![
+            (br#"{}"#.to_vec(), record_error),
+            (br#"{"items":null}"#.to_vec(), record_error),
+            (br#"{"items":"records"}"#.to_vec(), record_error),
+            (br#"{"items":1}"#.to_vec(), record_error),
+            (br#"{"items":true}"#.to_vec(), record_error),
+            (br#"{"items":{}}"#.to_vec(), record_error),
+            (br#"{"items":[],"next":[]}"#.to_vec(), cursor_error),
+            (br#"{"items":[],"next":{"secret":"must-not-escape"}}"#.to_vec(), cursor_error),
+            (br#"{"items":[],"next":""}"#.to_vec(), cursor_error),
+            (br#"{"items":[],"next":true}"#.to_vec(), cursor_error),
+            (br#"{"items":[],"next":1}"#.to_vec(), cursor_error),
+        ];
+        for cursor in ["x".repeat(4097), "é".repeat(2049)] {
+            cases.push((serde_json::to_vec(&json!({"items":[],"next":cursor})).unwrap(), cursor_error));
+        }
+        for (body, detail) in cases {
+            let drop_before = SENSITIVE_JSON_DROP_ZEROIZE_COUNT.load(Ordering::Relaxed);
+            let denied = durable_policy_response_evidence(&reservation, &body)
+                .expect_err("invalid traversal response must deny");
+            assert_eq!(denied, json!({
+                "error":"traversal_response_evidence_invalid",
+                "detail":detail,
+                "status_code":502,
+            }));
+            assert!(!denied.to_string().contains("must-not-escape"));
+            assert!(SENSITIVE_JSON_DROP_ZEROIZE_COUNT.load(Ordering::Relaxed)
+                >= drop_before.saturating_add(1));
+        }
+        let nested = traversal_response_fixture_reservation("page.next", "page.items");
+        for body in [br#"{}"#.as_slice(), br#"{"page":null}"#.as_slice(), br#"{"page":[]}"#.as_slice()] {
+            let denied = durable_policy_response_evidence(&nested, body)
+                .expect_err("record array cannot be absent behind a nonobject path");
+            assert_eq!(denied["detail"], record_error);
+            assert_eq!(denied["status_code"], 502);
+        }
+        for body in [b"{".as_slice(), b"[]".as_slice(), b"null".as_slice(), br#"{"items":[],"items":[]}"#.as_slice()] {
+            let denied = durable_policy_response_evidence(&reservation, body)
+                .expect_err("malformed or nonobject traversal JSON must deny");
+            assert_eq!(denied, json!({
+                "error":"traversal_response_evidence_invalid",
+                "detail":"traversal response must be an exact JSON object",
+                "status_code":502,
+            }));
+        }
     }
 
     #[test]

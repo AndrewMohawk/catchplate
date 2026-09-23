@@ -8084,6 +8084,7 @@ def run_verifier(
     tmp: Path,
     *extra: str,
     allow_host_bypass: bool = True,
+    include_output: bool = True,
     include_proxy_proof: bool = True,
     include_control_plane_response_signing_trust_root: bool = True,
     include_hardware_assurance: bool = False,
@@ -8188,6 +8189,13 @@ def run_verifier(
                 control_plane_response_signing_key_info()["key_id"],
             ]
         )
+    # Legacy readiness now requires a durable artifact, including for the
+    # observation/streaming CLI positives. Preserve explicit output negatives.
+    output_args = (
+        []
+        if not include_output or any(value == "--out" or value.startswith("--out=") for value in extra)
+        else ["--out", str(tmp / "readiness-cli-completion.json")]
+    )
     return subprocess.run(
         [
             sys.executable,
@@ -8268,6 +8276,7 @@ def run_verifier(
             *control_plane_response_signing_args,
             *proxy_proof_args,
             *hardware_assurance_args,
+            *output_args,
             *extra,
         ],
         cwd=ROOT,
@@ -11476,6 +11485,14 @@ def main() -> None:
             provenance_summary["provenance_digest"],
             valid_proxy_response_proof,
         )
+        missing_output = run_verifier(tmp, include_output=False)
+        if (
+            missing_output.returncode == 0
+            or "legacy readiness verification requires: --out" not in detail(missing_output)
+        ):
+            raise AssertionError(
+                "readiness CLI did not require a durable output artifact: " + detail(missing_output)
+            )
         out_path = tmp / "completion-proof.json"
         result = run_verifier(tmp, "--out", str(out_path))
         if result.returncode != 0:

@@ -1213,6 +1213,10 @@ def _durable_policy_claims(
             if cursor_policy["requestSource"] == "query"
             else None
         )
+        if cursor_query_field is not None and cursor_query_field not in admitted_query_fields:
+            raise ValueError(
+                f"traversal budget {constraint_id} cursor query is not admitted for operation {operation}"
+            )
         expected_lineage_fields = admitted_query_fields - (
             {cursor_query_field} if cursor_query_field is not None else set()
         )

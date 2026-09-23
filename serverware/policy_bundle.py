@@ -815,6 +815,32 @@ def normalized_credential_provider(value: Any) -> str:
     return aliases.get(provider, provider)
 
 
+def valid_traversal_query_name(value: Any) -> bool:
+    """An exact decoded query key, not a response path or URL-encoded name."""
+    if not isinstance(value, str) or not value:
+        return False
+    try:
+        byte_count = len(value.encode("utf-8"))
+    except UnicodeEncodeError:
+        return False
+    return byte_count <= 256 and not any(
+        ord(character) < 32 or 127 <= ord(character) <= 159
+        for character in value
+    )
+
+
+def valid_traversal_request_field(source: Any, value: Any) -> bool:
+    if not valid_traversal_query_name(value):
+        return False
+    if source == "query":
+        return True
+    return (
+        source == "header"
+        and value == value.lower()
+        and HTTP_HEADER_NAME_RE.fullmatch(value) is not None
+    )
+
+
 def is_serverware_internal_header(value: Any) -> bool:
     return str(value).strip().lower().startswith(SERVERWARE_INTERNAL_HEADER_PREFIX)
 
@@ -4205,10 +4231,11 @@ def _validate_constraints(route_id: str, constraints: Any) -> tuple[dict[str, An
                 }
                 or cursor.get("requestSource")
                 not in {"query", "header"}
-                or not isinstance(cursor.get("requestField"), str)
-                or RESPONSE_FIELD_PATH_RE.fullmatch(cursor["requestField"])
-                is None
+                or not valid_traversal_request_field(
+                    cursor.get("requestSource"), cursor.get("requestField")
+                )
                 or not isinstance(cursor.get("responseField"), str)
+                or len(cursor["responseField"]) > 256
                 or RESPONSE_FIELD_PATH_RE.fullmatch(cursor["responseField"])
                 is None
                 or cursor.get("digest") != "sha256"
@@ -4221,8 +4248,7 @@ def _validate_constraints(route_id: str, constraints: Any) -> tuple[dict[str, An
                 or not isinstance(lineage.get("queryFields"), list)
                 or not 1 <= len(lineage["queryFields"]) <= 32
                 or any(
-                    not isinstance(field, str)
-                    or RESPONSE_FIELD_PATH_RE.fullmatch(field) is None
+                    not valid_traversal_query_name(field)
                     for field in lineage["queryFields"]
                 )
                 or len(lineage["queryFields"])
@@ -4252,6 +4278,7 @@ def _validate_constraints(route_id: str, constraints: Any) -> tuple[dict[str, An
                 or set(accounting)
                 != {"recordCountField", "byteSource", "commit"}
                 or not isinstance(accounting.get("recordCountField"), str)
+                or len(accounting["recordCountField"]) > 256
                 or RESPONSE_FIELD_PATH_RE.fullmatch(
                     accounting["recordCountField"]
                 )
@@ -5392,6 +5419,11 @@ def _validate_durable_policy_sources(
                 raise PolicyBundleError(
                     f"route {route_id} traversalBudget {constraint_id} "
                     f"operation {operation} has no typed query catalog"
+                )
+            if request_source == "query" and request_field not in admitted:
+                raise PolicyBundleError(
+                    f"route {route_id} traversalBudget {constraint_id} cursor query "
+                    f"{request_field} is not admitted for operation {operation}"
                 )
             expected_sets.append(
                 admitted

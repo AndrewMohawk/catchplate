@@ -4676,29 +4676,29 @@ def main() -> None:
         collector_args.proxy_proof_summary_out = str(
             tmp / "readiness-observation-collector-summary.json"
         )
-        run_production_readiness.run_collector(
+        retained_observation_summary = run_production_readiness.run_collector(
             observation_collector_command(observation_collector_summary),
             collector_args,
             clean_subprocess_env(),
         )
-        if collector_args.collector_proof_contract != {
-            "proof_contract": "observation-v1",
-            "server_statement_sha256": "sha256:"
-            + hashlib.sha256(
-                canonical_json(observation_statement).encode("utf-8")
-            ).hexdigest(),
-            "captured_at_unix": observation_artifact["captured_at_unix"],
-            "issued_at_unix": observation_statement["issued_at_unix"],
-            "client_nonce_sha256": run_production_readiness.sha256_prefixed_base64url(
-                "n" * 43, "fixture nonce"
-            ),
-            "tls_channel_binding_sha256": "sha256:"
-            + hashlib.sha256(("t" * 43).encode("utf-8")).hexdigest(),
-            "observed_body_artifact_sha256": observation_body_digest,
-            "observed_body_artifact_bytes": 4,
-            "emitted_body_digest": observation_body_digest,
-            "emitted_body_bytes": 4,
-        }:
+        # Collection retains the exact artifact digest, selected contract,
+        # exporter and body measurements; it does not publish a verifier receipt.
+        if (
+            collector_args.collected_proxy_proof_contract != "observation-v1"
+            or collector_args.collected_proxy_proof_sha256
+            != "sha256:" + hashlib.sha256(
+                (canonical_json(observation_artifact) + "\n").encode("utf-8")
+            ).hexdigest()
+            or collector_args.collected_proxy_tls_channel_binding != "t" * 43
+            or collector_args.collected_proxy_observation_body_sha256 != observation_body_digest
+            or collector_args.collected_proxy_observation_body_bytes != 4
+            or collector_args.collected_proxy_stream_body_sha256 is not None
+            or collector_args.collected_proxy_stream_body_bytes is not None
+            or retained_observation_summary != observation_collector_summary
+            or collector_args.collector_summary != observation_collector_summary
+            or json.loads(Path(collector_args.proxy_proof_summary_out).read_text(encoding="utf-8"))
+            != observation_collector_summary
+        ):
             raise AssertionError(
                 "readiness runner did not retain the observation artifact/body contract"
             )

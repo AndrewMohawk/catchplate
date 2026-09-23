@@ -126,6 +126,25 @@ does not supply any missing kernel or remove the startup blocker.
 
 ## Authenticated storage prerequisites
 
+### Persisted PostgreSQL trigger modes
+
+Both per-table and schema-wide structural trigger inventories commit the exact
+`pg_trigger.tgenabled` code as `enabledMode`. `O`, `A`, `R`, and `D` remain
+distinct; missing or unknown codes are rejected, never defaulted. Source-created
+ordinary triggers use `O`, so all other modes differ from that exact expected
+manifest even when their definitions are unchanged. SQLite inventories are
+unchanged. Existing v9 manifest records lacking this field require a separately
+reviewed repair contract; there is no automatic rewrite or startup bypass.
+
+`scripts/test_postgres_trigger_manifest.py` exercises the same native catalog
+readers and production definition normalization in an externally prepared,
+disposable Unix-socket cluster. It checks mode-only drift, unchanged definitions,
+namespace isolation, ordinary enablement restoration and legacy/malformed mode
+controls. This is component coverage, not full schema admission or startup.
+Stored mode `O` alone does not prove firing under another
+`session_replication_role`, independent database authority, or predicate
+completeness; those enforcement requirements remain separate.
+
 Source review identified additional prerequisites below the missing kernels.
 These are separate from provisioning the production services:
 

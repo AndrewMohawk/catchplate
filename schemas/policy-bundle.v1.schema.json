@@ -484,6 +484,13 @@
       },
       "$comment": "Admission must prove the named field is captured by an exact requestValue rule or typed adapter operation field and reject noncanonical, fractional, negative, repeated, missing, overflowed, or coerced values."
     },
+    "traversalQueryName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F\\uD800-\\uDFFF]+$",
+      "description": "Exact decoded query name, not an object path. Semantic admission also enforces at most 256 UTF-8 bytes; no normalization or percent-decoding is applied to policy names."
+    },
     "traversalPolicy": {
       "type": "object",
       "required": ["store", "phases", "cursor", "lineage", "limits", "accounting", "onReplay", "onCrossLineage", "onMissingEvidence"],
@@ -497,12 +504,7 @@
           "additionalProperties": false,
           "properties": {
             "requestSource": {"enum": ["query", "header"]},
-            "requestField": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 256,
-              "pattern": "^[A-Za-z0-9_-]+(?:\\.[A-Za-z0-9_-]+)*$"
-            },
+            "requestField": {"$ref": "#/$defs/traversalQueryName"},
             "responseField": {
               "type": "string",
               "minLength": 1,
@@ -511,7 +513,11 @@
             },
             "digest": {"const": "sha256"},
             "firstPageMayOmit": {"const": true}
-          }
+          },
+          "allOf": [{
+            "if": {"properties": {"requestSource": {"const": "header"}}, "required": ["requestSource"]},
+            "then": {"properties": {"requestField": {"pattern": "^[a-z0-9!#$%&'*+.^_`|~-]+$"}}}
+          }]
         },
         "lineage": {
           "type": "object",
@@ -527,12 +533,7 @@
               "minItems": 1,
               "maxItems": 32,
               "uniqueItems": true,
-              "items": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 256,
-                "pattern": "^[A-Za-z0-9_-]+(?:\\.[A-Za-z0-9_-]+)*$"
-              }
+              "items": {"$ref": "#/$defs/traversalQueryName"}
             },
             "queryDigest": {"const": "sha256"}
           }

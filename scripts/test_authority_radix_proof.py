@@ -223,8 +223,8 @@ class AuthorityRadixProofTests(unittest.TestCase):
         self.assertEqual(radix.tree_json_bytes(row["row"]), sql_json(row["row"]))
         self.assertNotEqual(sql_json(row["row"]), wire_json(row["row"]))
         self.assertEqual(row["keyDigest"], wire_digest("serverware.policyAuthorityBusinessKey/v1", tree.table.encode(), wire_json(row["key"])))
-        # The separate executor SQL business-address Unicode mismatch is not
-        # repaired or presented as runtime compatibility by this tree fixture.
+        # This tree fixture distinguishes the two representations; the separate
+        # SQL wire serializer and actual byte admission need real-engine proof.
         self.assertNotEqual(row["keyDigest"], wire_digest("serverware.policyAuthorityBusinessKey/v1", tree.table.encode(), sql_json(row["key"])))
 
     def test_unsupported_numeric_representation_is_rejected_not_rounded(self) -> None:

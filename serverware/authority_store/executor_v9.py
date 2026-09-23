@@ -25,6 +25,7 @@ from serverware.authority_store.webauthn_trust_sql import (
 from serverware.authority_store.root_transition_sql import (
     assert_root_transition_after_sql,
     assert_root_transition_before_sql,
+    assert_root_transition_payload_sql,
     assert_root_transition_replay_sql,
     load_root_transition_sql,
     root_transition_declarations_sql,
@@ -1206,7 +1207,7 @@ def install_authority_v9_executor(
             END IF;
             capability_value := capability_json::pg_catalog.jsonb;
             canonical_capability := {namespace}.
-                serverware_policy_authority_canonical_json(
+                serverware_policy_authority_wire_json(
                     capability_value
                 );
             computed_capability_digest := {namespace}.
@@ -1217,7 +1218,7 @@ def install_authority_v9_executor(
             reservation_value :=
                 capability_value->'witnessReservation';
             canonical_reservation := {namespace}.
-                serverware_policy_authority_canonical_json(
+                serverware_policy_authority_wire_json(
                     reservation_value
                 );
             computed_reservation_digest := {namespace}.
@@ -1413,7 +1414,7 @@ def install_authority_v9_executor(
                 CASE WHEN capability_value->'webauthnReceipt' =
                     'null'::pg_catalog.jsonb THEN NULL
                     ELSE {namespace}.
-                        serverware_policy_authority_canonical_json(
+                        serverware_policy_authority_wire_json(
                             capability_value->'webauthnReceipt'
                         ) END,
                 capability_value->>'webauthnReceiptDigest',
@@ -1505,7 +1506,7 @@ def install_authority_v9_executor(
             END IF;
             receipt_value := witness_receipt_json::pg_catalog.jsonb;
             canonical_receipt := {namespace}.
-                serverware_policy_authority_canonical_json(receipt_value);
+                serverware_policy_authority_wire_json(receipt_value);
             computed_receipt_digest := {namespace}.
                 serverware_policy_authority_domain_digest(
                     'serverware.policyAuthorityReplayWitnessReceipt/v2',
@@ -1793,7 +1794,7 @@ def install_authority_v9_executor(
                         planner.terminal_receipt_digest
                     OR execution_envelope.terminal_receipt_json <>
                         {namespace}.
-                            serverware_policy_authority_canonical_json(
+                            serverware_policy_authority_wire_json(
                                 execution_envelope.terminal_receipt_json
                                     ::pg_catalog.jsonb
                             )
@@ -1858,7 +1859,7 @@ def install_authority_v9_executor(
                         serverware_policy_authority_domain_digest(
                             'serverware.webauthnTrustHighWater/v1',
                             {namespace}.
-                                serverware_policy_authority_canonical_json(
+                                serverware_policy_authority_wire_json(
                                     trust_high_water_value
                                 )
                         );
@@ -1926,7 +1927,7 @@ def install_authority_v9_executor(
             LOOP
                 NULL;
             END LOOP;
-            SELECT {namespace}.serverware_policy_authority_canonical_json(
+            SELECT {namespace}.serverware_policy_authority_wire_json(
                 pg_catalog.jsonb_agg(
                     pg_catalog.jsonb_build_object(
                         'table', roots.table_name,
@@ -1988,7 +1989,7 @@ def install_authority_v9_executor(
                 ) AS projected(value)
                 ORDER BY projected.value->>'table' COLLATE "C",
                     {namespace}.
-                        serverware_policy_authority_canonical_json(
+                        serverware_policy_authority_wire_json(
                             projected.value->'selector'
                         ) COLLATE "C"
             LOOP
@@ -2042,7 +2043,7 @@ def install_authority_v9_executor(
                                 'serverware.policyAuthorityAuthorizationRow/v1',
                                 authorization_source->>'table',
                                 {namespace}.
-                                    serverware_policy_authority_canonical_json(
+                                    serverware_policy_authority_wire_json(
                                         authorization_source->'selector'
                                     ),
                                 CASE
@@ -2054,7 +2055,7 @@ def install_authority_v9_executor(
                                     WHEN current_row IS NULL
                                     THEN 'null'
                                     ELSE {namespace}.
-                                        serverware_policy_authority_canonical_json(
+                                        serverware_policy_authority_wire_json(
                                             current_row
                                         )
                                 END
@@ -2081,7 +2082,7 @@ def install_authority_v9_executor(
             LOOP
                 NULL;
             END LOOP;
-            SELECT {namespace}.serverware_policy_authority_canonical_json(
+            SELECT {namespace}.serverware_policy_authority_wire_json(
                 pg_catalog.jsonb_agg(
                     pg_catalog.jsonb_build_object(
                         'table', roots.table_name,
@@ -2211,7 +2212,7 @@ def install_authority_v9_executor(
                                 'serverware.policyAuthorityBusinessKey/v1',
                                 selected_row->>'table',
                                 {namespace}.
-                                    serverware_policy_authority_canonical_json(
+                                    serverware_policy_authority_wire_json(
                                         selected_row->'key'
                                     )
                             )
@@ -2280,32 +2281,7 @@ def install_authority_v9_executor(
                 ),
                 'base64'
             );
-            canonical_result :=
-                {namespace}.serverware_policy_authority_canonical_json(
-                    pg_catalog.convert_from(
-                        result_bytes, 'UTF8'
-                    )::pg_catalog.jsonb
-                );
-            IF rt_payload->'typedRequest' IS DISTINCT FROM
-                    pg_catalog.convert_from(request_bytes, 'UTF8')::pg_catalog.jsonb
-                OR rt_payload->'expectedResult' IS DISTINCT FROM
-                    pg_catalog.convert_from(result_bytes, 'UTF8')::pg_catalog.jsonb
-                OR rt_payload->'authorizationProjection' IS DISTINCT FROM
-                    authorization_projection.projection_json::pg_catalog.jsonb
-            THEN RAISE EXCEPTION 'authority root transition exact payload changed'; END IF;
-            IF pg_catalog.convert_to(canonical_result, 'UTF8')
-                    IS DISTINCT FROM result_bytes
-                OR supplied_exact_request_base64url <>
-                    execution_envelope.exact_request_base64url
-                OR pg_catalog.octet_length(request_bytes) <>
-                    execution_envelope.exact_request_byte_count
-                OR 'sha256:' || pg_catalog.encode(
-                    pg_catalog.sha256(request_bytes), 'hex'
-                ) <> execution_envelope.exact_request_bytes_digest
-            THEN
-                RAISE EXCEPTION
-                    'authority v9 exact request or result bytes changed';
-            END IF;
+            {assert_root_transition_payload_sql(namespace)}
             computed_result_digest :=
                 {namespace}.serverware_policy_authority_domain_digest(
                     'serverware.policyAuthorityControlledWriterResult/v2',
@@ -2354,13 +2330,13 @@ def install_authority_v9_executor(
                     computed_authority_snapshot_digest
                 OR planner.selected_business_rows_json IS DISTINCT FROM
                     {namespace}.
-                        serverware_policy_authority_canonical_json(
+                        serverware_policy_authority_wire_json(
                             planner.selected_business_rows_json
                                 ::pg_catalog.jsonb
                         )
                 OR planner.mutation_plan_json IS DISTINCT FROM
                     {namespace}.
-                        serverware_policy_authority_canonical_json(
+                        serverware_policy_authority_wire_json(
                             planner.mutation_plan_json::pg_catalog.jsonb
                         )
                 OR planner.selected_business_rows_digest IS DISTINCT FROM
@@ -2438,7 +2414,7 @@ def install_authority_v9_executor(
                 OR now_epoch_ns >= authorization_projection.expires_at_epoch_ns
                 OR authorization_projection.projection_json IS DISTINCT FROM
                     {namespace}.
-                        serverware_policy_authority_canonical_json(
+                        serverware_policy_authority_wire_json(
                             authorization_projection.projection_json
                                 ::pg_catalog.jsonb
                         )
@@ -2540,7 +2516,7 @@ def install_authority_v9_executor(
                               )::bigint
                           AND evidence.evidence_json =
                                 {namespace}.
-                                    serverware_policy_authority_canonical_json(
+                                    serverware_policy_authority_wire_json(
                                         evidence.evidence_json
                                             ::pg_catalog.jsonb
                                     )
@@ -2586,7 +2562,7 @@ def install_authority_v9_executor(
                                 serverware_policy_authority_domain_digest(
                                     'serverware.policyAuthorityWebAuthnChallengeRow/v1',
                                     {namespace}.
-                                        serverware_policy_authority_canonical_json(
+                                        serverware_policy_authority_wire_json(
                                             challenge_mutation.value
                                                 ->'expectedRow'
                                         )
@@ -2629,7 +2605,7 @@ def install_authority_v9_executor(
                                 serverware_policy_authority_domain_digest(
                                     'serverware.policyAuthorityWebAuthnCredentialBinding/v1',
                                     {namespace}.
-                                        serverware_policy_authority_canonical_json(
+                                        serverware_policy_authority_wire_json(
                                             pg_catalog.jsonb_build_object(
                                                 'id',
                                                     credential_mutation.value
@@ -2701,7 +2677,7 @@ def install_authority_v9_executor(
                                 serverware_policy_authority_domain_digest(
                                     'serverware.policyAuthorityCredentialPolicy/v1',
                                     {namespace}.
-                                        serverware_policy_authority_canonical_json(
+                                        serverware_policy_authority_wire_json(
                                             pg_catalog.jsonb_build_object(
                                                 'schema',
                                                     'serverware.policyAuthorityCredentialPolicy/v1',
@@ -2832,7 +2808,7 @@ def install_authority_v9_executor(
                                 capability.operation_manifest_digest
                           AND template.template_json =
                                 {namespace}.
-                                    serverware_policy_authority_canonical_json(
+                                    serverware_policy_authority_wire_json(
                                         template.template_json
                                             ::pg_catalog.jsonb
                                     )
@@ -2866,7 +2842,7 @@ def install_authority_v9_executor(
                                 'serverware.policyAuthorityBusinessKey/v1',
                                 mutation->>'table',
                                 {namespace}.
-                                    serverware_policy_authority_canonical_json(
+                                    serverware_policy_authority_wire_json(
                                         mutation->'key'
                                     )
                             )
@@ -2896,7 +2872,7 @@ def install_authority_v9_executor(
                 RAISE EXCEPTION
                     'authority v9 commit deadline expired';
             END IF;
-            SELECT {namespace}.serverware_policy_authority_canonical_json(
+            SELECT {namespace}.serverware_policy_authority_wire_json(
                 pg_catalog.jsonb_agg(
                     pg_catalog.jsonb_build_object(
                         'table', roots.table_name,
@@ -2957,7 +2933,7 @@ def install_authority_v9_executor(
                 'sourceRevision', '{source_revision}'
             );
             receipt_json :=
-                {namespace}.serverware_policy_authority_canonical_json(
+                {namespace}.serverware_policy_authority_wire_json(
                     receipt_value
                 );
             receipt_digest :=

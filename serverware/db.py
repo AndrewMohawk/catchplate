@@ -68,6 +68,11 @@ from serverware.authority_store.metadata_schema import (
     _metadata_table_exists,
     _sqlite_execute_fixed_statements,
 )
+from serverware.authority_store.wire_json_sql import (
+    WIRE_JSON_FUNCTION_NAMES,
+    WIRE_JSON_MAX_BYTES,
+    wire_json_function_sql,
+)
 from serverware.authority_store.schema import (
     _policy_candidate_authority_canonicalize_namespace,
     _policy_candidate_authority_expected_structure_manifest,
@@ -7464,6 +7469,11 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
             $serverware_framed_digest$
             """
         )
+        if WIRE_JSON_MAX_BYTES != _POLICY_AUTHORITY_VERIFIER_RESPONSE_MAX_BYTES:
+            raise PolicyCandidateAuthorityError(
+                "authority wire JSON and digest frame byte bounds differ"
+            )
+        conn.execute(wire_json_function_sql(guard_namespace))
         conn.execute(
             f"""
             CREATE OR REPLACE FUNCTION {guard_namespace}.serverware_guard_policy_activation_publication()
@@ -9236,7 +9246,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                 END IF;
                 canonical_capability :=
                     {guard_namespace}.
-                        serverware_policy_authority_canonical_json(
+                        serverware_policy_authority_wire_json(
                             capability_value
                         );
                 IF canonical_capability IS DISTINCT FROM capability_json
@@ -9254,7 +9264,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                 witness_value := capability_value->'witnessReservation';
                 canonical_witness :=
                     {guard_namespace}.
-                        serverware_policy_authority_canonical_json(
+                        serverware_policy_authority_wire_json(
                             witness_value
                         );
                 computed_witness_digest :=
@@ -9793,14 +9803,14 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                         'writer capability is not closed';
                 END IF;
                 canonical_capability := {guard_namespace}.
-                    serverware_policy_authority_canonical_json(
+                    serverware_policy_authority_wire_json(
                         capability_value
                     );
                 witness_value := capability_value->'witnessReservation';
                 webauthn_receipt_value :=
                     capability_value->'webauthnReceipt';
                 canonical_witness := {guard_namespace}.
-                    serverware_policy_authority_canonical_json(
+                    serverware_policy_authority_wire_json(
                         witness_value
                     );
                 computed_capability_digest := {guard_namespace}.
@@ -9818,7 +9828,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                         'null'::pg_catalog.jsonb
                     THEN NULL
                     ELSE {guard_namespace}.
-                        serverware_policy_authority_canonical_json(
+                        serverware_policy_authority_wire_json(
                             webauthn_receipt_value
                         )
                 END;
@@ -10479,7 +10489,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                 receipt_value :=
                     witness_receipt_json::pg_catalog.jsonb;
                 canonical_receipt := {guard_namespace}.
-                    serverware_policy_authority_canonical_json(
+                    serverware_policy_authority_wire_json(
                         receipt_value
                     );
                 computed_receipt_digest := {guard_namespace}.
@@ -11189,7 +11199,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                         serverware_policy_authority_domain_digest(
                             'serverware.policyAuthorityMutationPlan/v2',
                             {guard_namespace}.
-                                serverware_policy_authority_canonical_json(
+                                serverware_policy_authority_wire_json(
                                     plan_value
                                 )
                         );
@@ -11200,7 +11210,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                         serverware_policy_authority_domain_digest(
                             'serverware.policyAuthorityQueryProofs/v1',
                             {guard_namespace}.
-                                serverware_policy_authority_canonical_json(
+                                serverware_policy_authority_wire_json(
                                     reads_value
                                 )
                         );
@@ -11209,7 +11219,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                         serverware_policy_authority_domain_digest(
                             'serverware.policyAuthorityWebAuthnReceipt/v1',
                             {guard_namespace}.
-                                serverware_policy_authority_canonical_json(
+                                serverware_policy_authority_wire_json(
                                     webauthn_receipt_value
                                 )
                         );
@@ -11223,7 +11233,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                         serverware_policy_authority_domain_digest(
                             'serverware.policyAuthorityResponse/v1',
                             {guard_namespace}.
-                                serverware_policy_authority_canonical_json(
+                                serverware_policy_authority_wire_json(
                                     result_value->'response'
                                 )
                         );
@@ -11464,7 +11474,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                           AND fence = verifier_capability.fence
                           AND receipt_json =
                             {guard_namespace}.
-                                serverware_policy_authority_canonical_json(
+                                serverware_policy_authority_wire_json(
                                     capability_value->
                                         'witnessReservation'
                                 )
@@ -11794,7 +11804,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                                 'serverware.policyAuthorityQuerySelectors/v1',
                                 manifest_entry.predicate_id,
                                 {guard_namespace}.
-                                    serverware_policy_authority_canonical_json(
+                                    serverware_policy_authority_wire_json(
                                         read_dependency->'selectors'
                                     )
                             );
@@ -12198,7 +12208,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                             serverware_policy_authority_framed_digest(
                                 'serverware.policyAuthorityRadixMultiproof/v2',
                                 {guard_namespace}.
-                                    serverware_policy_authority_canonical_json(
+                                    serverware_policy_authority_wire_json(
                                         expected_multiproof
                                     )
                             );
@@ -12229,7 +12239,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                                 authenticated_root.root_digest,
                                 multiproof_digest,
                                 {guard_namespace}.
-                                    serverware_policy_authority_canonical_json(
+                                    serverware_policy_authority_wire_json(
                                         COALESCE(
                                             (
                                                 SELECT pg_catalog.jsonb_agg(
@@ -12265,7 +12275,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                                     authenticated_root.root_digest,
                                     multiproof_digest,
                                     {guard_namespace}.
-                                        serverware_policy_authority_canonical_json(
+                                        serverware_policy_authority_wire_json(
                                             COALESCE(
                                                 (
                                                     SELECT
@@ -12304,7 +12314,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                                 'serverware.policyAuthorityQueryRows/v1',
                                 manifest_entry.predicate_id,
                                 {guard_namespace}.
-                                    serverware_policy_authority_canonical_json(
+                                    serverware_policy_authority_wire_json(
                                         read_rows
                                     )
                             )
@@ -12332,7 +12342,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                         serverware_policy_authority_domain_digest(
                             'serverware.policyAuthorityRootSet/v1',
                             {guard_namespace}.
-                                serverware_policy_authority_canonical_json(
+                                serverware_policy_authority_wire_json(
                                     root_set_value
                                 )
                         )
@@ -12718,7 +12728,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                                         serverware_policy_authority_domain_digest(
                                             'serverware.policyAuthorityAuditInclusionRoot/v1',
                                             {guard_namespace}.
-                                                serverware_policy_authority_canonical_json(
+                                                serverware_policy_authority_wire_json(
                                                     pg_catalog.jsonb_build_object(
                                                         'auditEventHash',
                                                             receipt->'row'->>
@@ -13124,7 +13134,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                                 ) AS transition
                                 CROSS JOIN LATERAL (
                                     SELECT {guard_namespace}.
-                                        serverware_policy_authority_canonical_json(
+                                        serverware_policy_authority_wire_json(
                                             pg_catalog.jsonb_build_object(
                                                 'schema',
                                                     'serverware.policyAuthorityTransition/v2',
@@ -13206,7 +13216,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                                             pg_catalog.sha256(
                                                 pg_catalog.convert_to(
                                                     {guard_namespace}.
-                                                        serverware_policy_authority_canonical_json(
+                                                        serverware_policy_authority_wire_json(
                                                             pg_catalog.
                                                                 jsonb_build_object(
                                                                     'eventPayloadDigest',
@@ -13244,7 +13254,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                                             pg_catalog.sha256(
                                                 pg_catalog.convert_to(
                                                     {guard_namespace}.
-                                                        serverware_policy_authority_canonical_json(
+                                                        serverware_policy_authority_wire_json(
                                                             pg_catalog.
                                                                 jsonb_build_object(
                                                                     'actorId',
@@ -13635,7 +13645,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                                     'preparation_input_json'
                                 IS DISTINCT FROM
                                 {guard_namespace}.
-                                    serverware_policy_authority_canonical_json(
+                                    serverware_policy_authority_wire_json(
                                         pg_catalog.jsonb_build_object(
                                             'schema',
                                             'serverware.policyActivationPreparationInput/v1'
@@ -13656,7 +13666,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                                     'transition_manifest_json'
                                 IS DISTINCT FROM
                                 {guard_namespace}.
-                                    serverware_policy_authority_canonical_json(
+                                    serverware_policy_authority_wire_json(
                                         (
                                             SELECT pg_catalog.jsonb_agg(
                                                 pg_catalog.jsonb_build_object(
@@ -13727,7 +13737,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                                     serverware_policy_authority_domain_digest(
                                         'serverware.policyActivationPreparation/v1',
                                         {guard_namespace}.
-                                            serverware_policy_authority_canonical_json(
+                                            serverware_policy_authority_wire_json(
                                                 pg_catalog.jsonb_build_object(
                                                     'activationAttemptId',
                                                         request_value->'input'->
@@ -14297,7 +14307,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                         serverware_policy_authority_domain_digest(
                             'serverware.policyAuthorityClosedSnapshotBefore/v2',
                             {guard_namespace}.
-                                serverware_policy_authority_canonical_json(
+                                serverware_policy_authority_wire_json(
                                     before_projection
                                 )
                         );
@@ -14526,7 +14536,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                                 serverware_policy_authority_domain_digest(
                                     'serverware.webauthnTrustHighWater/v1',
                                     {guard_namespace}.
-                                        serverware_policy_authority_canonical_json(
+                                        serverware_policy_authority_wire_json(
                                             pg_catalog.jsonb_build_object(
                                                 'schema',
                                                     'serverware.webauthnTrustHighWater/v1',
@@ -14599,7 +14609,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                         serverware_policy_authority_domain_digest(
                             'serverware.webauthnTrustHighWater/v1',
                             {guard_namespace}.
-                                serverware_policy_authority_canonical_json(
+                                serverware_policy_authority_wire_json(
                                     webauthn_trust_high_water
                                 )
                         );
@@ -14673,7 +14683,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                             serverware_policy_authority_domain_digest(
                                 'serverware.policyAuthorityWebAuthnChallengeRow/v1',
                                 {guard_namespace}.
-                                    serverware_policy_authority_canonical_json(
+                                    serverware_policy_authority_wire_json(
                                         webauthn_challenge_binding
                                     )
                             )
@@ -14683,7 +14693,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                             serverware_policy_authority_framed_digest(
                                 'serverware.policyAuthorityWebAuthnCredentialBinding/v1',
                                 {guard_namespace}.
-                                    serverware_policy_authority_canonical_json(
+                                    serverware_policy_authority_wire_json(
                                         webauthn_credential_binding
                                     )
                             )
@@ -14693,7 +14703,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                             serverware_policy_authority_domain_digest(
                                 'serverware.policyAuthorityCredentialPolicy/v1',
                                 {guard_namespace}.
-                                    serverware_policy_authority_canonical_json(
+                                    serverware_policy_authority_wire_json(
                                         webauthn_credential_policy
                                     )
                             )
@@ -15008,7 +15018,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                         serverware_policy_authority_domain_digest(
                             'serverware.policyAuthorityRootSet/v1',
                             {guard_namespace}.
-                                serverware_policy_authority_canonical_json(
+                                serverware_policy_authority_wire_json(
                                     root_set_value
                                 )
                         )
@@ -15041,7 +15051,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                         serverware_policy_authority_domain_digest(
                             'serverware.policyAuthorityCasProjectionAfter/v2',
                             {guard_namespace}.
-                                serverware_policy_authority_canonical_json(
+                                serverware_policy_authority_wire_json(
                                     after_projection
                                 )
                         )
@@ -15277,7 +15287,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                       AND finalization.
                                 finalized_authority_snapshot_json =
                             {guard_namespace}.
-                                serverware_policy_authority_canonical_json(
+                                serverware_policy_authority_wire_json(
                                     pg_catalog.jsonb_build_object(
                                         'schema',
                                             'serverware.policyActivationFinalizedAuthoritySnapshot/v1',
@@ -15376,7 +15386,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                                 serverware_policy_authority_domain_digest(
                                     'serverware.policyActivationFinalization/v1',
                                     {guard_namespace}.
-                                        serverware_policy_authority_canonical_json(
+                                        serverware_policy_authority_wire_json(
                                             pg_catalog.jsonb_build_object(
                                                 'activationAttemptId',
                                                     finalization.
@@ -15407,7 +15417,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                                 )
                       AND frozen.identity_json =
                             {guard_namespace}.
-                                serverware_policy_authority_canonical_json(
+                                serverware_policy_authority_wire_json(
                                     pg_catalog.jsonb_build_object(
                                         'schema',
                                             'serverware.policyActivationChainIdentity/v3',
@@ -15503,7 +15513,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                                 )
                       AND frozen.manifest_json =
                             {guard_namespace}.
-                                serverware_policy_authority_canonical_json(
+                                serverware_policy_authority_wire_json(
                                     frozen.manifest_json::pg_catalog.jsonb
                                 )
                       AND (
@@ -15554,7 +15564,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                                 )
                       AND frozen.rows_json =
                             {guard_namespace}.
-                                serverware_policy_authority_canonical_json(
+                                serverware_policy_authority_wire_json(
                                     frozen.rows_json::pg_catalog.jsonb
                                 )
                       AND (
@@ -15725,7 +15735,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                                     pg_catalog.sum(
                                         pg_catalog.octet_length(
                                             {guard_namespace}.
-                                                serverware_policy_authority_canonical_json(
+                                                serverware_policy_authority_wire_json(
                                                     section_row.value->'row'
                                                 )
                                         )
@@ -15757,7 +15767,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                                             serverware_policy_authority_framed_digest(
                                                 'serverware.policyActivationChainSectionGenesis/v1',
                                                 {guard_namespace}.
-                                                    serverware_policy_authority_canonical_json(
+                                                    serverware_policy_authority_wire_json(
                                                         pg_catalog.
                                                             jsonb_build_object(
                                                                 'identityDigest',
@@ -15777,7 +15787,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                                             serverware_policy_authority_framed_digest(
                                                 'serverware.policyActivationChainSectionRow/v1',
                                                 {guard_namespace}.
-                                                    serverware_policy_authority_canonical_json(
+                                                    serverware_policy_authority_wire_json(
                                                         pg_catalog.
                                                             jsonb_build_object(
                                                                 'previousRootDigest',
@@ -15861,7 +15871,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                                             serverware_policy_authority_framed_digest(
                                                 'serverware.policyActivationFinalizedExportRow/v1',
                                                 {guard_namespace}.
-                                                    serverware_policy_authority_canonical_json(
+                                                    serverware_policy_authority_wire_json(
                                                         closed_row.value->
                                                             'row'
                                                     )
@@ -15886,7 +15896,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                                 pg_catalog.sum(
                                     pg_catalog.octet_length(
                                         {guard_namespace}.
-                                            serverware_policy_authority_canonical_json(
+                                            serverware_policy_authority_wire_json(
                                                 closed_row.value->'row'
                                             )
                                     )
@@ -15946,7 +15956,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                                             'serverware.policyActivationFinalizedExportRowIdentityStep/v1',
                                             row_identity_roots.root_digest,
                                             {guard_namespace}.
-                                                serverware_policy_authority_canonical_json(
+                                                serverware_policy_authority_wire_json(
                                                     pg_catalog.
                                                         jsonb_build_object(
                                                             'sectionOrdinal',
@@ -16237,7 +16247,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
 	                      ) = 7
 	                      AND preparation.transition_manifest_json =
 	                            {guard_namespace}.
-	                                serverware_policy_authority_canonical_json(
+	                                serverware_policy_authority_wire_json(
 	                                    (
 	                                        SELECT pg_catalog.jsonb_agg(
 	                                            pg_catalog.jsonb_build_object(
@@ -16295,7 +16305,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
 	                                )
 	                      AND finalization.inclusion_identity_set_json =
 	                            {guard_namespace}.
-	                                serverware_policy_authority_canonical_json(
+	                                serverware_policy_authority_wire_json(
 	                                    (
 	                                        SELECT pg_catalog.jsonb_agg(
 	                                            pg_catalog.jsonb_build_object(
@@ -16926,7 +16936,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                     serverware_policy_authority_domain_digest(
                         'serverware.policyAuthorityRootSet/v2',
                         {guard_namespace}.
-                            serverware_policy_authority_canonical_json(
+                            serverware_policy_authority_wire_json(
                                 root_set_value
                             )
                     );
@@ -17008,7 +17018,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                     webauthn_receipt :=
                         capability.webauthn_receipt_json::pg_catalog.jsonb;
                     canonical_receipt := {guard_namespace}.
-                        serverware_policy_authority_canonical_json(
+                        serverware_policy_authority_wire_json(
                             webauthn_receipt
                         );
                     IF canonical_receipt IS DISTINCT FROM
@@ -17141,7 +17151,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                         serverware_policy_authority_domain_digest(
                             'serverware.policyAuthorityWebAuthnChallengeRow/v1',
                             {guard_namespace}.
-                                serverware_policy_authority_canonical_json(
+                                serverware_policy_authority_wire_json(
                                     challenge_row_value
                                 )
                         );
@@ -17157,7 +17167,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                             pg_catalog.sha256(
                                 pg_catalog.convert_to(
                                     {guard_namespace}.
-                                        serverware_policy_authority_canonical_json(
+                                        serverware_policy_authority_wire_json(
                                             challenge_value
                                         ),
                                     'UTF8'
@@ -17194,7 +17204,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                         serverware_policy_authority_domain_digest(
                             'serverware.policyAuthorityWebAuthnCredentialBinding/v1',
                             {guard_namespace}.
-                                serverware_policy_authority_canonical_json(
+                                serverware_policy_authority_wire_json(
                                     credential_binding_value
                                 )
                         );
@@ -17220,7 +17230,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                         serverware_policy_authority_domain_digest(
                             'serverware.webauthnTrustHighWater/v1',
                             {guard_namespace}.
-                                serverware_policy_authority_canonical_json(
+                                serverware_policy_authority_wire_json(
                                     trust_high_water_value
                                 )
                         );
@@ -17268,7 +17278,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                         serverware_policy_authority_domain_digest(
                             'serverware.policyAuthorityCredentialPolicy/v1',
                             {guard_namespace}.
-                                serverware_policy_authority_canonical_json(
+                                serverware_policy_authority_wire_json(
                                     credential_policy_value
                                 )
                         );
@@ -17490,7 +17500,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                 END IF;
                 result_value := supplied_result_json::pg_catalog.jsonb;
                 IF {guard_namespace}.
-                    serverware_policy_authority_canonical_json(result_value)
+                    serverware_policy_authority_wire_json(result_value)
                     IS DISTINCT FROM supplied_result_json
                 THEN
                     RAISE EXCEPTION
@@ -17532,7 +17542,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                     serverware_policy_authority_domain_digest(
                         'serverware.policyAuthorityRootSet/v2',
                         {guard_namespace}.
-                            serverware_policy_authority_canonical_json(
+                            serverware_policy_authority_wire_json(
                                 root_set_value
                             )
                     );
@@ -17564,7 +17574,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                             serverware_policy_authority_domain_digest(
                                 'serverware.webauthnRevocationSet/v1',
                                 {guard_namespace}.
-                                    serverware_policy_authority_canonical_json(
+                                    serverware_policy_authority_wire_json(
                                         publication.
                                             withdrawn_credential_ids_json
                                             ::pg_catalog.jsonb
@@ -17658,7 +17668,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                         '{_POLICY_CANDIDATE_AUTHORITY_SOURCE_REVISION}'
                 );
                 receipt_json := {guard_namespace}.
-                    serverware_policy_authority_canonical_json(
+                    serverware_policy_authority_wire_json(
                         receipt_value
                     );
                 receipt_digest := {guard_namespace}.
@@ -17967,7 +17977,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                         'WebAuthn challenge issue request is not closed';
                 END IF;
                 canonical_request := {guard_namespace}.
-                    serverware_policy_authority_canonical_json(
+                    serverware_policy_authority_wire_json(
                         request_value
                     );
                 computed_request_digest := {guard_namespace}.
@@ -18058,7 +18068,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                     serverware_policy_authority_domain_digest(
                         'serverware.policyAuthorityCredentialPolicy/v1',
                         {guard_namespace}.
-                            serverware_policy_authority_canonical_json(
+                            serverware_policy_authority_wire_json(
                                 credential_policy
                             )
                     );
@@ -18074,7 +18084,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                     request_value->>'operationId',
                     NULL,
                     {guard_namespace}.
-                        serverware_policy_authority_canonical_json(
+                        serverware_policy_authority_wire_json(
                             pg_catalog.jsonb_build_object(
                                 'schema',
                                     'serverware.policyAuthorityWebAuthnChallenge/v1',
@@ -18121,7 +18131,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                         'WebAuthn challenge identity was reused';
                 END IF;
                 RETURN {guard_namespace}.
-                    serverware_policy_authority_canonical_json(
+                    serverware_policy_authority_wire_json(
                         pg_catalog.jsonb_build_object(
                             'schema',
                                 'serverware.policyAuthorityWebAuthnChallengeIssued/v1',
@@ -18241,7 +18251,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                         'nonce authority request is not closed';
                 END IF;
                 canonical_request := {guard_namespace}.
-                    serverware_policy_authority_canonical_json(
+                    serverware_policy_authority_wire_json(
                         request_value
                     );
                 computed_request_digest := {guard_namespace}.
@@ -18313,7 +18323,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                     serverware_policy_authority_domain_digest(
                         'serverware.policyAuthorityRootSet/v1',
                         {guard_namespace}.
-                            serverware_policy_authority_canonical_json(
+                            serverware_policy_authority_wire_json(
                                 root_set_value
                             )
                     );
@@ -18382,7 +18392,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                     (request_value->>'maximumEntries')::bigint
                 THEN
                     RETURN {guard_namespace}.
-                        serverware_policy_authority_canonical_json(
+                        serverware_policy_authority_wire_json(
                             pg_catalog.jsonb_build_object(
                                 'schema',
                                     'serverware.credentialLeaseNonceResult/v1',
@@ -18403,7 +18413,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                 GET DIAGNOSTICS inserted_count = ROW_COUNT;
                 IF inserted_count = 0 THEN
                     RETURN {guard_namespace}.
-                        serverware_policy_authority_canonical_json(
+                        serverware_policy_authority_wire_json(
                             pg_catalog.jsonb_build_object(
                                 'schema',
                                     'serverware.credentialLeaseNonceResult/v1',
@@ -18415,7 +18425,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                 SET nonce_count = updated_nonce_count + 1
                 WHERE state.scope = 'global';
                 RETURN {guard_namespace}.
-                    serverware_policy_authority_canonical_json(
+                    serverware_policy_authority_wire_json(
                         pg_catalog.jsonb_build_object(
                             'schema',
                                 'serverware.credentialLeaseNonceResult/v1',
@@ -18550,26 +18560,26 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                     response_value :=
                         verifier_response_json::pg_catalog.jsonb;
                     request_canonical := {guard_namespace}.
-                        serverware_policy_authority_canonical_json(
+                        serverware_policy_authority_wire_json(
                             request_value
                         );
                     response_canonical := {guard_namespace}.
-                        serverware_policy_authority_canonical_json(
+                        serverware_policy_authority_wire_json(
                             response_value
                         );
                     input_canonical := {guard_namespace}.
-                        serverware_policy_authority_canonical_json(
+                        serverware_policy_authority_wire_json(
                             request_value->'input'
                         );
                     result_canonical := {guard_namespace}.
-                        serverware_policy_authority_canonical_json(
+                        serverware_policy_authority_wire_json(
                             response_value->'result'
                         );
                     signature_statement_digest := {guard_namespace}.
                         serverware_policy_authority_domain_digest(
                             '{_POLICY_AUTHORITY_VERIFIER_SIGNATURE_DOMAIN}',
                             {guard_namespace}.
-                                serverware_policy_authority_canonical_json(
+                                serverware_policy_authority_wire_json(
                                     response_value - ARRAY[
                                         'signature', 'signatureDigest'
                                     ]
@@ -18776,7 +18786,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                                     serverware_policy_authority_domain_digest(
                                         'serverware.policyAuthorityResponse/v1',
                                         {guard_namespace}.
-                                            serverware_policy_authority_canonical_json(
+                                            serverware_policy_authority_wire_json(
                                                 response_value->'result'->
                                                     'response'
                                             )
@@ -20637,6 +20647,7 @@ def _validate_policy_authority_owner_apply_function(
             "serverware_policy_authority_execute_v9",
             _POLICY_AUTHORITY_OWNER_APPLY_FUNCTION,
             "serverware_policy_authority_canonical_json",
+            *WIRE_JSON_FUNCTION_NAMES,
             "serverware_policy_authority_domain_digest",
             "serverware_policy_authority_framed_digest",
             "serverware_policy_authority_enforce_commit_deadline",

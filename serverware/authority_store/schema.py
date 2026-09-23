@@ -11,6 +11,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from serverware import authority_contract
 from serverware.authority_store import postgres_trigger_manifest
+from serverware.authority_store.wire_json_sql import WIRE_JSON_FUNCTION_NAMES
 
 _EXTRACTED_NAMES = frozenset(
     {
@@ -1295,6 +1296,7 @@ def _policy_candidate_authority_required_guard_names(
                 "serverware_guard_policy_activation_heads_successor",
                 "serverware_guard_policy_activation_publication",
                 "serverware_policy_authority_canonical_json",
+                *WIRE_JSON_FUNCTION_NAMES,
                 "serverware_policy_authority_domain_digest",
                 "serverware_policy_authority_framed_digest",
                 "serverware_policy_authority_authenticated_empty",

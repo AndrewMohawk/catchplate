@@ -48,6 +48,9 @@ through planner v3, Snapshot/v3 and pre-commit SQL checks. It also replaces
 synthetic authorization table-head selectors with actual proof-selected rows.
 This source-only component work does not establish independent root authority,
 range completeness, Unicode wire interoperability or full startup success.
+The separate [wire JSON repair](authority-wire-json.md) now implements the SQL
+message serializer and consumer migration without changing persisted tree hashes;
+its authored component and original-byte checks remain unexecuted.
 
 ## Implementation contracts still needed
 
@@ -184,9 +187,11 @@ These are separate from provisioning the production services:
 - The narrow tree-proof repair supports losslessly decoded strings, integers,
   booleans, null, lists and objects, with UTF-8 tree serialization; it rejects
   floats and decimal values instead of approximating PostgreSQL numeric scale.
-  The SQL business-address and whole-plan serialization contract still needs
-  reconciliation with ASCII-escaped Python transport for non-ASCII values.
-  Tree-only Unicode fixtures do not prove end-to-end executor compatibility.
+  The separate SQL wire serializer now targets ASCII-escaped Python message
+  commitments, with original request/result bytes checked rather than replaced.
+  Its lossless-integer profile is not general float parity. The complete stored
+  plan remains bound to its original bytes; tree-only Unicode fixtures and
+  unexecuted wire components do not prove end-to-end executor compatibility.
 - `BoundedQuery.exact_page` is not enforced by the current SQL reader.
   `KernelContext.exact_page_receipt` checks receipt structure and digests, but
   does not reconstruct a predicate/range root from its `proofNodes`. There is

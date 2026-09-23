@@ -310,7 +310,7 @@ class AuthorityRootTransitionTests(unittest.TestCase):
         with self.assertRaisesRegex(PrimaryRadixMutationError, "key or presence is not exact"):
             transition.derive_authorization_sources(operation=CHALLENGE, selected_rows=malformed)
 
-    def test_unicode_authorization_wire_sql_interoperability_is_explicitly_unresolved(self) -> None:
+    def test_unicode_authorization_wire_remains_distinct_from_persisted_tree_json(self) -> None:
         arguments, _ = fixture(CHALLENGE)
         row = next(entry for entry in arguments["selected_rows"] if entry["table"] == "webauthn_credentials")
         row["row"]["label"] = "café-雪"
@@ -327,9 +327,9 @@ class AuthorityRootTransitionTests(unittest.TestCase):
         domain = "serverware.policyAuthorityAuthorizationRow/v1"
         self.assertEqual(source["rowDigest"], wire_digest(domain, tree.table.encode(), wire_json(source["selector"]),
                                                         b"present", wire_json(source["row"])))
-        # Existing executor canonical_json renders literal UTF-8 here. This
-        # expected INEQUALITY records the open interoperability defect, not an
-        # accepted release or permission to change the persisted tree protocol.
+        # The live SQL wire helper has a separate real-engine component oracle.
+        # This pure INEQUALITY proves why the unchanged UTF-8 tree serializer
+        # must not be substituted into the ASCII authorization wire domain.
         self.assertNotEqual(source["rowDigest"], wire_digest(domain, tree.table.encode(), sql_json(source["selector"]),
                                                            b"present", sql_json(source["row"])))
 

@@ -614,6 +614,7 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_authority_radix_proof.py \
 	scripts/test_authority_radix_mutation.py \
 	scripts/test_authority_root_transition.py \
+	scripts/test_authority_wire_json_source.py \
 	scripts/test_authority_transition_registry.py \
 	scripts/test_webauthn_attestation_core.py \
 	scripts/test_control_plane_startup.py \
@@ -708,6 +709,7 @@ override CODER_EXCLUDED_TEST_SCRIPTS := \
 	scripts/test_postgres_trigger_manifest.py \
 	scripts/test_authority_mutation_postgres.py \
 	scripts/test_authority_root_transition_postgres.py \
+	scripts/test_authority_wire_json_postgres.py \
 	scripts/test_traversal_response_evidence.py \
 	scripts/test_webauthn_recovery.py
 CODER_TIMEOUT ?= timeout

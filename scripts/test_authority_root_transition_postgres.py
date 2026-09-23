@@ -38,10 +38,12 @@ from serverware.authority_store.root_transition_sql import (
     TRANSITION_SCHEMA,
     assert_root_transition_after_sql,
     assert_root_transition_before_sql,
+    assert_root_transition_payload_sql,
     assert_root_transition_replay_sql,
     load_root_transition_sql,
     root_transition_declarations_sql,
 )
+from serverware.authority_store.wire_json_sql import wire_json_function_sql
 from test_webauthn_trust_projection_postgres import local_connection_parameters
 
 
@@ -93,9 +95,13 @@ def production_digest_functions(namespace: str) -> list[str]:
         raise ValueError("database source exceeds component fixture bound")
     source = path.read_text(encoding="utf-8")
     marker = '        conn.execute(\n            f"""\n            CREATE OR REPLACE FUNCTION {guard_namespace}.\n                '
-    start = source.index(marker + "serverware_policy_authority_canonical_json(")
-    end = source.index(marker + "serverware_policy_authority_framed_digest(", start)
-    declarations = ast.parse(textwrap.dedent(source[start:end]))
+    declarations = []
+    for function_name, delimiter in (("serverware_policy_authority_canonical_json", "serverware_canonical"),
+                                     ("serverware_policy_authority_domain_digest", "serverware_digest")):
+        start = source.index(marker + function_name + "(")
+        closing = f'            ${delimiter}$\n            """\n        )'
+        end = source.index(closing, start) + len(closing)
+        declarations.extend(ast.parse(textwrap.dedent(source[start:end])).body)
     maximum = re.search(r"^_POLICY_AUTHORITY_VERIFIER_RESPONSE_MAX_BYTES = ([0-9 *]+)$",
                         source, re.MULTILINE)
     if maximum is None:
@@ -108,7 +114,7 @@ def production_digest_functions(namespace: str) -> list[str]:
         "_POLICY_AUTHORITY_VERIFIER_RESPONSE_MAX_BYTES": str(maximum_bytes),
     }
     statements = []
-    for node in declarations.body:
+    for node in declarations:
         if (not isinstance(node, ast.Expr) or not isinstance(node.value, ast.Call)
                 or not isinstance(node.value.func, ast.Attribute)
                 or node.value.func.attr != "execute" or len(node.value.args) != 1
@@ -136,11 +142,13 @@ def fixture_payload() -> dict:
     authorization = {"table": "auth_items", "rootRevision": 2, "rootDigest": token("auth"), "leafCount": 1}
     # These shapes start after planner admission: the component does not claim
     # this synthetic manifest, row or opaque proof is an actual operation plan.
-    selected = [{"table": "items", "key": {"id": "a"}, "keyDigest": token("key"),
-                 "present": True, "row": {"id": "a", "value": "caf\u00e9"}, "contractSelector": None}]
+    key = {"id": "clé-雪😀"}
+    key_digest = digest("serverware.policyAuthorityBusinessKey/v1", b"items", canonical(key))
+    selected = [{"table": "items", "key": key, "keyDigest": key_digest,
+                 "present": True, "row": {**key, "value": "caf\u00e9"}, "contractSelector": None}]
     mutations = [{"templateId": "fixture-not-authority", "operation": "UPDATE", "table": "items",
-                  "key": {"id": "a"}, "keyDigest": token("key"),
-                  "expectedRow": selected[0]["row"], "row": {"id": "a", "value": "apr\u00e8s"}}]
+                  "key": key, "keyDigest": key_digest,
+                  "expectedRow": selected[0]["row"], "row": {**key, "value": "apr\u00e8s"}}]
     request_digest = token("request")
     plan = {
         "schema": "serverware.policyAuthorityMeasuredPlan/v3",
@@ -162,11 +170,13 @@ def fixture_payload() -> dict:
     }
     return {
         "schema": "serverware.policyAuthorityPlannerResponse/v3", "measuredPlan": plan,
-        "typedRequest": {"component": "request"}, "selectedBusinessRows": selected,
+        "typedRequest": {"component": "requête-雪😀", "control": "\n\t\x01"}, "selectedBusinessRows": selected,
         "mutationPlan": mutations, "queryMultiproofs": [{"component": "opaque before proof"}],
         "queryMultiproofsDigest": token("proofs"), "plannerTrace": {"component": "trace"},
-        "plannerTraceDigest": token("trace"), "authorizationProjection": {"component": "projection"},
-        "webauthnEvidence": None, "expectedResult": {"ok": True}, "expectedResultDigest": token("result"),
+        "plannerTraceDigest": token("trace"),
+        "authorizationProjection": {"component": "projection", "subject": "utilisateur-雪😀"},
+        "webauthnEvidence": None, "expectedResult": {"ok": True, "label": "résultat-雪😀"},
+        "expectedResultDigest": "filled-by-seal",
         "plannerIdentity": {"sessionIdentityDigest": token("session"), "measurementDigest": token("measurement"),
                             "attestationReceiptDigest": token("attestation")},
         "rootTransition": {"schema": TRANSITION_SCHEMA, "profile": TRANSITION_PROFILE,
@@ -182,6 +192,10 @@ def seal(payload: dict) -> tuple[dict, dict, dict]:
     payload = copy.deepcopy(payload)
     plan = payload["measuredPlan"]
     transition = payload["rootTransition"]
+    payload["expectedResultDigest"] = digest("serverware.policyAuthorityControlledWriterResult/v2",
+                                           canonical(payload["expectedResult"]))
+    plan["authorizationProjectionDigest"] = digest("serverware.policyAuthorityAuthorizationProjection/v1",
+                                                   canonical(payload["authorizationProjection"]))
     plan["rootTransitionDigest"] = digest(TRANSITION_SCHEMA, canonical(transition))
     plan["authorityRootSetBeforeDigest"] = digest("serverware.policyAuthorityRootSet/v1", canonical(transition["businessBeforeRoots"]))
     plan["authoritySnapshotDigest"] = digest("serverware.policyAuthoritySnapshot/v3", *[
@@ -238,43 +252,61 @@ class AuthorityRootTransitionPostgresTests(unittest.TestCase):
         with cls.connection() as connection:
             for statement in production_digest_functions(cls.namespace):
                 connection.execute(statement)
+            connection.execute(wire_json_function_sql(cls.namespace))
             connection.execute(f"""
                 CREATE TYPE {cls.namespace}.fixture_planner AS ({', '.join(name + ' ' + kind for name, kind in PLANNER_COLUMNS.items())});
                 CREATE TYPE {cls.namespace}.fixture_capability AS ({', '.join(name + ' ' + kind for name, kind in CAPABILITY_COLUMNS.items())});
-                CREATE TABLE {cls.namespace}.fixture_state (id integer PRIMARY KEY, planner_json jsonb, capability_json jsonb, terminal_receipt_json text);
+                CREATE TABLE {cls.namespace}.fixture_state (id integer PRIMARY KEY, planner_json jsonb, capability_json jsonb,
+                    terminal_receipt_json text, exact_request_base64url text, exact_request_bytes_digest text,
+                    exact_request_byte_count bigint);
                 CREATE TABLE {cls.namespace}.items (id integer PRIMARY KEY, value integer NOT NULL);
                 CREATE TABLE {cls.namespace}.publications (id integer PRIMARY KEY);
                 CREATE TABLE {cls.namespace}.policy_authority_query_dependency_manifests (operation text, table_name text);
                 CREATE TABLE {cls.namespace}.policy_authority_authorization_dependency_manifests (operation text, table_name text);
                 CREATE TABLE {cls.namespace}.policy_authority_authenticated_table_roots
                     (table_name text PRIMARY KEY, root_revision bigint, root_digest text, leaf_count bigint);
-                CREATE FUNCTION {cls.namespace}.component(actual_after jsonb, replay boolean DEFAULT false)
+                CREATE FUNCTION {cls.namespace}.component(actual_after jsonb, request_payload bytea, result_payload bytea,
+                    supplied_projection_json text, replay boolean DEFAULT false)
                 RETURNS text LANGUAGE plpgsql SET search_path = pg_catalog AS $component$
                 DECLARE
                     planner {cls.namespace}.fixture_planner;
                     capability {cls.namespace}.fixture_capability;
                     execution_envelope record;
+                    authorization_projection record;
                     fixture_record record;
                     root_set_before_json text;
                     authorization_root_set_json text;
                     root_set_after_json text;
                     root_set_after_digest text;
+                    request_bytes bytea;
+                    result_bytes bytea;
+                    canonical_result text;
+                    supplied_exact_request_base64url text;
                     {root_transition_declarations_sql()}
                 BEGIN
                     SELECT * INTO STRICT fixture_record FROM {cls.namespace}.fixture_state WHERE id=1 FOR UPDATE;
                     planner := pg_catalog.jsonb_populate_record(NULL::{cls.namespace}.fixture_planner, fixture_record.planner_json);
                     capability := pg_catalog.jsonb_populate_record(NULL::{cls.namespace}.fixture_capability, fixture_record.capability_json);
-                    SELECT fixture_record.terminal_receipt_json AS terminal_receipt_json INTO execution_envelope;
+                    SELECT fixture_record.terminal_receipt_json AS terminal_receipt_json,
+                        fixture_record.exact_request_base64url AS exact_request_base64url,
+                        fixture_record.exact_request_bytes_digest AS exact_request_bytes_digest,
+                        fixture_record.exact_request_byte_count AS exact_request_byte_count INTO execution_envelope;
                     {load_root_transition_sql(cls.namespace)}
                     IF replay THEN
                         {assert_root_transition_replay_sql(cls.namespace)}
                         RETURN 'historical';
                     END IF;
-                    SELECT {cls.namespace}.serverware_policy_authority_canonical_json(pg_catalog.jsonb_agg(
+                    request_bytes := request_payload;
+                    result_bytes := result_payload;
+                    supplied_exact_request_base64url := pg_catalog.translate(
+                        pg_catalog.encode(request_payload, 'base64'), E'+/=\\n\\r', '-_');
+                    SELECT supplied_projection_json AS projection_json INTO authorization_projection;
+                    {assert_root_transition_payload_sql(cls.namespace)}
+                    SELECT {cls.namespace}.serverware_policy_authority_wire_json(pg_catalog.jsonb_agg(
                         pg_catalog.jsonb_build_object('table',table_name,'rootRevision',root_revision,'rootDigest',root_digest,'leafCount',leaf_count)
                         ORDER BY table_name COLLATE "C")) INTO root_set_before_json
                     FROM {cls.namespace}.policy_authority_authenticated_table_roots WHERE table_name='items';
-                    SELECT {cls.namespace}.serverware_policy_authority_canonical_json(pg_catalog.jsonb_agg(
+                    SELECT {cls.namespace}.serverware_policy_authority_wire_json(pg_catalog.jsonb_agg(
                         pg_catalog.jsonb_build_object('table',table_name,'rootRevision',root_revision,'rootDigest',root_digest,'leafCount',leaf_count)
                         ORDER BY table_name COLLATE "C")) INTO authorization_root_set_json
                     FROM {cls.namespace}.policy_authority_authenticated_table_roots WHERE table_name='auth_items';
@@ -285,7 +317,7 @@ class AuthorityRootTransitionPostgresTests(unittest.TestCase):
                         root_digest=changed.value->>'rootDigest', leaf_count=(changed.value->>'leafCount')::bigint
                     FROM pg_catalog.jsonb_array_elements(actual_after) AS changed(value)
                     WHERE stored.table_name=changed.value->>'table';
-                    SELECT {cls.namespace}.serverware_policy_authority_canonical_json(pg_catalog.jsonb_agg(
+                    SELECT {cls.namespace}.serverware_policy_authority_wire_json(pg_catalog.jsonb_agg(
                         pg_catalog.jsonb_build_object('table',table_name,'rootRevision',root_revision,'rootDigest',root_digest,'leafCount',leaf_count)
                         ORDER BY table_name COLLATE "C")) INTO root_set_after_json
                     FROM {cls.namespace}.policy_authority_authenticated_table_roots WHERE table_name='items';
@@ -321,12 +353,18 @@ class AuthorityRootTransitionPostgresTests(unittest.TestCase):
                                    (root["table"], root["rootRevision"], root["rootDigest"], root["leafCount"]))
         self.store()
 
-    def store(self, receipt: dict | None = None) -> None:
+    def store(self, receipt: dict | None = None, *, request_binding: bytes | None = None) -> None:
+        request = canonical(self.payload["typedRequest"]) if request_binding is None else request_binding
         with self.connection() as connection:
-            connection.execute(f"INSERT INTO {self.namespace}.fixture_state VALUES (1,%s,%s,%s) ON CONFLICT (id) "
+            connection.execute(f"INSERT INTO {self.namespace}.fixture_state VALUES (1,%s,%s,%s,%s,%s,%s) ON CONFLICT (id) "
                                "DO UPDATE SET planner_json=EXCLUDED.planner_json, capability_json=EXCLUDED.capability_json, "
-                               "terminal_receipt_json=EXCLUDED.terminal_receipt_json",
-                               (Jsonb(self.planner), Jsonb(self.capability), canonical(receipt).decode() if receipt is not None else None))
+                               "terminal_receipt_json=EXCLUDED.terminal_receipt_json, "
+                               "exact_request_base64url=EXCLUDED.exact_request_base64url, "
+                               "exact_request_bytes_digest=EXCLUDED.exact_request_bytes_digest, "
+                               "exact_request_byte_count=EXCLUDED.exact_request_byte_count",
+                               (Jsonb(self.planner), Jsonb(self.capability), canonical(receipt).decode() if receipt is not None else None,
+                                base64.urlsafe_b64encode(request).rstrip(b"=").decode("ascii"),
+                                "sha256:" + hashlib.sha256(request).hexdigest(), len(request)))
 
     def reseal(self) -> None:
         self.payload, self.planner, self.capability = seal(self.payload)
@@ -339,12 +377,17 @@ class AuthorityRootTransitionPostgresTests(unittest.TestCase):
             publications = connection.execute(f"SELECT * FROM {self.namespace}.publications").fetchall()
         return value, heads, publications
 
-    def run_component(self, *, replay: bool = False) -> str:
+    def run_component(self, *, replay: bool = False, request_bytes: bytes | None = None,
+                      result_bytes: bytes | None = None, projection: dict | None = None) -> str:
         with self.connection() as connection:
             with connection.transaction():
                 connection.execute("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
-                return connection.execute(f"SELECT {self.namespace}.component(%s,%s)",
-                                          (Jsonb(self.actual_after), replay)).fetchone()[0]
+                return connection.execute(f"SELECT {self.namespace}.component(%s,%s,%s,%s,%s)",
+                                          (Jsonb(self.actual_after),
+                                           canonical(self.payload["typedRequest"]) if request_bytes is None else request_bytes,
+                                           canonical(self.payload["expectedResult"]) if result_bytes is None else result_bytes,
+                                           canonical(self.payload["authorizationProjection"] if projection is None else projection).decode("ascii"),
+                                           replay)).fetchone()[0]
 
     def reject(self, message: str, *, replay: bool = False) -> None:
         before = self.state()
@@ -365,6 +408,98 @@ class AuthorityRootTransitionPostgresTests(unittest.TestCase):
                                                sort_keys=True, separators=(",", ":")).encode("utf-8"))
         self.store()
         self.reject("plan transport is not ASCII")
+
+    def test_request_and_result_canonical_spelling_is_not_replaced_by_reserialization(self) -> None:
+        for field, member in (("typedRequest", "component"), ("expectedResult", "ok")):
+            value = self.payload[field]
+            raw = canonical(value)
+            alternatives = (
+                json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8"),
+                b" " + raw,
+                b'{"' + member.encode("ascii") + b'":null,' + raw[1:],
+                raw.replace(b"\\u96ea", b"\\u96EA"),
+            )
+            for changed in alternatives:
+                with self.subTest(field=field, changed=changed):
+                    self.assertNotEqual(changed, raw)
+                    self.assertEqual(json.loads(changed), value)
+                    # Refresh even the persisted request byte anchors: the
+                    # canonical-wire guard must still refuse this spelling.
+                    self.store(request_binding=changed if field == "typedRequest" else None)
+                    before = self.state()
+                    supplied = {"request_bytes" if field == "typedRequest" else "result_bytes": changed}
+                    with self.assertRaisesRegex(psycopg.errors.RaiseException,
+                                                "authority v9 exact request or result bytes changed"):
+                        self.run_component(**supplied)
+                    self.assertEqual(self.state(), before)
+
+    def test_exact_payload_value_join_denies_changed_request_result_and_projection(self) -> None:
+        for parameter, changed in (
+            ("request_bytes", canonical({**self.payload["typedRequest"], "component": "other-雪"})),
+            ("result_bytes", canonical({**self.payload["expectedResult"], "label": "other-雪"})),
+            ("projection", {**self.payload["authorizationProjection"], "subject": "other-雪"}),
+        ):
+            with self.subTest(parameter=parameter):
+                before = self.state()
+                with self.assertRaisesRegex(psycopg.errors.RaiseException,
+                                            "authority root transition exact payload changed"):
+                    self.run_component(**{parameter: changed})
+                self.assertEqual(self.state(), before)
+
+    def test_exact_request_persisted_byte_anchors_are_independent(self) -> None:
+        for column, changed in (
+            ("exact_request_base64url", "e30"),
+            ("exact_request_bytes_digest", token("different-request-bytes")),
+            ("exact_request_byte_count", len(canonical(self.payload["typedRequest"])) + 1),
+        ):
+            self.store()
+            with self.connection() as connection:
+                connection.execute(sql.SQL("UPDATE {}.fixture_state SET {}=%s WHERE id=1").format(
+                    sql.Identifier(self.schema), sql.Identifier(column)), (changed,))
+            with self.subTest(column=column):
+                self.reject("authority v9 exact request or result bytes changed")
+
+    def test_wire_unicode_key_row_projection_and_result_domains_match_python(self) -> None:
+        # These are real SQL serializer/domain calls, not the complete executor
+        # selected-row/authentication loops or authenticated-tree mutations.
+        selected = self.payload["selectedBusinessRows"][0]
+        key, row = selected["key"], selected["row"]
+        with self.connection() as connection:
+            actual = connection.execute(f"""
+                SELECT
+                    {self.namespace}.serverware_policy_authority_domain_digest(
+                        'serverware.policyAuthorityBusinessKey/v1', 'items',
+                        {self.namespace}.serverware_policy_authority_wire_json(%s::jsonb)),
+                    {self.namespace}.serverware_policy_authority_domain_digest(
+                        'serverware.policyAuthorityAuthorizationRow/v1', 'items',
+                        {self.namespace}.serverware_policy_authority_wire_json(%s::jsonb), 'present',
+                        {self.namespace}.serverware_policy_authority_wire_json(%s::jsonb)),
+                    {self.namespace}.serverware_policy_authority_domain_digest(
+                        'serverware.policyAuthorityAuthorizationProjection/v1',
+                        {self.namespace}.serverware_policy_authority_wire_json(%s::jsonb)),
+                    {self.namespace}.serverware_policy_authority_domain_digest(
+                        'serverware.policyAuthorityControlledWriterResult/v2',
+                        {self.namespace}.serverware_policy_authority_wire_json(%s::jsonb))
+                """, (Jsonb(key), Jsonb(key), Jsonb(row), Jsonb(self.payload["authorizationProjection"]),
+                       Jsonb(self.payload["expectedResult"]))).fetchone()
+        self.assertEqual(actual, (
+            selected["keyDigest"],
+            digest("serverware.policyAuthorityAuthorizationRow/v1", b"items", canonical(key), b"present", canonical(row)),
+            self.payload["measuredPlan"]["authorizationProjectionDigest"], self.payload["expectedResultDigest"],
+        ))
+
+    def test_persisted_tree_utf8_serializer_remains_distinct_and_does_not_normalize(self) -> None:
+        composed, decomposed = {"clé": "é-雪😀"}, {"clé": "e\u0301-雪😀"}
+        with self.connection() as connection:
+            for value in (composed, decomposed):
+                actual = connection.execute(f"SELECT "
+                    f"{self.namespace}.serverware_policy_authority_canonical_json(%s::jsonb), "
+                    f"{self.namespace}.serverware_policy_authority_wire_json(%s::jsonb)",
+                    (Jsonb(value), Jsonb(value))).fetchone()
+                self.assertEqual(actual, (json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+                                          canonical(value).decode("ascii")))
+                self.assertNotEqual(actual[0], actual[1])
+        self.assertNotEqual(canonical(composed), canonical(decomposed))
 
     def test_exact_plan_hash_length_and_base64_are_mandatory(self) -> None:
         for column, value in (("exact_plan_byte_count", self.planner["exact_plan_byte_count"] + 1),
@@ -513,6 +648,9 @@ class AuthorityRootTransitionPostgresTests(unittest.TestCase):
         self.assertLess(body.index("{load_root_transition_sql(namespace)}"), body.index("IF capability.status = 'committed'"))
         self.assertLess(body.index("{assert_root_transition_replay_sql(namespace)}"), body.index("RETURN execution_envelope.terminal_receipt_json"))
         self.assertLess(body.index("{assert_root_transition_after_sql(namespace)}"), body.index("receipt_value := pg_catalog.jsonb_build_object"))
+        self.assertLess(body.index("{assert_root_transition_payload_sql(namespace)}"), body.index("computed_result_digest :="))
+        self.assertNotIn("serverware_policy_authority_canonical_json", source)
+        self.assertIn("serverware_policy_authority_wire_json", source)
         self.assertNotIn("canonical_json(rt_payload)", body)
 
 

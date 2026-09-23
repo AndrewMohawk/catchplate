@@ -280,7 +280,7 @@ canonicalizer. Only the closed ASCII root transition is canonicalized here.
                 IS DISTINCT FROM planner.planner_attestation_receipt_digest
         THEN RAISE EXCEPTION 'authority root transition planner identity changed'; END IF;
         rt_transition_digest := {namespace}.serverware_policy_authority_domain_digest(
-            {_literal(TRANSITION_SCHEMA)}, {namespace}.serverware_policy_authority_canonical_json(rt_transition));
+            {_literal(TRANSITION_SCHEMA)}, {namespace}.serverware_policy_authority_wire_json(rt_transition));
         IF rt_plan->>'rootTransitionDigest' IS DISTINCT FROM rt_transition_digest
         THEN RAISE EXCEPTION 'authority root transition digest changed'; END IF;
         rt_snapshot_digest := {namespace}.serverware_policy_authority_domain_digest(
@@ -294,10 +294,10 @@ canonicalizer. Only the closed ASCII root transition is canonicalized here.
         THEN RAISE EXCEPTION 'authority root transition snapshot binding changed'; END IF;
         rt_expected_after_digest := {namespace}.serverware_policy_authority_domain_digest(
             'serverware.policyAuthorityRootSet/v1',
-            {namespace}.serverware_policy_authority_canonical_json(rt_transition->'businessAfterRoots'));
+            {namespace}.serverware_policy_authority_wire_json(rt_transition->'businessAfterRoots'));
         rt_expected_authorization_after_digest := {namespace}.serverware_policy_authority_domain_digest(
             'serverware.policyAuthorityAuthorizationRootSet/v1',
-            {namespace}.serverware_policy_authority_canonical_json(rt_transition->'authorizationAfterRoots'));
+            {namespace}.serverware_policy_authority_wire_json(rt_transition->'authorizationAfterRoots'));
     """)
 
 
@@ -313,11 +313,43 @@ def assert_root_transition_before_sql(namespace: str) -> str:
     """
 
 
+def assert_root_transition_payload_sql(namespace: str) -> str:
+    """Bind decoded payloads while retaining their original canonical wire bytes.
+
+    Rendering is only an equality oracle here. It never replaces a received
+    request/result or changes their persisted byte hash. JSONB value equality
+    alone would erase duplicate members, whitespace and alternate escapes.
+    """
+    _schema_name(namespace)
+    return textwrap.dedent(f"""
+        canonical_result := {namespace}.serverware_policy_authority_wire_json(
+            pg_catalog.convert_from(result_bytes, 'UTF8')::pg_catalog.jsonb);
+        IF rt_payload->'typedRequest' IS DISTINCT FROM
+                pg_catalog.convert_from(request_bytes, 'UTF8')::pg_catalog.jsonb
+            OR rt_payload->'expectedResult' IS DISTINCT FROM
+                pg_catalog.convert_from(result_bytes, 'UTF8')::pg_catalog.jsonb
+            OR rt_payload->'authorizationProjection' IS DISTINCT FROM
+                authorization_projection.projection_json::pg_catalog.jsonb
+        THEN RAISE EXCEPTION 'authority root transition exact payload changed'; END IF;
+        IF pg_catalog.convert_to(canonical_result, 'UTF8') IS DISTINCT FROM result_bytes
+            OR pg_catalog.convert_to({namespace}.serverware_policy_authority_wire_json(
+                pg_catalog.convert_from(request_bytes, 'UTF8')::pg_catalog.jsonb), 'UTF8')
+                IS DISTINCT FROM request_bytes
+            OR supplied_exact_request_base64url IS DISTINCT FROM
+                execution_envelope.exact_request_base64url
+            OR pg_catalog.octet_length(request_bytes) IS DISTINCT FROM
+                execution_envelope.exact_request_byte_count
+            OR 'sha256:' || pg_catalog.encode(pg_catalog.sha256(request_bytes), 'hex')
+                IS DISTINCT FROM execution_envelope.exact_request_bytes_digest
+        THEN RAISE EXCEPTION 'authority v9 exact request or result bytes changed'; END IF;
+    """)
+
+
 def assert_root_transition_after_sql(namespace: str) -> str:
     """Compare all actual after heads before any terminal publication/consumption."""
     _schema_name(namespace)
     return textwrap.dedent(f"""
-        SELECT {namespace}.serverware_policy_authority_canonical_json(
+        SELECT {namespace}.serverware_policy_authority_wire_json(
             COALESCE(pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
                 'table', roots.table_name, 'rootRevision', roots.root_revision,
                 'rootDigest', roots.root_digest, 'leafCount', roots.leaf_count

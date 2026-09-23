@@ -104,12 +104,11 @@ must not be bypassed. No prepared coverage or test success is claimed here.
 - Predicate/range completeness, secondary-index maintenance and full operation
   query coverage. These primary-key proofs do not prove a complete range query.
 - The four missing WebAuthn kernels and full source-root startup.
-- A cross-cutting Unicode wire-canonicalization repair: Python wire commitments
-  use ASCII escapes while several existing SQL wire paths use literal UTF-8.
-  This affects business addressing, selected/mutation/projection commitments and
-  actual authorization source row digests. Pure Unicode tree tests establish
-  only the persisted tree's distinct UTF-8 hash semantics, not live wire parity.
-  Persisted tree hashes must not change to repair the wire representation.
+- Runtime acceptance of the [separate SQL wire serializer](authority-wire-json.md).
+  Its source repair moves message commitments to ASCII-escaped JSON without
+  changing persisted UTF-8 tree hashes. Pure Unicode tree tests establish only
+  that distinct tree representation; neither source review nor the unexecuted
+  component fixtures establish live wire or full-operation parity.
 - The older full-trace/work-accounting limits need integrated coverage; this
   profile does not silently raise them.
 - Existing installation transition authorization: changed functions/constraints

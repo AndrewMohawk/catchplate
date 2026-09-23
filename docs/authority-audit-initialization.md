@@ -170,6 +170,22 @@ online capacity finalizer. They do not establish SQL installation, all-writer
 fencing, independently accepted roots or successful migration. They remain
 unexecuted under the unchanged `goal.md` workflow.
 
+## Purpose-specific signature consumer
+
+The [signed initialization evidence component](authority-audit-initialization-evidence.md)
+now authenticates a pinned checkpoint and separate authorization, compares
+independently supplied expected facts and explicit validity windows, internally
+reruns the real preparation, and checks its exact row and after-root commitments.
+Its immutable result is non-actionable and always has `installationPermitted:
+false`. Direct construction of that result is representation-only, not proof.
+
+This closes the local signature/binding/recomputation boundary only. Independent
+trust provisioning, measured checkpoint production, actual writer exclusion,
+currentness, one-use ancestry and atomic installation remain missing. The
+signed aggregate count still relies on the checkpoint producer's independent
+evidence. Neither valid signatures nor distinct keys prove those physical or
+stateful claims. The source and real-signature fixtures remain unexecuted.
+
 ## Existing migration contracts are not initialization authority
 
 Keep these two mechanisms distinct:
@@ -203,8 +219,9 @@ source revision, registry, online limit or phase-2 activation flag changes here.
 The next coherent change must close all of these together before enabling an
 initializer or changing accepted schema/migration state:
 
-1. Define a purpose-specific independent checkpoint and installation contract
-   binding database generation, source/schema/key contracts, outbox and aggregate
+1. Produce and independently admit the purpose-specific checkpoint, and finish
+   its installation contract binding database generation, source/schema/key
+   contracts, outbox and aggregate
    root descriptors (including cardinality), currentness and all-writer fencing.
    Authenticate the issuer and its evidence, not just a caller-provided digest.
    The outbox's cardinality can now be rederived by the v2 complete inventory;

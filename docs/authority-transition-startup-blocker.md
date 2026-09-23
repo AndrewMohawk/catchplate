@@ -65,6 +65,11 @@ and authenticated counter installation remain missing.
 The offline preparation now calculates the exact compact initial row and
 prospective root transition from that inventory and aggregate-key absence.
 It does not install the row or provide independent initialization authority.
+The [signed evidence consumer](authority-audit-initialization-evidence.md) now
+verifies pinned checkpoint/authorization claims and internally recomputes the
+preparation. It remains non-actionable: external producers/context provisioning,
+physical writer exclusion, one-use ancestry and atomic installation are absent.
+This source-only component does not remove any startup blocker.
 
 The [table-permission closure](authority-table-permissions.md) additionally
 corrects twelve missing runtime read-only relations and detailed table schemas.

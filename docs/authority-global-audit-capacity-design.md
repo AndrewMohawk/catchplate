@@ -226,6 +226,11 @@ sequence-0 compact row and the real single-INSERT radix calculation. It binds
 full row and root bytes but grants no installation permission. Aggregate
 cardinality/currentness, one-use initialization ancestry, independent time and
 writer fencing still require admission; runtime INSERT remains prohibited.
+The [signature consumer](authority-audit-initialization-evidence.md) verifies
+pinned checkpoint/authorization claims and internally recomputes that exact
+preparation. Its result is non-actionable; independent producers, trusted
+context provisioning and atomic installation are still absent. It does not
+prove the checkpoint issuer's physical fencing or cardinality claims.
 
 SQLite retains its separately scoped locked COUNT and inline completion
 semantics until an explicitly implemented transition covers it. PostgreSQL

@@ -670,7 +670,6 @@ def _exact_empty_page_query(
         maximum_rows=1,
         proof_primitive="ordered-exact-page",
         exact_page=True,
-        page_size=1,
     )
 
 

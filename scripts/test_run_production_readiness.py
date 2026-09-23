@@ -2357,6 +2357,23 @@ def verify_sealed_bootstrap_receipt_contract() -> None:
             and isinstance(manifest, dict)
             and isinstance(nonce_assurance, dict)
         )
+        role_values = {
+            role: "sha256:" + hashlib.sha256(f"fixture-launch-role:{role}".encode("ascii")).hexdigest()
+            for role in launch_authorization.GLOBAL_ROLE_REGISTRY_REQUIRED_ROLES
+        }
+        role_values.update({
+            "launchAuthority": launch_authorization.spki_key_id(authority_spki(key)),
+            "launchAuthorityWitness": launch_authorization.spki_key_id(authority_spki(witness_key)),
+            "nonceAuthorityAssuranceEvidence": launch_authorization.spki_key_id(evidence_spki),
+            "nonceAuthorityVerifierState": launch_authorization.spki_key_id(verifier_state_spki),
+            "nonceAuthorityVerifierStateStoreAttestation": launch_authorization.spki_key_id(verifier_state_store_attestation_spki),
+        })
+        global_role_registry = {
+            "apiVersion": launch_authorization.GLOBAL_ROLE_REGISTRY_API_VERSION,
+            "claimScope": launch_authorization.GLOBAL_ROLE_REGISTRY_CLAIM_SCOPE,
+            "roles": {role: role_values[role] for role in sorted(role_values)},
+            "rolesOutsideClaim": list(launch_authorization.GLOBAL_ROLE_REGISTRY_ROLES_OUTSIDE_CLAIM),
+        }
         request = {
             "apiVersion": (
                 run_production_readiness.LAUNCH_AUTHORIZATION_REQUEST_API_VERSION
@@ -2395,7 +2412,14 @@ def verify_sealed_bootstrap_receipt_contract() -> None:
             "launchAuthorityWitnessStoreAssuranceSha256": (
                 "sha256:" + "6" * 64
             ),
+            "globalRoleRegistry": global_role_registry,
+            "globalRoleRegistrySha256": launch_authorization.launch_global_role_registry_sha256(global_role_registry),
+            "globalRoleRegistryPinsSha256": "sha256:" + hashlib.sha256(b"fixture-global-role-registry-pins").hexdigest(),
+            "launchAttemptJournalDomain": launch_authorization.LAUNCH_ATTEMPT_JOURNAL_DOMAIN,
         }
+        request["launchAttemptRecoveryIdentitySha256"] = (
+            launch_authorization.launch_attempt_recovery_identity_sha256(request)
+        )
         request_sha256 = (
             run_production_readiness._v2_launch_authorization_request_sha256(
                 request
@@ -2672,6 +2696,21 @@ def verify_sealed_bootstrap_receipt_contract() -> None:
     )
 
     authorization_mutations: list[tuple[str, dict[str, object]]] = []
+    expected_authorization_errors = {
+        "global role registry digest mismatch": (
+            "request global role registry digest binding mismatch"
+        ),
+        "global role key reuse": (
+            "launch global role registry reuses an SPKI across security roles"
+        ),
+        "launch attempt journal domain mismatch": (
+            "request launchAttemptJournalDomain must equal "
+            "'serverware.launchAuthorizationAttemptJournal/v1'"
+        ),
+        "launch attempt recovery identity mismatch": (
+            "request launch attempt recovery identity binding mismatch"
+        ),
+    }
 
     def mutate(label: str) -> dict[str, object]:
         value = json.loads(json.dumps(receipt))
@@ -2681,6 +2720,26 @@ def verify_sealed_bootstrap_receipt_contract() -> None:
     mutate("request digest mismatch")["launchAuthorization"]["requestSha256"] = (
         "sha256:" + "1" * 64
     )
+    for field in (
+        "globalRoleRegistry", "globalRoleRegistrySha256", "globalRoleRegistryPinsSha256",
+        "launchAttemptJournalDomain", "launchAttemptRecoveryIdentitySha256",
+    ):
+        label = f"missing {field}"
+        mutate(label)["launchAuthorization"]["request"].pop(field)
+        expected_authorization_errors[label] = (
+            f"launch authorization request is missing required fields: ['{field}']"
+        )
+    mutate("global role registry digest mismatch")["launchAuthorization"]["request"][
+        "globalRoleRegistrySha256"
+    ] = "sha256:" + "1" * 64
+    collision = mutate("global role key reuse")["launchAuthorization"]["request"]["globalRoleRegistry"]["roles"]
+    collision["policyIdentity"] = collision["launchAuthority"]
+    mutate("launch attempt journal domain mismatch")["launchAuthorization"]["request"][
+        "launchAttemptJournalDomain"
+    ] = "serverware.unrelatedJournal/v1"
+    mutate("launch attempt recovery identity mismatch")["launchAuthorization"]["request"][
+        "launchAttemptRecoveryIdentitySha256"
+    ] = "sha256:" + "1" * 64
     mutate("envelope digest mismatch")["launchAuthorization"][
         "authorizationSha256"
     ] = "sha256:" + "1" * 64
@@ -2737,8 +2796,13 @@ def verify_sealed_bootstrap_receipt_contract() -> None:
                 require_inputs=True,
                 authority_identity=test_authority_identity,
             )
-        except ValueError:
-            pass
+        except ValueError as exc:
+            expected = expected_authorization_errors.get(label)
+            if expected is not None and expected not in str(exc):
+                raise AssertionError(
+                    f"bootstrap receipt rejected {label} at the wrong guard; "
+                    f"expected {expected!r}, got {str(exc)!r}"
+                ) from exc
         else:
             raise AssertionError(f"bootstrap receipt accepted {label}")
 

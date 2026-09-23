@@ -8,7 +8,9 @@ import shlex
 import subprocess
 import sys
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
+from unittest.mock import patch
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -73,6 +75,77 @@ def write_env(path: Path, env: dict[str, str]) -> None:
 
 def digest(char: str) -> str:
     return "sha256:" + char * 64
+
+
+@contextmanager
+def fixture_image_measurements(*, substituted: dict[str, object] | None = None):
+    """Synthetic I/O only; exercise the real inventory/platform/no-shell validators.
+
+    Measurements are fixed independently of the mutable build/publish artifacts.
+    Unexpected commands fail closed instead of accessing Docker or the network.
+    """
+    control = "registry.prod.serverware.dev/serverware/control@" + digest("a")
+    gate = "registry.prod.serverware.dev/serverware/decision-gate@" + digest("b")
+    image_ids = {control: digest("a"), gate: digest("b")}
+    replacements = substituted or {}
+
+    def measured_run(command: list[str]) -> str:
+        if command == [
+            sys.executable, "scripts/verify_production_images_no_shell.py",
+            "--local-image-id", control, "--local-image-id", gate,
+        ]:
+            return json.dumps(replacements.get("no_shell", {"ok": True}))
+        if len(command) == 3 and command[:2] == ["docker", "pull"]:
+            if command[2] in image_ids:
+                return "synthetic fixture pull; no registry contacted"
+        if (
+            len(command) == 6
+            and command[:4] == ["docker", "image", "inspect", "--format"]
+            and command[5] in image_ids
+        ):
+            image_ref = command[5]
+            if command[4] == "{{.Id}}":
+                return str(replacements.get("image_id", image_ids[image_ref]))
+            if command[4] == "{{.Os}}/{{.Architecture}}":
+                return str(replacements.get("platform", "linux/amd64"))
+            if command[4] == "{{json .RepoDigests}}":
+                return json.dumps(replacements.get("repo_digests", [image_ref]))
+        raise AssertionError(f"unexpected fixture measurement command: {command!r}")
+
+    def measured_file(image_ref: str, path: str) -> str:
+        if image_ref == gate:
+            for field, character in (
+                ("binary_digest", "9"), ("launcher_binary_digest", "e")
+            ):
+                if path == build_production_images.DECISION_GATE_BINARY_PATHS[field]:
+                    return str(replacements.get(field, digest(character)))
+        raise AssertionError(f"unexpected fixture image file: {image_ref!r} {path!r}")
+
+    with (
+        patch.object(generate_release_provenance, "run", measured_run),
+        patch.object(build_production_images, "run", measured_run),
+        patch.object(build_production_images, "image_file_sha256", measured_file),
+    ):
+        yield
+
+
+def sign_fixture_reproducibility_report(paths: dict[str, Path]) -> None:
+    """Use real signature verification with a fixture-only external report key."""
+    key = Ed25519PrivateKey.from_private_bytes(b"\x19" * 32)
+    key_info = generate_release_provenance.public_key_info(key)
+    paths["reproducible_trust_root"].write_text(key_info["pem"], encoding="ascii")
+    payload = {
+        "apiVersion": generate_release_provenance.EXTERNAL_SIGNATURE_API_VERSION,
+        "artifactSha256": sha256_bytes(paths["reproducible"].read_bytes()),
+        "purpose": generate_release_provenance.REPRODUCIBILITY_SIGNATURE_PURPOSE,
+    }
+    write_json(paths["reproducible_signature"], {
+        **payload,
+        "kind": generate_release_provenance.EXTERNAL_SIGNATURE_KIND,
+        "algorithm": "Ed25519",
+        "signerKeyId": key_info["spki_sha256"],
+        "signature": "ed25519:" + b64e(key.sign(canonical_json(payload).encode("utf-8"))),
+    })
 
 
 LAUNCH_AUTHORITY_KEY_ID = digest("1")
@@ -190,6 +263,12 @@ def write_fixture_artifacts(tmp: Path, *, p99_ms: float = 6.0) -> dict[str, Path
         "mismatches": [],
     }
     write_json(reproducible, reproducible_document)
+    reproducible_paths = {
+        "reproducible": reproducible,
+        "reproducible_signature": tmp / "reproducible-build-verification.sig.json",
+        "reproducible_trust_root": tmp / "reproducible-build-verification.pub.pem",
+    }
+    sign_fixture_reproducibility_report(reproducible_paths)
     reproducible_sha256 = sha256_bytes(reproducible.read_bytes())
     reproducible_binding = {
         "apiVersion": verify_reproducible_builds.VERIFICATION_API_VERSION,
@@ -504,7 +583,7 @@ def write_fixture_artifacts(tmp: Path, *, p99_ms: float = 6.0) -> dict[str, Path
         "image_signatures_summary": image_signatures_summary,
         "image_signatures": image_signatures,
         "published": published,
-        "reproducible": reproducible,
+        **reproducible_paths,
         "bench": bench,
         "images_env": images_env,
         "env": env,
@@ -591,14 +670,15 @@ def assert_release_input_bindings(paths: dict[str, Path]) -> None:
         development_dirty_tree=False
     )
 
-    def inventory() -> dict[str, object]:
-        return generate_release_provenance.production_image_inventory(
-            build_path=paths["build"],
-            published_path=paths["published"],
-            images_env_path=paths["images_env"],
-            expected_source_tree_digest=source_tree_digest,
-            expected_source_contract=source_contract,
-        )
+    def inventory(*, substituted: dict[str, object] | None = None) -> dict[str, object]:
+        with fixture_image_measurements(substituted=substituted):
+            return generate_release_provenance.production_image_inventory(
+                build_path=paths["build"],
+                published_path=paths["published"],
+                images_env_path=paths["images_env"],
+                expected_source_tree_digest=source_tree_digest,
+                expected_source_contract=source_contract,
+            )
 
     production_images = inventory()
     gate = production_images["serverware-decision-gate"]
@@ -610,6 +690,8 @@ def assert_release_input_bindings(paths: dict[str, Path]) -> None:
             raise AssertionError(f"release inventory omitted {field}: {gate}")
     reproducible = generate_release_provenance.production_reproducibility_binding(
         paths["reproducible"],
+        signature_path=paths["reproducible_signature"],
+        trusted_public_key_path=paths["reproducible_trust_root"],
         expected_source_tree_digest=source_tree_digest,
         expected_images=production_images,
     )
@@ -619,6 +701,39 @@ def assert_release_input_bindings(paths: dict[str, Path]) -> None:
         raise AssertionError(
             f"release provenance did not bind reproducibility evidence bytes: {reproducible}"
         )
+    signature_document = json.loads(paths["reproducible_signature"].read_text(encoding="utf-8"))
+    try:
+        write_json(paths["reproducible_signature"], {
+            **signature_document, "signature": "ed25519:" + b64e(b"\0" * 64),
+        })
+        expect_value_error(
+            lambda: generate_release_provenance.production_reproducibility_binding(
+                paths["reproducible"],
+                signature_path=paths["reproducible_signature"],
+                trusted_public_key_path=paths["reproducible_trust_root"],
+                expected_source_tree_digest=source_tree_digest,
+                expected_images=production_images,
+            ),
+            "detached signature verification failed",
+        )
+    finally:
+        write_json(paths["reproducible_signature"], signature_document)
+
+    for substitutions, error_type, expected in (
+        ({"image_id": digest("8")}, ValueError, "does not resolve to the authenticated build config"),
+        ({"repo_digests": []}, ValueError, "expected immutable registry digest"),
+        ({"binary_digest": digest("8")}, ValueError, "decision-gate executable does not match"),
+        ({"launcher_binary_digest": digest("8")}, ValueError, "launcher does not match"),
+        ({"platform": "linux/arm64"}, RuntimeError, "platform"),
+        ({"no_shell": {"ok": False}}, RuntimeError, "no-shell verification failed"),
+    ):
+        try:
+            inventory(substituted=substitutions)
+        except error_type as exc:
+            if expected not in str(exc):
+                raise AssertionError(f"wrong measurement rejection: {exc}") from exc
+        else:
+            raise AssertionError(f"substituted measurement was accepted: {substitutions}")
 
     published = json.loads(paths["published"].read_text(encoding="utf-8"))
     reproducible_document = json.loads(
@@ -679,6 +794,19 @@ def assert_release_input_bindings(paths: dict[str, Path]) -> None:
         expect_value_error(
             lambda: generate_release_provenance.production_reproducibility_binding(
                 paths["reproducible"],
+                signature_path=paths["reproducible_signature"],
+                trusted_public_key_path=paths["reproducible_trust_root"],
+                expected_source_tree_digest=source_tree_digest,
+                expected_images=production_images,
+            ),
+            "detached signature binding is invalid",
+        )
+        sign_fixture_reproducibility_report(paths)
+        expect_value_error(
+            lambda: generate_release_provenance.production_reproducibility_binding(
+                paths["reproducible"],
+                signature_path=paths["reproducible_signature"],
+                trusted_public_key_path=paths["reproducible_trust_root"],
                 expected_source_tree_digest=source_tree_digest,
                 expected_images=production_images,
             ),
@@ -689,6 +817,7 @@ def assert_release_input_bindings(paths: dict[str, Path]) -> None:
             LAUNCH_AUTHORITY_KEY_ID
         )
         write_json(paths["reproducible"], reproducible_document)
+        sign_fixture_reproducibility_report(paths)
 
 
 def assert_staged_commands(output: dict[str, object], paths: dict[str, Path]) -> None:

@@ -623,6 +623,7 @@ class KernelContext:
     selected_rows: tuple[dict[str, Any], ...]
     database_now: datetime
     request_digest: str
+    verified_webauthn_evidence: Mapping[str, Any] | None = None
 
     def rows(self, table: str) -> tuple[dict[str, Any], ...]:
         return tuple(

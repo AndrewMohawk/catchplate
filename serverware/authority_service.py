@@ -6290,6 +6290,38 @@ class AuthorityProcess:
             )
         planner_request = payload["plannerRequest"]
         authority_planner.validate_planner_request(planner_request)
+        verifier_config = self.configuration.role("verifier")
+        planner = authority_planner.MeasuredPlanner(
+            read_dsn=_read_dsn_descriptor(
+                "SERVERWARE_POLICY_AUTHORITY_PLANNER_READ_POSTGRES_DSN"
+            ),
+            identity=self._planner_identity(),
+            connect_timeout_seconds=int(
+                self.role_config["databaseConnectTimeoutSeconds"]
+            ),
+            enabled_operations=tuple(
+                self.role_config["enabledOperations"]
+            ),
+            verifier_public_key=Ed25519PublicKey.from_public_bytes(
+                _b64url_decode(verifier_config["signingPublicKeyBase64Url"], size=32)
+            ),
+            verifier_identity={
+                "sessionIdentityDigest": _domain_digest(
+                    "serverware.policyAuthorityVerifierSession/v2",
+                    self.configuration.digest.encode("ascii"),
+                    verifier_config["measurementDigest"].encode("ascii"),
+                    verifier_config["attestationReceiptDigest"].encode("ascii"),
+                ),
+                "measurementDigest": verifier_config["measurementDigest"],
+                "attestationReceiptDigest": verifier_config["attestationReceiptDigest"],
+            },
+            maximum_assertion_age_ns=int(
+                self.configuration.payload["webauthn"]["maximumChallengeAgeNs"]
+            ),
+        )
+        # Check the pinned embedded receipt even on a durable-plan replay, and
+        # before asking another process for stored planning data.
+        planner.verify_assertion_evidence(planner_request)
         writer = self.configuration.role("planner-writer")
         replay = _socket_request(
             str(writer["socketPath"]),
@@ -6376,6 +6408,9 @@ class AuthorityProcess:
                     != planner_request["requestDigest"]
                 or measured_plan["capabilityId"]
                     != planner_request["capabilityId"]
+                or planner_request["operation"] == "webauthn.credential.revoke"
+                and _canonical(derived["webauthnEvidence"])
+                    != _canonical(planner_request["webauthnEvidence"])
             ):
                 raise AuthorityServiceError(
                     "durable planner payload identity changed"
@@ -6397,18 +6432,6 @@ class AuthorityProcess:
                 "persistenceReceipt":
                     self._planner_persistence_receipt(derived),
             }
-        planner = authority_planner.MeasuredPlanner(
-            read_dsn=_read_dsn_descriptor(
-                "SERVERWARE_POLICY_AUTHORITY_PLANNER_READ_POSTGRES_DSN"
-            ),
-            identity=self._planner_identity(),
-            connect_timeout_seconds=int(
-                self.role_config["databaseConnectTimeoutSeconds"]
-            ),
-            enabled_operations=tuple(
-                self.role_config["enabledOperations"]
-            ),
-        )
         derived = planner.derive(planner_request)
         signed_plan = {
             "schema":

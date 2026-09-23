@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import re
@@ -73,6 +74,58 @@ def target_dependencies(makefile: str, target: str) -> list[str]:
 def assert_consolidated_alias(makefile: str, target: str, dependency: str) -> None:
     if target_dependencies(makefile, target) != [dependency] or target_body(makefile, target):
         raise AssertionError(f"{target} must only delegate to {dependency}")
+
+
+def assert_preflight_descriptor_contract(preflight_source: str, readiness_source: str) -> None:
+    """The config-only child receives measured code FDs, not receipt authority."""
+    def function(source: str, name: str) -> ast.FunctionDef:
+        matches = [node for node in ast.parse(source).body
+                   if isinstance(node, ast.FunctionDef) and node.name == name]
+        if len(matches) != 1:
+            raise AssertionError(f"expected exactly one {name} function")
+        return matches[0]
+
+    def calls(node: ast.AST, expression: str) -> list[ast.Call]:
+        expected = ast.dump(ast.parse(expression, mode="eval").body)
+        return [item for item in ast.walk(node)
+                if isinstance(item, ast.Call) and ast.dump(item.func) == expected]
+
+    def assignment(node: ast.AST, name: str) -> ast.AST:
+        matches = [item.value for item in ast.walk(node)
+                   if isinstance(item, ast.Assign)
+                   and any(isinstance(target, ast.Name) and target.id == name for target in item.targets)]
+        if len(matches) != 1:
+            raise AssertionError(f"expected exactly one {name} assignment")
+        return matches[0]
+
+    preflight = function(preflight_source, "env_check")
+    measured_calls = calls(preflight, "run_production_readiness.run_measured_python_script")
+    if len(measured_calls) != 1:
+        raise AssertionError("preflight must invoke one measured config-gate script")
+    keywords = measured_calls[0].keywords
+    if {item.arg for item in keywords} != {
+        "python_setting", "python_expected_digest", "script_setting", "script_expected_digest", None,
+    } or len(keywords) != 5:
+        raise AssertionError("preflight config-gate call changed its closed measured arguments")
+    common_keyword = next(item for item in keywords if item.arg is None)
+    if not isinstance(common_keyword.value, ast.Name) or common_keyword.value.id != "common":
+        raise AssertionError("preflight config gate must use its closed common arguments")
+    common = assignment(preflight, "common")
+    if not isinstance(common, ast.Dict) or {key.value for key in common.keys if isinstance(key, ast.Constant)} != {
+        "cwd", "env", "stdout", "stderr", "check", "text",
+    } or len(common.keys) != 6:
+        raise AssertionError("preflight config gate must not inherit receipt or nonce-pins descriptors")
+
+    runner = function(readiness_source, "run_measured_python_script")
+    inherited = assignment(runner, "inherited")
+    if ast.dump(inherited) != ast.dump(ast.parse('tuple(kwargs.pop("pass_fds", ()))', mode="eval").body):
+        raise AssertionError("measured script descriptor inheritance must default to empty")
+    executions = calls(runner, "subprocess.run")
+    passed = [item.value for call in executions for item in call.keywords if item.arg == "pass_fds"]
+    if len(executions) != 1 or len(passed) != 1 or ast.dump(passed[0]) != ast.dump(
+        ast.parse("(*inherited, python.fd, script.fd)", mode="eval").body
+    ):
+        raise AssertionError("measured config gate must add only the authenticated Python and script descriptors")
 
 
 def main() -> None:
@@ -356,6 +409,7 @@ def main() -> None:
     adversarial_launcher_source = (
         ROOT / "scripts" / "test_production_launcher_adversarial.py"
     ).read_text(encoding="utf-8")
+    assert_preflight_descriptor_contract(preflight_source, readiness_source)
     for label, source, required in (
         (
             "manifest generator",
@@ -401,7 +455,8 @@ def main() -> None:
             (
                 '--launcher-nonce-rollback-assurance-pins',
                 'nonce_rollback_assurance',
-                'pass_fds=tuple(sorted({receipt_fd, pins_fd}))',
+                'or bootstrap_receipt_fd != 198',
+                'script_expected_digest=script_digest',
             ),
         ),
         (

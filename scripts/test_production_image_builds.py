@@ -110,6 +110,15 @@ def services_mounting_source(model: dict[str, object], source: str) -> set[str]:
     }
 
 
+def assert_control_plane_management_is_disabled(model: dict[str, object]) -> None:
+    control = model["services"]["serverware"]
+    environment = control.get("environment") or {}
+    if environment.get("SERVERWARE_DECISION_GATE_BASE") not in (None, ""):
+        raise AssertionError(
+            "production control plane must use shared grants, not any gate-management URL"
+        )
+
+
 def assert_production_dependencies() -> None:
     requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8").lower()
     if "mitmproxy" in requirements:
@@ -344,6 +353,23 @@ def assert_production_dependencies() -> None:
     if result.returncode != 0:
         raise AssertionError(f"production Compose model did not parse: {result.stderr.decode(errors='replace')}")
     model = json.loads(result.stdout)
+    assert_control_plane_management_is_disabled(model)
+    for management_url in (
+        "http://127.0.0.1:9091",
+        "http://decision-gate-rs:9091",
+        "https://management.invalid:9091",
+    ):
+        candidate = copy.deepcopy(model)
+        candidate["services"]["serverware"]["environment"][
+            "SERVERWARE_DECISION_GATE_BASE"
+        ] = management_url
+        try:
+            assert_control_plane_management_is_disabled(candidate)
+        except AssertionError as exc:
+            if "must use shared grants" not in str(exc):
+                raise
+        else:
+            raise AssertionError("production model admitted control-plane gate-management access")
     generate_release_provenance.validate_production_custody_topology(model, compose_env)
 
     def expect_custody_topology_rejection(label: str, mutate: object) -> None:

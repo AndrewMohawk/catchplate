@@ -164,7 +164,6 @@ services:
       SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN_FILE: /run/secrets/serverware-data-plane-rate-limit-consume-token
       SERVERWARE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN_FILE: /run/secrets/serverware-data-plane-release-authorization-token
       SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN_FILE: /run/secrets/serverware-data-plane-management-token
-      SERVERWARE_DECISION_GATE_BASE: http://127.0.0.1:9091
       SERVERWARE_AUDIT_ANCHOR_URL: https://audit-anchor:9100/anchors
       SERVERWARE_AUDIT_ANCHOR_CA_BUNDLE: /run/serverware/tls/ca.pem
       SERVERWARE_AUDIT_ANCHOR_TOKEN_FILE: /run/secrets/serverware-audit-anchor-token

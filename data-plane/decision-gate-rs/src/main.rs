@@ -50419,6 +50419,76 @@ mod tests {
         response
     }
 
+    fn accept_bounded_test_stream(
+        listener: &TcpListener,
+        budget: Duration,
+    ) -> io::Result<DeadlineIo<TcpStream>> {
+        let started = Instant::now();
+        listener.set_nonblocking(true)?;
+        loop {
+            let remaining = budget
+                .checked_sub(started.elapsed())
+                .filter(|remaining| !remaining.is_zero())
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "expected test request did not arrive before the fixture deadline",
+                    )
+                })?;
+            match listener.accept() {
+                Ok((stream, _)) => {
+                    stream.set_nonblocking(false)?;
+                    let mut stream = DeadlineIo::new(stream, budget, budget);
+                    // Accept, request reads, and response writes share one absolute
+                    // deadline; partial I/O cannot replenish the fixture budget.
+                    stream.read_started = Some(started);
+                    stream.write_started = Some(started);
+                    return Ok(stream);
+                }
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                    ) =>
+                {
+                    thread::sleep(remaining.min(Duration::from_millis(10)));
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    #[test]
+    fn bounded_test_listener_rejects_missing_request_and_expires_io() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bounded test listener");
+        let absent = accept_bounded_test_stream(&listener, Duration::from_millis(20))
+            .err()
+            .expect("missing request must fail the bounded fixture");
+        assert_eq!(absent.kind(), io::ErrorKind::TimedOut);
+
+        let _client = TcpStream::connect(listener.local_addr().expect("bounded test address"))
+            .expect("connect bounded test client");
+        let mut stream = accept_bounded_test_stream(&listener, Duration::from_millis(100))
+            .expect("accept bounded test client");
+        assert_eq!(stream.read_started, stream.write_started);
+        assert!(stream.read_started.is_some());
+        let mut byte = [0u8; 1];
+        assert_eq!(
+            stream
+                .read(&mut byte)
+                .expect_err("idle request must expire")
+                .kind(),
+            io::ErrorKind::TimedOut
+        );
+        assert_eq!(
+            stream
+                .write(b"late response")
+                .expect_err("write shares expired deadline")
+                .kind(),
+            io::ErrorKind::TimedOut
+        );
+    }
+
     fn finalize_test_upstream_response(snapshot: Arc<Snapshot>, raw_response: Vec<u8>) -> String {
         let state = test_gate_state(Arc::clone(&snapshot));
         let decision = json!({
@@ -50579,7 +50649,7 @@ mod tests {
     fn test_snapshot(epoch: u64) -> Arc<Snapshot> {
         Arc::new(Snapshot {
             epoch,
-            hash: format!("sha256:policy-{epoch}"),
+            hash: sha256_prefixed(format!("serverware:test-policy:epoch:{epoch}").as_bytes()),
             policy_id: "policy:test".to_string(),
             policy_sequence: epoch.max(1),
             rollback_epoch: 1,
@@ -50719,7 +50789,7 @@ mod tests {
 
         let mut unrelated_policy_change = snapshot.clone();
         unrelated_policy_change.epoch = 2;
-        unrelated_policy_change.hash = "sha256:policy-2".to_string();
+        unrelated_policy_change.hash = sha256_prefixed(b"serverware:test-policy:epoch:2");
         unrelated_policy_change.routes[0]
             .methods
             .insert("PUT".to_string());
@@ -52550,9 +52620,10 @@ mod tests {
             decision["payload"]["error"],
             "credential_generation_missing"
         );
-        assert!(decision["payload"]["detail"]
-            .as_str()
-            .is_some_and(|detail| detail.contains("credential lease URL is not configured")));
+        assert!(decision["payload"].get("detail").is_none());
+        assert!(!decision
+            .to_string()
+            .contains("credential lease URL is not configured"));
         assert!(matches!(
             release_listener.accept(),
             Err(error) if error.kind() == io::ErrorKind::WouldBlock
@@ -52855,7 +52926,7 @@ mod tests {
         .expect_err("stale policy grant must be rejected");
         assert_eq!(
             stale,
-            GrantAdmissionError::InactivePolicy("sha256:policy-2".to_string())
+            GrantAdmissionError::InactivePolicy(sha256_prefixed(b"serverware:test-policy:epoch:2"))
         );
         assert!(state.grants.lock().expect("grant cache").is_empty());
     }
@@ -53309,11 +53380,16 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").expect("shared grant listener");
         let address = listener.local_addr().expect("shared grant address");
         let server = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("shared grant request");
+            let mut stream = accept_bounded_test_stream(&listener, Duration::from_secs(5))
+                .expect("shared grant request must arrive before the fixture deadline");
             let mut request = [0u8; 16 * 1024];
-            let _ = stream
+            let read = stream
                 .read(&mut request)
                 .expect("read shared grant request");
+            assert!(
+                read > 0,
+                "shared grant request must not end before any bytes arrive"
+            );
             let body = serde_json::to_vec(&json!({
                 "ok":true,
                 "available":false,
@@ -53348,11 +53424,18 @@ mod tests {
             correlated_test_decision_request("A_-0123456789abcdefghijk"),
             Some("agent:test"),
         );
-        server.join().expect("shared grant server");
-
-        assert_eq!(decision["status_code"], 428);
-        assert_eq!(decision["approval_id"], "approval:shared");
-        assert_eq!(decision["approval_url"], "/approvals/approval:shared");
+        assert_eq!(decision["status_code"], 428, "shared grant decision: {decision}");
+        assert_eq!(
+            decision["approval_id"], "approval:shared",
+            "shared grant decision: {decision}"
+        );
+        assert_eq!(
+            decision["approval_url"], "/approvals/approval:shared",
+            "shared grant decision: {decision}"
+        );
+        server
+            .join()
+            .expect("shared grant server must receive and answer the request");
     }
 
     fn test_release_authorization_response(

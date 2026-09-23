@@ -9,9 +9,13 @@ from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
 from typing import Any, Callable, Mapping, Protocol
 
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
 from serverware import authority_contract
+from serverware import authority_radix_proof
 from serverware import authority_transition_core
 from serverware import authority_transition_registry
+from serverware import authority_webauthn_assertion
 from serverware.config import (
     WEBAUTHN_CHALLENGE_GLOBAL_LIVE_MAX,
     WEBAUTHN_CHALLENGE_GLOBAL_RATE_MAX,
@@ -481,6 +485,7 @@ class PlanningState:
     database_now: datetime | None = None
     webauthn_admission: Mapping[str, int] | None = None
     query_work_units: int = 0
+    verified_webauthn_evidence: Mapping[str, Any] | None = None
 
 
 class PlanningProgram(Protocol):
@@ -651,6 +656,7 @@ class TypedTransitionPlanningProgram:
         request: Mapping[str, Any],
         manifest: tuple[dict[str, Any], ...],
         trace: PlannerTrace,
+        verified_webauthn_evidence: Mapping[str, Any] | None = None,
     ) -> tuple[tuple[dict[str, Any], ...], PlanningState]:
         if (
             self.kernel.operation != self.operation
@@ -669,13 +675,31 @@ class TypedTransitionPlanningProgram:
             )
         _business_intent(request, operation=self.operation)
         try:
-            queries = authority_transition_core.close_queries(
-                self.operation,
-                self.kernel.queries(
+            if self.operation == authority_webauthn_assertion.OPERATION:
+                query_program = getattr(self.kernel, "queries_with_evidence", None)
+                if not callable(query_program) or verified_webauthn_evidence is None:
+                    raise AuthorityPlannerError(
+                        "revocation planning requires pinned verified assertion evidence"
+                    )
+                proposed_queries = query_program(
                     arguments=arguments,
                     database_now=database_now,
                     request_digest=str(request["requestDigest"]),
-                ),
+                    evidence=verified_webauthn_evidence,
+                )
+            else:
+                if verified_webauthn_evidence is not None:
+                    raise AuthorityPlannerError(
+                        "assertion planning hook is outside its exact operation"
+                    )
+                proposed_queries = self.kernel.queries(
+                    arguments=arguments,
+                    database_now=database_now,
+                    request_digest=str(request["requestDigest"]),
+                )
+            queries = authority_transition_core.close_queries(
+                self.operation,
+                proposed_queries,
             )
             selected = _read_bounded_transition_rows(
                 cursor,
@@ -692,6 +716,7 @@ class TypedTransitionPlanningProgram:
         return selected, PlanningState(
             database_now=database_now,
             query_work_units=sum(query.work_units for query in queries),
+            verified_webauthn_evidence=verified_webauthn_evidence,
         )
 
     def __call__(
@@ -713,6 +738,8 @@ class TypedTransitionPlanningProgram:
             or self.kernel.program_id
                 != authority_contract.transition_program_id(operation)
             or state.database_now is None
+            or (operation == authority_webauthn_assertion.OPERATION)
+                != (state.verified_webauthn_evidence is not None)
         ):
             raise AuthorityPlannerError(
                 "typed transition program identity changed"
@@ -731,6 +758,7 @@ class TypedTransitionPlanningProgram:
                     selected_rows=selected_rows,
                     database_now=state.database_now,
                     request_digest=str(request["requestDigest"]),
+                    verified_webauthn_evidence=state.verified_webauthn_evidence,
                 )
             )
         except authority_transition_core.TransitionKernelError as exc:
@@ -2097,6 +2125,7 @@ def _read_planning_inputs(
     manifest: tuple[dict[str, Any], ...],
     trace: PlannerTrace,
     program: PlanningProgram,
+    verified_webauthn_evidence: Mapping[str, Any] | None = None,
 ) -> tuple[tuple[dict[str, Any], ...], PlanningState]:
     if operation in WEBAUTHN_CHALLENGE_OPERATIONS:
         return _read_webauthn_challenge_planning_inputs(
@@ -2111,6 +2140,7 @@ def _read_planning_inputs(
             request=request,
             manifest=manifest,
             trace=trace,
+            verified_webauthn_evidence=verified_webauthn_evidence,
         )
     return (
         _read_selected_rows(
@@ -2200,19 +2230,10 @@ def _authorization_projection(
 
 
 def _empty_digest(depth: int) -> str:
-    if depth < 0 or depth > authority_contract.TREE_DEPTH:
-        raise AuthorityPlannerError("authenticated empty depth is invalid")
-    digest = framed_digest(
-        "serverware.policyAuthorityAuthenticatedEmptyLeaf/v1",
-        str(authority_contract.TREE_DEPTH).encode("ascii"),
-    )
-    for current in range(authority_contract.TREE_DEPTH - 1, depth - 1, -1):
-        digest = framed_digest(
-            "serverware.policyAuthorityAuthenticatedNode/v1",
-            str(current).encode("ascii"),
-            canonical_bytes([digest] * authority_contract.TREE_RADIX),
-        )
-    return digest
+    try:
+        return authority_radix_proof.empty_digest(depth)
+    except authority_radix_proof.RadixProofError as exc:
+        raise AuthorityPlannerError(str(exc)) from exc
 
 
 def _derive_multiproofs(
@@ -2222,131 +2243,15 @@ def _derive_multiproofs(
     roots: tuple[dict[str, Any], ...],
     trace: PlannerTrace,
 ) -> tuple[dict[str, Any], ...]:
-    root_by_table = {entry["table"]: entry for entry in roots}
-    proofs: list[dict[str, Any]] = []
-    for selected in selected_rows:
-        table = str(selected["table"])
-        root = root_by_table.get(table)
-        if root is None:
-            raise AuthorityPlannerError(
-                "selected row has no authenticated relation root"
-            )
-        key_digest = str(selected["keyDigest"])
-        _require_digest(key_digest, "selected row key digest")
-        path = key_digest[7:]
-        siblings: list[dict[str, Any]] = []
-        trace.read(
-            "policy_authority_authenticated_leaves",
-            {"tableName": table, "keyDigest": key_digest},
+    try:
+        return authority_radix_proof.derive_multiproofs(
+            cursor, selected_rows=selected_rows, roots=roots, trace=trace,
         )
-        leaf = cursor.execute(
-            "SELECT key_json, row_digest, leaf_digest, root_revision "
-            "FROM serverware_metadata."
-            "policy_authority_authenticated_leaves "
-            "WHERE table_name = %s AND key_digest = %s",
-            (table, key_digest),
-        ).fetchone()
-        row_digest = (
-            framed_digest(
-                "serverware.policyAuthorityAuthenticatedRow/v1",
-                table.encode("utf-8"),
-                canonical_bytes(selected["row"]),
-            )
-            if selected["present"]
-            else None
-        )
-        leaf_digest = (
-            framed_digest(
-                "serverware.policyAuthorityAuthenticatedLeaf/v1",
-                table.encode("utf-8"),
-                key_digest.encode("ascii"),
-                canonical_bytes(selected["key"]),
-                str(row_digest).encode("ascii"),
-            )
-            if selected["present"]
-            else _empty_digest(authority_contract.TREE_DEPTH)
-        )
-        if selected["present"]:
-            if (
-                leaf is None
-                or json.loads(str(leaf["key_json"])) != selected["key"]
-                or leaf["row_digest"] != row_digest
-                or leaf["leaf_digest"] != leaf_digest
-                or int(leaf["root_revision"]) > root["rootRevision"]
-            ):
-                raise AuthorityPlannerError(
-                    "selected row differs from its authenticated leaf"
-                )
-        elif leaf is not None:
-            raise AuthorityPlannerError(
-                "selected nonmembership has an authenticated leaf"
-            )
-        for depth in range(authority_contract.TREE_DEPTH):
-            prefix = path[:depth]
-            trace.read(
-                "policy_authority_authenticated_tree_nodes",
-                {
-                    "tableName": table,
-                    "depth": depth + 1,
-                    "pathPrefix": prefix,
-                },
-            )
-            rows = cursor.execute(
-                "SELECT path_prefix, node_digest, root_revision "
-                "FROM serverware_metadata."
-                "policy_authority_authenticated_tree_nodes "
-                "WHERE table_name = %s AND depth = %s "
-                "AND path_prefix >= %s AND path_prefix < %s",
-                (
-                    table,
-                    depth + 1,
-                    prefix + "0",
-                    prefix + "g",
-                ),
-            ).fetchall()
-            by_path = {
-                str(row["path_prefix"]): str(row["node_digest"])
-                for row in rows
-                if int(row["root_revision"]) <= root["rootRevision"]
-            }
-            child_digests = [
-                by_path.get(
-                    prefix + format(index, "x"),
-                    _empty_digest(depth + 1),
-                )
-                for index in range(authority_contract.TREE_RADIX)
-            ]
-            siblings.append(
-                {
-                    "depth": depth,
-                    "pathPrefix": prefix,
-                    "selectedNibble": path[depth],
-                    "childDigests": child_digests,
-                }
-            )
-        proof = {
-            "schema": "serverware.policyAuthorityRadixMultiproof/v3",
-            "table": table,
-            "key": selected["key"],
-            "keyDigest": key_digest,
-            "present": selected["present"],
-            "rowDigest": row_digest,
-            "leafDigest": leaf_digest,
-            "rootRevision": root["rootRevision"],
-            "rootDigest": root["rootDigest"],
-            "siblings": siblings,
-        }
-        proof["proofDigest"] = framed_digest(
-            "serverware.policyAuthorityRadixMultiproof/v3",
-            canonical_bytes(proof),
-        )
-        proofs.append(proof)
-    return tuple(
-        sorted(
-            proofs,
-            key=lambda entry: (entry["table"], entry["keyDigest"]),
-        )
-    )
+    except (
+        authority_radix_proof.RadixProofError,
+        authority_transition_core.TransitionKernelError,
+    ) as exc:
+        raise AuthorityPlannerError(str(exc)) from exc
 
 
 def _reconstruct_multiproof_root(
@@ -2354,116 +2259,13 @@ def _reconstruct_multiproof_root(
     *,
     selected: Mapping[str, Any],
 ) -> str:
-    required = {
-        "schema",
-        "table",
-        "key",
-        "keyDigest",
-        "present",
-        "rowDigest",
-        "leafDigest",
-        "rootRevision",
-        "rootDigest",
-        "siblings",
-        "proofDigest",
-    }
-    table = proof.get("table")
-    key = proof.get("key")
-    key_digest = proof.get("keyDigest")
-    siblings = proof.get("siblings")
-    if (
-        set(proof) != required
-        or proof.get("schema")
-            != "serverware.policyAuthorityRadixMultiproof/v3"
-        or table != selected.get("table")
-        or key != selected.get("key")
-        or key_digest != selected.get("keyDigest")
-        or proof.get("present") != selected.get("present")
-        or not isinstance(table, str)
-        or not isinstance(key, Mapping)
-        or not isinstance(siblings, list)
-        or len(siblings) != authority_contract.TREE_DEPTH
-    ):
-        raise AuthorityPlannerError(
-            "writer multiproof envelope is not closed"
-        )
-    _require_digest(key_digest, "writer multiproof key digest")
-    path = key_digest[7:]
-    expected_row_digest = (
-        framed_digest(
-            "serverware.policyAuthorityAuthenticatedRow/v1",
-            table.encode("utf-8"),
-            canonical_bytes(selected["row"]),
-        )
-        if selected["present"]
-        else None
-    )
-    expected_leaf_digest = (
-        framed_digest(
-            "serverware.policyAuthorityAuthenticatedLeaf/v1",
-            table.encode("utf-8"),
-            key_digest.encode("ascii"),
-            canonical_bytes(key),
-            str(expected_row_digest).encode("ascii"),
-        )
-        if selected["present"]
-        else _empty_digest(authority_contract.TREE_DEPTH)
-    )
-    if (
-        proof.get("rowDigest") != expected_row_digest
-        or proof.get("leafDigest") != expected_leaf_digest
-    ):
-        raise AuthorityPlannerError(
-            "writer multiproof leaf binding changed"
-        )
-    parent = expected_leaf_digest
-    for depth in range(authority_contract.TREE_DEPTH - 1, -1, -1):
-        level = siblings[depth]
-        child_digests = (
-            level.get("childDigests")
-            if isinstance(level, Mapping)
-            else None
-        )
-        selected_nibble = path[depth]
-        selected_index = int(selected_nibble, 16)
-        if (
-            not isinstance(level, Mapping)
-            or set(level)
-                != {
-                    "depth",
-                    "pathPrefix",
-                    "selectedNibble",
-                    "childDigests",
-                }
-            or level.get("depth") != depth
-            or level.get("pathPrefix") != path[:depth]
-            or level.get("selectedNibble") != selected_nibble
-            or not isinstance(child_digests, list)
-            or len(child_digests) != authority_contract.TREE_RADIX
-            or any(
-                not isinstance(digest, str)
-                or _require_digest(
-                    digest,
-                    "writer multiproof child digest",
-                )
-                    != digest
-                for digest in child_digests
-            )
-            or child_digests[selected_index] != parent
-        ):
-            raise AuthorityPlannerError(
-                "writer multiproof path reconstruction changed"
-            )
-        parent = framed_digest(
-            "serverware.policyAuthorityAuthenticatedNode/v1",
-            str(depth).encode("ascii"),
-            canonical_bytes(child_digests),
-        )
-    if parent != proof.get("rootDigest"):
-        raise AuthorityPlannerError(
-            "writer multiproof root reconstruction failed"
-        )
-    return parent
+    try:
+        return authority_radix_proof.reconstruct_multiproof_root(proof, selected=selected)
+    except (
+        authority_radix_proof.RadixProofError,
+        authority_transition_core.TransitionKernelError,
+    ) as exc:
+        raise AuthorityPlannerError(str(exc)) from exc
 
 
 def _validate_webauthn_evidence_envelope(
@@ -3035,6 +2837,9 @@ class MeasuredPlanner:
         connect_timeout_seconds: int,
         enabled_operations: tuple[str, ...],
         programs: Mapping[str, PlanningProgram] = PLANNING_PROGRAMS,
+        verifier_public_key: Ed25519PublicKey | None = None,
+        verifier_identity: Mapping[str, str] | None = None,
+        maximum_assertion_age_ns: int | None = None,
     ) -> None:
         if (
             not read_dsn
@@ -3054,6 +2859,52 @@ class MeasuredPlanner:
         self.connect_timeout_seconds = connect_timeout_seconds
         self.enabled_operations = frozenset(enabled_operations)
         self.programs = dict(programs)
+        if authority_webauthn_assertion.OPERATION in self.enabled_operations:
+            if (
+                not isinstance(verifier_public_key, Ed25519PublicKey)
+                or not isinstance(verifier_identity, Mapping)
+                or set(verifier_identity) != authority_webauthn_assertion.IDENTITY_FIELDS
+                or type(maximum_assertion_age_ns) is not int
+                or maximum_assertion_age_ns < 1
+            ):
+                raise AuthorityPlannerError(
+                    "revocation planner verifier pin is unavailable"
+                )
+            for value in verifier_identity.values():
+                _require_digest(value, "revocation verifier identity")
+        self.verifier_public_key = verifier_public_key
+        self.verifier_identity = (
+            MappingProxyType(dict(verifier_identity))
+            if verifier_identity is not None else None
+        )
+        self.maximum_assertion_age_ns = maximum_assertion_age_ns
+
+    def verify_assertion_evidence(
+        self, request: Mapping[str, Any]
+    ) -> Mapping[str, Any] | None:
+        verified_webauthn_evidence = None
+        if request.get("operation") == authority_webauthn_assertion.OPERATION:
+            # Independently authenticate the exact evidence before opening the
+            # planner transaction or deriving any selectors or mutations.
+            try:
+                verified_webauthn_evidence = (
+                    authority_webauthn_assertion.verify_revoke_assertion_evidence(
+                        request["webauthnEvidence"],
+                        operation_id=str(request["operationId"]),
+                        request_digest=str(request["requestDigest"]),
+                        capability_id=str(request["capabilityId"]),
+                        verifier_identity=self.verifier_identity,
+                        verifier_public_key=self.verifier_public_key,
+                        now_epoch_ns=time.time_ns(),
+                        deadline_epoch_ns=int(request["deadlineEpochNs"]),
+                        maximum_age_ns=self.maximum_assertion_age_ns,
+                    )
+                )
+            except authority_webauthn_assertion.AssertionEvidenceError as exc:
+                raise AuthorityPlannerError(
+                    "revocation planner assertion verification failed"
+                ) from exc
+        return verified_webauthn_evidence
 
     def derive(self, request: Mapping[str, Any]) -> dict[str, Any]:
         validate_planner_request(request)
@@ -3063,6 +2914,7 @@ class MeasuredPlanner:
             raise AuthorityPlannerError(
                 "operation is not enabled for the measured planner"
             )
+        verified_webauthn_evidence = self.verify_assertion_evidence(request)
         import psycopg
         from psycopg.rows import dict_row
 
@@ -3117,6 +2969,7 @@ class MeasuredPlanner:
                         manifest=selection_manifest,
                         trace=trace,
                         program=self.programs[operation],
+                        verified_webauthn_evidence=verified_webauthn_evidence,
                     )
                     transition = self.programs[operation](
                         operation=operation,
@@ -3195,7 +3048,11 @@ class MeasuredPlanner:
         expected_result_digest = db.compute_authority_v9_result_digest(
             result_bytes
         )
-        evidence = request["webauthnEvidence"]
+        evidence = (
+            dict(verified_webauthn_evidence)
+            if verified_webauthn_evidence is not None
+            else request["webauthnEvidence"]
+        )
         spec = authority_contract.operation_spec(operation)
         if bool(spec["assertionRequired"]) != isinstance(evidence, dict):
             raise AuthorityPlannerError(

@@ -14,8 +14,13 @@ that have no kernels in the policy, quota, or release registries:
 - `webauthn.credential.revoke`
 
 Their argument and evidence field sets are already reserved in
-`serverware/authority_transition_policy.py`, but no corresponding classes are
-implemented or registered. The registry now names missing kernels, unexpected
+`serverware/authority_transition_policy.py`, but no complete implementations are
+registered. An unregistered explicit self-revocation candidate now exists in
+`serverware/authority_transition_webauthn.py`; its deliberately limited source
+boundary and outstanding activation requirements are documented in
+[webauthn-revocation-candidate.md](webauthn-revocation-candidate.md). It is not a
+repair of the legacy aggregate endpoint or any of the other three operations.
+The registry now names missing kernels, unexpected
 kernels, overlapping registries, and mismatched identity or planning fields.
 All prior closure conditions remain enforced. No operation was removed from
 the contract, marked disabled, given a placeholder kernel, or delegated back to
@@ -94,6 +99,53 @@ merely those for the revoked credential's user. It also emits one audit record
 per invalidated control-plane approval. The existing 32-item cascade hint and
 136-mutation contract must be reconciled with those audit costs; silent
 truncation or dropping audits is not acceptable.
+
+## Authenticated storage prerequisites
+
+Source review identified additional prerequisites below the missing kernels.
+These are separate from provisioning the production services:
+
+- Business-row identity and authenticated-tree addressing use different digest
+  domains. `db.py`'s `serverware_policy_authority_authenticated_apply` stores
+  leaves under `serverware.policyAuthorityAuthenticatedKey/v1`; transport and
+  mutation plans identify rows with `serverware.policyAuthorityBusinessKey/v1`.
+  Proof production and reconstruction must derive the former from the exact
+  table/key while preserving the latter in the closed transport schema. They
+  cannot use the business digest as a database leaf lookup or radix path.
+  The SQL tree additionally length-prefixes the digest domain; the business
+  transport prefixes the domain followed by a NUL byte. Empty, key, row, leaf
+  and node hashes must match the SQL framing exactly without silently changing
+  persisted roots or the transport protocol.
+- The narrow tree-proof repair supports losslessly decoded strings, integers,
+  booleans, null, lists and objects, with UTF-8 tree serialization; it rejects
+  floats and decimal values instead of approximating PostgreSQL numeric scale.
+  The SQL business-address and whole-plan serialization contract still needs
+  reconciliation with ASCII-escaped Python transport for non-ASCII values.
+  Tree-only Unicode fixtures do not prove end-to-end executor compatibility.
+- `BoundedQuery.exact_page` is not enforced by the current SQL reader.
+  `KernelContext.exact_page_receipt` checks receipt structure and digests, but
+  does not reconstruct a predicate/range root from its `proofNodes`. There is
+  no complete, maintained secondary-index producer/consumer path. A receipt
+  with internally consistent hashes is not proof that matching rows were not
+  omitted. The candidate remains unregistered for this reason.
+- The planner reads root revisions and digests from PostgreSQL; the executor
+  locks and compares those database roots. This establishes a same-database
+  compare-and-swap boundary, not an independently retained current-root
+  checkpoint against malicious database rollback or substitution. The current
+  external witness binds operation, request, capability, result and generation,
+  but does not advance the executor's before/after root set or commit receipt.
+  An authenticated root transition and independent monotonic checkpoint must
+  be integrated before claiming that stronger database threat boundary.
+- Each current single-row proof costs 65 recorded tree reads, in addition to
+  manifest, root and business reads. The 4096-entry planner trace cap can
+  therefore reject a cascade below its declared 192-row maximum. Shared proof
+  and trace budgeting must be reconciled before treating that maximum as
+  executable capacity; raising a bound alone does not solve completeness.
+
+Focused proof tests must distinguish an independent expected-root pin from a
+root supplied by the same database. Neither an in-memory tree fixture nor a
+passing PostgreSQL transaction test establishes the independent witness
+property. Keep those evidence scopes separate during subsequent integration.
 
 ## Verification after implementation preparation and freeze
 

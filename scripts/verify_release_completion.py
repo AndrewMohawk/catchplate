@@ -14769,6 +14769,11 @@ def verify_bootstrap_launch_authorization_bindings(
     nonce_rollback_assurance: dict[str, Any],
     launch_manifest_v3: dict[str, Any],
 ) -> dict[str, Any]:
+    # Direct legacy-readiness callers do not pass through main()'s mode
+    # dispatch. Reuse its dependency loader without changing the active import
+    # roots; native-launcher retained-descriptor isolation remains in force.
+    # Final-v1 dispatch never calls this readiness-only helper or this loader.
+    load_readiness_dependencies()
     run_production_readiness.validate_bootstrap_receipt_summary(bootstrap_receipt)
     identity = run_production_readiness.bootstrap_launch_authorization_identity(
         bootstrap_receipt

@@ -5,15 +5,16 @@ import base64
 import hashlib
 import json
 import os
-import shutil
 import shlex
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -49,6 +50,19 @@ CODER_PREFLIGHT_DOCKER_DAEMON_ID_ENV = (
 
 def sha256_prefixed(value: bytes) -> str:
     return "sha256:" + hashlib.sha256(value).hexdigest()
+
+
+def fixture_static_amd64_elf() -> bytes:
+    """A minimal static ELF for byte-shape/pin checks; never execute it as a verifier."""
+    code = b"\xb8\x3c\x00\x00\x00\x31\xff\x0f\x05"  # exit(0)
+    size = 64 + 56 + len(code)
+    header = struct.pack(
+        "<16sHHIQQQIHHHHHH",
+        b"\x7fELF\x02\x01\x01" + b"\0" * 9,
+        2, 62, 1, 0x400000 + 120, 64, 0, 0, 64, 56, 1, 0, 0, 0,
+    )
+    segment = struct.pack("<IIQQQQQQ", 1, 5, 0, 0x400000, 0x400000, size, size, 4096)
+    return header + segment + code
 
 
 def fixture_ed25519_spki(seed_byte: int) -> tuple[str, str]:
@@ -109,7 +123,7 @@ def set_release_artifacts(env: dict[str, str], paths: dict[str, Path]) -> None:
     env["SERVERWARE_IMAGE_SIGNATURES_FILE"] = str(paths["image_signatures"].resolve())
 
 
-def coder_preflight_toolchain() -> tuple[Path, Path, str, str] | None:
+def coder_preflight_toolchain() -> tuple[Path, Path, str, str]:
     settings = {
         CODER_PREFLIGHT_DOCKER_EXECUTABLE_ENV: os.environ.get(
             CODER_PREFLIGHT_DOCKER_EXECUTABLE_ENV, ""
@@ -125,12 +139,11 @@ def coder_preflight_toolchain() -> tuple[Path, Path, str, str] | None:
         ),
     }
     supplied = [bool(value) for value in settings.values()]
-    if not any(supplied):
-        return None
     if not all(supplied):
         missing = sorted(name for name, value in settings.items() if not value)
         raise AssertionError(
-            "Coder production-preflight toolchain is incomplete: " + ", ".join(missing)
+            "Offline production-preflight toolchain must be explicitly prepared; "
+            "no live Docker fallback is permitted. Missing: " + ", ".join(missing)
         )
 
     executables: list[Path] = []
@@ -167,51 +180,21 @@ def coder_preflight_toolchain() -> tuple[Path, Path, str, str] | None:
 
 def fixture_release_env(paths: dict[str, Path]) -> dict[str, str]:
     env = test_production_readiness.good_env()
+    env["SERVERWARE_RESPONSE_OBSERVATION_V2_TEE_VERIFY_COMMAND"] = (
+        "/opt/serverware/bin/response-v2-tee-verify"
+    )
     env.update(test_production_handoff.fixture_release_trust_env(paths))
     env["SERVERWARE_COMPLETION_VERIFICATION_MODE"] = "readiness"
     fixture_dir = paths["build"].parent.resolve()
     production_python_path = fixture_dir / "production-python"
     production_python_path.write_bytes(Path(sys.executable).resolve().read_bytes())
     production_python_path.chmod(0o700)
-    coder_toolchain = coder_preflight_toolchain()
-    if coder_toolchain is None:
-        docker_source = shutil.which("docker")
-        if docker_source is None:
-            raise AssertionError("Docker is required for the production preflight fixture")
-        docker_source_path = Path(docker_source).resolve()
-        plugin_inventory = json.loads(
-            subprocess.run(
-                [docker_source, "info", "--format", "{{json .ClientInfo.Plugins}}"],
-                check=True,
-                stdout=subprocess.PIPE,
-                text=True,
-            ).stdout
-        )
-        compose_plugin_source = Path(
-            next(item["Path"] for item in plugin_inventory if item.get("Name") == "compose")
-        ).resolve()
-        docker_host = subprocess.run(
-            [docker_source, "context", "inspect", "--format", "{{.Endpoints.docker.Host}}"],
-            check=True,
-            stdout=subprocess.PIPE,
-            text=True,
-        ).stdout.strip()
-        if not docker_host.startswith("unix://"):
-            raise AssertionError(f"Docker fixture requires a local Unix endpoint: {docker_host}")
-        docker_socket = docker_host.removeprefix("unix://")
-        docker_daemon_id = subprocess.run(
-            [docker_source, "info", "--format", "{{.ID}}"],
-            check=True,
-            stdout=subprocess.PIPE,
-            text=True,
-        ).stdout.strip()
-    else:
-        (
-            docker_source_path,
-            compose_plugin_source,
-            docker_socket,
-            docker_daemon_id,
-        ) = coder_toolchain
+    (
+        docker_source_path,
+        compose_plugin_source,
+        docker_socket,
+        docker_daemon_id,
+    ) = coder_preflight_toolchain()
     production_docker_path = fixture_dir / "production-docker"
     production_docker_path.write_bytes(docker_source_path.read_bytes())
     production_docker_path.chmod(0o700)
@@ -350,6 +333,11 @@ def verify_runtime_trust_materials(tmp: Path) -> None:
         helper.write_bytes(b"test helper\n")
         helper.chmod(0o755)
     env = test_production_readiness.good_env()
+    tee_verifier = helper_dir / "response-v2-tee-verify"
+    tee_verifier.write_bytes(fixture_static_amd64_elf())
+    tee_verifier.chmod(0o755)
+    tee_verifier_setting = "SERVERWARE_RESPONSE_OBSERVATION_V2_TEE_VERIFY_COMMAND"
+    env[tee_verifier_setting] = "/opt/serverware/bin/response-v2-tee-verify"
     env["SERVERWARE_CONTROL_PLANE_TLS_DIR"] = str(tls_dir)
     env["SERVERWARE_AUDIT_ANCHOR_TLS_DIR"] = str(anchor_tls_dir)
     env["SERVERWARE_ATTESTATION_HELPER_DIR"] = str(helper_dir)
@@ -448,6 +436,31 @@ def verify_runtime_trust_materials(tmp: Path) -> None:
         raise AssertionError(
             f"Docker absolute path was incorrectly constrained to the helper directory: {docker_report}"
         )
+
+    for command in ("", "/opt/serverware/bin/response-v2-tee-verify --skip-checks"):
+        _, failures = production_host_preflight.runtime_trust_materials_check(
+            {**env, tee_verifier_setting: command}, skip_host_check=False
+        )
+        if not any(tee_verifier_setting in failure for failure in failures):
+            raise AssertionError(f"invalid response-v2 verifier command accepted: {failures}")
+
+    static_verifier = tee_verifier.read_bytes()
+    try:
+        # Update the pin too: this control must fail on ELF shape, not a stale hash.
+        tee_verifier.write_bytes(b"#!/bin/sh\nexit 0\n")
+        shell_manifest = {**executable_digest_manifest, tee_verifier_setting: sha256_prefixed(tee_verifier.read_bytes())}
+        _, failures = production_host_preflight.runtime_trust_materials_check(
+            {**env, production_host_preflight.ATTESTATION_EXECUTABLE_DIGEST_MANIFEST_ENV: json.dumps(shell_manifest)},
+            skip_host_check=False,
+        )
+        if not any("response-v2 TEE verifier must be a 64-bit" in failure for failure in failures):
+            raise AssertionError(f"non-ELF response-v2 verifier accepted: {failures}")
+        tee_verifier.write_bytes(static_verifier[:-1] + b"\x00")
+        _, failures = production_host_preflight.runtime_trust_materials_check(env, skip_host_check=False)
+        if not any(tee_verifier_setting in failure and "SHA-256 does not match" in failure for failure in failures):
+            raise AssertionError(f"changed static response-v2 verifier accepted: {failures}")
+    finally:
+        tee_verifier.write_bytes(static_verifier)
 
     missing_manifest = dict(executable_digest_manifest)
     missing_manifest.pop("SERVERWARE_NITRO_NSM_ATTEST_COMMAND_TEMPLATE")
@@ -2017,20 +2030,46 @@ def main() -> None:
         write_env(paths["env"], env)
         write_kms_materials(paths["kms_materials"])
         source_digest = json.loads(paths["build"].read_text(encoding="utf-8"))["metadata"]["source_tree_digest"]
-        production_images = generate_release_provenance.production_image_inventory(
-            build_path=paths["build"],
-            published_path=paths["published"],
-            images_env_path=paths["images_env"],
-            expected_source_tree_digest=source_digest,
-            expected_source_contract=build_production_images.source_contract(
-                development_dirty_tree=False
-            ),
-        )
-        _, compose_summary = generate_release_provenance.production_compose_model(
-            compose_file=ROOT / "docker-compose.production.yml",
-            env_file=paths["env"],
-            images=production_images,
-        )
+        with test_production_handoff.fixture_image_measurements():
+            production_images = generate_release_provenance.production_image_inventory(
+                build_path=paths["build"],
+                published_path=paths["published"],
+                images_env_path=paths["images_env"],
+                expected_source_tree_digest=source_digest,
+                expected_source_contract=build_production_images.source_contract(
+                    development_dirty_tree=False
+                ),
+            )
+        def offline_compose_run(command: list[str]) -> str:
+            expected_command = [
+                "docker", "compose", "--env-file", str(paths["env"]),
+                "-f", str(ROOT / "docker-compose.production.yml"),
+                "config", "--format", "json",
+            ]
+            if command != expected_command:
+                raise AssertionError(f"unexpected fixture Compose command: {command!r}")
+            # Render the actual YAML with the prepared, digest-pinned plugin. No
+            # model is mocked, and Docker discovery/daemon calls are not allowed.
+            result = run_production_readiness.run_measured_command(
+                [env[run_production_readiness.DOCKER_COMPOSE_PLUGIN_EXECUTABLE_ENV],
+                 "--host", f"unix://{env[run_production_readiness.DOCKER_UNIX_SOCKET_ENV]}",
+                 *command[2:]],
+                setting=run_production_readiness.DOCKER_COMPOSE_PLUGIN_EXECUTABLE_ENV,
+                expected_digest=env[run_production_readiness.DOCKER_COMPOSE_PLUGIN_SHA256_ENV],
+                cwd=ROOT,
+                env=run_production_readiness.docker_subprocess_environment(
+                    dict(os.environ), Path(env[run_production_readiness.DOCKER_UNIX_SOCKET_ENV])
+                ),
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, text=True,
+            )
+            return result.stdout.strip()
+
+        with patch.object(generate_release_provenance, "run", offline_compose_run):
+            _, compose_summary = generate_release_provenance.production_compose_model(
+                compose_file=ROOT / "docker-compose.production.yml",
+                env_file=paths["env"],
+                images=production_images,
+            )
         compose_images = compose_summary.get("images", {})
         if set(compose_images) != {
             "serverware",

@@ -3330,6 +3330,54 @@ def launch_manifest_v3_verification_fixture(
     }
 
 
+def verify_bootstrap_binding_cold_dependency_validation() -> None:
+    """An explicit readiness helper call must reach the real closed validator."""
+    missing = object()
+    previous = verify_release_completion.__dict__.pop(
+        "run_production_readiness", missing
+    )
+    original_validator = run_production_readiness.validate_bootstrap_receipt_summary
+    validated: list[object] = []
+    invalid_receipt = {"unexpected": True}
+
+    def record_validation(value: Any) -> dict[str, Any]:
+        validated.append(value)
+        return original_validator(value)
+
+    try:
+        run_production_readiness.validate_bootstrap_receipt_summary = record_validation
+        try:
+            verify_release_completion.verify_bootstrap_launch_authorization_bindings(
+                invalid_receipt,
+                signed_provenance_digest="invalid",
+                signed_source_tree_digest="invalid",
+                release_provenance_sha256="invalid",
+                reproducible_build_verification_sha256="invalid",
+                current_host_identity_sha256="invalid",
+                release_artifact_launch_authority={},
+                nonce_rollback_assurance={},
+                launch_manifest_v3={},
+            )
+        except ValueError as exc:
+            if str(exc) != "bootstrap receipt summary does not match its closed schema":
+                raise AssertionError(
+                    f"cold readiness helper did not reject through strict receipt validation: {exc}"
+                ) from exc
+        else:
+            raise AssertionError("cold readiness helper accepted a malformed receipt")
+        if (
+            verify_release_completion.run_production_readiness is not run_production_readiness
+            or validated != [invalid_receipt]
+        ):
+            raise AssertionError("readiness helper did not use the existing module's real validator")
+    finally:
+        run_production_readiness.validate_bootstrap_receipt_summary = original_validator
+        if previous is missing:
+            verify_release_completion.__dict__.pop("run_production_readiness", None)
+        else:
+            verify_release_completion.run_production_readiness = previous
+
+
 def verify_launcher_three_way_binding() -> None:
     receipt = bootstrap_receipt_summary(bootstrap_receipt_fixture())
     launcher_digest = receipt["launcher"]["sha256"]
@@ -11210,6 +11258,7 @@ def verify_release_artifact_authority_contracts() -> None:
 def main() -> None:
     completion_schema_validator, receipt_schema_fixture = verify_release_proof_schemas()
     test_exact_benchmark_nanosecond_contract()
+    verify_bootstrap_binding_cold_dependency_validation()
     verify_launcher_three_way_binding()
     verify_launcher_nonce_manifest_v3_binding()
     verify_release_artifact_authority_contracts()

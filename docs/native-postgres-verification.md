@@ -2,9 +2,13 @@
 
 ## Status and boundary
 
-This checkpoint authors a closed inventory and fixture-result contract layer.
-It does **not** implement a PostgreSQL cluster runner, install a PG16 test image,
-wire the controller's output consumer, or provide native execution evidence.
+The source includes a closed inventory and fixture-result contract layer. The
+separate [v12 runner-bounds checkpoint](coder-runner-bounds-v12.md) makes
+nonroot execution and resource/storage bounds part of the admitted runner
+identity, with fresh output ownership and exact pre-start container checks.
+Neither checkpoint implements a PostgreSQL cluster runner, installs a PG16
+test image, wires the controller's native output consumer, or provides native
+execution evidence.
 The current source remains unbuilt and unexecuted. The ten suites remain in
 `CODER_EXCLUDED_TEST_SCRIPTS`; their standalone entrypoints and result files do
 not remove that exclusion or satisfy changed-test coverage admission.
@@ -120,11 +124,33 @@ network service contract, which uses endpoint authorities/ports and HTTP health
 checks, is not a Unix-socket transport for these fixtures. Do not weaken the
 fixture DSN restrictions or expose a host socket to make it fit.
 
-The actual cluster lifecycle, PG16 image construction, bounded scratch/WAL
-storage, CPU/memory/PID limits, deadlines, log capture, controller-bound result
-consumption and authenticated controller cleanup are still incomplete. The
-existing runner's small private `/run` and `/tmp` mounts are not a reviewed
-database storage budget. The ten fixed per-suite ceilings sum to 3,600 seconds, before
+The actual cluster lifecycle, PG16 image construction, deadlines, log capture,
+controller-bound native result consumption and authenticated controller
+cleanup are still incomplete. `RunnerIdentity.executionBounds` now requires
+an admitted nonroot user/group, CPU, memory with no swap, PID, open-file,
+shared-memory and private writable-mount bounds. It does not choose or run a
+native-PG profile by itself. The actual Docker create/inspect/start boundary
+and fresh per-lane output ownership are described in
+[the runner-bounds contract](coder-runner-bounds-v12.md).
+
+The fixed private workload-data mount is `/var/lib/serverware-runner`; a later
+cluster manager can place a `PGDATA` child and its WAL there. The native
+example assigns it a 2 GiB tmpfs within a 4 GiB no-swap memory limit, alongside
+64 MiB shared memory, 64 MiB `/run` and 256 MiB `/tmp`. Its other bounds are
+UID/GID `10001:10001`, 2 CPUs, 128 PIDs and `nofile` 1024. This is not a
+measured capacity result, a host-backed database allocation, or a blanket
+user change for other runner profiles; Rust retains its own `65532:65532`
+identity. There is no host `/tmp` or unbounded private-data fallback. The
+separate writable lane-output bind is not aggregate-byte-quota-limited in
+this checkpoint; result-file read limits and tmpfs caps do not constrain
+arbitrary output writes. An independently enforced output-storage quota is
+still required before this can be a fully bounded native profile. Existing
+runtime images are not already admitted: inherited environment, labels,
+ports, healthcheck, shell or volumes can cause the closed inspect guard to
+deny them. Future component tests on tmpfs must not claim physical power-loss
+durability.
+
+The ten fixed per-suite ceilings sum to 3,600 seconds, before
 startup and cleanup, whereas the current Unit deadline profile is 900 seconds.
 The selected lane therefore needs an explicit bounded deadline/resource
 reconciliation; this inventory neither increases that deadline nor permits

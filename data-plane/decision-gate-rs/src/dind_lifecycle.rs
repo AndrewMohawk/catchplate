@@ -1,5 +1,16 @@
 #![allow(dead_code)]
 
+#[path = "runner_isolation_v12.rs"]
+mod runner_isolation_v12;
+
+#[cfg(test)]
+#[path = "runner_output_tests_v12.rs"]
+mod runner_output_tests_v12;
+
+use self::runner_isolation_v12::{
+    execution_host_config_v12, validate_runner_inspect_v12,
+};
+
 use crate::coder_controller_v11::{
     canonical_json_bytes_v11, constant_time_eq, digest_hex, sha256,
     sha256_exact_reader, ControllerError, Digest, Result,
@@ -61,7 +72,7 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{
-    FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt,
+    DirBuilderExt, FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt,
 };
 use std::os::unix::process::CommandExt;
 use std::os::unix::net::UnixStream;
@@ -1717,8 +1728,21 @@ struct PrivateDindHandleV12 {
     source_mount: PathBuf,
     artifact_mount: Option<PathBuf>,
     output_mount: PathBuf,
-    runner_ids: BTreeMap<LogicalLane, String>,
+    runners: BTreeMap<LogicalLane, PrivateRunnerV12>,
     service_ids: BTreeMap<LogicalLane, Vec<String>>,
+}
+
+#[derive(Clone)]
+struct PrivateRunnerV12 {
+    id: String,
+    expected_create: Value,
+    command_sha256: Digest,
+    output_mount: PathBuf,
+    output_identity_sha256: Digest,
+    uid: u32,
+    gid: u32,
+    created_inspect_sha256: Option<Digest>,
+    prestart_inspect_sha256: Option<Digest>,
 }
 
 struct PrivateDindStateV12 {
@@ -3593,7 +3617,7 @@ impl PrivateDindLifecycleV12 {
                 source_mount,
                 artifact_mount,
                 output_mount,
-                runner_ids: BTreeMap::new(),
+                runners: BTreeMap::new(),
                 service_ids: BTreeMap::new(),
             },
         );
@@ -3867,7 +3891,7 @@ impl PrivateDindLifecycleV12 {
             )
         })?;
         let handle = require_active_handle_mut_v12(&mut state, operation)?;
-        if handle.runner_ids.contains_key(&operation.request.lane) {
+        if handle.runners.contains_key(&operation.request.lane) {
             return Err(ControllerError::Rejected(
                 "private DinD lane already has a runner",
             ));
@@ -3877,12 +3901,26 @@ impl PrivateDindLifecycleV12 {
             operation.request.lane,
             &operation.request.plan_id,
         );
+        runner.validate().map_err(|error| {
+            ControllerError::InvalidOwned(error.to_string())
+        })?;
+        // The privileged generation parent is never made worker-writable.
+        // Each lane gets a fresh output root, separate from the OCI export
+        // directory and from every other lane, even when their UIDs differ.
+        let output_mount = handle.generation_root.join(format!(
+            "runner-output-{}", operation.request.lane.ordinal(),
+        ));
+        let output_identity_sha256 = create_runner_output_v12(
+            &handle.generation_root, &output_mount,
+            runner.execution_bounds.user_uid,
+            runner.execution_bounds.user_gid,
+        )?;
         let body = runner_create_body_v12(
             operation,
             handle,
             &runner,
             &command,
-            &name,
+            &output_mount,
         )?;
         drop(state);
         let response = self.docker_json_v12(
@@ -3894,17 +3932,77 @@ impl PrivateDindLifecycleV12 {
             ),
             &body,
         )?;
-        let body = require_docker_success_v12(&response, &[201])?;
-        let id = json_text_v12(&body, "Id")?.to_owned();
+        let created = require_docker_success_v12(&response, &[201])?;
+        let id = json_text_v12(&created, "Id")?.to_owned();
+        if id.len() != 64 || !id.bytes().all(|byte| {
+            matches!(byte, b'0'..=b'9' | b'a'..=b'f')
+        }) {
+            return Err(ControllerError::Rejected(
+                "private DinD runner returned a noncanonical container identity",
+            ));
+        }
         let mut state = self.state.lock().map_err(|_| {
             ControllerError::Rejected(
                 "private DinD lifecycle mutex is poisoned",
             )
         })?;
         require_active_handle_mut_v12(&mut state, operation)?
-            .runner_ids
-            .insert(operation.request.lane, id);
+            .runners
+            .insert(operation.request.lane, PrivateRunnerV12 {
+                id: id.clone(),
+                expected_create: body.clone(),
+                command_sha256: command.command_sha256,
+                output_mount,
+                output_identity_sha256,
+                uid: runner.execution_bounds.user_uid,
+                gid: runner.execution_bounds.user_gid,
+                created_inspect_sha256: None,
+                prestart_inspect_sha256: None,
+            });
+        drop(state);
+        // Docker may warn and discard unsupported limits. Retain the created
+        // resource for cleanup, but never start it after any warning.
+        if !matches!(created.get("Warnings"), Some(Value::Null))
+            && !created.get("Warnings").and_then(Value::as_array)
+                .is_some_and(Vec::is_empty)
+        {
+            return Err(ControllerError::Rejected(
+                "private DinD runner create did not confirm an empty warning set",
+            ));
+        }
+        let inspection = self.inspect_runner_before_start_v12(
+            operation, &id, &body,
+        )?;
+        let mut state = self.state.lock().map_err(|_| {
+            ControllerError::Rejected("private DinD lifecycle mutex is poisoned")
+        })?;
+        let retained = require_active_handle_mut_v12(&mut state, operation)?
+            .runners.get_mut(&operation.request.lane)
+            .ok_or(ControllerError::Rejected("created runner was lost"))?;
+        if retained.id != id || retained.expected_create != body
+            || retained.created_inspect_sha256.is_some()
+            || retained.prestart_inspect_sha256.is_some()
+        {
+            return Err(ControllerError::Rejected("created runner identity changed during inspection"));
+        }
+        retained.created_inspect_sha256 = Some(inspection);
         Ok(())
+    }
+
+    fn inspect_runner_before_start_v12(
+        &self,
+        operation: &DockerLaneOperationV12,
+        id: &str,
+        expected_create: &Value,
+    ) -> Result<Digest> {
+        let response = self.docker_http_v12(
+            operation, "GET", &format!("/v1.45/containers/{id}/json"),
+            Vec::new(), DockerRequestBodyV12::Empty,
+            DockerStreamModeV11::BoundedHttp,
+        )?;
+        let inspected = require_docker_success_v12(&response, &[200])?;
+        validate_runner_inspect_v12(&inspected, expected_create, id)?;
+        Ok(sha256(&canonical_json_bytes_v11(&inspected)?))
     }
 
     fn create_services_v12(
@@ -3995,24 +4093,56 @@ impl PrivateDindLifecycleV12 {
                 ))
             }
         };
-        let (id, output_mount) = {
+        let runner = {
             let state = self.state.lock().map_err(|_| {
                 ControllerError::Rejected(
                     "private DinD lifecycle mutex is poisoned",
                 )
             })?;
             let handle = require_active_handle_v12(&state, operation)?;
-            (
-                handle
-                    .runner_ids
+            handle
+                    .runners
                     .get(&operation.request.lane)
                     .cloned()
                     .ok_or(ControllerError::Rejected(
                         "repository body runner is absent",
-                    ))?,
-                handle.output_mount.clone(),
-            )
+                    ))?
         };
+        if runner.command_sha256 != body_contract.command.command_sha256
+            || runner.created_inspect_sha256.is_none()
+            || runner.prestart_inspect_sha256.is_some()
+        {
+            return Err(ControllerError::Rejected(
+                "repository body differs from its unconsumed inspected runner",
+            ));
+        }
+        let output_fd = open_directory_fd_v12(&runner.output_mount)?;
+        if directory_fd_identity_sha256_v12(output_fd.as_raw_fd())?
+            != runner.output_identity_sha256
+        {
+            return Err(ControllerError::Rejected(
+                "repository runner output identity changed before start",
+            ));
+        }
+        let inspected = self.inspect_runner_before_start_v12(
+            operation, &runner.id, &runner.expected_create,
+        )?;
+        {
+            let mut state = self.state.lock().map_err(|_| {
+                ControllerError::Rejected("private DinD lifecycle mutex is poisoned")
+            })?;
+            let retained = require_active_handle_mut_v12(&mut state, operation)?
+                .runners.get_mut(&operation.request.lane)
+                .ok_or(ControllerError::Rejected("body runner was lost"))?;
+            if retained.id != runner.id || retained.expected_create != runner.expected_create
+                || retained.created_inspect_sha256 != runner.created_inspect_sha256
+                || retained.prestart_inspect_sha256.is_some()
+            {
+                return Err(ControllerError::Rejected("body runner identity changed during inspection"));
+            }
+            retained.prestart_inspect_sha256 = Some(inspected);
+        }
+        let id = &runner.id;
         let start = self.docker_http_v12(
             operation,
             "POST",
@@ -4021,7 +4151,7 @@ impl PrivateDindLifecycleV12 {
             DockerRequestBodyV12::Empty,
             DockerStreamModeV11::BoundedHttp,
         )?;
-        require_docker_success_v12(&start, &[204, 304])?;
+        require_docker_success_v12(&start, &[204])?;
         let wait = self.docker_http_v12(
             operation,
             "POST",
@@ -4039,20 +4169,31 @@ impl PrivateDindLifecycleV12 {
             .ok_or(ControllerError::Invalid(
                 "Docker wait response lacks StatusCode",
             ))?;
-        let result_path = output_mount.join(format!(
+        if directory_fd_identity_sha256_v12(output_fd.as_raw_fd())?
+            != runner.output_identity_sha256
+        {
+            return Err(ControllerError::Rejected(
+                "repository runner output identity changed during execution",
+            ));
+        }
+        let result_name = format!(
             "{}-{}.json",
             PRIVATE_DIND_BODY_RESULT_V12,
             operation.request.lane.ordinal(),
-        ));
-        let result_path = if result_path.exists() {
-            result_path
-        } else {
-            output_mount.join(PRIVATE_DIND_BODY_RESULT_V12)
-        };
-        let result = read_private_file(
-            &result_path,
+        );
+        let result = read_runner_result_v12(
+            output_fd.as_raw_fd(), &result_name, runner.uid, runner.gid,
             16 * 1024 * 1024,
-        )?;
+        ).or_else(|error| match error {
+            ControllerError::Io(ref io_error)
+                if io_error.kind() == std::io::ErrorKind::NotFound => {
+                read_runner_result_v12(
+                    output_fd.as_raw_fd(), PRIVATE_DIND_BODY_RESULT_V12,
+                    runner.uid, runner.gid, 16 * 1024 * 1024,
+                )
+            }
+            other => Err(other),
+        })?;
         let value: Value =
             serde_json::from_slice(&result).map_err(|_| {
                 ControllerError::Invalid(
@@ -4104,9 +4245,9 @@ impl PrivateDindLifecycleV12 {
                 )
             })?;
             require_active_handle_v12(&state, operation)?
-                .runner_ids
+                .runners
                 .get(&operation.request.lane)
-                .cloned()
+                .map(|runner| runner.id.clone())
                 .ok_or(ControllerError::Rejected(
                     "private DinD runner is absent",
                 ))?
@@ -4126,7 +4267,7 @@ impl PrivateDindLifecycleV12 {
             )
         })?;
         require_active_handle_mut_v12(&mut state, operation)?
-            .runner_ids
+            .runners
             .remove(&operation.request.lane);
         Ok(())
     }
@@ -5081,6 +5222,18 @@ impl PrivateDindLifecycleV12 {
             "pid": handle.pid,
             "processStartTimeTicks": handle.start_time_ticks,
             "profile": handle.profile,
+            "runners": handle.runners.iter().map(|(lane, runner)| {
+                Ok(json!({
+                    "lane": lane,
+                    "containerId": runner.id,
+                    "createRequestSha256": sha256(&canonical_json_bytes_v11(
+                        &runner.expected_create,
+                    )?),
+                    "createdInspectSha256": runner.created_inspect_sha256,
+                    "prestartInspectSha256": runner.prestart_inspect_sha256,
+                    "outputDirectoryIdentitySha256": runner.output_identity_sha256,
+                }))
+            }).collect::<Result<Vec<Value>>>()?,
             "socketDevice": socket_metadata.dev(),
             "socketInode": socket_metadata.ino(),
             "version": "serverware/private-dind-observation/v12",
@@ -6053,7 +6206,7 @@ fn runner_create_body_v12(
     handle: &PrivateDindHandleV12,
     runner: &RunnerIdentity,
     command: &ContainerCommand,
-    _name: &str,
+    output_mount: &Path,
 ) -> Result<Value> {
     let mounts = &runner.mount_policy;
     let mut binds = vec![
@@ -6064,7 +6217,7 @@ fn runner_create_body_v12(
         ),
         format!(
             "{}:{}:rw",
-            handle.output_mount.display(),
+            output_mount.display(),
             mounts.output_destination,
         ),
     ];
@@ -6096,6 +6249,9 @@ fn runner_create_body_v12(
     } else {
         "none".to_owned()
     };
+    let host_config = execution_host_config_v12(
+        &runner.execution_bounds, binds, &network_mode,
+    )?;
     Ok(json!({
         "AttachStderr": false,
         "AttachStdin": false,
@@ -6103,27 +6259,18 @@ fn runner_create_body_v12(
         "Cmd": command_tail,
         "Entrypoint": [command.executable.clone()],
         "Env": environment,
-        "HostConfig": {
-            "AutoRemove": false,
-            "Binds": binds,
-            "CapDrop": ["ALL"],
-            "Init": false,
-            "IpcMode": "private",
-            "NetworkMode": network_mode,
-            "ReadonlyRootfs": true,
-            "SecurityOpt": ["no-new-privileges=true"],
-            "Tmpfs": {
-                "/run": "rw,nosuid,nodev,noexec,size=64m",
-                "/tmp": "rw,nosuid,nodev,noexec,size=256m"
-            }
-        },
+        "HostConfig": host_config,
+        "Healthcheck": {"Test": ["NONE"]},
         "Image": exact_image_reference_v12(&runner.image),
         "Labels": owner_labels_json_v12(operation),
         "NetworkDisabled": network_mode == "none",
         "OpenStdin": false,
         "StdinOnce": false,
+        "StopSignal": "SIGTERM",
         "StopTimeout": 10,
         "Tty": false,
+        "User": format!("{}:{}", runner.execution_bounds.user_uid,
+            runner.execution_bounds.user_gid),
         "WorkingDir": command.cwd,
     }))
 }
@@ -8064,6 +8211,74 @@ fn publish_exact_private_file(
         ));
     }
     Ok(())
+}
+
+fn create_runner_output_v12(
+    generation_root: &Path, path: &Path, uid: u32, gid: u32,
+) -> Result<Digest> {
+    let parent = std::fs::symlink_metadata(generation_root)?;
+    if path.parent() != Some(generation_root)
+        || !parent.is_dir() || parent.uid() != 0
+        || parent.mode() & 0o777 != 0o700
+        || uid < 1000 || gid < 1000
+    {
+        return Err(ControllerError::Rejected(
+            "runner output lacks a privileged private generation parent",
+        ));
+    }
+    // Exclusive creation: an earlier attempt or retained output is never
+    // re-owned, widened, reused, or silently removed.
+    std::fs::DirBuilder::new().mode(0o700).create(path)?;
+    let directory = open_directory_fd_v12(path)?;
+    if unsafe { libc::fchown(directory.as_raw_fd(), uid, gid) } != 0
+        || unsafe { libc::fchmod(directory.as_raw_fd(), 0o700) } != 0
+    {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    directory_fd_identity_sha256_v12(directory.as_raw_fd())
+}
+
+fn read_runner_result_v12(
+    directory: RawFd, name: &str, uid: u32, gid: u32, maximum: u64,
+) -> Result<Vec<u8>> {
+    require_directory_fd_v12(directory)?;
+    if name.is_empty() || name.contains('/') || matches!(name, "." | "..") {
+        return Err(ControllerError::Rejected("runner result is not one fixed filename"));
+    }
+    let name = CString::new(name).map_err(|_| {
+        ControllerError::Rejected("runner result name contains NUL")
+    })?;
+    let raw = unsafe {
+        libc::openat(directory, name.as_ptr(),
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
+    };
+    if raw < 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    let mut file = unsafe { File::from_raw_fd(raw) };
+    let before = file.metadata()?;
+    if !before.is_file() || before.uid() != uid || before.gid() != gid
+        || before.mode() & 0o077 != 0 || before.nlink() != 1
+        || before.len() == 0 || before.len() > maximum
+    {
+        return Err(ControllerError::Rejected(
+            "runner result is not its owned bounded private regular file",
+        ));
+    }
+    let mut bytes = Vec::with_capacity(before.len() as usize);
+    (&mut file).take(before.len() + 1).read_to_end(&mut bytes)?;
+    let after = file.metadata()?;
+    if bytes.len() as u64 != before.len()
+        || before.dev() != after.dev() || before.ino() != after.ino()
+        || before.uid() != after.uid() || before.gid() != after.gid()
+        || before.mode() != after.mode() || before.nlink() != after.nlink()
+        || before.len() != after.len()
+        || before.mtime() != after.mtime() || before.mtime_nsec() != after.mtime_nsec()
+        || before.ctime() != after.ctime() || before.ctime_nsec() != after.ctime_nsec()
+    {
+        return Err(ControllerError::Rejected("runner result changed during bounded read"));
+    }
+    Ok(bytes)
 }
 
 fn read_private_file(path: &Path, maximum: u64) -> Result<Vec<u8>> {

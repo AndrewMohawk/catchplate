@@ -23,6 +23,7 @@ pub const MAX_ARGUMENTS: usize = 256;
 pub const MAX_ENDPOINTS: usize = 64;
 pub const MAX_OCI_OBJECTS: usize = 512;
 pub const MAX_SERVICES: usize = 64;
+pub const RUNNER_PRIVATE_DATA_PATH_V12: &str = "/var/lib/serverware-runner";
 
 #[derive(Debug)]
 pub enum PlanProtocolError {
@@ -739,6 +740,62 @@ pub enum EndpointProtocol {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct RunnerExecutionBoundsV12 {
+    pub user_uid: u32,
+    pub user_gid: u32,
+    pub cpu_quota_micros: u64,
+    pub cpu_period_micros: u64,
+    pub memory_bytes: u64,
+    pub pids: u32,
+    pub open_files: u32,
+    pub shm_bytes: u64,
+    pub run_tmpfs_bytes: u64,
+    pub tmp_tmpfs_bytes: u64,
+    pub private_data_bytes: u64,
+}
+
+impl RunnerExecutionBoundsV12 {
+    pub fn validate(&self) -> PlanResult<()> {
+        if !(1000..=2_147_483_647).contains(&self.user_uid)
+            || !(1000..=2_147_483_647).contains(&self.user_gid)
+            || self.cpu_period_micros != 100_000
+            || !(1000..=6_400_000).contains(&self.cpu_quota_micros)
+            || !(256 * 1024 * 1024..=64 * 1024 * 1024 * 1024)
+                .contains(&self.memory_bytes)
+            || !(16..=8192).contains(&self.pids)
+            || !(64..=65_536).contains(&self.open_files)
+            || !(16 * 1024 * 1024..=1024 * 1024 * 1024)
+                .contains(&self.shm_bytes)
+            || !(1024 * 1024..=256 * 1024 * 1024)
+                .contains(&self.run_tmpfs_bytes)
+            || !(16 * 1024 * 1024..=1024 * 1024 * 1024)
+                .contains(&self.tmp_tmpfs_bytes)
+            || !(16 * 1024 * 1024..=8 * 1024 * 1024 * 1024)
+                .contains(&self.private_data_bytes)
+        {
+            return Err(PlanProtocolError::Invalid(
+                "runner execution bounds are invalid",
+            ));
+        }
+        let writable_bytes = self
+            .shm_bytes
+            .checked_add(self.run_tmpfs_bytes)
+            .and_then(|sum| sum.checked_add(self.tmp_tmpfs_bytes))
+            .and_then(|sum| sum.checked_add(self.private_data_bytes))
+            .ok_or(PlanProtocolError::Invalid(
+                "runner writable memory bound overflows",
+            ))?;
+        if writable_bytes > self.memory_bytes {
+            return Err(PlanProtocolError::Invalid(
+                "runner writable memory exceeds its memory bound",
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RunnerIdentity {
     pub image: OciObjectReference,
     pub runtime_executable_sha256: Digest,
@@ -746,6 +803,7 @@ pub struct RunnerIdentity {
     pub static_courier_sha256: Option<Digest>,
     pub executable_closure_sha256: Vec<Digest>,
     pub mount_policy: RunnerMountPolicy,
+    pub execution_bounds: RunnerExecutionBoundsV12,
 }
 
 impl RunnerIdentity {
@@ -793,6 +851,7 @@ impl RunnerIdentity {
             ));
         }
         self.mount_policy.validate()?;
+        self.execution_bounds.validate()?;
         Ok(())
     }
 }
@@ -837,6 +896,9 @@ impl RunnerMountPolicy {
             || destinations
                 .iter()
                 .any(|path| matches!(*path, "/run" | "/tmp" | "/"))
+            || destinations.iter().any(|path| {
+                paths_overlap(path, RUNNER_PRIVATE_DATA_PATH_V12)
+            })
             || !self.source_read_only
             || !self.artifacts_read_only
             || !self.root_filesystem_read_only
@@ -854,12 +916,7 @@ impl RunnerMountPolicy {
 }
 
 fn paths_overlap(left: &str, right: &str) -> bool {
-    if left == right {
-        return true;
-    }
-    let left_prefix = format!("{}/", left.trim_end_matches('/'));
-    let right_prefix = format!("{}/", right.trim_end_matches('/'));
-    left.starts_with(&right_prefix) || right.starts_with(&left_prefix)
+    Path::new(left).starts_with(right) || Path::new(right).starts_with(left)
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1729,4 +1786,283 @@ fn require_absolute_container_path(
         )));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod runner_execution_bounds_tests {
+    use super::*;
+
+    const MIB: u64 = 1024 * 1024;
+    const FIELDS: [(&str, u64, u64); 11] = [
+        ("userUid", 1000, 2_147_483_647),
+        ("userGid", 1000, 2_147_483_647),
+        ("cpuQuotaMicros", 1000, 6_400_000),
+        ("cpuPeriodMicros", 100_000, 100_000),
+        ("memoryBytes", 256 * MIB, 64 * 1024 * MIB),
+        ("pids", 16, 8192),
+        ("openFiles", 64, 65_536),
+        ("shmBytes", 16 * MIB, 1024 * MIB),
+        ("runTmpfsBytes", MIB, 256 * MIB),
+        ("tmpTmpfsBytes", 16 * MIB, 1024 * MIB),
+        ("privateDataBytes", 16 * MIB, 8 * 1024 * MIB),
+    ];
+
+    fn bounds() -> RunnerExecutionBoundsV12 {
+        RunnerExecutionBoundsV12 {
+            user_uid: 1000,
+            user_gid: 1000,
+            cpu_quota_micros: 1000,
+            cpu_period_micros: 100_000,
+            memory_bytes: 256 * MIB,
+            pids: 16,
+            open_files: 64,
+            shm_bytes: 16 * MIB,
+            run_tmpfs_bytes: MIB,
+            tmp_tmpfs_bytes: 16 * MIB,
+            private_data_bytes: 16 * MIB,
+        }
+    }
+
+    fn runner() -> RunnerIdentity {
+        RunnerIdentity {
+            image: OciObjectReference {
+                repository: "fixture/runner".into(),
+                manifest_digest_sha256: [3; 32],
+                index_digest_sha256: None,
+                platform: "linux/amd64".into(),
+                size: 1,
+            },
+            runtime_executable_sha256: [1; 32],
+            rootfs_sha256: [4; 32],
+            static_courier_sha256: Some([2; 32]),
+            executable_closure_sha256: vec![[1; 32], [2; 32]],
+            mount_policy: RunnerMountPolicy {
+                source_destination: "/opt/serverware/src".into(),
+                artifact_destination: "/opt/serverware/artifacts".into(),
+                output_destination: "/opt/serverware/output".into(),
+                source_read_only: true,
+                artifacts_read_only: true,
+                root_filesystem_read_only: true,
+                no_host_bind_mounts: true,
+                no_socket_mounts: true,
+                private_run_tmpfs: true,
+                private_tmp_tmpfs: true,
+            },
+            execution_bounds: bounds(),
+        }
+    }
+
+    // Structural/digest fixture only; this does not attest a real CAS or signer.
+    fn prepare() -> PrepareContract {
+        let sealing = CasSealingEvidenceV12 {
+            policy: CasSealingPolicyV12::UserspaceDigestOnly,
+            userspace_manifest_sha256: [5; 32],
+            fs_verity_file_digests_sha256: None,
+            immutable_file_set_sha256: None,
+        };
+        let runner = runner();
+        let mut value = PrepareContract {
+            lane: LogicalLane::Unit,
+            generation_kind: DindGenerationKind::NoBuild,
+            source: SourceCasReference {
+                manifest_sha256: [6; 32],
+                object_sha256: [7; 32],
+                entry_count: 1,
+                total_bytes: 1,
+                sealing_evidence: sealing.clone(),
+            },
+            artifacts: Some(ArtifactCasReference {
+                manifest_sha256: [8; 32],
+                object_sha256: [9; 32],
+                source_manifest_sha256: [6; 32],
+                build_plan_sha256: [10; 32],
+                files_sha256: [11; 32],
+                oci_objects: vec![runner.image.clone()],
+                sealing_evidence: sealing,
+            }),
+            imported_oci_manifest_sha256: vec![
+                runner.image.manifest_digest_sha256,
+            ],
+            runner,
+            exact_build: None,
+            services: vec![],
+            prepare_sha256: [0; 32],
+        };
+        value.prepare_sha256 = canonical_sha256_without_digest(
+            &value,
+            |copy| copy.prepare_sha256 = [0; 32],
+        )
+        .unwrap();
+        value
+    }
+
+    #[test]
+    fn runner_bounds_accept_inclusive_minimum_and_maximum_profiles() {
+        bounds().validate().unwrap();
+        let mut maximum = serde_json::to_value(bounds()).unwrap();
+        for (field, _, upper) in FIELDS {
+            maximum[field] = serde_json::json!(upper);
+        }
+        serde_json::from_value::<RunnerExecutionBoundsV12>(maximum)
+            .unwrap()
+            .validate()
+            .unwrap();
+    }
+
+    #[test]
+    fn runner_bounds_reject_each_outside_boundary_and_extreme_integer() {
+        for (field, lower, upper) in FIELDS {
+            for invalid in [0, lower - 1, upper + 1, u64::MAX] {
+                let mut value = serde_json::to_value(bounds()).unwrap();
+                value[field] = serde_json::json!(invalid);
+                if let Ok(parsed) =
+                    serde_json::from_value::<RunnerExecutionBoundsV12>(value)
+                {
+                    assert!(parsed.validate().is_err(), "{field}={invalid}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn runner_bounds_charge_all_writable_memory_at_the_exact_limit() {
+        let mut value = bounds();
+        value.run_tmpfs_bytes = 16 * MIB;
+        value.private_data_bytes = 208 * MIB;
+        value.validate().unwrap();
+        for field in [
+            "shmBytes", "runTmpfsBytes", "tmpTmpfsBytes", "privateDataBytes",
+        ] {
+            let mut exceeded = serde_json::to_value(&value).unwrap();
+            let previous = exceeded[field].as_u64().unwrap();
+            exceeded[field] = serde_json::json!(previous + 1);
+            let exceeded: RunnerExecutionBoundsV12 =
+                serde_json::from_value(exceeded).unwrap();
+            assert_eq!(
+                exceeded.validate().unwrap_err().to_string(),
+                "runner writable memory exceeds its memory bound",
+            );
+        }
+    }
+
+    #[test]
+    fn runner_bounds_serialization_is_closed_required_and_integer_only() {
+        let value = serde_json::to_value(bounds()).unwrap();
+        assert_eq!(value.as_object().unwrap().len(), FIELDS.len());
+        assert_eq!(
+            serde_json::from_value::<RunnerExecutionBoundsV12>(value.clone())
+                .unwrap(),
+            bounds(),
+        );
+        for (field, _, _) in FIELDS {
+            let mut missing = value.clone();
+            assert!(missing.as_object_mut().unwrap().remove(field).is_some());
+            assert!(serde_json::from_value::<RunnerExecutionBoundsV12>(
+                missing,
+            )
+            .is_err());
+            for invalid in [
+                serde_json::Value::Null,
+                serde_json::json!(false),
+                serde_json::json!("1000"),
+                serde_json::json!(1000.0),
+                serde_json::json!(-1),
+            ] {
+                let mut wrong_type = value.clone();
+                wrong_type[field] = invalid;
+                assert!(serde_json::from_value::<RunnerExecutionBoundsV12>(
+                    wrong_type,
+                )
+                .is_err());
+            }
+        }
+        let mut extra = value;
+        extra["unbounded"] = serde_json::json!(false);
+        assert!(serde_json::from_value::<RunnerExecutionBoundsV12>(extra)
+            .is_err());
+    }
+
+    #[test]
+    fn runner_identity_requires_and_validates_execution_bounds() {
+        let mut runner = runner();
+        runner.validate().unwrap();
+        let mut missing = serde_json::to_value(&runner).unwrap();
+        missing.as_object_mut().unwrap().remove("executionBounds");
+        assert!(serde_json::from_value::<RunnerIdentity>(missing).is_err());
+        runner.execution_bounds.user_uid = 0;
+        assert_eq!(
+            runner.validate().unwrap_err().to_string(),
+            "runner execution bounds are invalid",
+        );
+    }
+
+    #[test]
+    fn runner_mounts_cannot_cover_or_enter_private_data_scratch() {
+        assert_eq!(RUNNER_PRIVATE_DATA_PATH_V12, "/var/lib/serverware-runner");
+        for field in [
+            "sourceDestination", "artifactDestination", "outputDestination",
+        ] {
+            for path in [
+                "/var", "/var/lib", "/var/lib/serverware-runner",
+                "/var/lib/serverware-runner/pgdata",
+                "/var//lib/serverware-runner",
+                "/var/./lib/serverware-runner",
+                "/var/lib/serverware-runner//pgdata",
+                "/var/lib/serverware-runner/./pgdata",
+                "/var//lib/", "/var/./lib", "/",
+            ] {
+                let mut value = serde_json::to_value(runner().mount_policy)
+                    .unwrap();
+                value[field] = serde_json::json!(path);
+                assert!(serde_json::from_value::<RunnerMountPolicy>(value)
+                    .unwrap()
+                    .validate()
+                    .is_err());
+            }
+            let mut sibling = serde_json::to_value(runner().mount_policy)
+                .unwrap();
+            sibling[field] = serde_json::json!(
+                "/var/lib/serverware-runner-sibling"
+            );
+            serde_json::from_value::<RunnerMountPolicy>(sibling)
+                .unwrap()
+                .validate()
+                .unwrap();
+        }
+        assert!(paths_overlap("/", RUNNER_PRIVATE_DATA_PATH_V12));
+        assert!(paths_overlap(RUNNER_PRIVATE_DATA_PATH_V12, "/"));
+        assert!(!paths_overlap(
+            "/var/lib/serverware-runner-sibling",
+            RUNNER_PRIVATE_DATA_PATH_V12,
+        ));
+        assert!(!paths_overlap("/opt/source", "/opt/artifacts"));
+    }
+
+    #[test]
+    fn prepare_digest_binds_every_runner_execution_bound() {
+        let prepared = prepare();
+        prepared.validate().unwrap();
+        for (field, lower, _) in FIELDS {
+            let mut changed = serde_json::to_value(&prepared).unwrap();
+            changed["runner"]["executionBounds"][field] =
+                serde_json::json!(lower + 1);
+            let mut changed: PrepareContract =
+                serde_json::from_value(changed).unwrap();
+            let next_digest = canonical_sha256_without_digest(
+                &changed,
+                |copy| copy.prepare_sha256 = [0; 32],
+            )
+            .unwrap();
+            assert_ne!(next_digest, prepared.prepare_sha256, "{field}");
+            assert!(changed.validate().is_err(), "{field}");
+            if field != "cpuPeriodMicros" {
+                assert_eq!(
+                    changed.validate().unwrap_err().to_string(),
+                    "prepare contract digest is not canonical",
+                );
+                changed.prepare_sha256 = next_digest;
+                changed.validate().unwrap();
+            }
+        }
+    }
 }

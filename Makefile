@@ -616,6 +616,8 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_authority_root_transition.py \
 	scripts/test_authority_wire_json_source.py \
 	scripts/test_authority_audit_capacity.py \
+	scripts/test_authority_global_audit_capacity.py \
+	scripts/test_authority_global_audit_capacity_sql_source.py \
 	scripts/test_authority_transition_registry.py \
 	scripts/test_webauthn_attestation_core.py \
 	scripts/test_webauthn_trust_core.py \
@@ -712,6 +714,7 @@ override CODER_EXCLUDED_TEST_SCRIPTS := \
 	scripts/test_postgres_trigger_manifest.py \
 	scripts/test_authority_mutation_postgres.py \
 	scripts/test_authority_root_transition_postgres.py \
+	scripts/test_authority_global_audit_capacity_postgres.py \
 	scripts/test_authority_wire_json_postgres.py \
 	scripts/test_traversal_response_evidence.py \
 	scripts/test_webauthn_recovery.py

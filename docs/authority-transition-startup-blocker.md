@@ -57,6 +57,10 @@ source-owned limit and couples four policy writers' charges to their exact fresh
 audit INSERTs. It does not establish global pending/claimed cardinality: quota
 and legacy writers still use different accounting paths, and delivery does not
 maintain that policy aggregate. Its authored helper cases remain unexecuted.
+The [global capacity components](authority-global-audit-capacity-design.md)
+now define compact OLD/NEW accounting and independent Python/SQL checks, but
+remain unintegrated. They neither create an authenticated baseline nor provide
+the missing PostgreSQL delivery transition.
 
 ## Implementation contracts still needed
 

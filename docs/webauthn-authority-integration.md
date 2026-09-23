@@ -114,6 +114,10 @@ INSERTs. It does not supply this global count proof: the quota helper uses a
 different aggregate identity, legacy writers use a direct COUNT, and delivery
 does not decrement the policy aggregate. A complete all-writer transition is
 still required; the nominal row limit is not proof of the maintained population.
+The [global capacity implementation contract](authority-global-audit-capacity-design.md)
+records the prepared compact-counter validators, the nineteen-operation scope,
+and the coordinated bounds, initialization and delivery changes still needed.
+No current workflow is admitted merely by the presence of those components.
 
 ## Root authority, time and whole-operation bounds
 

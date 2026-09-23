@@ -61,6 +61,12 @@ workload has been demonstrated.
 
 ## Remaining integration
 
+The [global capacity components and integration contract](authority-global-audit-capacity-design.md)
+prepare a compact shared counter plus independent Python and SQL admission.
+Those components are not connected to the live planner or executor and do not
+replace the four-writer behavior described here. Their authored fixtures have
+not run; initialization and receipt-bound delivery remain required.
+
 - Policy writers use aggregate kind `metadata-audit-outbox-capacity` and a
   one-frame partition commitment. Quota writers use a different row: kind
   `metadata-audit-outbox`, partition `global`, with a two-frame commitment.

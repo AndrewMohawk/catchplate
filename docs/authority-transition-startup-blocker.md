@@ -55,7 +55,7 @@ its authored component and original-byte checks remain unexecuted.
 The [fresh audit helpers](authority-audit-capacity.md) retain exact INSERT and
 replay guards while dropping the old policy/quota counter paths. The common
 planner, payload admission and executor now use the [global capacity contract](authority-global-audit-capacity-design.md),
-with separate business/framework budgets and source `.26`/primary-root profile
+with separate business/framework budgets and source `.27`/primary-root profile
 v2. This remains unexecuted source: authenticated initialization and general
 receipt-bound PostgreSQL delivery are missing, and SQLite remains separate.
 
@@ -71,6 +71,12 @@ migration source comparison before signing. Structural capture now checks the
 configured NOLOGIN authority owner rather than the bootstrap session login.
 The full program and owner contract enter the source digest; old recorded
 digests are not automatically upgraded. All of this remains unexecuted.
+
+The [verifier read-permission correction](authority-verifier-read-permissions.md)
+binds the current four-table WebAuthn read set, dedicated verifier role and shared
+effective-privilege query through all four installation paths and live evidence
+reads. Source `.27` rejects older permission/profile contracts. This is not native
+role/mTLS proof or completion of the missing WebAuthn kernels.
 
 ## Implementation contracts still needed
 

@@ -624,6 +624,7 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_authority_audit_backfill_spec.py \
 	scripts/test_authority_table_acl_source.py \
 	scripts/test_authority_schema_source.py \
+	scripts/test_authority_verifier_read_source.py \
 	scripts/test_authority_transition_registry.py \
 	scripts/test_webauthn_attestation_core.py \
 	scripts/test_webauthn_trust_core.py \
@@ -721,6 +722,7 @@ override CODER_EXCLUDED_TEST_SCRIPTS := \
 	scripts/test_authority_mutation_postgres.py \
 	scripts/test_authority_root_transition_postgres.py \
 	scripts/test_authority_global_audit_capacity_postgres.py \
+	scripts/test_authority_verifier_read_postgres.py \
 	scripts/test_authority_wire_json_postgres.py \
 	scripts/test_traversal_response_evidence.py \
 	scripts/test_webauthn_recovery.py
@@ -7288,6 +7290,13 @@ verify-webauthn-trust-projection:
 verify-authority-row-mutations:
 	test -n "$${SERVERWARE_TEST_POSTGRES_DSN:-}"
 	python3 scripts/test_authority_mutation_postgres.py --postgres-dsn "$$SERVERWARE_TEST_POSTGRES_DSN"
+
+# Unexecuted component entrypoint, not approved native-controller coverage.
+# All fixture role/schema/database-ACL changes remain in rolled-back transactions.
+verify-authority-verifier-read:
+	test -n "$${SERVERWARE_TEST_POSTGRES_DSN:-}"
+	test "$${SERVERWARE_TEST_POSTGRES_DISPOSABLE:-}" = "1"
+	python3 scripts/test_authority_verifier_read_postgres.py --postgres-dsn "$$SERVERWARE_TEST_POSTGRES_DSN" --disposable-cluster
 
 verify-nitro-nsm-attest:
 	python3 scripts/test_nitro_nsm_attest.py

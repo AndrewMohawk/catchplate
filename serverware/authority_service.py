@@ -50,6 +50,9 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 from serverware import authority_contract
 from serverware import authority_planner
 from serverware import authority_transition_registry
+from serverware.authority_store.verifier_read_sql import (
+    verifier_read_privilege_check,
+)
 
 SOURCE_REVISION = (
     authority_contract.SOURCE_REVISION
@@ -4457,6 +4460,7 @@ class AuthorityProcess:
                         "SELECT current_user AS role, ssl.ssl, "
                         "ssl.client_dn, ssl.client_serial::text "
                         "AS client_serial, ssl.issuer_dn, "
+                        "role_record.rolcanlogin, "
                         "role_record.rolsuper, "
                         "role_record.rolcreaterole, "
                         "role_record.rolcreatedb, "
@@ -4481,7 +4485,8 @@ class AuthorityProcess:
                         identity is None
                         or identity["role"]
                         != self.role_config["databaseRole"]
-                        or not bool(identity["ssl"])
+                        or identity.get("ssl") is not True
+                        or identity.get("rolcanlogin") is not True
                         or identity["client_dn"]
                         != self.role_config["tlsClientDn"]
                         or identity["client_serial"]
@@ -4489,7 +4494,7 @@ class AuthorityProcess:
                         or identity["issuer_dn"]
                         != self.role_config["tlsIssuerDn"]
                         or any(
-                            bool(identity[field])
+                            identity.get(field) is not False
                             for field in (
                                 "rolsuper",
                                 "rolcreaterole",
@@ -4506,33 +4511,10 @@ class AuthorityProcess:
                             "WebAuthn authority read role changed"
                         )
                     forbidden_authority = cursor.execute(
-                        "SELECT 1 FROM pg_catalog.pg_class AS relation "
-                        "JOIN pg_catalog.pg_namespace AS namespace "
-                        "ON namespace.oid = relation.relnamespace "
-                        "WHERE namespace.nspname = 'serverware_metadata' "
-                        "AND relation.relkind IN ('r', 'p', 'S') "
-                        "AND ((relation.relkind IN ('r', 'p') AND "
-                        "pg_catalog.has_table_privilege(current_user, "
-                        "relation.oid, 'INSERT,UPDATE,DELETE,TRUNCATE,"
-                        "REFERENCES,TRIGGER')) OR "
-                        "(relation.relkind = 'S' AND "
-                        "pg_catalog.has_sequence_privilege(current_user, "
-                        "relation.oid, 'USAGE,UPDATE'))) "
-                        "UNION ALL "
-                        "SELECT 1 FROM pg_catalog.pg_auth_members "
-                        "WHERE member = "
-                        "current_user::pg_catalog.regrole::oid "
-                        "OR roleid = "
-                        "current_user::pg_catalog.regrole::oid "
-                        "UNION ALL "
-                        "SELECT 1 FROM pg_catalog.pg_proc AS function_record "
-                        "JOIN pg_catalog.pg_namespace AS namespace "
-                        "ON namespace.oid = "
-                        "function_record.pronamespace "
-                        "WHERE namespace.nspname = 'serverware_metadata' "
-                        "AND pg_catalog.has_function_privilege("
-                        "current_user, function_record.oid, 'EXECUTE') "
-                        "LIMIT 1"
+                        *verifier_read_privilege_check(
+                            role=self.role_config["databaseRole"],
+                            namespace="serverware_metadata",
+                        )
                     ).fetchone()
                     if forbidden_authority is not None:
                         raise AuthorityServiceError(

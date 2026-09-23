@@ -174,6 +174,20 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
             and isinstance(node.func, ast.Attribute) and node.func.attr in {"cursor", "execute"}]
         self.assertTrue(cursor_calls)
         self.assertTrue(all(node.lineno > first.end_lineno for node in cursor_calls))
+        verifier_guard = self.seal.body[1]
+        self.assertIsInstance(verifier_guard, ast.If)
+        self.assert_shape(verifier_guard.test,
+            "schema in {_POLICY_CANDIDATE_AUTHORITY_SCHEMA_NAME, 'serverware_candidate_authority_expected_v9'} "
+            "and (type(authority_verifier_role) is not str "
+            "or re.fullmatch('[a-z][a-z0-9_]{0,62}', authority_verifier_role) is None "
+            "or authority_verifier_role != _METADATA_STORE_AUTHORITY_VERIFIER_ROLE "
+            "or authority_verifier_role in {runtime_role, authority_executor_role, authority_owner_role, "
+            "authority_capability_issuer_role, authority_planner_writer_role} "
+            "or type(authority_verifier_read_tables) is not frozenset "
+            "or authority_verifier_read_tables != _POLICY_AUTHORITY_VERIFIER_READ_TABLES)")
+        self.assert_shape(verifier_guard.body[0].exc,
+            "error_type('metadata verifier role/read closure is not source exact')")
+        self.assertTrue(all(node.lineno > verifier_guard.end_lineno for node in cursor_calls))
 
     def test_all_three_metadata_callers_pass_the_actual_complete_read_only_set(self):
         owners = ((self.db_tree, "init_db"),
@@ -333,7 +347,7 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
 
     def test_source_revision_and_all_seventeen_v9_ddl_checks_are_pinned(self):
         self.assertEqual(authority_contract.SOURCE_REVISION,
-            "serverware.policyCandidateAuthoritySource/2026-07-30.26")
+            "serverware.policyCandidateAuthoritySource/2026-07-30.27")
         _, executor = read_source("serverware/authority_store/executor_v9.py", 2 * 1024 * 1024)
         self.assertFalse(any(isinstance(node, ast.FunctionDef)
             and node.name == "authority_v9_schema_source" for node in executor.body))
@@ -347,7 +361,7 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
         literals = [node.value for node in ast.walk(function)
             if isinstance(node, ast.Constant) and type(node.value) is str]
         self.assertEqual(sum(value.count(authority_contract.SOURCE_REVISION) for value in literals), 17)
-        self.assertFalse(any("serverware.policyCandidateAuthoritySource/2026-07-30.25" in value for value in literals))
+        self.assertFalse(any("serverware.policyCandidateAuthoritySource/2026-07-30.26" in value for value in literals))
 
 
 if __name__ == "__main__":

@@ -41,6 +41,7 @@ from serverware.authority_store import (
     metadata_schema as _metadata_schema,
 )
 from serverware.authority_store import schema as _authority_schema
+from serverware.authority_store import verifier_read_sql as _authority_verifier_read_sql
 from serverware.authority_store.authority_dispatch import (
     _POLICY_AUTHORITY_CONTROLLED_WRITER_HANDLERS,
     _authority_marshal_value,
@@ -1896,39 +1897,7 @@ _POLICY_AUTHORITY_PLANNER_WRITER_TABLE_PRIVILEGES = MappingProxyType(
             frozenset({"SELECT", "UPDATE"}),
     }
 )
-_POLICY_AUTHORITY_VERIFIER_READ_TABLES = frozenset(
-    {
-        str(entry["table"])
-        for operation_manifest in
-            _POLICY_AUTHORITY_OPERATION_QUERY_MANIFEST.values()
-        for entry in operation_manifest
-    }
-    | {
-        table
-        for tables in
-            _POLICY_AUTHORITY_OPERATION_AUTHORIZATION_READ_TABLES.values()
-        for table in tables
-    }
-    | {
-        "policy_authority_query_dependency_manifests",
-        "policy_authority_authenticated_table_roots",
-        "policy_authority_authenticated_tree_nodes",
-        "policy_authority_authenticated_leaves",
-        "policy_authority_authenticated_root_revisions",
-        "policy_authority_verifier_capabilities",
-        "policy_authority_writer_capabilities",
-        "policy_authority_writer_receipts",
-        "policy_authority_external_witness_receipts",
-        "policy_authority_fence_heads",
-        "policy_authority_execution_envelopes",
-        "policy_authority_planner_transactions",
-        "policy_authority_authorization_projections",
-        "policy_authority_webauthn_assertion_evidence",
-        "policy_authority_webauthn_assertion_receipts",
-        "webauthn_challenges",
-        "webauthn_credentials",
-    }
-)
+_POLICY_AUTHORITY_VERIFIER_READ_TABLES = authority_contract.VERIFIER_READ_TABLES
 _POLICY_CANARY_TRANSITIONS = {
     "staged": frozenset({"distributing", "failed", "cancelled", "expired", "superseded"}),
     "distributing": frozenset({"observing", "failed", "cancelled", "expired", "superseded"}),
@@ -3568,6 +3537,21 @@ def _seal_postgres_schema_acl(
         raise error_type(
             "metadata runtime read-only table closure is not source exact"
         )
+    if schema in {
+        _POLICY_CANDIDATE_AUTHORITY_SCHEMA_NAME,
+        "serverware_candidate_authority_expected_v9",
+    } and (
+        type(authority_verifier_role) is not str
+        or re.fullmatch(r"[a-z][a-z0-9_]{0,62}", authority_verifier_role) is None
+        or authority_verifier_role != _METADATA_STORE_AUTHORITY_VERIFIER_ROLE
+        or authority_verifier_role in {
+            runtime_role, authority_executor_role, authority_owner_role,
+            authority_capability_issuer_role, authority_planner_writer_role,
+        }
+        or type(authority_verifier_read_tables) is not frozenset
+        or authority_verifier_read_tables != _POLICY_AUTHORITY_VERIFIER_READ_TABLES
+    ):
+        raise error_type("metadata verifier role/read closure is not source exact")
     if (
         authority_planner_writer_function_signatures
         and authority_planner_writer_function_signatures
@@ -4929,6 +4913,14 @@ def _seal_postgres_schema_acl(
             raise error_type(
                 "PostgreSQL object owner or ACL contains unexpected authority"
             )
+        if verifier_role not in {runtime_role, executor_role}:
+            verifier_privilege_violation = cur.execute(
+                *_authority_verifier_read_sql.verifier_read_privilege_check(
+                    role=verifier_role, namespace=schema,
+                )
+            ).fetchone()
+            if verifier_privilege_violation is not None:
+                raise error_type("PostgreSQL verifier effective privileges are not source exact")
 
 
 def _audit_pg_connect():
@@ -20479,6 +20471,9 @@ def _policy_authority_owner_verification_profile_digest(
         ).strip(),
         "executorRole": _METADATA_STORE_AUTHORITY_EXECUTOR_ROLE,
         "verifierReadRole": _METADATA_STORE_AUTHORITY_VERIFIER_ROLE,
+        "verifierReadContract": authority_contract.VERIFIER_READ_CONTRACT,
+        "verifierReadPrivilegeSqlDigest":
+            _authority_verifier_read_sql.VERIFIER_READ_PRIVILEGE_SQL_DIGEST,
         "verifierReadTables": sorted(
             _POLICY_AUTHORITY_VERIFIER_READ_TABLES
         ),
@@ -27269,6 +27264,8 @@ def init_db(
                 authority_executor_role=(
                     _METADATA_STORE_AUTHORITY_EXECUTOR_ROLE
                 ),
+                authority_verifier_role=_METADATA_STORE_AUTHORITY_VERIFIER_ROLE,
+                authority_verifier_read_tables=_POLICY_AUTHORITY_VERIFIER_READ_TABLES,
                 authority_owner_role=(
                     _METADATA_STORE_AUTHORITY_OWNER_ROLE
                 ),

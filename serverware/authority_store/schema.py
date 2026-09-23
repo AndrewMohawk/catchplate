@@ -12,6 +12,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from serverware import authority_contract
 from serverware.authority_store import metadata_schema_source
 from serverware.authority_store import postgres_trigger_manifest
+from serverware.authority_store.verifier_read_sql import VERIFIER_READ_PRIVILEGE_SQL_DIGEST
 from serverware.authority_store.completed_v9_schema_source import (
     COMPLETED_V9_RECEIPT_TABLE as _COMPLETED_V9_RECEIPT_TABLE,
     completed_v9_schema_programs,
@@ -168,6 +169,10 @@ def _policy_candidate_authority_source_contract_digest() -> str:
             "objectOwnershipContract":
                 "serverware.policyAuthorityObjectOwnership/v1",
             "authorityOwnerRole": _METADATA_STORE_AUTHORITY_OWNER_ROLE,
+            "verifierReadContract": authority_contract.VERIFIER_READ_CONTRACT,
+            "verifierReadRole": _METADATA_STORE_AUTHORITY_VERIFIER_ROLE,
+            "verifierReadTables": sorted(authority_contract.VERIFIER_READ_TABLES),
+            "verifierReadPrivilegeSqlDigest": VERIFIER_READ_PRIVILEGE_SQL_DIGEST,
             "metadataSchemaProgramDigest":
                 _policy_candidate_authority_framed_digest(
                     "serverware.metadataSchemaProgram/v1",
@@ -1377,6 +1382,8 @@ def _policy_candidate_authority_expected_structure_manifest(
                 authority_executor_role=(
                     _METADATA_STORE_AUTHORITY_EXECUTOR_ROLE
                 ),
+                authority_verifier_role=_METADATA_STORE_AUTHORITY_VERIFIER_ROLE,
+                authority_verifier_read_tables=_POLICY_AUTHORITY_VERIFIER_READ_TABLES,
                 authority_owner_role=(
                     _METADATA_STORE_AUTHORITY_OWNER_ROLE
                 ),
@@ -2483,6 +2490,8 @@ def repair_policy_candidate_authority_completed_v9_receipt(
             authority_executor_role=(
                 _METADATA_STORE_AUTHORITY_EXECUTOR_ROLE
             ),
+            authority_verifier_role=_METADATA_STORE_AUTHORITY_VERIFIER_ROLE,
+            authority_verifier_read_tables=_POLICY_AUTHORITY_VERIFIER_READ_TABLES,
             authority_owner_role=_METADATA_STORE_AUTHORITY_OWNER_ROLE,
             authority_capability_issuer_role=(
                 _METADATA_STORE_AUTHORITY_CAPABILITY_ISSUER_ROLE

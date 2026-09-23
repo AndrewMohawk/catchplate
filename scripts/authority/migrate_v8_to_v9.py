@@ -1503,6 +1503,8 @@ def migrate(
                     authority_executor_role=(
                         db._METADATA_STORE_AUTHORITY_EXECUTOR_ROLE
                     ),
+                    authority_verifier_role=db._METADATA_STORE_AUTHORITY_VERIFIER_ROLE,
+                    authority_verifier_read_tables=db._POLICY_AUTHORITY_VERIFIER_READ_TABLES,
                     authority_owner_role=db._METADATA_STORE_AUTHORITY_OWNER_ROLE,
                     authority_capability_issuer_role=(
                         db._METADATA_STORE_AUTHORITY_CAPABILITY_ISSUER_ROLE

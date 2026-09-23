@@ -47,7 +47,7 @@ def authority_v9_schema_source() -> str:
                 ),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.26'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.27'
                 ),
                 CHECK (status = 'completed'),
                 CHECK (length(before_manifest_json) BETWEEN 2 AND 67108864),
@@ -80,7 +80,7 @@ def authority_v9_schema_source() -> str:
                 CHECK (length(key_columns_json) BETWEEN 2 AND 4194304),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.26'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.27'
                 )
             );
 
@@ -123,7 +123,7 @@ def authority_v9_schema_source() -> str:
                 CHECK (length(template_json) BETWEEN 2 AND 4194304),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.26'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.27'
                 )
             );
 
@@ -176,7 +176,7 @@ def authority_v9_schema_source() -> str:
                 CHECK (length(evidence_json) BETWEEN 2 AND 4194304),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.26'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.27'
                 )
             );
 
@@ -214,7 +214,7 @@ def authority_v9_schema_source() -> str:
                 CHECK (expires_at_epoch_ns > created_at_epoch_ns),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.26'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.27'
                 )
             );
 
@@ -293,7 +293,7 @@ def authority_v9_schema_source() -> str:
                 ),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.26'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.27'
                 )
             );
 
@@ -402,7 +402,7 @@ def authority_v9_schema_source() -> str:
                 ),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.26'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.27'
                 )
             );
 
@@ -453,7 +453,7 @@ def authority_v9_schema_source() -> str:
                 CHECK (length(state_json) BETWEEN 2 AND 4194304),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.26'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.27'
                 )
             );
 
@@ -515,7 +515,7 @@ def authority_v9_schema_source() -> str:
                 CHECK (expires_at_epoch_ns > created_at_epoch_ns),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.26'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.27'
                 )
             );
 
@@ -552,7 +552,7 @@ def authority_v9_schema_source() -> str:
                 ),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.26'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.27'
                 )
             );
 
@@ -583,7 +583,7 @@ def authority_v9_schema_source() -> str:
                 CHECK (deleted_at_epoch_ns >= 0),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.26'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.27'
                 )
             );
 
@@ -628,7 +628,7 @@ def authority_v9_schema_source() -> str:
                 ),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.26'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.27'
                 )
             );
 
@@ -682,7 +682,7 @@ def authority_v9_schema_source() -> str:
                 ),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.26'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.27'
                 )
             );
 
@@ -726,7 +726,7 @@ def authority_v9_schema_source() -> str:
                 CHECK (updated_at_epoch_ns >= 0),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.26'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.27'
                 )
             );
 
@@ -774,7 +774,7 @@ def authority_v9_schema_source() -> str:
             ),
             CHECK (
                 source_revision =
-                'serverware.policyCandidateAuthoritySource/2026-07-30.26'
+                'serverware.policyCandidateAuthoritySource/2026-07-30.27'
             )
         );
 
@@ -841,7 +841,7 @@ def authority_v9_schema_source() -> str:
             ),
             CHECK (
                 source_revision =
-                'serverware.policyCandidateAuthoritySource/2026-07-30.26'
+                'serverware.policyCandidateAuthoritySource/2026-07-30.27'
             )
         );
 
@@ -901,7 +901,7 @@ def authority_v9_schema_source() -> str:
                 ),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.26'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.27'
                 )
             );
     """.replace(

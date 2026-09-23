@@ -22,8 +22,10 @@ The declarations now have two no-I/O source constructors and one composer:
 - `metadata_schema_source()` concatenates those exact results. It accepts no
   external SQL, paths, configuration or replacement arguments.
 
-The extraction preserved the base literal and extension function byte-for-byte.
-Source revision `.26` and every SQL constraint remain unchanged. The executor
+At the schema-source extraction checkpoint, the base literal and extension
+function were preserved byte-for-byte at source revision `.26`. The subsequent
+[verifier-read correction](authority-verifier-read-permissions.md) advances the
+current revision to `.27` and updates its 17 v9 revision pins. The executor
 retains its existing extension API by directly importing the sole constructor.
 The containing package still imports the schema facade and its dependencies;
 these are no-I/O source constructors, not a claim of a standard-library-only

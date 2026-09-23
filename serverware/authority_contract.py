@@ -7,7 +7,7 @@ from types import MappingProxyType
 from typing import Any, Mapping
 
 
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.26"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.27"
 SCHEMA_VERSION = 9
 CONTRACT_SCHEMA = "serverware.policyAuthorityOperationContract/v3"
 BUSINESS_INTENT_SCHEMA = "serverware.policyAuthorityBusinessIntent/v2"
@@ -58,6 +58,15 @@ MAX_PLAN_QUERY_ROWS = MAX_QUERY_PROOFS + 1
 MAX_PLAN_MUTATIONS = MAX_MUTATIONS + 1
 MAX_PLAN_WORK_UNITS = MAX_WORK_UNITS + 2
 MAX_PLAN_SELECTED_BYTES = MAX_REQUEST_BYTES + 8192
+# Current measured verifier evidence reads, not planner/business query closure
+# or the retained pre-v9 root/outcome helper inventory.
+VERIFIER_READ_CONTRACT = "serverware.policyAuthorityVerifierRead/v1"
+VERIFIER_READ_TABLES = frozenset({
+    "webauthn_challenges",
+    "webauthn_credentials",
+    "webauthn_trust_publication_high_water",
+    "webauthn_trust_publications",
+})
 _AUDIT_COUNTER_REPLACEMENT_OPERATIONS = frozenset({
     "policy.activation.prepare", "policy.activation.abort", "policy.genesis.prepare",
     "rbac.binding.mutate", "control-approval.request", "control-approval.decide",
@@ -2169,6 +2178,8 @@ OPERATION_MANIFEST_DIGEST = _digest(
         "auditCapacityMutationWorkUnits": AUDIT_CAPACITY_MUTATION_WORK_UNITS,
         "phase2StoreTables": list(PHASE2_STORE_TABLES),
         "v9AdditionalProtectedTables": list(V9_ADDITIONAL_PROTECTED_TABLES),
+        "verifierReadContract": VERIFIER_READ_CONTRACT,
+        "verifierReadTables": sorted(VERIFIER_READ_TABLES),
         "proofPrimitives": sorted(PROOF_PRIMITIVES),
         "capabilityIssuerFunctionSignatures": {
             function_name: list(argument_types)

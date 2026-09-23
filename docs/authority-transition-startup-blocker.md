@@ -265,6 +265,11 @@ These are separate from provisioning the production services:
   The typed reader also [stages referenced-row proofs](authority-query-proof-staging.md)
   before their fields drive dependent SQL. This relative membership check does
   not add independent currentness, completeness or a missing WebAuthn kernel.
+  Source `.28` adds [distinct complete-index query declarations](authority-complete-query-contract.md)
+  for explicit revocation, committed by the operation/handler manifests. The
+  reader rejects them before business/proof SQL until actual frontier acquisition
+  is implemented. [Storage, all-writer maintenance and bootstrap](authority-index-storage-integration.md)
+  remain requirements, not installed capabilities.
 - The planner reads root revisions and digests from PostgreSQL; the executor
   locks and compares those database roots. This establishes a same-database
   compare-and-swap boundary, not an independently retained current-root

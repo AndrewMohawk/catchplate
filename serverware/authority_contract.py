@@ -6,8 +6,10 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Mapping
 
+from serverware import authority_complete_query
 
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.27"
+
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.28"
 SCHEMA_VERSION = 9
 CONTRACT_SCHEMA = "serverware.policyAuthorityOperationContract/v3"
 BUSINESS_INTENT_SCHEMA = "serverware.policyAuthorityBusinessIntent/v2"
@@ -84,6 +86,7 @@ PROOF_PRIMITIVES = frozenset(
         "ordered-exact-page",
         "aggregate-high-water",
         "authenticated-secondary-index",
+        authority_complete_query.PROOF_PRIMITIVE,
         "authenticated-root-delta",
         "capacity-reservation",
         "checked-arithmetic",
@@ -1941,6 +1944,7 @@ _OPERATIONS = {
             "primary-key-row",
             "aggregate-high-water",
             "ordered-exact-page",
+            authority_complete_query.PROOF_PRIMITIVE,
         ),
         maximum_query_rows=192,
         maximum_mutations=136,
@@ -2079,6 +2083,7 @@ def operation_manifest() -> dict[str, Any]:
             "selectorClosure": spec["selectorClosure"],
             "proofKind": spec["proofKind"],
             "proofPrimitives": list(spec["proofPrimitives"]),
+            "completeIndexQueryRoles": authority_complete_query.role_manifest(operation),
             "globalAuditCapacity": spec["globalAuditCapacity"],
             "auditCapacityCounterSlotsReplaced": spec["auditCapacityCounterSlotsReplaced"],
             "auditCapacityAddsAggregateRoot": spec["auditCapacityAddsAggregateRoot"],
@@ -2134,6 +2139,7 @@ def operation_manifest() -> dict[str, Any]:
                         spec["approverPolicyRequired"],
                     "proofPrimitives":
                         list(spec["proofPrimitives"]),
+                    "completeIndexQueryRoles": authority_complete_query.role_manifest(operation),
                     "globalAuditCapacity": spec["globalAuditCapacity"],
                     "auditCapacityCounterSlotsReplaced": spec["auditCapacityCounterSlotsReplaced"],
                     "auditCapacityAddsAggregateRoot": spec["auditCapacityAddsAggregateRoot"],

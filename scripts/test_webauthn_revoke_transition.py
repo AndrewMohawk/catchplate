@@ -26,6 +26,7 @@ sys.path.insert(0, str(ROOT))
 
 from serverware import authority_contract
 from serverware import authority_audit_capacity as capacity
+from serverware import authority_complete_query as complete
 from serverware import authority_transition_core as core
 from serverware import authority_transition_policy as policy
 from serverware import authority_transition_webauthn as candidate
@@ -302,21 +303,42 @@ class RevokeTransitionTests(unittest.TestCase):
             arguments=context.arguments, database_now=self.now,
             request_digest=self.request_digest, evidence=context.verified_webauthn_evidence,
         )
-        predicate_values = lambda query: {(item.column, item.operator): item.value for item in query.predicates}
-        registrations = next(query for query in queries if "global_registration_challenges" in query.query_id)
-        self.assertEqual(predicate_values(registrations), {
-            ("challenge_type", "eq"): "registration", ("used_at", "is-null"): None,
-            ("expires_at", "gt"): self.now.isoformat(),
-        })
-        sessions = [query for query in queries if query.table == "oidc_browser_sessions"]
-        self.assertEqual({predicate_values(query)[("status", "eq")] for query in sessions}, {"active", "pending_webauthn"})
-        for query in queries:
-            if query.absent_key is None:
-                self.assertTrue(query.exact_page)
-                self.assertEqual(query.proof_primitive, "ordered-exact-page")
-                self.assertIsNone(query.page_size)
-                self.assertIsNone(query.continuation_token_digest)
-                self.assertNotIn("id", {item.column for item in query.predicates})
+        complete_queries = tuple(query for query in queries if type(query) is complete.CompleteIndexQuery)
+        self.assertEqual(tuple(query.role for query in complete_queries), (
+            "sessions_pending_webauthn", "sessions_active", "grants", "approvals",
+            "global_registration_challenges",
+        ))
+        elapsed = self.now - datetime(1970, 1, 1, tzinfo=timezone.utc)
+        cutoff_us = (elapsed.days * 86400 + elapsed.seconds) * 1_000_000 + elapsed.microseconds
+        expected = {
+            "sessions_pending_webauthn": ("webauthn_session_credential_status",
+                {"credential_record_id": "credential-target", "status": "pending_webauthn"}, 2),
+            "sessions_active": ("webauthn_session_credential_status",
+                {"credential_record_id": "credential-target", "status": "active"}, 2),
+            "grants": ("webauthn_grant_approver_active", {"credential_record_id": "credential-target"}, 1),
+            "approvals": ("webauthn_control_approval_approved", {"credential_record_id": "credential-target"}, 1),
+            "global_registration_challenges": ("webauthn_registration_unused_global",
+                {"expires_after_us": cutoff_us}, 1),
+        }
+        for query in complete_queries:
+            self.assertEqual((query.index_id, query.selector(), query.maximum_rows), expected[query.role])
+            self.assertEqual(query.proof_primitive, complete.PROOF_PRIMITIVE)
+            self.assertNotIsInstance(query, core.BoundedQuery)
+            for name in ("predicates", "order_by", "absent_key", "exact_page", "page_size",
+                         "continuation_token_digest", "secondary_index_name"):
+                self.assertFalse(hasattr(query, name))
+        self.assertEqual(complete.validate_bindings(candidate.OPERATION, complete_queries,
+            arguments=context.arguments, cutoff_us=cutoff_us), complete_queries)
+        exact_queries = [query for query in queries if type(query) is core.BoundedQuery]
+        self.assertEqual(len(exact_queries), 4)
+        for query in exact_queries:
+            self.assertEqual(query.proof_primitive, "primary-key-row")
+            self.assertFalse(query.exact_page)
+            self.assertEqual(query.maximum_rows, 1)
+            self.assertEqual(query.predicates,
+                tuple(core.QueryPredicate(column, "eq", value) for column, value in query.absent_key.items()))
+            self.assertEqual(query.order_by, (core.QueryOrder("id"),))
+            self.assertEqual(query.contract_value()["schema"], "serverware.policyAuthorityQueryProgram/v1")
         audit_queries = [query for query in queries if query.table == "metadata_audit_outbox"]
         self.assertEqual(len(audit_queries), 2)
         self.assertTrue(all(query.absent_key is not None and query.maximum_rows == 1 for query in audit_queries))

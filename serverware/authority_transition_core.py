@@ -9,6 +9,7 @@ from types import MappingProxyType
 from typing import Any, Mapping, Protocol
 
 from serverware import authority_contract
+from serverware import authority_complete_query
 from serverware import authority_query_reads
 
 
@@ -496,6 +497,7 @@ class BoundedQuery:
                 and self.absent_key is None
             )
             or self.proof_primitive not in authority_contract.PROOF_PRIMITIVES
+            or self.proof_primitive == authority_complete_query.PROOF_PRIMITIVE
             or not isinstance(self.work_units, int)
             or isinstance(self.work_units, bool)
             or not 1 <= self.work_units <= authority_contract.MAX_WORK_UNITS
@@ -592,6 +594,11 @@ class BoundedQuery:
             "continuationTokenDigest": self.continuation_token_digest,
             "secondaryIndexName": self.secondary_index_name,
         }
+
+
+# Complete index declarations deliberately have no SQL-predicate/page fields.
+# The legacy BoundedQuery wire projection above remains byte-for-byte v1.
+Query = BoundedQuery | authority_complete_query.CompleteIndexQuery
 
 
 @dataclass(frozen=True, slots=True)
@@ -2666,7 +2673,7 @@ class TransitionKernel(Protocol):
         arguments: Mapping[str, Any],
         database_now: datetime,
         request_digest: str,
-    ) -> tuple[BoundedQuery, ...]:
+    ) -> tuple[Query, ...]:
         ...
 
     def transition(self, context: KernelContext) -> KernelTransition:
@@ -3494,9 +3501,22 @@ def delete_with_tombstone(
 
 def close_queries(
     operation: str,
-    queries: tuple[BoundedQuery, ...],
-) -> tuple[BoundedQuery, ...]:
+    queries: tuple[Query, ...],
+) -> tuple[Query, ...]:
     spec = authority_contract.operation_spec(operation)
+    if (type(queries) is not tuple
+            or len(queries) > spec["maximumQueryRows"]
+            or any(type(query) not in (BoundedQuery, authority_complete_query.CompleteIndexQuery)
+                   for query in queries)):
+        raise TransitionKernelError("authority query program has an unknown declaration kind")
+    try:
+        queries = tuple(
+            authority_complete_query.snapshot_query(query)
+            if type(query) is authority_complete_query.CompleteIndexQuery else query
+            for query in queries
+        )
+    except authority_complete_query.CompleteQueryError as exc:
+        raise TransitionKernelError("authority complete query declaration is invalid") from exc
     allowed = (
         set(spec["businessReads"])
         | set(spec["businessWrites"])
@@ -3505,8 +3525,9 @@ def close_queries(
     if (
         not isinstance(queries, tuple)
         or any(
-            not isinstance(query, BoundedQuery)
-            or query.table not in allowed
+            query.table not in allowed
+            or (type(query) is BoundedQuery
+                and query.proof_primitive == authority_complete_query.PROOF_PRIMITIVE)
             for query in queries
         )
         or any(

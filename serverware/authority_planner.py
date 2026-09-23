@@ -19,6 +19,7 @@ from serverware.authority_audit_trace import (
     audit_capacity_scan_key,
 )
 from serverware import authority_contract
+from serverware import authority_complete_query
 from serverware import authority_primary_contract
 from serverware import authority_query_reads
 from serverware import authority_query_staging
@@ -498,7 +499,7 @@ class PlanningState:
     webauthn_admission: Mapping[str, int] | None = None
     query_work_units: int = 0
     verified_webauthn_evidence: Mapping[str, Any] | None = None
-    query_program: tuple[authority_transition_core.BoundedQuery, ...] = ()
+    query_program: tuple[authority_transition_core.Query, ...] = ()
     query_reads: tuple[authority_query_reads.QueryRead, ...] = ()
 
 
@@ -744,6 +745,21 @@ class TypedTransitionPlanningProgram:
                     database_now=database_now,
                     request_digest=str(request["requestDigest"]),
                 )
+            if (type(proposed_queries) is not tuple
+                    or len(proposed_queries) > authority_contract.operation_spec(self.operation)["maximumBusinessQueryRows"]):
+                raise AuthorityPlannerError("typed query inventory exceeds its source bound")
+            if authority_complete_query.role_manifest(self.operation):
+                bound_queries = iter(authority_complete_query.validate_bindings(
+                    self.operation,
+                    tuple(query for query in proposed_queries
+                          if type(query) is authority_complete_query.CompleteIndexQuery),
+                    arguments=arguments,
+                    cutoff_us=authority_complete_query.cutoff_microseconds(database_now),
+                ))
+                proposed_queries = tuple(
+                    next(bound_queries) if type(query) is authority_complete_query.CompleteIndexQuery else query
+                    for query in proposed_queries
+                )
             queries = authority_audit_capacity.add_capacity_query(
                 self.operation,
                 proposed_queries,
@@ -758,6 +774,7 @@ class TypedTransitionPlanningProgram:
                 query_sources=query_sources,
             )
         except (authority_transition_core.TransitionKernelError,
+                authority_complete_query.CompleteQueryError,
                 authority_query_reads.QueryReadError,
                 authority_query_staging.QueryStagingError) as exc:
             raise AuthorityPlannerError(
@@ -1600,16 +1617,21 @@ def _read_bounded_transition_rows(
     *,
     operation: str,
     request: Mapping[str, Any],
-    queries: tuple[authority_transition_core.BoundedQuery, ...],
+    queries: tuple[authority_transition_core.Query, ...],
     manifest: tuple[dict[str, Any], ...],
     trace: PlannerTrace,
     query_sources: authority_query_staging.StagedQueryProofs,
 ) -> tuple[tuple[dict[str, Any], ...],
-           tuple[authority_transition_core.BoundedQuery, ...],
+           tuple[authority_transition_core.Query, ...],
            tuple[authority_query_reads.QueryRead, ...]]:
     # Retain query identity and empty results separately from the deduplicated
     # row union. This records SQL observations, not predicate completeness.
     queries = authority_query_reads.snapshot_queries(operation, queries)
+    # Reject the whole inventory before even the first business/proof read.
+    # A complete declaration must never fall through to ordinary SQL LIMIT+1.
+    # The earlier database-clock read is not independent time authority.
+    if any(type(query) is authority_complete_query.CompleteIndexQuery for query in queries):
+        raise AuthorityPlannerError("complete index query acquisition is not available")
     manifest_by_table = {
         str(entry["table"]): entry for entry in manifest
     }

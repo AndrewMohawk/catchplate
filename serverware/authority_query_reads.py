@@ -20,6 +20,7 @@ from dataclasses import dataclass, fields
 from typing import Any
 
 from serverware import authority_contract
+from serverware import authority_complete_query
 
 
 MAX_BOOKKEEPING_BYTES = 64 * 1024 * 1024
@@ -225,8 +226,15 @@ def validate_read_budget(operation: str, *, query_reads: tuple[QueryRead, ...]) 
 
 def _query_copy(query: Any, budget: _CopyBudget) -> Any:
     core = _core()
+    if type(query) is authority_complete_query.CompleteIndexQuery:
+        try:
+            owned = authority_complete_query.snapshot_query(query)
+            budget.charge(len(_wire(owned.contract_value())))
+            return owned
+        except authority_complete_query.CompleteQueryError as exc:
+            raise QueryReadError("complete query source snapshot is invalid") from exc
     if type(query) is not core.BoundedQuery:
-        raise QueryReadError("query program requires exact BoundedQuery values")
+        raise QueryReadError("query program requires an exact admitted declaration kind")
     try:
         values = {field.name: getattr(query, field.name) for field in fields(core.BoundedQuery)}
         _query_id(values["query_id"])
@@ -395,6 +403,10 @@ def reference_source_rows(operation: str, query: Any, *, prior_reads: tuple[Quer
         raise QueryReadError("query reference source inventory includes the current query")
     selections = _selection_map(operation, selected_rows)
     available = _associations(records, selections)
+    # The initial complete roles bind only request literals, fixed source enums
+    # and an explicit supplied cutoff. They contain no deferred row references.
+    if type(owned) is authority_complete_query.CompleteIndexQuery:
+        return ()
     core = _core()
     budget = _CopyBudget()
     sources = {}
@@ -423,6 +435,10 @@ def reference_source_rows(operation: str, query: Any, *, prior_reads: tuple[Quer
 def _resolve(query, prior_reads: tuple[QueryRead, ...], selections):
     core = _core()
     available = _associations(prior_reads, selections)
+    if type(query) is authority_complete_query.CompleteIndexQuery:
+        # Do not synthesize legacy primary-key ORDER BY or SQL predicates for
+        # an index declaration. This is bookkeeping, not completeness admission.
+        return authority_complete_query.snapshot_query(query)
     budget = _CopyBudget()
 
     def resolve(value):
@@ -460,6 +476,13 @@ def resolve_query(operation: str, query: Any, *, prior_reads: tuple[QueryRead, .
 
 def _resolution_shape(query, resolved) -> None:
     core = _core()
+    if (type(query) is authority_complete_query.CompleteIndexQuery
+            or type(resolved) is authority_complete_query.CompleteIndexQuery):
+        if (type(query) is not authority_complete_query.CompleteIndexQuery
+                or type(resolved) is not authority_complete_query.CompleteIndexQuery
+                or _wire(query.contract_value()) != _wire(resolved.contract_value())):
+            raise QueryReadError("complete query resolution changed its bound declaration")
+        return
     expected, actual = query.contract_value(), resolved.contract_value()
     expected["orderBy"] = [{"column": item.column, "descending": item.descending}
                            for item in (query.order_by or tuple(core.QueryOrder(c) for c in _keys()[query.table]))]
@@ -485,6 +508,9 @@ def _resolution_shape(query, resolved) -> None:
 
 def _capture(query, resolved, ordered_selected_rows, returned_row_count) -> QueryRead:
     _resolution_shape(query, resolved)
+    complete = type(query) is authority_complete_query.CompleteIndexQuery
+    require_absence = False if complete else query.require_absence
+    absent_key = None if complete else resolved.absent_key
     if type(ordered_selected_rows) is not tuple or len(ordered_selected_rows) > query.maximum_rows:
         raise QueryReadError("query observed address count exceeds its declared bound")
     if type(returned_row_count) is not int or not 0 <= returned_row_count <= query.maximum_rows:
@@ -500,14 +526,14 @@ def _capture(query, resolved, ordered_selected_rows, returned_row_count) -> Quer
     if len({(item.table, item.key_json) for item in addresses}) != len(addresses):
         raise QueryReadError("query observed address is duplicated")
     if returned_row_count:
-        if (query.require_absence or returned_row_count != len(addresses)
+        if (require_absence or returned_row_count != len(addresses)
                 or any(not item.present for item in addresses)):
             raise QueryReadError("query returned rows differ from its observed presence")
-    elif resolved.absent_key is None:
+    elif absent_key is None:
         if addresses:
             raise QueryReadError("ordinary empty query cannot invent an absence address")
     elif (len(addresses) != 1 or addresses[0].present
-          or addresses[0].key_json != _key_bytes(query.table, resolved.absent_key, budget)):
+          or addresses[0].key_json != _key_bytes(query.table, absent_key, budget)):
         raise QueryReadError("exact-absence query lost its resolved absent address")
     return QueryRead(query.query_id, declared_json, resolved_json,
                      addresses, returned_row_count)

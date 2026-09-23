@@ -104,6 +104,12 @@ declarations, retained proof frontiers, same-checkpoint root-pair authority and
 closed versioned Python/SQL transport admission. Existing exact-page metadata
 does not gain completeness authority from these records.
 
+The [distinct complete-index declarations](authority-complete-query-contract.md)
+now have their own source-bound schema and can be retained as observations
+without legacy ordering or absence synthesis. The planner reader rejects this
+kind before business/proof SQL while actual frontier acquisition is missing.
+Retention does not turn that declaration into proof evidence.
+
 The original retention slice added 24 query-record component methods, nine
 pre-kernel primary-input methods and one planner source-order method, preserving
 all existing method identities. Staging adds separate reference and lifecycle

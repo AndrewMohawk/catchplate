@@ -1,17 +1,16 @@
 """UNREGISTERED candidate for bounded explicit self-revocation.
 
-Address lists are signed hints, never row-selection authority. The measured
-planner queries the complete live predicates, including GLOBAL registration
+Address lists are signed hints, never row-selection authority. The candidate
+declares source-fixed complete index queries, including GLOBAL registration
 challenges, and rejects overflow. Audits use exact absent keys. The common
 planner owns the initialized global audit-capacity query, counter CAS and
 framework budget; this business kernel does not scan or count the outbox.
 The old aggregate HTTP route remains unchanged.
 
-The current reader's measured SQL predicates and LIMIT+1 provide completeness
-only if PostgreSQL query semantics are trusted. Selected-row membership proofs
-do not prove predicate completeness against a malicious database. Therefore
-this kernel is deliberately NOT registered, pending authenticated predicate /
-secondary-index completeness integration. Four startup gaps remain visible.
+The current reader rejects these declarations before business/proof SQL: real
+frontier production, maintained indexes and independent root-pair admission are
+not yet available. Selected-row membership is not predicate completeness. This
+kernel remains deliberately NOT registered; four startup gaps remain visible.
 """
 from __future__ import annotations
 
@@ -23,6 +22,7 @@ from typing import Any, Mapping
 
 from serverware import authority_contract
 from serverware import authority_audit_capacity
+from serverware import authority_complete_query
 from serverware import authority_transition_core as core
 
 
@@ -113,20 +113,6 @@ def _exact_query(operation: str, name: str, table: str, item_id: str) -> core.Bo
     )
 
 
-def _complete_query(
-    operation: str, name: str, table: str,
-    predicates: tuple[core.QueryPredicate, ...], maximum_rows: int,
-) -> core.BoundedQuery:
-    # _read_bounded_transition_rows always fetches maximum_rows + 1 and denies
-    # overflow. No continuation or partial page is accepted for revocation.
-    return core.BoundedQuery(
-        query_id=core.query_program_id(operation, name, table), table=table,
-        predicates=predicates, order_by=(core.QueryOrder("id"),),
-        maximum_rows=max(1, maximum_rows), proof_primitive="ordered-exact-page",
-        exact_page=True,
-    )
-
-
 def audit_id(operation: str, request_digest: str, approval_id: str | None) -> str:
     subject = "credential" if approval_id is None else "approval:" + approval_id
     subject_digest = hashlib.sha256(subject.encode("utf-8")).hexdigest()
@@ -139,36 +125,24 @@ def audit_id(operation: str, request_digest: str, approval_id: str | None) -> st
 def cascade_queries(
     *, operation: str, values: Mapping[str, Any], database_now: datetime,
     request_digest: str,
-) -> tuple[core.BoundedQuery, ...]:
-    """Reusable dependency/audit queries; caller owns its aggregate authority."""
+) -> tuple[core.Query, ...]:
+    """Explicit-revocation declarations, not aggregate withdrawal authority.
+
+    The supplied database time is bound as an input, not authenticated by this
+    conversion. A future aggregate operation needs its own roles and budgets.
+    """
     record_id = values["record_id"]
     queries = [_exact_query(operation, "revoked_credential", "webauthn_credentials", record_id)]
-    for status in ("pending_webauthn", "active"):
-        queries.append(_complete_query(
-            operation, "sessions_" + status, "oidc_browser_sessions",
-            (core.QueryPredicate("bound_webauthn_credential_id", "eq", record_id),
-             core.QueryPredicate("status", "eq", status)),
-            len(values["oidc_session_ids"]),
+    try:
+        cutoff_us = authority_complete_query.cutoff_microseconds(database_now)
+        queries.extend(authority_complete_query.bind_query(
+            operation, role, arguments=values, cutoff_us=cutoff_us,
+        ) for role in (
+            "sessions_pending_webauthn", "sessions_active", "grants", "approvals",
+            "global_registration_challenges",
         ))
-    for name, table, column, state_column, state, hint in (
-        ("grants", "approval_grants", "approver_webauthn_credential_id", "state", "active", "approval_grant_ids"),
-        ("approvals", "control_plane_approvals", "approver_webauthn_credential_id", "status", "approved", "control_plane_approval_ids"),
-    ):
-        queries.append(_complete_query(
-            operation, name, table,
-            (core.QueryPredicate(column, "eq", record_id), core.QueryPredicate(state_column, "eq", state)),
-            len(values[hint]),
-        ))
-    if values["source"] == "explicit":
-        queries.append(_complete_query(
-            operation, "global_registration_challenges", "webauthn_challenges",
-            (core.QueryPredicate("challenge_type", "eq", "registration"),
-             core.QueryPredicate("used_at", "is-null"),
-             core.QueryPredicate("expires_at", "gt", database_now.astimezone(timezone.utc).isoformat())),
-            len(values["registration_challenge_ids"]),
-        ))
-    elif values["registration_challenge_ids"]:
-        raise core.TransitionKernelError("non-explicit cascade cannot select registration challenges")
+    except authority_complete_query.CompleteQueryError as exc:
+        raise core.TransitionKernelError("revocation complete query binding failed") from exc
     audit_subjects = list(values["control_plane_approval_ids"])
     if values["audit_event"] is not None:
         audit_subjects.append(None)
@@ -358,11 +332,11 @@ class WebAuthnCredentialRevokeKernel:
     program_id = core.transition_program_id(operation, handler)
     permits_empty_mutation = False
 
-    def queries(self, *, arguments: Mapping[str, Any], database_now: datetime, request_digest: str) -> tuple[core.BoundedQuery, ...]:
+    def queries(self, *, arguments: Mapping[str, Any], database_now: datetime, request_digest: str) -> tuple[core.Query, ...]:
         values = _arguments(arguments)
         return cascade_queries(operation=self.operation, values=values, database_now=database_now, request_digest=request_digest)
 
-    def queries_with_evidence(self, *, arguments: Mapping[str, Any], database_now: datetime, request_digest: str, evidence: Mapping[str, Any]) -> tuple[core.BoundedQuery, ...]:
+    def queries_with_evidence(self, *, arguments: Mapping[str, Any], database_now: datetime, request_digest: str, evidence: Mapping[str, Any]) -> tuple[core.Query, ...]:
         values = _arguments(arguments)
         queries = list(self.queries(arguments=arguments, database_now=database_now, request_digest=request_digest))
         signer = core.require_text(evidence.get("credentialRecordId"), "assertion credential", maximum_bytes=1024)

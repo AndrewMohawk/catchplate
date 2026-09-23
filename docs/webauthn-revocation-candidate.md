@@ -17,10 +17,14 @@ supported. Admin revocation of another user, trust-root withdrawal, offline
 last-key decommission, and the existing two-person aggregate route are not
 admitted by this candidate. They require their own complete authority contract.
 
-Signed sorted address lists, at most 32 each, are hints. Query predicates select
+Signed sorted address lists, at most 32 each, are hints. Fixed index roles declare
 all live credential-bound OIDC sessions (`pending_webauthn` and `active`), active
 grants, approved control-plane approvals, and **all users'** live registration
-challenges. Exact set comparison rejects missing, extra, duplicate or stale
+challenges. The two session roles retain one combined 32-address ceiling.
+The [distinct complete-query contract](authority-complete-query-contract.md)
+binds selectors to source intent/time, but the reader rejects these declarations
+until actual proof acquisition is available. Exact set comparison in the pure
+candidate rejects missing, extra, duplicate or stale
 hints. Every invalidated approval emits its own audit; the credential audit is
 emitted only when `audit_event` was supplied, matching the legacy distinction.
 Every audit key is deterministic and requires an absent row. A used key or
@@ -71,17 +75,18 @@ Registry closure and the service's enabled-operation checks prevent activation.
 
 ## Why registration is withheld
 
-The existing `_read_bounded_transition_rows` reader executes bounded SQL
+The ordinary `_read_bounded_transition_rows` path executes bounded SQL
 predicates with `ORDER BY` and `LIMIT maximum_rows + 1`; overflow is denied.
-Under trusted PostgreSQL query semantics, that yields complete matching sets.
-However, it does **not** enforce `BoundedQuery.exact_page` via an authenticated
-predicate/range receipt. `_derive_multiproofs` proves membership or exact-key
-absence for selected rows, not that no other matching row was omitted by a
-malicious database. Merely declaring `ordered-exact-page` is not that proof.
+It does not enforce `BoundedQuery.exact_page` through a reconstructed range proof.
+The candidate no longer uses that page declaration for its complete populations:
+it emits the distinct source-bound complete-index type, which the reader
+explicitly rejects before business/proof SQL. `_derive_multiproofs` still proves
+membership or exact-key absence, not that no matching row was omitted. Neither
+an ordinary page flag nor a new declaration alone is a completeness proof.
 
 The source must not convert this assumption into an enabled signed operation.
-The next prerequisite is an authenticated predicate/secondary-index primitive
-that binds each cascade predicate, ordering, complete terminal range,
+The next prerequisite is actual producer/consumer integration for the new
+primitive, binding each source selector, index ordering, complete terminal range,
 source relation root/revision, returned rows and absence/overflow boundary. It
 must be maintained by every writer of each indexed relation and verified before
 mutation derivation. Existing `KernelContext.exact_page_receipt` describes an

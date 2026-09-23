@@ -214,3 +214,10 @@ SQL snapshot consumers must commit that evidence under an explicitly versioned
 contract, not silently add a frame to the existing nine-frame Snapshot/v3.
 The outer 64 MiB plan ceiling still applies across all queries; the larger
 combined component byte allowance does not raise it.
+
+The [source-bound complete-query contract](authority-complete-query-contract.md)
+now fixes the explicit-revocation candidate's five index roles under a distinct
+query kind. Its reader deliberately rejects acquisition until the actual
+producer is available. The [storage integration contract](authority-index-storage-integration.md)
+records that producer and the all-writer/head-effect requirements; neither is
+an installed index or admitted checkpoint.

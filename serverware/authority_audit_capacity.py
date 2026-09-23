@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from typing import Any, Mapping
 
 from serverware import authority_contract
+from serverware import authority_complete_query
 from serverware import authority_transition_core as core
 from serverware.audit_outbox_contract import MAX_PENDING
 from serverware.authority_primary_contract import PRIMARY_KEY_COLUMNS
@@ -152,8 +153,8 @@ def _require_counter_permission(spec: Mapping[str, Any]) -> None:
 
 
 def add_capacity_query(
-    operation: str, queries: tuple[core.BoundedQuery, ...]
-) -> tuple[core.BoundedQuery, ...]:
+    operation: str, queries: tuple[core.Query, ...]
+) -> tuple[core.Query, ...]:
     """Add one source-owned selection, before rows/proofs are read.
 
     Do not require absence: the global row must exist, including on whole-operation
@@ -161,8 +162,21 @@ def add_capacity_query(
     or deferred selector that could alias this framework-owned row.
     """
     spec = _spec(operation)
-    if type(queries) is not tuple or any(not isinstance(q, core.BoundedQuery) for q in queries):
+    if (type(queries) is not tuple
+            or len(queries) > spec["maximumBusinessQueryRows"]
+            or any(type(q) not in (core.BoundedQuery, authority_complete_query.CompleteIndexQuery)
+                   for q in queries)):
         _fail("audit capacity query inventory is invalid")
+    # Revalidate complete declarations before consulting their source-derived
+    # table/bounds; a constructed object is not an admission token.
+    try:
+        queries = tuple(
+            authority_complete_query.snapshot_query(query)
+            if type(query) is authority_complete_query.CompleteIndexQuery else query
+            for query in queries
+        )
+    except authority_complete_query.CompleteQueryError as exc:
+        raise AuditCapacityError("audit capacity complete query declaration is invalid") from exc
     query_id = core.query_program_id(operation, QUERY_NAME, AGGREGATE_TABLE)
     for query in queries:
         if query.query_id == query_id:

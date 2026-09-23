@@ -222,6 +222,12 @@ source revision, registry, online limit or phase-2 activation flag changes here.
 
 ## Required producer/installer integration
 
+The [independent decision requirements](authority-audit-initialization-decision.md)
+now specify the missing enrolled identity, irreversible precommit decision,
+external latest-head and ambiguous-retry boundary. They are not an implemented
+ledger or installer. The existing witness's local durability repair does not
+extend its role into that missing service.
+
 The next coherent change must close all of these together before enabling an
 initializer or changing accepted schema/migration state:
 

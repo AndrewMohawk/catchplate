@@ -624,6 +624,7 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_authority_audit_inventory.py \
 	scripts/test_authority_audit_initialization.py \
 	scripts/test_authority_audit_initialization_admission.py \
+	scripts/test_authority_witness_journal.py \
 	scripts/test_authority_audit_backfill_spec.py \
 	scripts/test_authority_table_acl_source.py \
 	scripts/test_authority_schema_source.py \

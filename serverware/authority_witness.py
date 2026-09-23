@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import base64
-import ctypes
-import errno
 import fcntl
 import hashlib
 import json
@@ -35,6 +33,7 @@ from serverware import authority_contract
 from serverware import authority_artifact_spec
 from serverware import authority_stage_zero_contract
 from serverware import authority_transition_registry
+from serverware.authority_witness_journal import JournalConflict, WitnessJournalIO
 
 
 CONFIG_SCHEMA = "serverware.policyAuthorityReplayWitnessConfiguration/v2"
@@ -65,7 +64,6 @@ MAX_MESSAGE_BYTES = authority_contract.MAX_REQUEST_BYTES
 MAX_STATE_BYTES = 1024 * 1024 * 1024
 MAX_STATE_RECORD_BYTES = MAX_MESSAGE_BYTES * 4
 MAX_STATE_RECORDS = 65536
-RENAME_NOREPLACE = 1
 STATE_RECORD_PROTOCOL = (
     "append-canonical-record-fdatasync-renameat2-noreplace-fsyncdir-v1"
 )
@@ -99,19 +97,6 @@ class WitnessConflict(WitnessError):
     pass
 
 
-_LIBC = ctypes.CDLL(None, use_errno=True)
-_RENAMEAT2 = getattr(_LIBC, "renameat2", None)
-if _RENAMEAT2 is not None:
-    _RENAMEAT2.argtypes = (
-        ctypes.c_int,
-        ctypes.c_char_p,
-        ctypes.c_int,
-        ctypes.c_char_p,
-        ctypes.c_uint,
-    )
-    _RENAMEAT2.restype = ctypes.c_int
-
-
 def _canonical(value: Any) -> bytes:
     return json.dumps(
         value,
@@ -126,29 +111,6 @@ def _canonical_timestamp_now() -> str:
     return datetime.now(timezone.utc).replace(
         microsecond=0
     ).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def _rename_noreplace(
-    directory_descriptor: int,
-    temporary_name: str,
-    record_name: str,
-) -> None:
-    if _RENAMEAT2 is None:
-        raise WitnessError("witness requires libc renameat2")
-    result = _RENAMEAT2(
-        directory_descriptor,
-        temporary_name.encode("ascii"),
-        directory_descriptor,
-        record_name.encode("ascii"),
-        RENAME_NOREPLACE,
-    )
-    if result != 0:
-        error_number = ctypes.get_errno()
-        if error_number == errno.EEXIST:
-            raise WitnessConflict("witness state record already exists")
-        raise WitnessError(
-            f"witness renameat2 failed with errno {error_number}"
-        )
 
 
 def _state_record_name(sequence: int, canonical_record: bytes) -> str:
@@ -897,7 +859,11 @@ class WitnessStateStore:
             raise WitnessError(
                 "another witness owns the mutable-state directory"
             ) from exc
-        self.lock = threading.Lock()
+        self._journal_io = WitnessJournalIO(
+            self.state_directory_descriptor,
+            maximum_record_bytes=MAX_STATE_RECORD_BYTES,
+        )
+        self.lock = self._journal_io.lock
         self.receipts: dict[str, dict[str, Any]] = {}
         self.terminal_reservations: set[str] = set()
         self.request_phases: set[tuple[str, str]] = set()
@@ -923,13 +889,13 @@ class WitnessStateStore:
         self.sequence = 0
         self.fence = 0
         self.head_digest: str | None = None
-        self._load_state()
-        state_metadata = os.fstat(self.state_directory_descriptor)
-        self.state_directory_change = (
-            state_metadata.st_mtime_ns,
-            state_metadata.st_ctime_ns,
-        )
-        self._persist_generation_activation()
+        validated_stamp = self._journal_io.recover(self._load_state)
+        try:
+            self.state_directory_change = validated_stamp[2:]
+            self._persist_generation_activation()
+        except BaseException:
+            self._journal_io.poison()
+            raise
 
     def _verify_state_directory(self) -> None:
         metadata = os.fstat(self.state_directory_descriptor)
@@ -974,7 +940,7 @@ class WitnessStateStore:
                 "stored witness receipt signature is invalid"
             ) from exc
 
-    def _load_state(self) -> None:
+    def _load_state(self) -> tuple[int, int, int, int]:
         names = list(os.listdir(self.state_directory_descriptor))
         removed_temporary = False
         record_names: list[tuple[int, str]] = []
@@ -1083,6 +1049,12 @@ class WitnessStateStore:
                 raise WitnessError(
                     "configured generation is not the stored successor"
                 )
+        return (
+            directory_identity_after.st_dev,
+            directory_identity_after.st_ino,
+            directory_identity_after.st_mtime_ns,
+            directory_identity_after.st_ctime_ns,
+        )
 
     def _read_state_record(
         self,
@@ -1146,117 +1118,103 @@ class WitnessStateStore:
         self,
         record: Mapping[str, Any],
     ) -> tuple[str, bytes]:
-        directory_metadata = os.fstat(self.state_directory_descriptor)
-        if (
-            directory_metadata.st_mtime_ns,
-            directory_metadata.st_ctime_ns,
-        ) != self.state_directory_change:
-            raise WitnessError(
-                "witness state directory changed outside its singleton"
-            )
-        canonical_record = _canonical(dict(record))
-        if (
-            not 1 <= len(canonical_record) <= MAX_STATE_RECORD_BYTES
-            or self.state_record_count + 1 > self.state_record_limit
-            or self.state_total_bytes + len(canonical_record)
-                > self.state_quota_bytes
-        ):
-            raise WitnessError("witness state quota is exhausted")
-        record_name = _state_record_name(
-            int(record["stateSequence"]),
-            canonical_record,
-        )
-        temporary_name = (
-            f".tmp-{os.getpid()}-{threading.get_native_id()}-"
-            f"{record['stateSequence']:020d}-{record_name[28:92]}"
-        )
-        descriptor = os.open(
-            temporary_name,
-            os.O_WRONLY
-            | os.O_CREAT
-            | os.O_EXCL
-            | os.O_CLOEXEC
-            | os.O_NOFOLLOW,
-            0o600,
-            dir_fd=self.state_directory_descriptor,
-        )
-        published = False
-        try:
-            offset = 0
-            while offset < len(canonical_record):
-                written = os.write(descriptor, canonical_record[offset:])
-                if written <= 0:
+        with self._journal_io.ready():
+            try:
+                directory_metadata = os.fstat(self.state_directory_descriptor)
+                if (
+                    directory_metadata.st_mtime_ns,
+                    directory_metadata.st_ctime_ns,
+                ) != self.state_directory_change:
                     raise WitnessError(
-                        "witness state record write was incomplete"
+                        "witness state directory changed outside its singleton"
                     )
-                offset += written
-            os.fchmod(descriptor, 0o400)
-            os.fsync(descriptor)
-            _rename_noreplace(
-                self.state_directory_descriptor,
-                temporary_name,
-                record_name,
+            except BaseException:
+                self._journal_io.poison()
+                raise
+            canonical_record = _canonical(dict(record))
+            if (
+                not 1 <= len(canonical_record) <= MAX_STATE_RECORD_BYTES
+                or self.state_record_count + 1 > self.state_record_limit
+                or self.state_total_bytes + len(canonical_record)
+                    > self.state_quota_bytes
+            ):
+                raise WitnessError("witness state quota is exhausted")
+            record_name = _state_record_name(
+                int(record["stateSequence"]),
+                canonical_record,
             )
-            published = True
-            os.fsync(self.state_directory_descriptor)
-        finally:
-            os.close(descriptor)
-            if not published:
-                try:
-                    os.unlink(
-                        temporary_name,
-                        dir_fd=self.state_directory_descriptor,
-                    )
-                    os.fsync(self.state_directory_descriptor)
-                except FileNotFoundError:
-                    pass
-        self.state_sequence += 1
-        self.state_record_count += 1
-        self.state_total_bytes += len(canonical_record)
-        directory_metadata = os.fstat(self.state_directory_descriptor)
-        self.state_directory_change = (
-            directory_metadata.st_mtime_ns,
-            directory_metadata.st_ctime_ns,
-        )
-        return record_name, canonical_record
+            temporary_name = (
+                f".tmp-{os.getpid()}-{threading.get_native_id()}-"
+                f"{record['stateSequence']:020d}-{record_name[28:92]}"
+            )
+            try:
+                self._journal_io.publish(
+                    temporary_name, record_name, canonical_record,
+                )
+                self.state_sequence += 1
+                self.state_record_count += 1
+                self.state_total_bytes += len(canonical_record)
+                directory_metadata = os.fstat(self.state_directory_descriptor)
+                self.state_directory_change = (
+                    directory_metadata.st_mtime_ns,
+                    directory_metadata.st_ctime_ns,
+                )
+            except JournalConflict as exc:
+                self._journal_io.poison()
+                raise WitnessConflict(str(exc)) from exc
+            except BaseException:
+                self._journal_io.poison()
+                raise
+            return record_name, canonical_record
+
+    def _persist_and_accept_state_record(self, record: Mapping[str, Any]) -> None:
+        with self._journal_io.ready():
+            record_name, canonical_record = self._persist_state_record(record)
+            try:
+                self._accept_stored_state_record(
+                    record,
+                    canonical_record,
+                    record_name=record_name,
+                    record_length=len(canonical_record),
+                )
+            except BaseException:
+                # The immutable record may already be durable while indexes
+                # are only partly updated. No replay may use that view.
+                self._journal_io.poison()
+                raise
 
     def _persist_generation_activation(self) -> None:
-        generation = self.configuration["generation"]
-        activation_id = _domain_digest(
-            "serverware.policyAuthorityWitnessGenerationActivation/v1",
-            _canonical(generation),
-        )
-        existing = self.activation_records.get(generation["digest"])
-        if existing is not None:
-            record, _canonical_record = self._read_state_record(existing)
-            if record.get("transitionId") != activation_id:
-                raise WitnessError(
-                    "stored generation activation identity changed"
-                )
-            return
-        record = {
-            "schema": WITNESS_STATE_RECORD_SCHEMA,
-            "kind": "generation-activation",
-            "stateSequence": self.state_sequence + 1,
-            "generation": generation,
-            "transitionId": activation_id,
-            "envelopeId": None,
-            "parentEnvelopeId": None,
-            "consumerLaunchId": None,
-            "consumerLaunchKeyId": None,
-            "consumerLaunchCertificateDigest": None,
-            "canonicalRequestBase64Url": None,
-            "canonicalResponseBase64Url": None,
-            "canonicalRequestDigest": None,
-            "canonicalResponseDigest": None,
-        }
-        record_name, canonical_record = self._persist_state_record(record)
-        self._accept_stored_state_record(
-            record,
-            canonical_record,
-            record_name=record_name,
-            record_length=len(canonical_record),
-        )
+        with self._journal_io.ready():
+            generation = self.configuration["generation"]
+            activation_id = _domain_digest(
+                "serverware.policyAuthorityWitnessGenerationActivation/v1",
+                _canonical(generation),
+            )
+            existing = self.activation_records.get(generation["digest"])
+            if existing is not None:
+                record, _canonical_record = self._read_state_record(existing)
+                if record.get("transitionId") != activation_id:
+                    raise WitnessError(
+                        "stored generation activation identity changed"
+                    )
+                return
+            record = {
+                "schema": WITNESS_STATE_RECORD_SCHEMA,
+                "kind": "generation-activation",
+                "stateSequence": self.state_sequence + 1,
+                "generation": generation,
+                "transitionId": activation_id,
+                "envelopeId": None,
+                "parentEnvelopeId": None,
+                "consumerLaunchId": None,
+                "consumerLaunchKeyId": None,
+                "consumerLaunchCertificateDigest": None,
+                "canonicalRequestBase64Url": None,
+                "canonicalResponseBase64Url": None,
+                "canonicalRequestDigest": None,
+                "canonicalResponseDigest": None,
+            }
+            self._persist_and_accept_state_record(record)
 
     def _accept_stored_receipt(
         self,
@@ -2080,93 +2038,95 @@ class WitnessStateStore:
         self,
         transition_id: str,
     ) -> tuple[bytes, bytes, tuple[str, str, str], str]:
-        (
-            record_name,
-            record_length,
-            launch_id,
-            launch_key_id,
-            certificate_digest,
-            generation_digest,
-        ) = self.transition_records[transition_id]
-        record, canonical_record = self._read_state_record(record_name)
-        if len(canonical_record) != record_length:
-            raise WitnessError(
-                "credential-release replay record is unavailable"
+        with self._journal_io.ready():
+            (
+                record_name,
+                record_length,
+                launch_id,
+                launch_key_id,
+                certificate_digest,
+                generation_digest,
+            ) = self.transition_records[transition_id]
+            record, canonical_record = self._read_state_record(record_name)
+            if len(canonical_record) != record_length:
+                raise WitnessError(
+                    "credential-release replay record is unavailable"
+                )
+            if (
+                record.get("schema") != WITNESS_STATE_RECORD_SCHEMA
+                or record.get("kind") != "transition"
+                or record.get("transitionId") != transition_id
+                or record.get("consumerLaunchId") != launch_id
+                or record.get("consumerLaunchKeyId") != launch_key_id
+                or record.get("consumerLaunchCertificateDigest")
+                    != certificate_digest
+                or not isinstance(record.get("generation"), dict)
+                or record["generation"].get("digest")
+                    != generation_digest
+            ):
+                raise WitnessError(
+                    "credential-release replay index changed"
+                )
+            request_bytes = _b64url_decode_bounded(
+                record.get("canonicalRequestBase64Url"),
+                maximum=MAX_MESSAGE_BYTES,
             )
-        if (
-            record.get("schema") != WITNESS_STATE_RECORD_SCHEMA
-            or record.get("kind") != "transition"
-            or record.get("transitionId") != transition_id
-            or record.get("consumerLaunchId") != launch_id
-            or record.get("consumerLaunchKeyId") != launch_key_id
-            or record.get("consumerLaunchCertificateDigest")
-                != certificate_digest
-            or not isinstance(record.get("generation"), dict)
-            or record["generation"].get("digest")
-                != generation_digest
-        ):
-            raise WitnessError(
-                "credential-release replay index changed"
+            response_bytes = _b64url_decode_bounded(
+                record.get("canonicalResponseBase64Url"),
+                maximum=MAX_MESSAGE_BYTES,
             )
-        request_bytes = _b64url_decode_bounded(
-            record.get("canonicalRequestBase64Url"),
-            maximum=MAX_MESSAGE_BYTES,
-        )
-        response_bytes = _b64url_decode_bounded(
-            record.get("canonicalResponseBase64Url"),
-            maximum=MAX_MESSAGE_BYTES,
-        )
-        if (
-            record.get("canonicalRequestDigest")
-            != _protocol_digest(
-                "serverware.policyAuthorityWitnessExactRequest/v1",
+            if (
+                record.get("canonicalRequestDigest")
+                != _protocol_digest(
+                    "serverware.policyAuthorityWitnessExactRequest/v1",
+                    request_bytes,
+                )
+                or record.get("canonicalResponseDigest")
+                != _protocol_digest(
+                    "serverware.policyAuthorityWitnessExactResponse/v1",
+                    response_bytes,
+                )
+            ):
+                raise WitnessError(
+                    "credential-release exact replay digest changed"
+                )
+            return (
                 request_bytes,
-            )
-            or record.get("canonicalResponseDigest")
-            != _protocol_digest(
-                "serverware.policyAuthorityWitnessExactResponse/v1",
                 response_bytes,
+                (launch_id, launch_key_id, certificate_digest),
+                generation_digest,
             )
-        ):
-            raise WitnessError(
-                "credential-release exact replay digest changed"
-            )
-        return (
-            request_bytes,
-            response_bytes,
-            (launch_id, launch_key_id, certificate_digest),
-            generation_digest,
-        )
 
     def _read_receipt_response(self, receipt_digest: str) -> bytes:
-        record_name = self.receipt_record_names[receipt_digest]
-        record, _canonical_record = self._read_state_record(record_name)
-        response_bytes = _b64url_decode_bounded(
-            record.get("canonicalResponseBase64Url"),
-            maximum=MAX_MESSAGE_BYTES,
-        )
-        if record.get("canonicalResponseDigest") != _protocol_digest(
-            "serverware.policyAuthorityWitnessExactResponse/v1",
-            response_bytes,
-        ):
-            raise WitnessError("indexed witness response digest changed")
-        try:
-            receipt = json.loads(response_bytes)
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise WitnessError(
-                "indexed witness response is invalid"
-            ) from exc
-        if (
-            not isinstance(receipt, dict)
-            or response_bytes != _canonical(receipt)
-            or _protocol_digest(
-                str(receipt.get("schema")),
-                response_bytes,
+        with self._journal_io.ready():
+            record_name = self.receipt_record_names[receipt_digest]
+            record, _canonical_record = self._read_state_record(record_name)
+            response_bytes = _b64url_decode_bounded(
+                record.get("canonicalResponseBase64Url"),
+                maximum=MAX_MESSAGE_BYTES,
             )
-            != receipt_digest
-        ):
-            raise WitnessError("indexed witness response changed")
-        return response_bytes
+            if record.get("canonicalResponseDigest") != _protocol_digest(
+                "serverware.policyAuthorityWitnessExactResponse/v1",
+                response_bytes,
+            ):
+                raise WitnessError("indexed witness response digest changed")
+            try:
+                receipt = json.loads(response_bytes)
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise WitnessError(
+                    "indexed witness response is invalid"
+                ) from exc
+            if (
+                not isinstance(receipt, dict)
+                or response_bytes != _canonical(receipt)
+                or _protocol_digest(
+                    str(receipt.get("schema")),
+                    response_bytes,
+                )
+                != receipt_digest
+            ):
+                raise WitnessError("indexed witness response changed")
+            return response_bytes
 
     def transition(self, request: Mapping[str, Any]) -> dict[str, Any]:
         response = self.transition_bytes(
@@ -2185,6 +2145,7 @@ class WitnessStateStore:
         *,
         peer_process: Mapping[str, int | str] | None = None,
     ) -> bytes:
+        self._journal_io.require_ready()
         if (
             request.get("phase") == "credential-release-consume"
             and peer_process is None
@@ -2195,6 +2156,7 @@ class WitnessStateStore:
         candidate_transition_id = request.get("transitionId")
         if _is_digest(candidate_transition_id):
             with self.lock:
+                self._journal_io.require_ready()
                 if (
                     candidate_transition_id
                         in self.transition_records
@@ -2223,6 +2185,7 @@ class WitnessStateStore:
         request_key = (phase, str(request["envelopeId"]))
         transition_id = metadata["transitionId"]
         with self.lock:
+            self._journal_io.require_ready()
             if transition_id is not None:
                 if transition_id in self.transition_records:
                     (
@@ -2277,6 +2240,7 @@ class WitnessStateStore:
             expected_peer=peer_process,
         )
         with self.lock:
+            self._journal_io.require_ready()
             if transition_id is not None:
                 if transition_id in self.transition_records:
                     (
@@ -2447,15 +2411,7 @@ class WitnessStateStore:
                     response_bytes,
                 ),
             }
-            record_name, canonical_record = self._persist_state_record(
-                state_record
-            )
-            self._accept_stored_state_record(
-                state_record,
-                canonical_record,
-                record_name=record_name,
-                record_length=len(canonical_record),
-            )
+            self._persist_and_accept_state_record(state_record)
             return response_bytes
 
 

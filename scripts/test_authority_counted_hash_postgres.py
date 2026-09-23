@@ -52,6 +52,7 @@ class CountedHashPostgresTests(unittest.TestCase):
         self.connection.execute("SET LOCAL statement_timeout = '5s'")
         self.connection.execute("SET LOCAL lock_timeout = '250ms'")
         self.connection.execute("SET LOCAL idle_in_transaction_session_timeout = '10s'")
+        self.connection.execute("SET LOCAL quote_all_identifiers = off")
         environment = self.connection.execute(
             "SELECT pg_catalog.inet_server_addr(), pg_catalog.getdatabaseencoding(), "
             "pg_catalog.current_setting('server_version_num')::integer, current_user = session_user, "
@@ -277,9 +278,7 @@ class CountedHashPostgresTests(unittest.TestCase):
                                    PREFIX + "counted_branch": "TABLE(node_digest text, subtree_count bigint)"}.get(name, "text")
                 self.assertEqual(result, expected_result)
                 self.assertEqual(returns_set, name in (PREFIX + "counted_profile", PREFIX + "counted_branch"))
-                self.assertEqual(len(settings), 1)
-                self.assertEqual(settings[0].replace('"', '').replace(' ', ''),
-                                 "search_path=pg_catalog," + self.schema + ",pg_temp")
+                self.assertEqual(settings, [f"search_path=pg_catalog, {self.schema}, pg_temp"])
         for namespace in (None, "serverware_metadata", '"Upper"', '"bad-name"', '"a"; SELECT 1', '"' + "a" * 64 + '"'):
             with self.subTest(namespace=namespace), self.assertRaises(ValueError):
                 counted_hash_sql.counted_hash_functions_sql(namespace)

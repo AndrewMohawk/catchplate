@@ -11,7 +11,7 @@ import re
 
 
 INVENTORY_SCHEMA = "serverware.nativePostgresInventory/v1"
-TOTAL_TESTS = 220
+TOTAL_TESTS = 238
 
 
 @dataclass(frozen=True, slots=True)
@@ -334,12 +334,37 @@ SUITES: tuple[NativePostgresSuite, ...] = (
         disposable_cluster=False,
         timeout_seconds=300,
     ),
+    NativePostgresSuite(
+        script="scripts/test_authority_counted_maintenance_postgres.py",
+        test_ids=(
+            "AuthorityCountedMaintenancePostgresTests.test_all_six_relations_and_eleven_profiles_insert_delete_exact_full_trees",
+            "AuthorityCountedMaintenancePostgresTests.test_both_nonmember_events_verify_root_and_leave_all_records_unchanged",
+            "AuthorityCountedMaintenancePostgresTests.test_challenge_expiry_user_partition_and_used_membership_moves",
+            "AuthorityCountedMaintenancePostgresTests.test_corrupt_or_missing_opened_cache_and_target_node_are_not_repaired",
+            "AuthorityCountedMaintenancePostgresTests.test_corrupt_or_missing_positive_opaque_sibling_rejects_before_root",
+            "AuthorityCountedMaintenancePostgresTests.test_credential_partition_moves_and_live_membership_exit_enter",
+            "AuthorityCountedMaintenancePostgresTests.test_event_table_operation_images_and_referenced_field_types_are_closed",
+            "AuthorityCountedMaintenancePostgresTests.test_every_required_head_must_exist_even_for_an_excluded_profile",
+            "AuthorityCountedMaintenancePostgresTests.test_fullrow_and_equal_updates_stamp_only_touched_paths_and_member_heads",
+            "AuthorityCountedMaintenancePostgresTests.test_future_leaf_and_opened_or_opaque_node_revisions_are_rejected",
+            "AuthorityCountedMaintenancePostgresTests.test_insert_requires_absent_target_and_absent_existing_business_identity",
+            "AuthorityCountedMaintenancePostgresTests.test_late_profile_failure_rolls_back_all_effects_and_allows_exact_retry",
+            "AuthorityCountedMaintenancePostgresTests.test_old_leaf_fullrow_commitment_and_stored_primary_identity_must_match",
+            "AuthorityCountedMaintenancePostgresTests.test_primary_key_changes_require_explicit_delete_then_insert_events",
+            "AuthorityCountedMaintenancePostgresTests.test_publication_bundle_status_and_generation_moves_all_fixed_profiles",
+            "AuthorityCountedMaintenancePostgresTests.test_real_function_catalog_invoker_contract_has_no_trigger_attachment",
+            "AuthorityCountedMaintenancePostgresTests.test_revision_overflow_denies_member_event_but_nonmember_does_not_increment",
+            "AuthorityCountedMaintenancePostgresTests.test_session_grant_and_control_approval_membership_transitions",
+        ),
+        disposable_cluster=False,
+        timeout_seconds=300,
+    ),
 )
 
 
 # The order is the closed batch order, not lexical filename order. The booleans
 # encode an extra fixture CLI acknowledgement; False never permits a real or
-# shared database. All thirteen suites require a prepared disposable local cluster.
+# shared database. All fourteen suites require a prepared disposable local cluster.
 _SUITE_SHAPES = (
     ("scripts/test_webauthn_trust_projection_postgres.py", 8, False, 300),
     ("scripts/test_postgres_trigger_manifest.py", 5, False, 300),
@@ -354,6 +379,7 @@ _SUITE_SHAPES = (
     ("scripts/test_authority_counted_hash_postgres.py", 10, False, 300),
     ("scripts/test_authority_counted_projection_postgres.py", 16, False, 300),
     ("scripts/test_authority_counted_store_postgres.py", 10, False, 300),
+    ("scripts/test_authority_counted_maintenance_postgres.py", 18, False, 300),
 )
 _TEST_ID = re.compile(r"[A-Za-z][A-Za-z0-9_]*\.test_[a-z][a-z0-9_]*", re.ASCII)
 
@@ -365,8 +391,8 @@ def validate_inventory() -> None:
     source digest binding and complete observed results are separate checks.
     """
     if (type(INVENTORY_SCHEMA) is not str or INVENTORY_SCHEMA != "serverware.nativePostgresInventory/v1"
-            or type(SUITES) is not tuple or len(SUITES) != 13
-            or type(TOTAL_TESTS) is not int or TOTAL_TESTS != 220):
+            or type(SUITES) is not tuple or len(SUITES) != 14
+            or type(TOTAL_TESTS) is not int or TOTAL_TESTS != 238):
         raise ValueError("native PostgreSQL inventory envelope differs from source")
     seen_scripts: set[str] = set()
     seen_tests: set[str] = set()

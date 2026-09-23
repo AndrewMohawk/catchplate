@@ -64,12 +64,12 @@ class NativePostgresProfileTests(unittest.TestCase):
             "/run/serverware-native-postgres", "/opt/serverware/output/native-postgres"))
         self.assertEqual((profile.USER, profile.UID, profile.GID), ("serverware_fixture_admin", 10001, 10001))
         self.assertEqual((profile.TOTAL_SECONDS, profile.INIT_SECONDS, profile.STARTUP_SECONDS,
-                          profile.SHUTDOWN_SECONDS), (5100, 120, 60, 60))
+                          profile.SHUTDOWN_SECONDS), (5400, 120, 60, 60))
         self.assertEqual(tuple(suite.timeout_seconds for suite in inventory.SUITES),
-                         (300, 300, 300, 300, 300, 300, 900, 300, 300, 300, 300, 300, 300))
-        self.assertEqual(sum(suite.timeout_seconds for suite in inventory.SUITES), 4500)
+                         (300, 300, 300, 300, 300, 300, 900, 300, 300, 300, 300, 300, 300, 300))
+        self.assertEqual(sum(suite.timeout_seconds for suite in inventory.SUITES), 4800)
         self.assertEqual(profile.TOTAL_SECONDS - profile.INIT_SECONDS - profile.STARTUP_SECONDS
-                         - profile.SHUTDOWN_SECONDS - 4500, 360)
+                         - profile.SHUTDOWN_SECONDS - 4800, 360)
 
     def test_exact_initdb_vector_has_no_shell_no_sync_or_external_wal_override(self):
         self.assertEqual(profile.initdb_argv(), (
@@ -550,12 +550,12 @@ class NativePostgresProcessTests(unittest.TestCase):
                 harness.supervisor.wait(child, harness.now + 5, must_remain_alive=child)
 
     def test_lifetime_child_inventory_is_bounded_and_closed_supervisor_cannot_restart(self):
-        self.assertEqual(processes.MAX_CHILDREN, 15)
-        with ProcessHarness(*({"chunks": [b""]} for _ in range(15))) as harness:
-            for _ in range(15):
+        self.assertEqual(processes.MAX_CHILDREN, 16)
+        with ProcessHarness(*({"chunks": [b""]} for _ in range(16))) as harness:
+            for _ in range(16):
                 child = harness.start()
                 self.assertEqual(harness.supervisor.wait(child, harness.now + 5), "exited")
-            self.assertEqual(len(harness.supervisor.children), 15)
+            self.assertEqual(len(harness.supervisor.children), 16)
             with self.assertRaisesRegex(processes.NativePostgresProcessError, "inventory is full"):
                 harness.start()
             harness.supervisor.close()

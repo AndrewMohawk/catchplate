@@ -218,7 +218,7 @@ def _read_report(raw: bytes, index: int, source_sha256: str) -> tuple[str, int]:
 def reconcile_native_postgres_batch(
     observations: tuple[NativeFixtureObservation, ...], *, source_sha256: tuple[str, ...],
 ) -> NativeBatchSummary:
-    """Reconcile exactly ten ordered observations with prepared script digests.
+    """Reconcile the complete ordered source inventory with prepared digests.
 
     ``source_sha256`` must come from the independently admitted prepared source,
     not from the child report. This pure function cannot authenticate its caller.
@@ -228,7 +228,7 @@ def reconcile_native_postgres_batch(
     """
     validate_inventory()
     _require(type(observations) is tuple and len(observations) == len(SUITES),
-             "native batch must account for the exact ten fixtures")
+             "native batch must account for the exact source fixture inventory")
     _require(type(source_sha256) is tuple and len(source_sha256) == len(SUITES),
              "native batch requires every prepared source digest")
     summaries = []

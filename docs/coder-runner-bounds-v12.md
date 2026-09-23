@@ -179,8 +179,8 @@ on a tmpfs does not establish survival of host power loss or storage loss.
 The separate [native cluster manager](native-postgres-verification.md) and its
 bounded local log capture are now source-implemented but unexecuted. Fixed PG16
 toolchain/image closure, output-storage quota, controller report-consumer
-integration and authenticated cleanup are still required. The thirteen suite deadlines total
-4,500 seconds before startup and
+integration and authenticated cleanup are still required. The fourteen suite deadlines total
+4,800 seconds before startup and
 cleanup; the existing Unit deadline is 900 seconds. Adding execution bounds
 does not change that deadline, omit suites to fit it, remove their exclusions,
 waive changed-test coverage, or authorize verification before the complete

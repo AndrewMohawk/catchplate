@@ -17,7 +17,8 @@ derives counted before/after roots from the actual primary engine's verified
 OLD/NEW snapshots. It fixes member-event revision semantics and shared component
 budgets, but is not installed SQL maintenance or executor root-vector admission.
 Source renderers now also define native PostgreSQL counted hashes and fixed row
-projections, plus fresh dedicated storage DDL. Their real-engine fixtures are
+projections, fresh dedicated storage DDL, and normalized per-profile/all-profile
+[SQL maintenance](authority-counted-sql-maintenance.md). Their real-engine fixtures are
 authored for later prepared verification; neither the SQL nor the fixtures have
 been executed or installed into the production schema.
 
@@ -267,12 +268,19 @@ and their revision effects; an unchanged-primary-key partition move remains one
 event. The pure evaluator still rejects a key-changing UPDATE. This is the
 required normalization for a future hook, not an installed trigger change.
 
+The native component now implements the normalized event and actual path
+maintenance below, without attaching that hook or admitting caller-provided
+JSONB as authenticated images. Its 18 native fixture methods remain unrun; the
+bounded algorithm and its limitations are detailed in the
+[SQL maintenance reference](authority-counted-sql-maintenance.md).
+
 A normalized SQL event must lock the complete fixed source-head set in index-ID
 byte order before processing any profile, including when both images are
 nonmembers. Missing heads deny; they never trigger genesis. Before persistent
-counted writes, verify exact OLD leaves, NEW-path absence, immediate untouched
-sibling commitments and the reconstructed BEFORE root/count. Also compare
-stored nodes on opened paths with their reconstructed BEFORE values: silently
+counted writes, verify exact OLD leaves, absence for newly inserted target
+paths, immediate untouched sibling commitments and the reconstructed BEFORE
+root/count. Also compare stored nodes on opened paths with their reconstructed
+BEFORE values: silently
 overwriting a corrupt redundant node is not an admitted repair. With no target
 paths, still fold the root from its sixteen depth-one children. Opaque off-path
 subtrees remain relative commitments, not an audit of their interiors.
@@ -402,6 +410,10 @@ Current implementation anchors:
 - [`counted_store_sql.py`](../serverware/authority_store/counted_store_sql.py):
   fresh-only dedicated heads/leaves/nodes DDL with fixed source profiles and
   local constraints; no seed, maintenance, runtime grants or installer changes.
+- [`counted_path_sql.py`](../serverware/authority_store/counted_path_sql.py) and
+  [`counted_maintenance_sql.py`](../serverware/authority_store/counted_maintenance_sql.py):
+  actual bounded before/after reconstruction, persistence and complete-profile
+  event dispatch; no installed trigger provenance or current-root authority.
 - [`v9_schema_source.py`](../serverware/authority_store/v9_schema_source.py) and
   [`metadata_schema_source.py`](../serverware/authority_store/metadata_schema_source.py):
   existing secondary-head metadata and primary physical stores.

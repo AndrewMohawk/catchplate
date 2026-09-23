@@ -695,6 +695,7 @@ override CODER_EXCLUDED_TEST_SCRIPTS := \
 	scripts/test_sign_release_images.py \
 	scripts/test_sigstore_json.py \
 	scripts/test_transparency_checkpoint.py \
+	scripts/test_checkpoint_sequence.py \
 	scripts/test_webauthn_recovery.py
 CODER_TIMEOUT ?= timeout
 CODER_BUILD_TIMEOUT ?= 3600s
@@ -7241,6 +7242,7 @@ verify-policy-activation-evidence:
 
 verify-transparency-checkpoint:
 	python3 scripts/test_transparency_checkpoint.py
+	python3 scripts/test_checkpoint_sequence.py
 
 verify-nitro-nsm-attest:
 	python3 scripts/test_nitro_nsm_attest.py

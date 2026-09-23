@@ -306,6 +306,7 @@ def exercise_independent_provenance_trust() -> None:
     checkpoint_payload = {
         "provider": external_provider,
         "log_id": external_log_id,
+        "external_sequence": 1,
         "record_digest": record_digest,
         "leaf_hash": leaf_hash,
         "tree_head_hash": tree_head_hash,
@@ -315,6 +316,7 @@ def exercise_independent_provenance_trust() -> None:
         "ok": True,
         "provider": external_provider,
         "log_id": external_log_id,
+        "external_sequence": checkpoint_payload["external_sequence"],
         "receipt": {
             "kind": "ed25519-signed-checkpoint",
             "payload": checkpoint_payload,

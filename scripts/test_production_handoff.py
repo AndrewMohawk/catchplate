@@ -441,7 +441,7 @@ def write_fixture_artifacts(tmp: Path, *, p99_ms: float = 6.0) -> dict[str, Path
                 },
             },
         ],
-        "kind": "ImageSignatures",
+        "kind": "ImageSignatureBundle",
         "metadata": {
             "provenanceDigest": provenance_digest,
             "releaseSigningKeyId": release_key_id,
@@ -502,7 +502,9 @@ def write_fixture_artifacts(tmp: Path, *, p99_ms: float = 6.0) -> dict[str, Path
             "image_signature_bundle_digest": image_signature_digest,
             "provenance_digest": provenance_digest,
             "release_signing_key_id": release_key_id,
-            "image_signing_key_id": digest("3"),
+            "image_signing_key_id": test_release_completion.sigstore_signing_key_info()[
+                "key_id"
+            ],
             "images": len(image_signature_payload["images"]),
             "transparency_mode": "signed-merkle-transparency-log",
         },
@@ -1022,6 +1024,20 @@ def main() -> None:
                 raise AssertionError(
                     f"handoff accepted invalid {argument}={value!r}: {detail(invalid)}"
                 )
+
+        stale_kind_document = json.loads(
+            paths["image_signatures"].read_text(encoding="utf-8")
+        )
+        stale_kind_document["kind"] = "ImageSignatures"
+        write_json(paths["image_signatures"], stale_kind_document)
+        stale_kind = run_handoff(paths)
+        if (
+            stale_kind.returncode == 0
+            or "unsupported image signatures schema" not in detail(stale_kind)
+        ):
+            raise AssertionError(
+                f"handoff accepted the obsolete image-signature kind: {detail(stale_kind)}"
+            )
 
     with tempfile.TemporaryDirectory() as tmp_raw:
         tmp = Path(tmp_raw)

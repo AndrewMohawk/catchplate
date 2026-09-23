@@ -26,6 +26,26 @@ launcher separately measures and retains complete import-root trees.
 The source schemas are the [Sigstore Rekor protobuf definition](https://github.com/sigstore/protobuf-specs/blob/main/protos/sigstore_rekor.proto)
 and [ProtoJSON int64 mapping](https://protobuf.dev/programming-guides/json/#strings-for-int64).
 
+## Authenticated checkpoint sequences
+
+External checkpoint sequences must be JSON integers from 1 through
+9007199254740991. The reported sequence must equal the sequence authenticated by
+the Ed25519 receipt. Updating both values without a fresh valid signature still
+fails. Local source sequences and tree sizes use the same positive integer
+bound; booleans, numeric strings and fractional values are not integers here.
+
+At the external adapter boundary only, `checkpoint_id` remains a sole-field
+transport alias for that bounded integer. Supplying both aliases is rejected,
+even if equal. The signed payload and normalized artifact use only
+`external_sequence`. This differs deliberately from the foreign Sigstore int64
+counter representation described above.
+
+Opaque receipts are no longer supported. Setting
+`SERVERWARE_TRANSPARENCY_REQUIRE_VERIFIABLE_RECEIPT=0` fails explicitly before
+publication or fixture signing; operators must supply the verifiable receipt
+protocol. Valid receipt signatures do not by themselves establish trusted log
+identity: final verification still uses independently pinned log keys/provider.
+
 ## Static Compose versus runtime evidence
 
 Release provenance must account for the exact eighteen services declared in

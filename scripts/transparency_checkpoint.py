@@ -26,6 +26,31 @@ MAX_HTTP_RESPONSE_BYTES = 1024 * 1024
 CHECKPOINT_VERSION = "serverware.transparencyCheckpoint/v1"
 PUBLICATION_VERSION = "serverware.externalTransparencyCheckpointRequest/v1"
 RECEIPT_VERSION = "serverware.externalTransparencyReceipt/v1"
+MAX_CHECKPOINT_INTEGER = (1 << 53) - 1
+
+
+def require_positive_checkpoint_integer(value: Any, label: str) -> int:
+    if type(value) is not int or not 1 <= value <= MAX_CHECKPOINT_INTEGER:
+        raise SystemExit(f"{label} must be an integer between 1 and {MAX_CHECKPOINT_INTEGER}")
+    return value
+
+
+def response_sequence(response: dict[str, Any]) -> int:
+    # checkpoint_id is a transport compatibility alias, never a string ID and
+    # never part of the canonical signed receipt or normalized artifact.
+    present = [field for field in ("external_sequence", "checkpoint_id") if field in response]
+    if len(present) != 1:
+        raise SystemExit("external checkpoint response requires exactly one of external_sequence or checkpoint_id")
+    return require_positive_checkpoint_integer(response[present[0]], "external checkpoint sequence")
+
+
+def unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, child in pairs:
+        if key in value:
+            raise ValueError(f"duplicate JSON object key: {key}")
+        value[key] = child
+    return value
 
 
 def canonical_json(value: Any) -> str:
@@ -63,8 +88,16 @@ def env_bool(name: str, default: bool = False) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def require_authenticated_receipt_mode(required: bool) -> None:
+    if required is not True:
+        raise SystemExit(
+            "SERVERWARE_TRANSPARENCY_REQUIRE_VERIFIABLE_RECEIPT must remain enabled; "
+            "opaque checkpoint receipts are unsupported"
+        )
+
+
 def read_stdin_object() -> dict[str, Any]:
-    payload = json.loads(sys.stdin.read() or "{}")
+    payload = json.loads(sys.stdin.read() or "{}", object_pairs_hook=unique_json_object)
     if not isinstance(payload, dict):
         raise SystemExit("stdin must be a JSON object")
     return payload
@@ -117,16 +150,15 @@ def validate_checkpoint(payload: dict[str, Any]) -> None:
         raise SystemExit(f"checkpoint payload missing fields: {', '.join(missing)}")
     if payload.get("version") != CHECKPOINT_VERSION:
         raise SystemExit(f"unsupported checkpoint version: {payload.get('version')!r}")
-    if not isinstance(payload.get("sequence"), int) or payload["sequence"] < 1:
-        raise SystemExit("checkpoint sequence must be a positive integer")
-    if not isinstance(payload.get("tree_size"), int) or payload["tree_size"] < 1:
-        raise SystemExit("checkpoint tree_size must be a positive integer")
+    require_positive_checkpoint_integer(payload.get("sequence"), "checkpoint sequence")
+    require_positive_checkpoint_integer(payload.get("tree_size"), "checkpoint tree_size")
     for field in ("tree_head_hash", "record_digest", "leaf_hash"):
         if not isinstance(payload.get(field), str) or not payload[field].startswith("sha256:"):
             raise SystemExit(f"checkpoint {field} must be a sha256-prefixed digest")
     signed_tree_head = payload.get("signed_tree_head")
     if not isinstance(signed_tree_head, dict):
         raise SystemExit("checkpoint signed_tree_head must be an object")
+    require_positive_checkpoint_integer(signed_tree_head.get("tree_size"), "signed tree head tree_size")
     if signed_tree_head.get("tree_size") != payload["tree_size"]:
         raise SystemExit("signed tree head tree_size does not match checkpoint payload")
     if signed_tree_head.get("tree_head_hash") != payload["tree_head_hash"]:
@@ -157,11 +189,13 @@ def receipt_payload(
     *,
     provider: str,
     log_id: str,
-    external_sequence: int | str,
+    external_sequence: int,
     request_digest: str,
     checkpoint_digest: str,
     checkpoint: dict[str, Any],
 ) -> dict[str, Any]:
+    validate_checkpoint(checkpoint)
+    require_positive_checkpoint_integer(external_sequence, "external checkpoint sequence")
     return {
         "version": RECEIPT_VERSION,
         "provider": provider,
@@ -178,15 +212,23 @@ def receipt_payload(
 
 
 def sign_receipt(key: Ed25519PrivateKey, payload: dict[str, Any]) -> str:
+    require_positive_checkpoint_integer(payload.get("external_sequence"), "external checkpoint receipt sequence")
+    if "checkpoint_id" in payload:
+        raise SystemExit("external checkpoint receipt must use external_sequence, not checkpoint_id")
     return "ed25519:" + b64e(key.sign(canonical_json(payload).encode("utf-8")))
 
 
 def verify_ed25519_receipt(receipt: dict[str, Any], expected: dict[str, Any], response_log_id: str) -> bool:
+    if receipt.get("kind") != "ed25519-signed-checkpoint":
+        return False
     payload = receipt.get("payload")
     signature = receipt.get("signature")
     public_key_pem = receipt.get("public_key_pem")
     if not isinstance(payload, dict) or not isinstance(signature, str) or not isinstance(public_key_pem, str):
         return False
+    require_positive_checkpoint_integer(payload.get("external_sequence"), "external checkpoint receipt sequence")
+    if "checkpoint_id" in payload:
+        raise SystemExit("external checkpoint receipt must use external_sequence, not checkpoint_id")
     if not signature.startswith("ed25519:"):
         raise SystemExit("external checkpoint receipt signature must use ed25519")
     public_key = serialization.load_pem_public_key(public_key_pem.encode("ascii"))
@@ -196,6 +238,9 @@ def verify_ed25519_receipt(receipt: dict[str, Any], expected: dict[str, Any], re
     if response_log_id != info["log_id"]:
         raise SystemExit("external checkpoint log_id does not match receipt public key")
     for field, expected_value in expected.items():
+        if field in {"source_sequence", "tree_size"}:
+            require_positive_checkpoint_integer(expected_value, f"expected external checkpoint receipt {field}")
+            require_positive_checkpoint_integer(payload.get(field), f"external checkpoint receipt {field}")
         if payload.get(field) != expected_value:
             raise SystemExit(f"external checkpoint receipt {field} does not match request")
     try:
@@ -226,6 +271,8 @@ def normalized_response(
     *,
     require_verifiable_receipt: bool,
 ) -> dict[str, Any]:
+    require_authenticated_receipt_mode(require_verifiable_receipt)
+    validate_checkpoint(checkpoint)
     if response.get("ok") is not True:
         raise SystemExit(f"external transparency log rejected checkpoint: {response}")
     provider = response.get("provider")
@@ -243,7 +290,7 @@ def normalized_response(
         raise SystemExit("external checkpoint digest does not match checkpoint payload")
     if response.get("request_digest") != request_digest:
         raise SystemExit("external checkpoint request_digest does not match publication request")
-    if response.get("tree_size") != checkpoint["tree_size"]:
+    if require_positive_checkpoint_integer(response.get("tree_size"), "external checkpoint tree_size") != checkpoint["tree_size"]:
         raise SystemExit("external checkpoint tree_size does not match checkpoint payload")
     if response.get("tree_head_hash") != checkpoint["tree_head_hash"]:
         raise SystemExit("external checkpoint tree_head_hash does not match checkpoint payload")
@@ -253,24 +300,26 @@ def normalized_response(
     expected_log_id = os.getenv("SERVERWARE_TRANSPARENCY_EXPECTED_LOG_ID", "").strip()
     if expected_log_id and log_id != expected_log_id:
         raise SystemExit("external checkpoint log_id did not match SERVERWARE_TRANSPARENCY_EXPECTED_LOG_ID")
-    external_sequence = response.get("external_sequence", response.get("checkpoint_id"))
-    if external_sequence is None or external_sequence == "":
-        raise SystemExit("external checkpoint response missing external_sequence or checkpoint_id")
+    external_sequence = response_sequence(response)
     receipt = response.get("receipt")
     if not isinstance(receipt, dict):
         receipt = build_signature_receipt(response)
     if not isinstance(receipt, dict) or not receipt.get("kind"):
         raise SystemExit("external checkpoint response missing receipt")
     expected_receipt_fields = {
+        "provider": provider,
+        "log_id": log_id,
+        "external_sequence": external_sequence,
         "checkpoint_digest": expected_checkpoint_digest,
         "request_digest": request_digest,
+        "source_sequence": checkpoint["sequence"],
         "tree_size": checkpoint["tree_size"],
         "tree_head_hash": checkpoint["tree_head_hash"],
         "record_digest": checkpoint["record_digest"],
         "leaf_hash": checkpoint["leaf_hash"],
     }
     verifiable = verify_ed25519_receipt(receipt, expected_receipt_fields, log_id)
-    if require_verifiable_receipt and not verifiable:
+    if not verifiable:
         raise SystemExit("external checkpoint receipt is not verifiable by the adapter")
     return {
         "ok": True,
@@ -288,12 +337,16 @@ def normalized_response(
 
 
 def checkpoint_fixture(checkpoint: dict[str, Any]) -> dict[str, Any]:
+    require_authenticated_receipt_mode(env_bool("SERVERWARE_TRANSPARENCY_REQUIRE_VERIFIABLE_RECEIPT", True))
     request = publication_request(checkpoint)
     path = log_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a+b") as handle:
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-        external_sequence = fixture_log_last_sequence_from_handle(handle) + 1
+        external_sequence = require_positive_checkpoint_integer(
+            fixture_log_last_sequence_from_handle(handle) + 1,
+            "external checkpoint sequence",
+        )
         key = load_private_key()
         info = public_key_info(key.public_key())
         provider = os.getenv("SERVERWARE_EXTERNAL_TRANSPARENCY_PROVIDER", "managed-transparency-log-fixture")
@@ -362,8 +415,8 @@ def fixture_log_last_sequence_from_handle(handle: Any) -> int:
         if not line.endswith(b"\n"):
             raise SystemExit("external transparency fixture log must end with a newline")
         try:
-            record = json.loads(line[:-1].decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            record = json.loads(line[:-1].decode("utf-8"), object_pairs_hook=unique_json_object)
+        except (UnicodeDecodeError, ValueError) as exc:
             raise SystemExit(f"external transparency fixture log record {line_number} is invalid JSON") from exc
         validate_fixture_log_record(record, expected_sequence, line_number)
         expected_sequence += 1
@@ -403,17 +456,15 @@ def validate_fixture_log_record(record: Any, expected_sequence: int, line_number
         raise SystemExit(f"external transparency fixture log record {line_number} provider is invalid")
     if record["mode"] != "external-managed-transparency-log":
         raise SystemExit(f"external transparency fixture log record {line_number} mode is invalid")
-    sequence = record["external_sequence"]
-    if type(sequence) is not int or sequence < 1:
-        raise SystemExit(f"external transparency fixture log record {line_number} sequence is invalid")
+    sequence = require_positive_checkpoint_integer(
+        record["external_sequence"], f"external transparency fixture log record {line_number} sequence",
+    )
     if sequence != expected_sequence:
         raise SystemExit("external transparency fixture log sequences must be contiguous and start at 1")
     if not isinstance(record["received_at"], str) or not record["received_at"]:
         raise SystemExit(f"external transparency fixture log record {line_number} received_at is invalid")
-    if type(record["tree_size"]) is not int or record["tree_size"] < 1:
-        raise SystemExit(f"external transparency fixture log record {line_number} tree_size is invalid")
-    if type(record["source_sequence"]) is not int or record["source_sequence"] < 1:
-        raise SystemExit(f"external transparency fixture log record {line_number} source_sequence is invalid")
+    require_positive_checkpoint_integer(record["tree_size"], f"external transparency fixture log record {line_number} tree_size")
+    require_positive_checkpoint_integer(record["source_sequence"], f"external transparency fixture log record {line_number} source_sequence")
     if record["source_mode"] is not None and not isinstance(record["source_mode"], str):
         raise SystemExit(f"external transparency fixture log record {line_number} source_mode is invalid")
     for field in ("checkpoint_digest", "request_digest", "tree_head_hash", "record_digest", "leaf_hash", "log_id"):
@@ -427,6 +478,10 @@ def validate_fixture_log_record(record: Any, expected_sequence: int, line_number
     signed_tree_head = record["signed_tree_head"]
     if not isinstance(signed_tree_head, dict):
         raise SystemExit(f"external transparency fixture log record {line_number} signed_tree_head must be an object")
+    require_positive_checkpoint_integer(
+        signed_tree_head.get("tree_size"),
+        f"external transparency fixture log record {line_number} signed tree size",
+    )
     if signed_tree_head.get("tree_size") != record["tree_size"]:
         raise SystemExit(f"external transparency fixture log record {line_number} signed tree size does not match")
     if signed_tree_head.get("tree_head_hash") != record["tree_head_hash"]:
@@ -480,6 +535,7 @@ def load_extra_headers() -> dict[str, str]:
 
 
 def checkpoint_http(checkpoint: dict[str, Any], url: str) -> dict[str, Any]:
+    require_authenticated_receipt_mode(env_bool("SERVERWARE_TRANSPARENCY_REQUIRE_VERIFIABLE_RECEIPT", True))
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme != "https" and not env_bool("SERVERWARE_TRANSPARENCY_ALLOW_INSECURE_HTTP", False):
         raise SystemExit("SERVERWARE_TRANSPARENCY_LOG_URL must use https unless SERVERWARE_TRANSPARENCY_ALLOW_INSECURE_HTTP=1")
@@ -513,18 +569,19 @@ def checkpoint_http(checkpoint: dict[str, Any], url: str) -> dict[str, Any]:
         raise SystemExit(f"managed transparency log returned HTTP {exc.code}: {detail}") from exc
     except urllib.error.URLError as exc:
         raise SystemExit(f"managed transparency log request failed: {exc.reason}") from exc
-    response = json.loads(response_body.decode("utf-8"))
+    response = json.loads(response_body.decode("utf-8"), object_pairs_hook=unique_json_object)
     if not isinstance(response, dict):
         raise SystemExit("managed transparency log returned non-object JSON")
     return normalized_response(
         response,
         checkpoint,
         request["request_digest"],
-        require_verifiable_receipt=env_bool("SERVERWARE_TRANSPARENCY_REQUIRE_VERIFIABLE_RECEIPT", True),
+        require_verifiable_receipt=True,
     )
 
 
 def command_checkpoint(args: argparse.Namespace) -> dict[str, Any]:
+    require_authenticated_receipt_mode(env_bool("SERVERWARE_TRANSPARENCY_REQUIRE_VERIFIABLE_RECEIPT", True))
     checkpoint = read_stdin_object()
     mode = args.mode or os.getenv("SERVERWARE_TRANSPARENCY_CHECKPOINT_MODE", "").strip()
     url = args.url or os.getenv("SERVERWARE_TRANSPARENCY_LOG_URL", "").strip()
@@ -540,6 +597,7 @@ def command_checkpoint(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def command_verify() -> dict[str, Any]:
+    require_authenticated_receipt_mode(env_bool("SERVERWARE_TRANSPARENCY_REQUIRE_VERIFIABLE_RECEIPT", True))
     request = read_stdin_object()
     checkpoint = request.get("checkpoint")
     response = request.get("response")
@@ -550,7 +608,7 @@ def command_verify() -> dict[str, Any]:
         response,
         checkpoint,
         publication["request_digest"],
-        require_verifiable_receipt=env_bool("SERVERWARE_TRANSPARENCY_REQUIRE_VERIFIABLE_RECEIPT", True),
+        require_verifiable_receipt=True,
     )
 
 

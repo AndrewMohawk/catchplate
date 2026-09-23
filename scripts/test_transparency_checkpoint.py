@@ -206,6 +206,20 @@ class ManagedLogHandler(BaseHTTPRequestHandler):
             response["checkpoint_digest"] = "sha256:" + "0" * 64
         if self.path.endswith("/missing-receipt"):
             response.pop("receipt", None)
+        if self.path.endswith("/sequence-alias"):
+            response["checkpoint_id"] = response.pop("external_sequence")
+        if self.path.endswith("/sequence-mismatch"):
+            response["external_sequence"] = 43
+        if self.path.endswith("/sequence-bool"):
+            response["external_sequence"] = True
+        if self.path.endswith("/sequence-dual-alias"):
+            response["checkpoint_id"] = response["external_sequence"]
+        if self.path.endswith("/signed-sequence-string"):
+            receipt_payload["external_sequence"] = "42"
+            response["receipt"]["signature"] = sign_receipt(receipt_payload)
+        if self.path.endswith("/sequence-stale-signature"):
+            response["external_sequence"] = 43
+            receipt_payload["external_sequence"] = 43
         encoded = canonical_json(response).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -321,6 +335,21 @@ def main() -> None:
         http_response = run_adapter(payload, http_env)
         if http_response.get("external_sequence") != 42:
             raise AssertionError(f"HTTP managed log sequence mismatch: {http_response}")
+        alias_env = dict(http_env)
+        alias_env["SERVERWARE_TRANSPARENCY_LOG_URL"] = f"{base}/sequence-alias"
+        aliased = run_adapter(payload, alias_env)
+        if aliased.get("external_sequence") != 42 or "checkpoint_id" in aliased:
+            raise AssertionError("transport sequence alias was not normalized to the signed integer")
+        for endpoint, expected in (
+            ("sequence-mismatch", "receipt external_sequence does not match request"),
+            ("sequence-bool", "external checkpoint sequence must be an integer"),
+            ("sequence-dual-alias", "requires exactly one of external_sequence or checkpoint_id"),
+            ("signed-sequence-string", "external checkpoint receipt sequence must be an integer"),
+            ("sequence-stale-signature", "receipt signature did not verify"),
+        ):
+            sequence_env = dict(http_env)
+            sequence_env["SERVERWARE_TRANSPARENCY_LOG_URL"] = f"{base}/{endpoint}"
+            expect_failure(payload, sequence_env, expected)
         verify_input = {"checkpoint": payload, "response": http_response}
         verify_result = subprocess.run(
             [sys.executable, "scripts/transparency_checkpoint.py", "verify"],

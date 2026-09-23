@@ -2097,16 +2097,35 @@ def proof_policy_bundle(
                 "adapter": {
                     "type": "generic.rest",
                     "config": {
+                        "credentialMode": "none",
+                        "noCredentialProof": {
+                            "credentialRefAbsent": True,
+                            "secretInjectionDisabled": True,
+                            "sensitiveHeadersForwarded": False,
+                            "authorizationForwarded": False,
+                        },
                         "request": {
                             "allowedHeaders": ["accept", "user-agent"],
                             "allowedQueryKeys": [],
+                            "allowedMediaTypes": [],
                             "bodyMode": "none",
                             "maxBodyBytes": 0,
+                            "operation": {"name": "production.proof.health"},
+                            "valueRules": [],
                         },
                         "response": {
                             "mode": "json",
                             "maxBodyBytes": 65536,
+                            "contentTypes": ["application/json"],
                             "allowedFields": ["status"],
+                            "allowedHeaders": [],
+                            "error": {
+                                "mode": "json",
+                                "maxBodyBytes": 65536,
+                                "allowedFields": ["error", "code", "message"],
+                                "allowedHeaders": [],
+                                "onInvalid": "block",
+                            },
                         },
                     },
                 },
@@ -2142,6 +2161,20 @@ def verify_proof_policy_identity_contract() -> None:
                     raise AssertionError(f"proof identity rejected for wrong reason: {exc}") from exc
             else:
                 raise AssertionError("proof policy accepted an unanchored agent header")
+        for field in (
+            "credentialRefAbsent", "secretInjectionDisabled",
+            "sensitiveHeadersForwarded", "authorizationForwarded",
+        ):
+            bundle = proof_policy_bundle()
+            proof = bundle["routes"][0]["adapter"]["config"]["noCredentialProof"]
+            proof[field] = not proof[field]
+            try:
+                validate(bundle)
+            except ValueError as exc:
+                if "exact non-secret proof" not in str(exc):
+                    raise AssertionError(f"credentialless fixture rejected for wrong reason: {exc}") from exc
+            else:
+                raise AssertionError(f"proof policy accepted invalid noCredentialProof.{field}")
 
 
 def verify_sealed_bootstrap_receipt_contract() -> None:

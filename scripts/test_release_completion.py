@@ -6945,7 +6945,11 @@ def signed_external_receipt(payload: dict[str, Any]) -> dict[str, Any]:
 
 def external_checkpoint(*, provider: str = "managed-prod-log", log_id: str | None = None) -> dict[str, Any]:
     selected_log_id = log_id or str(external_receipt_key_info()["key_id"])
-    receipt_payload = {"provider": provider, "log_id": selected_log_id}
+    receipt_payload = {
+        "provider": provider,
+        "log_id": selected_log_id,
+        "external_sequence": 42,
+    }
     return {
         "accepted": 1,
         "mode": "external-managed-transparency-log",
@@ -6994,6 +6998,7 @@ def transparency_for_record(
         {
             "provider": provider,
             "log_id": selected_log_id,
+            "external_sequence": checkpoint["external_sequence"],
             "record_digest": record_digest,
             "leaf_hash": leaf_hash,
             "tree_head_hash": tree_head_hash,
@@ -7573,7 +7578,7 @@ def image_signatures(
     }
     payload = {
         "apiVersion": "serverware.imageSignatures/v1",
-        "kind": "ImageSignatures",
+        "kind": "ImageSignatureBundle",
         "metadata": {
             "provenanceDigest": provenance_digest,
             "releaseSigningKeyId": selected_release_key_id,
@@ -7803,6 +7808,7 @@ def file_summary(path: Path, label: str) -> dict[str, Any]:
 
 
 def production_host_preflight(tmp: Path, source_tree_digest: str = SOURCE_TREE_DIGEST) -> dict[str, Any]:
+    configured = run_production_readiness.load_env_file(tmp / "production.env")
     control_ref = "registry.prod.serverware.dev/serverware/control@sha256:" + "6" * 64
     gate_ref = "registry.prod.serverware.dev/serverware/decision-gate@sha256:" + "7" * 64
     policy_identity = verify_production_policy_identity.verify_persisted_report(
@@ -7840,6 +7846,11 @@ def production_host_preflight(tmp: Path, source_tree_digest: str = SOURCE_TREE_D
             )
         ),
         "checks": {
+            "nonce_rollback_assurance": {
+                "apiVersion": run_production_readiness.NONCE_ROLLBACK_ASSURANCE_BINDING_API_VERSION,
+                "enforcement": "not-native-launcher-enforced",
+                "verified": False,
+            },
             "host": {
                 "ok": True,
                 "skipped": False,
@@ -7874,12 +7885,18 @@ def production_host_preflight(tmp: Path, source_tree_digest: str = SOURCE_TREE_D
                         "setting": setting,
                         "executable": (
                             str(tmp.resolve() / PINNED_EXECUTABLE_NAMES[setting])
-                            if setting == production_host_preflight_module.PRODUCTION_PYTHON_EXECUTABLE_SETTING
+                            if setting in {
+                                production_host_preflight_module.PRODUCTION_PYTHON_EXECUTABLE_SETTING,
+                                production_host_preflight_module.PRODUCTION_DOCKER_EXECUTABLE_SETTING,
+                            }
                             else f"/opt/serverware/bin/{PINNED_EXECUTABLE_NAMES[setting]}"
                         ),
                         "host_path": (
                             str(tmp.resolve() / PINNED_EXECUTABLE_NAMES[setting])
-                            if setting == production_host_preflight_module.PRODUCTION_PYTHON_EXECUTABLE_SETTING
+                            if setting in {
+                                production_host_preflight_module.PRODUCTION_PYTHON_EXECUTABLE_SETTING,
+                                production_host_preflight_module.PRODUCTION_DOCKER_EXECUTABLE_SETTING,
+                            }
                             else str(tmp.resolve() / "attestation-helpers" / PINNED_EXECUTABLE_NAMES[setting])
                         ),
                         "sha256": fixture_executable_digest_manifest()[setting],
@@ -11242,6 +11259,40 @@ def verify_release_artifact_authority_contracts() -> None:
     )
     if verified_provenance["launch_authority"] != build_summary["launch_authority"]:
         raise AssertionError("release provenance launch authority does not bind the production build")
+
+    image_summary, image_document = image_signatures(
+        provenance_summary["provenance_digest"]
+    )
+
+    def verify_image_fixture(document: dict[str, Any]) -> dict[str, Any]:
+        return verify_release_completion.verify_image_signatures(
+            image_summary,
+            document,
+            verified_provenance,
+            expected_image_digests=[ref.split("@", 1)[1] for ref in readiness_refs],
+            expected_image_refs=readiness_refs,
+            expected_sigstore_key_id=sigstore_signing_key_info()["key_id"],
+            expected_rekor_log_id=rekor_key_info()["key_id"],
+            expected_external_provider="managed-prod-log",
+            expected_external_log_id=external_receipt_key_info()["key_id"],
+            trusted_sigstore_public_key_pem=sigstore_signing_key_info()["public_key_pem"],
+            trusted_rekor_public_key_pem=rekor_key_info()["public_key_pem"],
+            trusted_external_public_key_pem=external_receipt_key_info()["public_key_pem"],
+        )
+
+    verified_images = verify_image_fixture(image_document)
+    if verified_images["image_signature_bundle_digest"] != image_summary["image_signature_bundle_digest"]:
+        raise AssertionError("production image-signature fixture lost its signed payload binding")
+    stale_kind_document = clone_document(image_document)
+    stale_kind_document["kind"] = "ImageSignatures"
+    try:
+        verify_image_fixture(stale_kind_document)
+    except ValueError as exc:
+        if "unsupported image signatures schema" not in str(exc):
+            raise AssertionError(f"obsolete image-signature kind failed for the wrong reason: {exc}") from exc
+    else:
+        raise AssertionError("completion verifier accepted the obsolete image-signature kind")
+
     mismatched_provenance = json.loads(json.dumps(provenance_document))
     mismatched_provenance["provenance"]["reproducible_build"][
         "launch_authority_key_id"
@@ -11351,7 +11402,33 @@ def main() -> None:
             tmp / "decision-gate-rs-bench.json",
             benchmark_document(),
         )
-        write(tmp / "production-host-preflight.json", production_host_preflight(tmp))
+        env_path = tmp / "production.env"
+        env_bytes = env_path.read_bytes()
+        env_stat = env_path.stat()
+        configured = run_production_readiness.load_env_file(env_path)
+        preflight = production_host_preflight(tmp)
+        after_env_stat = env_path.stat()
+        if (
+            env_path.read_bytes() != env_bytes
+            or (after_env_stat.st_ino, after_env_stat.st_mtime_ns, after_env_stat.st_mode)
+            != (env_stat.st_ino, env_stat.st_mtime_ns, env_stat.st_mode)
+        ):
+            raise AssertionError("preflight fixture rewrote its existing production env")
+        if preflight["checks"]["production_env"]["env_keys"] != sorted(configured):
+            raise AssertionError("preflight fixture did not use its existing production env")
+        runtime_trust = preflight["checks"]["runtime_trust_materials"]
+        if {item["setting"]: item["sha256"] for item in runtime_trust["python_script_digests"]} != {
+            setting: configured[setting]
+            for setting in run_production_readiness.PINNED_PYTHON_SCRIPTS.values()
+        }:
+            raise AssertionError("preflight fixture did not preserve existing Python script pins")
+        for executable in runtime_trust["executable_digests"]:
+            if (
+                executable["executable"] != shlex.split(configured[executable["setting"]])[0]
+                or executable["sha256"] != sha256_file(Path(executable["host_path"]))
+            ):
+                raise AssertionError("preflight fixture executable report does not bind its actual fixture file")
+        write(tmp / "production-host-preflight.json", preflight)
         valid_hardware_assurance = hardware_assurance_document(nitro, tmp)
         write(tmp / "hardware-assurance.json", valid_hardware_assurance)
         (tmp / "hardware-assurance-verifier.pub.pem").write_text(
@@ -12937,6 +13014,23 @@ def main() -> None:
             tmp / "decision-gate-rs-bench.json",
             benchmark_document(),
         )
+        for nonce_assurance_case in ("missing", "claimed-verified"):
+            bad_preflight = production_host_preflight(tmp)
+            if nonce_assurance_case == "missing":
+                bad_preflight["checks"].pop("nonce_rollback_assurance")
+            else:
+                bad_preflight["checks"]["nonce_rollback_assurance"]["verified"] = True
+            write(tmp / "production-host-preflight.json", bad_preflight)
+            rejected_nonce_assurance = run_verifier(tmp)
+            if (
+                rejected_nonce_assurance.returncode == 0
+                or "manual production host preflight must not claim launcher-enforced nonce rollback assurance"
+                not in detail(rejected_nonce_assurance)
+            ):
+                raise AssertionError(
+                    f"completion verifier accepted {nonce_assurance_case} manual nonce assurance: "
+                    f"{detail(rejected_nonce_assurance)}"
+                )
         skipped_config_preflight = production_host_preflight(tmp)
         skipped_config_preflight["checks"]["production_env"]["config_gate"]["skipped"] = True
         write(tmp / "production-host-preflight.json", skipped_config_preflight)

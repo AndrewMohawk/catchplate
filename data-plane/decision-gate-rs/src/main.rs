@@ -11915,7 +11915,9 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                 ));
             }
             let type_fields: &[&str] = match constraint_type {
-                "rateLimit" => &["store", "max", "windowSeconds", "calendarWindow", "key"],
+                "rateLimit" => &[
+                    "store", "max", "windowSeconds", "calendarWindow", "windowSemantics", "key",
+                ],
                 "slidingWindowLimit" => &[
                     "store",
                     "max",
@@ -12584,6 +12586,18 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                 if window.kind().is_calendar() && store != "shared" {
                     return Err(format!(
                         "route {route_id} rateLimit {constraint_id} calendar windows require store shared"
+                    ));
+                }
+                let expected_semantics = if window.kind().is_calendar() {
+                    "calendarUTC"
+                } else {
+                    "fixedFromFirstUse"
+                };
+                if constraint.get("windowSemantics").and_then(Value::as_str)
+                    != Some(expected_semantics)
+                {
+                    return Err(format!(
+                        "route {route_id} rateLimit {constraint_id} must use windowSemantics {expected_semantics}"
                     ));
                 }
                 let key = match constraint.get("key") {
@@ -56918,7 +56932,7 @@ mod tests {
                             "providerSubject":"test-google-account",
                             "oauthClientId":client_id,
                             "scopes":scopes,
-                            "injection":{"type":"bearer"},
+                            "injection":{"type":"bearer","field":"access_token"},
                         }),
                         json!({
                             "credentialType":"oauth2",
@@ -56982,7 +56996,7 @@ mod tests {
                             "providerSubject":"test-x-account",
                             "oauthClientId":client_id,
                             "scopes":scopes,
-                            "injection":{"type":"bearer"},
+                            "injection":{"type":"bearer","field":"access_token"},
                         }),
                         json!({
                             "credentialType":"oauth2",
@@ -59386,7 +59400,7 @@ mod tests {
     fn provider_request_profile_policy_admission_is_exact_for_every_mode() {
         for (adapter_type, mode, expected_query_count, expected_max_body) in [
             ("gmail.v1", None, 12, 0),
-            ("x.v2", Some("recentSearchOnly"), 17, 0),
+            ("x.v2", Some("recentSearchOnly"), 16, 0),
             ("x.v2", Some("readOnly"), 55, 0),
             ("x.v2", Some("controlledWrite"), 0, 65_536),
             ("npm.registry", None, 0, 16 * 1024 * 1024),
@@ -59708,6 +59722,7 @@ mod tests {
             .expect("principals")
             .push(json!({
                 "id":"agent:alias",
+                "sourceCidrs":["127.0.0.2/32"],
                 "requiredHeaders":{"x_agent_class":"trusted"}
             }));
         let error = validate_policy_capabilities(&wildcard_collision)
@@ -59724,12 +59739,15 @@ mod tests {
             .expect("principals")
             .push(json!({
                 "id":"agent:other",
+                "sourceCidrs":["127.0.0.2/32"],
                 "requiredHeaders":{"x-agent-class":"other"}
             }));
         validate_policy_capabilities(&selected_only)
             .expect("identity selectors for principals outside the route do not collide");
 
         let mut snapshot_value = (*test_snapshot(1)).clone();
+        snapshot_value.principals[0].source_cidrs =
+            vec!["127.0.0.1/32".parse().expect("identity fixture source CIDR")];
         snapshot_value.principals[0].required_headers =
             BTreeMap::from([("x-agent-class".to_string(), "trusted".to_string())]);
         snapshot_value.routes[0].adapter_config["request"]["allowedHeaders"] =
@@ -59746,7 +59764,7 @@ mod tests {
             &state,
             &snapshot,
             DecisionRequest {
-                client_ip: None,
+                client_ip: Some("127.0.0.1".to_string()),
                 method: "GET".to_string(),
                 url: "https://example.test/resource".to_string(),
                 headers: original_headers.clone(),
@@ -59783,7 +59801,7 @@ mod tests {
             &state,
             &snapshot,
             DecisionRequest {
-                client_ip: None,
+                client_ip: Some("127.0.0.1".to_string()),
                 method: "GET".to_string(),
                 url: "https://example.test/resource".to_string(),
                 headers: BTreeMap::from([(
@@ -61235,6 +61253,7 @@ mod tests {
                     "response":{
                         "mode":"json",
                         "maxBodyBytes":65536,
+                        "contentTypes":["application/json"],
                         "allowedFields":["ok","published"],
                         "allowedHeaders":[],
                         "error":{
@@ -63483,7 +63502,10 @@ mod tests {
         );
 
         let mut duplicate_route = policy_with_route(route.clone());
-        duplicate_route["routes"] = json!([route.clone(), route.clone()]);
+        // Duplicate the complete admitted route, including its response envelope,
+        // so the negative reaches ID uniqueness instead of an earlier guard.
+        let admitted_route = duplicate_route["routes"][0].clone();
+        duplicate_route["routes"] = json!([admitted_route.clone(), admitted_route]);
         assert_eq!(
             validate_policy_capabilities(&duplicate_route)
                 .expect_err("duplicate route IDs must fail"),
@@ -63618,10 +63640,13 @@ mod tests {
                 let mut snapshot_value = (*test_snapshot(1)).clone();
                 snapshot_value.routes[0].credential_ref = Some("credential:test".to_string());
                 snapshot_value.routes[0].adapter_config["request"] = json!({
-                    "allowedHeaders":["content-type"],
+                    "allowedHeaders":[],
                     "allowedQueryKeys":[],
+                    "allowedMediaTypes":[content_type],
                     "bodyMode":body_mode,
-                    "maxBodyBytes":1024
+                    "maxBodyBytes":1024,
+                    "operation":{"name":"generic.write"},
+                    "valueRules":[]
                 });
                 snapshot_value.routes[0].constraints = constraints;
                 let snapshot = Arc::new(snapshot_value);
@@ -63664,10 +63689,13 @@ mod tests {
             let mut snapshot_value = (*test_snapshot(1)).clone();
             snapshot_value.routes[0].credential_ref = Some("credential:test".to_string());
             snapshot_value.routes[0].adapter_config["request"] = json!({
-                "allowedHeaders":["content-type"],
+                "allowedHeaders":[],
                 "allowedQueryKeys":[],
+                "allowedMediaTypes":["application/octet-stream"],
                 "bodyMode":body_mode,
-                "maxBodyBytes":1024
+                "maxBodyBytes":1024,
+                "operation":{"name":"generic.write"},
+                "valueRules":[]
             });
             let snapshot = Arc::new(snapshot_value);
             let state = test_gate_state(Arc::clone(&snapshot));
@@ -63693,9 +63721,10 @@ mod tests {
                 Some("agent:test"),
             );
             assert_eq!(denied["allowed"], false);
+            assert_eq!(denied["status_code"], 500);
             assert_eq!(
                 denied["payload"]["error"],
-                "credential_opaque_request_body_denied"
+                "credential_non_buffered_request_body_denied"
             );
             assert_eq!(denied["payload"]["bodyMode"], body_mode);
             assert!(state
@@ -66787,7 +66816,12 @@ mod tests {
         route.adapter_config = json!({
             "mode":"recentSearchOnly",
             "blockWrites":true,
-            "appIds":[],
+            "appIds":["catalog-test-app"],
+            "credentialBinding":{
+                "credentialType":"oauth2","provider":"x",
+                "subjects":["catalog-test-account"],"clientIds":["catalog-test-app"],
+                "requiredScopes":["tweet.read","users.read"]
+            },
             "allowedReadOperations":["search.read"],
             "response":{"mode":"json","maxBodyBytes":65536,"allowedFields":["data"]}
         });
@@ -66818,6 +66852,14 @@ mod tests {
         let url = Url::parse(&request.url).expect("recent X URL");
         validate_adapter(&request, &BTreeMap::new(), &url, &route_match)
             .expect("recent-search mode permits the exact recent counts endpoint");
+        let mut wrong_app_route = route.clone();
+        wrong_app_route.adapter_config["appIds"] = json!(["other-app"]);
+        let wrong_app_match = RouteMatch { route: &wrong_app_route, params: BTreeMap::new() };
+        assert_eq!(
+            validate_adapter(&request, &BTreeMap::new(), &url, &wrong_app_match)
+                .expect_err("catalog admission must retain the exact application binding")["error"],
+            "x_app_id_binding_invalid",
+        );
 
         let recent_route = json!({
             "id":"x:recent",
@@ -66833,7 +66875,15 @@ mod tests {
                 "blockWrites":true,
                 "appIds":["approved-app"],
                 "allowedReadOperations":["search.read"],
-                "response":{"mode":"json","maxBodyBytes":65536,"allowedFields":["data"]}
+                "response":{
+                    "mode":"json","maxBodyBytes":65536,
+                    "contentTypes":["application/json"],"allowedFields":["data"],
+                    "allowedHeaders":[],
+                    "error":{
+                        "mode":"json","maxBodyBytes":65536,"allowedFields":["error"],
+                        "allowedHeaders":[],"onInvalid":"block"
+                    }
+                }
             }},
             "constraints":[
                 {
@@ -66883,6 +66933,7 @@ mod tests {
                 "response":{
                     "mode":"json",
                     "maxBodyBytes":65536,
+                    "contentTypes":["application/json"],
                     "allowedFields":["data"],
                     "allowedHeaders":[],
                     "error":{
@@ -69746,65 +69797,87 @@ mod tests {
     #[test]
     fn calendar_rate_limit_policy_admission_matches_the_shared_compiler_contract() {
         fn route_with_rate_limit(constraint: Value) -> Value {
-            json!({
-                "id":"route:calendar-quota",
-                "principals":["agent:test"],
-                "match":{
-                    "scheme":"https","host":"example.test","port":443,
-                    "methods":["GET"],"paths":["/resource"]
-                },
-                "adapter":{"type":"generic.rest","config":{
-                    "request":{
-                        "allowedHeaders":[],"allowedQueryKeys":[],
-                        "bodyMode":"none","maxBodyBytes":0,
-                        "operation":{"name":"resource.read"}
-                    },
-                    "response":{"mode":"json","maxBodyBytes":1024,"allowedFields":["safe"]}
-                }},
-                "constraints":[constraint]
-            })
+            let mut route = generic_policy_route("none", json!(1024));
+            route["id"] = json!("route:calendar-quota");
+            route["match"]["methods"] = json!(["GET"]);
+            route["adapter"]["config"]["request"]["maxBodyBytes"] = json!(0);
+            route["adapter"]["config"]["request"]["operation"]["name"] = json!("resource.read");
+            route["constraints"] = json!([constraint]);
+            route
         }
 
+        let mut valid_constraints = Vec::new();
         for calendar_window in ["utcDay", "utcIsoWeek", "utcMonth"] {
-            let constraint = json!({
+            valid_constraints.push(json!({
                 "id":"quota:calendar","type":"rateLimit","max":5,
-                "calendarWindow":calendar_window,"store":"shared"
-            });
-            validate_policy_capabilities(&policy_with_route(route_with_rate_limit(constraint)))
-                .unwrap_or_else(|error| panic!("{calendar_window} must compile: {error}"));
+                "calendarWindow":calendar_window,"store":"shared",
+                "windowSemantics":"calendarUTC"
+            }));
         }
-        validate_policy_capabilities(&policy_with_route(route_with_rate_limit(json!({
+        valid_constraints.push(json!({
             "id":"quota:fixed","type":"rateLimit","max":5,
-            "windowSeconds":3600,"store":"local"
-        }))))
-        .expect("fixed local quota remains supported");
+            "windowSeconds":3600,"store":"local",
+            "windowSemantics":"fixedFromFirstUse"
+        }));
+        for (index, constraint) in valid_constraints.into_iter().enumerate() {
+            let expected_semantics = constraint["windowSemantics"].as_str().unwrap();
+            let policy = policy_with_route(route_with_rate_limit(constraint.clone()));
+            validate_policy_capabilities(&policy).expect("exact quota semantics must be admitted");
+            load_compiled_test_snapshot(policy, "quota-window-semantics", 2 + index as u64);
+            for invalid in [None, Some(Value::Null), Some(json!(true)), Some(json!(7)),
+                Some(json!("sliding")), Some(json!(if expected_semantics == "calendarUTC" {
+                    "fixedFromFirstUse"
+                } else {
+                    "calendarUTC"
+                }))]
+            {
+                let mut malformed = constraint.clone();
+                if let Some(value) = invalid {
+                    malformed["windowSemantics"] = value;
+                } else {
+                    malformed.as_object_mut().unwrap().remove("windowSemantics");
+                }
+                assert_eq!(
+                    validate_policy_capabilities(&policy_with_route(route_with_rate_limit(malformed)))
+                        .expect_err("missing, mistyped, or mismatched quota semantics must fail"),
+                    format!("route route:calendar-quota rateLimit {} must use windowSemantics {expected_semantics}",
+                        constraint["id"].as_str().unwrap()),
+                );
+            }
+        }
 
-        for (label, constraint) in [
+        for (label, constraint, expected_error) in [
             (
                 "both",
-                json!({"id":"quota:test","type":"rateLimit","max":5,"windowSeconds":60,"calendarWindow":"utcDay","store":"shared"}),
+                json!({"id":"quota:test","type":"rateLimit","max":5,"windowSeconds":60,"calendarWindow":"utcDay","store":"shared","windowSemantics":"calendarUTC"}),
+                "exactly one",
             ),
             (
                 "neither",
-                json!({"id":"quota:test","type":"rateLimit","max":5,"store":"shared"}),
+                json!({"id":"quota:test","type":"rateLimit","max":5,"store":"shared","windowSemantics":"fixedFromFirstUse"}),
+                "exactly one",
             ),
             (
                 "unknown",
-                json!({"id":"quota:test","type":"rateLimit","max":5,"calendarWindow":"utcWeek","store":"shared"}),
+                json!({"id":"quota:test","type":"rateLimit","max":5,"calendarWindow":"utcWeek","store":"shared","windowSemantics":"calendarUTC"}),
+                "calendarWindow",
             ),
             (
                 "local",
-                json!({"id":"quota:test","type":"rateLimit","max":5,"calendarWindow":"utcDay","store":"local"}),
+                json!({"id":"quota:test","type":"rateLimit","max":5,"calendarWindow":"utcDay","store":"local","windowSemantics":"calendarUTC"}),
+                "calendar windows require store shared",
             ),
             (
                 "non-integer max",
-                json!({"id":"quota:test","type":"rateLimit","max":5.5,"calendarWindow":"utcDay","store":"shared"}),
+                json!({"id":"quota:test","type":"rateLimit","max":5.5,"calendarWindow":"utcDay","store":"shared","windowSemantics":"calendarUTC"}),
+                "max must be an integer",
             ),
         ] {
+            let error = validate_policy_capabilities(&policy_with_route(route_with_rate_limit(constraint)))
+                .expect_err("malformed quota must fail independently of semantics");
             assert!(
-                validate_policy_capabilities(&policy_with_route(route_with_rate_limit(constraint)))
-                    .is_err(),
-                "malformed {label} quota compiled"
+                error.contains(expected_error),
+                "malformed {label} quota reached the wrong guard: {error}"
             );
         }
     }
@@ -70912,11 +70985,21 @@ mod tests {
                 let durable_error =
                     validate_policy_capabilities(&policy_with_route(durable_route))
                         .expect_err("durable response bytes must require explicit buffering");
-                assert!(
-                    durable_error.contains("explicitly buffered")
-                        || durable_error.contains("unsupported"),
-                    "{durable_kind}/{mode}: {durable_error}"
-                );
+                if mode == "stream" {
+                    let expected = if durable_kind == "traversalBudget" {
+                        "route route:test traversalBudget durable-traversal requires buffered response validation".to_string()
+                    } else {
+                        format!("route route:test {durable_kind} {} requires buffered terminal authority evidence",
+                            if durable_kind == "slidingWindowLimit" { "durable-sliding" } else { "durable-weighted" })
+                    };
+                    assert_eq!(durable_error, expected);
+                } else {
+                    assert!(
+                        durable_error.contains("explicitly buffered")
+                            || durable_error.contains("unsupported"),
+                        "{durable_kind}/{mode}: {durable_error}"
+                    );
+                }
                 let mut runtime_durable_route = test_snapshot(1).routes[0].clone();
                 runtime_durable_route.adapter_config["response"]["mode"] = json!(mode);
                 runtime_durable_route.constraints = vec![json!({
@@ -70941,17 +71024,18 @@ mod tests {
         mutating_stream["adapter"]["config"]["request"]["allowedMediaTypes"] =
             json!(["application/x-ndjson"]);
         mutating_stream["adapter"]["config"]["request"]["allowedFields"] = json!(["safe"]);
-        assert!(
+        assert_eq!(
             validate_policy_capabilities(&policy_with_route(mutating_stream))
-                .expect_err("credential-bearing mutating stream must fail")
-                .contains("must buffer")
+                .expect_err("credential-bearing mutating stream must fail"),
+            "route route:test credential-bearing generic.rest routes cannot use non-buffered bodyMode jsonlStream"
         );
 
         let opaque_request_stream = generic_policy_route("stream", json!(1024));
         let error =
             validate_policy_capabilities(&policy_with_credential_route(opaque_request_stream))
                 .expect_err("credential-bearing opaque request stream must fail");
-        assert!(error.contains("opaque bodyMode stream"), "{error}");
+        assert_eq!(error,
+            "route route:test credential-bearing generic.rest routes cannot use non-buffered bodyMode stream");
     }
 
     #[test]
@@ -71174,6 +71258,7 @@ mod tests {
                         "maxBodyBytes":4096
                     },
                     "maxBodyBytes":1048576,
+                    "contentTypes":["application/json"],
                     "allowedFields":["id","internalDate","payload.headers"],
                     "allowedHeaders":[],
                     "allowedMessageHeaderNames":["From","Subject"],
@@ -71244,6 +71329,7 @@ mod tests {
                 "response":{
                     "mode":"json",
                     "maxBodyBytes":65536,
+                    "contentTypes":["application/json"],
                     "allowedFields":["package","version","published"],
                     "allowedHeaders":[],
                     "error":{
@@ -71414,7 +71500,15 @@ mod tests {
                 "blockWrites":true,
                 "appIds":["approved-app"],
                 "allowedReadOperations":["tweets.read","users.read"],
-                "response":{"mode":"json","maxBodyBytes":1048576,"allowedFields":["data","meta"]}
+                "response":{
+                    "mode":"json","maxBodyBytes":1048576,
+                    "contentTypes":["application/json"],"allowedFields":["data","meta"],
+                    "allowedHeaders":[],
+                    "error":{
+                        "mode":"json","maxBodyBytes":65536,"allowedFields":["error"],
+                        "allowedHeaders":[],"onInvalid":"block"
+                    }
+                }
             }},
             "constraints":[{
                 "id":"x-read-operations",
@@ -71445,7 +71539,15 @@ mod tests {
                 "request":provider_request_profile_json("x.v2", Some("controlledWrite")),
                 "blockWrites":false,
                 "appIds":["approved-app"],
-                "response":{"mode":"json","maxBodyBytes":65536,"allowedFields":["data"]}
+                "response":{
+                    "mode":"json","maxBodyBytes":65536,
+                    "contentTypes":["application/json"],"allowedFields":["data"],
+                    "allowedHeaders":[],
+                    "error":{
+                        "mode":"json","maxBodyBytes":65536,"allowedFields":["error"],
+                        "allowedHeaders":[],"onInvalid":"block"
+                    }
+                }
             }},
             "constraints":[
                 {"id":"x-write-operation","type":"operationPolicy","allowedOperations":["tweets.write"]},
@@ -77378,7 +77480,7 @@ mod tests {
             "scopes":["tweet.read","users.read"],
         });
         let injection = credential_injection_with_signed_identity(
-            &json!({"type":"bearer"}),
+            &json!({"type":"bearer","field":"access_token"}),
             definition.as_object().expect("OAuth credential definition"),
         )
         .expect("signed OAuth injection identity");
@@ -79048,17 +79150,26 @@ mod tests {
             "type":"rateLimit",
             "max":1,
             "windowSeconds":60,
+            "windowSemantics":"fixedFromFirstUse",
             "store":"shared",
         })];
-        assert!(
+        let expected = "production route route:test with JIT or shared durable authority requires atomic release authorization";
+        assert_eq!(
             validate_production_release_authorization_policy(&shared_quota, true, false)
-                .expect_err("production credential shared quota must require atomic authorization")
-                .contains("shared quota")
+                .expect_err("production credential shared quota must require atomic authorization"),
+            expected,
         );
 
         shared_quota.routes[0].credential_ref = None;
-        validate_production_release_authorization_policy(&shared_quota, true, false)
-            .expect("credentialless shared quotas do not inject a data-plane credential");
+        assert_eq!(
+            validate_production_release_authorization_policy(&shared_quota, true, false)
+                .expect_err("shared durable authority requires atomic authorization even without a credential"),
+            expected,
+        );
+        validate_production_release_authorization_policy(&shared_quota, true, true)
+            .expect("atomic authorization admits the credentialless shared quota");
+        validate_production_release_authorization_policy(&shared_quota, false, false)
+            .expect("only explicit development mode retains legacy quota compatibility");
     }
 
     #[test]
@@ -79170,14 +79281,14 @@ mod tests {
     #[test]
     fn production_attestation_verifier_rejects_relative_path_and_symlink() {
         let digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
-        assert!(configure_control_plane_attestation_verifier(
+        assert_eq!(configure_control_plane_attestation_verifier(
             Some("control-plane-attestation-verify"),
             Some(digest),
             true,
             true,
         )
-        .expect_err("relative verifier path must fail")
-        .contains("must be absolute"));
+        .expect_err("relative verifier path must fail"),
+        "production attestation verifier must be one absolute executable with no interpreter or command arguments");
 
         let target = write_test_executable(
             "verifier-symlink-target",
@@ -79226,12 +79337,92 @@ mod tests {
         fs::remove_file(executable).expect("remove mismatched verifier");
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    fn static_attestation_verifier_fixture() -> Vec<u8> {
+        // Benign test-only ELF: read the two-byte {} request, write fixed JSON,
+        // and exit. It exercises execveat without an interpreter, shared library,
+        // external compiler, or an assumed executable from the test image.
+        let output = b"{\"ok\":true,\"claims\":{\"snapshot\":\"approved\"}}";
+        let mut code = vec![
+            0x48, 0x83, 0xec, 0x10, // sub rsp, 16 (writable stdin buffer)
+            0x31, 0xc0,             // xor eax, eax (read)
+            0x31, 0xff,             // xor edi, edi (stdin)
+            0x48, 0x89, 0xe6,       // mov rsi, rsp
+            0xba, 0x10, 0, 0, 0,    // mov edx, 16
+            0x0f, 0x05,             // syscall: wait for request before exiting
+            0xb8, 1, 0, 0, 0,       // mov eax, 1 (write)
+            0xbf, 1, 0, 0, 0,       // mov edi, 1 (stdout)
+            0x48, 0x8d, 0x35, 16, 0, 0, 0, // lea rsi, [rip + 16] (output)
+            0xba,                   // mov edx, output length
+        ];
+        code.extend_from_slice(&(output.len() as u32).to_le_bytes());
+        code.extend_from_slice(&[
+            0x0f, 0x05,             // syscall: write
+            0xb8, 60, 0, 0, 0,      // mov eax, 60 (exit)
+            0x31, 0xff,             // xor edi, edi (success)
+            0x0f, 0x05,             // syscall: exit
+        ]);
+        const ELF_HEADER: usize = 64;
+        const PROGRAM_HEADER: usize = 56;
+        const BASE_ADDRESS: u64 = 0x400000;
+        let program_size = (ELF_HEADER + PROGRAM_HEADER + code.len() + output.len()) as u64;
+        let mut elf = vec![0u8; ELF_HEADER + PROGRAM_HEADER];
+        elf[..7].copy_from_slice(b"\x7fELF\x02\x01\x01");
+        elf[16..18].copy_from_slice(&2u16.to_le_bytes()); // ET_EXEC
+        elf[18..20].copy_from_slice(&62u16.to_le_bytes()); // EM_X86_64
+        elf[20..24].copy_from_slice(&1u32.to_le_bytes());
+        elf[24..32].copy_from_slice(
+            &(BASE_ADDRESS + (ELF_HEADER + PROGRAM_HEADER) as u64).to_le_bytes(),
+        );
+        elf[32..40].copy_from_slice(&(ELF_HEADER as u64).to_le_bytes());
+        elf[52..54].copy_from_slice(&(ELF_HEADER as u16).to_le_bytes());
+        elf[54..56].copy_from_slice(&(PROGRAM_HEADER as u16).to_le_bytes());
+        elf[56..58].copy_from_slice(&1u16.to_le_bytes());
+        elf[64..68].copy_from_slice(&1u32.to_le_bytes()); // PT_LOAD, file offset zero
+        elf[68..72].copy_from_slice(&5u32.to_le_bytes()); // PF_R | PF_X
+        elf[80..88].copy_from_slice(&BASE_ADDRESS.to_le_bytes());
+        elf[88..96].copy_from_slice(&BASE_ADDRESS.to_le_bytes());
+        elf[96..104].copy_from_slice(&program_size.to_le_bytes());
+        elf[104..112].copy_from_slice(&program_size.to_le_bytes());
+        elf[112..120].copy_from_slice(&4096u64.to_le_bytes());
+        elf.extend_from_slice(&code);
+        elf.extend_from_slice(output);
+        elf
+    }
+
+    #[test]
+    fn production_attestation_verifier_rejects_scripts_even_with_matching_digest() {
+        let script = b"#!/bin/sh\nprintf '%s' '{\"ok\":true,\"claims\":{}}'\n";
+        let executable = write_test_executable("verifier-script", script);
+        let error = configure_control_plane_attestation_verifier(
+            executable.to_str(), Some(&sha256_prefixed(script)), true, true,
+        ).expect_err("a byte-pinned interpreter script is not a static production verifier");
+        assert_eq!(error,
+            "production attestation verifier must be a little-endian static x86-64 ELF");
+        fs::remove_file(executable).expect("remove script verifier");
+    }
+
+    #[test]
+    fn restricted_attestation_command_environment_is_explicit() {
+        // This probes the shared restricted subprocess runner, not static ELF
+        // admission or the execveat environment. The snapshot test below proves
+        // executable identity; its constant JSON is not evidence about envp.
+        let script = b"#!/bin/sh\nIFS= read -r request || :\n[ \"$LANG\" = C ] || exit 3\n[ \"$LC_ALL\" = C ] || exit 4\n[ \"$TZ\" = UTC ] || exit 5\n[ \"${HOME+x}\" != x ] || exit 6\nprintf '%s' '{\"ok\":true}'\n";
+        let executable = write_test_executable("verifier-environment-probe", script);
+        let result = run_bounded_json_program_with_timeout(
+            &executable, &[], &json!({}), "test environment probe",
+            Duration::from_secs(10), true, None, 65_536,
+        );
+        fs::remove_file(executable).expect("remove environment probe");
+        assert_eq!(result.expect("actual restricted environment probe"), json!({"ok":true}));
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     #[test]
     fn sealed_attestation_verifier_snapshot_survives_path_substitution() {
-        let script = b"#!/bin/sh\n[ \"$LANG\" = C ] || exit 3\n[ \"$LC_ALL\" = C ] || exit 4\n[ \"$TZ\" = UTC ] || exit 5\nprintf '%s' '{\"ok\":true,\"claims\":{\"snapshot\":\"approved\"}}'\n";
-        let executable = write_test_executable("verifier-valid", script);
-        let expected = sha256_prefixed(script);
+        let program = static_attestation_verifier_fixture();
+        let executable = write_test_executable("verifier-valid", &program);
+        let expected = sha256_prefixed(&program);
         let verifier = configure_control_plane_attestation_verifier(
             executable.to_str(),
             Some(&expected),

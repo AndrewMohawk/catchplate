@@ -710,16 +710,86 @@ def assert_development_image_identity_validation() -> None:
             raise AssertionError(f"development provenance accepted {description}")
 
 
-def assert_reproducible_rust_binary_config() -> None:
-    for relative in (
-        "data-plane/decision-gate-rs/Dockerfile",
-        "data-plane/decision-gate-rs/Dockerfile.production",
-    ):
-        dockerfile = (ROOT / relative).read_text(encoding="utf-8")
-        if "COPY schemas /schemas" not in dockerfile:
-            raise AssertionError(
-                f"{relative} must package the schemas embedded by the Rust gate"
+def assert_production_schema_build_stages(dockerfile: str) -> None:
+    """Source regression contract, not a general Dockerfile/shell validator."""
+    stages: dict[str, list[str]] = {}
+    current: list[str] = []
+    for raw in dockerfile.splitlines():
+        line = raw.strip()
+        if line.upper().startswith("FROM "):
+            alias = re.search(r"\sAS\s+([a-zA-Z0-9_-]+)$", line, re.IGNORECASE)
+            current = []
+            if alias is not None:
+                name = alias.group(1)
+                if name in stages:
+                    raise AssertionError(f"duplicate production build stage: {name}")
+                stages[name] = current
+        elif line and not line.startswith("#"):
+            current.append(line.removesuffix("\\").rstrip().removesuffix(";").rstrip())
+
+    for name in ("build", "launcher-build"):
+        lines = stages.get(name)
+        if lines is None:
+            raise AssertionError(f"missing production schema build stage: {name}")
+        copies = [index for index, line in enumerate(lines)
+                  if line == "cp -R /source/schemas /schemas"]
+        builds = [index for index, line in enumerate(lines)
+                  if line.startswith("RUN --network=none cargo build --release --frozen")]
+        if len(copies) != 1 or len(builds) != 1 or copies[0] >= builds[0]:
+            raise AssertionError(f"{name} must copy verified schemas before its offline Rust build")
+        if name == "build":
+            prerequisites = (
+                "tar --no-same-owner -xf /source-contract/source.tar -C /source",
+                "sha256sum -c /source-contract/source.files.sha256",
+                "done < /source-contract/source.files.mode",
             )
+        else:
+            prerequisites = ("COPY --from=build /source /source",)
+        positions = []
+        for requirement in prerequisites:
+            if lines.count(requirement) != 1:
+                raise AssertionError(f"{name} must retain verified-source prerequisite: {requirement}")
+            positions.append(lines.index(requirement))
+        if positions != sorted(positions) or positions[-1] >= copies[0]:
+            raise AssertionError(f"{name} must verify source before copying embedded schemas")
+
+
+def assert_reproducible_rust_binary_config() -> None:
+    development = (ROOT / "data-plane/decision-gate-rs/Dockerfile").read_text(encoding="utf-8")
+    if "COPY schemas /schemas" not in development:
+        raise AssertionError("development Rust image must package its embedded schemas")
+    production = (ROOT / "data-plane/decision-gate-rs/Dockerfile.production").read_text(encoding="utf-8")
+    assert_production_schema_build_stages(production)
+    # Mutate each stage independently: a valid copy in another stage cannot
+    # compensate for missing, redirected, unverified or late source here.
+    sections = re.split(r"(?=^FROM )", production, flags=re.MULTILINE)
+    for stage in ("build", "launcher-build"):
+        index = next(index for index, section in enumerate(sections)
+                     if re.search(rf" AS {re.escape(stage)}$", section.splitlines()[0] if section else ""))
+        original = sections[index]
+        copy_line = next(line for line in original.splitlines(keepends=True)
+                         if line.strip().startswith("cp -R /source/schemas /schemas"))
+        changed_cases = {
+            "missing copy": original.replace(copy_line, ""),
+            "unverified source": original.replace("cp -R /source/schemas /schemas", "cp -R /unverified/schemas /schemas"),
+            "wrong destination": original.replace("cp -R /source/schemas /schemas", "cp -R /source/schemas /wrong-schemas"),
+            "late copy": original.replace(copy_line, "") + "\n" + copy_line,
+        }
+        prerequisite = (
+            "sha256sum -c /source-contract/source.files.sha256"
+            if stage == "build" else "COPY --from=build /source /source"
+        )
+        changed_cases["missing source verification"] = original.replace(prerequisite, "# omitted prerequisite")
+        for label, section in changed_cases.items():
+            candidate = list(sections)
+            candidate[index] = section
+            try:
+                assert_production_schema_build_stages("".join(candidate))
+            except AssertionError as exc:
+                if stage not in str(exc):
+                    raise AssertionError(f"{stage} {label} reached wrong stage guard: {exc}") from exc
+            else:
+                raise AssertionError(f"production accepted {stage} {label}")
     cargo = (ROOT / "data-plane" / "decision-gate-rs" / "Cargo.toml").read_text(encoding="utf-8")
     if "[profile.release]" not in cargo or 'strip = "symbols"' not in cargo:
         raise AssertionError("Rust release binaries must strip nondeterministic symbol tables")

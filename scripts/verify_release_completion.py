@@ -1080,11 +1080,31 @@ def verify_external_checkpoint_receipt(
     require(payload.get("provider") == provider, f"{label} external transparency receipt provider mismatch")
     require(payload.get("log_id") == log_id, f"{label} external transparency receipt log mismatch")
     for field, expected in expected_fields.items():
+        if field in {"source_sequence", "tree_size"}:
+            require_bounded_uint(
+                expected, f"{label} expected external transparency receipt {field}", minimum=1,
+            )
+            require_bounded_uint(
+                payload.get(field), f"{label} external transparency receipt {field}", minimum=1,
+            )
         require(payload.get(field) == expected, f"{label} external transparency receipt {field} mismatch")
     external_sequence = require_bounded_uint(
         checkpoint.get("external_sequence"),
         f"{label} external checkpoint sequence",
         minimum=1,
+    )
+    require(
+        "checkpoint_id" not in checkpoint and "checkpoint_id" not in payload,
+        f"{label} external checkpoint must use external_sequence, not checkpoint_id",
+    )
+    signed_sequence = require_bounded_uint(
+        payload.get("external_sequence"),
+        f"{label} external checkpoint receipt sequence",
+        minimum=1,
+    )
+    require(
+        signed_sequence == external_sequence,
+        f"{label} external checkpoint receipt sequence mismatch",
     )
     verify_ed25519(
         trusted_public_key_pem,

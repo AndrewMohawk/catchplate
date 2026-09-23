@@ -30,6 +30,8 @@ from psycopg import sql
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from serverware.native_postgres_results import run_native_fixture
+
 from serverware import authority_contract
 from serverware.authority_store.verifier_read_sql import verifier_read_privilege_check
 from test_webauthn_trust_projection_postgres import local_connection_parameters
@@ -259,11 +261,13 @@ class AuthorityVerifierReadPostgresTests(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument("--postgres-dsn", required=True)
+    parser.add_argument("--prepared-result")
     parser.add_argument("--disposable-cluster", action="store_true", required=True,
                         help="acknowledge the externally prepared cluster is disposable")
     arguments, test_arguments = parser.parse_known_args()
     CONNECTION_PARAMETERS = local_connection_parameters(arguments.postgres_dsn)
     DISPOSABLE_CLUSTER_ACKNOWLEDGED = arguments.disposable_cluster
-    unittest.main(argv=[sys.argv[0], *test_arguments])
+    run_native_fixture("scripts/test_authority_verifier_read_postgres.py",
+        argv=[sys.argv[0], *test_arguments], result_path=arguments.prepared_result)

@@ -26,6 +26,8 @@ from psycopg.types.json import Jsonb
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from serverware.native_postgres_results import run_native_fixture
+
 from serverware.authority_store.mutation_sql import (
     apply_mutation_sql,
     closed_record_sql,
@@ -415,8 +417,10 @@ class AuthorityMutationPostgresTests(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument("--postgres-dsn", required=True)
+    parser.add_argument("--prepared-result")
     arguments, test_arguments = parser.parse_known_args()
     CONNECTION_PARAMETERS = local_connection_parameters(arguments.postgres_dsn)
-    unittest.main(argv=[sys.argv[0], *test_arguments])
+    run_native_fixture("scripts/test_authority_mutation_postgres.py",
+        argv=[sys.argv[0], *test_arguments], result_path=arguments.prepared_result)

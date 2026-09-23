@@ -71,8 +71,10 @@ concurrency, rollback or independently authenticated evidence.
 
 Authenticated initialization/backfill and a general receipt-bound PostgreSQL
 delivery transition remain missing. The [offline population component](authority-audit-initialization.md)
-now checks complete status-bearing membership relative to a supplied root and
-cardinality, without granting that descriptor authority or installing a row.
+now reconstructs the full root from enumerated status-bearing leaves and derives
+cardinality relative to the supplied digest. It rejects omitted populations even
+with a matching understated count, without granting that root authority or
+installing a row.
 SQLite retains its separate locked COUNT
 and completion behavior. Direct production DML remains revoked. A fresh source
 manifest, import closure and explicitly admitted installed-schema transition

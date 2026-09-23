@@ -17,7 +17,7 @@ offline initializer or an installed permission proof.
 `serverware/authority_audit_inventory.py` implements
 `verify_audit_inventory(root=..., records=...)`. It consumes a stream of exact
 `selectedRow` / `proof` pairs and returns an immutable
-`serverware.metadataAuditOutboxInventoryObservation/v1` with the supplied root
+`serverware.metadataAuditOutboxInventoryObservation/v2` with the supplied root
 descriptor, source revision, three status counts and derived outstanding count.
 The observation has a domain-separated digest, not a signature or authority bit.
 Direct construction of its dataclass checks consistency only, not proof validity.
@@ -40,28 +40,42 @@ establishes uniqueness under collision resistance. The stream must end at
 exactly the descriptor's leaf count; an extra record is rejected before copying
 or hashing it, and an interrupted or short stream never returns an observation.
 
-If the independently accepted descriptor says there are N leaves, N distinct
-memberships against its one root cover the whole population. Count pending and
-claimed as outstanding, audited as terminal, and reject outstanding counts over
-the source-owned 100,000 limit. Audited history does not share that live limit.
+After each membership proof is validated, its recomputed leaf enters a separate
+streaming frontier. The frontier reconstructs the **entire** sparse radix tree
+using only those enumerated leaves and canonical empty children. It never uses
+the supplied proof's opaque sibling hashes as populated subtrees. On iterator
+exhaustion, close every remaining prefix and require the resulting root digest
+to match the supplied root. An understated count plus a valid prefix, suffix or
+interior subset can no longer pass: the omitted nonempty branches change this
+reconstructed root under collision resistance.
 
-This proof is conditional: the radix digest does **not** authenticate the
-descriptor's leaf count or revision. An untrusted understated count together
-with that many valid membership proofs can omit real leaves. Copying a root
-from the same database or signing an opaque database-provided digest does not
-solve that problem. Root currentness, database generation, schema, writer fence
-and independent acceptance must be supplied by the eventual initializer's
-separate authority protocol. An empty supplied root with a positive revision
-can describe a previously populated table; it is not fresh genesis.
+Thus v2 derives cardinality from the complete enumerated population relative to
+that root digest, while retaining the descriptor-count consistency check. The
+old v1 relied on an independently authenticated count and cannot substitute for
+this stronger observation. Count pending and claimed as outstanding, audited as
+terminal, and reject outstanding counts over the source-owned 100,000 limit.
+Audited history does not share that live limit.
+
+This still does not authenticate which root is authoritative. A different or
+stale root and its complete population can be internally valid. Root revision,
+currentness, database generation, schema, writer fence and independent acceptance
+must be supplied by the eventual initializer's separate authority protocol.
+An empty supplied root with a positive revision can describe a previously
+populated table; it is not fresh genesis. The observed statuses also remain
+distinct from cryptographic proof of their ledger-delivery semantics.
 
 ## Offline resource and evidence boundary
 
-The verifier retains one record's owned snapshots/proof state, counters and one
-previous key, not the full population. Serialized per-record/evaluator inputs
+The verifier retains one record's owned snapshots/proof state, counters, one
+previous 64-nibble key, a fixed frontier of 64 sixteen-child vectors and 65 empty
+digests, not the full population. Serialized per-record/evaluator inputs
 are limited to 64 MiB, depth 128 and 1,000,000 JSON nodes; each proof has exactly
 64 vectors and 1024 child slots. The evaluator accounts a fixed single-proof
-hash budget. The serialized cap is not a peak-RSS promise, and envelope overhead
-means independent maxima need not fit simultaneously.
+hash budget. Full-root reconstruction additionally hashes each occupied prefix
+once: at most 64 internal-node hashes per member plus 65 hashes to construct the
+empty ladder. No online evaluator budget is increased or charged as a substitute
+for this separate offline work. The serialized cap is not a peak-RSS promise,
+and envelope overhead means independent maxima need not fit simultaneously.
 
 The offline job owner must enforce total CPU, byte, memory and elapsed-time
 budgets, including a producer stalled between records. A large terminal history
@@ -73,8 +87,13 @@ The new fixture uses an independently built small tree and independent SQL/wire
 hash framing. Authored controls cover mixed and empty populations, missing,
 duplicate, reordered and extra members, changed full rows/proofs/roots,
 historical SQL types, resource/representation rejection, a reused generator
-buffer, stream exhaustion and immutable results. Tests deliberately demonstrate
-the descriptor-trust limitation. Direct observation-constructor arithmetic
+buffer, stream exhaustion and immutable results. Updated controls reject all
+nonempty omitted subsets of the small independent tree even when their claimed
+count matches, and retain the unauthenticated revision/currentness boundary.
+Separate deterministic frontier controls exercise deep shared prefixes and
+radix carries against an independently reconstructed tree; arbitrary synthetic
+leaf inputs there are not membership or admission evidence.
+Direct observation-constructor arithmetic
 checks the 100,000/100,001 boundary without claiming a 100,000-proof workload.
 None of these tests has executed, and they are not migration/concurrency proof.
 
@@ -107,7 +126,10 @@ The [canonical schema-source correction](authority-schema-source.md) now supplie
 complete comparison DDL to retry/repair, validates fresh migration against source
 before signing and checks configured authority ownership after ACL sealing.
 Those unexecuted source changes do not populate the global audit counter or
-supply independent root/cardinality authority.
+supply independent current-root authority. Likewise, the v2 inventory verifier
+is not yet invoked by an admitted migration or initializer; its strengthened
+completeness check does not authorize a database change. No database schema, runtime
+source revision, registry, online limit or phase-2 activation flag changes here.
 
 ## Required producer/installer integration
 
@@ -118,6 +140,8 @@ initializer or changing accepted schema/migration state:
    binding database generation, source/schema/key contracts, outbox and aggregate
    root descriptors (including cardinality), currentness and all-writer fencing.
    Authenticate the issuer and its evidence, not just a caller-provided digest.
+   The outbox's cardinality can now be rederived by the v2 complete inventory;
+   the aggregate root still needs its own accepted count/mapping evidence.
 2. Under admitted offline writer exclusion, prove the complete status population
    and the exact global aggregate identity's absence. Compare the observation
    with independently authorized installation evidence. No zero-on-missing

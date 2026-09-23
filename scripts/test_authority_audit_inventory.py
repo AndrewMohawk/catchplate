@@ -2,7 +2,9 @@
 """Pure inventory components against independently built small radix trees.
 
 These tests supply roots; they do not authenticate a database, root revision,
-leaf count, currentness, schema, delivery receipt or initializer permission.
+currentness, schema, delivery receipt or initializer permission. Complete
+leaf-only reconstruction additionally checks cardinality against the supplied
+tree digest; direct summary construction is not that verification.
 No registry replacement, database, signer or clock is used. Capacity boundary
 tests validate the compact summary, not a 100,000-proof load or native SQL.
 """
@@ -25,13 +27,14 @@ from serverware import authority_contract
 from serverware.authority_audit_inventory import (
     AuditInventoryError,
     AuditInventoryObservation,
+    _InventoryRootFrontier,
     verify_audit_inventory,
 )
-from serverware.authority_radix_mutation import PrimaryRoot
+from serverware.authority_radix_mutation import PrimaryRadixMutationError, PrimaryRoot
 
 
 TABLE = "metadata_audit_outbox"
-SCHEMA = "serverware.metadataAuditOutboxInventoryObservation/v1"
+SCHEMA = "serverware.metadataAuditOutboxInventoryObservation/v2"
 PROOF_SCHEMA = "serverware.policyAuthorityRadixMultiproof/v3"
 MAX_INTEGER = 2**63 - 1
 MIN_INTEGER = -(2**63)
@@ -142,6 +145,20 @@ class InventoryTree:
         return [self.record(row["id"]) for row in sorted(self.rows.values(), key=lambda row: tree_key(row["id"]))]
 
 
+def independent_sparse_root(leaf_by_path):
+    """Small arbitrary-leaf component oracle, never an admitted inventory."""
+    empty = InventoryTree([]).empty
+    nodes = {(64, path): digest for path, digest in leaf_by_path.items()}
+    for depth in range(63, -1, -1):
+        prefixes = {path[:depth] for node_depth, path in nodes if node_depth == depth + 1}
+        for prefix in prefixes:
+            children = [nodes.get((depth + 1, prefix + format(index, "x")), empty[depth + 1])
+                        for index in range(16)]
+            nodes[(depth, prefix)] = sql_digest("serverware.policyAuthorityAuthenticatedNode/v1",
+                str(depth).encode("ascii"), sql_json(children))
+    return nodes.get((0, ""), empty[0])
+
+
 class AuditInventoryTests(unittest.TestCase):
     def setUp(self):
         self.tree = InventoryTree([outbox_row("one"), outbox_row("two", "claimed"),
@@ -166,6 +183,8 @@ class AuditInventoryTests(unittest.TestCase):
         self.assertEqual(result.json_projection(), expected)
         self.assertEqual(result.digest, wire_digest(SCHEMA, wire_json(expected)))
         self.assertNotEqual(result.digest, sql_digest(SCHEMA, wire_json(expected)))
+        previous = {**expected, "schema": "serverware.metadataAuditOutboxInventoryObservation/v1"}
+        self.assertNotEqual(result.digest, wire_digest(previous["schema"], wire_json(previous)))
 
     def test_historical_text_ids_nullable_columns_and_signed_bigints_remain_valid(self):
         rows = [outbox_row("", attempts=MIN_INTEGER),
@@ -191,11 +210,76 @@ class AuditInventoryTests(unittest.TestCase):
             with self.assertRaises(AuditInventoryError):
                 verify_audit_inventory(root=tree.root, records=wrong)
 
+    def test_real_authenticated_keys_with_shared_prefix_reconstruct_the_full_population(self):
+        # A fixed bounded corpus guarantees a two-nibble bucket collision.
+        # Only the selected pair gets row proofs; no hash hook is substituted.
+        buckets = {}
+        pair = None
+        for index in range(257):
+            identifier = f"inventory-close-prefix-{index:03}"
+            prefix = tree_key(identifier)[7:9]
+            if prefix in buckets:
+                pair = (buckets[prefix], identifier)
+                break
+            buckets[prefix] = identifier
+        self.assertIsNotNone(pair)
+        left, right = pair
+        self.assertEqual(tree_key(left)[7:9], tree_key(right)[7:9])
+        self.assertNotEqual(tree_key(left), tree_key(right))
+        tree = InventoryTree([outbox_row(left), outbox_row(right, "claimed")], revision=31)
+        records = tree.records()
+        before = copy.deepcopy(records)
+        result = verify_audit_inventory(root=tree.root, records=records)
+        self.assertEqual(result.root.root_digest, tree.nodes[(0, "")])
+        self.assertEqual((result.pending_count, result.claimed_count, result.audited_count), (1, 1, 0))
+        self.assertEqual(records, before)
+
     def test_omitted_duplicate_reordered_and_extra_members_fail(self):
         for records in ([], self.records[:-1], [self.records[0], self.records[0], self.records[2]],
                 list(reversed(self.records)), [*self.records, self.records[0]]):
             with self.subTest(length=len(records)), self.assertRaises(AuditInventoryError):
                 verify_audit_inventory(root=self.tree.root, records=records)
+
+    def test_understated_count_and_proved_prefix_suffix_or_interior_cannot_hide_population(self):
+        baseline = verify_audit_inventory(root=self.tree.root, records=self.records)
+        self.assertEqual(baseline.root.root_digest, self.tree.nodes[(0, "")])
+        # All supplied members retain genuine proofs against the FULL tree,
+        # including valid opaque siblings for the omitted members. Those
+        # siblings cannot populate the separately reconstructed inventory.
+        for name, subset in (
+            ("prefix-one", self.records[:1]),
+            ("prefix-two", self.records[:2]),
+            ("suffix-one", self.records[-1:]),
+            ("suffix-two", self.records[-2:]),
+            ("interior", self.records[1:2]),
+            ("omitted-interior", [self.records[0], self.records[2]]),
+        ):
+            with self.subTest(subset=name):
+                before = copy.deepcopy(subset)
+                exhausted = []
+
+                def stream():
+                    yield from subset
+                    exhausted.append(True)
+
+                understated = replace(self.tree.root, leaf_count=len(subset))
+                with self.assertRaisesRegex(AuditInventoryError,
+                        "^audit inventory reconstructed root differs from the supplied root$"):
+                    verify_audit_inventory(root=understated, records=stream())
+                self.assertEqual(exhausted, [True])
+                self.assertEqual(subset, before)
+
+    def test_full_population_wrong_descriptor_count_still_rejects_before_root_comparison(self):
+        # A zero count with this nonempty digest fails at descriptor creation,
+        # not at the later inventory reconstruction comparison.
+        with self.assertRaisesRegex(PrimaryRadixMutationError, "^root emptiness and leaf count disagree$"):
+            replace(self.tree.root, leaf_count=0)
+        for count, message in (
+            (2, "audit inventory contains extra members"),
+            (4, "audit inventory omits members from its supplied descriptor"),
+        ):
+            with self.subTest(count=count), self.assertRaisesRegex(AuditInventoryError, "^" + message + "$"):
+                verify_audit_inventory(root=replace(self.tree.root, leaf_count=count), records=self.records)
 
     def test_supplied_root_table_hash_revision_and_count_are_exact_bindings(self):
         for root in (replace(self.tree.root, table="other_table"),
@@ -369,6 +453,8 @@ class AuditInventoryTests(unittest.TestCase):
         result = verify_audit_inventory(root=self.tree.root, records=records())
         self.assertEqual(shared, {})
         self.assertEqual((result.pending_count, result.claimed_count, result.audited_count), (1, 1, 1))
+        self.assertEqual(result.root.root_digest, self.tree.nodes[(0, "")])
+        self.assertEqual(result.json_projection()["schema"], SCHEMA)
 
     def test_invalid_stream_containers_and_empty_root_extra_member_reject(self):
         for records in (None, 1, "", b"", bytearray(), {}, {"selectedRow": None, "proof": None}):
@@ -396,19 +482,95 @@ class AuditInventoryTests(unittest.TestCase):
         with self.assertRaises(AuditInventoryError):
             AuditInventoryObservation(replace(self.tree.root, table="other_table"), 1, 1, 1)
 
-    def test_revision_and_leaf_count_authority_are_explicit_external_preconditions(self):
-        # A root HASH does not commit revision or count. These accepted changes
-        # are deliberate boundary controls, not a claim that they are authorized.
+    def test_revision_and_currentness_still_require_external_authority(self):
+        # The reconstructed hash proves neither a root's provenance nor its
+        # revision/currentness. A coherently relabeled COMPLETE population is
+        # still accepted; that is not permission to use it as a current root.
         root = replace(self.tree.root, root_revision=999)
         records = copy.deepcopy(self.records)
         for record in records:
             record["proof"]["rootRevision"] = 999
             refresh_proof(record["proof"])
         self.assertEqual(verify_audit_inventory(root=root, records=records).root.root_revision, 999)
-        understated = replace(self.tree.root, leaf_count=1)
-        result = verify_audit_inventory(root=understated, records=self.records[:1])
-        self.assertEqual(result.root.root_digest, self.tree.root.root_digest)
-        self.assertEqual(result.pending_count + result.claimed_count + result.audited_count, 1)
+        stale = InventoryTree([outbox_row("historical", "claimed")], revision=1)
+        result = verify_audit_inventory(root=stale.root, records=stale.records())
+        self.assertEqual(result.outstanding_count, 1)
+        self.assertNotEqual(result.root.root_digest, self.tree.root.root_digest)
+        # No API input identifies the live database or selects its latest root.
+
+    def test_private_frontier_empty_prefix_root_carry_and_all_sixteen_children(self):
+        # Hashing/state-machine components only. Arbitrary canonical leaf
+        # digests below are NOT membership-verified rows and never enter the
+        # public verifier; no production hash or key function is monkeypatched.
+        cases = {
+            "empty": (),
+            "one": ("0" * 64,),
+            "lcp-zero-root-carry": ("0" + "f" * 63, "1" + "0" * 63, "f" * 64),
+            "multiple-shared-depths": (
+                "1234" + "0" * 60, "1234" + "1" * 60,
+                "1235" + "0" * 60, "1240" + "0" * 60,
+            ),
+            "lcp-sixty-three": ("a" * 63 + "0", "a" * 63 + "1", "a" * 63 + "f"),
+            "low-nibble-carry": ("b" * 62 + "0f", "b" * 62 + "10", "b" * 62 + "ff"),
+            "all-root-children": tuple(format(index, "x") + "0" * 63 for index in range(16)),
+            "all-last-children": tuple("e" * 63 + format(index, "x") for index in range(16)),
+        }
+        for name, paths in cases.items():
+            with self.subTest(case=name):
+                leaves = {path: "sha256:" + hashlib.sha256(("component leaf:" + path).encode("ascii")).hexdigest()
+                          for path in paths}
+                before = copy.deepcopy(leaves)
+                frontier = _InventoryRootFrontier()
+                self.assertEqual(len(frontier._children), 64)
+                self.assertEqual(len(frontier._empty), 65)
+                self.assertTrue(all(len(children) == 16 for children in frontier._children))
+                for path, leaf in sorted(leaves.items()):
+                    frontier.add("sha256:" + path, leaf)
+                    # Fixed container shape, not a total Python heap/RSS claim.
+                    self.assertEqual(len(frontier._children), 64)
+                    self.assertTrue(all(len(children) == 16 for children in frontier._children))
+                self.assertEqual(frontier.finish(), independent_sparse_root(leaves))
+                self.assertEqual(leaves, before)
+
+    def test_private_frontier_rejects_bad_digest_types_duplicates_and_descending_keys(self):
+        class StringSubclass(str):
+            pass
+
+        key = "sha256:" + "8" * 64
+        leaf = "sha256:" + "9" * 64
+        invalid = (None, False, b"sha256:" + b"0" * 64, StringSubclass(key),
+                   "", "0" * 64, "sha256:" + "a" * 63, "sha256:" + "A" * 64,
+                   "sha256:" + "g" * 64)
+        for value in invalid:
+            for invalid_key in (False, True):
+                with self.subTest(value=repr(value), invalid_key=invalid_key):
+                    frontier = _InventoryRootFrontier()
+                    with self.assertRaisesRegex(AuditInventoryError, "^audit inventory frontier digest is invalid$"):
+                        frontier.add(value if invalid_key else key, leaf if invalid_key else value)
+                    frontier.add(key, leaf)
+                    self.assertEqual(frontier.finish(), independent_sparse_root({key[7:]: leaf}))
+        for following in (key, "sha256:" + "7" * 64):
+            with self.subTest(following=following):
+                frontier = _InventoryRootFrontier()
+                frontier.add(key, leaf)
+                with self.assertRaisesRegex(AuditInventoryError,
+                        "^audit inventory keys are duplicated or not in tree order$"):
+                    frontier.add(following, leaf)
+                self.assertEqual(frontier.finish(), independent_sparse_root({key[7:]: leaf}))
+
+    def test_private_frontier_cannot_be_reopened_or_finalized_twice(self):
+        key, leaf = "sha256:" + "0" * 64, "sha256:" + "1" * 64
+        for occupied in (False, True):
+            with self.subTest(occupied=occupied):
+                frontier = _InventoryRootFrontier()
+                if occupied:
+                    frontier.add(key, leaf)
+                expected = independent_sparse_root({key[7:]: leaf} if occupied else {})
+                self.assertEqual(frontier.finish(), expected)
+                with self.assertRaisesRegex(AuditInventoryError, "^audit inventory frontier is already finished$"):
+                    frontier.finish()
+                with self.assertRaisesRegex(AuditInventoryError, "^audit inventory frontier is already finished$"):
+                    frontier.add("sha256:" + "2" * 64, leaf)
 
 
 if __name__ == "__main__":

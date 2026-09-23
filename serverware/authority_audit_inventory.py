@@ -1,9 +1,9 @@
 """Streaming full-population observation relative to a supplied outbox root.
 
-Distinct proved members whose number equals an independently accepted leaf
-count establish completeness under collision resistance. The tree digest does
-NOT authenticate that count, its revision, currentness, schema or database
-identity. The caller must obtain and bind the whole descriptor independently.
+Rebuild the entire sparse tree from the exact proved leaves, never from opaque
+proof siblings. Comparing that root authenticates population and cardinality
+under collision resistance, relative to the supplied root digest. Its revision,
+currentness, schema and database identity still require independent authority.
 
 This component has no database, clock, signer, writer fence, receipt issuer or
 counter INSERT. Its observation is not an authorization object. It is one
@@ -30,7 +30,7 @@ from serverware.authority_radix_mutation import (
 )
 
 
-OBSERVATION_SCHEMA = "serverware.metadataAuditOutboxInventoryObservation/v1"
+OBSERVATION_SCHEMA = "serverware.metadataAuditOutboxInventoryObservation/v2"
 _MAX_INTEGER = 2**63 - 1
 _MIN_INTEGER = -(2**63)
 _TEXT_COLUMNS = frozenset({
@@ -64,6 +64,81 @@ _TABLE_CONTRACT = PrimaryTableContract(
 
 class AuditInventoryError(ValueError):
     pass
+
+
+def _inventory_node_digest(depth: int, children: list[str]) -> str:
+    return radix._tree_digest(
+        "serverware.policyAuthorityAuthenticatedNode/v1",
+        str(depth).encode("ascii"), radix.tree_json_bytes(children),
+    )
+
+
+class _InventoryRootFrontier:
+    """Private sorted-leaf accumulator; its digests confer no root authority.
+
+    Only verified leaf digests and canonical empty children enter this state.
+    Every occupied prefix is hashed once: at most 64 hashes per member, plus
+    65 hashes for the fixed empty ladder. This work is additional to the
+    existing per-record membership evaluator's separately bounded work.
+    """
+
+    __slots__ = ("_empty", "_children", "_previous_path", "_finished")
+
+    def __init__(self) -> None:
+        depth = authority_contract.TREE_DEPTH
+        self._empty = [""] * (depth + 1)
+        self._empty[depth] = radix._tree_digest(
+            "serverware.policyAuthorityAuthenticatedEmptyLeaf/v1",
+            str(depth).encode("ascii"),
+        )
+        for current in range(depth - 1, -1, -1):
+            self._empty[current] = _inventory_node_digest(
+                current, [self._empty[current + 1]] * authority_contract.TREE_RADIX,
+            )
+        self._children = [
+            [self._empty[current + 1]] * authority_contract.TREE_RADIX
+            for current in range(depth)
+        ]
+        self._previous_path = ""
+        self._finished = False
+
+    def _close_suffix(self, shared_depth: int) -> None:
+        # Retain the shared-prefix frame. Close completed descendants into it
+        # bottom-up; a new path may then use only empty descendants below it.
+        for depth in range(authority_contract.TREE_DEPTH - 1, shared_depth, -1):
+            digest = _inventory_node_digest(depth, self._children[depth])
+            self._children[depth - 1][int(self._previous_path[depth - 1], 16)] = digest
+            self._children[depth] = [self._empty[depth + 1]] * authority_contract.TREE_RADIX
+
+    def add(self, tree_key: str, leaf_digest: str) -> None:
+        if self._finished:
+            raise AuditInventoryError("audit inventory frontier is already finished")
+        try:
+            if type(tree_key) is not str or type(leaf_digest) is not str:
+                raise core.TransitionKernelError("frontier digest type is not exact")
+            core.require_digest(tree_key, "inventory tree key")
+            core.require_digest(leaf_digest, "inventory verified leaf")
+        except core.TransitionKernelError as exc:
+            raise AuditInventoryError("audit inventory frontier digest is invalid") from exc
+        path = tree_key[7:]
+        if path <= self._previous_path:
+            raise AuditInventoryError("audit inventory keys are duplicated or not in tree order")
+        if self._previous_path:
+            shared_depth = 0
+            while path[shared_depth] == self._previous_path[shared_depth]:
+                shared_depth += 1
+            self._close_suffix(shared_depth)
+        self._children[-1][int(path[-1], 16)] = leaf_digest
+        self._previous_path = path
+
+    def finish(self) -> str:
+        if self._finished:
+            raise AuditInventoryError("audit inventory frontier is already finished")
+        self._finished = True
+        if not self._previous_path:
+            return self._empty[0]
+        self._close_suffix(0)
+        return _inventory_node_digest(0, self._children[0])
 
 
 def _root_copy(root: Any) -> PrimaryRoot:
@@ -156,9 +231,11 @@ def verify_audit_inventory(
     """Observe a complete stream, conditional on the supplied root authority.
 
     Records must be strictly ascending by persisted AuthenticatedKey/v1 digest,
-    not textual id or BusinessKey/v1 digest. This proves uniqueness with only
-    the preceding digest retained. An exact record count is necessary: root
-    reconstruction alone says nothing about omitted leaves or leaf_count.
+    not textual id or BusinessKey/v1 digest. A fixed-depth frontier reconstructs
+    the entire root from these leaves, without accepting supplied sibling
+    hashes as population. The count is derived from that complete population
+    and must also equal the descriptor's count. Per-member inclusion alone
+    would not establish completeness, even with that count comparison.
 
     Retained state is constant in population size; per-record wire/graph/hash
     budgets still apply. The owner of the offline job must enforce total CPU,
@@ -174,7 +251,7 @@ def verify_audit_inventory(
         raise AuditInventoryError("audit inventory records must be iterable") from exc
     counts = {status: 0 for status in _STATUSES}
     count = 0
-    previous_key = ""
+    frontier = _InventoryRootFrontier()
     for record in stream:
         # Fetch one beyond the advertised total to detect an extra record,
         # but do not copy, hash or admit it. Do not silently accept a prefix.
@@ -193,13 +270,16 @@ def verify_audit_inventory(
             raise AuditInventoryError("audit inventory membership proof is invalid") from exc
         if evaluation.business_after_roots != (expected,) or evaluation.authorization_after_roots:
             raise AuditInventoryError("audit inventory read-only proof changed its root")
-        if tree_key <= previous_key:
-            raise AuditInventoryError("audit inventory keys are duplicated or not in tree order")
-        previous_key = tree_key
+        # The evaluator recomputed this leaf from the same owned full row and
+        # checked its membership. Never pass its opaque proof siblings into
+        # the frontier: only enumerated leaves may populate the rebuilt tree.
+        frontier.add(tree_key, proof["leafDigest"])
         counts[selected["row"]["status"]] += 1
         count += 1
         if counts["pending"] + counts["claimed"] > capacity.MAX_PENDING:
             raise AuditInventoryError("audit inventory outstanding population exceeds capacity")
     if count != expected.leaf_count:
         raise AuditInventoryError("audit inventory omits members from its supplied descriptor")
+    if frontier.finish() != expected.root_digest:
+        raise AuditInventoryError("audit inventory reconstructed root differs from the supplied root")
     return AuditInventoryObservation(expected, counts["pending"], counts["claimed"], counts["audited"])

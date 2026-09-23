@@ -58,6 +58,10 @@ planner, payload admission and executor now use the [global capacity contract](a
 with separate business/framework budgets and source `.27`/primary-root profile
 v2. This remains unexecuted source: authenticated initialization and general
 receipt-bound PostgreSQL delivery are missing, and SQLite remains separate.
+The offline [inventory v2 component](authority-audit-initialization.md) now
+reconstructs the complete root from enumerated leaves, removing reliance on a
+supplied count for completeness. Independent root currentness, writer exclusion
+and authenticated counter installation remain missing.
 
 The [table-permission closure](authority-table-permissions.md) additionally
 corrects twelve missing runtime read-only relations and detailed table schemas.

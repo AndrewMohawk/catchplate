@@ -212,10 +212,13 @@ completes local audit. Neither is authority to fabricate a global baseline.
 The separate v8-to-v9 full-row migration stream does include status bytes,
 but does not prove population completeness against an independently accepted
 root descriptor. The new [streaming population verifier](authority-audit-initialization.md)
-checks distinct full-row memberships and exact descriptor cardinality using
-existing primary-radix proofs. It emits only a conditional observation; neither
-its supplied root nor its leaf count becomes trusted by hashing them. It is not
-yet connected to an authenticated checkpoint producer or offline installer.
+checks distinct full-row memberships, then reconstructs the entire radix root
+from those leaves and canonical empty children, never opaque proof siblings.
+Its v2 observation derives exact cardinality relative to the supplied root
+digest, rejecting omitted rows even with an understated matching count. It does
+not authenticate root revision/currentness, database generation or writer
+exclusion, and is not yet connected to an authenticated checkpoint producer or
+offline installer.
 
 SQLite retains its separately scoped locked COUNT and inline completion
 semantics until an explicitly implemented transition covers it. PostgreSQL

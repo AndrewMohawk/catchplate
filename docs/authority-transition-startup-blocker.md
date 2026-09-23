@@ -259,11 +259,14 @@ These are separate from provisioning the production services:
   but does not advance the executor's before/after root set or commit receipt.
   An authenticated root transition and independent monotonic checkpoint must
   be integrated before claiming that stronger database threat boundary.
-- Each current single-row proof costs 65 recorded tree reads, in addition to
-  manifest, root and business reads. The 4096-entry planner trace cap can
-  therefore reject a cascade below its declared 192-row maximum. Shared proof
-  and trace budgeting must be reconciled before treating that maximum as
-  executable capacity; raising a bound alone does not solve completeness.
+- The [bounded primary read producer](authority-primary-read-batching.md) now
+  shares business/authorization child lookups in groups of at most sixteen
+  parents, retaining the global counter's exact singleton 65-read trace block.
+  Its source acquisition bound is at most five physical reads per non-counter
+  selection, without lifting the 4096-entry business ceiling or discounting
+  full proof-evaluation work. This source-only repair does not establish full
+  planner/operation capacity, maintained ordered indices or predicate
+  completeness. Those boundaries still require integration and verification.
 
 Focused proof tests must distinguish an independent expected-root pin from a
 root supplied by the same database. Neither an in-memory tree fixture nor a

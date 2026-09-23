@@ -22,6 +22,41 @@ class RadixProofError(ValueError):
     pass
 
 
+BATCH_TRACE_PROFILE = "serverware.policyAuthorityRadixReadBatch/v1"
+MAX_BATCH_PARENTS = 16
+MAX_BATCH_CHILDREN = MAX_BATCH_PARENTS * authority_contract.TREE_RADIX
+_TABLE_IDENTIFIER = re.compile(r"[a-z][a-z0-9_]{0,127}\Z")
+
+
+def validate_batch_trace_key(key: Any) -> tuple[tuple[str, int, str], ...]:
+    """Validate the closed physical-read profile, not execution or authority.
+
+    Parent depth is the child-node SQL depth, so its prefix has depth-1
+    nibbles. A physical read may span both tables and depths. These identities
+    are always business charged; they never replace the reserved counter's
+    separately traced singleton proof.
+    """
+    if (type(key) is not dict or set(key) != {"profile", "parents"}
+            or type(key["profile"]) is not str or key["profile"] != BATCH_TRACE_PROFILE
+            or type(key["parents"]) is not list
+            or not 1 <= len(key["parents"]) <= MAX_BATCH_PARENTS):
+        raise RadixProofError("authenticated batch trace is not closed")
+    parents: list[tuple[str, int, str]] = []
+    for parent in key["parents"]:
+        if type(parent) is not dict or set(parent) != {"tableName", "depth", "pathPrefix"}:
+            raise RadixProofError("authenticated batch parent is not closed")
+        table, depth, prefix = parent["tableName"], parent["depth"], parent["pathPrefix"]
+        if (type(table) is not str or _TABLE_IDENTIFIER.fullmatch(table) is None
+                or type(depth) is not int or not 1 <= depth <= authority_contract.TREE_DEPTH
+                or type(prefix) is not str or len(prefix) != depth - 1
+                or any(character not in "0123456789abcdef" for character in prefix)):
+            raise RadixProofError("authenticated batch parent identity is invalid")
+        parents.append((table, depth, prefix))
+    if parents != sorted(set(parents)):
+        raise RadixProofError("authenticated batch parents are not sorted and unique")
+    return tuple(parents)
+
+
 def tree_json_bytes(value: Any) -> bytes:
     """SQL UTF-8 JSON for lossless scalars; never approximate numeric scale.
 
@@ -104,6 +139,85 @@ def _database_digest(value: Any, label: str) -> str:
     return digest
 
 
+def _read_selected_leaf(
+    cursor: Any, *, selected: dict[str, Any], root_by_table: Mapping[str, Any],
+    trace: Any, quoted_namespace: str,
+) -> tuple[dict[str, Any], str, Mapping[str, Any]]:
+    """Shared singleton leaf validation; no node queries or proof authority."""
+    table = str(selected["table"])
+    root = root_by_table.get(table)
+    if root is None:
+        raise RadixProofError("selected row has no authenticated relation root")
+    if (
+        type(root.get("rootRevision")) is not int or root["rootRevision"] < 0
+        or type(selected.get("present")) is not bool
+        or (selected["present"] and not isinstance(selected.get("row"), Mapping))
+        or (not selected["present"] and selected.get("row") is not None)
+    ):
+        raise RadixProofError("selected row or authenticated root revision is not closed")
+    require_digest(root.get("rootDigest"), "authenticated relation root")
+    key_digest = str(selected["keyDigest"])
+    require_digest(key_digest, "selected row key digest")
+    if key_digest != framed_digest(
+        "serverware.policyAuthorityBusinessKey/v1", table.encode("utf-8"), canonical_bytes(selected["key"]),
+    ):
+        raise RadixProofError("selected business key digest changed")
+    tree_key_digest = authenticated_key_digest(table, selected["key"])
+    path = tree_key_digest[7:]
+    trace.read("policy_authority_authenticated_leaves", {"tableName": table, "keyDigest": tree_key_digest})
+    leaf = cursor.execute(
+        "SELECT CASE WHEN pg_catalog.octet_length(key_json) BETWEEN 1 AND "
+        f"{authority_contract.MAX_RESULT_BYTES} THEN key_json ELSE NULL END AS key_json, "
+        "CASE WHEN pg_catalog.octet_length(row_digest) = 71 "
+        "THEN row_digest ELSE NULL END AS row_digest, "
+        "CASE WHEN pg_catalog.octet_length(leaf_digest) = 71 "
+        "THEN leaf_digest ELSE NULL END AS leaf_digest, root_revision "
+        f"FROM {quoted_namespace}.policy_authority_authenticated_leaves "
+        "WHERE table_name = %s AND key_digest = %s", (table, tree_key_digest),
+    ).fetchone()
+    if leaf is not None:
+        if not isinstance(leaf, Mapping):
+            raise RadixProofError("authenticated leaf is not a database record")
+        stored_key_json = _database_text(
+            leaf.get("key_json"), maximum_bytes=authority_contract.MAX_RESULT_BYTES,
+            label="authenticated leaf key JSON",
+        )
+        stored_row_digest = _database_digest(leaf.get("row_digest"), "authenticated leaf row digest")
+        stored_leaf_digest = _database_digest(leaf.get("leaf_digest"), "authenticated leaf digest")
+        try:
+            stored_key = json.loads(stored_key_json)
+        except (ValueError, RecursionError) as exc:
+            raise RadixProofError("authenticated leaf key JSON is malformed") from exc
+    row_digest = (
+        _tree_digest("serverware.policyAuthorityAuthenticatedRow/v1", table.encode("utf-8"), tree_json_bytes(selected["row"]))
+        if selected["present"] else None
+    )
+    leaf_digest = (
+        _tree_digest(
+            "serverware.policyAuthorityAuthenticatedLeaf/v1", table.encode("utf-8"),
+            tree_key_digest.encode("ascii"), tree_json_bytes(selected["key"]), str(row_digest).encode("ascii"),
+        )
+        if selected["present"] else empty_digest(authority_contract.TREE_DEPTH)
+    )
+    if selected["present"]:
+        if (
+            leaf is None or stored_key != selected["key"]
+            or stored_row_digest != row_digest or stored_leaf_digest != leaf_digest
+            or type(leaf.get("root_revision")) is not int
+            or not 0 < leaf["root_revision"] <= root["rootRevision"]
+        ):
+            raise RadixProofError("selected row differs from its authenticated leaf")
+    elif leaf is not None:
+        raise RadixProofError("selected nonmembership has an authenticated leaf")
+    proof = {
+        "schema": "serverware.policyAuthorityRadixMultiproof/v3",
+        "table": table, "key": selected["key"], "keyDigest": key_digest,
+        "present": selected["present"], "rowDigest": row_digest, "leafDigest": leaf_digest,
+        "rootRevision": root["rootRevision"], "rootDigest": root["rootDigest"], "siblings": [],
+    }
+    return proof, path, root
+
+
 def derive_multiproofs(
     cursor: Any,
     *,
@@ -125,72 +239,11 @@ def derive_multiproofs(
     root_by_table = {entry["table"]: entry for entry in roots}
     proofs: list[dict[str, Any]] = []
     for selected in selected_rows:
-        table = str(selected["table"])
-        root = root_by_table.get(table)
-        if root is None:
-            raise RadixProofError("selected row has no authenticated relation root")
-        if (
-            type(root.get("rootRevision")) is not int or root["rootRevision"] < 0
-            or type(selected.get("present")) is not bool
-            or (selected["present"] and not isinstance(selected.get("row"), Mapping))
-            or (not selected["present"] and selected.get("row") is not None)
-        ):
-            raise RadixProofError("selected row or authenticated root revision is not closed")
-        require_digest(root.get("rootDigest"), "authenticated relation root")
-        key_digest = str(selected["keyDigest"])
-        require_digest(key_digest, "selected row key digest")
-        if key_digest != framed_digest(
-            "serverware.policyAuthorityBusinessKey/v1", table.encode("utf-8"), canonical_bytes(selected["key"]),
-        ):
-            raise RadixProofError("selected business key digest changed")
-        tree_key_digest = authenticated_key_digest(table, selected["key"])
-        path = tree_key_digest[7:]
-        siblings: list[dict[str, Any]] = []
-        trace.read("policy_authority_authenticated_leaves", {"tableName": table, "keyDigest": tree_key_digest})
-        leaf = cursor.execute(
-            "SELECT CASE WHEN pg_catalog.octet_length(key_json) BETWEEN 1 AND "
-            f"{authority_contract.MAX_RESULT_BYTES} THEN key_json ELSE NULL END AS key_json, "
-            "CASE WHEN pg_catalog.octet_length(row_digest) = 71 "
-            "THEN row_digest ELSE NULL END AS row_digest, "
-            "CASE WHEN pg_catalog.octet_length(leaf_digest) = 71 "
-            "THEN leaf_digest ELSE NULL END AS leaf_digest, root_revision "
-            f"FROM {quoted_namespace}.policy_authority_authenticated_leaves "
-            "WHERE table_name = %s AND key_digest = %s", (table, tree_key_digest),
-        ).fetchone()
-        if leaf is not None:
-            if not isinstance(leaf, Mapping):
-                raise RadixProofError("authenticated leaf is not a database record")
-            stored_key_json = _database_text(
-                leaf.get("key_json"), maximum_bytes=authority_contract.MAX_RESULT_BYTES,
-                label="authenticated leaf key JSON",
-            )
-            stored_row_digest = _database_digest(leaf.get("row_digest"), "authenticated leaf row digest")
-            stored_leaf_digest = _database_digest(leaf.get("leaf_digest"), "authenticated leaf digest")
-            try:
-                stored_key = json.loads(stored_key_json)
-            except (ValueError, RecursionError) as exc:
-                raise RadixProofError("authenticated leaf key JSON is malformed") from exc
-        row_digest = (
-            _tree_digest("serverware.policyAuthorityAuthenticatedRow/v1", table.encode("utf-8"), tree_json_bytes(selected["row"]))
-            if selected["present"] else None
+        proof, path, root = _read_selected_leaf(
+            cursor, selected=selected, root_by_table=root_by_table,
+            trace=trace, quoted_namespace=quoted_namespace,
         )
-        leaf_digest = (
-            _tree_digest(
-                "serverware.policyAuthorityAuthenticatedLeaf/v1", table.encode("utf-8"),
-                tree_key_digest.encode("ascii"), tree_json_bytes(selected["key"]), str(row_digest).encode("ascii"),
-            )
-            if selected["present"] else empty_digest(authority_contract.TREE_DEPTH)
-        )
-        if selected["present"]:
-            if (
-                leaf is None or stored_key != selected["key"]
-                or stored_row_digest != row_digest or stored_leaf_digest != leaf_digest
-                or type(leaf.get("root_revision")) is not int
-                or not 0 < leaf["root_revision"] <= root["rootRevision"]
-            ):
-                raise RadixProofError("selected row differs from its authenticated leaf")
-        elif leaf is not None:
-            raise RadixProofError("selected nonmembership has an authenticated leaf")
+        table, siblings = proof["table"], proof["siblings"]
         for depth in range(authority_contract.TREE_DEPTH):
             prefix = path[:depth]
             trace.read("policy_authority_authenticated_tree_nodes", {
@@ -228,12 +281,149 @@ def derive_multiproofs(
                 for index in range(authority_contract.TREE_RADIX)
             ]
             siblings.append({"depth": depth, "pathPrefix": prefix, "selectedNibble": path[depth], "childDigests": child_digests})
-        proof = {
-            "schema": "serverware.policyAuthorityRadixMultiproof/v3",
-            "table": table, "key": selected["key"], "keyDigest": key_digest,
-            "present": selected["present"], "rowDigest": row_digest, "leafDigest": leaf_digest,
-            "rootRevision": root["rootRevision"], "rootDigest": root["rootDigest"], "siblings": siblings,
+        proof["proofDigest"] = framed_digest("serverware.policyAuthorityRadixMultiproof/v3", canonical_bytes(proof))
+        proofs.append(proof)
+    return tuple(sorted(proofs, key=lambda entry: (entry["table"], entry["keyDigest"])))
+
+
+def derive_multiproofs_batched(
+    cursor: Any,
+    *,
+    selected_rows: tuple[dict[str, Any], ...],
+    roots: tuple[dict[str, Any], ...],
+    trace: Any,
+    namespace: str = "serverware_metadata",
+) -> tuple[dict[str, Any], ...]:
+    """Share before-tree reads without changing any v3 proof or stored hash.
+
+    Every selected leaf still has one physical singleton read. The operation's
+    distinct (table, child-depth, parent-prefix) vectors are sorted and fetched
+    in groups of at most 16, including across tables/depths. There are at most
+    N + ceil(64*N/16) = 5*N SQL reads, each traced exactly once. Missing children
+    retain the existing empty hashes; malformed returned rows are never hidden.
+
+    Callers keep the global audit counter in the existing singleton path: its
+    reserved contiguous trace block is not a batch allowance. This per-call
+    cache cannot cross transactions or before-root inventories. Output still
+    has all 64*16 slots per row; downstream proof/hash/byte budgets, root
+    authority, transaction isolation and predicate completeness are unchanged.
+    """
+    if type(namespace) is not str or re.fullmatch(r"[a-z][a-z0-9_]{0,62}", namespace) is None:
+        raise RadixProofError("authenticated proof namespace is not a lowercase ASCII identifier")
+    if (type(selected_rows) is not tuple
+            or len(selected_rows) > authority_contract.MAX_QUERY_PROOFS
+            or type(roots) is not tuple or len(roots) > authority_contract.MAX_QUERY_PROOFS):
+        raise RadixProofError("authenticated batch inventory exceeds its bound")
+    root_by_table: dict[str, dict[str, Any]] = {}
+    for root in roots:
+        if (type(root) is not dict or type(root.get("table")) is not str
+                or _TABLE_IDENTIFIER.fullmatch(root["table"]) is None
+                or root["table"] in root_by_table
+                or type(root.get("rootRevision")) is not int
+                or not 0 <= root["rootRevision"] <= 2**63 - 1):
+            raise RadixProofError("authenticated batch root inventory is not closed")
+        _database_digest(root.get("rootDigest"), "authenticated relation root")
+        root_by_table[root["table"]] = root
+    addresses: set[tuple[str, str]] = set()
+    for selected in selected_rows:
+        if (type(selected) is not dict or type(selected.get("table")) is not str
+                or _TABLE_IDENTIFIER.fullmatch(selected["table"]) is None
+                or not isinstance(selected.get("key"), Mapping)):
+            raise RadixProofError("authenticated batch selected identity is not closed")
+        key_digest = _database_digest(selected.get("keyDigest"), "selected row key digest")
+        address = (selected["table"], key_digest)
+        if address in addresses:
+            raise RadixProofError("authenticated batch selected address is duplicated")
+        addresses.add(address)
+
+    quoted_namespace = f'"{namespace}"'
+    pending: list[tuple[dict[str, Any], str]] = []
+    parent_set: set[tuple[str, int, str]] = set()
+    tree_addresses: set[tuple[str, str]] = set()
+    for selected in selected_rows:
+        proof, path, _root = _read_selected_leaf(
+            cursor, selected=selected, root_by_table=root_by_table,
+            trace=trace, quoted_namespace=quoted_namespace,
+        )
+        table = proof["table"]
+        if (table, path) in tree_addresses:
+            raise RadixProofError("authenticated batch tree address is duplicated")
+        tree_addresses.add((table, path))
+        pending.append((proof, path))
+        parent_set.update((table, depth + 1, path[:depth])
+                          for depth in range(authority_contract.TREE_DEPTH))
+
+    parents = sorted(parent_set)
+    vectors: dict[tuple[str, int, str], tuple[str, ...]] = {}
+    for offset in range(0, len(parents), MAX_BATCH_PARENTS):
+        batch = parents[offset:offset + MAX_BATCH_PARENTS]
+        trace_key = {
+            "profile": BATCH_TRACE_PROFILE,
+            "parents": [{"tableName": table, "depth": depth, "pathPrefix": prefix}
+                        for table, depth, prefix in batch],
         }
+        validate_batch_trace_key(trace_key)
+        children = tuple(
+            (table, depth, prefix + format(index, "x"))
+            for table, depth, prefix in batch
+            for index in range(authority_contract.TREE_RADIX)
+        )
+        requested = set(children)
+        if len(requested) != len(children) or len(children) > MAX_BATCH_CHILDREN:
+            raise RadixProofError("authenticated batch child inventory is not closed")
+        limit = len(children) + 1
+        parameters = tuple(value for child in children for value in child) + (limit,)
+        # Only the fixed placeholder count varies. Identifiers are source fixed
+        # except the independently validated/quoted SQL namespace above.
+        values_sql = ", ".join("(%s::text,%s::integer,%s::text)" for _ in children)
+        trace.read("policy_authority_authenticated_tree_nodes", trace_key)
+        rows = cursor.execute(
+            "SELECT CASE WHEN pg_catalog.octet_length(node.table_name) BETWEEN 1 AND 128 "
+            "THEN node.table_name ELSE NULL END AS table_name, node.depth AS depth, "
+            "CASE WHEN pg_catalog.octet_length(node.path_prefix) BETWEEN 1 AND 64 "
+            "THEN node.path_prefix ELSE NULL END AS path_prefix, "
+            "CASE WHEN pg_catalog.octet_length(node.node_digest) = 71 "
+            "THEN node.node_digest ELSE NULL END AS node_digest, node.root_revision AS root_revision "
+            f"FROM {quoted_namespace}.policy_authority_authenticated_tree_nodes AS node "
+            f"JOIN (VALUES {values_sql}) AS requested(table_name, depth, path_prefix) "
+            "ON node.table_name = requested.table_name AND node.depth = requested.depth "
+            "AND node.path_prefix = requested.path_prefix LIMIT %s",
+            parameters,
+        ).fetchmany(limit)
+        if type(rows) is not list or len(rows) > len(children):
+            raise RadixProofError("authenticated batch child set exceeded its bound")
+        by_child: dict[tuple[str, int, str], str] = {}
+        for row in rows:
+            if not isinstance(row, Mapping) or set(row) != {
+                "table_name", "depth", "path_prefix", "node_digest", "root_revision",
+            }:
+                raise RadixProofError("authenticated batch child is not a closed database record")
+            table = _database_text(row["table_name"], maximum_bytes=128,
+                                   label="authenticated batch child table")
+            path = _database_text(row["path_prefix"], maximum_bytes=64,
+                                  label="authenticated batch child path")
+            depth = row["depth"]
+            if type(depth) is not int:
+                raise RadixProofError("authenticated batch child depth is not exact")
+            identity = (table, depth, path)
+            if (identity not in requested or identity in by_child
+                    or type(row["root_revision"]) is not int
+                    or not 0 < row["root_revision"] <= root_by_table[table]["rootRevision"]):
+                raise RadixProofError("authenticated batch child identity or revision changed")
+            by_child[identity] = _database_digest(row["node_digest"], "authenticated batch child digest")
+        for table, depth, prefix in batch:
+            vectors[(table, depth, prefix)] = tuple(
+                by_child.get((table, depth, prefix + format(index, "x")), empty_digest(depth))
+                for index in range(authority_contract.TREE_RADIX)
+            )
+
+    proofs: list[dict[str, Any]] = []
+    for proof, path in pending:
+        proof["siblings"] = [
+            {"depth": depth, "pathPrefix": path[:depth], "selectedNibble": path[depth],
+             "childDigests": list(vectors[(proof["table"], depth + 1, path[:depth])])}
+            for depth in range(authority_contract.TREE_DEPTH)
+        ]
         proof["proofDigest"] = framed_digest("serverware.policyAuthorityRadixMultiproof/v3", canonical_bytes(proof))
         proofs.append(proof)
     return tuple(sorted(proofs, key=lambda entry: (entry["table"], entry["keyDigest"])))

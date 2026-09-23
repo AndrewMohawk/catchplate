@@ -2180,12 +2180,33 @@ def _derive_multiproofs(
     # The final inventory may include one separately budgeted global counter.
     # Individual business query/proof limits remain source-contract checked.
     if (not isinstance(selected_rows, tuple)
-            or len(selected_rows) > authority_contract.MAX_PLAN_QUERY_ROWS):
+            or len(selected_rows) > authority_contract.MAX_PLAN_QUERY_ROWS
+            or any(not isinstance(item, Mapping) for item in selected_rows)):
         raise AuthorityPlannerError("planner final proof inventory exceeds its bound")
+    # The framework counter retains its exact contiguous singleton proof trace.
+    # All other selections use source-bounded physical child-vector batches;
+    # reconstructed v3 proofs and evaluator work accounting do not change.
+    counter_rows = tuple(item for item in selected_rows if (
+        item.get("table") == authority_audit_capacity.AGGREGATE_TABLE
+        and item.get("key") == {"aggregate_id": authority_audit_capacity.AGGREGATE_ID}
+    ))
+    business_rows = tuple(item for item in selected_rows if not (
+        item.get("table") == authority_audit_capacity.AGGREGATE_TABLE
+        and item.get("key") == {"aggregate_id": authority_audit_capacity.AGGREGATE_ID}
+    ))
+    participates = authority_contract.operation_spec(trace.operation)["globalAuditCapacity"]
+    if (len(counter_rows) != int(participates)
+            or len(business_rows) > authority_contract.MAX_QUERY_PROOFS):
+        raise AuthorityPlannerError("planner proof business/framework inventory is not exact")
     try:
-        return authority_radix_proof.derive_multiproofs(
-            cursor, selected_rows=selected_rows, roots=roots, trace=trace,
+        counter_proofs = authority_radix_proof.derive_multiproofs(
+            cursor, selected_rows=counter_rows, roots=roots, trace=trace,
         )
+        business_proofs = authority_radix_proof.derive_multiproofs_batched(
+            cursor, selected_rows=business_rows, roots=roots, trace=trace,
+        )
+        return tuple(sorted((*counter_proofs, *business_proofs),
+                            key=lambda entry: (entry["table"], entry["keyDigest"])))
     except (
         authority_radix_proof.RadixProofError,
         authority_transition_core.TransitionKernelError,

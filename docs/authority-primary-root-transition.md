@@ -81,6 +81,12 @@ exact global audit counter. [Capacity admission](authority-global-audit-capacity
 separately enforces that partition. Relational-root inventory remains 256;
 transport, trace, deadline and transition-work limits remain independent.
 
+The [bounded primary read producer](authority-primary-read-batching.md) now
+batches physical child-vector lookups while retaining byte-identical full v3
+proofs and these evaluation metrics. Its separate trace profile does not change
+persisted roots or discount hash/vector work. The planner keeps the exact global
+counter's singleton proof block; whole-operation runtime capacity remains unproven.
+
 Authored fixtures cover independent whole-tree rebuilds, shared-prefix batches,
 source-key closure, counter/count semantics, strict lifecycle and wire negatives,
 and shared PostgreSQL guards with transaction rollback and historical replay.

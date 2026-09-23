@@ -77,6 +77,18 @@ class AuditTraceBudget:
         return canonical_bytes({"access": access, "table": table, "key": key})
 
     def append(self, entry: Mapping[str, Any]) -> None:
+        # A batch entry represents exactly one bounded physical node SELECT.
+        # Legacy singleton keys retain their decoder and reserved counter block;
+        # a declared batch profile must satisfy the same source-owned shape and
+        # limits used by the actual reader, and is always business charged.
+        key = entry["key"]
+        if (entry["access"] == "read"
+                and entry["table"] == "policy_authority_authenticated_tree_nodes"
+                and isinstance(key, Mapping) and "profile" in key):
+            try:
+                authority_radix_proof.validate_batch_trace_key(key)
+            except authority_radix_proof.RadixProofError as exc:
+                raise AuditTraceError("primary radix batch trace is not closed") from exc
         identity = self._identity(entry["access"], entry["table"], entry["key"])
         if self._next_proof_node is not None:
             depth = self._next_proof_node

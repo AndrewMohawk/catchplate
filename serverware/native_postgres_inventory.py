@@ -11,7 +11,7 @@ import re
 
 
 INVENTORY_SCHEMA = "serverware.nativePostgresInventory/v1"
-TOTAL_TESTS = 182
+TOTAL_TESTS = 184
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,6 +103,8 @@ SUITES: tuple[NativePostgresSuite, ...] = (
         script="scripts/test_authority_primary_tree_postgres.py",
         test_ids=(
             "AuthorityPrimaryTreePostgresTests.test_actual_schema_and_empty_ladder_match_independent_genesis",
+            "AuthorityPrimaryTreePostgresTests.test_batched_native_reader_matches_singletons_and_independent_cross_relation_proofs",
+            "AuthorityPrimaryTreePostgresTests.test_batched_native_reader_rejects_bounded_projection_and_stale_node_revision",
             "AuthorityPrimaryTreePostgresTests.test_duplicate_insert_changes_no_rows_nodes_roots_or_history",
             "AuthorityPrimaryTreePostgresTests.test_missing_or_wrong_manifest_root_rejects_real_trigger_write_atomically",
             "AuthorityPrimaryTreePostgresTests.test_post_write_failure_rolls_back_entire_tree_and_allows_same_row_retry",
@@ -286,7 +288,7 @@ _SUITE_SHAPES = (
     ("scripts/test_postgres_trigger_manifest.py", 5, False, 300),
     ("scripts/test_authority_mutation_postgres.py", 14, False, 300),
     ("scripts/test_authority_root_transition_postgres.py", 21, False, 300),
-    ("scripts/test_authority_primary_tree_postgres.py", 7, False, 300),
+    ("scripts/test_authority_primary_tree_postgres.py", 9, False, 300),
     ("scripts/test_authority_audit_initialization_postgres.py", 31, False, 300),
     ("scripts/test_authority_audit_initialization_store_postgres.py", 36, True, 900),
     ("scripts/test_authority_global_audit_capacity_postgres.py", 25, False, 300),
@@ -304,7 +306,7 @@ def validate_inventory() -> None:
     """
     if (type(INVENTORY_SCHEMA) is not str or INVENTORY_SCHEMA != "serverware.nativePostgresInventory/v1"
             or type(SUITES) is not tuple or len(SUITES) != 10
-            or type(TOTAL_TESTS) is not int or TOTAL_TESTS != 182):
+            or type(TOTAL_TESTS) is not int or TOTAL_TESTS != 184):
         raise ValueError("native PostgreSQL inventory envelope differs from source")
     seen_scripts: set[str] = set()
     seen_tests: set[str] = set()

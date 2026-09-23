@@ -25,12 +25,12 @@ supply independent approval, installed controller identity or cleanup proof.
 
 [native_postgres_inventory.py](../serverware/native_postgres_inventory.py)
 defines `serverware.nativePostgresInventory/v1`, ten ordered frozen
-`NativePostgresSuite` records and `TOTAL_TESTS = 182`. Each record contains an
+`NativePostgresSuite` records and `TOTAL_TESTS = 184`. Each record contains an
 exact script path, an explicit sorted tuple of `Class.test_method` IDs, its
 disposable-cluster CLI acknowledgement requirement and its timeout in seconds.
 The IDs are authored source declarations, not dynamically discovered or
 executed results. The total includes the pure representation and source-linkage
-methods contained in these fixtures; it is not a count of 182 native SQL tests.
+methods contained in these fixtures; it is not a count of 184 native SQL tests.
 
 | Order | Script under `scripts/` | Methods | Timeout | Extra disposable CLI flag |
 | --- | --- | ---: | ---: | --- |
@@ -38,7 +38,7 @@ methods contained in these fixtures; it is not a count of 182 native SQL tests.
 | 01 | `test_postgres_trigger_manifest.py` | 5 | 300 s | No |
 | 02 | `test_authority_mutation_postgres.py` | 14 | 300 s | No |
 | 03 | `test_authority_root_transition_postgres.py` | 21 | 300 s | No |
-| 04 | `test_authority_primary_tree_postgres.py` | 7 | 300 s | No |
+| 04 | `test_authority_primary_tree_postgres.py` | 9 | 300 s | No |
 | 05 | `test_authority_audit_initialization_postgres.py` | 31 | 300 s | No |
 | 06 | `test_authority_audit_initialization_store_postgres.py` | 36 | 900 s | Yes |
 | 07 | `test_authority_global_audit_capacity_postgres.py` | 25 | 300 s | No |
@@ -53,6 +53,16 @@ database. The frozen records are data, not capabilities. The no-argument
 ordering, uniqueness and total without importing fixtures, reading files or
 running tests. It does not prove that fixture discovery or observed execution
 matches those declarations.
+
+The two newly authored primary-tree cases use the actual batched `VALUES`/`CASE`
+reader through a psycopg dictionary-row cursor. Seventeen trigger-maintained
+rows support four selected identities covering presence and absence across
+outbox and non-global aggregate relations. Expected proofs come from independent
+small-tree reconstruction and are also compared with the existing singleton
+reader. A forced cross-table batch and rollback-scoped oversized-node/stale-node
+controls cover the native query shape without disabling schema constraints.
+These cases are unexecuted; they do not establish current roots, complete
+predicate ranges, production planner execution or passing native admission.
 
 ## Fixed future invocation profile
 

@@ -154,11 +154,14 @@ input bytes, proof/frontier nodes, table/index updates, trace reads and work.
 Compute the complete cost before effects; no subset success, independent child
 commits, or budget reset per page. Transport pagination retains one query,
 checkpoint, cutoff and total budget; gaps, overlaps and duplicate leaves fail.
-Existing per-row proofs cost 65 recorded tree reads, so the 4096-entry trace
-limit cannot execute the advertised 192-row case without shared proof/trace
-accounting. Raising one limit or retaining a smaller fixture is not proof of
-the declared capacity. Existing operation bounds and new framework/index costs
-must be explicitly reconciled and versioned.
+The [primary read batching implementation](authority-primary-read-batching.md)
+now replaces per-row child lookups with bounded shared physical reads while
+preserving full proof bytes/evaluator work and the exact global counter trace.
+This removes the source's unconditional 65-reads-per-business-row schedule, not
+the need to prove full 192-row operation capacity. Other reads and all new index
+costs remain charged. Raising one limit or retaining a smaller fixture is not
+proof of the declared capacity; changed operation/framework/index bounds still
+require explicit reconciliation and versioning.
 
 ## Registration verification and acyclic evidence
 

@@ -15,6 +15,7 @@ Injected post-write failure proves transaction rollback only, not crash safety.
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 import unittest
@@ -24,6 +25,7 @@ from pathlib import Path
 
 import psycopg
 from psycopg import sql
+from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 
@@ -33,6 +35,7 @@ sys.path.insert(0, str(ROOT))
 from serverware.native_postgres_results import run_native_fixture
 
 from serverware import authority_audit_initialization as initialization
+from serverware import authority_radix_proof as radix
 from serverware.authority_primary_contract import source_query_manifest_digest
 from serverware.authority_radix_mutation import PrimaryRoot
 from serverware.authority_store.metadata_schema_source import metadata_base_schema_source
@@ -40,7 +43,7 @@ from serverware.authority_store.v9_schema_source import authority_v9_schema_sour
 from serverware.authority_store import primary_tree_sql
 from test_authority_audit_initialization import AGGREGATE, KEY, OUTBOX, aggregate_tree, absence, initial_row
 from test_authority_audit_inventory import InventoryTree, outbox_row
-from test_authority_radix_proof import sql_digest, sql_json
+from test_authority_radix_proof import sql_digest, sql_json, wire_digest, wire_json
 from test_webauthn_trust_projection_postgres import local_connection_parameters
 
 
@@ -53,6 +56,16 @@ BASE_TABLES = (OUTBOX, ROOTS, NODES, LEAVES, HISTORY)
 ALL_TABLES = (*BASE_TABLES, AGGREGATE)
 TRIGGER_FUNCTION = "serverware_policy_authority_authenticated_trigger"
 MANIFEST = source_query_manifest_digest()
+
+
+class ReadTrace:
+    """Observe real producer reads without replacing its psycopg cursor."""
+
+    def __init__(self):
+        self.entries = []
+
+    def read(self, table, key):
+        self.entries.append((table, key))
 
 
 def production_table_statements() -> tuple[str, ...]:
@@ -221,6 +234,51 @@ class AuthorityPrimaryTreePostgresTests(unittest.TestCase):
             aggregate_root=self.stored_root(AGGREGATE), aggregate_absence=absence(aggregate),
             initialized_at_epoch_ns=1_000_000_000)
 
+    def batch_fixture(self):
+        # Seventeen actual rows leave populated off-path siblings, while four
+        # selected identities cover presence and absence in both relations.
+        rows = [outbox_row(f"batch-{index:02d}") for index in range(16)]
+        for row in rows:
+            self.assertEqual(self.insert(OUTBOX, row), row)
+        # An ordinary aggregate identity, not the global counter that the live
+        # planner deliberately keeps in its separate singleton proof block.
+        aggregate_row = initial_row(16)
+        aggregate_row.update(aggregate_id="native-batch-component",
+                             aggregate_kind="native-batch-component")
+        state = json.loads(aggregate_row["state_json"])
+        state.update(aggregateId=aggregate_row["aggregate_id"],
+                     aggregateKind=aggregate_row["aggregate_kind"])
+        aggregate_row["state_json"] = wire_json(state).decode("ascii")
+        aggregate_row["state_digest"] = wire_digest("serverware.policyAuthorityAggregateState/v1", wire_json(state))
+        self.assertEqual(self.insert(AGGREGATE, aggregate_row), aggregate_row)
+        outbox, aggregate = InventoryTree(rows), aggregate_tree([aggregate_row])
+        self.assert_tree(outbox)
+        self.assert_tree(aggregate)
+        first = outbox.record(rows[0]["id"])
+        first_nibble = first["proof"]["siblings"][0]["selectedNibble"]
+        # Pick from a fixed small corpus using the independent address hash.
+        # Different first nibbles give exactly 127 outbox parents, so the
+        # 16-parent schedule necessarily contains a physical cross-table batch.
+        missing = next((f"absent-{index:02d}" for index in range(256)
+            if sql_digest("serverware.policyAuthorityAuthenticatedKey/v1",
+                OUTBOX.encode("ascii"), sql_json({"id": f"absent-{index:02d}"}))[7] != first_nibble), None)
+        self.assertIsNotNone(missing)
+        records = [first, outbox.record(missing)]
+        for key in ({"aggregate_id": aggregate_row["aggregate_id"]},
+                    {"aggregate_id": "absent-component-aggregate"}):
+            selected = aggregate.selected(key)
+            records.append({"selectedRow": selected, "proof": aggregate.proof(selected)})
+        selected = tuple(record["selectedRow"] for record in records)
+        expected = tuple(sorted((record["proof"] for record in records),
+                                key=lambda proof: (proof["table"], proof["keyDigest"])))
+        roots = tuple(self.stored_root(table).json_projection() for table in (OUTBOX, AGGREGATE))
+        return selected, roots, expected
+
+    def read_batch(self, selected, roots, trace=None):
+        with self.connection.cursor(row_factory=dict_row) as cursor:
+            return radix.derive_multiproofs_batched(cursor, selected_rows=selected,
+                roots=roots, trace=ReadTrace() if trace is None else trace, namespace=self.schema)
+
     def test_actual_schema_and_empty_ladder_match_independent_genesis(self) -> None:
         self.assertEqual(len(production_table_statements()), 6)
         for table, fields in ((OUTBOX, set(outbox_row())), (AGGREGATE, set(initial_row(0)))):
@@ -339,6 +397,59 @@ class AuthorityPrimaryTreePostgresTests(unittest.TestCase):
                         self.insert(OUTBOX, outbox_row("denied"))
                 self.assertEqual(self.snapshot(), before)
             self.assertEqual(self.snapshot(), initial)
+
+    def test_batched_native_reader_matches_singletons_and_independent_cross_relation_proofs(self) -> None:
+        selected, roots, expected = self.batch_fixture()
+        before = self.snapshot()
+        trace, singleton_trace = ReadTrace(), ReadTrace()
+        actual = self.read_batch(selected, roots, trace)
+        with self.connection.cursor(row_factory=dict_row) as cursor:
+            singleton = radix.derive_multiproofs(cursor, selected_rows=selected,
+                roots=roots, trace=singleton_trace, namespace=self.schema)
+        self.assertEqual(actual, expected)
+        self.assertEqual(actual, singleton)
+        self.assertEqual(len(singleton_trace.entries), 65 * len(selected))
+        parents = sorted({(proof["table"], level["depth"] + 1, level["pathPrefix"])
+                          for proof in expected for level in proof["siblings"]})
+        expected_batches = [parents[offset:offset + 16] for offset in range(0, len(parents), 16)]
+        node_reads = [key for table, key in trace.entries if table == NODES]
+        self.assertEqual(node_reads, [{"profile": "serverware.policyAuthorityRadixReadBatch/v1",
+            "parents": [{"tableName": table, "depth": depth, "pathPrefix": prefix}
+                        for table, depth, prefix in batch]} for batch in expected_batches])
+        self.assertTrue(any(len({parent["tableName"] for parent in key["parents"]}) == 2
+                            for key in node_reads))
+        self.assertEqual(len(trace.entries), len(selected) + len(expected_batches))
+        self.assertLessEqual(len(trace.entries), 5 * len(selected))
+        self.assertEqual([table for table, _ in trace.entries[:len(selected)]], [LEAVES] * len(selected))
+        by_address = {(row["table"], row["keyDigest"]): row for row in selected}
+        for proof in actual:
+            self.assertEqual(radix.reconstruct_multiproof_root(proof,
+                selected=by_address[(proof["table"], proof["keyDigest"])]),
+                next(root["rootDigest"] for root in roots if root["table"] == proof["table"]))
+        self.assertEqual(self.snapshot(), before)
+
+    def test_batched_native_reader_rejects_bounded_projection_and_stale_node_revision(self) -> None:
+        selected, roots, expected = self.batch_fixture()
+        self.assertEqual(self.read_batch(selected, roots), expected)
+        path = sql_digest("serverware.policyAuthorityAuthenticatedKey/v1",
+                          OUTBOX.encode("ascii"), sql_json(selected[0]["key"]))[7:]
+        revision = self.stored_root(OUTBOX).root_revision
+        before = self.snapshot()
+        # Both changes obey the actual DDL: digest text is not syntax checked,
+        # and a positive node revision need not be <= its relation head in SQL.
+        # No constraint or trigger is disabled to inject these component faults.
+        for column, value, diagnostic in (
+            ("node_digest", "x" * 72, "authenticated batch child digest is not bounded database text"),
+            ("root_revision", revision + 1, "authenticated batch child identity or revision changed"),
+        ):
+            with self.subTest(column=column), self.rollback_variant():
+                self.assertEqual(self.connection.execute(sql.SQL(
+                    "UPDATE {} SET {}=%s WHERE table_name=%s AND depth=1 AND path_prefix=%s"
+                ).format(self.object(NODES), sql.Identifier(column)), (value, OUTBOX, path[:1])).rowcount, 1)
+                with self.assertRaisesRegex(radix.RadixProofError, diagnostic):
+                    self.read_batch(selected, roots)
+            self.assertEqual(self.snapshot(), before)
+            self.assertEqual(self.read_batch(selected, roots), expected)
 
 
 if __name__ == "__main__":

@@ -33,6 +33,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 import verify_nitro_tee
 import sigstore_json
+import exact_latency
 
 
 def load_readiness_dependencies() -> None:
@@ -259,11 +260,6 @@ PUBLIC_NITRO_ROLE_REGISTRY_API_VERSION = (
 )
 HOST_READINESS_CONTEXT_API_VERSION = "serverware.hostReadinessContext/v1"
 CANONICAL_JSON_SIGNED_MAX = (1 << 63) - 1
-MILLISECONDS_TO_NANOSECONDS = 1_000_000
-EXACT_MILLISECONDS_RE = re.compile(
-    r"(?:0|[1-9][0-9]*)(?:\.[0-9]{1,6})?\Z",
-    re.ASCII,
-)
 BENCHMARK_MILLISECOND_FIELDS = frozenset(
     {"p50_ms", "p95_ms", "p99_ms", "min_ms", "max_ms", "mean_ms"}
 )
@@ -1171,27 +1167,17 @@ def exact_milliseconds_to_nanoseconds(
     label: str,
     positive: bool = False,
 ) -> int:
-    require(type(value) is not bool, f"{label} must be an exact decimal millisecond value")
-    if type(value) is int:
-        require(value >= 0, f"{label} must not be negative")
-        nanoseconds = value * MILLISECONDS_TO_NANOSECONDS
-    else:
-        token = value.token if isinstance(value, ExactJsonDecimal) else value
+    if isinstance(value, ExactJsonDecimal):
         require(
-            isinstance(token, str) and EXACT_MILLISECONDS_RE.fullmatch(token) is not None,
+            isinstance(value.token, str),
             f"{label} must be canonical decimal milliseconds with at most six fractional digits",
         )
-        whole, separator, fractional = token.partition(".")
-        nanoseconds = int(whole) * MILLISECONDS_TO_NANOSECONDS
-        if separator:
-            nanoseconds += int(fractional.ljust(6, "0"))
-    require(
-        nanoseconds <= CANONICAL_JSON_SIGNED_MAX,
-        f"{label} exceeds the canonical signed 64-bit nanosecond maximum",
+        value = value.token
+    return exact_latency.milliseconds_to_nanoseconds(
+        value,
+        label=label,
+        positive=positive,
     )
-    if positive:
-        require(nanoseconds > 0, f"{label} must be positive")
-    return nanoseconds
 
 
 def benchmark_milliseconds_to_nanoseconds(

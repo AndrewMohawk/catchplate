@@ -62,6 +62,25 @@ counters remain integer-only. A checksum supplies no independent authentication:
 this metadata and any embedded host-readiness context remain readiness-only,
 never final release or action authority.
 
+## Exact latency policy units
+
+`--p99-limit-ms` and `SERVERWARE_COMPLETION_P99_LIMIT_MS` accept canonical decimal
+text with at most six fractional millisecond digits. Conversion is exact, never
+through binary floating point, and must produce a positive integer nanosecond
+value no greater than 9223372036854775807. Exponents, signs, leading zeroes,
+sub-nanosecond precision and out-of-range values are rejected. Equivalent
+spellings such as `20` and `20.000000` agree; conflicting configured CLI and env
+thresholds are rejected in both manual and launcher-enforced readiness. The
+runner preserves the selected text when forwarding it to the verifier.
+
+The persisted policy remains the existing integer `p99_limit_ns` field, with no
+millisecond alias or schema-version change. `scripts/exact_latency.py` is shared
+by producer and consumer; benchmark JSON retains its separate exact-decimal
+adapter. The helper is included in the verified source archive and legacy
+launcher's whole import-root measurement. External final-v1 preflight also
+requires its presence, which does not authenticate that installation: its owner
+must independently bind the whole verifier/import closure.
+
 ## Streaming authorization commitments
 
 A public streaming proof carries an operation-context digest, not the full

@@ -8,7 +8,6 @@ import fcntl
 import hashlib
 import hmac
 import json
-import math
 import os
 import re
 import secrets
@@ -34,6 +33,7 @@ SCRIPT_DIRECTORY = ROOT / "scripts"
 sys.path[:0] = [str(SCRIPT_DIRECTORY), str(ROOT)]
 
 import launch_authorization  # noqa: E402
+import exact_latency  # noqa: E402
 KEY_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 PLACEHOLDER_RE = re.compile(
     r"(<[^>]+>|\$\{[^}]+\}|CHANGE[_-]?ME|REPLACE[_-]?ME|FILL[_-]?ME|TODO|TBD)",
@@ -372,6 +372,53 @@ def canonical_json(value: Any) -> str:
         ensure_ascii=True,
         allow_nan=False,
     )
+
+
+def select_p99_limit(
+    env_value: str | None,
+    cli_value: str | None,
+    *,
+    launcher_enforced: bool,
+) -> tuple[str, int]:
+    if launcher_enforced and env_value is None:
+        raise ValueError(f"{COMPLETION_P99_LIMIT_ENV} must be pinned for launcher-enforced readiness")
+    for label, value in ((COMPLETION_P99_LIMIT_ENV, env_value), ("--p99-limit-ms", cli_value)):
+        if value is not None and not isinstance(value, str):
+            raise ValueError(f"{label} must be exact decimal millisecond text")
+    env_ns = (
+        exact_latency.milliseconds_to_nanoseconds(env_value, label=COMPLETION_P99_LIMIT_ENV, positive=True)
+        if env_value is not None else None
+    )
+    cli_ns = (
+        exact_latency.milliseconds_to_nanoseconds(cli_value, label="--p99-limit-ms", positive=True)
+        if cli_value is not None else None
+    )
+    if env_ns is not None and cli_ns is not None and env_ns != cli_ns:
+        raise ValueError(f"--p99-limit-ms must match {COMPLETION_P99_LIMIT_ENV} exactly in nanoseconds")
+    # The producer binds its configured env policy even outside launcher mode.
+    # An equivalent CLI spelling is safe; a conflicting override is not.
+    selected = cli_value if cli_value is not None else env_value
+    if selected is None:
+        selected = "20.0"
+    return selected, exact_latency.milliseconds_to_nanoseconds(
+        selected, label="selected p99 limit", positive=True
+    )
+
+
+def validate_p99_policy_binding(binding: dict[str, Any], expected_ns: int | None = None) -> None:
+    limit_ns = binding.get("p99_limit_ns")
+    if (
+        "p99_limit_ms" in binding
+        or type(limit_ns) is not int
+        or not 0 < limit_ns <= exact_latency.MAX_NANOSECONDS
+    ):
+        raise ValueError("completion proof p99 policy must use positive signed-64 integer nanoseconds")
+    if expected_ns is not None and (
+        type(expected_ns) is not int
+        or not 0 < expected_ns <= exact_latency.MAX_NANOSECONDS
+        or limit_ns != expected_ns
+    ):
+        raise ValueError("completion proof p99 policy mismatch")
 
 
 def sha256_prefixed_bytes(value: bytes) -> str:
@@ -3301,6 +3348,7 @@ def verify_completion_output(path: Path, expected: argparse.Namespace | None = N
     proxy = proof.get("production_proxy_response_proof")
     if not isinstance(binding, dict) or not isinstance(proxy, dict):
         raise ValueError("completion proof proxy/env binding contract is missing")
+    validate_p99_policy_binding(binding)
     if expected is not None:
         expected_proof_contract = getattr(
             expected, "proxy_proof_contract", BUFFERED_PROXY_PROOF_CONTRACT
@@ -3543,8 +3591,10 @@ def verify_completion_output(path: Path, expected: argparse.Namespace | None = N
             raise ValueError("completion proof launcher trust binding mismatch")
         if binding.get("proxy_proof_max_age_seconds") != expected.proxy_proof_max_age_seconds:
             raise ValueError("completion proof proxy max-age policy mismatch")
-        if binding.get("p99_limit_ms") != expected.p99_limit_ms:
-            raise ValueError("completion proof p99 policy mismatch")
+        expected_p99_limit_ns = getattr(expected, "p99_limit_ns", None)
+        if expected_p99_limit_ns is None:
+            raise ValueError("completion proof expected p99 policy is missing exact nanoseconds")
+        validate_p99_policy_binding(binding, expected_p99_limit_ns)
         if binding.get("docker_executable") != expected.docker_executable:
             raise ValueError("completion proof Docker executable mismatch")
         if launcher_enforced:
@@ -4119,7 +4169,7 @@ def completion_command(args: argparse.Namespace) -> dict[str, Any]:
             "--proxy-proof-max-age-seconds",
             str(args.proxy_proof_max_age_seconds),
             "--p99-limit-ms",
-            str(args.p99_limit_ms),
+            args.p99_limit_ms,
             "--out",
             str(Path(args.completion_proof_out)),
         ],
@@ -4710,7 +4760,7 @@ def main() -> None:
     parser.add_argument("--proxy-operation-digest", default=None)
     parser.add_argument("--proxy-operation-context-digest", default=None)
     parser.add_argument("--proxy-proof-max-age-seconds", type=int, default=None)
-    parser.add_argument("--p99-limit-ms", type=float, default=None)
+    parser.add_argument("--p99-limit-ms", default=None)
     parser.add_argument("--control-plane-base", default=None)
     parser.add_argument("--control-plane-ca-bundle", default=None)
     parser.add_argument("--config-only", action="store_true")
@@ -4949,35 +4999,13 @@ def main() -> None:
         )
 
     env_p99_limit = loaded.get(COMPLETION_P99_LIMIT_ENV)
-    if args.launcher_enforced and env_p99_limit is None:
-        print(
-            f"production readiness env error: {COMPLETION_P99_LIMIT_ENV} must be pinned for launcher-enforced readiness",
-            file=sys.stderr,
-        )
-        raise SystemExit(1)
     try:
-        parsed_env_p99_limit = float(env_p99_limit or "20.0")
-    except ValueError as exc:
-        print(f"production readiness env error: {COMPLETION_P99_LIMIT_ENV} must be numeric", file=sys.stderr)
-        raise SystemExit(1) from exc
-    if (
-        args.launcher_enforced
-        and args.p99_limit_ms is not None
-        and args.p99_limit_ms != parsed_env_p99_limit
-    ):
-        print(
-            f"production readiness env error: --p99-limit-ms must match {COMPLETION_P99_LIMIT_ENV} for launcher-enforced readiness",
-            file=sys.stderr,
+        args.p99_limit_ms, args.p99_limit_ns = select_p99_limit(
+            env_p99_limit, args.p99_limit_ms, launcher_enforced=args.launcher_enforced
         )
-        raise SystemExit(1)
-    args.p99_limit_ms = (
-        parsed_env_p99_limit
-        if args.launcher_enforced or args.p99_limit_ms is None
-        else args.p99_limit_ms
-    )
-    if not math.isfinite(args.p99_limit_ms) or args.p99_limit_ms <= 0:
-        print("production readiness env error: completion p99 limit must be finite and positive", file=sys.stderr)
-        raise SystemExit(1)
+    except ValueError as exc:
+        print(f"production readiness env error: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
 
     if args.launcher_enforced:
         for attribute, setting in (

@@ -23470,6 +23470,243 @@ fn checked_add(value: &mut u64, increment: u64) -> Result<(), ShadowError> {
     Ok(())
 }
 
+// Component-only local trust/storage fixture. It exercises the actual legacy
+// receipt verifier, not production assignment/attestation/RPC or durable I/O.
+// No Verified* value is constructed here: signatures, pins, time, exact stored
+// payload and retrieval bindings must all pass verify_shadow_spill_receipt.
+#[cfg(test)]
+pub(crate) mod terminal_receipt_fixture {
+    use super::*;
+    use ed25519_dalek::{Signer, SigningKey};
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(crate) enum Fault {
+        None,
+        Signature,
+        PinnedKey,
+        VerificationKey,
+        StaleTime,
+        FutureTime,
+        Checkpoint,
+        PersistenceBytes,
+        RetrievalBytes,
+    }
+
+    struct FixedTrust {
+        checkpoint: AtomicTrustCheckpoint,
+        role: PolicyShadowCustodySignerRole,
+        key_id: Sha256Digest,
+        key_spki: Sha256Digest,
+        key: VerifyingKey,
+    }
+
+    impl EnvelopeKeyTrust for FixedTrust {
+        fn current_checkpoint(&self) -> Result<AtomicTrustCheckpoint, ShadowError> {
+            Ok(self.checkpoint.clone())
+        }
+
+        fn resolve_ed25519_key(
+            &self,
+            checkpoint: &AtomicTrustCheckpoint,
+            signature_domain: &str,
+            key_id: &Sha256Digest,
+            key_spki_sha256: &Sha256Digest,
+        ) -> Result<VerifyingKey, ShadowError> {
+            if checkpoint != &self.checkpoint
+                || signature_domain != self.role.signature_domain()
+                || key_id != &self.key_id
+                || key_spki_sha256 != &self.key_spki
+            {
+                return Err(ShadowError::TrustResolutionFailed);
+            }
+            Ok(self.key)
+        }
+    }
+
+    struct FixedTime(i64);
+
+    impl TrustedTime for FixedTime {
+        fn now_unix_nanos(&self) -> Result<i64, ShadowError> {
+            Ok(self.0)
+        }
+    }
+
+    struct ExactLocalStore {
+        role: PolicyShadowCustodySignerRole,
+        persistence_id: Sha256Digest,
+        retrieval_id: Sha256Digest,
+        retrieval_proof: Sha256Digest,
+        persisted: Vec<u8>,
+        retrieved: Vec<u8>,
+    }
+
+    impl PolicyShadowPersistenceProofVerifier for ExactLocalStore {
+        fn verify_persistence_receipt(
+            &self,
+            role: PolicyShadowCustodySignerRole,
+            persistence_receipt_sha256: &Sha256Digest,
+            canonical_payload: &[u8],
+        ) -> Result<(), ShadowError> {
+            if role != self.role || persistence_receipt_sha256 != &self.persistence_id
+                || canonical_payload != self.persisted.as_slice()
+            {
+                return Err(ShadowError::PayloadDigestMismatch);
+            }
+            Ok(())
+        }
+
+        fn verify_immutable_retrieval(
+            &self,
+            role: PolicyShadowCustodySignerRole,
+            retrieval_id_sha256: &Sha256Digest,
+            retrieval_proof_sha256: &Sha256Digest,
+            canonical_payload: &[u8],
+        ) -> Result<(), ShadowError> {
+            if role != self.role || retrieval_id_sha256 != &self.retrieval_id
+                || retrieval_proof_sha256 != &self.retrieval_proof
+                || canonical_payload != self.retrieved.as_slice()
+            {
+                return Err(ShadowError::BindingDrift);
+            }
+            Ok(())
+        }
+    }
+
+    pub(crate) fn verify(
+        event: &ShadowSpoolEvent,
+        disposition: ShadowSpoolDisposition,
+        fault: Fault,
+    ) -> Result<VerifiedShadowSpillReceipt, ShadowError> {
+        let key = SigningKey::from_bytes(&[73; 32]);
+        let role = custody_signer_role_for_spool_phase(event.phase());
+        let key_id = Sha256Digest::compute(b"local terminal component key");
+        let key_spki = ed25519_public_key_material_sha256(&key.verifying_key());
+        let checkpoint = AtomicTrustCheckpoint::new(
+            Sha256Digest::compute(b"local terminal component checkpoint"),
+            1_000_000,
+            1,
+            Sha256Digest::compute(b"local terminal component revocations"),
+        )?;
+        let persistence_id = Sha256Digest::compute(b"local terminal component stored slot");
+        let retrieval_id = Sha256Digest::compute(b"local terminal component retrieval slot");
+        let retrieval_proof = Sha256Digest::compute(b"local terminal component retrieval proof");
+        let predecessor = Sha256Digest::compute(b"local terminal component predecessor");
+        let observed_at = 1_000_000_i64;
+        let record_digest = hash_domain_frames(
+            b"serverware.policyShadowSpoolRecord/v1",
+            &[&canonical_json_bytes(&(
+                &event.generation_id,
+                event.ingress_sequence,
+                &event.request_binding_sha256,
+                &event.request_commitment_sha256,
+                event.phase,
+                disposition,
+                &event.event_sha256,
+                &event.canonical_event_bytes,
+                1_u64,
+                0_u64,
+                &predecessor,
+                observed_at,
+                &checkpoint.checkpoint_id,
+                &persistence_id,
+                &retrieval_id,
+                &retrieval_proof,
+            ))?],
+        );
+        let resulting_head = hash_domain_frames(
+            b"serverware.policyShadowSpoolHead/v1",
+            &[&canonical_json_bytes(&(0_u64, &predecessor, 1_u64, &record_digest))?],
+        );
+        let mut wire = SignedShadowSpillReceipt {
+            generation_id: event.generation_id.clone(),
+            ingress_sequence: event.ingress_sequence,
+            request_binding_sha256: event.request_binding_sha256.clone(),
+            request_commitment_sha256: event.request_commitment_sha256.clone(),
+            event_ordinal: 1,
+            event_phase: event.phase,
+            disposition,
+            event_sha256: event.event_sha256.clone(),
+            canonical_event_bytes: event.canonical_event_bytes.clone(),
+            predecessor_event_ordinal: 0,
+            predecessor_head_sha256: predecessor,
+            resulting_head_sha256: resulting_head,
+            trusted_observed_at_unix_nanos: observed_at,
+            trusted_time_checkpoint_sha256: checkpoint.checkpoint_id.clone(),
+            persistence_receipt_sha256: persistence_id.clone(),
+            retrieval_id_sha256: retrieval_id.clone(),
+            retrieval_proof_sha256: retrieval_proof.clone(),
+            signing_key_id: key_id.clone(),
+            signing_key_spki_sha256: key_spki.clone(),
+            signature: CanonicalEd25519Signature(String::new()),
+            signed_receipt_sha256: Sha256Digest::compute(b"not yet signed"),
+        };
+        let payload = wire.canonical_signature_payload()?;
+        let mut signature = key.sign(&signature_preimage(role.signature_domain(), &payload)).to_bytes();
+        if fault == Fault::Signature {
+            signature[0] ^= 1;
+        }
+        wire.signature = CanonicalEd25519Signature(URL_SAFE_NO_PAD.encode(signature));
+        // Refresh the outer receipt digest even for the bad-signature case:
+        // its oracle must be actual Ed25519 verification, not digest parsing.
+        wire.signed_receipt_sha256 = hash_domain_frames(
+            b"serverware.policyShadowSpillReceipt/v1",
+            &[&canonical_json_bytes(&(
+                &record_digest,
+                &wire.resulting_head_sha256,
+                &key_id,
+                &key_spki,
+                &wire.signature,
+            ))?],
+        );
+        let mut store = ExactLocalStore {
+            role,
+            persistence_id,
+            retrieval_id,
+            retrieval_proof,
+            persisted: payload.clone(),
+            retrieved: payload,
+        };
+        if fault == Fault::PersistenceBytes {
+            store.persisted.push(b' ');
+        }
+        if fault == Fault::RetrievalBytes {
+            store.retrieved.push(b' ');
+        }
+        let mut trust = FixedTrust {
+            checkpoint,
+            role,
+            key_id: key_id.clone(),
+            key_spki: key_spki.clone(),
+            key: key.verifying_key(),
+        };
+        if fault == Fault::Checkpoint {
+            trust.checkpoint.checkpoint_id = Sha256Digest::compute(b"another checkpoint");
+        }
+        if fault == Fault::VerificationKey {
+            trust.key = SigningKey::from_bytes(&[74; 32]).verifying_key();
+        }
+        let expected_key = if fault == Fault::PinnedKey {
+            Sha256Digest::compute(b"another pinned key")
+        } else {
+            key_id
+        };
+        let now = match fault {
+            Fault::StaleTime => observed_at + 101,
+            Fault::FutureTime => observed_at - 1,
+            _ => observed_at + 1,
+        };
+        verify_shadow_spill_receipt(
+            wire,
+            event,
+            ExpectedSigner { key_id: &expected_key, key_spki_sha256: &key_spki },
+            &trust,
+            &FixedTime(now),
+            &store,
+            100,
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

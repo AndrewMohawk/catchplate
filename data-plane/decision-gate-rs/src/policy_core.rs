@@ -56,6 +56,14 @@ use zeroize::{Zeroize, Zeroizing};
 const SHADOW_QUEUE_ITEMS: usize = 1_024;
 const SHADOW_QUEUE_BYTES: usize = 128 * 1024 * 1024;
 const SHADOW_MAX_JOB_BYTES: usize = 20 * 1024 * 1024;
+// Additional inline terminal-reference retention per lifecycle. Charge each
+// queued job conservatively even when jobs share that lifecycle. This is not
+// an extension of the receipt-arena budget or a total heap/RSS measurement.
+const SHADOW_ACTIVE_TERMINAL_RETENTION_BYTES: usize = 384;
+
+fn shadow_job_bytes_with_terminal_retention(payload_bytes: usize) -> usize {
+    payload_bytes.saturating_add(SHADOW_ACTIVE_TERMINAL_RETENTION_BYTES)
+}
 const SHADOW_MAX_FACT_HEADERS: usize = 128;
 const SHADOW_MAX_FACT_HEADER_BYTES: usize = 64 * 1024;
 const SHADOW_MAX_FACT_BODY_BYTES: usize = 16 * 1024 * 1024;
@@ -2912,6 +2920,28 @@ struct DurableShadowEventReceipt {
     verified_trust_checkpoint_sha256: InlineSha256Digest,
 }
 
+fn matching_terminal_append_receipt(
+    event: &ShadowSpoolEvent,
+    outcome: Result<TerminalSlotAppendOutcome, ShadowError>,
+) -> Option<VerifiedShadowSpillReceipt> {
+    if !matches!(
+        event.phase(),
+        ShadowSpoolPhase::PreDispatchTerminal | ShadowSpoolPhase::PostDispatchTerminal
+    ) {
+        return None;
+    }
+    match outcome {
+        Ok(TerminalSlotAppendOutcome::Committed(receipt)
+            | TerminalSlotAppendOutcome::Existing(receipt))
+            if receipt.matches_event(event)
+                && receipt.disposition() == ShadowSpoolDisposition::Appended =>
+        {
+            Some(receipt)
+        }
+        _ => None,
+    }
+}
+
 #[derive(Clone, Copy)]
 struct ImmutableSpillReceiptRef {
     modeled_handle: ReceiptSlotHandle,
@@ -4248,21 +4278,9 @@ impl AccountingLedger {
             };
             let outcome = custody.append_terminal(&context, &request);
             let completed = finish_custody_call(custody.as_ref(), context);
-            let receipt = match outcome {
-                Ok(
-                TerminalSlotAppendOutcome::Committed(receipt)
-                | TerminalSlotAppendOutcome::Existing(receipt),
-                )
-                    if receipt.matches_event(&event)
-                        && receipt.disposition()
-                            == ShadowSpoolDisposition::Appended =>
-                {
-                    receipt
-                }
-                Ok(TerminalSlotAppendOutcome::Fork(_))
-                | Ok(TerminalSlotAppendOutcome::Committed(_))
-                | Ok(TerminalSlotAppendOutcome::Existing(_))
-                | Err(_) => {
+            let receipt = match matching_terminal_append_receipt(&event, outcome) {
+                Some(receipt) => receipt,
+                None => {
                     self.mark_hard_unready();
                     return None;
                 }
@@ -5201,6 +5219,192 @@ struct FinalActiveDecision {
     dispatch_authorized: bool,
 }
 
+// A retained reference to a genuinely appended terminal, never an execution
+// permit or a new signed statement. There is no public constructor, mutable
+// accessor, serialization, or conversion to an effect/dispatch capability.
+struct ActiveTerminalRecord {
+    decision: FinalActiveDecision,
+    receipt: DurableShadowEventReceipt,
+    request_binding_sha256: InlineSha256Digest,
+    request_commitment_sha256: InlineSha256Digest,
+    returned_http_status: u16,
+    phase: ShadowSpoolPhase,
+}
+
+const _: () = assert!(
+    std::mem::size_of::<ActiveTerminalRecord>()
+        - std::mem::size_of::<FinalActiveDecision>()
+        <= SHADOW_ACTIVE_TERMINAL_RETENTION_BYTES
+);
+const _: () = assert!(
+    std::mem::size_of::<Option<ActiveTerminalRecord>>()
+        - std::mem::size_of::<Option<FinalActiveDecision>>()
+        <= SHADOW_ACTIVE_TERMINAL_RETENTION_BYTES
+);
+
+struct PreparedActiveTerminalRecord {
+    decision: FinalActiveDecision,
+    generation_id: InlineSha256Digest,
+    ingress_sequence: u64,
+    request_binding_sha256: InlineSha256Digest,
+    request_commitment_sha256: InlineSha256Digest,
+    event_sha256: InlineSha256Digest,
+    returned_http_status: u16,
+    phase: ShadowSpoolPhase,
+}
+
+// Receipt matching happens after append; all fallible local binding and
+// canonicalization happens before it. Only the final successful state update
+// converts this private intermediate into the retained terminal record.
+struct MatchedActiveTerminalRecord {
+    prepared: PreparedActiveTerminalRecord,
+    receipt: DurableShadowEventReceipt,
+}
+
+fn final_active_outcome_digest(
+    active_plan_sha256: &str,
+    outcome: &str,
+    returned_http_status: u16,
+    dispatch_authorized: bool,
+    effect_results_sha256: &str,
+    terminal_response_sha256: &str,
+) -> String {
+    digest_json_ensure_ascii(&json!({
+        "domain":"serverware.policyShadowFinalActiveOutcome/v2",
+        "activePlanSha256":active_plan_sha256,
+        "outcome":outcome,
+        "returnedHttpStatus":returned_http_status,
+        "dispatchAuthorized":dispatch_authorized,
+        "effectResultsSha256":effect_results_sha256,
+        "terminalResponseSha256":terminal_response_sha256,
+    }))
+}
+
+impl FinalActiveDecision {
+    fn terminal_event(
+        &self,
+        ingress_sequence: u64,
+        request_binding_sha256: String,
+        request_commitment_sha256: String,
+        active_response_validation_sha256: Option<String>,
+    ) -> ShadowAccountingEvent {
+        let mut event = ShadowAccountingEvent::minimal(
+            ingress_sequence,
+            request_binding_sha256,
+            request_commitment_sha256,
+            if self.dispatch_authorized {
+                ShadowRuntimeEvent::ResponseTerminalAppended
+            } else {
+                ShadowRuntimeEvent::ActivePreDispatchTerminal
+            },
+        );
+        event.active_plan_sha256 = Some(self.active_evaluation.semantic_sha256.clone());
+        event.final_active_decision_sha256 = Some(self.final_decision_sha256.clone());
+        event.active_effect_results_sha256 = Some(self.effect_results_sha256.clone());
+        event.active_disposition = Some(self.final_outcome.clone());
+        event.response_facts_sha256 = self.exact_response_facts_sha256.clone();
+        event.active_response_validation_sha256 = active_response_validation_sha256;
+        event
+    }
+}
+
+impl PreparedActiveTerminalRecord {
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        generation_id: &str,
+        ingress_sequence: u64,
+        request_binding_sha256: &str,
+        request_commitment_sha256: &str,
+        decision: FinalActiveDecision,
+        returned_http_status: u16,
+        active_response_validation_sha256: Option<&str>,
+        event: &ShadowAccountingEvent,
+    ) -> Result<Self, String> {
+        let generation_id = InlineSha256Digest::from_str(generation_id)?;
+        let request_binding = InlineSha256Digest::from_str(request_binding_sha256)?;
+        let request_commitment = InlineSha256Digest::from_str(request_commitment_sha256)?;
+        if ingress_sequence == 0 || !(200..=599).contains(&returned_http_status)
+            || !matches!(decision.final_outcome.as_str(), "allow" | "deny" | "conditional" | "error")
+        {
+            return Err("terminal record status or identity is invalid".to_string());
+        }
+        let plan = decision.active_evaluation.active_plan()
+            .ok_or("terminal record lacks an active plan")?;
+        if plan.semantic_commitment().map_err(shadow_error)?.as_str()
+                != decision.active_evaluation.semantic_sha256
+            || decision.effect_requirements != ActiveEffectRequirements::from_plan(plan)
+            || decision.final_decision_sha256 != final_active_outcome_digest(
+                &decision.active_evaluation.semantic_sha256,
+                &decision.final_outcome,
+                returned_http_status,
+                decision.dispatch_authorized,
+                &decision.effect_results_sha256,
+                &decision.terminal_response_sha256,
+            )
+        {
+            return Err("terminal record decision commitment mismatch".to_string());
+        }
+        for digest in [
+            Some(decision.active_evaluation.semantic_sha256.as_str()),
+            Some(decision.final_decision_sha256.as_str()),
+            Some(decision.effect_results_sha256.as_str()),
+            Some(decision.terminal_response_sha256.as_str()),
+            decision.exact_response_facts_sha256.as_deref(),
+            decision.gmail_metadata_evidence_sha256.as_deref(),
+            active_response_validation_sha256,
+        ].into_iter().flatten() {
+            InlineSha256Digest::from_str(digest)?;
+        }
+        let expected_event = decision.terminal_event(
+            ingress_sequence,
+            request_binding_sha256.to_string(),
+            request_commitment_sha256.to_string(),
+            active_response_validation_sha256.map(str::to_string),
+        );
+        let event_bytes = event.canonical_bytes()?;
+        if event_bytes != expected_event.canonical_bytes()? {
+            return Err("terminal record event commitment mismatch".to_string());
+        }
+        Ok(Self {
+            decision,
+            generation_id,
+            ingress_sequence,
+            request_binding_sha256: request_binding,
+            request_commitment_sha256: request_commitment,
+            event_sha256: InlineSha256Digest::compute(&event_bytes),
+            returned_http_status,
+            phase: event.spool_phase(),
+        })
+    }
+
+    fn match_receipt(
+        self,
+        receipt: DurableShadowEventReceipt,
+    ) -> Result<MatchedActiveTerminalRecord, String> {
+        if receipt.generation_id != self.generation_id
+            || receipt.ingress_sequence != self.ingress_sequence
+            || receipt.event_ordinal == 0
+            || receipt.event_sha256 != self.event_sha256
+        {
+            return Err("terminal record durable receipt binding mismatch".to_string());
+        }
+        Ok(MatchedActiveTerminalRecord { prepared: self, receipt })
+    }
+}
+
+impl MatchedActiveTerminalRecord {
+    fn into_record(self) -> ActiveTerminalRecord {
+        ActiveTerminalRecord {
+            decision: self.prepared.decision,
+            receipt: self.receipt,
+            request_binding_sha256: self.prepared.request_binding_sha256,
+            request_commitment_sha256: self.prepared.request_commitment_sha256,
+            returned_http_status: self.prepared.returned_http_status,
+            phase: self.prepared.phase,
+        }
+    }
+}
+
 #[derive(Clone)]
 struct PendingActiveDecision {
     decision_at_epoch_ms: u64,
@@ -5227,7 +5431,7 @@ struct DecisionTimeBinding {
 #[derive(Default)]
 struct LifecycleState {
     pending_active: Option<PendingActiveDecision>,
-    final_active: Option<FinalActiveDecision>,
+    final_active: Option<ActiveTerminalRecord>,
     candidate: Option<PolicyEvaluation>,
     decision_time_binding: Option<DecisionTimeBinding>,
     response_finished: bool,
@@ -5787,15 +5991,14 @@ impl ShadowRequestHandle {
             "gmailMetadataEvidenceSha256":gmail_metadata_evidence_sha256.as_deref(),
             "terminalEffectCommitments":terminal_effect_commitments,
         }));
-        let final_decision_sha256 = digest_json_ensure_ascii(&json!({
-            "domain":"serverware.policyShadowFinalActiveOutcome/v2",
-            "activePlanSha256":pending.active_plan_sha256.as_str(),
-            "outcome":terminal_outcome,
-            "returnedHttpStatus":returned_http_status,
-            "dispatchAuthorized":pending.dispatch_authorized,
-            "effectResultsSha256":effect_results_sha256.as_str(),
-            "terminalResponseSha256":terminal_response_sha256.as_str(),
-        }));
+        let final_decision_sha256 = final_active_outcome_digest(
+            &pending.active_plan_sha256,
+            terminal_outcome,
+            returned_http_status,
+            pending.dispatch_authorized,
+            &effect_results_sha256,
+            &terminal_response_sha256,
+        );
         let final_active = FinalActiveDecision {
             decision_at_epoch_ms: pending.decision_at_epoch_ms,
             active_evaluation: pending.active_evaluation,
@@ -5831,37 +6034,35 @@ impl ShadowRequestHandle {
             );
         }
         drop(state);
-        let mut terminal_record = ShadowAccountingEvent::minimal(
+        let terminal_event = final_active.terminal_event(
             self.inner.ingress_sequence,
             self.inner.request_binding_sha256.clone(),
             self.inner.request_commitment_sha256.clone(),
-            if final_active.dispatch_authorized {
-                ShadowRuntimeEvent::ResponseTerminalAppended
-            } else {
-                ShadowRuntimeEvent::ActivePreDispatchTerminal
-            },
+            active_response_validation_sha256.clone(),
         );
-        terminal_record.active_plan_sha256 =
-            Some(final_active.active_evaluation.semantic_sha256.clone());
-        terminal_record.final_active_decision_sha256 =
-            Some(final_active.final_decision_sha256.clone());
-        terminal_record.active_effect_results_sha256 =
-            Some(final_active.effect_results_sha256.clone());
-        terminal_record.active_disposition =
-            Some(final_active.final_outcome.clone());
-        terminal_record.response_facts_sha256 =
-            final_active.exact_response_facts_sha256.clone();
-        terminal_record.active_response_validation_sha256 =
-            active_response_validation_sha256;
-        if !self.inner.ledger.record(
+        let dispatch_authorized = final_active.dispatch_authorized;
+        let prepared_record = PreparedActiveTerminalRecord::new(
             self.inner.generation.generation_id(),
-            terminal_record,
+            self.inner.ingress_sequence,
+            &self.inner.request_binding_sha256,
+            &self.inner.request_commitment_sha256,
+            final_active,
+            returned_http_status,
+            active_response_validation_sha256.as_deref(),
+            &terminal_event,
+        ).map_err(|error| {
+            self.record_failure(PolicyShadowTerminalReason::DecisionTimePlanBindingMismatch);
+            error
+        })?;
+        let receipt = self.inner.ledger.record_with_receipt(
+            self.inner.generation.generation_id(),
+            terminal_event,
             false,
-        ) {
-            return Err(
-                "custody did not append terminal active evidence".to_string(),
-            );
-        }
+        ).ok_or("custody did not append terminal active evidence")?;
+        let matched_record = prepared_record.match_receipt(receipt).map_err(|error| {
+            self.inner.ledger.mark_hard_unready();
+            error
+        })?;
         if self
             .inner
             .finalization_consumed
@@ -5881,7 +6082,7 @@ impl ShadowRequestHandle {
                     .to_string(),
             );
         }
-        if final_active.dispatch_authorized
+        if dispatch_authorized
             && self
                 .inner
                 .response_terminal_recorded
@@ -5913,7 +6114,7 @@ impl ShadowRequestHandle {
                 );
             }
         };
-        state.final_active = Some(final_active);
+        state.final_active = Some(matched_record.into_record());
         state.response_finished = true;
         drop(state);
         if let Err(error) = self.enqueue_request_evaluation() {
@@ -6816,11 +7017,11 @@ impl ShadowRequestHandle {
     }
 
     fn enqueue_request_evaluation(&self) -> Result<(), String> {
-        let estimated_bytes = self
+        let estimated_bytes = shadow_job_bytes_with_terminal_retention(self
             .inner
             .facts
             .estimated_bytes()
-            .saturating_add(self.inner.request_binding_sha256.len());
+            .saturating_add(self.inner.request_binding_sha256.len()));
         if estimated_bytes > SHADOW_MAX_JOB_BYTES {
             if !self.inner.ledger.record(
                 self.inner.generation.generation_id(),
@@ -7614,7 +7815,7 @@ impl ShadowResponseHook {
             match self.inner.state.try_lock() {
                 Ok(state) => (
                     state.pending_active.clone(),
-                    state.final_active.clone(),
+                    state.final_active.as_ref().map(|record| record.decision.clone()),
                 ),
                 Err(_) => {
                     ShadowRequestHandle {
@@ -7839,11 +8040,11 @@ impl ShadowResponseAttempt {
             gmail_metadata_evidence_sha256,
             terminal_effect_commitments,
         )?;
-        let estimated_bytes = capture
+        let estimated_bytes = shadow_job_bytes_with_terminal_retention(capture
             .body
             .len()
             .saturating_add(capture.raw_response_head.len())
-            .saturating_add(capture.raw_response_body.len());
+            .saturating_add(capture.raw_response_body.len()));
         if estimated_bytes > SHADOW_MAX_JOB_BYTES {
             return Err("shadow response job exceeds bound".to_string());
         }
@@ -10105,7 +10306,7 @@ fn shadow_worker(receiver: Receiver<ShadowWork>, ledger: Arc<AccountingLedger>) 
                     .ok()
                     .map(|state| {
                         (
-                            state.final_active.clone(),
+                            state.final_active.as_ref().map(|record| record.decision.clone()),
                             state.decision_time_binding.clone(),
                         )
                     })
@@ -10280,7 +10481,10 @@ fn shadow_worker(receiver: Receiver<ShadowWork>, ledger: Arc<AccountingLedger>) 
                     .state
                     .try_lock()
                     .ok()
-                    .map(|state| (state.final_active.clone(), state.candidate.clone()))
+                    .map(|state| (
+                        state.final_active.as_ref().map(|record| record.decision.clone()),
+                        state.candidate.clone(),
+                    ))
                     .unwrap_or((None, None));
                 if candidate.is_none() {
                     if let Some(active) = final_active.as_ref() {
@@ -10359,5 +10563,329 @@ fn shadow_worker(receiver: Receiver<ShadowWork>, ledger: Arc<AccountingLedger>) 
             }
         }
         ledger.compact_one_requested();
+    }
+}
+
+#[cfg(test)]
+mod active_terminal_record_tests {
+    use super::*;
+    use super::super::policy_shadow::terminal_receipt_fixture::{self, Fault};
+
+    // These are exact local receipt/retention component tests, not a running
+    // authority, successful effect execution, or production custody RPC proof.
+    fn decision(dispatch: bool) -> FinalActiveDecision {
+        let outcome = if dispatch {
+            PolicyOutcome::Permit
+        } else {
+            PolicyOutcome::Deny { reason: Identifier::parse("fixture-denial").unwrap() }
+        };
+        let plan = ActivePolicyPlan::new(outcome, vec![], vec![], vec![]).unwrap();
+        let semantic_sha256 = plan.semantic_commitment().unwrap().as_str().to_string();
+        let effect_requirements = ActiveEffectRequirements::from_plan(&plan);
+        let final_outcome = if dispatch { "allow" } else { "deny" }.to_string();
+        let effect_results_sha256 = sha256_prefixed(b"component effect commitment only");
+        let terminal_response_sha256 = sha256_prefixed(b"component response bytes");
+        let final_decision_sha256 = final_active_outcome_digest(
+            &semantic_sha256,
+            &final_outcome,
+            if dispatch { 200 } else { 403 },
+            dispatch,
+            &effect_results_sha256,
+            &terminal_response_sha256,
+        );
+        FinalActiveDecision {
+            decision_at_epoch_ms: 1,
+            active_evaluation: PolicyEvaluation {
+                snapshot_hash: sha256_prefixed(b"component policy"),
+                route_id: None,
+                disposition: if dispatch { PureDisposition::Permit } else {
+                    PureDisposition::Deny {
+                        status: 403,
+                        reason: "fixture-denial".to_string(),
+                        payload: json!({"error":"fixture-denial"}),
+                    }
+                },
+                plan: SeparatedPolicyPlan::Active(plan),
+                operation: None,
+                rewrite: None,
+                conditions: vec![],
+                semantic_sha256,
+            },
+            effect_requirements,
+            final_outcome,
+            final_decision_sha256,
+            effect_results_sha256,
+            terminal_response_sha256,
+            exact_response_facts_sha256: Some(sha256_prefixed(b"component response facts")),
+            gmail_metadata_evidence_sha256: None,
+            resolved_credential_slot: None,
+            resolved_credential_version: None,
+            dispatch_authorized: dispatch,
+        }
+    }
+
+    fn event(decision: &FinalActiveDecision) -> ShadowAccountingEvent {
+        decision.terminal_event(
+            1,
+            sha256_prefixed(b"component request binding"),
+            sha256_prefixed(b"component request commitment"),
+            None,
+        )
+    }
+
+    fn prepare(
+        decision: FinalActiveDecision,
+        event: &ShadowAccountingEvent,
+        status: u16,
+    ) -> Result<PreparedActiveTerminalRecord, String> {
+        PreparedActiveTerminalRecord::new(
+            &sha256_prefixed(b"component generation"),
+            1,
+            &sha256_prefixed(b"component request binding"),
+            &sha256_prefixed(b"component request commitment"),
+            decision,
+            status,
+            None,
+            event,
+        )
+    }
+
+    fn spool(event: &ShadowAccountingEvent, generation: &str) -> ShadowSpoolEvent {
+        let bytes = event.canonical_bytes().unwrap();
+        ShadowSpoolEvent::new(
+            Sha256Digest::parse(generation.to_string()).unwrap(),
+            event.ingress_sequence,
+            Sha256Digest::parse(event.request_binding_sha256.clone()).unwrap(),
+            Sha256Digest::parse(event.request_commitment_sha256.clone()).unwrap(),
+            event.spool_phase(),
+            Sha256Digest::compute(&bytes),
+            bytes,
+        ).unwrap()
+    }
+
+    fn verified(event: &ShadowSpoolEvent) -> VerifiedShadowSpillReceipt {
+        terminal_receipt_fixture::verify(event, ShadowSpoolDisposition::Appended, Fault::None)
+            .expect("real local signature and exact storage/retrieval binding")
+    }
+
+    fn durable(receipt: &VerifiedShadowSpillReceipt) -> DurableShadowEventReceipt {
+        // Use the real modeled arena/reference conversion; never hand-build a
+        // VerifiedShadowSpillReceipt or its retained durable reference.
+        let mut arena = PolicyCoreModeledReceiptArena::try_new(1).unwrap();
+        let modeled = ImmutableSpillReceiptRef::modeled_reference(receipt, 1).unwrap();
+        let handle = arena.insert(modeled).unwrap();
+        let reference = ImmutableSpillReceiptRef::from_verified(receipt, handle).unwrap();
+        reference.durable_receipt(receipt.ingress_sequence())
+    }
+
+    #[test]
+    fn active_terminal_record_retains_real_verified_component_receipt() {
+        for dispatch in [false, true] {
+            let decision = decision(dispatch);
+            let event = event(&decision);
+            let generation = sha256_prefixed(b"component generation");
+            let spool = spool(&event, &generation);
+            let verified = verified(&spool);
+            let receipt = durable(&verified);
+            let prepared = prepare(decision, &event, if dispatch { 200 } else { 403 }).unwrap();
+            let record = prepared.match_receipt(receipt).unwrap().into_record();
+            assert!(record.receipt.generation_id.matches_digest(verified.generation_id()));
+            assert_eq!(record.receipt.ingress_sequence, verified.ingress_sequence());
+            assert_eq!(record.receipt.event_ordinal, verified.event_ordinal());
+            for (retained, authenticated) in [
+                (record.receipt.event_sha256, verified.event_sha256()),
+                (record.receipt.resulting_head_sha256, verified.resulting_head_sha256()),
+                (record.receipt.signed_receipt_sha256, verified.signed_receipt_sha256()),
+                (record.receipt.retrieval_id_sha256, verified.retrieval_id_sha256()),
+                (record.receipt.retrieval_proof_sha256, verified.retrieval_proof_sha256()),
+                (record.receipt.verified_payload_sha256, verified.canonical_payload_sha256()),
+                (record.receipt.verified_trust_checkpoint_sha256,
+                    &verified.verified_trust_checkpoint().checkpoint_id),
+            ] {
+                assert!(retained.matches_digest(authenticated));
+            }
+            assert_eq!(record.request_binding_sha256,
+                InlineSha256Digest::from_str(&event.request_binding_sha256).unwrap());
+            assert_eq!(record.request_commitment_sha256,
+                InlineSha256Digest::from_str(&event.request_commitment_sha256).unwrap());
+            assert_eq!(record.returned_http_status, if dispatch { 200 } else { 403 });
+            assert_eq!(record.phase, spool.phase());
+            assert_eq!(record.decision.final_decision_sha256,
+                event.final_active_decision_sha256.unwrap());
+        }
+    }
+
+    #[test]
+    fn active_terminal_record_rejects_preappend_decision_and_status_drift() {
+        let baseline = decision(false);
+        let event = event(&baseline);
+        assert!(prepare(baseline.clone(), &event, 403).is_ok());
+        for label in ["plan", "final", "effect", "response", "status", "dispatch", "outcome"] {
+            let mut changed = baseline.clone();
+            let mut status = 403;
+            match label {
+                "plan" => changed.active_evaluation.semantic_sha256 = sha256_prefixed(b"other plan"),
+                "final" => changed.final_decision_sha256 = sha256_prefixed(b"other final decision"),
+                "effect" => changed.effect_results_sha256 = sha256_prefixed(b"other effects"),
+                "response" => changed.terminal_response_sha256 = sha256_prefixed(b"other response"),
+                "status" => status = 404,
+                "dispatch" => changed.dispatch_authorized = true,
+                "outcome" => changed.final_outcome = "error".to_string(),
+                _ => unreachable!(),
+            }
+            assert_eq!(prepare(changed, &event, status).err().as_deref(),
+                Some("terminal record decision commitment mismatch"), "{label}");
+        }
+        assert_eq!(prepare(baseline, &event, 199).err().as_deref(),
+            Some("terminal record status or identity is invalid"));
+    }
+
+    #[test]
+    fn active_terminal_record_rejects_preappend_event_drift() {
+        let baseline = decision(false);
+        let original = event(&baseline);
+        for label in ["request-binding", "request-commitment", "ingress", "phase", "plan",
+            "final", "effect", "response-facts", "response-validation", "outcome"]
+        {
+            let mut changed = original.clone();
+            let other = Some(sha256_prefixed(b"changed event commitment"));
+            match label {
+                "request-binding" => changed.request_binding_sha256 = other.unwrap(),
+                "request-commitment" => changed.request_commitment_sha256 = other.unwrap(),
+                "ingress" => changed.ingress_sequence = 2,
+                "phase" => changed.set_event(ShadowRuntimeEvent::ResponseTerminalAppended),
+                "plan" => changed.active_plan_sha256 = other,
+                "final" => changed.final_active_decision_sha256 = other,
+                "effect" => changed.active_effect_results_sha256 = other,
+                "response-facts" => changed.response_facts_sha256 = other,
+                "response-validation" => changed.active_response_validation_sha256 = other,
+                "outcome" => changed.active_disposition = Some("error".to_string()),
+                _ => unreachable!(),
+            }
+            assert_eq!(prepare(baseline.clone(), &changed, 403).err().as_deref(),
+                Some("terminal record event commitment mismatch"), "{label}");
+        }
+    }
+
+    #[test]
+    fn active_terminal_record_rejects_crossed_verified_receipts() {
+        let baseline = decision(false);
+        let original = event(&baseline);
+        for label in ["generation", "ingress", "request-binding", "request-commitment", "phase", "event"] {
+            let mut changed = original.clone();
+            let mut generation = sha256_prefixed(b"component generation");
+            match label {
+                "generation" => generation = sha256_prefixed(b"different generation"),
+                "ingress" => changed.ingress_sequence = 2,
+                "request-binding" => changed.request_binding_sha256 = sha256_prefixed(b"different binding"),
+                "request-commitment" => changed.request_commitment_sha256 = sha256_prefixed(b"different request"),
+                "phase" => changed.set_event(ShadowRuntimeEvent::ResponseTerminalAppended),
+                "event" => changed.active_effect_results_sha256 = Some(sha256_prefixed(b"different effects")),
+                _ => unreachable!(),
+            }
+            let receipt = verified(&spool(&changed, &generation));
+            let prepared = prepare(baseline.clone(), &original, 403).unwrap();
+            assert_eq!(prepared.match_receipt(durable(&receipt)).err().as_deref(),
+                Some("terminal record durable receipt binding mismatch"), "{label}");
+        }
+    }
+
+    #[test]
+    fn active_terminal_receipt_selection_requires_exact_appended_terminal() {
+        let event = event(&decision(false));
+        let generation = sha256_prefixed(b"component generation");
+        let terminal_spool = spool(&event, &generation);
+        let receipt = verified(&terminal_spool);
+        for outcome in [TerminalSlotAppendOutcome::Committed(receipt.clone()),
+            TerminalSlotAppendOutcome::Existing(receipt.clone())]
+        {
+            let selected = matching_terminal_append_receipt(&terminal_spool, Ok(outcome)).unwrap();
+            assert_eq!(selected.signed_receipt_sha256(), receipt.signed_receipt_sha256());
+        }
+        assert!(matching_terminal_append_receipt(&terminal_spool,
+            Ok(TerminalSlotAppendOutcome::Fork(receipt))).is_none());
+        assert!(matching_terminal_append_receipt(&terminal_spool, Err(ShadowError::CustodyUnavailable)).is_none());
+        let unavailable = terminal_receipt_fixture::verify(
+            &terminal_spool, ShadowSpoolDisposition::Unavailable, Fault::None).unwrap();
+        assert!(matching_terminal_append_receipt(&terminal_spool,
+            Ok(TerminalSlotAppendOutcome::Committed(unavailable))).is_none());
+        let mut changed = event.clone();
+        changed.ingress_sequence = 2;
+        let crossed = verified(&spool(&changed, &generation));
+        assert!(matching_terminal_append_receipt(&terminal_spool,
+            Ok(TerminalSlotAppendOutcome::Existing(crossed))).is_none());
+        changed.set_event(ShadowRuntimeEvent::CandidateEvaluated);
+        let nonterminal = spool(&changed, &generation);
+        assert!(matching_terminal_append_receipt(&nonterminal,
+            Ok(TerminalSlotAppendOutcome::Committed(verified(&nonterminal)))).is_none());
+    }
+
+    #[test]
+    fn active_terminal_receipt_component_checks_real_crypto_time_and_storage() {
+        let event = spool(&event(&decision(false)), &sha256_prefixed(b"component generation"));
+        assert!(terminal_receipt_fixture::verify(&event,
+            ShadowSpoolDisposition::Appended, Fault::None).is_ok());
+        for (fault, expected) in [
+            (Fault::Signature, ShadowError::SignatureInvalid),
+            (Fault::PinnedKey, ShadowError::SignerBindingMismatch),
+            (Fault::VerificationKey, ShadowError::SignatureInvalid),
+            (Fault::StaleTime, ShadowError::EvidenceTooOld),
+            (Fault::FutureTime, ShadowError::EvidenceTooOld),
+            (Fault::Checkpoint, ShadowError::TrustCheckpointMismatch),
+            (Fault::PersistenceBytes, ShadowError::PayloadDigestMismatch),
+            (Fault::RetrievalBytes, ShadowError::BindingDrift),
+        ] {
+            assert_eq!(terminal_receipt_fixture::verify(&event,
+                ShadowSpoolDisposition::Appended, fault).unwrap_err(), expected, "{fault:?}");
+        }
+    }
+
+    #[test]
+    fn active_terminal_retention_has_fixed_bounded_queue_charge() {
+        assert_eq!(std::mem::size_of::<DurableShadowEventReceipt>(), 272);
+        assert!(std::mem::size_of::<ActiveTerminalRecord>()
+            - std::mem::size_of::<FinalActiveDecision>() <= SHADOW_ACTIVE_TERMINAL_RETENTION_BYTES);
+        assert!(std::mem::size_of::<Option<ActiveTerminalRecord>>()
+            - std::mem::size_of::<Option<FinalActiveDecision>>() <= SHADOW_ACTIVE_TERMINAL_RETENTION_BYTES);
+        assert_eq!(shadow_job_bytes_with_terminal_retention(0), 384);
+        assert_eq!(shadow_job_bytes_with_terminal_retention(SHADOW_MAX_JOB_BYTES - 384),
+            SHADOW_MAX_JOB_BYTES);
+        assert!(shadow_job_bytes_with_terminal_retention(SHADOW_MAX_JOB_BYTES - 383)
+            > SHADOW_MAX_JOB_BYTES);
+        assert_eq!(shadow_job_bytes_with_terminal_retention(usize::MAX), usize::MAX);
+        // Source wiring is distinct from executing queue admission under RPC.
+        let source = include_str!("policy_core.rs");
+        let request = source.split_once("fn enqueue_request_evaluation(&self)").unwrap().1;
+        assert!(request.split_once("if estimated_bytes > SHADOW_MAX_JOB_BYTES").unwrap().0
+            .contains("shadow_job_bytes_with_terminal_retention(self"));
+        let response = source.split_once("impl ShadowResponseAttempt").unwrap().1
+            .split_once("pub(crate) fn finish_parsed_unavailable").unwrap().0;
+        assert!(response.contains("shadow_job_bytes_with_terminal_retention(capture"));
+    }
+
+    #[test]
+    fn active_terminal_publication_failure_boundary_is_source_pinned_only() {
+        // Not a full finalize_terminal/CAS/RPC test: assert the production
+        // publication remains after every existing postappend local guard.
+        let source = include_str!("policy_core.rs");
+        let finalize = source.split_once("fn finalize_terminal(").unwrap().1
+            .split_once("pub(crate) fn record_unready_accounting").unwrap().0;
+        let prepared = finalize.find("PreparedActiveTerminalRecord::new(").unwrap();
+        let appended = finalize.find("self.inner.ledger.record_with_receipt(").unwrap();
+        let matched = finalize.find("prepared_record.match_receipt(receipt)").unwrap();
+        let final_cas = finalize.find(".finalization_consumed").unwrap();
+        // The preappend duplicate check uses finalization_consumed first;
+        // locate the actual postappend CAS separately.
+        let postappend = &finalize[matched..];
+        let consume = postappend.find(".compare_exchange(").unwrap();
+        let response = postappend.find("if dispatch_authorized").unwrap();
+        let state = postappend.find("let mut state = match self.inner.state.try_lock()").unwrap();
+        let published = postappend.find("state.final_active = Some(matched_record.into_record())").unwrap();
+        assert!(prepared < appended && appended < matched && final_cas < appended);
+        assert!(consume < response && response < state && state < published);
+        assert!(postappend[consume..response].contains("return Err("));
+        assert!(postappend[response..state].contains("return Err("));
+        assert!(postappend[state..published].contains("return Err("));
+        assert_eq!(finalize.matches("matched_record.into_record()").count(), 1);
     }
 }

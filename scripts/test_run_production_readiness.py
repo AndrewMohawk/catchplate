@@ -149,6 +149,8 @@ def verify_readiness_observation_body_revalidation(
                 **{
                     **collector_inputs,
                     "verification_mode": "readiness",
+                    "p99_limit_ms": "20.0",
+                    "p99_limit_ns": 20_000_000,
                     "runner_started_at_unix": generated_at,
                     "pre_run_completion_proof_state": {"exists": False},
                 }
@@ -198,7 +200,7 @@ def verify_readiness_observation_body_revalidation(
                 "production_readiness": {},
                 "production_readiness_config": {},
                 "current_completion_host": {},
-                "production_env_binding": {},
+                "production_env_binding": {"p99_limit_ns": 20_000_000},
                 "running_production_containers": {},
                 "production_host_preflight": {
                     "verification_mode": "readiness",
@@ -3551,7 +3553,110 @@ def verify_completion_authorization_freshness_boundaries() -> None:
         )
 
 
+def verify_exact_p99_policy_contract() -> None:
+    convert = run_production_readiness.exact_latency.milliseconds_to_nanoseconds
+    for token, expected in (
+        (1, 1_000_000),
+        ("0.000001", 1),
+        ("20.0", 20_000_000),
+        ("9223372036854.775806", 9_223_372_036_854_775_806),
+        ("9223372036854.775807", 9_223_372_036_854_775_807),
+    ):
+        if convert(token, label="fixture p99", positive=True) != expected:
+            raise AssertionError(f"exact p99 conversion changed {token!r}")
+    invalid_values = (
+        True, False, 1.0, float("nan"), float("inf"), None, -1, 0,
+        "", "0", "0.000000", "-1", "+1", "01", " 1", "1 ", "1e0",
+        "NaN", "Infinity", "1.", ".1", "0.0000001", "1.0000000",
+        "9223372036854.775808", "9223372036855", "9" * 4096,
+    )
+    for value in invalid_values:
+        try:
+            convert(value, label="fixture p99", positive=True)
+        except ValueError as exc:
+            if "fixture p99" not in str(exc):
+                raise
+        else:
+            raise AssertionError(f"exact positive p99 conversion accepted {value!r}")
+    if convert("0", label="zero benchmark") != 0:
+        raise AssertionError("nonnegative benchmark conversion no longer permits zero")
+
+    for enforced in (False, True):
+        for env_value, cli_value, selected, expected in (
+            ("20.0", None, "20.0", 20_000_000),
+            ("20", "20.000000", "20.000000", 20_000_000),
+            ("0.000001", "0.000001", "0.000001", 1),
+            ("9223372036854.775807", None, "9223372036854.775807", 9_223_372_036_854_775_807),
+        ):
+            actual = run_production_readiness.select_p99_limit(
+                env_value, cli_value, launcher_enforced=enforced
+            )
+            if actual != (selected, expected):
+                raise AssertionError(f"p99 selection lost exact text/units: {actual}")
+        for env_value, cli_value in (
+            ("20.0", "20.000001"),
+            ("9223372036854.775806", "9223372036854.775807"),
+        ):
+            try:
+                run_production_readiness.select_p99_limit(env_value, cli_value, launcher_enforced=enforced)
+            except ValueError as exc:
+                if "must match SERVERWARE_COMPLETION_P99_LIMIT_MS exactly in nanoseconds" not in str(exc):
+                    raise
+            else:
+                raise AssertionError("p99 selection rounded conflicting CLI/env policy together")
+        for invalid in invalid_values:
+            if invalid is None:
+                continue  # Absence has separate mode-dependent semantics below.
+            for env_value, cli_value in ((invalid, "20.0"), ("20.0", invalid)):
+                try:
+                    run_production_readiness.select_p99_limit(env_value, cli_value, launcher_enforced=enforced)
+                except ValueError as exc:
+                    if "must match" in str(exc):
+                        raise AssertionError("invalid p99 input reached only the equality guard") from exc
+                else:
+                    raise AssertionError("p99 selection accepted invalid input or ignored its invalid peer")
+    for cli_value, expected in ((None, ("20.0", 20_000_000)), ("0.000001", ("0.000001", 1))):
+        if run_production_readiness.select_p99_limit(None, cli_value, launcher_enforced=False) != expected:
+            raise AssertionError("manual p99 default or explicit exact threshold changed")
+        try:
+            run_production_readiness.select_p99_limit(None, cli_value, launcher_enforced=True)
+        except ValueError as exc:
+            if "must be pinned for launcher-enforced readiness" not in str(exc):
+                raise
+        else:
+            raise AssertionError("launcher p99 policy accepted a missing environment pin")
+
+    validate = run_production_readiness.validate_p99_policy_binding
+    for value in (1, 20_000_000, 9_223_372_036_854_775_807):
+        validate({"p99_limit_ns": value}, value)
+    for value in (None, True, 1.0, "1", 0, -1, 9_223_372_036_854_775_808):
+        try:
+            validate({"p99_limit_ns": value}, 1)
+        except ValueError as exc:
+            if "must use positive signed-64 integer nanoseconds" not in str(exc):
+                raise
+        else:
+            raise AssertionError("p99 proof binding accepted a non-integer or out-of-range threshold")
+    for binding in ({}, {"p99_limit_ms": "20.0"}, {"p99_limit_ns": 20_000_000, "p99_limit_ms": "20.0"}):
+        try:
+            validate(binding, 20_000_000)
+        except ValueError as exc:
+            if "must use positive signed-64 integer nanoseconds" not in str(exc):
+                raise
+        else:
+            raise AssertionError("p99 proof binding accepted legacy or missing units")
+    for expected in (True, 1.0, "1", 0, -1, 2, 9_223_372_036_854_775_808):
+        try:
+            validate({"p99_limit_ns": 1}, expected)
+        except ValueError as exc:
+            if "p99 policy mismatch" not in str(exc):
+                raise
+        else:
+            raise AssertionError("p99 proof binding accepted an invalid or different expected threshold")
+
+
 def main() -> None:
+    verify_exact_p99_policy_contract()
     verify_launcher_style_helper_import()
     verify_proof_policy_identity_contract()
     for invalid_path in ("relative/path", "/", "/tmp/../etc/passwd", "/tmp//receipt", "/tmp/receipt/"):
@@ -3833,6 +3938,54 @@ def main() -> None:
         key_material = trust_paths["sigstore_trusted_public_key"].read_text(encoding="ascii").strip()
         if key_material in dry_run.stdout.decode("utf-8"):
             raise AssertionError(f"runner dry-run leaked trusted public-key material: {plan}")
+
+        # Exercise real argparse, env loading, selection and completion_command;
+        # dry-run prepares argv without invoking the production workloads.
+        for label, env_text, cli_text, expected_text, expected_error in (
+            ("one-nanosecond", "0.000001", None, "0.000001", None),
+            ("signed64-maximum", "9223372036854.775807", None, "9223372036854.775807", None),
+            ("equivalent", "20", "20.000000", "20.000000", None),
+            (
+                "one-nanosecond-conflict",
+                "9223372036854.775806", "9223372036854.775807", None,
+                "--p99-limit-ms must match SERVERWARE_COMPLETION_P99_LIMIT_MS exactly in nanoseconds",
+            ),
+            (
+                "invalid-cli", "20.0", "2e1", None,
+                "--p99-limit-ms must be canonical decimal milliseconds",
+            ),
+            (
+                "invalid-env", "20.0000000", "20.0", None,
+                "SERVERWARE_COMPLETION_P99_LIMIT_MS must be canonical decimal milliseconds",
+            ),
+        ):
+            p99_env_path = tmp / f"p99-{label}.env"
+            write_env(
+                p99_env_path,
+                {**minimal_values, "SERVERWARE_COMPLETION_P99_LIMIT_MS": env_text},
+            )
+            p99_result = run_runner(
+                "--env-file", str(p99_env_path),
+                "--claims-file", str(runner_claims),
+                "--nitro-evidence-out", str(runner_nitro_evidence),
+                "--dry-run", *security_args,
+                *(("--p99-limit-ms", cli_text) if cli_text is not None else ()),
+            )
+            if expected_error is not None:
+                if p99_result.returncode == 0 or expected_error not in detail(p99_result):
+                    raise AssertionError(f"p99 {label} missed its input guard: {detail(p99_result)}")
+                continue
+            if p99_result.returncode != 0:
+                raise AssertionError(f"exact p99 {label} dry-run failed: {detail(p99_result)}")
+            p99_plan = json.loads(p99_result.stdout.decode("utf-8"))
+            p99_command = p99_plan["commands"][-1]
+            p99_argv = p99_command["argv"]
+            if (
+                p99_command["label"] != "verify-release-completion"
+                or p99_argv.count("--p99-limit-ms") != 1
+                or p99_argv[p99_argv.index("--p99-limit-ms") + 1] != expected_text
+            ):
+                raise AssertionError(f"completion argv lost exact selected p99 text: {p99_command}")
 
         streaming_body_path = tmp / "proxy-response-body.bin"
         streaming_env = tmp / "streaming.env"

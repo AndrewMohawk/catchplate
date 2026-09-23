@@ -5496,6 +5496,69 @@ def benchmark_document(*, p99_ms: float = 9.0) -> dict[str, Any]:
     }
 
 
+def verify_persisted_p99_policy_contract(
+    tmp: Path,
+    persisted_proof: dict[str, Any],
+    runner_expected: SimpleNamespace,
+) -> None:
+    invalid_units = "completion proof p99 policy must use positive signed-64 integer nanoseconds"
+    for label, p99_fields, expected_error in (
+        ("different", {"p99_limit_ns": 20_000_001}, "completion proof p99 policy mismatch"),
+        ("boolean", {"p99_limit_ns": True}, invalid_units),
+        ("fractional", {"p99_limit_ns": 20_000_000.0}, invalid_units),
+        ("string", {"p99_limit_ns": "20000000"}, invalid_units),
+        ("zero", {"p99_limit_ns": 0}, invalid_units),
+        ("negative", {"p99_limit_ns": -1}, invalid_units),
+        ("overflow", {"p99_limit_ns": 9_223_372_036_854_775_808}, invalid_units),
+        ("missing", {}, invalid_units),
+        ("legacy", {"p99_limit_ms": "20.0"}, invalid_units),
+        ("mixed", {"p99_limit_ns": 20_000_000, "p99_limit_ms": "20.0"}, invalid_units),
+    ):
+        candidate = clone_document(persisted_proof)
+        candidate_path = tmp / f"p99-{label}-completion.json"
+        publication_token = hashlib.sha256(label.encode("ascii")).hexdigest()[:32]
+        checksum_path = run_production_readiness.completion_proof_digest_path(
+            candidate_path, publication_token
+        )
+        candidate["proof_path"] = str(candidate_path)
+        candidate["integrity_metadata"] = {
+            **candidate["integrity_metadata"],
+            "publicationToken": publication_token,
+            "detached_sha256_path": str(checksum_path),
+        }
+        binding = candidate["production_env_binding"]
+        binding.pop("p99_limit_ns", None)
+        binding.update(p99_fields)
+        refresh_readiness_v6_proof_core(candidate)
+        # Deliberately construct malformed reader input without asking the
+        # strict production writer to emit it. Keep canonical bytes, the core
+        # digest, private mode and detached checksum valid to isolate p99.
+        run_production_readiness.write_private_json(candidate_path, candidate)
+        checksum_path.write_text(sha256_file(candidate_path) + "\n", encoding="ascii")
+        checksum_path.chmod(0o600)
+        contexts = (runner_expected,) if label == "different" else (None, runner_expected)
+        for expected in contexts:
+            try:
+                run_production_readiness.verify_completion_output(candidate_path, expected)
+            except ValueError as exc:
+                if str(exc) != expected_error:
+                    raise AssertionError(f"persisted p99 {label} failed at the wrong guard: {exc}") from exc
+            else:
+                raise AssertionError(f"persisted reader accepted invalid p99 {label}")
+
+    missing_expected = SimpleNamespace(**vars(runner_expected))
+    del missing_expected.p99_limit_ns
+    try:
+        run_production_readiness.verify_completion_output(
+            Path(persisted_proof["proof_path"]), missing_expected
+        )
+    except ValueError as exc:
+        if str(exc) != "completion proof expected p99 policy is missing exact nanoseconds":
+            raise
+    else:
+        raise AssertionError("persisted reader fell back to legacy expected millisecond units")
+
+
 def test_exact_benchmark_nanosecond_contract() -> None:
     exact = verify_release_completion.ExactJsonDecimal
     for token, expected in (
@@ -5512,12 +5575,21 @@ def test_exact_benchmark_nanosecond_contract() -> None:
             raise AssertionError(
                 f"exact millisecond conversion changed {token!r}: {actual}"
             )
+        direct = run_production_readiness.exact_latency.milliseconds_to_nanoseconds(
+            token, label="shared fixture latency"
+        )
+        if direct != actual:
+            raise AssertionError("completion decimal adapter diverged from the shared exact parser")
     for invalid in (
         exact("-1"),
         exact("01"),
         exact("1e0"),
         exact("0.0000001"),
         exact("9223372036854.775808"),
+        exact("9" * 4096),
+        exact(1),
+        exact(True),
+        exact(None),
         1.0,
         True,
     ):
@@ -6274,6 +6346,10 @@ def test_final_production_env_binding() -> None:
         ):
             raise AssertionError(f"valid final env binding omitted trust-root identities: {binding}")
 
+        equivalent_binding = verify_binding(selected_p99_limit="20.000000")
+        if equivalent_binding.get("p99_limit_ns") != 20_000_000:
+            raise AssertionError("producer rejected or changed an equivalent exact decimal p99 policy")
+
         if sys.platform.startswith("linux"):
             current_python = Path(sys.executable).resolve()
             current_python_digest = sha256_file(current_python)
@@ -6331,6 +6407,7 @@ def test_final_production_env_binding() -> None:
         for label, kwargs in (
             ("proxy proof max age", {"selected_proxy_max_age": 299}),
             ("p99 limit", {"selected_p99_limit": "19"}),
+            ("one-nanosecond p99 conflict", {"selected_p99_limit": "20.000001"}),
             (
                 "Docker executable",
                 {"selected_docker_executable": str(tmp / "caller-selected-docker")},
@@ -11798,7 +11875,8 @@ def main() -> None:
             proxy_client_nonce=PROXY_CLIENT_NONCE,
             proxy_tls_channel_binding=PROXY_TLS_CHANNEL_BINDING,
             proxy_proof_max_age_seconds=300,
-            p99_limit_ms=20.0,
+            p99_limit_ms="20.0",
+            p99_limit_ns=20_000_000,
             docker_executable=str(tmp / "production-docker"),
             collected_proxy_proof_sha256=sha256_file(tmp / "proxy-response-proof.json"),
             launcher_env_binding=None,
@@ -11844,6 +11922,7 @@ def main() -> None:
             out_path,
             runner_expected,
         )
+        verify_persisted_p99_policy_contract(tmp, persisted_proof, runner_expected)
         runner_expected.pre_run_completion_proof_state = {
             "exists": True,
             "sha256": verified_output_digest,

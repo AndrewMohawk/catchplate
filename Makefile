@@ -6685,6 +6685,7 @@ _production-final-v1-input-preflight:
 		require_file "the frozen release-completion verifier" "$(PRODUCTION_RELEASE_ROOT)/scripts/verify_release_completion.py"; \
 		require_file "the frozen public-Nitro verifier" "$(PRODUCTION_RELEASE_ROOT)/scripts/verify_nitro_tee.py"; \
 		require_file "the frozen Sigstore JSON helper" "$(PRODUCTION_RELEASE_ROOT)/scripts/sigstore_json.py"; \
+		require_file "the frozen exact latency helper" "$(PRODUCTION_RELEASE_ROOT)/scripts/exact_latency.py"; \
 		test "$(PRODUCTION_STATE_DIRECTORY)" = "/var/lib/serverware/production-proof" || fail "PRODUCTION_STATE_DIRECTORY must remain the fixed durable final-proof directory /var/lib/serverware/production-proof"; \
 		require_file "PRODUCTION_FINAL_V1_PUBLIC_NITRO_EVIDENCE_BUNDLE" "$(PRODUCTION_FINAL_V1_PUBLIC_NITRO_EVIDENCE_BUNDLE)"; \
 		require_file "PRODUCTION_FINAL_V1_PUBLIC_NITRO_EXPECTATIONS" "$(PRODUCTION_FINAL_V1_PUBLIC_NITRO_EXPECTATIONS)"; \

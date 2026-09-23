@@ -518,7 +518,7 @@ class WitnessJournalSourceLinkageTests(unittest.TestCase):
             self.assertIsInstance(handler.body[-1], ast.Raise)
         counters = [node for node in ast.walk(guarded) if isinstance(node, ast.AugAssign)]
         self.assertEqual({ast.unparse(node.target) for node in counters},
-                         {"self.state_sequence", "self.state_record_count", "self.state_total_bytes"})
+                         {"self.state_sequence"})
         self.assertTrue(all(node.lineno > publish[0].lineno for node in counters))
 
         accept = methods["_persist_and_accept_state_record"]
@@ -531,6 +531,13 @@ class WitnessJournalSourceLinkageTests(unittest.TestCase):
         accept_tries = [node for node in ast.walk(accept) if isinstance(node, ast.Try)
                         and indexed[0] in tuple(ast.walk(node))]
         self.assertEqual(len(accept_tries), 1)
+        accepted_kind = calls(accept_tries[0], "self._accepted_capacity_kind")
+        adopted = [node for node in accept_tries[0].body if isinstance(node, ast.Assign)
+                   and any(ast.unparse(target) == "self._capacity_usage" for target in node.targets)]
+        self.assertEqual((len(accepted_kind), len(adopted)), (1, 1))
+        self.assertLess(indexed[0].lineno, accepted_kind[0].lineno)
+        self.assertLess(accepted_kind[0].lineno, adopted[0].lineno)
+        self.assertEqual(ast.unparse(adopted[0].value), "planned_usage")
         handler = accept_tries[0].handlers[0]
         self.assertEqual(ast.unparse(handler.type), "BaseException")
         self.assertEqual(len(calls(handler, "self._journal_io.poison")), 1)
@@ -541,8 +548,19 @@ class WitnessJournalSourceLinkageTests(unittest.TestCase):
         accept_callers = {name for name, method in methods.items()
                           if calls(method, "self._accept_stored_state_record")}
         self.assertEqual(accept_callers, {"_load_state", "_persist_and_accept_state_record"})
-        self.assertIn("self._persist_and_accept_state_record(state_record)\n            return response_bytes",
-                      ast.get_source_segment(source, methods["transition_bytes"]))
+        transition_call = calls(methods["transition_bytes"], "self._persist_and_accept_state_record")[0]
+        self.assertEqual([ast.unparse(argument) for argument in transition_call.args], ["state_record"])
+        self.assertEqual({keyword.arg: ast.unparse(keyword.value) for keyword in transition_call.keywords},
+                         {"capacity_kind": "_capacity_kind_for_phase(phase)"})
+        blocks = [node for node in ast.walk(methods["transition_bytes"]) if isinstance(node, ast.With)
+                  and any(isinstance(statement, ast.Expr) and statement.value is transition_call
+                          for statement in node.body)]
+        self.assertEqual(len(blocks), 1)
+        position = next(index for index, statement in enumerate(blocks[0].body)
+                        if isinstance(statement, ast.Expr) and statement.value is transition_call)
+        returned = blocks[0].body[position + 1]
+        self.assertIsInstance(returned, ast.Return)
+        self.assertEqual(ast.unparse(returned.value), "response_bytes")
 
     def test_recovery_returns_validated_stamp_and_helper_imports_no_authority(self):
         source, _parsed, methods = witness_source()

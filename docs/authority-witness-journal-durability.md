@@ -73,12 +73,15 @@ This repair deliberately does not claim to solve separate source gaps:
   retained latest head. A valid suffix rollback above that floor still needs
   independent detection. Local fsync, signatures and contiguous history do not
   provide that external authority.
-- Per-append quota checks do not reserve the space/record slots needed to finish
-  an accepted reservation. An initialization service must reserve its worst-case
-  terminal/recovery capacity before admitting work.
-- Existing next-generation admission does not itself transfer every outstanding
-  reservation. Initialization generation handover must preserve the consumed
-  identity and pending decisions explicitly.
+- The [completion-capacity accounting](authority-witness-capacity.md) now holds
+  one maximum-sized terminal record and slot per open existing reservation,
+  reconstructs those holds at recovery, and rejects generation activation while
+  work remains open. This is source-only logical quota, not filesystem allocation
+  or an initialization service's complete materialization/recovery reservation.
+- The generation drain guard does not transfer outstanding reservations.
+  Initialization generation handover must preserve the consumed identity and
+  pending decisions explicitly; historical unresolved cross-generation state
+  requires separately admitted repair rather than automatic activation.
 - The existing witness has a closed local role, Unix peer/deadline assumptions
   and `networkAllowed: false` state binding. It is not a remotely operated
   initialization service merely because its append machinery is reusable.

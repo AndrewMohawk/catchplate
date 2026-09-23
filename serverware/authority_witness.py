@@ -33,6 +33,7 @@ from serverware import authority_contract
 from serverware import authority_artifact_spec
 from serverware import authority_stage_zero_contract
 from serverware import authority_transition_registry
+from serverware import authority_witness_capacity as capacity
 from serverware.authority_witness_journal import JournalConflict, WitnessJournalIO
 
 
@@ -95,6 +96,14 @@ class WitnessError(RuntimeError):
 
 class WitnessConflict(WitnessError):
     pass
+
+
+def _capacity_kind_for_phase(phase: str) -> str:
+    if type(phase) is str and phase in RESERVATION_PHASES:
+        return "reservation"
+    if type(phase) is str and phase in TERMINAL_PHASES:
+        return "terminal"
+    raise WitnessError("witness capacity phase is invalid")
 
 
 def _canonical(value: Any) -> bytes:
@@ -876,16 +885,25 @@ class WitnessStateStore:
         self.activation_records: dict[str, str] = {}
         self.state_generation: dict[str, Any] | None = None
         self.state_sequence = 0
-        self.state_record_count = 0
-        self.state_total_bytes = 0
+        if type(self.state_binding["quotaBytes"]) is not int:
+            raise WitnessError("witness signed quota is not an exact integer")
         self.state_quota_bytes = min(
-            int(self.state_binding["quotaBytes"]),
+            self.state_binding["quotaBytes"],
             MAX_STATE_BYTES,
         )
         self.state_record_limit = min(
             MAX_STATE_RECORDS,
             max(1, self.state_quota_bytes // 128),
         )
+        try:
+            self._capacity_limits = capacity.WitnessCapacityLimits(
+                byte_limit=self.state_quota_bytes,
+                record_limit=self.state_record_limit,
+                max_record_bytes=MAX_STATE_RECORD_BYTES,
+            )
+        except capacity.WitnessCapacityError as exc:
+            raise WitnessError("witness signed capacity limits are invalid") from exc
+        self._capacity_usage = capacity.WitnessCapacityUsage(0, 0, 0)
         self.sequence = 0
         self.fence = 0
         self.head_digest: str | None = None
@@ -995,14 +1013,18 @@ class WitnessStateStore:
                 record_name=name,
                 record_length=len(canonical_record),
             )
+            try:
+                # Historical prefixes may predate reserved-capacity admission.
+                # Count actual validated records here; require all outstanding
+                # completion holds at the final recovered head before readiness.
+                self._capacity_usage = capacity.replay_append(
+                    self._capacity_usage, self._capacity_limits,
+                    kind=self._accepted_capacity_kind(receipt_digest),
+                    record_bytes=len(canonical_record),
+                )
+            except capacity.WitnessCapacityError as exc:
+                raise WitnessError("witness recovered capacity history is invalid") from exc
             self.state_sequence = sequence
-            self.state_record_count += 1
-            self.state_total_bytes += len(canonical_record)
-            if (
-                self.state_record_count > self.state_record_limit
-                or self.state_total_bytes > self.state_quota_bytes
-            ):
-                raise WitnessError("witness state exceeds its signed quota")
             if (
                 receipt_digest is not None
                 and self.sequence
@@ -1030,6 +1052,10 @@ class WitnessStateStore:
             raise WitnessError(
                 "witness state is below its externally pinned high-water"
             )
+        try:
+            capacity.require_completion_capacity(self._capacity_usage, self._capacity_limits)
+        except capacity.WitnessCapacityError as exc:
+            raise WitnessError("witness recovered reservations exceed completion capacity") from exc
         current_generation = self.configuration["generation"]
         if self.state_generation is not None:
             stored_sequence = self.state_generation["sequence"]
@@ -1117,7 +1143,9 @@ class WitnessStateStore:
     def _persist_state_record(
         self,
         record: Mapping[str, Any],
-    ) -> tuple[str, bytes]:
+        *,
+        capacity_kind: str,
+    ) -> tuple[str, bytes, capacity.WitnessCapacityUsage]:
         with self._journal_io.ready():
             try:
                 directory_metadata = os.fstat(self.state_directory_descriptor)
@@ -1132,13 +1160,16 @@ class WitnessStateStore:
                 self._journal_io.poison()
                 raise
             canonical_record = _canonical(dict(record))
-            if (
-                not 1 <= len(canonical_record) <= MAX_STATE_RECORD_BYTES
-                or self.state_record_count + 1 > self.state_record_limit
-                or self.state_total_bytes + len(canonical_record)
-                    > self.state_quota_bytes
-            ):
-                raise WitnessError("witness state quota is exhausted")
+            try:
+                # Reserve one worst-case terminal record per open reservation.
+                # Generation activation must not strand old-generation work.
+                # This is signed logical quota, not disk block preallocation.
+                planned_usage = capacity.plan_append(
+                    self._capacity_usage, self._capacity_limits,
+                    kind=capacity_kind, record_bytes=len(canonical_record),
+                )
+            except capacity.WitnessCapacityError as exc:
+                raise WitnessError("witness state completion capacity is exhausted or invalid") from exc
             record_name = _state_record_name(
                 int(record["stateSequence"]),
                 canonical_record,
@@ -1152,8 +1183,6 @@ class WitnessStateStore:
                     temporary_name, record_name, canonical_record,
                 )
                 self.state_sequence += 1
-                self.state_record_count += 1
-                self.state_total_bytes += len(canonical_record)
                 directory_metadata = os.fstat(self.state_directory_descriptor)
                 self.state_directory_change = (
                     directory_metadata.st_mtime_ns,
@@ -1165,18 +1194,31 @@ class WitnessStateStore:
             except BaseException:
                 self._journal_io.poison()
                 raise
-            return record_name, canonical_record
+            return record_name, canonical_record, planned_usage
 
-    def _persist_and_accept_state_record(self, record: Mapping[str, Any]) -> None:
+    def _accepted_capacity_kind(self, receipt_digest: str | None) -> str:
+        # Called only after complete stored-record/request/signature admission.
+        if receipt_digest is None:
+            return "generation-activation"
+        return _capacity_kind_for_phase(self.receipts[receipt_digest]["phase"])
+
+    def _persist_and_accept_state_record(
+        self, record: Mapping[str, Any], *, capacity_kind: str,
+    ) -> None:
         with self._journal_io.ready():
-            record_name, canonical_record = self._persist_state_record(record)
+            record_name, canonical_record, planned_usage = self._persist_state_record(
+                record, capacity_kind=capacity_kind,
+            )
             try:
-                self._accept_stored_state_record(
+                receipt_digest = self._accept_stored_state_record(
                     record,
                     canonical_record,
                     record_name=record_name,
                     record_length=len(canonical_record),
                 )
+                if self._accepted_capacity_kind(receipt_digest) != capacity_kind:
+                    raise WitnessError("witness accepted record capacity kind changed")
+                self._capacity_usage = planned_usage
             except BaseException:
                 # The immutable record may already be durable while indexes
                 # are only partly updated. No replay may use that view.
@@ -1214,7 +1256,7 @@ class WitnessStateStore:
                 "canonicalRequestDigest": None,
                 "canonicalResponseDigest": None,
             }
-            self._persist_and_accept_state_record(record)
+            self._persist_and_accept_state_record(record, capacity_kind="generation-activation")
 
     def _accept_stored_receipt(
         self,
@@ -2411,7 +2453,9 @@ class WitnessStateStore:
                     response_bytes,
                 ),
             }
-            self._persist_and_accept_state_record(state_record)
+            self._persist_and_accept_state_record(
+                state_record, capacity_kind=_capacity_kind_for_phase(phase),
+            )
             return response_bytes
 
 

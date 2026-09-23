@@ -209,6 +209,10 @@ def _policy_candidate_authority_source_contract_digest() -> str:
             "headTables": list(_POLICY_CANDIDATE_AUTHORITY_HEAD_TABLES),
             "jitAuthorityRuntimeReadOnlyTables":
                 sorted(_JIT_AUTHORITY_RUNTIME_READ_ONLY_TABLES),
+            "authorityRuntimeReadOnlyTables":
+                sorted(_POLICY_AUTHORITY_RUNTIME_READ_ONLY_TABLES),
+            "v9AdditionalProtectedTables":
+                list(authority_contract.V9_ADDITIONAL_PROTECTED_TABLES),
             "measuredAuthorityServiceSource":
                 "serverware/authority_service.py",
             "authorityServiceSourcePresent": True,
@@ -829,6 +833,7 @@ def _policy_candidate_authority_schema_tables() -> tuple[str, ...]:
         dict.fromkeys(
             _POLICY_CANDIDATE_AUTHORITY_IMMUTABLE_TABLES
             + _POLICY_CANDIDATE_AUTHORITY_HEAD_TABLES
+            + authority_contract.V9_ADDITIONAL_PROTECTED_TABLES
             + (
                 "metadata_audit_outbox",
                 "rbac_authority_state",

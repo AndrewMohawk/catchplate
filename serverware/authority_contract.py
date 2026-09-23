@@ -7,7 +7,7 @@ from types import MappingProxyType
 from typing import Any, Mapping
 
 
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.25"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.26"
 SCHEMA_VERSION = 9
 CONTRACT_SCHEMA = "serverware.policyAuthorityOperationContract/v3"
 BUSINESS_INTENT_SCHEMA = "serverware.policyAuthorityBusinessIntent/v2"
@@ -782,6 +782,26 @@ _PHASE3_SEALED = ("policy_authority_sealed_values",)
 _PHASE3_ACTIVATION_EVIDENCE = (
     "policy_authority_activation_evidence_bindings",
 )
+# Source-owned storage/ACL inventory, not a generic immutability policy.
+# Some primitives require measured UPDATE/INSERT operations; none may inherit
+# the ordinary metadata runtime's broad table DML grant. Keep this independent
+# of current kernel registration, since missing kernels must not grant access.
+PHASE2_STORE_TABLES = tuple(sorted({
+    *_PHASE2_AGGREGATE,
+    *_PHASE2_EXACT_PAGE,
+    *_PHASE2_WORK_PAGE,
+    *_PHASE2_TOMBSTONE,
+    *_PHASE2_OPAQUE,
+    *_PHASE2_EVIDENCE,
+    *_PHASE3_CONTINUATION,
+    *_PHASE3_SEALED,
+    *_PHASE3_ACTIVATION_EVIDENCE,
+}))
+V9_ADDITIONAL_PROTECTED_TABLES = tuple(sorted({
+    *PHASE2_STORE_TABLES,
+    "policy_authority_authorization_dependency_manifests",
+    "policy_authority_operation_mutation_templates",
+}))
 _PHASE2_MAINTENANCE = (
     _PHASE2_AGGREGATE
     + _PHASE2_WORK_PAGE
@@ -2147,6 +2167,8 @@ OPERATION_MANIFEST_DIGEST = _digest(
         "maxPlanSelectedBytes": MAX_PLAN_SELECTED_BYTES,
         "auditCapacityQueryWorkUnits": AUDIT_CAPACITY_QUERY_WORK_UNITS,
         "auditCapacityMutationWorkUnits": AUDIT_CAPACITY_MUTATION_WORK_UNITS,
+        "phase2StoreTables": list(PHASE2_STORE_TABLES),
+        "v9AdditionalProtectedTables": list(V9_ADDITIONAL_PROTECTED_TABLES),
         "proofPrimitives": sorted(PROOF_PRIMITIVES),
         "capabilityIssuerFunctionSignatures": {
             function_name: list(argument_types)

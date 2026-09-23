@@ -1693,6 +1693,7 @@ _POLICY_AUTHORITY_RUNTIME_READ_ONLY_TABLES = frozenset(
         *_POLICY_CANDIDATE_AUTHORITY_IMMUTABLE_TABLES,
         *_POLICY_CANDIDATE_AUTHORITY_HEAD_TABLES,
         *_JIT_AUTHORITY_RUNTIME_READ_ONLY_TABLES,
+        *authority_contract.V9_ADDITIONAL_PROTECTED_TABLES,
         "policy_authority_genesis_preparations",
         "policy_authority_genesis_finalizations",
         "policy_high_water",
@@ -3558,6 +3559,14 @@ def _seal_postgres_schema_acl(
     ] = (),
     error_type: type[Exception] = MetadataStoreError,
 ) -> None:
+    if schema == _POLICY_CANDIDATE_AUTHORITY_SCHEMA_NAME and (
+        type(runtime_read_only_tables) is not frozenset
+        or runtime_read_only_tables
+        != _POLICY_AUTHORITY_RUNTIME_READ_ONLY_TABLES
+    ):
+        raise error_type(
+            "metadata runtime read-only table closure is not source exact"
+        )
     if (
         authority_planner_writer_function_signatures
         and authority_planner_writer_function_signatures
@@ -20348,6 +20357,39 @@ def _metadata_pg_connect_with_dsn(
                     "function name"
                 )
             if not admin:
+                invalid_protected_table_privilege = cur.execute(
+                    "SELECT required.table_name "
+                    "FROM pg_catalog.unnest(%s::text[]) "
+                    "AS required(table_name) "
+                    "LEFT JOIN pg_catalog.pg_namespace AS namespace "
+                    "ON namespace.nspname = %s "
+                    "LEFT JOIN pg_catalog.pg_class AS relation "
+                    "ON relation.relnamespace = namespace.oid "
+                    "AND relation.relname = required.table_name "
+                    "WHERE namespace.oid IS NULL "
+                    "OR relation.oid IS NULL "
+                    "OR relation.relkind NOT IN ('r', 'p') "
+                    "OR CASE WHEN relation.relkind IN ('r', 'p') THEN ("
+                    "pg_catalog.has_table_privilege("
+                    "current_user, relation.oid, 'SELECT') IS NOT TRUE "
+                    "OR pg_catalog.has_table_privilege("
+                    "current_user, relation.oid, "
+                    "'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') "
+                    "IS NOT FALSE "
+                    "OR pg_catalog.has_any_column_privilege("
+                    "current_user, relation.oid, "
+                    "'INSERT,UPDATE,REFERENCES') IS NOT FALSE"
+                    ") ELSE FALSE END LIMIT 1",
+                    (
+                        sorted(_POLICY_AUTHORITY_RUNTIME_READ_ONLY_TABLES),
+                        _POLICY_CANDIDATE_AUTHORITY_SCHEMA_NAME,
+                    ),
+                ).fetchone()
+                if invalid_protected_table_privilege is not None:
+                    raise MetadataStoreError(
+                        "runtime metadata protected-table privileges "
+                        "are not source exact"
+                    )
                 live_owner_contract = (
                     _validate_policy_authority_owner_apply_function(cur)
                 )

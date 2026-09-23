@@ -18,18 +18,7 @@ PHASE2_BACKFILL_MODE: Final[str] = (
 )
 
 
-PHASE2_TABLES: Final[tuple[str, ...]] = (
-    "policy_authority_activation_evidence_bindings",
-    "policy_authority_bounded_aggregate_states",
-    "policy_authority_continuations",
-    "policy_authority_exact_pages",
-    "policy_authority_external_evidence_receipts",
-    "policy_authority_opaque_values",
-    "policy_authority_sealed_values",
-    "policy_authority_secondary_index_heads",
-    "policy_authority_tombstones",
-    "policy_authority_work_pages",
-)
+PHASE2_TABLES: Final[tuple[str, ...]] = authority_contract.PHASE2_STORE_TABLES
 
 
 AGGREGATE_BACKFILLS: Final[

@@ -127,8 +127,9 @@ would escape the signed predicted transition.
 
 ## Bounds and version closure
 
-Source revision `.25` and primary-root work profile `/v2` make the change
-explicit. The original business ceilings remain 256 rows, 512 mutations and
+Source revision `.25` introduced primary-root work profile `/v2` and these
+allowances; current `.26` also closes the [authority table permissions](authority-table-permissions.md).
+The original business ceilings remain 256 rows, 512 mutations and
 16,384 work units; twelve reviewed operations reclaim one old query/mutation
 slot. Final-plan ceilings are 257/513/16,386, but only the exact counter address
 may consume the additional row/mutation. One composed query work unit is always

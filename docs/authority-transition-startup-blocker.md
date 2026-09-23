@@ -55,9 +55,14 @@ its authored component and original-byte checks remain unexecuted.
 The [fresh audit helpers](authority-audit-capacity.md) retain exact INSERT and
 replay guards while dropping the old policy/quota counter paths. The common
 planner, payload admission and executor now use the [global capacity contract](authority-global-audit-capacity-design.md),
-with separate business/framework budgets and source `.25`/primary-root profile
+with separate business/framework budgets and source `.26`/primary-root profile
 v2. This remains unexecuted source: authenticated initialization and general
 receipt-bound PostgreSQL delivery are missing, and SQLite remains separate.
+
+The [table-permission closure](authority-table-permissions.md) additionally
+corrects twelve missing runtime read-only relations and detailed table schemas.
+Source `.26` binds these inventories and adds effective table/column privilege
+checks on runtime connections. This is source-only, not native ACL admission.
 
 ## Implementation contracts still needed
 

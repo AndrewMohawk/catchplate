@@ -6,6 +6,12 @@ startup acceptance is implemented. Missing global capacity continues to deny
 participating operations. Neither this document nor the component observation
 is permission to insert zero, sum old scalars or change runtime DML privileges.
 
+The initializer trace also identified and corrected a source [table-permission
+inventory omission](authority-table-permissions.md). Source `.26` protects the
+ten primitive and two contract tables from ordinary runtime writes and includes
+their detailed schemas. This unexecuted correction is a prerequisite, not an
+offline initializer or an installed permission proof.
+
 ## Complete-population component
 
 `serverware/authority_audit_inventory.py` implements

@@ -242,6 +242,10 @@ now joins real signed snapshot verification to one local candidate/head commit
 under a pre-existing pinned enrollment. It returns only `RECORDED_UNANCHORED`,
 not an anchored decision or installation permission; independent enrollment,
 latest-head authority, materialization and the installer remain missing.
+Both recording and historical lookup now require observed pinned database/role
+identity, exact source schema and effective/raw privilege admission. These
+unexecuted checks assume trusted administrator stability and do not close the
+independent authority or rollback boundary.
 
 The next coherent change must close all of these together before enabling an
 initializer or changing accepted schema/migration state:

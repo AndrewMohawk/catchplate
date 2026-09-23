@@ -69,7 +69,7 @@ def audit_initialization_store_ddl(namespace: str) -> tuple[str, str]:
             CHECK ({_digest_check('enrollment_digest')}),
             CHECK ({_digest_check('head_digest')}),
             CHECK (pg_catalog.octet_length(enrollment_bytes) BETWEEN 1 AND {MAX_ENROLLMENT_BYTES}),
-            CHECK (head_sequence IN (0, 1)),
+            CHECK (head_sequence = 0 OR head_sequence = 1),
             CHECK (head_sequence <> 0 OR head_digest = enrollment_digest)
         );""",
         f"""CREATE TABLE {candidates} (

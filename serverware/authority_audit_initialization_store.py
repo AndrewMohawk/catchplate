@@ -3,8 +3,9 @@
 This storage prerequisite requires an independently supplied, already installed
 enrollment. It has no enrollment, reset, generation handover, signing, anchor or
 APPLIED operation. A committed local row is NOT a rollback-resistant decision.
-Schema/ACL admission, physical separation, trusted enrollment, external latest
-head and purpose-specific decision/materialization services remain required.
+Observed schema/ACL/session admission assumes trusted administrator stability;
+physical separation, trusted enrollment, external latest head and purpose-specific
+decision/materialization services remain required.
 """
 from __future__ import annotations
 
@@ -28,6 +29,8 @@ from serverware.authority_radix_mutation import PrimaryRoot
 from serverware.authority_store.audit_initialization_store_sql import (
     CANDIDATES, ENROLLMENTS, MAX_ENROLLMENT_BYTES, MAX_RECORD_BYTES,
 )
+from serverware.authority_store import initialization_store_access as access
+from serverware.authority_store import initialization_store_structure as structure
 
 
 ENROLLMENT_SCHEMA = "serverware.metadataAuditInitializationStoreEnrollment/v1"
@@ -288,15 +291,16 @@ class _Session:
 
     def arm(self) -> None:
         remaining = self.remaining_ms()
-        self.cursor.execute(
-            "SELECT pg_catalog.set_config('statement_timeout',%s,true), "
-            "pg_catalog.set_config('lock_timeout',%s,true), "
-            "pg_catalog.set_config('synchronous_commit','on',true), "
-            "pg_catalog.set_config('row_security','off',true), "
-            "pg_catalog.set_config('search_path','pg_catalog',true)",
-            (str(min(remaining, self.limits.statement_timeout_ms)) + "ms",
-             str(min(remaining, self.limits.lock_timeout_ms)) + "ms")).fetchone()
-        self.remaining_ms()
+        # SET, unlike a SELECT set_config call, does not establish the first
+        # serializable snapshot before the initial relation locks. Identifiers
+        # are source-owned and every literal is escaped by psycopg, never SQL
+        # supplied by a request. Each command still needs the outer watchdog.
+        settings = (("statement_timeout", str(min(remaining, self.limits.statement_timeout_ms)) + "ms"),
+            ("lock_timeout", str(min(remaining, self.limits.lock_timeout_ms)) + "ms"),
+            ("synchronous_commit", "on"), ("row_security", "off"), ("search_path", "pg_catalog"))
+        for name, value in settings:
+            self.cursor.execute(sql.SQL("SET LOCAL {} = {}").format(sql.Identifier(name), sql.Literal(value)))
+            self.remaining_ms()
 
     def run(self, statement, parameters=None):
         self.arm()
@@ -311,7 +315,7 @@ def _namespace(value: str) -> str:
     return value
 
 
-def _operation(connection, limits, started, callback):
+def _operation(connection, limits, started, identity, callback):
     # A transaction context on INTRANS is only a savepoint. Never accept one.
     if (not isinstance(connection, psycopg.Connection) or connection.closed or connection.autocommit
             or connection.info.transaction_status != TransactionStatus.IDLE
@@ -325,6 +329,11 @@ def _operation(connection, limits, started, callback):
             with connection.cursor(row_factory=dict_row) as cursor:
                 cursor.execute("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE READ WRITE")
                 session.cursor = cursor
+                # SELECT privileges suffice. These locks precede the first
+                # SELECT, but do not freeze GRANT/REVOKE or all privileged DDL.
+                # Trusted administrator stability remains an explicit premise.
+                session.run(sql.SQL("LOCK TABLE ONLY {}, ONLY {} IN ACCESS SHARE MODE").format(
+                    sql.Identifier(identity.namespace, ENROLLMENTS), sql.Identifier(identity.namespace, CANDIDATES)))
                 context = session.run(
                     "SELECT pg_catalog.current_setting('transaction_isolation') AS isolation, "
                     "pg_catalog.current_setting('transaction_read_only') AS read_only, "
@@ -339,6 +348,8 @@ def _operation(connection, limits, started, callback):
                     "synchronous_commit": "on", "recovery": False}
                 if context is None or _canonical(context) != _canonical(expected):
                     raise LocalInitializationStoreError("local initialization store session is not admitted")
+                access.admit_store_access(session, identity)
+                structure.admit_store_structure(session, identity)
                 result = callback(session)
                 session.arm()  # Remaining deadline and local synchronous COMMIT policy.
             committing = True
@@ -408,6 +419,7 @@ def _existing(session, namespace, enrollment, request):
 def lookup_exact_local_initialization_candidate(
     store_connection: psycopg.Connection, checkpoint_bytes: bytes, authorization_bytes: bytes, *,
     enrollment: LocalInitializationEnrollment, store_limits: StoreReadLimits,
+    store_identity: access.InitializationStoreDatabaseIdentity,
     namespace: str = "serverware_initialization",
 ) -> StoredInitializationCandidate | None:
     """Read exact retained local history without fresh signatures or metadata.
@@ -421,8 +433,12 @@ def lookup_exact_local_initialization_candidate(
     accepted = _copy(LocalInitializationEnrollment, enrollment)
     limits = _copy(StoreReadLimits, store_limits)
     namespace = _namespace(namespace)
+    identity = _copy(access.InitializationStoreDatabaseIdentity, store_identity)
+    if (identity.namespace != namespace
+            or identity.backend_incarnation_digest != accepted.backend_incarnation_digest):
+        raise LocalInitializationStoreError("local initialization database identity differs from enrollment")
     request = _request(accepted, checkpoint_bytes, authorization_bytes)
-    return _operation(store_connection, limits, started,
+    return _operation(store_connection, limits, started, identity,
         lambda session: _existing(session, namespace, accepted, request))
 
 
@@ -432,6 +448,7 @@ def record_local_initialization_candidate(
     trust: admission.AuditInitializationTrust, expectation: admission.AuditInitializationExpectation,
     now_epoch_ns: int, expected_outbox_root: PrimaryRoot, expected_aggregate_root: PrimaryRoot,
     read_limits: reader.AuditInitializationReadLimits, store_limits: StoreReadLimits,
+    store_identity: access.InitializationStoreDatabaseIdentity,
     namespace: str = "serverware_initialization", metadata_namespace: str = "serverware_metadata",
 ) -> StoredInitializationCandidate:
     """Commit one local candidate from real signed PostgreSQL verification.
@@ -445,8 +462,9 @@ def record_local_initialization_candidate(
 
     Store transaction acknowledgement establishes conditional LOCAL persistence
     only. This is not COMMIT_DECIDED, APPLIED, an anchor or permission to install.
-    Source/schema/ACL admission and an outer driver/process watchdog remain
-    required. After an ambiguous commit, keep writers fenced and use exact
+    Observed catalog admission requires trusted administrator stability and is
+    not an independent rollback/identity proof. An outer watchdog is required.
+    After an ambiguous commit, keep writers fenced and use exact
     lookup on a fresh connection; never infer noncommit from local absence.
     """
     started = time.monotonic_ns()
@@ -457,6 +475,10 @@ def record_local_initialization_candidate(
     outbox, aggregate = _copy(PrimaryRoot, expected_outbox_root), _copy(PrimaryRoot, expected_aggregate_root)
     namespace = _namespace(namespace)
     metadata_namespace = _namespace(metadata_namespace)
+    identity = _copy(access.InitializationStoreDatabaseIdentity, store_identity)
+    if (identity.namespace != namespace
+            or identity.backend_incarnation_digest != accepted.backend_incarnation_digest):
+        raise LocalInitializationStoreError("local initialization database identity differs from enrollment")
     if store_connection is metadata_connection:
         raise LocalInitializationStoreError("local initialization store and metadata connections must differ")
     if (accepted_trust != accepted.trust
@@ -494,4 +516,4 @@ def record_local_initialization_candidate(
             raise LocalInitializationStoreError("local initialization candidate readback differs")
         return candidate
 
-    return _operation(store_connection, limits, started, record)
+    return _operation(store_connection, limits, started, identity, record)

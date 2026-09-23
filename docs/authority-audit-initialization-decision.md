@@ -4,6 +4,9 @@ Status: protocol requirements, not an implemented authority service or admitted
 decision wire contract. The [local PostgreSQL candidate store](authority-audit-initialization-store.md)
 now supplies one-use transactional persistence under a pinned existing enrollment;
 its sole state is `RECORDED_UNANCHORED`, never an anchored decision or permission.
+Both store entry points now require observed database/session identity, exact
+source schema and least-privilege ACL admission under trusted administrator
+stability. Those source-only checks are not independent enrollment or anti-rollback proof.
 The [signed consumer](authority-audit-initialization-evidence.md)
 authenticates an exact calculation but consumes no initialization entitlement.
 The [PostgreSQL reader](authority-audit-initialization-postgres.md) now connects

@@ -52469,9 +52469,10 @@ mod tests {
         let denied = decide_internal(&state, &snapshot, request(), Some("agent:test"));
         stop.store(1, Ordering::Relaxed);
         quota_server.join().expect("shared quota server");
+        // Live legacy JIT is rejected before injection preflight or consumption.
         assert_eq!(
             denied["payload"]["error"],
-            "credential_jit_requires_atomic_release_authorization"
+            "legacy_jit_requires_atomic_release_authorization"
         );
         assert_eq!(
             *quota_consumption_flags.lock().expect("shared quota flags"),
@@ -53407,47 +53408,94 @@ mod tests {
 
     #[test]
     fn shared_jit_428_includes_approval_url_without_changing_approval_id() {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("shared grant listener");
-        let address = listener.local_addr().expect("shared grant address");
+        let listener = TcpListener::bind("127.0.0.1:0").expect("atomic release listener");
+        let address = listener.local_addr().expect("atomic release address");
+        let effects_listener = TcpListener::bind("127.0.0.1:0")
+            .expect("unexpected legacy or credential effect listener");
+        effects_listener
+            .set_nonblocking(true)
+            .expect("unexpected effect listener nonblocking mode");
+        let effects_address = effects_listener.local_addr().expect("effect listener address");
+        let approval_expires_at = (OffsetDateTime::now_utc() + TimeDuration::minutes(5))
+            .format(&Rfc3339)
+            .expect("pending approval expiry");
+        let server_approval_expires_at = approval_expires_at.clone();
+        let response_signing_key = SigningKey::from_bytes(&[113u8; 32]);
+        let mut snapshot_value =
+            (*test_snapshot_with_control_plane_response_key(1, &response_signing_key)).clone();
+        snapshot_value.routes[0].jit = valid_jit_policy();
+        // This fixture proves authenticated approval presentation only. The route
+        // remains credentialless and no forwarding/shadow authority is fabricated.
+        let snapshot = Arc::new(snapshot_value);
+        let server_snapshot = Arc::clone(&snapshot);
         let server = thread::spawn(move || {
             let mut stream = accept_bounded_test_stream(&listener, Duration::from_secs(5))
-                .expect("shared grant request must arrive before the fixture deadline");
-            let mut request = [0u8; 16 * 1024];
-            let read = stream
-                .read(&mut request)
-                .expect("read shared grant request");
-            assert!(
-                read > 0,
-                "shared grant request must not end before any bytes arrive"
+                .expect("atomic reserve request must arrive before the fixture deadline");
+            let head = read_request_head_from(&mut stream, None).expect("atomic reserve head");
+            let request = read_request_body_from_head(
+                &mut stream,
+                head,
+                MAX_MANAGEMENT_REQUEST_BODY_BYTES,
+            )
+            .expect("complete atomic reserve request");
+            assert_eq!(request.method, "POST");
+            assert_eq!(request.target, "/api/data-plane/release-authorizations/reserve");
+            let payload = strict_json_value_from_slice(&request.body).expect("atomic reserve JSON");
+            let response = signed_release_test_response(
+                &response_signing_key,
+                &server_snapshot,
+                &request,
+                StatusCode::OK,
+                json!({
+                    "apiVersion":"serverware.releaseAuthorization/v1",
+                    "ok":true,
+                    "authorized":false,
+                    "state":"denied",
+                    "reason":"jit_grant_unavailable",
+                    "attemptId":payload["attemptId"],
+                    "bindingDigest":test_release_binding_digest(&payload, true, json!([])),
+                    "idempotentReplay":false,
+                    "grantId":null,
+                    "approvalRequestId":"approval:shared",
+                    "approvalStatus":"pending",
+                    "approvalExpiresAt":server_approval_expires_at,
+                    "approvalCreated":true,
+                    "reservationExpiresAtEpochMs":null,
+                    "dispatchStartedAtEpochMs":null,
+                    "dispatchExpiresAtEpochMs":null,
+                    "completionOutcome":null,
+                    "retryAfterSeconds":3,
+                    "quotas":[],
+                    "store":{"backend":"postgres","ha":true},
+                }),
             );
-            let body = serde_json::to_vec(&json!({
-                "ok":true,
-                "available":false,
-                "consumed":false,
-                "approval_id":"approval:shared",
-                "expires_at":"2030-01-01T00:00:00Z"
-            }))
-            .expect("shared grant response body");
             stream
-                .write_all(
-                    format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                        body.len()
-                    )
-                    .as_bytes(),
-                )
-                .expect("shared grant response head");
-            stream.write_all(&body).expect("shared grant response body");
+                .write_all(&response)
+                .expect("signed atomic pending approval response");
+            (listener, payload)
         });
 
-        let mut snapshot_value = (*test_snapshot(1)).clone();
-        snapshot_value.routes[0].jit = json!({"required":true});
-        let snapshot = Arc::new(snapshot_value);
         let mut state = test_gate_state(Arc::clone(&snapshot));
-        state.audit_url = Some("https://audit.invalid/events".to_string());
+        state.audit_client = Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(2))
+            .build()
+            .expect("bounded fixture control-plane client");
+        state.credential_lease_client = state.audit_client.clone();
+        state.atomic_release_authorization_enabled = true;
+        state.release_authorization_base_url = Some(format!(
+            "http://{address}/api/data-plane/release-authorizations"
+        ));
+        state.release_authorization_token = Some("release-token".to_string());
+        state.audit_url = Some(format!("http://{effects_address}/audit"));
         state.audit_token = Some("audit-token".to_string());
-        state.grant_consume_url = Some(format!("http://{address}/consume"));
+        state.grant_consume_url = Some(format!("http://{effects_address}/consume"));
         state.grant_consume_token = Some("grant-token".to_string());
+        state.rate_limit_consume_url = Some(format!("http://{effects_address}/quota"));
+        state.rate_limit_consume_token = Some("rate-token".to_string());
+        state.credential_lease_url = Some(format!("http://{effects_address}/credential-leases"));
+        state.credential_lease_token = Some("credential-token".to_string());
         let decision = decide_internal(
             &state,
             &snapshot,
@@ -53455,6 +53503,8 @@ mod tests {
             Some("agent:test"),
         );
         assert_eq!(decision["status_code"], 428, "shared grant decision: {decision}");
+        assert_eq!(decision["action"], "jit_required");
+        assert_eq!(decision["allowed"], false);
         assert_eq!(
             decision["approval_id"], "approval:shared",
             "shared grant decision: {decision}"
@@ -53463,9 +53513,71 @@ mod tests {
             decision["approval_url"], "/approvals/approval:shared",
             "shared grant decision: {decision}"
         );
-        server
+        assert_eq!(decision["payload"]["approval_id"], "approval:shared");
+        assert_eq!(decision["payload"]["approval_url"], "/approvals/approval:shared");
+        assert_eq!(decision["approval_status"], "pending");
+        assert_eq!(decision["expires_at"], approval_expires_at);
+        assert_eq!(decision["approval_created"], true);
+        assert_eq!(decision["retry_after_seconds"], 3);
+        assert_eq!(decision["jit"]["grant_store"], "atomic_release_authorization");
+        assert_eq!(decision["jit"]["grant_reserved"], false);
+        assert_eq!(decision["jit"]["grant_consumed"], false);
+        let (listener, payload) = server
             .join()
-            .expect("shared grant server must receive and answer the request");
+            .expect("atomic reserve server must receive and answer the request");
+        let canonical = &payload["canonicalRequest"];
+        assert_eq!(payload["requestDigest"], digest_json_ensure_ascii(canonical));
+        assert_eq!(payload["operationDigest"], operation_digest(canonical));
+        assert_eq!(payload["operationContext"], canonical["operation"]);
+        assert_eq!(payload["flowId"], payload["attemptId"]);
+        assert_eq!(decision["attempt_id"], payload["attemptId"]);
+        assert_eq!(decision["request_digest"], payload["requestDigest"]);
+        assert_eq!(decision["operation_digest"], payload["operationDigest"]);
+        assert_eq!(canonical["request"]["headers"], json!({"host":"example.test"}));
+        assert!(payload["credentialRef"].is_null());
+        assert!(matches!(listener.accept(), Err(error) if error.kind() == io::ErrorKind::WouldBlock));
+        assert!(matches!(effects_listener.accept(), Err(error) if error.kind() == io::ErrorKind::WouldBlock));
+        assert!(state.grants.lock().expect("grant cache").is_empty());
+        assert!(state.credential_generations.lock().expect("credential generations").is_empty());
+        assert!(state.credential_leases.lock().expect("credential lease cache").is_empty());
+        assert!(state.constraint_rate_counters.lock().expect("rate counters").is_empty());
+        assert!(!state.audit_queue.lock().expect("audit queue").iter().any(|event| {
+            event.event_type == "data_plane.jit.grant_consumed"
+        }));
+    }
+
+    #[test]
+    fn shared_jit_requires_atomic_authorization_before_legacy_endpoint_contact() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("legacy grant listener");
+        listener.set_nonblocking(true).expect("legacy listener nonblocking mode");
+        let address = listener.local_addr().expect("legacy grant address");
+        let mut snapshot_value = (*test_snapshot(1)).clone();
+        snapshot_value.routes[0].jit = valid_jit_policy();
+        let snapshot = Arc::new(snapshot_value);
+        let mut state = test_gate_state(Arc::clone(&snapshot));
+        assert!(!state.atomic_release_authorization_enabled);
+        state.audit_client = Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(2))
+            .build()
+            .expect("bounded legacy negative control-plane client");
+        state.credential_lease_client = state.audit_client.clone();
+        state.grant_consume_url = Some(format!("http://{address}/consume"));
+        state.grant_consume_token = Some("grant-token".to_string());
+        let decision = decide_internal(
+            &state,
+            &snapshot,
+            correlated_test_decision_request("A_-0123456789abcdefghijk"),
+            Some("agent:test"),
+        );
+        assert_eq!(decision["status_code"], 503);
+        assert_eq!(decision["allowed"], false);
+        assert_eq!(decision["payload"]["error"], "legacy_jit_requires_atomic_release_authorization");
+        assert!(matches!(listener.accept(), Err(error) if error.kind() == io::ErrorKind::WouldBlock));
+        assert!(state.grants.lock().expect("grant cache").is_empty());
+        assert!(state.constraint_rate_counters.lock().expect("rate counters").is_empty());
+        assert!(state.audit_queue.lock().expect("audit queue").is_empty());
     }
 
     fn test_release_authorization_response(
@@ -72285,7 +72397,7 @@ mod tests {
             let mut params = BTreeMap::from([("user".to_string(), "me".to_string())]);
             if let Some(message_id) = message_id {
                 params.insert("message_id".to_string(), message_id.to_string());
-                request.gmail_proofs.push(message_id.to_string());
+                request.gmail_proofs.push(SensitiveString::new(message_id.to_string()));
             }
             let route_match = RouteMatch { route, params };
             let url = Url::parse(target).unwrap();

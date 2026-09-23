@@ -33,6 +33,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from serverware import authority_contract
+from serverware.authority_store.primary_tree_sql import canonical_json_function_sql
 from serverware.authority_store.root_transition_sql import (
     TRANSITION_PROFILE,
     TRANSITION_SCHEMA,
@@ -89,15 +90,18 @@ def token(label: str) -> str:
 
 
 def production_digest_functions(namespace: str) -> list[str]:
-    """Extract the two real f-string SQL literals without importing db.py."""
+    """Use shared tree JSON and extract the remaining wire-domain SQL literal.
+
+    Never import db.py or replace either implementation with fixture SQL.
+    The tree's separate length-framed digest is not the wire-domain function.
+    """
     path = ROOT / "serverware/db.py"
     if path.stat().st_size > 16 * 1024 * 1024:
         raise ValueError("database source exceeds component fixture bound")
     source = path.read_text(encoding="utf-8")
     marker = '        conn.execute(\n            f"""\n            CREATE OR REPLACE FUNCTION {guard_namespace}.\n                '
     declarations = []
-    for function_name, delimiter in (("serverware_policy_authority_canonical_json", "serverware_canonical"),
-                                     ("serverware_policy_authority_domain_digest", "serverware_digest")):
+    for function_name, delimiter in (("serverware_policy_authority_domain_digest", "serverware_digest"),):
         start = source.index(marker + function_name + "(")
         closing = f'            ${delimiter}$\n            """\n        )'
         end = source.index(closing, start) + len(closing)
@@ -113,7 +117,7 @@ def production_digest_functions(namespace: str) -> list[str]:
         "guard_namespace": namespace,
         "_POLICY_AUTHORITY_VERIFIER_RESPONSE_MAX_BYTES": str(maximum_bytes),
     }
-    statements = []
+    statements = [canonical_json_function_sql(namespace)]
     for node in declarations:
         if (not isinstance(node, ast.Expr) or not isinstance(node.value, ast.Call)
                 or not isinstance(node.value.func, ast.Attribute)

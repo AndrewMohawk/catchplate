@@ -329,11 +329,16 @@ class AuthorityRadixProofTests(unittest.TestCase):
 
     def test_source_wiring_preserves_stored_domain_and_active_proof_calls(self) -> None:
         database = (ROOT / "serverware/db.py").read_text()
-        framed_body = database.split("AS $serverware_framed_digest$", 1)[1].split("$serverware_framed_digest$", 1)[0]
+        tree_path = ROOT / "serverware/authority_store/primary_tree_sql.py"
+        self.assertLess(tree_path.stat().st_size, 128 * 1024)
+        tree_source = tree_path.read_text(encoding="utf-8")
+        self.assertIn("conn.execute(_primary_tree_sql.framed_digest_function_sql(guard_namespace))", database)
+        self.assertIn("_primary_tree_sql.authenticated_tree_functions_sql(", database)
+        framed_body = tree_source.split("AS $serverware_framed_digest$", 1)[1].split("$serverware_framed_digest$", 1)[0]
         self.assertIn("digest_material := pg_catalog.int8send(", framed_body)
         self.assertIn("pg_catalog.octet_length(encoded_domain)::bigint", framed_body)
         self.assertIn(") || encoded_domain;", framed_body)
-        apply_body = database.split("AS $serverware_authenticated_apply$", 1)[1].split("$serverware_authenticated_apply$", 1)[0]
+        apply_body = tree_source.split("AS $serverware_authenticated_apply$", 1)[1].split("$serverware_authenticated_apply$", 1)[0]
         self.assertIn("'serverware.policyAuthorityAuthenticatedKey/v1'", apply_body)
         self.assertNotIn("policyAuthorityBusinessKey/v1", apply_body)
         planner = (ROOT / "serverware/authority_planner.py").read_text()

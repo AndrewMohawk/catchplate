@@ -186,6 +186,12 @@ signed aggregate count still relies on the checkpoint producer's independent
 evidence. Neither valid signatures nor distinct keys prove those physical or
 stateful claims. The source and real-signature fixtures remain unexecuted.
 
+The [shared primary-tree SQL and native transaction fixture](authority-primary-tree-sql.md)
+now cover the actual production trigger definitions and an exact prepared-row
+INSERT against independent after-root arithmetic. These authored, unexecuted
+controls use privileged component setup, not initializer permission. They prove
+no one-use receipt, physical fence, commit/crash or production installation.
+
 ## Existing migration contracts are not initialization authority
 
 Keep these two mechanisms distinct:

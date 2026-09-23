@@ -91,8 +91,11 @@ Pure fixtures use actual source operation contracts without patching the missing
 kernel registry. Textual/AST wiring tests do not establish runtime integration.
 The PostgreSQL fixture uses opaque post-admission stand-ins and directly invokes
 the production guard fragments; it is not the complete signed execution path.
-It extracts the actual canonical/domain SQL support definitions, including the
-Snapshot/v3 exactly-nine-frame exception; other domains retain their 1–8 bound.
+It uses the shared tree canonical SQL and extracts the actual wire-domain SQL
+support definition, including the Snapshot/v3 exactly-nine-frame exception;
+other domains retain their 1–8 bound. Separate [primary-tree SQL controls](authority-primary-tree-sql.md)
+exercise the actual production row triggers and full independent tree oracle in
+authored native tests, not hand-assigned after roots. They remain unexecuted.
 
 The pure component scripts are listed in the isolated test inventory. The new
 PostgreSQL component is listed in the excluded inventory alongside the existing

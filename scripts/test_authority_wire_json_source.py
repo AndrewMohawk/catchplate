@@ -52,6 +52,9 @@ MIXED_TREE_DOMAINS = (
 # from CREATE OR REPLACE FUNCTION through its closing dollar-quote delimiter.
 # Recorded read-only from committed 984ca5c, db.py:7296-7355,8671-8722,8727-9006.
 # No runtime Git lookup or automatic fingerprint refresh is permitted here.
+# Extraction to primary_tree_sql.py preserves the exact templates. The one
+# approved apply timestamp grammar repair is mapped back explicitly below;
+# persisted tree serialization/hashing and every other byte stay pinned.
 UNCHANGED_SQL_SHA256 = {
     TREE: "416f18a283f701b94e9be7046fb10d4b708d795a38a523bde253e67293682708",
     PREFIX + "authenticated_empty": "9ae84436a40e8d5e34ae4cda1042b110b830464b1265c4423169b5fa438c97ef",
@@ -66,21 +69,24 @@ def database_source() -> str:
     return path.read_text(encoding="utf-8")
 
 
+def shared_tree_source() -> str:
+    path = ROOT / "serverware/authority_store/primary_tree_sql.py"
+    if path.stat().st_size > 128 * 1024:
+        raise AssertionError("shared tree source exceeded its bounded fixture")
+    return path.read_text(encoding="utf-8")
+
+
 def serializer_sql_literals(source: str) -> dict[str, str]:
-    """Locate exact conn.execute literal spans; never evaluate their values."""
+    """Locate SQL template spans in db and shared renderers, without evaluation."""
     result = {}
     for node in ast.walk(ast.parse(source)):
-        if (not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute)
-                or node.func.attr != "execute" or not node.args
-                or not isinstance(node.args[0], (ast.JoinedStr, ast.Constant))):
+        if not isinstance(node, ast.JoinedStr):
             continue
-        expression = node.args[0]
-        constants = expression.values if isinstance(expression, ast.JoinedStr) else (expression,)
-        static_text = "".join(value.value for value in constants
+        static_text = "".join(value.value for value in node.values
                               if isinstance(value, ast.Constant) and type(value.value) is str)
         if not CALL.search(static_text):
             continue
-        literal = ast.get_source_segment(source, node.args[0])
+        literal = ast.get_source_segment(source, node)
         if literal is None:
             raise AssertionError("serializer literal source span is unavailable")
         header = re.search(
@@ -106,13 +112,19 @@ def serializer_sql_literals(source: str) -> dict[str, str]:
     return result
 
 
-def assert_partition(source: str) -> dict[str, str]:
+def assert_partition(source: str, shared_source: str | None = None) -> dict[str, str]:
+    shared_source = shared_tree_source() if shared_source is None else shared_source
     literals = serializer_sql_literals(source)
+    shared_literals = serializer_sql_literals(shared_source)
+    if set(literals) & set(shared_literals):
+        raise AssertionError("serializer SQL function identity is duplicated across sources")
+    literals.update(shared_literals)
     expected_functions = set(WIRE_COUNTS) | set(TREE_ARGUMENTS) | {TREE}
     if set(literals) != expected_functions:
         raise AssertionError("serializer SQL function inventory changed")
     actual_calls = Counter(name for sql in literals.values() for name in CALL.findall(sql))
-    if actual_calls != Counter({TREE: 14, WIRE: 71}) or actual_calls != Counter(CALL.findall(source)):
+    if (actual_calls != Counter({TREE: 14, WIRE: 71})
+            or actual_calls != Counter(CALL.findall(source + shared_source))):
         raise AssertionError("serializer call inventory changed or has an unclassified call")
     for name, sql in literals.items():
         if len(re.findall(r"\b" + WIRE + r"\s*\(", sql)) != WIRE_COUNTS.get(name, 0):
@@ -159,7 +171,25 @@ class AuthorityWireJsonSourceTests(unittest.TestCase):
         literals = assert_partition(database_source())
         for name, expected in UNCHANGED_SQL_SHA256.items():
             with self.subTest(name=name):
-                self.assertEqual(hashlib.sha256(literals[name].encode("utf-8")).hexdigest(), expected)
+                literal = literals[name]
+                if name == PREFIX + "authenticated_apply":
+                    # Qualified functions take comma-separated arguments, not
+                    # EXTRACT's special FROM syntax. This explicit one-token
+                    # compatibility mapping does not repin any tree hash code.
+                    repaired = "'epoch', pg_catalog.clock_timestamp()"
+                    self.assertEqual(literal.count(repaired), 1)
+                    literal = literal.replace(repaired, "epoch FROM pg_catalog.clock_timestamp()")
+                self.assertEqual(hashlib.sha256(literal.encode("utf-8")).hexdigest(), expected)
+
+    def test_shared_renderer_changes_remain_inside_the_same_partition(self) -> None:
+        source, shared = database_source(), shared_tree_source()
+        assert_partition(source, shared)
+        changed = replace_call(shared, TREE, "authenticated_row", WIRE)
+        with self.assertRaisesRegex(AssertionError, "call inventory changed"):
+            assert_partition(source, changed)
+        duplicate = serializer_sql_literals(shared)[PREFIX + "authenticated_empty"]
+        with self.assertRaisesRegex(AssertionError, "duplicated across sources"):
+            assert_partition(source + '\nDUPLICATE_SQL = f"""\n' + duplicate + '"""\n', shared)
 
     def test_missing_or_extra_wire_migration_is_detected(self) -> None:
         source = database_source()

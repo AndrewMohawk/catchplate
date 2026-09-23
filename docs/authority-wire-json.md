@@ -90,7 +90,7 @@ receipt-table repair exception is not permission to replace these functions.
 
 Authored coverage, all unexecuted:
 
-- `test_authority_wire_json_source.py`: six source-partition controls, including
+- `test_authority_wire_json_source.py`: seven source-partition controls, including
   byte fingerprints of the unchanged tree functions at `984ca5c`, all 11 tree
   arguments/domains, and missing/extra/count-preserving migration controls.
 - `test_authority_wire_json_postgres.py`: 14 real-engine component methods for
@@ -105,6 +105,11 @@ prepared private Unix-socket database and random disposable schemas; they do not
 prove the full signed planner/executor/witness flow or production ACL behavior.
 The root-transition fixture still uses explicit synthetic post-admission roots
 and an opaque proof, not a complete real operation.
+The [shared primary-tree SQL](authority-primary-tree-sql.md) now has a separate
+native fixture for actual row triggers and independently rebuilt roots. Its
+source extraction preserves tree/hash templates with an explicitly reviewed
+epoch-call grammar correction; the original source fingerprints are not
+silently replaced. These new tests also remain unexecuted.
 
 The source-partition script enters the isolated inventory. The new PostgreSQL
 script joins the excluded real-engine inventory until the trusted controller

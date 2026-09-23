@@ -615,6 +615,7 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_authority_radix_mutation.py \
 	scripts/test_authority_root_transition.py \
 	scripts/test_authority_wire_json_source.py \
+	scripts/test_authority_primary_tree_source.py \
 	scripts/test_authority_audit_capacity.py \
 	scripts/test_authority_global_audit_capacity.py \
 	scripts/test_authority_global_audit_capacity_sql_source.py \
@@ -723,6 +724,7 @@ override CODER_EXCLUDED_TEST_SCRIPTS := \
 	scripts/test_postgres_trigger_manifest.py \
 	scripts/test_authority_mutation_postgres.py \
 	scripts/test_authority_root_transition_postgres.py \
+	scripts/test_authority_primary_tree_postgres.py \
 	scripts/test_authority_global_audit_capacity_postgres.py \
 	scripts/test_authority_verifier_read_postgres.py \
 	scripts/test_authority_wire_json_postgres.py \

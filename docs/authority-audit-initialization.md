@@ -237,6 +237,12 @@ external latest-head and ambiguous-retry boundary. They are not an implemented
 ledger or installer. The existing witness's local durability repair does not
 extend its role into that missing service.
 
+The [local PostgreSQL candidate store](authority-audit-initialization-store.md)
+now joins real signed snapshot verification to one local candidate/head commit
+under a pre-existing pinned enrollment. It returns only `RECORDED_UNANCHORED`,
+not an anchored decision or installation permission; independent enrollment,
+latest-head authority, materialization and the installer remain missing.
+
 The next coherent change must close all of these together before enabling an
 initializer or changing accepted schema/migration state:
 

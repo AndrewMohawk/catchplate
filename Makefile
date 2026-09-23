@@ -727,6 +727,7 @@ override CODER_EXCLUDED_TEST_SCRIPTS := \
 	scripts/test_authority_root_transition_postgres.py \
 	scripts/test_authority_primary_tree_postgres.py \
 	scripts/test_authority_audit_initialization_postgres.py \
+	scripts/test_authority_audit_initialization_store_postgres.py \
 	scripts/test_authority_global_audit_capacity_postgres.py \
 	scripts/test_authority_verifier_read_postgres.py \
 	scripts/test_authority_wire_json_postgres.py \

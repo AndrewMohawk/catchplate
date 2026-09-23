@@ -1,7 +1,10 @@
 # Independent audit initialization decision requirements
 
-Status: protocol requirements, not an implemented service or admitted wire
-contract. The [signed consumer](authority-audit-initialization-evidence.md)
+Status: protocol requirements, not an implemented authority service or admitted
+decision wire contract. The [local PostgreSQL candidate store](authority-audit-initialization-store.md)
+now supplies one-use transactional persistence under a pinned existing enrollment;
+its sole state is `RECORDED_UNANCHORED`, never an anchored decision or permission.
+The [signed consumer](authority-audit-initialization-evidence.md)
 authenticates an exact calculation but consumes no initialization entitlement.
 The [PostgreSQL reader](authority-audit-initialization-postgres.md) now connects
 that consumer to actual snapshot rows/proofs, still without installing anything.
@@ -22,8 +25,10 @@ must not restore this authority to an earlier unused state.
 Generation handover must carry consumed identity and unresolved decisions;
 missing local files or a newer request-selected generation cannot establish
 fresh genesis. The enrollment loader and independent latest-head authority are
-not implemented or provisioned. The current startup witness floor is not a
-substitute for a latest head advanced by every acknowledged decision.
+not implemented or provisioned. The store requires owner-installed exact
+enrollment bytes and has no enrollment or generation-handover API. The current
+startup witness floor is not a substitute for a latest head advanced by every
+acknowledged decision.
 
 ## Required irreversible sequence
 

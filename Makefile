@@ -752,6 +752,7 @@ override CODER_EXCLUDED_TEST_SCRIPTS := \
 	scripts/test_authority_wire_json_postgres.py \
 	scripts/test_authority_counted_hash_postgres.py \
 	scripts/test_authority_counted_projection_postgres.py \
+	scripts/test_authority_counted_store_postgres.py \
 	scripts/test_traversal_response_evidence.py \
 	scripts/test_webauthn_recovery.py
 # Exact repository-source closure newly exercised by the counted SQL fixtures.
@@ -762,6 +763,7 @@ override CODER_EXCLUDED_TEST_SCRIPTS := \
 override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/test_authority_counted_hash_postgres.py \
 	scripts/test_authority_counted_projection_postgres.py \
+	scripts/test_authority_counted_store_postgres.py \
 	scripts/test_authority_index_join.py \
 	scripts/test_authority_index_range.py \
 	scripts/test_authority_radix_mutation.py \
@@ -787,6 +789,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_store/completed_v9_schema_source.py \
 	serverware/authority_store/counted_hash_sql.py \
 	serverware/authority_store/counted_projection_sql.py \
+	serverware/authority_store/counted_store_sql.py \
 	serverware/authority_store/metadata_schema_source.py \
 	serverware/authority_store/mutation_sql.py \
 	serverware/authority_store/postgres_trigger_manifest.py \

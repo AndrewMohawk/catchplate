@@ -17,8 +17,9 @@ derives counted before/after roots from the actual primary engine's verified
 OLD/NEW snapshots. It fixes member-event revision semantics and shared component
 budgets, but is not installed SQL maintenance or executor root-vector admission.
 Source renderers now also define native PostgreSQL counted hashes and fixed row
-projections. Their real-engine fixtures are authored for later prepared
-verification; neither the SQL nor the fixtures have been executed or installed.
+projections, plus fresh dedicated storage DDL. Their real-engine fixtures are
+authored for later prepared verification; neither the SQL nor the fixtures have
+been executed or installed into the production schema.
 
 The existing `policy_authority_secondary_index_heads` declaration is metadata,
 not an implementation of the counted profile. Its relation/index names, column
@@ -51,9 +52,17 @@ checks each primary ID's BusinessKey/v1 digest and the index-key suffix. This
 authenticates lookup material only relative to the reconstructed counted root;
 primary membership and semantic projection still require the real row join.
 
-These are implemented acquisition shapes, not DDL or catalog/ACL admission.
+These are implemented acquisition shapes, not installed catalog/ACL admission.
 The SQL comparisons explicitly use `C` collation; installed storage must still
 admit the matching column/index ordering and constraints below.
+
+The [fresh PostgreSQL storage component](../serverware/authority_store/counted_store_sql.py)
+uses a dedicated
+`policy_authority_counted_index_heads` relation with `index_id`, `table_name`,
+`counted_profile`, `projection_digest`, `projection_manifest_digest`,
+`index_revision`, `root_digest` and `leaf_count`. This is a counted checkpoint
+descriptor; the separately versioned root vector must bind it to the actual
+primary checkpoint. Merely storing both roots does not authenticate either.
 
 The schema must bind the exact counted profile, projection descriptor and
 projection manifest. The eleven source profiles cover six base relations:
@@ -82,6 +91,22 @@ fixed before installation:
 The existing metadata head requires `revision > 0`, while the pure anchor admits
 revision zero only for an empty count. A new installed contract must choose its
 genesis revision explicitly; it cannot silently reinterpret either convention.
+
+The dedicated fresh-store contract chooses revision zero only for an empty
+count and the source profile's exact empty-root digest. Empty heads at later
+revisions are also valid, such as after deleting the last member. No DDL default
+or insert manufactures a head. The source-fixed profile/manifest constraints
+admit all eleven exact index/table/descriptor combinations. Leaves use
+`(index_id, index_key)` as their primary key and uniquely constrain
+`(index_id, primary_key_digest)`; the potentially 4096-byte primary ID is not a
+B-tree index key. Leaves and nodes bind their profile to a head through a
+nondeferrable foreign key. All stored text uses `C` collation.
+
+These scalar constraints do not prove that stored primary IDs hash to their
+commitments, that nodes match leaves, that record revisions do not exceed their
+head, or that the index has complete authenticated population. Those cross-row
+and cryptographic invariants remain maintenance/admission obligations. No
+standalone DDL renderer installs its tables into the production schema.
 
 Use byte ordering or an explicitly admitted `C` collation for hexadecimal keys
 and prefixes, with a matching unique range index. Constraints and catalog
@@ -242,6 +267,24 @@ and their revision effects; an unchanged-primary-key partition move remains one
 event. The pure evaluator still rejects a key-changing UPDATE. This is the
 required normalization for a future hook, not an installed trigger change.
 
+A normalized SQL event must lock the complete fixed source-head set in index-ID
+byte order before processing any profile, including when both images are
+nonmembers. Missing heads deny; they never trigger genesis. Before persistent
+counted writes, verify exact OLD leaves, NEW-path absence, immediate untouched
+sibling commitments and the reconstructed BEFORE root/count. Also compare
+stored nodes on opened paths with their reconstructed BEFORE values: silently
+overwriting a corrupt redundant node is not an admitted repair. With no target
+paths, still fold the root from its sixteen depth-one children. Opaque off-path
+subtrees remain relative commitments, not an audit of their interiors.
+
+Per-event bounds do not constrain a multirow transaction. Existing bulk writers
+need explicit operation-wide accounting; caller-controlled counters or session
+settings cannot authorize a reset. SQL projection also performs hashes that the
+pure combined evaluator reuses from primary verification, so native accounting
+must charge its own actual work or a conservative source-fixed upper bound.
+The existing executor/root and direct-writer/row lock order is not yet proven
+deadlock-free; a source-level ordering rule is not concurrency test evidence.
+
 Maintenance must cover every supported writer, not just the four missing
 WebAuthn kernels. Existing source contains challenge expiry/pruning, recovery,
 bulk revocation and browser-session lifecycle writers. Some are already behind
@@ -320,6 +363,22 @@ The audit-capacity initializer's signed purposes do not authorize index
 installation. Source code and same-database locks cannot manufacture independent
 enrollment, current-root authority, trusted expiry time or witness durability.
 
+Activation must also update the actual schema-composition contract. The current
+shared schema program is unqualified and serves canonical, scratch and SQLite
+paths; a PostgreSQL-only, namespace-qualified fresh renderer cannot simply be
+appended with a hardcoded production namespace. Canonical installation and
+expected-schema replay need the same admitted PostgreSQL stage, source digest,
+function definitions and catalog closure. Fresh-only `CREATE TABLE` must not be
+replayed over an existing schema, and `IF NOT EXISTS` is not shape validation.
+
+New stores must enter the exact runtime-readonly and owner-dependency
+inventories before the blanket runtime DML grant is narrowed. Planner reads
+need separate explicit grants. They must stay out of primary-tracked table and
+trigger inventories. Versioned migration inventories, current-schema drift
+checks and later initialization backfills also need coordinated changes; a
+receipt-only repair cannot authorize new storage or skip uninitialized index
+maintenance. None of these activation changes is supplied by the fresh DDL.
+
 ## Source seams and verification obligations
 
 Current implementation anchors:
@@ -340,6 +399,9 @@ Current implementation anchors:
   [`counted_projection_sql.py`](../serverware/authority_store/counted_projection_sql.py):
   source-fixed native counted hashing and actual row projection definitions;
   no storage, trigger attachment, grants or installed-profile admission.
+- [`counted_store_sql.py`](../serverware/authority_store/counted_store_sql.py):
+  fresh-only dedicated heads/leaves/nodes DDL with fixed source profiles and
+  local constraints; no seed, maintenance, runtime grants or installer changes.
 - [`v9_schema_source.py`](../serverware/authority_store/v9_schema_source.py) and
   [`metadata_schema_source.py`](../serverware/authority_store/metadata_schema_source.py):
   existing secondary-head metadata and primary physical stores.

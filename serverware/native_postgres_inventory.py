@@ -11,7 +11,7 @@ import re
 
 
 INVENTORY_SCHEMA = "serverware.nativePostgresInventory/v1"
-TOTAL_TESTS = 210
+TOTAL_TESTS = 220
 
 
 @dataclass(frozen=True, slots=True)
@@ -317,12 +317,29 @@ SUITES: tuple[NativePostgresSuite, ...] = (
         disposable_cluster=False,
         timeout_seconds=300,
     ),
+    NativePostgresSuite(
+        script="scripts/test_authority_counted_store_postgres.py",
+        test_ids=(
+            "AuthorityCountedStorePostgresTests.test_actual_catalog_has_exact_columns_collations_and_bounded_unique_keys",
+            "AuthorityCountedStorePostgresTests.test_all_eleven_heads_accept_independent_empty_roots_at_genesis_and_later_revisions",
+            "AuthorityCountedStorePostgresTests.test_foreign_keys_require_exact_heads_and_never_cascade_or_defer",
+            "AuthorityCountedStorePostgresTests.test_fresh_ddl_has_no_seed_defaults_functions_or_application_triggers",
+            "AuthorityCountedStorePostgresTests.test_head_source_identity_empty_equivalence_and_signed_bounds_are_closed",
+            "AuthorityCountedStorePostgresTests.test_leaf_commitment_syntax_suffix_and_positive_revision_are_enforced",
+            "AuthorityCountedStorePostgresTests.test_leaf_unique_path_and_business_commitment_keys_do_not_index_raw_ids",
+            "AuthorityCountedStorePostgresTests.test_node_depth_prefix_count_capacity_and_digest_bounds_are_exact",
+            "AuthorityCountedStorePostgresTests.test_node_key_uniqueness_revisions_and_nulls_preserve_transaction_state",
+            "AuthorityCountedStorePostgresTests.test_raw_primary_id_accepts_exact_utf8_byte_limit_without_btree_width_failure",
+        ),
+        disposable_cluster=False,
+        timeout_seconds=300,
+    ),
 )
 
 
 # The order is the closed batch order, not lexical filename order. The booleans
 # encode an extra fixture CLI acknowledgement; False never permits a real or
-# shared database. All twelve suites require a prepared disposable local cluster.
+# shared database. All thirteen suites require a prepared disposable local cluster.
 _SUITE_SHAPES = (
     ("scripts/test_webauthn_trust_projection_postgres.py", 8, False, 300),
     ("scripts/test_postgres_trigger_manifest.py", 5, False, 300),
@@ -336,6 +353,7 @@ _SUITE_SHAPES = (
     ("scripts/test_authority_wire_json_postgres.py", 14, False, 300),
     ("scripts/test_authority_counted_hash_postgres.py", 10, False, 300),
     ("scripts/test_authority_counted_projection_postgres.py", 16, False, 300),
+    ("scripts/test_authority_counted_store_postgres.py", 10, False, 300),
 )
 _TEST_ID = re.compile(r"[A-Za-z][A-Za-z0-9_]*\.test_[a-z][a-z0-9_]*", re.ASCII)
 
@@ -347,8 +365,8 @@ def validate_inventory() -> None:
     source digest binding and complete observed results are separate checks.
     """
     if (type(INVENTORY_SCHEMA) is not str or INVENTORY_SCHEMA != "serverware.nativePostgresInventory/v1"
-            or type(SUITES) is not tuple or len(SUITES) != 12
-            or type(TOTAL_TESTS) is not int or TOTAL_TESTS != 210):
+            or type(SUITES) is not tuple or len(SUITES) != 13
+            or type(TOTAL_TESTS) is not int or TOTAL_TESTS != 220):
         raise ValueError("native PostgreSQL inventory envelope differs from source")
     seen_scripts: set[str] = set()
     seen_tests: set[str] = set()

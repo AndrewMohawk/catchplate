@@ -253,9 +253,11 @@ These are separate from provisioning the production services:
   omitted. The candidate remains unregistered for this reason.
   The separate [counted-index interval reconstructor](authority-index-range.md)
   now implements the bounded hash/count frontier calculation as unexecuted
-  source. It is not wired into that reader or receipt path and does not supply
-  row-to-index projection, primary-row joins, maintained storage or independent
-  root authority. No existing exact-page metadata is newly trusted by it.
+  source. The [fixed-projection primary join](authority-index-primary-join.md)
+  adds eleven selector codecs and actual row-proof correspondence relative to
+  a supplied root pair. Neither component is wired into that reader or receipt
+  path; maintained storage and independent root-pair authority remain missing.
+  No existing exact-page metadata is newly trusted by this work.
 - The planner reads root revisions and digests from PostgreSQL; the executor
   locks and compares those database roots. This establishes a same-database
   compare-and-swap boundary, not an independently retained current-root

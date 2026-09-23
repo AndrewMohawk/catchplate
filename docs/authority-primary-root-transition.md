@@ -87,6 +87,15 @@ proofs and these evaluation metrics. Its separate trace profile does not change
 persisted roots or discount hash/vector work. The planner keeps the exact global
 counter's singleton proof block; whole-operation runtime capacity remains unproven.
 
+The shared engine also exposes `evaluate_primary_radix_memberships`, which
+performs genuine read-only proof verification and retains the exact detached
+row/proof dictionaries it verified. Both public entry points freshly revalidate
+limits, table contracts and root descriptors, including constructor-bypassed
+objects. The [fixed index join](authority-index-primary-join.md) uses this owned
+snapshot without rereading caller rows or accepting a caller-created successful
+result. Existing mutation wire formats and charged metrics are unchanged;
+the nested membership dictionaries are owned but not immutable authority tokens.
+
 Authored fixtures cover independent whole-tree rebuilds, shared-prefix batches,
 source-key closure, counter/count semantics, strict lifecycle and wire negatives,
 and shared PostgreSQL guards with transaction rollback and historical replay.

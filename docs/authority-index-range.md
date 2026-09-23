@@ -12,7 +12,7 @@ built or executed. No WebAuthn kernel is registered by this work, and the
 The component checks a complete interval relative to a supplied counted index
 root. It does not authenticate that root, its currentness, its relationship to
 the primary table, or the population that an index producer was supposed to
-include. In particular, this slice provides none of:
+include. In particular, the raw range component alone provides none of:
 
 - an admitted row-to-index projection or key encoding;
 - SQL index storage, an index producer, or all-writer maintenance;
@@ -23,14 +23,20 @@ include. In particular, this slice provides none of:
 It must not be substituted for those missing contracts merely because a
 caller can construct a valid model or obtain a successful reconstruction.
 
+The separate [fixed projections and primary-proof join](authority-index-primary-join.md)
+now provides eleven source-owned selector codecs and joins returned leaves to
+the actual primary evaluator's verified row snapshots. That unactivated
+consumer establishes correspondence relative to a supplied root pair, not
+complete initial population, maintained storage or independently current roots.
+
 ## Fixed tree and complete frontier
 
-Paths contain exactly 160 lowercase hexadecimal nibbles at leaf depth. A
-prospective layout is a 32-byte equality-partition commitment, a 16-byte order
-component and a 32-byte primary-key commitment. That layout is explanatory,
-not an admitted codec: this component does not prove which row fields produced
-any path, how timestamps or strings are ordered, or whether two different
-business identities can receive the same derived key.
+Paths contain exactly 160 lowercase hexadecimal nibbles at leaf depth. The
+separate fixed codec uses a 32-byte equality-partition commitment, a 16-byte
+order component and a 32-byte primary-key commitment. This raw component does
+not interpret that layout or prove which row fields produced a path. The joined
+consumer rederives the fixed encoding; SQL codec/migration admission remains
+outstanding.
 
 The fixed profile is `serverware.policyAuthorityCountedIndex/v1`. Every hash
 length-prefixes every frame, including its domain, with an unsigned eight-byte
@@ -144,8 +150,9 @@ controller/dependency prerequisites or sequential verification workflow.
 
 The concrete WebAuthn selector requirements come from the current legacy
 queries and the unregistered revocation candidate; see
-[WebAuthn authority integration](webauthn-authority-integration.md). Proposed
-fixed selectors include:
+[WebAuthn authority integration](webauthn-authority-integration.md). The
+[eleven source-fixed projections](authority-index-primary-join.md) cover these
+populations, but do not yet supply their installed SQL query programs:
 
 | Population | Required selection |
 | --- | --- |
@@ -161,12 +168,11 @@ completion publication/high-water checks can retain primary-key proofs. A
 raw-challenge secondary lookup is needed only if that legacy lookup is itself
 part of the admitted query program.
 
-The projection contract must distinguish null from an empty string and pin
-Unicode, equality, ordering and primary-key tiebreaker semantics. Current
-expiry columns are SQL text, while the candidate also parses UTC timestamps;
-converting them to ordered numeric time requires an explicit representation
-and legacy-data admission decision. Passage of time changes the interval
-cutoff, not persisted membership.
+The fixed projection contract distinguishes null from an empty string and pins
+exact UTF-8 equality, signed numerical ordering and a BusinessKey/v1 tiebreaker.
+Current expiry columns are SQL text; the new canonical UTC/microsecond codec
+and text limits still require explicit SQL representation and legacy-data
+admission. Passage of time changes the interval cutoff, not persisted membership.
 
 Trust withdrawal must use the actual classifier, including first matching
 root order, its development exception, missing roots, Python lowercase AAGUID

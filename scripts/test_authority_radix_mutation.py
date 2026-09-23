@@ -14,18 +14,22 @@ import sys
 import unittest
 from decimal import Decimal
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from serverware import authority_radix_mutation as radix_mutation
 from serverware.authority_radix_mutation import (
     PrimaryRadixBatchResult,
     PrimaryRadixLimits,
+    PrimaryRadixMembershipResult,
     PrimaryRadixMutationError,
     PrimaryRoot,
     PrimaryTableContract,
     evaluate_primary_radix_batch,
+    evaluate_primary_radix_memberships,
 )
 from test_authority_radix_proof import sql_digest, sql_json, wire_digest, wire_json
 
@@ -407,6 +411,136 @@ class AuthorityRadixMutationTests(unittest.TestCase):
                 PrimaryTableContract("items", invalid, True, "business")
         with self.assertRaises(PrimaryRadixMutationError):
             PrimaryTableContract("items", ("id",), True, "authorization")
+
+
+    def test_memberships_retain_verified_owned_graphs_without_extra_copy_or_hash_metrics(self) -> None:
+        tree = IndependentTree([{"id": "é雪", "value": {"nested": [1, None, "☃"]}}])
+        selected = (tree.selected({"id": "é雪"}), tree.selected({"id": "absent"}))
+        arguments = batch(tree, selected, ())
+        # Matching uses exact addresses, not the caller's independent tuple order.
+        arguments["before_proofs"] = tuple(reversed(arguments["before_proofs"]))
+        pristine = copy.deepcopy(arguments)
+        expected = evaluate_primary_radix_batch(**arguments)
+        membership_arguments = {name: value for name, value in arguments.items() if name != "mutations"}
+        observed = evaluate_primary_radix_memberships(**membership_arguments)
+        self.assertIs(type(observed), PrimaryRadixMembershipResult)
+        self.assertEqual(observed.result, expected)
+        self.assertEqual(observed.result.metrics.hash_work, 66 + 70 + 68)
+        self.assertEqual(observed.selected_rows, selected)
+        self.assertEqual(observed.before_proofs, arguments["before_proofs"])
+        self.assertEqual(arguments, pristine)
+        self.assertIsNot(observed.selected_rows[0], selected[0])
+        self.assertIsNot(observed.selected_rows[0]["key"], selected[0]["key"])
+        self.assertIsNot(observed.selected_rows[0]["row"]["value"]["nested"],
+                         selected[0]["row"]["value"]["nested"])
+        self.assertIsNot(observed.before_proofs[0]["siblings"][0]["childDigests"],
+                         arguments["before_proofs"][0]["siblings"][0]["childDigests"])
+        by_address = {(proof["table"], proof["keyDigest"]): proof for proof in observed.before_proofs}
+        present = observed.selected_rows[0]
+        self.assertEqual(by_address[(present["table"], present["keyDigest"])]["rowDigest"],
+                         sql_digest("serverware.policyAuthorityAuthenticatedRow/v1", b"items", sql_json(present["row"])))
+        self.assertEqual(present["keyDigest"], wire_digest(
+            "serverware.policyAuthorityBusinessKey/v1", b"items", wire_json(present["key"])))
+        selected[0]["row"]["value"]["nested"].append("caller change")
+        arguments["before_proofs"][0]["siblings"][0]["childDigests"][0] = "sha256:" + "0" * 64
+        self.assertEqual(observed.selected_rows, pristine["selected_rows"])
+        self.assertEqual(observed.before_proofs, pristine["before_proofs"])
+        with self.assertRaises(dataclasses.FrozenInstanceError):
+            observed.selected_rows = ()
+        # Inner dictionaries are owned, not frozen or reusable verification tokens.
+        observed.selected_rows[0]["row"]["value"]["nested"].append("owned change")
+        again = evaluate_primary_radix_memberships(**{
+            name: value for name, value in pristine.items() if name != "mutations"
+        })
+        self.assertEqual(again.selected_rows, pristine["selected_rows"])
+
+    def test_memberships_reverify_proofs_and_never_accept_a_caller_created_result(self) -> None:
+        arguments = {name: value for name, value in self.arguments.items() if name != "mutations"}
+        observation = evaluate_primary_radix_memberships(**arguments)
+        for changed in (observation, PrimaryRadixMembershipResult(
+                observation.result, observation.selected_rows, observation.before_proofs)):
+            with self.assertRaises(PrimaryRadixMutationError):
+                evaluate_primary_radix_memberships(**{**arguments, "selected_rows": changed})
+        bad_selected = copy.deepcopy(self.selected)
+        bad_selected["row"]["value"] = 999
+        with self.assertRaisesRegex(PrimaryRadixMutationError, "before proof reconstruction"):
+            evaluate_primary_radix_memberships(**{**arguments, "selected_rows": (bad_selected,)})
+        bad_proof = copy.deepcopy(arguments["before_proofs"][0])
+        bad_proof["rowDigest"] = "sha256:" + "a" * 64
+        refresh_proof_digest(bad_proof)
+        with self.assertRaisesRegex(PrimaryRadixMutationError, "before proof reconstruction"):
+            evaluate_primary_radix_memberships(**{**arguments, "before_proofs": (bad_proof,)})
+        with self.assertRaises(TypeError):
+            evaluate_primary_radix_memberships(**arguments, mutations=())
+        empty = evaluate_primary_radix_memberships(**{**arguments, "selected_rows": (), "before_proofs": ()})
+        self.assertEqual((empty.selected_rows, empty.before_proofs), ((), ()))
+        self.assertEqual(empty.result.business_after_roots, (self.tree.root,))
+        self.assertEqual(empty.result.metrics.hash_work, 66)
+
+    def test_both_evaluator_paths_revalidate_bypassed_and_incomplete_contexts(self) -> None:
+        def changed(instance, **updates):
+            owned = object.__new__(type(instance))
+            for field in dataclasses.fields(instance):
+                object.__setattr__(owned, field.name, updates.get(field.name, getattr(instance, field.name)))
+            return owned
+
+        contract = self.tree.contract()
+        root = self.tree.root
+        cases = (
+            {"limits": changed(LIMITS, max_hashes=True)},
+            {"limits": changed(LIMITS, max_input_bytes=2**63)},
+            {"limits": object.__new__(PrimaryRadixLimits)},
+            {"limits": {}},
+            {"table_contracts": (changed(contract, write_access=1),)},
+            {"table_contracts": (changed(contract, key_columns=["id"]),)},
+            {"table_contracts": (changed(contract, table="Upper"),)},
+            {"table_contracts": (object.__new__(PrimaryTableContract),)},
+            {"table_contracts": ({},)},
+            {"business_before_roots": (changed(root, root_revision=True),)},
+            {"business_before_roots": (changed(root, leaf_count=True),)},
+            {"business_before_roots": (changed(root, root_revision=-1),)},
+            {"business_before_roots": (changed(root, root_digest="not-a-digest"),)},
+            {"business_before_roots": (object.__new__(PrimaryRoot),)},
+            {"business_before_roots": ({},)},
+        )
+        for selected, proofs in (((), ()), ((self.selected,), self.arguments["before_proofs"])):
+            base = {**self.arguments, "selected_rows": selected, "before_proofs": proofs, "mutations": ()}
+            for case_number, changes in enumerate(cases):
+                with self.subTest(case=case_number, populated=bool(selected)):
+                    with self.assertRaises(PrimaryRadixMutationError):
+                        evaluate_primary_radix_batch(**{**base, **changes})
+                    with self.assertRaises(PrimaryRadixMutationError):
+                        evaluate_primary_radix_memberships(**{
+                            name: value for name, value in {**base, **changes}.items() if name != "mutations"
+                        })
+
+    def test_engine_uses_fresh_context_snapshots_after_copy_entry(self) -> None:
+        original_snapshot = radix_mutation._Budget.snapshot
+        for memberships in (False, True):
+            arguments = copy.deepcopy({**self.arguments, "mutations": ()})
+            expected = evaluate_primary_radix_batch(**arguments)
+            observed = []
+
+            def snapshot(budget, value, depth=0, ancestors=frozenset()):
+                if depth == 0:
+                    observed.append(True)
+                    object.__setattr__(arguments["limits"], "max_hashes", 1)
+                    object.__setattr__(arguments["table_contracts"][0], "table", "changed")
+                    object.__setattr__(arguments["business_before_roots"][0], "root_digest", "sha256:" + "a" * 64)
+                # This is a controlled caller-input mutation, not a successful
+                # verifier substitute: every real snapshot call still runs.
+                return original_snapshot(budget, value, depth, ancestors)
+
+            with mock.patch.object(radix_mutation._Budget, "snapshot", snapshot):
+                if memberships:
+                    result = evaluate_primary_radix_memberships(**{
+                        name: value for name, value in arguments.items() if name != "mutations"
+                    }).result
+                else:
+                    result = evaluate_primary_radix_batch(**arguments)
+            self.assertEqual(observed, [True])
+            self.assertEqual(result, expected)
+            self.assertEqual(arguments["limits"].max_hashes, 1)
 
 
 if __name__ == "__main__":

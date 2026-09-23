@@ -177,6 +177,58 @@ class PrimaryRadixBatchResult:
                 "metrics": self.metrics.json_projection()}
 
 
+@dataclass(frozen=True, slots=True)
+class PrimaryRadixMembershipResult:
+    """Owned read-only evaluation output, never an authority token.
+
+    The tuple fields retain the exact detached dictionaries verified by the
+    engine. Their nested values remain mutable; callers must not expose or
+    mutate them while deriving projections. No evaluator accepts this object
+    instead of the original proof inputs. Proof and selected-row tuple order
+    may differ: their exact business addresses, not positions, identify joins.
+    """
+
+    result: PrimaryRadixBatchResult
+    selected_rows: tuple[dict[str, Any], ...]
+    before_proofs: tuple[dict[str, Any], ...]
+
+    def __post_init__(self) -> None:
+        if (type(self.result) is not PrimaryRadixBatchResult
+                or type(self.selected_rows) is not tuple or type(self.before_proofs) is not tuple
+                or len(self.selected_rows) != len(self.before_proofs)
+                or len(self.selected_rows) > authority_contract.MAX_PLAN_QUERY_ROWS
+                or any(type(row) is not dict for row in self.selected_rows + self.before_proofs)):
+            raise PrimaryRadixMutationError("primary membership result shape is invalid")
+
+
+def _context_fields(value: Any, expected: type, names: tuple[str, ...]) -> tuple[Any, ...]:
+    if type(value) is not expected:
+        raise PrimaryRadixMutationError("primary radix context has an unexpected exact type")
+    try:
+        return tuple(getattr(value, name) for name in names)
+    except AttributeError as exc:
+        raise PrimaryRadixMutationError("primary radix context is incomplete") from exc
+
+
+def _limits_snapshot(value: PrimaryRadixLimits) -> PrimaryRadixLimits:
+    return PrimaryRadixLimits(*_context_fields(value, PrimaryRadixLimits, (
+        "max_selected_rows", "max_mutations", "max_proof_vectors", "max_proof_child_slots",
+        "max_hashes", "max_input_bytes", "max_json_depth", "max_json_nodes",
+    )))
+
+
+def _contract_snapshot(value: PrimaryTableContract) -> PrimaryTableContract:
+    return PrimaryTableContract(*_context_fields(value, PrimaryTableContract, (
+        "table", "key_columns", "write_access", "root_class",
+    )))
+
+
+def _root_snapshot(value: PrimaryRoot) -> PrimaryRoot:
+    return PrimaryRoot(*_context_fields(value, PrimaryRoot, (
+        "table", "root_revision", "root_digest", "leaf_count",
+    )))
+
+
 class _Budget:
     def __init__(self, limits: PrimaryRadixLimits) -> None:
         self.limits = limits
@@ -190,6 +242,10 @@ class _Budget:
             raise PrimaryRadixMutationError("primary radix hash budget exceeded")
 
     def snapshot(self, value: Any, depth: int = 0, ancestors: frozenset[int] = frozenset()) -> Any:
+        # This historical metric bounds scalar SQL UTF-8 encodings during the
+        # copy. Final canonical wire bytes, including punctuation and ASCII
+        # escaping, are checked separately after serialization. It is not an
+        # exact preallocation wire-byte limit or an external parser guarantee.
         self.nodes += 1
         if self.nodes > self.limits.max_json_nodes or depth > self.limits.max_json_depth:
             raise PrimaryRadixMutationError("primary radix JSON structure budget exceeded")
@@ -240,7 +296,7 @@ def _row_has_key(row: Any, key_bytes: bytes, contract: PrimaryTableContract) -> 
         raise PrimaryRadixMutationError("primary radix original key changed")
 
 
-def evaluate_primary_radix_batch(
+def _evaluate_primary_radix_batch(
     *,
     table_contracts: tuple[PrimaryTableContract, ...],
     business_before_roots: tuple[PrimaryRoot, ...],
@@ -249,15 +305,14 @@ def evaluate_primary_radix_batch(
     before_proofs: tuple[dict[str, Any], ...],
     mutations: tuple[dict[str, Any], ...],
     limits: PrimaryRadixLimits,
-) -> PrimaryRadixBatchResult:
+) -> tuple[PrimaryRadixBatchResult, tuple[dict[str, Any], ...], tuple[dict[str, Any], ...]]:
     """Calculate an exact final primary-root vector, or reject the entire batch.
 
     Mutation input order need not be the SQL sort order: distinct original keys
     commute for final roots/counts. No intermediate SQL root-revision history is
     returned or claimed. Duplicate same-key actions are always rejected.
     """
-    if type(limits) is not PrimaryRadixLimits:
-        raise PrimaryRadixMutationError("primary radix limits must be an exact frozen profile")
+    limits = _limits_snapshot(limits)
     sequences = (table_contracts, business_before_roots, authorization_before_roots,
                  selected_rows, before_proofs, mutations)
     if any(type(value) is not tuple for value in sequences):
@@ -267,8 +322,17 @@ def evaluate_primary_radix_batch(
             or len(selected_rows) > limits.max_selected_rows
             or len(before_proofs) != len(selected_rows) or len(mutations) > limits.max_mutations):
         raise PrimaryRadixMutationError("primary radix inventory count is not closed or exceeds budget")
-    if any(type(item) is not PrimaryTableContract for item in table_contracts):
-        raise PrimaryRadixMutationError("primary radix table contract type is invalid")
+    table_contracts = tuple(_contract_snapshot(item) for item in table_contracts)
+    vectors = len(before_proofs) * _DEPTH
+    child_slots = vectors * _RADIX
+    if vectors > limits.max_proof_vectors or child_slots > limits.max_proof_child_slots:
+        raise PrimaryRadixMutationError("primary radix proof vector budget exceeded")
+    budget = _Budget(limits)
+    # Revalidated root constructors consult the same cached empty ladder used
+    # below. Charge its cold allowance before any such constructor can hash.
+    budget.charge_hashes(_EMPTY_HASH_WORK)
+    business_before_roots = tuple(_root_snapshot(root) for root in business_before_roots)
+    authorization_before_roots = tuple(_root_snapshot(root) for root in authorization_before_roots)
     contracts = {item.table: item for item in table_contracts}
     if len(contracts) != len(table_contracts):
         raise PrimaryRadixMutationError("primary radix table contract is duplicated")
@@ -281,12 +345,6 @@ def evaluate_primary_radix_batch(
             heads[root.table] = root
     if set(heads) != set(contracts):
         raise PrimaryRadixMutationError("primary radix root inventory is not complete")
-    vectors = len(before_proofs) * _DEPTH
-    child_slots = vectors * _RADIX
-    if vectors > limits.max_proof_vectors or child_slots > limits.max_proof_child_slots:
-        raise PrimaryRadixMutationError("primary radix proof vector budget exceeded")
-    budget = _Budget(limits)
-    budget.charge_hashes(_EMPTY_HASH_WORK)
     try:
         snapshot = budget.snapshot({
             "contracts": [item.json_projection() for item in table_contracts],
@@ -447,9 +505,57 @@ def evaluate_primary_radix_batch(
                            overlay.get((table, 0, ""), root.root_digest), root.leaf_count + count_deltas[table])
         for table, root in heads.items()
     }
-    return PrimaryRadixBatchResult(
+    result = PrimaryRadixBatchResult(
         business_after_roots=tuple(after[table] for table in sorted(after) if contracts[table].root_class == "business"),
         authorization_after_roots=tuple(after[table] for table in sorted(after) if contracts[table].root_class == "authorization"),
         metrics=PrimaryRadixMetrics(len(selected_rows), len(mutations), vectors, child_slots,
                                    len(ancestors), budget.hash_work, input_bytes, budget.nodes),
     )
+    return result, tuple(snapshot["selected"]), tuple(snapshot["proofs"])
+
+
+def evaluate_primary_radix_batch(
+    *,
+    table_contracts: tuple[PrimaryTableContract, ...],
+    business_before_roots: tuple[PrimaryRoot, ...],
+    authorization_before_roots: tuple[PrimaryRoot, ...],
+    selected_rows: tuple[dict[str, Any], ...],
+    before_proofs: tuple[dict[str, Any], ...],
+    mutations: tuple[dict[str, Any], ...],
+    limits: PrimaryRadixLimits,
+) -> PrimaryRadixBatchResult:
+    """Calculate the exact final primary-root vector using the shared engine.
+
+    Distinct original-key mutations commute for final roots/counts; this does
+    not claim intermediate SQL revision history or authenticated currentness.
+    """
+    result, _, _ = _evaluate_primary_radix_batch(
+        table_contracts=table_contracts, business_before_roots=business_before_roots,
+        authorization_before_roots=authorization_before_roots, selected_rows=selected_rows,
+        before_proofs=before_proofs, mutations=mutations, limits=limits,
+    )
+    return result
+
+
+def evaluate_primary_radix_memberships(
+    *,
+    table_contracts: tuple[PrimaryTableContract, ...],
+    business_before_roots: tuple[PrimaryRoot, ...],
+    authorization_before_roots: tuple[PrimaryRoot, ...],
+    selected_rows: tuple[dict[str, Any], ...],
+    before_proofs: tuple[dict[str, Any], ...],
+    limits: PrimaryRadixLimits,
+) -> PrimaryRadixMembershipResult:
+    """Reverify actual primary proofs and retain their engine-owned row copies.
+
+    The sole engine runs with no mutations. A consumer must call this function
+    each time, then derive from its returned dictionaries, never caller aliases
+    or a caller-created membership result. No extra JSON copy or hash is added.
+    The result establishes membership relative to supplied heads only.
+    """
+    result, owned_selected, owned_proofs = _evaluate_primary_radix_batch(
+        table_contracts=table_contracts, business_before_roots=business_before_roots,
+        authorization_before_roots=authorization_before_roots, selected_rows=selected_rows,
+        before_proofs=before_proofs, mutations=(), limits=limits,
+    )
+    return PrimaryRadixMembershipResult(result, owned_selected, owned_proofs)

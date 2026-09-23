@@ -72,10 +72,12 @@ not a usable completeness authority.
 The new [counted-index range component](authority-index-range.md) now implements
 bounded sparse-frontier reconstruction for one complete fixed-key interval. It
 opens every intersecting nonempty subtree and hashes counts into the computed
-root. This source-only component is not yet an admitted predicate proof: fixed
-row projections, same-checkpoint primary joins, installed index storage and
-all-writer maintenance remain absent. It does not replace the existing query
-primitive or enable any missing kernel.
+root. The separate [fixed-projection join](authority-index-primary-join.md) now
+defines eleven selectors and rederives each returned leaf from the actual
+primary evaluator's owned verified rows. Both remain unactivated source:
+independently admitted same-checkpoint roots, installed index storage and
+all-writer maintenance are absent. Neither replaces the existing query
+primitive or enables any missing kernel.
 
 The coordinated index/query manifest must cover at least these fixed selectors:
 

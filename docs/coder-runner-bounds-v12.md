@@ -78,8 +78,8 @@ bind. A controller-enforced output-storage quota remains necessary for a
 fully bounded native profile.
 
 `/var/lib/serverware-runner` is the fixed private-data mount, not a caller-
-selected host path. A later PostgreSQL lifecycle may create its `PGDATA` child
-there. It must not put the database or WAL in the host's root-backed `/tmp`,
+selected host path. The separate source-owned PostgreSQL lifecycle creates its
+fresh `PGDATA` child there. It must not put the database or WAL in the host's root-backed `/tmp`,
 silently enlarge `/run` or `/tmp`, or fall back to an unbounded writable root
 filesystem. The tmpfs ceilings and shared-memory allowance must fit inside
 the declared memory ceiling; that arithmetic is not proof that every admitted
@@ -134,7 +134,7 @@ not silently discarded. A prepared image and its signed command must fit the
 closed profile; this checkpoint does not establish that existing image
 artifacts already do. The fixed Docker log driver has an 8 MiB single-file
 rotation bound, which is not a substitute for complete bounded fixture-log
-capture by the still-missing native runner.
+capture by the separate, unexecuted native runner.
 
 The result reader retains an output-directory descriptor across execution
 and rechecks its device, inode, ownership and mode identity. It reads one of
@@ -176,9 +176,10 @@ memory. This is a bounded example, not a measured sizing result or a prepared
 PG16 image identity or a complete native resource profile. PostgreSQL `fsync`
 on a tmpfs does not establish survival of host power loss or storage loss.
 
-The native cluster manager, fixed PG16 toolchain/image closure, output-storage
-quota, bounded log capture, report-consumer integration and controller-
-authenticated cleanup are still required. The ten suite deadlines total
+The separate [native cluster manager](native-postgres-verification.md) and its
+bounded local log capture are now source-implemented but unexecuted. Fixed PG16
+toolchain/image closure, output-storage quota, controller report-consumer
+integration and authenticated cleanup are still required. The ten suite deadlines total
 3,600 seconds before startup and
 cleanup; the existing Unit deadline is 900 seconds. Adding execution bounds
 does not change that deadline, omit suites to fit it, remove their exclusions,

@@ -82,6 +82,12 @@ must create a disposable local Unix-socket cluster with networking disabled and
 must never point at a production database. This target does not enter the
 default or production image, and a passing query test does not establish the
 complete authority protocol, independent witness state or WebAuthn startup.
+The [fixed native PostgreSQL lifecycle](docs/native-postgres-verification.md)
+is now source-implemented with bounded child/log supervision and exact fixture
+accounting, but remains unexecuted. It requires a separately pinned PG16/Python
+image, prepared source expectations and an admitted controller profile; the
+unversioned engineering target above does not meet that closure. Its local
+result cannot replace the controller's terminal destruction receipt.
 
 Production candidates are intentionally built without network access from one
 separately published, immutable dependency snapshot. At this handoff,

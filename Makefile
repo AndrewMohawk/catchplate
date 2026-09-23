@@ -612,6 +612,9 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_codebase_attestation.py \
 	scripts/test_native_postgres_contract.py \
 	scripts/test_native_postgres_batch.py \
+	scripts/test_native_postgres_runner.py \
+	scripts/test_native_postgres_lifecycle.py \
+	scripts/test_native_postgres_probe.py \
 	scripts/test_authority_primary_contract.py \
 	scripts/test_authority_radix_proof.py \
 	scripts/test_authority_radix_mutation.py \

@@ -6,9 +6,10 @@ The source includes a closed inventory and fixture-result contract layer. The
 separate [v12 runner-bounds checkpoint](coder-runner-bounds-v12.md) makes
 nonroot execution and resource/storage bounds part of the admitted runner
 identity, with fresh output ownership and exact pre-start container checks.
-Neither checkpoint implements a PostgreSQL cluster runner, installs a PG16
-test image, wires the controller's native output consumer, or provides native
-execution evidence.
+The source now also includes a fixed, cooperative PostgreSQL cluster runner,
+described below. It has not been executed, does not install a PG16 test image,
+and is not wired to the controller's native output consumer. None of these
+source checkpoints provides native execution evidence.
 The current source remains unbuilt and unexecuted. The ten suites remain in
 `CODER_EXCLUDED_TEST_SCRIPTS`; their standalone entrypoints and result files do
 not remove that exclusion or satisfy changed-test coverage admission.
@@ -68,9 +69,10 @@ script, selector, DSN or executable. Its fixed profile is:
 - The two inventory-marked scripts receive `--disposable-cluster`; every script
   receives `-v`.
 
-These tuples do not execute anything or create the named paths. A future
-admitted runner must own the canonical mode-0700 Unix-socket and report
-directories and the disposable database cluster before using them. A fixture
+These tuples alone do not execute anything or create the named paths. The
+source-owned lifecycle below creates fresh canonical mode-0700 Unix-socket and
+report directories and a disposable database cluster before using them. An
+independently admitted image, command and resource profile remain required. A fixture
 acknowledgement flag is not evidence of that ownership. Tests retain their real
 connection-admission and cleanup checks; the result contract is not a registry
 bypass or replacement database facade.
@@ -115,7 +117,98 @@ The existing engineering Dockerfile's unversioned `postgresql` package install
 does not establish this PG16 runtime closure. A separate pinned PostgreSQL
 service image does not automatically become the Python fixture runner image.
 
-## Remaining runner and controller work
+## Fixed cluster lifecycle source
+
+[run_native_postgres.py](../scripts/run_native_postgres.py) is a no-argument,
+no-build component entrypoint. It invokes
+[native_postgres_runner.py](../serverware/native_postgres_runner.py), not a
+generic shell or database service. It accepts no caller-selected DSN, script,
+SQL, executable, output directory, environment or timeout. Its source profile
+requires Linux/amd64, Python 3.11, UID/GID `10001:10001`, read-only root-owned
+source/artifacts/executables, and no ambient `PG*` configuration. These local
+checks complement rather than authenticate the external signed plan.
+
+The new required toolchain prefix is `/opt/serverware/postgresql-16/bin` with
+`initdb` and `postgres` at those exact paths. This is a source contract, **not an
+already prepared or pinned toolchain**. The future image must provide the
+same-ABI PostgreSQL server, shared data, executable/library closure, Python and
+psycopg/libpq, and the operating-system account for UID/GID 10001. Copying an
+Alpine server into a glibc Python image does not provide that closure. The
+existing engineering image also inherits ports rejected by the closed runner
+inspection profile; it is not implicitly compatible.
+
+The entrypoint reads the fixed read-only artifact
+`/opt/serverware/artifacts/native-postgres-sources-v1.json`. Its exact canonical
+ASCII JSON object has only `schema: serverware.nativePostgresPreparedSources/v1`
+and `scripts`, with ten ordered objects containing only `path` and `sha256`.
+Paths follow the inventory above and hashes are canonical `sha256:` strings.
+The independently admitted artifact CAS must bind these prepared expectations
+and the entire transitive source/runtime closure. Generating this small JSON
+from the current checkout is not source approval. All ten fixture files are
+remeasured against the supplied expectations before and after execution.
+
+The lifecycle:
+
+1. Exclusively creates `/var/lib/serverware-runner/native-postgres/pgdata`,
+   `/run/serverware-native-postgres`, and fresh `native-postgres/reports` and
+   `native-postgres/logs` children of the private lane output. Existing paths
+   are rejected, never adopted, repaired or removed.
+2. Runs fixed `initdb` as nonroot with UTF8, libc `C` locale, page checksums,
+   the disposable bootstrap superuser, local trust and host rejection. `--no-clean`
+   preserves incomplete initialization for outer teardown; no `--no-sync`,
+   alternate WAL directory or retained cluster is permitted.
+3. Starts foreground PostgreSQL with no TCP listener, the private Unix socket,
+   durability settings enabled, explicit conservative server settings, and
+   `restart_after_crash=off`. A fresh cluster is essential: the fixtures create
+   actual LOGIN roles, committed databases and privileged catalog/ACL state.
+4. Uses deadline-driven nonblocking libpq readiness and repeated identity
+   checks while continuing to drain the server log. The fixed query verifies
+   PG16, UTF8, actual current/session admin identity, direct superuser, Unix
+   transport, no recovery, the exact configuration and observed cluster system
+   identifier. This is not independent server or image authentication.
+5. Starts exactly the ten fixed fixtures sequentially. Every child has an
+   independent deadline and live-bounded combined stdout/stderr capture.
+   Reconciliation uses actual retained exit state, bounded report bytes and
+   complete log hashes. Failure, timeout, log loss, unexpected server exit,
+   cancellation, report mismatch or source drift stops further scheduling;
+   attempted processes never become `not-started`, and remaining fixtures
+   cannot become passing omissions. No fixture or cluster is retried.
+6. Stops remaining direct fixture children, requests a bounded PostgreSQL fast
+   shutdown, and reaps retained direct children. A forced kill, an already-dead
+   server, incomplete logs or remaining socket prevents observed clean shutdown.
+   Every signal normally uses the retained pidfd, never a PID file. The only
+   setup fallback targets the exact still-unreaped `Popen` child if pidfd
+   acquisition fails immediately after spawn.
+
+[native_postgres_process.py](../serverware/native_postgres_process.py) retains
+at most twelve direct children and 8 MiB of combined log bytes per child
+(96 MiB aggregate in-memory prefixes). An overflow prefix is preserved but
+cannot qualify as a complete log. Missing pipe EOF has a finite drain window;
+cleanup continues after cancellation or selector failure. The component does
+not use Docker's rotating log as complete fixture evidence.
+
+The runner exclusively publishes a bounded canonical
+`native-postgres/runtime-result.json` using
+`serverware.nativePostgresRuntimeResult/v1`. It contains exact fixture process
+states, cooperative test accounting, source expectations/readback, cluster
+observation, per-process log hashes/sizes/completeness and local cleanup
+observations. Exit zero requires `runtimeStatus: COMPLETE`; every other outcome
+exits 2 or fails before publishing a usable result. A missing or partial result
+is not completion. `externalDestructionRequired` is always true: the runner
+neither deletes PGDATA nor claims descendant/cgroup/container destruction.
+PostgreSQL children may have separate sessions; killing/reaping the postmaster
+is not proof that those descendants are gone. The final independent controller
+must still destroy the complete namespace, mounts, cgroup and storage and issue
+its authenticated `DESTROYED` receipt. The native document does not fabricate
+`BodyExecutionResultV12`, courier/runtime evidence or release authority.
+
+This implementation follows the documented
+[PG16 initialization](https://www.postgresql.org/docs/16/app-initdb.html) and
+[fast-shutdown semantics](https://www.postgresql.org/docs/16/server-shutdown.html).
+The source-owned test scripts use synthetic process, clock, libpq and filesystem
+boundaries; they have not been run and do not establish real cluster behavior.
+
+## Remaining image and controller work
 
 The v12 protocol can carry a fixed no-build runner command without adding a
 general-exec operation or giving repository code Docker authority. A local
@@ -124,17 +217,18 @@ network service contract, which uses endpoint authorities/ports and HTTP health
 checks, is not a Unix-socket transport for these fixtures. Do not weaken the
 fixture DSN restrictions or expose a host socket to make it fit.
 
-The actual cluster lifecycle, PG16 image construction, deadlines, log capture,
+The fixed cluster lifecycle and bounded local log capture are source-implemented
+but unverified. PG16 image construction, admitted deadlines, output quota,
 controller-bound native result consumption and authenticated controller
-cleanup are still incomplete. `RunnerIdentity.executionBounds` now requires
+cleanup are still incomplete. `RunnerIdentity.executionBounds` requires
 an admitted nonroot user/group, CPU, memory with no swap, PID, open-file,
 shared-memory and private writable-mount bounds. It does not choose or run a
 native-PG profile by itself. The actual Docker create/inspect/start boundary
 and fresh per-lane output ownership are described in
 [the runner-bounds contract](coder-runner-bounds-v12.md).
 
-The fixed private workload-data mount is `/var/lib/serverware-runner`; a later
-cluster manager can place a `PGDATA` child and its WAL there. The native
+The fixed private workload-data mount is `/var/lib/serverware-runner`; the
+cluster manager places its fresh `PGDATA` child and WAL there. The native
 example assigns it a 2 GiB tmpfs within a 4 GiB no-swap memory limit, alongside
 64 MiB shared memory, 64 MiB `/run` and 256 MiB `/tmp`. Its other bounds are
 UID/GID `10001:10001`, 2 CPUs, 128 PIDs and `nofile` 1024. This is not a
@@ -152,12 +246,27 @@ durability.
 
 The ten fixed per-suite ceilings sum to 3,600 seconds, before
 startup and cleanup, whereas the current Unit deadline profile is 900 seconds.
-The selected lane therefore needs an explicit bounded deadline/resource
-reconciliation; this inventory neither increases that deadline nor permits
+The source-only native sub-job proposes a 4,200-second ceiling with 120 seconds
+for initialization, 60 for readiness, 60 for shutdown and additional bounded
+overhead. It reserves cleanup time before scheduling a fixture and never
+shortens the declared fixture ceilings. This is not an override of the signed
+Unit deadline: the selected lane still needs an explicit bounded deadline/resource
+reconciliation including its other work and outer cleanup. This inventory neither increases that deadline nor permits
 silently dropping suites to fit it. An installed controller must enforce the
 selected profile and retain source/runtime/artifact/result bindings, then prove all task-owned
 processes, sockets, mounts and storage are gone. A report from a fixture or a
 pure batch consumer cannot manufacture that terminal proof.
+The existing Docker runner `StopTimeout` is also still 10 seconds; it has not
+been silently widened to the native component's 60-second PostgreSQL shutdown
+budget. Cancellation/deadline admission must reconcile those limits and retain
+forced outer destruction for any incomplete cooperative shutdown.
+
+The actual v12 body is supplied in the externally signed
+`executor-invocation-inputs-v12.json` logical-plan template. Future admission
+must explicitly bind the new image, exact no-argument Python entrypoint,
+source/artifact destinations, environment, resources, timeout and result
+consumer. A Makefile phase name or a locally authored manifest is not that
+signed invocation. No such external input was created or reissued here.
 
 Keep all ten exclusions and all mandatory prerequisite gates until the real
 prepared lane is implemented, independently admitted and reviewed. Even a

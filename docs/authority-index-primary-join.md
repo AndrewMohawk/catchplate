@@ -200,10 +200,13 @@ maintenance must predict that effect without applying the head change twice.
 No registry entry, source-activation flag, baseline waiver or relaxed startup
 guard is supplied by this slice.
 
-The current planner flattens query results and derives primary proofs after
-calling the transition. Integration must retain source query IDs, exact member
-addresses and empty-query evidence, then verify the joined evidence before the
-kernel consumes it. Query-local null `contractSelector` metadata must remain
+The [planner retention and pre-kernel verification](authority-query-read-retention.md)
+now preserves query IDs, ordered member addresses and empty observations, and
+verifies actual primary membership before invoking the transition. It does not
+yet acquire or verify indexed-query frontiers. Integration must verify joined
+complete-query evidence before the kernel consumes it, and authenticate deferred
+selector sources before dependent SQL execution. Query-local null
+`contractSelector` metadata must remain
 distinct from legitimate selector metadata on the global selected-row union;
 both views must agree on the exact key and full row. The closed transport and
 SQL snapshot consumers must commit that evidence under an explicitly versioned

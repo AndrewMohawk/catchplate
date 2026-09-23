@@ -110,9 +110,12 @@ outbox to fit a cascade row limit.
 
 The query model must explicitly represent indexed complete ranges. Today
 `exact_page` and `secondary_index_name` require different, mutually exclusive
-proof primitives; silently overloading either is not an integration. Retain
-per-query evidence through planner selection instead of flattening all rows
-and losing which predicate they prove. Empty queries need proofs too.
+proof primitives; silently overloading either is not an integration. The
+[retained query observations](authority-query-read-retention.md) now preserve
+individual definitions, ordered member addresses and empty results alongside
+the selected-row union. Actual primary verification also precedes the kernel.
+Those observations are not authenticated predicate evidence: empty queries
+still need range proofs, and closed versioned transport/admission is missing.
 
 All writers must maintain exact OLD/NEW index deltas atomically with primary
 row changes: insertion, deletion, status/credential/key/expiry moves, unchanged

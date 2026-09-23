@@ -4,7 +4,7 @@ import base64
 import hashlib
 import json
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
 from typing import Any, Callable, Mapping, Protocol
@@ -20,6 +20,7 @@ from serverware.authority_audit_trace import (
 )
 from serverware import authority_contract
 from serverware import authority_primary_contract
+from serverware import authority_query_reads
 from serverware import authority_radix_proof
 from serverware import authority_root_transition
 from serverware import authority_transition_core
@@ -496,6 +497,8 @@ class PlanningState:
     webauthn_admission: Mapping[str, int] | None = None
     query_work_units: int = 0
     verified_webauthn_evidence: Mapping[str, Any] | None = None
+    query_program: tuple[authority_transition_core.BoundedQuery, ...] = ()
+    query_reads: tuple[authority_query_reads.QueryRead, ...] = ()
 
 
 class PlanningProgram(Protocol):
@@ -743,7 +746,7 @@ class TypedTransitionPlanningProgram:
                 self.operation,
                 proposed_queries,
             )
-            selected = _read_bounded_transition_rows(
+            selected, queries, query_reads = _read_bounded_transition_rows(
                 cursor,
                 operation=self.operation,
                 request=request,
@@ -751,7 +754,8 @@ class TypedTransitionPlanningProgram:
                 manifest=manifest,
                 trace=trace,
             )
-        except authority_transition_core.TransitionKernelError as exc:
+        except (authority_transition_core.TransitionKernelError,
+                authority_query_reads.QueryReadError) as exc:
             raise AuthorityPlannerError(
                 "typed transition query program denied the request"
             ) from exc
@@ -759,6 +763,8 @@ class TypedTransitionPlanningProgram:
             database_now=database_now,
             query_work_units=sum(query.work_units for query in queries),
             verified_webauthn_evidence=verified_webauthn_evidence,
+            query_program=queries,
+            query_reads=query_reads,
         )
 
     def __call__(
@@ -800,6 +806,7 @@ class TypedTransitionPlanningProgram:
                 database_now=state.database_now,
                 request_digest=str(request["requestDigest"]),
                 verified_webauthn_evidence=state.verified_webauthn_evidence,
+                query_reads=state.query_reads,
             )
             transition = self.kernel.transition(context)
         except authority_transition_core.TransitionKernelError as exc:
@@ -1592,35 +1599,18 @@ def _read_bounded_transition_rows(
     queries: tuple[authority_transition_core.BoundedQuery, ...],
     manifest: tuple[dict[str, Any], ...],
     trace: PlannerTrace,
-) -> tuple[dict[str, Any], ...]:
+) -> tuple[tuple[dict[str, Any], ...],
+           tuple[authority_transition_core.BoundedQuery, ...],
+           tuple[authority_query_reads.QueryRead, ...]]:
+    # Retain query identity and empty results separately from the deduplicated
+    # row union. This records SQL observations, not predicate completeness.
+    queries = authority_query_reads.snapshot_queries(operation, queries)
     manifest_by_table = {
         str(entry["table"]): entry for entry in manifest
     }
     extracted = authority_contract.extract_selectors(operation, request)
     selected: dict[tuple[str, bytes], dict[str, Any]] = {}
-
-    def resolve(value: Any) -> Any:
-        if not isinstance(
-            value,
-            authority_transition_core.SelectedRowFieldReference,
-        ):
-            return value
-        identity = (
-            value.table,
-            canonical_bytes(dict(value.key)),
-        )
-        source = selected.get(identity)
-        row = source.get("row") if source is not None else None
-        if (
-            source is None
-            or source.get("present") is not True
-            or not isinstance(row, Mapping)
-            or value.column not in row
-        ):
-            raise AuthorityPlannerError(
-                "typed transition row-field reference is unresolved"
-            )
-        return row[value.column]
+    query_reads: list[authority_query_reads.QueryRead] = []
 
     for query in queries:
         manifest_entry = manifest_by_table.get(query.table)
@@ -1631,6 +1621,7 @@ def _read_bounded_transition_rows(
         key_columns = tuple(manifest_entry["keyColumns"])
         if (
             not key_columns
+            or key_columns != authority_primary_contract.PRIMARY_KEY_COLUMNS.get(query.table)
             or any(
                 not isinstance(column, str) or not column
                 for column in key_columns
@@ -1639,9 +1630,13 @@ def _read_bounded_transition_rows(
             raise AuthorityPlannerError(
                 "typed transition query has no exact primary key"
             )
+        resolved_query = authority_query_reads.resolve_query(
+            operation, query, prior_reads=tuple(query_reads),
+            selected_rows=tuple(selected.values()),
+        )
         clauses: list[str] = []
         parameters: list[Any] = []
-        for predicate in query.predicates:
+        for predicate in resolved_query.predicates:
             if predicate.operator == "is-null":
                 clauses.append(
                     f"target.{predicate.column} IS NULL"
@@ -1662,11 +1657,8 @@ def _read_bounded_transition_rows(
                 clauses.append(
                     f"target.{predicate.column} {sql_operator} %s"
                 )
-                parameters.append(resolve(predicate.value))
-        order = query.order_by or tuple(
-            authority_transition_core.QueryOrder(column)
-            for column in key_columns
-        )
+                parameters.append(predicate.value)
+        order = resolved_query.order_by
         ordering = ", ".join(
             f"target.{item.column} "
             + ("DESC" if item.descending else "ASC")
@@ -1691,16 +1683,10 @@ def _read_bounded_transition_rows(
         query_rows = tuple(
             row["row_value"] for row in rows
         )
-        resolved_absent_key = (
-            None
-            if query.absent_key is None
-            else {
-                column: resolve(value)
-                for column, value in query.absent_key.items()
-            }
-        )
+        resolved_absent_key = resolved_query.absent_key
         if resolved_absent_key is not None and not query_rows:
             query_rows = (None,)
+        ordered_selected = []
         for row_value in query_rows:
             if row_value is None:
                 key = dict(resolved_absent_key or {})
@@ -1731,17 +1717,29 @@ def _read_bounded_transition_rows(
                 contract_selector=contract_selector,
             )
             previous = selected.get(identity)
-            if previous is not None and previous != entry:
+            if previous is not None and canonical_bytes(previous) != canonical_bytes(entry):
                 raise AuthorityPlannerError(
                     "typed transition queries disagree on one row"
                 )
             selected[identity] = entry
+            ordered_selected.append(entry)
             trace.read(query.table, key)
-    return tuple(
+        query_read = authority_query_reads.capture_query_read(
+            operation, query, resolved_query=resolved_query,
+            ordered_selected_rows=tuple(ordered_selected), returned_row_count=len(rows),
+        )
+        authority_query_reads.validate_read_budget(
+            operation, query_reads=(*query_reads, query_read),
+        )
+        query_reads.append(query_read)
+    selected_rows = tuple(
         sorted(
             selected.values(),
             key=lambda entry: (entry["table"], entry["keyDigest"]),
         )
+    )
+    return selected_rows, queries, authority_query_reads.validate_query_reads(
+        operation, queries=queries, query_reads=tuple(query_reads), selected_rows=selected_rows,
     )
 
 
@@ -2931,6 +2929,36 @@ class MeasuredPlanner:
                         program=self.programs[operation],
                         verified_webauthn_evidence=verified_webauthn_evidence,
                     )
+                    multiproofs = _derive_multiproofs(
+                        cursor,
+                        selected_rows=selected,
+                        roots=tuple(roots) + tuple(authorization_roots),
+                        trace=trace,
+                    )
+                    try:
+                        # Kernels receive the actual verifier's owned snapshot.
+                        # This does not authenticate earlier dependent SQL reads
+                        # or prove completeness/currentness of a query/root.
+                        verified_inputs = authority_root_transition.verify_primary_plan_inputs(
+                            operation=operation, business_before_roots=roots,
+                            authorization_before_roots=authorization_roots,
+                            selected_rows=selected, before_proofs=multiproofs,
+                        )
+                        selected = verified_inputs.selected_rows
+                        multiproofs = verified_inputs.before_proofs
+                        if isinstance(self.programs[operation], TypedTransitionPlanningProgram):
+                            planning_state = replace(
+                                planning_state,
+                                query_reads=authority_query_reads.validate_query_reads(
+                                    operation, queries=planning_state.query_program,
+                                    query_reads=planning_state.query_reads, selected_rows=selected,
+                                ),
+                            )
+                    except (authority_root_transition.PrimaryRadixMutationError,
+                            authority_query_reads.QueryReadError) as exc:
+                        raise AuthorityPlannerError(
+                            "planner before-kernel input verification failed"
+                        ) from exc
                     transition = self.programs[operation](
                         operation=operation,
                         handler=str(
@@ -2969,12 +2997,6 @@ class MeasuredPlanner:
                         raise AuthorityPlannerError(
                             "planner final global audit capacity changed"
                         ) from exc
-                    multiproofs = _derive_multiproofs(
-                        cursor,
-                        selected_rows=selected,
-                        roots=tuple(roots) + tuple(authorization_roots),
-                        trace=trace,
-                    )
         if (
             len(selected) > int(spec["maximumQueryRows"])
             or len(mutations) > int(spec["maximumMutations"])

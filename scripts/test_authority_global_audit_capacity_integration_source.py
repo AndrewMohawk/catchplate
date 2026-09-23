@@ -134,6 +134,7 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
         finalized = call(method, "authority_audit_capacity.finalize_capacity")
         self.assertEqual(keywords(context)["database_now"], "state.database_now")
         self.assertEqual(keywords(context)["selected_rows"], "selected_rows")
+        self.assertEqual(keywords(context)["query_reads"], "state.query_reads")
         self.assertEqual([ast.unparse(item) for item in kernel.args], ["context"])
         self.assertEqual([ast.unparse(item) for item in finalized.args], ["context", "transition.mutations"])
         self.assertLess(context.lineno, kernel.lineno)
@@ -148,6 +149,37 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
         self.assertEqual(ast.dump(no_op_guards[0].test), ast.dump(ast.parse(
             "not finalized_mutations and not self.kernel.permits_empty_mutation", mode="eval",
         ).body))
+
+    def test_query_observations_are_retained_and_rechecked_against_owned_primary_rows(self):
+        reader = definition(self.tree, "_read_bounded_transition_rows")
+        snapshotted = call(reader, "authority_query_reads.snapshot_queries")
+        resolved = call(reader, "authority_query_reads.resolve_query")
+        executed = call(reader, "cursor.execute")
+        captured = call(reader, "authority_query_reads.capture_query_read")
+        bounded = call(reader, "authority_query_reads.validate_read_budget")
+        validated = call(reader, "authority_query_reads.validate_query_reads")
+        self.assertLess(snapshotted.lineno, resolved.lineno)
+        self.assertLess(resolved.lineno, executed.lineno)
+        self.assertLess(executed.lineno, captured.lineno)
+        self.assertLess(captured.lineno, bounded.lineno)
+        self.assertLess(bounded.lineno, validated.lineno)
+        self.assertEqual(keywords(captured)["returned_row_count"], "len(rows)")
+        rendered = ast.unparse(reader)
+        self.assertIn("for predicate in resolved_query.predicates", rendered)
+        self.assertIn("parameters.append(predicate.value)", rendered)
+        self.assertIn("resolved_absent_key = resolved_query.absent_key", rendered)
+        self.assertIn("canonical_bytes(previous) != canonical_bytes(entry)", rendered)
+        state = call(self.method("read_inputs"), "PlanningState")
+        self.assertEqual(keywords(state)["query_program"], "queries")
+        self.assertEqual(keywords(state)["query_reads"], "query_reads")
+        producer = self.method("derive", "MeasuredPlanner")
+        primary = call(producer, "authority_root_transition.verify_primary_plan_inputs")
+        association = call(producer, "authority_query_reads.validate_query_reads")
+        self.assertLess(primary.lineno, association.lineno)
+        self.assertEqual(keywords(association), {
+            "queries": "planning_state.query_program", "query_reads": "planning_state.query_reads",
+            "selected_rows": "selected",
+        })
 
     def test_transition_work_uses_finalized_batch_and_explicit_shared_accounting(self):
         method = self.method("__call__")
@@ -164,18 +196,36 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
         self.assertEqual(keywords(call(method, "PlannedTransition"))["work_units"], "total_work_units")
 
     def test_final_producer_checks_precede_proof_reads_and_root_computation(self):
+        # Keep this existing test identity while updating its old ordering
+        # contract: membership now precedes the kernel; final mutation checks
+        # still precede complete after-root recomputation.
         method = self.method("derive", "MeasuredPlanner")
         capacity = call(method, "authority_audit_capacity.validate_capacity_transition")
         work = call(method, "authority_audit_capacity.validate_transition_work_units")
         proof = call(method, "_derive_multiproofs")
+        before = call(method, "authority_root_transition.verify_primary_plan_inputs")
         roots = call(method, "authority_root_transition.derive_primary_root_transition")
         self.assertEqual(keywords(capacity), {
             "operation": "operation", "selected_rows": "selected", "mutations": "mutations",
         })
         self.assertEqual(keywords(work)["work_units"], "transition.work_units")
-        self.assertLess(capacity.lineno, proof.lineno)
-        self.assertLess(work.lineno, proof.lineno)
-        self.assertLess(proof.lineno, roots.lineno)
+        self.assertLess(proof.lineno, before.lineno)
+        program_calls = [node for node in ast.walk(method) if isinstance(node, ast.Call)
+                         and ast.unparse(node.func) == "self.programs[operation]"]
+        self.assertEqual(len(program_calls), 1)
+        self.assertLess(before.lineno, program_calls[0].lineno)
+        self.assertLess(program_calls[0].lineno, capacity.lineno)
+        self.assertLess(program_calls[0].lineno, work.lineno)
+        self.assertLess(capacity.lineno, roots.lineno)
+        self.assertLess(work.lineno, roots.lineno)
+        self.assertEqual(keywords(before), {
+            "operation": "operation", "business_before_roots": "roots",
+            "authorization_before_roots": "authorization_roots",
+            "selected_rows": "selected", "before_proofs": "multiproofs",
+        })
+        rendered = ast.unparse(method)
+        self.assertIn("selected = verified_inputs.selected_rows", rendered)
+        self.assertIn("multiproofs = verified_inputs.before_proofs", rendered)
         self.assertEqual(keywords(roots)["mutations"], "mutation_value")
 
     def test_payload_rederives_capacity_and_work_before_root_acceptance(self):

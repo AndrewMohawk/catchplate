@@ -9,6 +9,7 @@ from types import MappingProxyType
 from typing import Any, Mapping, Protocol
 
 from serverware import authority_contract
+from serverware import authority_query_reads
 
 
 QUERY_PROGRAM_SCHEMA = "serverware.policyAuthorityQueryProgram/v1"
@@ -624,6 +625,21 @@ class KernelContext:
     database_now: datetime
     request_digest: str
     verified_webauthn_evidence: Mapping[str, Any] | None = None
+    query_reads: tuple[authority_query_reads.QueryRead, ...] = ()
+
+    def observed_query_rows(self, *, query_id: str) -> tuple[dict[str, Any], ...]:
+        """Return the retained ordered SQL observation, not completeness proof.
+
+        Global selector metadata is preserved. Neither an empty result nor this
+        accessor supplies indexed range, checkpoint or currentness authority.
+        """
+        try:
+            return authority_query_reads.query_rows(
+                self.operation, query_reads=self.query_reads,
+                selected_rows=self.selected_rows, query_id=query_id,
+            )
+        except authority_query_reads.QueryReadError as exc:
+            raise TransitionKernelError("retained query observation is invalid") from exc
 
     def rows(self, table: str) -> tuple[dict[str, Any], ...]:
         return tuple(

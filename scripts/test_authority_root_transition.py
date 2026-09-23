@@ -13,18 +13,26 @@ import ast
 import copy
 import sys
 import unittest
+from dataclasses import FrozenInstanceError
+from datetime import datetime, timezone
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from serverware import authority_contract
+from serverware import authority_audit_capacity as capacity
 from serverware import authority_primary_contract as primary
+from serverware import authority_radix_mutation as radix_mutation
 from serverware import authority_root_transition as transition
+from serverware import authority_transition_core as core
+from serverware import authority_transition_policy as policy
 from serverware.authority_radix_mutation import PrimaryRadixMutationError
-from test_authority_radix_mutation import IndependentTree, change
+from test_authority_radix_mutation import IndependentTree, change, refresh_proof_digest
 from test_authority_radix_proof import sql_json, wire_digest, wire_json
+import test_authority_global_audit_capacity as capacity_fixture
 
 
 COUNTER = "webauthn.counter.cas"
@@ -97,6 +105,32 @@ def calls(tree: ast.AST, name: str) -> list[ast.Call]:
     return [node for node in ast.walk(tree) if isinstance(node, ast.Call)
             and ((isinstance(node.func, ast.Name) and node.func.id == name)
                  or (isinstance(node.func, ast.Attribute) and node.func.attr == name))]
+
+
+def input_fixture(operation=COUNTER, rows_by_table=None, selected_keys=None):
+    """Real source table closure and independent hashes; no caller key policy."""
+    rows_by_table = {} if rows_by_table is None else rows_by_table
+    contracts = primary.primary_table_contracts(operation)
+    trees = {contract.table: IndependentTree(rows_by_table.get(contract.table, []),
+             table=contract.table, columns=contract.key_columns) for contract in contracts}
+    selected = []
+    proofs = []
+    for contract in contracts:
+        tree = trees[contract.table]
+        keys = ([tree.key(row) for row in rows_by_table.get(contract.table, [])]
+                if selected_keys is None else selected_keys.get(contract.table, []))
+        for key in keys:
+            value = tree.selected(key)
+            selected.append(value)
+            proofs.append(tree.proof(value))
+    return {
+        "operation": operation,
+        "business_before_roots": [trees[contract.table].root.json_projection()
+                                  for contract in contracts if contract.root_class == "business"],
+        "authorization_before_roots": [trees[contract.table].root.json_projection()
+                                       for contract in contracts if contract.root_class == "authorization"],
+        "selected_rows": selected, "before_proofs": proofs,
+    }, trees
 
 
 class AuthorityRootTransitionTests(unittest.TestCase):
@@ -396,6 +430,265 @@ class AuthorityRootTransitionTests(unittest.TestCase):
         self.assertIn("'serverware.policyAuthoritySnapshot/v3'", digest_body)
         self.assertIn("pg_catalog.cardinality(digest_frames) <> 9", digest_body)
         self.assertIn("NOT BETWEEN 1 AND 8 END", digest_body)
+
+
+class PrimaryPlanInputTests(unittest.TestCase):
+    """Pre-kernel component composition; not imported planner/startup proof."""
+
+    def setUp(self):
+        self.row = {"id": "credential-雪", "credential_id": "public-雪", "sign_count": 1,
+                    "revoked_at": None, "last_used_at": None, "updated_at": "old",
+                    "metadata": {"flags": [True, None], "note": "☃"}}
+        self.inputs, self.trees = input_fixture(COUNTER, {"webauthn_credentials": [self.row]})
+        self.now = datetime(2031, 2, 3, 4, 5, 6, tzinfo=timezone.utc)
+        self.request_digest = wire_digest("component-pre-kernel-request", b"counter-cas")
+        values = {"recordId": self.row["id"], "credentialId": self.row["credential_id"],
+                  "expectedSignCount": 1, "newSignCount": 2}
+        self.arguments = {**values, "businessIntent": authority_contract.synthesize_business_intent(COUNTER, values)}
+
+    def test_actual_membership_inputs_feed_real_counter_kernel_and_final_delta(self):
+        pristine = copy.deepcopy(self.inputs)
+        verified = transition.verify_primary_plan_inputs(**self.inputs)
+        self.assertIs(type(verified), radix_mutation.PrimaryRadixMembershipResult)
+        self.assertEqual(verified.selected_rows, tuple(self.inputs["selected_rows"]))
+        self.assertEqual(verified.before_proofs, tuple(self.inputs["before_proofs"]))
+        self.assertEqual(verified.result.metrics.hash_work, 136)
+        self.assertEqual(verified.result.metrics.mutations, 0)
+        self.assertEqual(verified.result.metrics.recomputed_ancestors, 0)
+        kernel = policy.KERNELS[COUNTER]
+        queries = kernel.queries(arguments=self.arguments, database_now=self.now, request_digest=self.request_digest)
+        self.assertEqual(len(queries), 1)
+        self.assertEqual(queries[0].table, "webauthn_credentials")
+        self.assertEqual(queries[0].absent_key, {"id": self.row["id"]})
+        context = core.KernelContext(operation=COUNTER, arguments=self.arguments,
+            selected_rows=verified.selected_rows, database_now=self.now, request_digest=self.request_digest)
+        actual = kernel.transition(context)
+        self.assertIs(actual.result, True)
+        self.assertEqual(actual.work_units, 8)
+        self.assertEqual(len(actual.mutations), 1)
+        expected_row = {**self.row, "sign_count": 2, "last_used_at": self.now.isoformat(),
+                        "updated_at": self.now.isoformat()}
+        mutation = actual.mutations[0]
+        self.assertEqual(mutation["row"], expected_row)
+        self.assertEqual(mutation["expectedRow"], self.row)
+        templates = authority_contract.operation_spec(COUNTER)["mutationTemplates"]
+        self.assertEqual(mutation["templateId"], next(item["templateId"] for item in templates
+                         if item["table"] == "webauthn_credentials" and item["mutation"] == "UPDATE"))
+        result = transition.derive_primary_root_transition(**{
+            **self.inputs, "selected_rows": verified.selected_rows, "before_proofs": verified.before_proofs,
+        }, mutations=actual.mutations)
+        expected_tree = IndependentTree([expected_row], table="webauthn_credentials", revision=2)
+        self.assertEqual(result["businessAfterRoots"], [expected_tree.root.json_projection()])
+        self.assertEqual(result["metrics"]["hashWork"], 202)
+        self.assertEqual(self.inputs, pristine)
+
+    def test_changed_row_key_proof_and_root_context_reject_before_inputs_are_returned(self):
+        cases = []
+        for field, value in (("rootRevision", 2), ("rootRevision", True), ("leafCount", True),
+                             ("leafCount", 0), ("rootDigest", "sha256:" + "a" * 64)):
+            changed = copy.deepcopy(self.inputs)
+            changed["business_before_roots"][0][field] = value
+            cases.append(changed)
+        for field, value in (("rowDigest", "sha256:" + "b" * 64), ("rootRevision", 2)):
+            changed = copy.deepcopy(self.inputs)
+            changed["before_proofs"][0][field] = value
+            refresh_proof_digest(changed["before_proofs"][0])
+            cases.append(changed)
+        changed = copy.deepcopy(self.inputs)
+        changed["before_proofs"][0]["siblings"][12]["childDigests"][4] = "sha256:" + "c" * 64
+        refresh_proof_digest(changed["before_proofs"][0])
+        cases.append(changed)
+        for field, value in (("row", {**self.row, "sign_count": 9}),
+                             ("key", {"caller_key": self.row["id"]}),
+                             ("keyDigest", "sha256:" + "d" * 64), ("present", 1)):
+            changed = copy.deepcopy(self.inputs)
+            changed["selected_rows"][0][field] = value
+            cases.append(changed)
+        understated, _ = input_fixture(COUNTER, {"webauthn_credentials": [self.row, {**self.row, "id": "second"}]})
+        understated["business_before_roots"][0]["leafCount"] = 1
+        cases.append(understated)
+        for index, changed in enumerate(cases):
+            with self.subTest(case=index), self.assertRaises(PrimaryRadixMutationError):
+                transition.verify_primary_plan_inputs(**changed)
+
+    def test_source_root_classes_and_primary_inventories_are_closed(self):
+        for updates in (
+            {"business_before_roots": []},
+            {"business_before_roots": [], "authorization_before_roots": self.inputs["business_before_roots"]},
+            {"business_before_roots": [{**self.inputs["business_before_roots"][0], "table": "unknown"}]},
+            {"business_before_roots": self.inputs["business_before_roots"] * 2},
+            {"before_proofs": []}, {"before_proofs": self.inputs["before_proofs"] * 2},
+            {"selected_rows": self.inputs["selected_rows"] * 2, "before_proofs": self.inputs["before_proofs"] * 2},
+            {"selected_rows": iter(())},
+        ):
+            with self.subTest(fields=tuple(updates)), self.assertRaises(PrimaryRadixMutationError):
+                transition.verify_primary_plan_inputs(**{**self.inputs, **updates})
+        with self.assertRaises(ValueError):
+            transition.verify_primary_plan_inputs(**{**self.inputs, "operation": "unknown.operation"})
+        # Exact absence remains genuine evidence, not a missing proof. The real
+        # CAS kernel can decide its source-declared no-op from that owned row.
+        absent, _ = input_fixture(COUNTER, selected_keys={"webauthn_credentials": [{"id": self.row["id"]}]})
+        verified = transition.verify_primary_plan_inputs(**absent)
+        self.assertIs(verified.selected_rows[0]["present"], False)
+        self.assertEqual(verified.result.metrics.hash_work, 134)
+        actual = policy.KERNELS[COUNTER].transition(core.KernelContext(
+            operation=COUNTER, arguments=self.arguments, selected_rows=verified.selected_rows,
+            database_now=self.now, request_digest=self.request_digest))
+        self.assertEqual((actual.mutations, actual.result), ((), False))
+
+    def test_owned_inputs_are_detached_and_reverification_never_accepts_an_observation(self):
+        pristine = copy.deepcopy(self.inputs)
+        verified = transition.verify_primary_plan_inputs(**self.inputs)
+        self.assertIsNot(verified.selected_rows[0], self.inputs["selected_rows"][0])
+        self.assertIsNot(verified.selected_rows[0]["row"]["metadata"]["flags"],
+                         self.inputs["selected_rows"][0]["row"]["metadata"]["flags"])
+        self.inputs["selected_rows"][0]["row"]["metadata"]["flags"].append("caller")
+        self.inputs["before_proofs"][0]["siblings"][0]["childDigests"].clear()
+        self.inputs["business_before_roots"][0]["rootRevision"] = 999
+        self.assertEqual(verified.selected_rows, tuple(pristine["selected_rows"]))
+        self.assertEqual(verified.before_proofs, tuple(pristine["before_proofs"]))
+        self.assertEqual(verified.result.business_after_roots[0].root_revision, 1)
+        with self.assertRaises(FrozenInstanceError):
+            verified.selected_rows = ()
+        # Nested dictionaries are detached data, not immutable authority tokens.
+        verified.selected_rows[0]["row"]["metadata"]["flags"].append("owned")
+        again = transition.verify_primary_plan_inputs(**pristine)
+        self.assertEqual(again.selected_rows, tuple(pristine["selected_rows"]))
+        for value in (verified, radix_mutation.PrimaryRadixMembershipResult(
+                verified.result, verified.selected_rows, verified.before_proofs)):
+            with self.assertRaises(PrimaryRadixMutationError):
+                transition.verify_primary_plan_inputs(**{**pristine, "selected_rows": value})
+        with self.assertRaises(TypeError):
+            transition.verify_primary_plan_inputs(**pristine, mutations=())
+
+    def test_authorization_rows_share_genuine_before_root_context_without_changing_heads(self):
+        arguments, _ = fixture(CHALLENGE)
+        inputs = {name: value for name, value in arguments.items() if name != "mutations"}
+        verified = transition.verify_primary_plan_inputs(**inputs)
+        self.assertEqual([root.json_projection() for root in verified.result.business_after_roots],
+                         inputs["business_before_roots"])
+        self.assertEqual([root.json_projection() for root in verified.result.authorization_after_roots],
+                         inputs["authorization_before_roots"])
+        sources = transition.derive_authorization_sources(operation=CHALLENGE,
+                                                          selected_rows=verified.selected_rows)
+        self.assertEqual({source["present"] for source in sources}, {True, False})
+        changed = copy.deepcopy(inputs)
+        proof = next(item for item in changed["before_proofs"] if item["table"] == "webauthn_credentials")
+        proof["rootRevision"] += 1
+        refresh_proof_digest(proof)
+        with self.assertRaises(PrimaryRadixMutationError):
+            transition.verify_primary_plan_inputs(**changed)
+
+    def test_consistently_rebound_descriptor_still_does_not_prove_currentness(self):
+        changed = copy.deepcopy(self.inputs)
+        changed["business_before_roots"][0].update(rootRevision=999, leafCount=17)
+        changed["before_proofs"][0]["rootRevision"] = 999
+        refresh_proof_digest(changed["before_proofs"][0])
+        verified = transition.verify_primary_plan_inputs(**changed)
+        self.assertEqual(verified.result.business_after_roots[0].root_revision, 999)
+        self.assertEqual(verified.result.business_after_roots[0].leaf_count, 17)
+        self.assertEqual(verified.selected_rows, tuple(self.inputs["selected_rows"]))
+        # The operation-bound wrapper verifies membership, not descriptor
+        # provenance, predicate completeness or fresh signed checkpoint authority.
+
+    def test_source_phase_limits_are_exact_and_oversized_inventory_denies_before_engine(self):
+        for operation in (COUNTER, "rbac.binding.mutate", "webauthn.registration.create"):
+            spec = authority_contract.operation_spec(operation)
+            count = spec["maximumQueryRows"]
+            expected = {"selectedRows": count, "proofVectors": 257 * 64,
+                        "proofChildSlots": 257 * 64 * 16, "rootDescriptorHashAllowance": 66,
+                        "membershipHashWork": 66 + 70 * count,
+                        "auditCapacityHashAllowance": count + int(spec["globalAuditCapacity"]),
+                        "totalHashWork": 132 + 71 * count + int(spec["globalAuditCapacity"]),
+                        "inputBytes": 64 * 1024 * 1024, "jsonNodes": 1_000_000}
+            with self.subTest(operation=operation):
+                self.assertEqual(transition.primary_plan_input_metric_bounds(operation), expected)
+                changed = transition.primary_plan_input_metric_bounds(operation)
+                changed["membershipHashWork"] = 0
+                self.assertEqual(transition.primary_plan_input_metric_bounds(operation), expected)
+        actual_engine = transition.evaluate_primary_radix_memberships
+        actual_capacity = capacity.validate_capacity_transition
+        with mock.patch.object(transition, "evaluate_primary_radix_memberships", wraps=actual_engine) as engine, \
+                mock.patch.object(capacity, "validate_capacity_transition", wraps=actual_capacity) as final:
+            observed = transition.verify_primary_plan_inputs(**self.inputs)
+        self.assertEqual((engine.call_count, final.call_count), (1, 1))
+        arguments = engine.call_args.kwargs
+        self.assertEqual(arguments["table_contracts"], primary.primary_table_contracts(COUNTER))
+        limits = arguments["limits"]
+        self.assertEqual((limits.max_selected_rows, limits.max_mutations, limits.max_proof_vectors,
+                          limits.max_proof_child_slots, limits.max_hashes, limits.max_input_bytes,
+                          limits.max_json_depth, limits.max_json_nodes),
+                         (256, 512, 16448, 263168, 17986, 64 * 1024 * 1024, 128, 1_000_000))
+        self.assertEqual(set(arguments), {"table_contracts", "business_before_roots", "authorization_before_roots",
+                                          "selected_rows", "before_proofs", "limits"})
+        self.assertIs(final.call_args.kwargs["selected_rows"], observed.selected_rows)
+        self.assertEqual(final.call_args.kwargs["mutations"], ())
+        maximum = authority_contract.operation_spec(COUNTER)["maximumQueryRows"]
+        with mock.patch.object(transition, "evaluate_primary_radix_memberships", wraps=actual_engine) as engine:
+            with self.assertRaisesRegex(PrimaryRadixMutationError, "inventory exceeds operation bounds"):
+                transition.verify_primary_plan_inputs(**{
+                    **self.inputs, "selected_rows": self.inputs["selected_rows"] * (maximum + 1),
+                    "before_proofs": self.inputs["before_proofs"] * (maximum + 1)})
+            self.assertEqual(engine.call_count, 0)
+        with self.assertRaises(TypeError):
+            transition.verify_primary_plan_inputs(**self.inputs, limits=limits)
+
+    def test_authenticated_counter_profile_is_required_without_bootstrap_or_mutation(self):
+        operation = "rbac.binding.mutate"
+        counter_table, outbox = capacity_fixture.TABLE, capacity_fixture.OUTBOX
+        compact = capacity_fixture.counter_row(live_count=100_000, active_count=100_000)
+        spec = authority_contract.operation_spec(operation)
+        self.assertEqual((spec["maximumBusinessQueryRows"], spec["maximumQueryRows"]), (5, 6))
+        business = [capacity_fixture.outbox_row(f"component-{index}") for index in range(5)]
+        inputs, _ = input_fixture(operation, {counter_table: [compact], outbox: business})
+        observed = transition.verify_primary_plan_inputs(**inputs)
+        self.assertEqual((len(observed.selected_rows), observed.result.metrics.hash_work), (6, 486))
+        self.assertEqual(observed.result.metrics.mutations, 0)
+        actual_counter = next(row["row"] for row in observed.selected_rows if row["table"] == counter_table)
+        self.assertEqual(actual_counter, compact)
+        self.assertEqual((actual_counter["live_count"], actual_counter["revision"]), (100_000, 7))
+        counter_only, _ = input_fixture(operation, {counter_table: [compact]})
+        self.assertEqual(len(transition.verify_primary_plan_inputs(**counter_only).selected_rows), 1)
+        missing, _ = input_fixture(operation)
+        absent, _ = input_fixture(operation, selected_keys={counter_table: [{"aggregate_id": capacity_fixture.IDENTITY}]})
+        malformed = []
+        for row in (capacity_fixture.counter_row(capacity_limit=99_999),
+                    capacity_fixture.counter_row(live_count=100_001, active_count=100_001),
+                    capacity_fixture.counter_row(revision=True),
+                    capacity_fixture.counter_row(source_revision="not-the-source-revision")):
+            invalid, _ = input_fixture(operation, {counter_table: [row]})
+            malformed.append(invalid)
+        for label, invalid in [("missing", missing), ("absent", absent),
+                               *((f"compact-{index}", item) for index, item in enumerate(malformed))]:
+            with self.subTest(case=label), self.assertRaisesRegex(
+                    PrimaryRadixMutationError, "audit capacity inputs changed") as caught:
+                transition.verify_primary_plan_inputs(**invalid)
+            self.assertIsInstance(caught.exception.__cause__, capacity.AuditCapacityError)
+        # Six business rows cannot spend the framework's sixth slot simply by
+        # leaving the authenticated counter head present but unselected.
+        excessive, _ = input_fixture(operation, {counter_table: [compact],
+            outbox: [capacity_fixture.outbox_row(f"extra-{index}") for index in range(6)]},
+            selected_keys={outbox: [{"id": f"extra-{index}"} for index in range(6)]})
+        with self.assertRaisesRegex(PrimaryRadixMutationError, "audit capacity inputs changed") as caught:
+            transition.verify_primary_plan_inputs(**excessive)
+        self.assertIn("business bound", str(caught.exception.__cause__))
+
+    def test_business_selected_byte_limit_is_checked_after_genuine_full_row_proofs(self):
+        row = {**self.row, "padding": ""}
+        initial, _ = input_fixture(COUNTER, {"webauthn_credentials": [row]})
+        row["padding"] = "x" * (4 * 1024 * 1024 - len(wire_json(initial["selected_rows"])))
+        inputs, _ = input_fixture(COUNTER, {"webauthn_credentials": [row]})
+        self.assertEqual(len(wire_json(inputs["selected_rows"])), 4 * 1024 * 1024)
+        accepted = transition.verify_primary_plan_inputs(**inputs)
+        self.assertEqual(accepted.selected_rows[0]["row"], row)
+        # Rebuild both row commitment and proof: this rejection is the real
+        # selected-envelope cap, not a stale row hash or an artificial byte spy.
+        excessive, _ = input_fixture(COUNTER, {"webauthn_credentials": [{**row, "padding": row["padding"] + "x"}]})
+        self.assertEqual(len(wire_json(excessive["selected_rows"])), 4 * 1024 * 1024 + 1)
+        with self.assertRaisesRegex(PrimaryRadixMutationError, "audit capacity inputs changed") as caught:
+            transition.verify_primary_plan_inputs(**excessive)
+        self.assertIsInstance(caught.exception.__cause__, capacity.AuditCapacityError)
+        self.assertIn("business bound", str(caught.exception.__cause__))
 
 
 if __name__ == "__main__":

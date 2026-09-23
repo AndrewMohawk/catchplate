@@ -96,6 +96,12 @@ snapshot without rereading caller rows or accepting a caller-created successful
 result. Existing mutation wire formats and charged metrics are unchanged;
 the nested membership dictionaries are owned but not immutable authority tokens.
 
+The planner's [pre-kernel input phase](authority-query-read-retention.md) now
+uses that actual membership engine and source operation/table contracts before
+passing owned rows to a transition. Its separate conservative hash allowance
+also covers root-descriptor and audit-capacity input checks. It does not replace
+final mutation/root recomputation or change this persisted transition profile.
+
 Authored fixtures cover independent whole-tree rebuilds, shared-prefix batches,
 source-key closure, counter/count semantics, strict lifecycle and wire negatives,
 and shared PostgreSQL guards with transaction rollback and historical replay.

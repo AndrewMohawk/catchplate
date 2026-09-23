@@ -258,6 +258,10 @@ These are separate from provisioning the production services:
   a supplied root pair. Neither component is wired into that reader or receipt
   path; maintained storage and independent root-pair authority remain missing.
   No existing exact-page metadata is newly trusted by this work.
+  [Query retention and pre-kernel verification](authority-query-read-retention.md)
+  now preserve per-query observations and verify primary membership before the
+  transition. They do not yet provide range evidence, maintained indexes or a
+  closed signed snapshot protocol for those observations.
 - The planner reads root revisions and digests from PostgreSQL; the executor
   locks and compares those database roots. This establishes a same-database
   compare-and-swap boundary, not an independently retained current-root

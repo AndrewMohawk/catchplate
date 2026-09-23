@@ -9,12 +9,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from serverware import authority_contract
+from serverware import authority_audit_capacity, authority_contract
 from serverware.authority_radix_mutation import (
     PrimaryRadixLimits,
+    PrimaryRadixMembershipResult,
     PrimaryRadixMutationError,
     PrimaryRoot,
     evaluate_primary_radix_batch,
+    evaluate_primary_radix_memberships,
 )
 from serverware.authority_transition_core import canonical_bytes, framed_digest
 
@@ -41,6 +43,37 @@ def metric_bounds() -> dict[str, int]:
         "hashWork": depth + 2 + proofs * (2 * depth + 8),
         "inputBytes": authority_contract.MAX_RESULT_BYTES,
         "jsonNodes": 1_000_000,
+    }
+
+
+def primary_plan_input_metric_bounds(operation: str) -> dict[str, int]:
+    """Source-owned bounds for the additional pre-kernel verification phase.
+
+    These are not persisted root-transition metrics or kernel workUnits. Root
+    descriptor construction can consult the cold empty ladder before entering
+    the engine, so it receives its own conservative allowance. The membership
+    engine retains its separate cold allowance and charges every full proof.
+    Empty-mutation capacity admission hashes each selected BusinessKey and, for
+    a participating operation, the compact counter state. Module import work,
+    SQL proof production and later delta/payload verification are separate.
+    """
+    spec = authority_contract.operation_spec(operation)
+    depth = authority_contract.TREE_DEPTH
+    selected = spec["maximumQueryRows"]
+    root_allowance = depth + 2
+    membership_hashes = depth + 2 + selected * (depth + 6)
+    audit_hashes = selected + int(spec["globalAuditCapacity"])
+    shared = metric_bounds()
+    return {
+        "selectedRows": selected,
+        "proofVectors": shared["proofVectors"],
+        "proofChildSlots": shared["proofChildSlots"],
+        "rootDescriptorHashAllowance": root_allowance,
+        "membershipHashWork": membership_hashes,
+        "auditCapacityHashAllowance": audit_hashes,
+        "totalHashWork": root_allowance + membership_hashes + audit_hashes,
+        "inputBytes": shared["inputBytes"],
+        "jsonNodes": shared["jsonNodes"],
     }
 
 
@@ -153,6 +186,75 @@ def derive_authorization_sources(*, operation: str, selected_rows: Any) -> list[
         raise PrimaryRadixMutationError("authorization source selections do not cover declared relations")
     result.sort(key=lambda entry: (entry["table"], canonical_bytes(entry["selector"])))
     return result
+
+
+def verify_primary_plan_inputs(
+    *, operation: str, business_before_roots: Any, authorization_before_roots: Any,
+    selected_rows: Any, before_proofs: Any,
+) -> PrimaryRadixMembershipResult:
+    """Reverify selected inputs before a kernel, returning the actual snapshots.
+
+    This always invokes the real membership engine, with source table contracts
+    and no mutations; no caller-created result or alternate limits are accepted.
+    The returned nested dictionaries are owned but mutable, not authority tokens.
+    The caller must use these rows/proofs, then independently recompute the final
+    mutation delta. This phase does not authenticate earlier deferred SQL
+    predicates, predicate completeness, or independently current before roots.
+
+    The engine's input-byte metric covers its one canonical snapshot. Capacity
+    admission separately enforces the original business 4 MiB selected envelope
+    plus the exact framework allowance; its bounded canonical passes are not
+    additional proof input or a claim of a whole-process allocation ceiling.
+    """
+    from serverware.authority_primary_contract import primary_table_contracts
+
+    spec = authority_contract.operation_spec(operation)
+    bounds = primary_plan_input_metric_bounds(operation)
+    for inventory in (business_before_roots, authorization_before_roots,
+                      selected_rows, before_proofs):
+        if type(inventory) not in (list, tuple):
+            raise PrimaryRadixMutationError("primary plan input inventory is not an array")
+    if (len(business_before_roots) + len(authorization_before_roots) > authority_contract.MAX_QUERY_PROOFS
+            or len(selected_rows) > bounds["selectedRows"]
+            or len(before_proofs) != len(selected_rows)):
+        raise PrimaryRadixMutationError("primary plan input inventory exceeds operation bounds")
+
+    # Reserve before constructors can consult empty_digest. The genuine engine
+    # enforces its own hash allowance before reconstruction; do not discount it
+    # merely because these constructors may have warmed the same empty ladder.
+    charged_hashes = bounds["rootDescriptorHashAllowance"]
+    business = _roots(list(business_before_roots))
+    authorization = _roots(list(authorization_before_roots))
+    memberships = evaluate_primary_radix_memberships(
+        table_contracts=primary_table_contracts(operation),
+        business_before_roots=business, authorization_before_roots=authorization,
+        selected_rows=tuple(selected_rows), before_proofs=tuple(before_proofs),
+        limits=PrimaryRadixLimits(
+            max_selected_rows=spec["maximumQueryRows"], max_mutations=spec["maximumMutations"],
+            max_proof_vectors=bounds["proofVectors"], max_proof_child_slots=bounds["proofChildSlots"],
+            max_hashes=bounds["membershipHashWork"], max_input_bytes=bounds["inputBytes"],
+            max_json_depth=128, max_json_nodes=bounds["jsonNodes"],
+        ),
+    )
+    if (memberships.result.business_after_roots != business
+            or memberships.result.authorization_after_roots != authorization
+            or memberships.result.metrics.mutations != 0
+            or memberships.result.metrics.recomputed_ancestors != 0):
+        raise PrimaryRadixMutationError("primary plan membership verification changed before roots")
+    charged_hashes += memberships.result.metrics.hash_work
+    # Reserve actual source-capacity validation work before calling it. This
+    # reuses the owned engine rows and creates neither a counter mutation nor a
+    # baseline when the required global counter is missing.
+    charged_hashes += len(memberships.selected_rows) + int(spec["globalAuditCapacity"])
+    if charged_hashes > bounds["totalHashWork"]:
+        raise PrimaryRadixMutationError("primary plan input hash budget exceeded")
+    try:
+        authority_audit_capacity.validate_capacity_transition(
+            operation=operation, selected_rows=memberships.selected_rows, mutations=(),
+        )
+    except (authority_audit_capacity.AuditCapacityError, ValueError) as exc:
+        raise PrimaryRadixMutationError("primary plan audit capacity inputs changed") from exc
+    return memberships
 
 
 def derive_primary_root_transition(

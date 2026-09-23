@@ -37,6 +37,11 @@ The [explicit-context attestation core](webauthn-attestation-core.md) prepares
 shared registration cryptography for an eventual measured evidence producer.
 It does not itself produce signed authority evidence or fill a missing kernel.
 
+The [row-mutation SQL correction](authority-row-mutation-sql.md) addresses
+separate executor parameter, absence and identifier defects. Its shared SQL
+component fixture does not establish full executor or startup success; existing
+installed function definitions still require explicit repair admission.
+
 ## Implementation contracts still needed
 
 The following bounds are the existing contract, not permission to truncate a

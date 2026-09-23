@@ -9,6 +9,12 @@ from typing import Any
 
 from serverware import authority_contract
 from serverware import authority_transition_registry
+from serverware.authority_store.mutation_sql import (
+    apply_mutation_sql,
+    closed_record_sql,
+    locked_primary_key_row_sql,
+    selected_row_matches_sql,
+)
 from serverware.authority_store.webauthn_trust_sql import (
     locked_webauthn_trust_projection,
 )
@@ -1972,14 +1978,10 @@ def install_authority_v9_executor(
                             projected.value->'selector'
                         ) COLLATE "C"
             LOOP
-                IF pg_catalog.jsonb_typeof(authorization_source) <>
-                        'object'
-                    OR pg_catalog.jsonb_object_length(
-                        authorization_source
-                    ) <> 5
+                IF NOT {closed_record_sql('authorization_source')}
                     OR pg_catalog.jsonb_typeof(
                         authorization_source->'selector'
-                    ) <> 'object'
+                    ) IS DISTINCT FROM 'object'
                     OR NOT EXISTS (
                         SELECT 1
                         FROM {namespace}.
@@ -2017,51 +2019,8 @@ def install_authority_v9_executor(
                     RAISE EXCEPTION
                         'authority authorization selector is not exact';
                 END IF;
-                SELECT pg_catalog.string_agg(
-                    pg_catalog.format(
-                        'target.%I IS NOT DISTINCT FROM '
-                        '(($1->''selector''->>%L)::%s)',
-                        key_column.column_name,
-                        key_column.column_name,
-                        pg_catalog.format_type(
-                            attribute.atttypid, attribute.atttypmod
-                        )
-                    ),
-                    ' AND ' ORDER BY key_column.ordinal
-                )
-                INTO key_predicate
-                FROM pg_catalog.jsonb_array_elements_text(key_columns)
-                    WITH ORDINALITY AS key_column(
-                        column_name, ordinal
-                    )
-                JOIN pg_catalog.pg_class AS relation
-                    ON relation.relname =
-                        authorization_source->>'table'
-                JOIN pg_catalog.pg_namespace AS relation_namespace
-                    ON relation_namespace.oid = relation.relnamespace
-                    AND relation_namespace.nspname = '{namespace}'
-                JOIN pg_catalog.pg_attribute AS attribute
-                    ON attribute.attrelid = relation.oid
-                    AND attribute.attname = key_column.column_name
-                    AND attribute.attnum > 0
-                    AND NOT attribute.attisdropped;
-                EXECUTE pg_catalog.format(
-                    'SELECT to_jsonb(target) FROM %I.%I AS target '
-                    'WHERE %s FOR UPDATE',
-                    '{namespace}',
-                    authorization_source->>'table',
-                    key_predicate
-                )
-                INTO current_row
-                USING authorization_source;
-                IF (
-                    authorization_source->>'present' = 'true'
-                    AND current_row IS NULL
-                ) OR (
-                    authorization_source->>'present' = 'false'
-                    AND current_row IS NOT NULL
-                ) OR current_row IS DISTINCT FROM
-                    authorization_source->'row'
+                {locked_primary_key_row_sql(namespace, 'authorization_source')}
+                IF NOT {selected_row_matches_sql('authorization_source')}
                     OR authorization_source->>'rowDigest'
                         IS DISTINCT FROM
                         {namespace}.
@@ -2275,51 +2234,8 @@ def install_authority_v9_executor(
                     RAISE EXCEPTION
                         'authority v9 selected key is not exact';
                 END IF;
-                SELECT pg_catalog.string_agg(
-                    pg_catalog.format(
-                        'target.%I IS NOT DISTINCT FROM '
-                        '(($1->''key''->>%L)::%s)',
-                        key_column.column_name,
-                        key_column.column_name,
-                        pg_catalog.format_type(
-                            attribute.atttypid, attribute.atttypmod
-                        )
-                    ),
-                    ' AND ' ORDER BY key_column.ordinal
-                )
-                INTO key_predicate
-                FROM pg_catalog.jsonb_array_elements_text(key_columns)
-                    WITH ORDINALITY AS key_column(
-                        column_name, ordinal
-                    )
-                JOIN pg_catalog.pg_class AS relation
-                    ON relation.relname = selected_row->>'table'
-                JOIN pg_catalog.pg_namespace AS relation_namespace
-                    ON relation_namespace.oid = relation.relnamespace
-                    AND relation_namespace.nspname = '{namespace}'
-                JOIN pg_catalog.pg_attribute AS attribute
-                    ON attribute.attrelid = relation.oid
-                    AND attribute.attname = key_column.column_name
-                    AND attribute.attnum > 0
-                    AND NOT attribute.attisdropped;
-                EXECUTE pg_catalog.format(
-                    'SELECT to_jsonb(target) FROM %I.%I AS target '
-                    'WHERE %s FOR UPDATE',
-                    '{namespace}',
-                    selected_row->>'table',
-                    key_predicate
-                )
-                INTO current_row
-                USING selected_row;
-                IF (
-                    selected_row->>'present' = 'true'
-                    AND current_row IS NULL
-                ) OR (
-                    selected_row->>'present' = 'false'
-                    AND current_row IS NOT NULL
-                ) OR (
-                    current_row IS DISTINCT FROM selected_row->'row'
-                ) THEN
+                {locked_primary_key_row_sql(namespace, 'selected_row')}
+                IF NOT {selected_row_matches_sql('selected_row')} THEN
                     RAISE EXCEPTION
                         'authority v9 selected business row changed';
                 END IF;
@@ -2870,11 +2786,11 @@ def install_authority_v9_executor(
                     planned.value->>'keyDigest' COLLATE "C",
                     planned.value->>'operation' COLLATE "C"
             LOOP
-                IF mutation->>'operation'
-                        NOT IN ('INSERT', 'UPDATE', 'DELETE')
-                    OR pg_catalog.jsonb_object_length(mutation) <> 7
-                    OR pg_catalog.jsonb_typeof(mutation->'key') <>
-                        'object'
+                IF NOT {closed_record_sql('mutation')}
+                    OR (mutation->>'operation'
+                        IN ('INSERT', 'UPDATE', 'DELETE')) IS NOT TRUE
+                    OR pg_catalog.jsonb_typeof(mutation->'key')
+                        IS DISTINCT FROM 'object'
                     OR NOT EXISTS (
                         SELECT 1
                         FROM {namespace}.
@@ -2942,170 +2858,7 @@ def install_authority_v9_executor(
                     AS dependency
                 WHERE dependency.operation = capability.operation
                   AND dependency.table_name = mutation->>'table';
-                SELECT pg_catalog.string_agg(
-                    pg_catalog.format(
-                        'target.%I IS NOT DISTINCT FROM '
-                        '(($1->''key''->>%L)::%s)',
-                        key_column.column_name,
-                        key_column.column_name,
-                        pg_catalog.format_type(
-                            attribute.atttypid, attribute.atttypmod
-                        )
-                    ),
-                    ' AND ' ORDER BY key_column.ordinal
-                )
-                INTO key_predicate
-                FROM pg_catalog.jsonb_array_elements_text(key_columns)
-                    WITH ORDINALITY AS key_column(
-                        column_name, ordinal
-                    )
-                JOIN pg_catalog.pg_class AS relation
-                    ON relation.relname = mutation->>'table'
-                JOIN pg_catalog.pg_namespace AS relation_namespace
-                    ON relation_namespace.oid = relation.relnamespace
-                    AND relation_namespace.nspname = '{namespace}'
-                JOIN pg_catalog.pg_attribute AS attribute
-                    ON attribute.attrelid = relation.oid
-                    AND attribute.attname = key_column.column_name
-                    AND attribute.attnum > 0
-                    AND NOT attribute.attisdropped;
-                EXECUTE pg_catalog.format(
-                    'SELECT to_jsonb(target) FROM %I.%I AS target '
-                    'WHERE %s FOR UPDATE',
-                    '{namespace}',
-                    mutation->>'table',
-                    key_predicate
-                )
-                INTO current_row
-                USING mutation;
-                IF current_row IS DISTINCT FROM mutation->'expectedRow' THEN
-                    RAISE EXCEPTION
-                        'authority v9 mutation CAS precondition changed';
-                END IF;
-                IF mutation->>'operation' = 'INSERT' THEN
-                    IF current_row IS NOT NULL
-                        OR pg_catalog.jsonb_typeof(mutation->'row') <>
-                            'object'
-                    THEN
-                        RAISE EXCEPTION
-                            'authority v9 insert precondition is invalid';
-                    END IF;
-                    SELECT pg_catalog.string_agg(
-                        pg_catalog.format('%I', attribute.attname),
-                        ', ' ORDER BY attribute.attnum
-                    )
-                    INTO update_columns
-                    FROM pg_catalog.pg_attribute AS attribute
-                    JOIN pg_catalog.pg_class AS relation
-                        ON relation.oid = attribute.attrelid
-                    JOIN pg_catalog.pg_namespace AS relation_namespace
-                        ON relation_namespace.oid =
-                            relation.relnamespace
-                    WHERE relation_namespace.nspname = '{namespace}'
-                      AND relation.relname = mutation->>'table'
-                      AND attribute.attnum > 0
-                      AND NOT attribute.attisdropped
-                      AND attribute.attgenerated = ''
-                      AND attribute.attidentity = '';
-                    IF update_columns IS NULL THEN
-                        RAISE EXCEPTION
-                            'authority v9 insert has no writable columns';
-                    END IF;
-                    EXECUTE pg_catalog.format(
-                        'INSERT INTO %I.%I (%s) SELECT %s FROM '
-                        'pg_catalog.jsonb_populate_record(NULL::%I.%I, $1)',
-                        '{namespace}',
-                        mutation->>'table',
-                        update_columns,
-                        update_columns,
-                        '{namespace}',
-                        mutation->>'table'
-                    )
-                    USING mutation->'row';
-                ELSIF mutation->>'operation' = 'UPDATE' THEN
-                    IF current_row IS NULL
-                        OR pg_catalog.jsonb_typeof(mutation->'row') <>
-                            'object'
-                    THEN
-                        RAISE EXCEPTION
-                            'authority v9 update precondition is invalid';
-                    END IF;
-                    SELECT pg_catalog.string_agg(
-                        pg_catalog.format('%I', attribute.attname),
-                        ', ' ORDER BY attribute.attnum
-                    )
-                    INTO update_columns
-                    FROM pg_catalog.pg_attribute AS attribute
-                    JOIN pg_catalog.pg_class AS relation
-                        ON relation.oid = attribute.attrelid
-                    JOIN pg_catalog.pg_namespace AS relation_namespace
-                        ON relation_namespace.oid =
-                            relation.relnamespace
-                    WHERE relation_namespace.nspname = '{namespace}'
-                      AND relation.relname = mutation->>'table'
-                      AND attribute.attnum > 0
-                      AND NOT attribute.attisdropped
-                      AND attribute.attgenerated = ''
-                      AND attribute.attidentity = '';
-                    EXECUTE pg_catalog.format(
-                        'UPDATE %I.%I AS target SET (%s) = '
-                        '(SELECT %s FROM '
-                        'pg_catalog.jsonb_populate_record(NULL::%I.%I, $1)) '
-                        'WHERE %s',
-                        '{namespace}',
-                        mutation->>'table',
-                        update_columns,
-                        update_columns,
-                        '{namespace}',
-                        mutation->>'table',
-                        key_predicate
-                    )
-                    USING mutation->'row';
-                ELSIF mutation->>'operation' = 'DELETE' THEN
-                    IF current_row IS NULL
-                        OR mutation->'row' IS DISTINCT FROM
-                            'null'::pg_catalog.jsonb
-                    THEN
-                        RAISE EXCEPTION
-                            'authority v9 delete precondition is invalid';
-                    END IF;
-                    EXECUTE pg_catalog.format(
-                        'DELETE FROM %I.%I AS target WHERE %s',
-                        '{namespace}',
-                        mutation->>'table',
-                        key_predicate
-                    )
-                    USING mutation;
-                ELSE
-                    RAISE EXCEPTION
-                        'authority v9 mutation template is unreachable';
-                END IF;
-                GET DIAGNOSTICS matched_count = ROW_COUNT;
-                IF matched_count <> 1 THEN
-                    RAISE EXCEPTION
-                        'authority v9 mutation cardinality is not exact';
-                END IF;
-                EXECUTE pg_catalog.format(
-                    'SELECT to_jsonb(target) FROM %I.%I AS target '
-                    'WHERE %s',
-                    '{namespace}',
-                    mutation->>'table',
-                    key_predicate
-                )
-                INTO post_row
-                USING mutation;
-                IF (
-                        mutation->>'operation' = 'DELETE'
-                        AND post_row IS NOT NULL
-                    )
-                    OR (
-                        mutation->>'operation' <> 'DELETE'
-                        AND post_row IS DISTINCT FROM mutation->'row'
-                    )
-                THEN
-                    RAISE EXCEPTION
-                        'authority v9 mutation postcondition changed';
-                END IF;
+                {apply_mutation_sql(namespace)}
             END LOOP;
 
             now_epoch_ns := pg_catalog.floor(

@@ -69,6 +69,14 @@ malicious database omitted no matching row. The current exact-page helper
 checks self-consistent hashes, not a reconstructed complete interval, and is
 not a usable completeness authority.
 
+The new [counted-index range component](authority-index-range.md) now implements
+bounded sparse-frontier reconstruction for one complete fixed-key interval. It
+opens every intersecting nonempty subtree and hashes counts into the computed
+root. This source-only component is not yet an admitted predicate proof: fixed
+row projections, same-checkpoint primary joins, installed index storage and
+all-writer maintenance remain absent. It does not replace the existing query
+primitive or enable any missing kernel.
+
 The coordinated index/query manifest must cover at least these fixed selectors:
 
 | Relation | Required complete selection or absence/count fact |

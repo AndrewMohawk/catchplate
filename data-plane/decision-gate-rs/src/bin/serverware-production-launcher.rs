@@ -6711,6 +6711,17 @@ mod tests {
             json!(sha256_prefixed(&canonical_json_bytes(contract).unwrap()));
     }
 
+    fn rebind_nonce_authority_assurance(value: &mut Value) {
+        let assurance = &value["nonceRollbackAssurance"]["contract"]["publicConfigPins"]
+            ["nonceAuthorityAssurance"];
+        let assurance_digest = sha256_prefixed(&canonical_json_bytes(assurance).unwrap());
+        value["nonceRollbackAssurance"]["contract"]["publicConfigPins"]
+            ["nonceAuthorityAssuranceSha256"] = json!(assurance_digest.clone());
+        value["nonceRollbackAssurance"]["contract"]["independentVerifierPins"]
+            ["expectedNonceAuthorityAssuranceSha256"] = json!(assurance_digest);
+        rebind_nonce_rollback_assurance_contract(value);
+    }
+
     fn global_role_registry_json(
         witness: &LaunchAuthorityWitnessConfiguration,
         nonce: &Value,
@@ -7220,7 +7231,7 @@ mod tests {
         wrong_profile["nonceRollbackAssurance"]["contract"]["publicConfigPins"]
             ["nonceAuthorityAssurance"]["rollbackProtection"]["mechanism"] =
             json!("appendOnlyWitnessedLedger");
-        rebind_nonce_rollback_assurance_contract(&mut wrong_profile);
+        rebind_nonce_authority_assurance(&mut wrong_profile);
         assert!(parse_manifest(&manifest_bytes(&wrong_profile))
             .unwrap_err()
             .to_string()
@@ -7244,11 +7255,43 @@ mod tests {
         unsafe_integer["nonceRollbackAssurance"]["contract"]["publicConfigPins"]
             ["nonceAuthorityAssurance"]["authorityGeneration"] =
             json!(JSON_SAFE_INTEGER_MAX + 1);
-        rebind_nonce_rollback_assurance_contract(&mut unsafe_integer);
+        rebind_nonce_authority_assurance(&mut unsafe_integer);
         assert!(parse_manifest(&manifest_bytes(&unsafe_integer))
             .unwrap_err()
             .to_string()
             .contains("complete production rollback profile"));
+    }
+
+    #[test]
+    fn nonce_rollback_assurance_rejects_stale_nested_digest_pins() {
+        let mut changed = manifest_json();
+        changed["nonceRollbackAssurance"]["contract"]["publicConfigPins"]
+            ["nonceAuthorityAssurance"]["authorityGeneration"] = json!(2);
+        let assurance_digest = sha256_prefixed(&canonical_json_bytes(
+            &changed["nonceRollbackAssurance"]["contract"]["publicConfigPins"]
+                ["nonceAuthorityAssurance"],
+        ).unwrap());
+        for refreshed_pin in [None, Some("public"), Some("independent")] {
+            let mut stale = changed.clone();
+            match refreshed_pin {
+                Some("public") => {
+                    stale["nonceRollbackAssurance"]["contract"]["publicConfigPins"]
+                        ["nonceAuthorityAssuranceSha256"] = json!(assurance_digest.clone());
+                }
+                Some("independent") => {
+                    stale["nonceRollbackAssurance"]["contract"]["independentVerifierPins"]
+                        ["expectedNonceAuthorityAssuranceSha256"] = json!(assurance_digest.clone());
+                }
+                None => {},
+                _ => unreachable!("closed fixture pin selection"),
+            }
+            rebind_nonce_rollback_assurance_contract(&mut stale);
+            assert_eq!(
+                parse_manifest(&manifest_bytes(&stale)).unwrap_err().to_string(),
+                "nonce authority assurance canonical digest is not independently pinned",
+                "both nested assurance pins must match, refreshed pin: {refreshed_pin:?}",
+            );
+        }
     }
 
     #[test]

@@ -9,6 +9,7 @@ import json
 import os
 import shlex
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
@@ -4096,6 +4097,7 @@ PINNED_EXECUTABLE_NAMES = {
     "SERVERWARE_DATA_PLANE_RESPONSE_PROOF_ATTESTATION_COMMAND": "response-proof-attest",
     "SERVERWARE_DATA_PLANE_LEASE_RECIPIENT_VERIFY_COMMAND": "lease-recipient-verify",
     "SERVERWARE_CONTROL_PLANE_ATTESTATION_VERIFY_COMMAND": "control-plane-attestation-verify",
+    "SERVERWARE_RESPONSE_OBSERVATION_V2_TEE_VERIFY_COMMAND": "response-observation-v2-tee-verify",
     "SERVERWARE_PROXY_PROOF_COLLECTOR_COMMAND": "serverware-proof-client",
     "SERVERWARE_PRODUCTION_PYTHON_EXECUTABLE": "production-python",
     "SERVERWARE_DOCKER_EXECUTABLE": "production-docker",
@@ -4103,10 +4105,23 @@ PINNED_EXECUTABLE_NAMES = {
 
 
 def fixture_executable_bytes(setting: str) -> bytes:
+    if setting == "SERVERWARE_RESPONSE_OBSERVATION_V2_TEE_VERIFY_COMMAND":
+        # Byte-shape/digest fixture only; never execute this as a TEE verifier.
+        code = b"\xb8\x3c\x00\x00\x00\x31\xff\x0f\x05"
+        size = 64 + 56 + len(code)
+        header = struct.pack(
+            "<16sHHIQQQIHHHHHH",
+            b"\x7fELF\x02\x01\x01" + b"\0" * 9,
+            2, 62, 1, 0x400000 + 120, 64, 0, 0, 64, 56, 1, 0, 0, 0,
+        )
+        segment = struct.pack("<IIQQQQQQ", 1, 5, 0, 0x400000, 0x400000, size, size, 4096)
+        return header + segment + code
     return f"#!/bin/sh\n# {setting}\nexit 0\n".encode("ascii")
 
 
 def fixture_executable_digest_manifest() -> dict[str, str]:
+    if set(PINNED_EXECUTABLE_NAMES) != production_host_preflight_module.PINNED_EXECUTABLE_COMMAND_SETTINGS:
+        raise AssertionError("release fixture executable names must cover the exact pinned command set")
     return {
         setting: sha256_prefixed_bytes(fixture_executable_bytes(setting))
         for setting in sorted(PINNED_EXECUTABLE_NAMES)
@@ -6350,19 +6365,28 @@ def test_final_production_env_binding() -> None:
         else:
             raise AssertionError("direct final verifier accepted an alternate launcher env path")
 
-        changed_helper = tmp.resolve() / "attestation-helpers" / "serverware-proof-client"
-        original_helper = changed_helper.read_bytes()
-        changed_helper.write_bytes(b"#!/bin/sh\nexit 9\n")
-        changed_helper.chmod(0o755)
-        try:
-            verify_binding()
-        except ValueError as exc:
-            if "current pinned executable remeasurement failed" not in str(exc):
-                raise
-        else:
-            raise AssertionError("direct final verifier accepted collector replacement after preflight")
-        changed_helper.write_bytes(original_helper)
-        changed_helper.chmod(0o755)
+        for helper_name in ("serverware-proof-client", "response-observation-v2-tee-verify"):
+            changed_helper = tmp.resolve() / "attestation-helpers" / helper_name
+            original_helper = changed_helper.read_bytes()
+            changed_bytes = original_helper + b"\n# replaced fixture bytes\n"
+            if helper_name == "response-observation-v2-tee-verify":
+                run_production_readiness.validate_static_amd64_elf(changed_bytes, "tampered fixture")
+            changed_helper.write_bytes(changed_bytes)
+            changed_helper.chmod(0o755)
+            try:
+                try:
+                    verify_binding()
+                except ValueError as exc:
+                    if (
+                        "current pinned executable remeasurement failed" not in str(exc)
+                        or "SHA-256 does not match" not in str(exc)
+                    ):
+                        raise
+                else:
+                    raise AssertionError(f"direct final verifier accepted {helper_name} replacement after preflight")
+            finally:
+                changed_helper.write_bytes(original_helper)
+                changed_helper.chmod(0o755)
 
         changed_compose_plugin = Path(
             configured[run_production_readiness.DOCKER_COMPOSE_PLUGIN_EXECUTABLE_ENV]

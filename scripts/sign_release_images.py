@@ -26,6 +26,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey,
 
 import serverware_source_tree
 import verify_production_readiness
+import sigstore_json
 from serverware.http_client import request_bytes
 
 FIXTURE_COMMAND_MARKERS = ("fixture", "cosign_fixture.py", "sigstore_fixture.py")
@@ -284,7 +285,7 @@ def run_json_command(command: str, payload: dict[str, Any], *, timeout: int = 60
         detail = result.stderr.decode("utf-8", errors="replace") or result.stdout.decode("utf-8", errors="replace")
         raise RuntimeError(f"external signing command failed with exit {result.returncode}: {detail[-2000:]}")
     try:
-        response = json.loads(result.stdout.decode("utf-8"))
+        response = sigstore_json.parse_json(result.stdout)
     except Exception as exc:
         raise RuntimeError("external signing command returned invalid JSON") from exc
     if response.get("ok") is not True:
@@ -351,6 +352,7 @@ def validate_sigstore_response(response: dict[str, Any], *, statement_digest: st
     if not response.get("key_provider"):
         raise RuntimeError(f"external signature is missing key_provider binding: {response}")
     if require_transparency:
+        sigstore_json.validate(response, scope="response")
         transparency = response.get("transparency") or {}
         required = {"log_id", "entry_uuid", "integrated_time", "inclusion_proof"}
         missing = sorted(required - set(transparency))
@@ -375,6 +377,7 @@ def validate_sigstore_verify_response(
         if verify.get("verified_transparency") is not True:
             raise RuntimeError(f"external signature verifier did not prove transparency: {verify}")
         verified_transparency = verify.get("transparency") if isinstance(verify.get("transparency"), dict) else {}
+        sigstore_json.validate(verified_transparency, scope="transparency")
         signed_transparency = signature_response.get("transparency") if isinstance(signature_response.get("transparency"), dict) else {}
         for key in ("log_id", "entry_uuid", "integrated_time", "log_index", "inclusion_proof"):
             if signed_transparency.get(key) != verified_transparency.get(key):
@@ -391,7 +394,9 @@ def external_sign_statement(
     image_id: str | None,
     statement: dict[str, Any],
 ) -> dict[str, Any]:
-    statement_digest = sha256_prefixed_json(statement)
+    statement_digest = sha256_prefixed_bytes(
+        sigstore_json.statement_json(statement, kind=kind).encode("utf-8")
+    )
     payload = {
         "apiVersion": "serverware.sigstoreSignRequest/v1",
         "kind": kind,
@@ -729,7 +734,9 @@ def main() -> None:
     else:
         assert key is not None
         bundle["metadata"]["signature"] = sign_value(key, signature_payload(bundle))
-    bundle_digest = sha256_prefixed_json(signature_payload(bundle))
+    bundle_digest = sha256_prefixed_bytes(
+        sigstore_json.statement_json(signature_payload(bundle), kind="image-signature-bundle").encode("utf-8")
+    )
     bundle["image_signature_bundle_digest"] = bundle_digest
 
     record = {
@@ -771,6 +778,7 @@ def main() -> None:
     }
 
     out_path = ROOT / args.out
+    sigstore_json.validate(bundle, scope="image-signatures", label="image signatures")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(bundle, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     if not production_refs:

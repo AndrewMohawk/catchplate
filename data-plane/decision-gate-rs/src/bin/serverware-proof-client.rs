@@ -8704,11 +8704,20 @@ mod tests {
         )
         .expect("parse receipt response statement");
         response_statement["body_sha256"] = Value::String(response_body_digest);
-        let response_statement = canonical_json(&response_statement).into_bytes();
+        let response_statement = canonical_json_ensure_ascii(&response_statement).into_bytes();
         statement["control_plane_authorization_receipt"]["response"]["statement_b64"] =
             Value::String(general_purpose::URL_SAFE_NO_PAD.encode(&response_statement));
         statement["control_plane_authorization_receipt"]["response"]["statement_sha256"] =
             Value::String(sha256_prefixed(&response_statement));
+        statement["control_plane_authorization_receipt"]["response"]["signature"] =
+            Value::String(format!(
+                "ed25519:{}",
+                general_purpose::URL_SAFE_NO_PAD.encode(
+                    control_plane_response_signing_key()
+                        .sign(&response_statement)
+                        .to_bytes()
+                )
+            ));
 
         let receipt_digest = sha256_prefixed(
             canonical_json(&statement["control_plane_authorization_receipt"]).as_bytes(),
@@ -9026,6 +9035,36 @@ mod tests {
             verify_stream_runtime_proof(&wrong_signature, &response, &expectations)
                 .expect_err("wrong signature")
                 .contains("verification failed")
+        );
+    }
+
+    #[test]
+    fn streaming_runtime_proof_rejects_stale_control_plane_response_signature() {
+        let verifier_key = SigningKey::from_bytes(&[11u8; 32]);
+        let (mut proof, nonce_bytes, response_key) = streaming_proof(&verifier_key);
+        let response = captured_stream_response();
+        let nonce = general_purpose::URL_SAFE_NO_PAD.encode(nonce_bytes);
+        let exporter = general_purpose::URL_SAFE_NO_PAD.encode([8u8; 32]);
+        let control_plane_response_key = control_plane_response_signing_key().verifying_key();
+        let expectations =
+            streaming_expectations(&nonce, &exporter, &control_plane_response_key);
+        verify_stream_runtime_proof(&proof, &response, &expectations)
+            .expect("freshly signed streaming receipt must verify");
+
+        let (buffered, _, _) = production_proof(&verifier_key);
+        let receipt = &mut proof["streaming_response_statement"]
+            ["control_plane_authorization_receipt"];
+        receipt["response"]["signature"] = buffered["server_statement"]
+            ["control_plane_authorization_receipt"]["response"]["signature"].clone();
+        let receipt_digest = sha256_prefixed(canonical_json(receipt).as_bytes());
+        proof["streaming_response_statement"]["control_plane_authorization_receipt_sha256"] =
+            Value::String(receipt_digest);
+        resign_streaming_statement(&mut proof, &response_key);
+        resign_streaming_attestation(&mut proof, &verifier_key);
+        assert_eq!(
+            verify_stream_runtime_proof(&proof, &response, &expectations)
+                .expect_err("an old response signature cannot authenticate a changed binding"),
+            "control-plane authorization receipt response signature verification failed",
         );
     }
 
@@ -9985,7 +10024,7 @@ mod tests {
         assert!(
             verify_runtime_proof(&invalid_attempt, &response, &expectations)
                 .expect_err("non-digest attempt identity must fail closed")
-                .contains("must be canonical lowercase sha256")
+                .contains("runtime proof field attempt_id is not a canonical SHA-256 digest")
         );
 
         let mut invalid_time = proof.clone();
@@ -10009,7 +10048,7 @@ mod tests {
         assert!(
             verify_runtime_proof(&raw_header_tamper, &response, &expectations)
                 .expect_err("raw upstream header tamper must fail closed")
-                .contains("canonical upstream response binding")
+                .contains("server response upstream canonical digest mismatch")
         );
 
         let mut false_completion_claim = proof.clone();
@@ -10034,7 +10073,7 @@ mod tests {
         assert!(
             verify_runtime_proof(&mismatched_upstream_status, &response, &expectations)
                 .expect_err("mismatched upstream status must fail closed")
-                .contains("upstream_response.status must match response.status")
+                .contains("server response upstream status binding mismatch")
         );
 
         let mut legacy = proof;

@@ -7016,13 +7016,41 @@ mod tests {
             .response
             .body_b64 = general_purpose::URL_SAFE_NO_PAD
             .encode(canonical_json_bytes(&tampered).expect("tampered dispatch body"));
-        assert!(validate_release_authorization_binding(
+        assert_eq!(validate_release_authorization_binding(
             &ResponseStatementAuthorityView::from(&statement),
             &binding,
         )
         .expect_err("calendar proof must require the exact window end")
-        .message
-        .contains("window end is missing"));
+        .message,
+        "dispatch quota fields do not match the versioned window contract");
+
+        tampered["quotas"][0]["windowEndEpochMs"] = Value::Null;
+        statement
+            .control_plane_authorization_receipt
+            .response
+            .body_b64 = general_purpose::URL_SAFE_NO_PAD
+            .encode(canonical_json_bytes(&tampered).expect("null calendar window end"));
+        assert_eq!(validate_release_authorization_binding(
+            &ResponseStatementAuthorityView::from(&statement),
+            &binding,
+        )
+        .expect_err("an explicit null cannot satisfy the calendar window end")
+        .message,
+        "dispatch calendar quota window end is missing");
+
+        tampered["quotas"][0]["windowEndEpochMs"] = json!(window_end_epoch_ms + 1);
+        statement
+            .control_plane_authorization_receipt
+            .response
+            .body_b64 = general_purpose::URL_SAFE_NO_PAD
+            .encode(canonical_json_bytes(&tampered).expect("inexact calendar window end"));
+        assert_eq!(validate_release_authorization_binding(
+            &ResponseStatementAuthorityView::from(&statement),
+            &binding,
+        )
+        .expect_err("calendar window boundaries cannot drift by one millisecond")
+        .message,
+        "dispatch calendar quota boundaries are not exact");
     }
 
     #[test]

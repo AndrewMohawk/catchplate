@@ -31,6 +31,9 @@ signatures. Signing and deployment consume those reports without regenerating th
 
 Do not transfer production private keys to the source checkout or build worker.
 Move only immutable artifacts and the necessary public evidence between stages.
+The [release interoperability notes](release-interoperability.md) describe the
+representation-preserving Sigstore boundary and the remaining distinction
+between static Compose topology and verified runtime identity/lifecycle.
 The dependency owner must publish a new wheelhouse for the current
 `cryptography==50.0.0` lock before the production build can proceed. Both dependency
 manifests must identify the same reviewed snapshot; changing pins without

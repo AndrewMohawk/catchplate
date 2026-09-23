@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from cryptography.hazmat.primitives import serialization
+import sigstore_json
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -48,7 +49,7 @@ def normalize_log_id(value: Any) -> str:
 
 
 def read_stdin() -> dict[str, Any]:
-    payload = json.loads(sys.stdin.read() or "{}")
+    payload = sigstore_json.parse_json(sys.stdin.read() or "{}")
     if not isinstance(payload, dict):
         raise SystemExit("stdin must be a JSON object")
     return payload
@@ -102,7 +103,8 @@ def validate_statement_request(request: dict[str, Any]) -> None:
     statement = request.get("statement")
     if not isinstance(statement, dict):
         raise SystemExit("request missing statement")
-    if request.get("statement_digest") != sha256_prefixed_json(statement):
+    statement_bytes = sigstore_json.statement_json(statement, kind=request.get("kind")).encode("utf-8")
+    if request.get("statement_digest") != sha256_prefixed_bytes(statement_bytes):
         raise SystemExit("statement_digest does not match statement")
 
 
@@ -119,13 +121,13 @@ def artifact_paths(base: Path, request: dict[str, Any]) -> dict[str, Path]:
 
 
 def write_statement(path: Path, statement: dict[str, Any]) -> None:
-    path.write_text(canonical_json(statement), encoding="utf-8")
+    path.write_text(sigstore_json.statement_json(statement), encoding="utf-8")
 
 
 def load_bundle(path: Path) -> dict[str, Any]:
     try:
-        bundle = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
+        bundle = sigstore_json.load_json(path.read_bytes(), scope="bundle")
+    except (ValueError, UnicodeDecodeError) as exc:
         raise SystemExit(f"cosign bundle is not JSON: {exc}") from exc
     if not isinstance(bundle, dict):
         raise SystemExit("cosign bundle must be a JSON object")
@@ -149,6 +151,7 @@ def tlog_entries(bundle: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def transparency_from_bundle(bundle: dict[str, Any]) -> dict[str, Any]:
+    sigstore_json.validate(bundle, scope="bundle")
     entries = tlog_entries(bundle)
     if not entries:
         raise SystemExit("cosign bundle is missing transparency log entries")
@@ -290,6 +293,7 @@ def sign() -> None:
             "transparency": transparency,
             "bundle": bundle,
         }
+        sigstore_json.validate(response, scope="response")
         print(canonical_json(response))
 
 
@@ -300,6 +304,7 @@ def verify() -> None:
     signature_response = request.get("signature_response")
     if not isinstance(signature_response, dict):
         raise SystemExit("verify request missing signature_response")
+    sigstore_json.validate(signature_response, scope="response")
     if signature_response.get("statement_digest") != request.get("statement_digest"):
         raise SystemExit("signature response statement_digest mismatch")
     bundle = signature_response.get("bundle")

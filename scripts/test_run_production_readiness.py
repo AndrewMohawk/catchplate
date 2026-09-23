@@ -2075,6 +2075,10 @@ def proof_policy_bundle(
         "principals": [
             {
                 "id": principal_id,
+                # A header names the agent but is not its trust anchor. This
+                # fixture admits only a local proof client; it is not a live
+                # deployment identity or evidence that any client connected.
+                "sourceCidrs": ["127.0.0.1/32"],
                 "requiredHeaders": {"X-Serverware-Agent": agent_id},
             }
         ],
@@ -2109,6 +2113,35 @@ def proof_policy_bundle(
             }
         ],
     }
+
+
+def verify_proof_policy_identity_contract() -> None:
+    with tempfile.TemporaryDirectory(dir=test_temp_root(), prefix="proof-identity-") as tmp_raw:
+        path = Path(tmp_raw) / "policy.json"
+
+        def validate(bundle: dict[str, object]) -> None:
+            path.write_text(canonical_json(bundle) + "\n", encoding="utf-8")
+            run_production_readiness.validate_proxy_proof_policy_consistency(
+                path,
+                agent_id="production-proof-agent",
+                principal_id="agent:production-proof",
+                proof_url="https://proof-target.prod.internal/health",
+            )
+
+        validate(proof_policy_bundle())
+        for selectors, expected in (
+            ([], "must define at least one enforceable identity selector"),
+            (["0.0.0.0/0"], "requiredHeaders require a non-universal source CIDR"),
+        ):
+            bundle = proof_policy_bundle()
+            bundle["principals"][0]["sourceCidrs"] = selectors
+            try:
+                validate(bundle)
+            except ValueError as exc:
+                if expected not in str(exc):
+                    raise AssertionError(f"proof identity rejected for wrong reason: {exc}") from exc
+            else:
+                raise AssertionError("proof policy accepted an unanchored agent header")
 
 
 def verify_sealed_bootstrap_receipt_contract() -> None:
@@ -3401,6 +3434,7 @@ def verify_completion_authorization_freshness_boundaries() -> None:
 
 def main() -> None:
     verify_launcher_style_helper_import()
+    verify_proof_policy_identity_contract()
     for invalid_path in ("relative/path", "/", "/tmp/../etc/passwd", "/tmp//receipt", "/tmp/receipt/"):
         try:
             run_production_readiness._normalized_absolute_receipt_path(invalid_path, "test")

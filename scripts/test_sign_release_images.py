@@ -20,6 +20,16 @@ import verify_release_completion as release_verifier  # noqa: E402
 def exercise_external_verify_contract() -> None:
     statement = {"predicate": {"source": "verify-contract"}}
     statement_digest = signer.sha256_prefixed_json(statement)
+    # This tests the external-command/response contract, not cryptographic
+    # authentication. No command runs; only the focused real-key Sigstore tests
+    # authenticate signatures, SETs, Merkle inclusion and checkpoints.
+    inclusion_proof = {
+        "treeSize": "8",
+        "logIndex": "7",
+        "rootHash": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "hashes": [],
+        "checkpoint": {"envelope": "non-cryptographic command-contract mock"},
+    }
     signed_response = {
         "ok": True,
         "statement_digest": statement_digest,
@@ -28,9 +38,27 @@ def exercise_external_verify_contract() -> None:
         "transparency": {
             "log_id": "sha256:" + "2" * 64,
             "entry_uuid": "entry",
-            "integrated_time": 1779830000,
-            "log_index": 7,
-            "inclusion_proof": {"treeSize": 8},
+            "integrated_time": "1779830000",
+            "log_index": "7",
+            "inclusion_proof": inclusion_proof,
+        },
+        "bundle": {
+            "mediaType": "application/vnd.dev.sigstore.bundle.v0.3+json",
+            "messageSignature": {
+                "messageDigest": {"algorithm": "SHA2_256", "digest": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="},
+                "signature": "sigstore:test",
+            },
+            "verificationMaterial": {
+                "publicKey": {"hint": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="},
+                "tlogEntries": [{
+                    "logIndex": "7",
+                    "integratedTime": "1779830000",
+                    "logId": {"keyId": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="},
+                    "canonicalizedBody": "e30=",
+                    "inclusionPromise": {"signedEntryTimestamp": "bW9jay1zZXQ="},
+                    "inclusionProof": inclusion_proof,
+                }],
+            },
         },
     }
     calls: list[str] = []

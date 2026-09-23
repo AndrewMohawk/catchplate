@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import copy
 import hashlib
 import json
 import os
@@ -26,6 +27,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import test_production_handoff  # noqa: E402
+import test_production_image_builds  # noqa: E402
 import test_production_release_input_preflight  # noqa: E402
 import test_production_readiness  # noqa: E402
 import build_production_images  # noqa: E402
@@ -2028,6 +2030,12 @@ def main() -> None:
         set_release_artifacts(env, paths)
         set_production_images(env, paths["images_env"])
         write_env(paths["env"], env)
+        # The real Compose renderer needs the complete current topology. These
+        # nonexistent socket/key paths are render-only fixture inputs, not
+        # provisioned authority or a passing runtime/readiness configuration.
+        compose_env_path = tmp / "compose-fixture.env"
+        compose_env = test_production_image_builds.production_compose_fixture_environment(env)
+        write_env(compose_env_path, compose_env)
         write_kms_materials(paths["kms_materials"])
         source_digest = json.loads(paths["build"].read_text(encoding="utf-8"))["metadata"]["source_tree_digest"]
         with test_production_handoff.fixture_image_measurements():
@@ -2042,7 +2050,7 @@ def main() -> None:
             )
         def offline_compose_run(command: list[str]) -> str:
             expected_command = [
-                "docker", "compose", "--env-file", str(paths["env"]),
+                "docker", "compose", "--env-file", str(compose_env_path),
                 "-f", str(ROOT / "docker-compose.production.yml"),
                 "config", "--format", "json",
             ]
@@ -2058,24 +2066,39 @@ def main() -> None:
                 expected_digest=env[run_production_readiness.DOCKER_COMPOSE_PLUGIN_SHA256_ENV],
                 cwd=ROOT,
                 env=run_production_readiness.docker_subprocess_environment(
-                    dict(os.environ), Path(env[run_production_readiness.DOCKER_UNIX_SOCKET_ENV])
+                    {name: value for name, value in os.environ.items() if not name.startswith("SERVERWARE_")},
+                    Path(env[run_production_readiness.DOCKER_UNIX_SOCKET_ENV]),
                 ),
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, text=True,
             )
             return result.stdout.strip()
 
         with patch.object(generate_release_provenance, "run", offline_compose_run):
-            _, compose_summary = generate_release_provenance.production_compose_model(
+            compose_canonical, compose_summary = generate_release_provenance.production_compose_model(
                 compose_file=ROOT / "docker-compose.production.yml",
-                env_file=paths["env"],
+                env_file=compose_env_path,
                 images=production_images,
             )
         compose_images = compose_summary.get("images", {})
         if set(compose_images) != {
             "serverware",
             "audit-anchor",
+            "policy-authority-runtime",
+            "policy-authority-verifier",
+            "policy-authority-issuer",
+            "policy-authority-executor",
+            "policy-authority-external-witness-ready",
             "custody-runtime",
             "decision-gate-rs",
+            "response-v2-generation-bootstrap",
+            "response-v2-state-authority",
+            "response-v2-credential-transport",
+            "response-v2-policy-proof-verifier",
+            "response-v2-immutable-artifact-ledger",
+            "response-v2-release-attestor-publisher",
+            "response-v2-cleanup-watchdog",
+            "response-v2-custody-router",
+            "response-v2-generation-activation",
         }:
             raise AssertionError(
                 f"production Compose proof did not retain the exact service set: {compose_summary}"
@@ -2089,6 +2112,35 @@ def main() -> None:
             env["SERVERWARE_DECISION_GATE_IMAGE"],
         }:
             raise AssertionError(f"production Compose proof did not bind immutable images: {compose_summary}")
+        for service, image in compose_images.items():
+            control_image = service in {"serverware", "audit-anchor"} or service.startswith("policy-authority-")
+            expected_image = env["SERVERWARE_CONTROL_PLANE_IMAGE" if control_image else "SERVERWARE_DECISION_GATE_IMAGE"]
+            if image != expected_image:
+                raise AssertionError(f"production service uses the wrong image family: {service}")
+        rendered_model = json.loads(compose_canonical)
+        # Only negative inputs are supplied by this stub; the positive model
+        # above came from the actual digest-pinned, daemon-disconnected renderer.
+        for label, mutate, expected_error in (
+            ("missing authority service", lambda model: model["services"].pop("policy-authority-issuer"), "services must be exactly"),
+            ("extra service", lambda model: model["services"].__setitem__("unreviewed-service", {}), "services must be exactly"),
+            ("wrong authority image", lambda model: model["services"]["policy-authority-issuer"].__setitem__("image", env["SERVERWARE_DECISION_GATE_IMAGE"]), "does not use its immutable published image"),
+            ("wrong custody image", lambda model: model["services"]["response-v2-state-authority"].__setitem__("image", env["SERVERWARE_CONTROL_PLANE_IMAGE"]), "does not use its immutable published image"),
+            ("build override", lambda model: model["services"]["policy-authority-executor"].__setitem__("build", {"context": "."}), "must not contain a build directive"),
+        ):
+            candidate = copy.deepcopy(rendered_model)
+            mutate(candidate)
+            with patch.object(generate_release_provenance, "run", return_value=json.dumps(candidate)):
+                try:
+                    generate_release_provenance.production_compose_model(
+                        compose_file=ROOT / "docker-compose.production.yml",
+                        env_file=compose_env_path,
+                        images=production_images,
+                    )
+                except ValueError as exc:
+                    if expected_error not in str(exc):
+                        raise AssertionError(f"{label} reached the wrong guard: {exc}") from exc
+                else:
+                    raise AssertionError(f"production Compose accepted {label}")
         expected_images = generate_release_provenance.merge_production_images_env.validate_production_images(
             env["SERVERWARE_PRODUCTION_IMAGES"]
         )
@@ -2106,7 +2158,7 @@ def main() -> None:
         try:
             compose_status, compose_failures = production_host_preflight.production_compose_check(
                 compose_file=ROOT / "docker-compose.production.yml",
-                env_file=paths["env"],
+                env_file=compose_env_path,
                 expected_images=expected_images,
                 expected_digest=compose_summary["sha256"],
                 skip_host_check=False,
@@ -2151,7 +2203,7 @@ def main() -> None:
             )
         _, mismatch_failures = production_host_preflight.production_compose_check(
             compose_file=ROOT / "docker-compose.production.yml",
-            env_file=paths["env"],
+            env_file=compose_env_path,
             expected_images=expected_images,
             expected_digest="sha256:" + "0" * 64,
             skip_host_check=False,
@@ -2164,7 +2216,7 @@ def main() -> None:
         compose_plugin.chmod(0o700)
         _, replaced_plugin_failures = production_host_preflight.production_compose_check(
             compose_file=ROOT / "docker-compose.production.yml",
-            env_file=paths["env"],
+            env_file=compose_env_path,
             expected_images=expected_images,
             expected_digest=compose_summary["sha256"],
             skip_host_check=False,

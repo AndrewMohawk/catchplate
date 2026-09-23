@@ -5,6 +5,7 @@ import argparse
 import base64
 import hashlib
 import hmac
+import ipaddress
 import json
 import os
 import re
@@ -67,6 +68,15 @@ CUSTODY_V2_SERVICES = (
 )
 CUSTODY_GATE_IMAGE_SERVICES = ("custody-runtime", *CUSTODY_V2_SERVICES, "decision-gate-rs")
 CUSTODY_DEV_SERVICES = (*DEV_SERVICES[:-1], *CUSTODY_GATE_IMAGE_SERVICES)
+PRODUCTION_CONTROL_IMAGE_SERVICES = (
+    "serverware", "audit-anchor", "policy-authority-runtime",
+    "policy-authority-verifier", "policy-authority-issuer",
+    "policy-authority-executor", "policy-authority-external-witness-ready",
+)
+PRODUCTION_CONTROL_HEALTHCHECK_COMMAND = (
+    "CMD", "/runtime/python/bin/python3", "-I", "-P", "-s", "-S",
+    "/runtime/authority-bootstrap/authority_fd_entrypoint.py", "control-plane-health",
+)
 PRODUCTION_CONTROL_HEALTHCHECK_SHA256 = (
     "sha256:edbdc5b8790e94a6e3ccd62f190763d5ba2ef3acc17d93a8a38a8bd4aa1b33df"
 )
@@ -1625,8 +1635,48 @@ def validate_production_custody_topology(
         raise ValueError("production custody must run as explicit UID 65531 and socket GID 65530")
     if gate.get("user") != "65532:65532":
         raise ValueError("production decision gate must run as explicit UID 65532")
-    if {str(value) for value in (gate.get("group_add") or [])} != {"65530"}:
-        raise ValueError("production decision gate must receive only custody socket GID 65530")
+    host_contract = model.get("x-serverware-policy-custody-host-contract") or {}
+    driver_gid = loaded_env.get("SERVERWARE_POLICY_CUSTODY_DRIVER_GID", "")
+    if (
+        not re.fullmatch(r"[1-9][0-9]{0,9}", driver_gid)
+        or int(driver_gid) > 4294967294
+        or driver_gid in {"65519", "65530", "65532"}
+        or str(host_contract.get("driverGroupGid", "")) != driver_gid
+        or host_contract.get("assuranceClass") != "trusted-host-no-tee"
+        or host_contract.get("socketActivation") != "systemd-inherited-seqpacket"
+    ):
+        raise ValueError("production custody requires a distinct env-bound host driver group")
+    groups = [str(value) for value in (gate.get("group_add") or [])]
+    if len(groups) != 3 or set(groups) != {"65519", "65530", driver_gid}:
+        raise ValueError("production decision gate must receive only the v2, custody, and declared host driver groups")
+    if (
+        gate.get("network_mode") != "service:serverware"
+        or gate.get("networks")
+        or gate.get("ports")
+        or serverware.get("network_mode")
+        or set(serverware.get("networks") or {}) != {"default", "gate-control", "anchor-control"}
+    ):
+        raise ValueError("production decision gate must share only the control-plane network namespace")
+    proxy_address = loaded_env.get("SERVERWARE_PROXY_BIND_ADDRESS", "")
+    try:
+        ipaddress.ip_address(proxy_address)
+    except ValueError as exc:
+        raise ValueError("production proxy bind address must be an explicit IP address") from exc
+    expected_ports = {
+        ("127.0.0.1", "3000", 3000, "tcp"),
+        (proxy_address, "8080", 9090, "tcp"),
+    }
+    ports = serverware.get("ports") or []
+    if (
+        len(ports) != 2
+        or any(not isinstance(port, dict) for port in ports)
+        or {
+            (port.get("host_ip"), str(port.get("published")), port.get("target"), port.get("protocol"))
+            for port in ports
+        } != expected_ports
+        or any(service.get("ports") for name, service in services.items() if name != "serverware")
+    ):
+        raise ValueError("production ports must publish only loopback control and the env-bound proxy through serverware")
 
     custody_env = custody.get("environment") or {}
     gate_env = gate.get("environment") or {}
@@ -1775,27 +1825,10 @@ def validate_production_custody_topology(
 
     serverware_healthcheck = serverware.get("healthcheck") or {}
     healthcheck_test = serverware_healthcheck.get("test") or []
-    healthcheck_command = str(healthcheck_test[3]) if len(healthcheck_test) == 4 else ""
-    if healthcheck_test[:3] != ["CMD", "/usr/bin/python3", "-c"] or (
-        sha256_prefixed_bytes(healthcheck_command.encode("utf-8"))
-        != PRODUCTION_CONTROL_HEALTHCHECK_SHA256
-    ):
-        raise ValueError("production control-plane readiness program is not the pinned command")
-    if not all(
-        marker in healthcheck_command
-        for marker in (
-            "/run/serverware/custody-trust/control-plane-response-signing.pub.pem",
-            "/run/serverware/custody-trust/control-plane-response-signing.key-id",
-            "/run/secrets/serverware-response-signing-key",
-            "https://serverware:3000/healthz",
-            "/run/serverware/tls/ca.pem",
-            "validate_response_signing_key_custody",
-            "sys.exit(1)",
-        )
-    ) or "assert " in healthcheck_command or "__debug__" in healthcheck_command:
-        raise ValueError(
-            "production control-plane readiness must verify live HTTPS health and published custody trust against the active private key"
-        )
+    # The immutable control image/source contract binds the entrypoint and its
+    # live HTTPS/private-key custody checks; no inline or caller-selected code.
+    if healthcheck_test != list(PRODUCTION_CONTROL_HEALTHCHECK_COMMAND) or serverware_healthcheck.get("disable"):
+        raise ValueError("production control-plane readiness must use the exact isolated authority entrypoint")
     if ((custody.get("depends_on") or {}).get("serverware") or {}).get("condition") != "service_healthy":
         raise ValueError("production custody must wait for control-plane trust publication readiness")
     if ((gate.get("depends_on") or {}).get("custody-runtime") or {}).get("condition") != "service_started":
@@ -1829,10 +1862,8 @@ def production_compose_model(
     if not isinstance(services, dict):
         raise ValueError("rendered production Compose model has no services")
     expected_images = {
-        "serverware": images["serverware-control"]["repo_digests"][0],
-        "audit-anchor": images["serverware-control"]["repo_digests"][0],
-        "custody-runtime": images["serverware-decision-gate"]["repo_digests"][0],
-        "decision-gate-rs": images["serverware-decision-gate"]["repo_digests"][0],
+        **{name: images["serverware-control"]["repo_digests"][0] for name in PRODUCTION_CONTROL_IMAGE_SERVICES},
+        **{name: images["serverware-decision-gate"]["repo_digests"][0] for name in CUSTODY_GATE_IMAGE_SERVICES},
     }
     if set(services) != set(expected_images):
         raise ValueError(

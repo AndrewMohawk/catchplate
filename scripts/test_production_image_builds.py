@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import ast
 import json
 import hashlib
 import os
@@ -23,6 +24,35 @@ import verify_reproducible_builds
 from test_development_compose import clean_environment, custody_environment
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+def production_compose_fixture_environment(
+    base: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Render-only inputs: never provision or claim usable release authority."""
+    compose = (ROOT / "docker-compose.production.yml").read_text(encoding="utf-8")
+    environment = clean_environment()
+    environment.update(base or {})
+    for name in re.findall(r"\$\{([A-Z0-9_]+):\?[^}]*\}", compose):
+        environment.setdefault(name, "serverware-compose-test-value")
+    # Each short-syntax bind source gets a distinct, nonexistent absolute path.
+    # Do not confuse required host IPs with volume sources or invent named volumes.
+    for name in re.findall(r"^\s*- \$\{([A-Z0-9_]+):\?[^}]*\}(?=[:/])", compose, re.MULTILINE):
+        if name not in (base or {}):
+            environment[name] = f"/serverware-compose-contract/{name.lower()}"
+    if "SERVERWARE_CONTROL_PLANE_IMAGE" not in (base or {}):
+        environment["SERVERWARE_CONTROL_PLANE_IMAGE"] = "registry.test/serverware-control@sha256:" + "1" * 64
+    if "SERVERWARE_DECISION_GATE_IMAGE" not in (base or {}):
+        environment["SERVERWARE_DECISION_GATE_IMAGE"] = "registry.test/serverware-gate@sha256:" + "2" * 64
+    for name, value in {
+        "SERVERWARE_POLICY_CUSTODY_DRIVER_GID": "65518",
+        "SERVERWARE_PROXY_BIND_ADDRESS": "127.0.0.1",
+    }.items():
+        if name not in (base or {}):
+            environment[name] = value
+    # A caller cannot accidentally turn a render-only fixture into daemon access.
+    environment["DOCKER_HOST"] = clean_environment()["DOCKER_HOST"]
+    return environment
 
 
 def final_stage_lines(path: Path) -> list[str]:
@@ -319,9 +349,7 @@ def assert_production_dependencies() -> None:
         raise AssertionError("production decision gate must not mount control-plane private state")
     if "serverware-gate-materials:/run/serverware/gate:ro" not in production_compose:
         raise AssertionError("production decision gate must mount only the scoped gate-material volume")
-    compose_env = clean_environment()
-    for name in re.findall(r"\$\{([A-Z0-9_]+):\?[^}]*\}", production_compose):
-        compose_env.setdefault(name, "serverware-compose-test-value")
+    compose_env = production_compose_fixture_environment()
     bind_mount_fixtures = {
         "SERVERWARE_CONTROL_PLANE_TLS_DIR": "/tmp/serverware-compose-test-tls",
         "SERVERWARE_ATTESTATION_HELPER_DIR": "/tmp/serverware-compose-test-helpers",
@@ -372,14 +400,18 @@ def assert_production_dependencies() -> None:
             raise AssertionError("production model admitted control-plane gate-management access")
     generate_release_provenance.validate_production_custody_topology(model, compose_env)
 
-    def expect_custody_topology_rejection(label: str, mutate: object) -> None:
+    def expect_custody_topology_rejection(
+        label: str, mutate: object, expected_error: str | None = None,
+    ) -> None:
         candidate = copy.deepcopy(model)
         mutate(candidate)
         try:
             generate_release_provenance.validate_production_custody_topology(
                 candidate, compose_env
             )
-        except ValueError:
+        except ValueError as exc:
+            if expected_error is not None and expected_error not in str(exc):
+                raise AssertionError(f"{label} reached the wrong guard: {exc}") from exc
             return
         raise AssertionError(f"production custody validator accepted {label}")
 
@@ -435,7 +467,7 @@ def assert_production_dependencies() -> None:
         candidate["services"]["serverware"]["volumes"].append(copy.deepcopy(state_mount))
 
     def alter_pinned_healthcheck(candidate: dict[str, object]) -> None:
-        candidate["services"]["serverware"]["healthcheck"]["test"][3] += "; pass"
+        candidate["services"]["serverware"]["healthcheck"]["test"][-1] = "socket-health"
 
     for label, mutate in (
         ("custody network access", set_service_value("custody-runtime", "network_mode", None)),
@@ -456,6 +488,42 @@ def assert_production_dependencies() -> None:
         ("custody racing trust publication", lambda candidate: candidate["services"]["custody-runtime"]["depends_on"]["serverware"].__setitem__("condition", "service_started")),
     ):
         expect_custody_topology_rejection(label, mutate)
+
+    for label, mutate, expected_error in (
+        ("extra privileged gate group", set_service_value("decision-gate-rs", "group_add", ["65519", "65518", "65530", "0"]), "only the v2, custody, and declared host driver groups"),
+        ("missing v2 gate group", set_service_value("decision-gate-rs", "group_add", ["65518", "65530"]), "only the v2, custody, and declared host driver groups"),
+        ("wrong host driver group", lambda candidate: candidate["x-serverware-policy-custody-host-contract"].__setitem__("driverGroupGid", "65517"), "distinct env-bound host driver group"),
+        ("unbound gate namespace", set_service_value("decision-gate-rs", "network_mode", "host"), "share only the control-plane network namespace"),
+        ("gate extra network", set_service_value("decision-gate-rs", "networks", {"default": {}}), "share only the control-plane network namespace"),
+        ("gate-owned publication", set_service_value("decision-gate-rs", "ports", [{"target": 9090, "published": "8080"}]), "share only the control-plane network namespace"),
+        ("missing control publications", set_service_value("serverware", "ports", []), "publish only loopback control and the env-bound proxy"),
+        ("disabled healthcheck", set_service_value("serverware", "healthcheck", {"test": list(generate_release_provenance.PRODUCTION_CONTROL_HEALTHCHECK_COMMAND), "disable": True}), "exact isolated authority entrypoint"),
+        ("changed healthcheck mode", alter_pinned_healthcheck, "exact isolated authority entrypoint"),
+        ("missing isolated healthcheck flag", set_service_value("serverware", "healthcheck", {"test": [part for part in generate_release_provenance.PRODUCTION_CONTROL_HEALTHCHECK_COMMAND if part != "-I"]}), "exact isolated authority entrypoint"),
+        ("inline healthcheck injection", set_service_value("serverware", "healthcheck", {"test": ["CMD", "/usr/bin/python3", "-c", "raise SystemExit(0)"]}), "exact isolated authority entrypoint"),
+    ):
+        expect_custody_topology_rejection(label, mutate, expected_error)
+    for target, field, value in (
+        (3000, "host_ip", "0.0.0.0"),
+        (9090, "host_ip", "0.0.0.0"),
+        (9090, "target", 9091),
+        (9090, "protocol", "udp"),
+    ):
+        def alter_port(candidate: dict[str, object]) -> None:
+            next(port for port in candidate["services"]["serverware"]["ports"] if port["target"] == target)[field] = value
+        expect_custody_topology_rejection(
+            f"changed {target} {field}", alter_port,
+            "publish only loopback control and the env-bound proxy",
+        )
+    for driver_gid in ("", "0", "65519", "65530", "65532", "4294967295", "driver"):
+        candidate_env = {**compose_env, "SERVERWARE_POLICY_CUSTODY_DRIVER_GID": driver_gid}
+        try:
+            generate_release_provenance.validate_production_custody_topology(model, candidate_env)
+        except ValueError as exc:
+            if "distinct env-bound host driver group" not in str(exc):
+                raise
+        else:
+            raise AssertionError(f"production accepted invalid host driver GID: {driver_gid!r}")
 
     if set(model["services"]) != {
         "serverware",
@@ -480,12 +548,22 @@ def assert_production_dependencies() -> None:
         raise AssertionError(f"production Compose service set is not closed and complete: {sorted(model['services'])}")
     custody = model["services"]["custody-runtime"]
     gate = model["services"]["decision-gate-rs"]
-    healthcheck_command = model["services"]["serverware"]["healthcheck"]["test"][3]
+    if model["services"]["serverware"]["healthcheck"]["test"] != list(generate_release_provenance.PRODUCTION_CONTROL_HEALTHCHECK_COMMAND):
+        raise AssertionError("production readiness must use the exact isolated authority entrypoint")
+    health_source = ast.parse((ROOT / "serverware" / "authority_fd_entrypoint.py").read_text(encoding="utf-8"))
+    healthcheck_command = next(
+        ast.literal_eval(node.value)
+        for node in health_source.body
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "CONTROL_PLANE_HEALTH_CODE" for target in node.targets)
+    )
     if (
         "validate_response_signing_key_custody" not in healthcheck_command
         or "sys.exit(1)" not in healthcheck_command
         or "assert " in healthcheck_command
         or "__debug__" in healthcheck_command
+        or generate_release_provenance.sha256_prefixed_bytes(healthcheck_command.encode("utf-8"))
+        != generate_release_provenance.PRODUCTION_CONTROL_HEALTHCHECK_SHA256
     ):
         raise AssertionError(
             "production control-plane readiness is not explicit under optimized Python"
@@ -538,14 +616,16 @@ def assert_production_dependencies() -> None:
     gate_dockerfile = (ROOT / "data-plane" / "decision-gate-rs" / "Dockerfile.production").read_text(encoding="utf-8")
     if "serverware-custody-runtime /usr/local/bin/serverware-custody-runtime" not in gate_dockerfile:
         raise AssertionError("production decision-gate image must contain the custody runtime binary")
-    control_ports = model["services"]["serverware"].get("ports") or []
-    if len(control_ports) != 1 or control_ports[0].get("host_ip") != "127.0.0.1":
+    ports = model["services"]["serverware"].get("ports") or []
+    control_ports = [binding for binding in ports if int(binding["target"]) == 3000]
+    if len(control_ports) != 1 or control_ports[0].get("host_ip") != "127.0.0.1" or str(control_ports[0].get("published")) != "3000":
         raise AssertionError(f"production control plane must be loopback-bound behind the deployment ingress: {control_ports}")
-    ports = model["services"]["decision-gate-rs"].get("ports") or []
+    if gate.get("ports") or gate.get("networks") or gate.get("network_mode") != "service:serverware":
+        raise AssertionError("production gate must share the control-plane namespace without separate publication")
     if any(int(binding["target"]) == 9091 for binding in ports):
         raise AssertionError("production must not publish the decision-gate management listener")
     proxy_ports = [binding for binding in ports if int(binding["target"]) == 9090]
-    if len(proxy_ports) != 1 or str(proxy_ports[0].get("published")) != "8080":
+    if len(ports) != 2 or len(proxy_ports) != 1 or str(proxy_ports[0].get("published")) != "8080" or proxy_ports[0].get("host_ip") != compose_env["SERVERWARE_PROXY_BIND_ADDRESS"]:
         raise AssertionError(f"production must publish only container proxy port 9090 as host port 8080: {ports}")
     gate_mounts = model["services"]["decision-gate-rs"].get("volumes") or []
     gate_targets = {str(mount.get("target")) for mount in gate_mounts}

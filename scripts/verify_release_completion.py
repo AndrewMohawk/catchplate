@@ -21,7 +21,6 @@ import tempfile
 import tarfile
 import time
 import types
-import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
@@ -33,6 +32,7 @@ from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 import verify_nitro_tee
+import sigstore_json
 
 
 def load_readiness_dependencies() -> None:
@@ -834,15 +834,7 @@ class InputSnapshots:
 
 
 def external_counter_field(name: str, value: Any) -> bool:
-    normalized = re.sub(r"[^a-z0-9]", "", name.lower())
-    return (
-        normalized == "ordinal"
-        or normalized.endswith("generation")
-        or normalized.endswith("epoch")
-        or normalized.endswith("sequence")
-        or normalized.endswith("treesize")
-        or normalized.endswith("index")
-    )
+    return sigstore_json.counter_field(name)
 
 
 def validate_canonical_json_profile(
@@ -852,59 +844,13 @@ def validate_canonical_json_profile(
     depth: int = 0,
     field_name: str | None = None,
 ) -> None:
-    require(depth <= 64, f"{label} exceeds the canonical JSON nesting limit")
-    if field_name is not None and external_counter_field(field_name, value):
-        require(
-            type(value) is int and value >= 0,
-            f"{label} {field_name} must be an unsigned integer",
-        )
-    if isinstance(value, dict):
-        require(len(value) <= 100_000, f"{label} has too many object fields")
-        for key, child in value.items():
-            require(isinstance(key, str), f"{label} contains a non-string object key")
-            validate_canonical_json_string(key, f"{label} object key")
-            validate_canonical_json_profile(
-                child,
-                label=label,
-                depth=depth + 1,
-                field_name=key,
-            )
-        return
-    if isinstance(value, list):
-        require(len(value) <= 100_000, f"{label} has too many array items")
-        for child in value:
-            validate_canonical_json_profile(
-                child,
-                label=label,
-                depth=depth + 1,
-            )
-        return
-    if isinstance(value, str):
-        validate_canonical_json_string(value, label)
-        return
-    if value is None or isinstance(value, bool):
-        return
-    if type(value) is int:
-        require(
-            -(1 << 63) <= value <= CANONICAL_JSON_SIGNED_MAX,
-            f"{label} integer is outside the canonical signed 64-bit profile",
-        )
-        return
-    raise ValueError(
-        f"{label} contains a value outside {CANONICAL_JSON_PROFILE}"
+    sigstore_json.validate_profile(
+        value, label=label, depth=depth, field_name=field_name,
     )
 
 
 def validate_canonical_json_string(value: str, label: str) -> None:
-    require("\x00" not in value, f"{label} contains NUL")
-    require(
-        all(not 0xD800 <= ord(character) <= 0xDFFF for character in value),
-        f"{label} contains a Unicode surrogate",
-    )
-    require(
-        unicodedata.normalize("NFC", value) == value,
-        f"{label} is not Unicode NFC",
-    )
+    sigstore_json.validate_string(value, label)
 
 
 def canonical_json(value: Any) -> str:
@@ -1420,6 +1366,11 @@ def load_json_bytes(data: bytes, path: Path, label: str) -> dict[str, Any]:
     return parsed
 
 
+def load_image_signatures_json_snapshot(snapshot: FileSnapshot) -> dict[str, Any]:
+    """Only image-signature artifacts contain the scoped foreign protocol."""
+    return sigstore_json.load_json(snapshot.data, scope="image-signatures")
+
+
 def load_benchmark_json_snapshot(
     snapshot: FileSnapshot,
     label: str,
@@ -1685,16 +1636,7 @@ def sigstore_log_id(entry: dict[str, Any]) -> Any:
 
 
 def parse_nonnegative_int64(value: Any, label: str) -> int:
-    if isinstance(value, bool):
-        raise ValueError(f"{label} is invalid")
-    if isinstance(value, int):
-        parsed = value
-    elif isinstance(value, str) and re.fullmatch(r"0|[1-9][0-9]*", value):
-        parsed = int(value)
-    else:
-        raise ValueError(f"{label} is invalid")
-    require(0 <= parsed <= 2**63 - 1, f"{label} is outside int64 range")
-    return parsed
+    return sigstore_json.parse_nonnegative_int64(value, label)
 
 
 def verify_sigstore_checkpoint(
@@ -1790,6 +1732,8 @@ def verify_sigstore_bundle_binding(
     trusted_rekor_public_key_pem: str,
     label: str,
 ) -> None:
+    sigstore_json.validate(sigstore, scope="response", label=label)
+    statement_bytes = sigstore_json.statement_json(expected_statement).encode("utf-8")
     trusted_signing_key_id = release_public_key_id(trusted_signing_public_key_pem)
     trusted_rekor_log_id = release_public_key_id(trusted_rekor_public_key_pem)
     require(
@@ -1801,7 +1745,7 @@ def verify_sigstore_bundle_binding(
         f"{label} independently trusted Rekor key id mismatch",
     )
     require(
-        sha256_prefixed_json(expected_statement) == expected_statement_digest,
+        sha256_prefixed_bytes(statement_bytes) == expected_statement_digest,
         f"{label} expected statement digest mismatch",
     )
     signing_public_key = serialization.load_pem_public_key(
@@ -1811,7 +1755,6 @@ def verify_sigstore_bundle_binding(
         not isinstance(signing_public_key, Ed25519PublicKey),
         f"{label} transparent Ed25519/Ed25519ph signatures are not supported by this verifier",
     )
-    statement_bytes = canonical_json(expected_statement).encode("utf-8")
     bundle = sigstore.get("bundle") if isinstance(sigstore.get("bundle"), dict) else {}
     require(bundle, f"{label} Sigstore proof is missing bundle")
     message_signature = bundle.get("messageSignature") if isinstance(bundle.get("messageSignature"), dict) else {}
@@ -6230,6 +6173,7 @@ def verify_image_signatures(
     trusted_rekor_public_key_pem: str,
     trusted_external_public_key_pem: str,
 ) -> dict[str, Any]:
+    sigstore_json.validate(document, scope="image-signatures", label="image signatures")
     provenance_digest = str(provenance["provenance_digest"])
     require(summary.get("ok") is True and summary.get("image_signatures") == "pass", "image signatures summary did not pass")
     require(summary.get("image_signature_provider") == "sigstore-command", "image signatures did not use sigstore-command")
@@ -6250,7 +6194,10 @@ def verify_image_signatures(
     digest = require_sha256(document.get("image_signature_bundle_digest"), "image signature bundle digest")
     require(summary.get("image_signature_bundle_digest") == digest, "image signature summary digest mismatch")
     normalized_payload = normalized_image_signature_payload(document)
-    require(sha256_prefixed_json(normalized_payload) == digest, "image signature bundle payload digest mismatch")
+    require(
+        sha256_prefixed_bytes(sigstore_json.statement_json(normalized_payload).encode("utf-8")) == digest,
+        "image signature bundle payload digest mismatch",
+    )
     require(document.get("apiVersion") == "serverware.imageSignatures/v1", "image signature bundle has wrong apiVersion")
     images = document.get("images")
     require(isinstance(images, list) and images, "image signature bundle has no images")
@@ -21151,7 +21098,7 @@ def main() -> None:
     provenance_summary = load_json_snapshot(final_file_snapshots["release_provenance_summary"], "release provenance summary")
     provenance_document = load_json_snapshot(final_file_snapshots["release_provenance"], "release provenance")
     image_summary = load_json_snapshot(final_file_snapshots["image_signatures_summary"], "image signatures summary")
-    image_document = load_json_snapshot(final_file_snapshots["image_signatures"], "image signatures")
+    image_document = load_image_signatures_json_snapshot(final_file_snapshots["image_signatures"])
     bench = load_benchmark_json_snapshot(
         final_file_snapshots["bench"],
         "decision-gate benchmark",

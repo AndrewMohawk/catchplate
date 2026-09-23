@@ -5,7 +5,7 @@ An external prepared runner owns a disposable no-network PostgreSQL engine and
 its lifecycle. This test accepts only its local Unix socket, creates one random
 schema, and drops that exact schema. It never starts Docker, provisions trust,
 imports the blocked registry, or substitutes a successful authority admission.
-The table declarations come from the actual db.py schema literal; the executed
+The table declarations come from the pure production schema source; the executed
 projection comes from the same helper interpolated into the production executor.
 Root authentication, predicate completeness, the full executor, and migrations
 are deliberately outside this engineering proof boundary.
@@ -13,12 +13,10 @@ are deliberately outside this engineering proof boundary.
 from __future__ import annotations
 
 import argparse
-import ast
 import os
 import re
 import stat
 import sys
-import textwrap
 import unittest
 import uuid
 from pathlib import Path
@@ -35,6 +33,7 @@ sys.path.insert(0, str(ROOT))
 from serverware.authority_store.webauthn_trust_sql import (
     locked_webauthn_trust_projection,
 )
+from serverware.authority_store.metadata_schema_source import metadata_base_schema_source
 
 
 CONNECTION_PARAMETERS: dict[str, str | int] | None = None
@@ -87,28 +86,10 @@ def local_connection_parameters(dsn: str) -> dict[str, str | int]:
 
 
 def production_table_declarations() -> list[str]:
-    source_path = ROOT / "serverware/db.py"
+    source_path = ROOT / "serverware/authority_store/metadata_schema_source.py"
     if source_path.stat().st_size > 16 * 1024 * 1024:
         raise ValueError("database schema source exceeds fixture bound")
-    source = source_path.read_text(encoding="utf-8")
-    start_marker = '        metadata_schema_source = """'
-    end_marker = "        metadata_schema_source += ("
-    if source.count(start_marker) != 1 or source.count(end_marker) != 1:
-        raise ValueError("database schema literal boundary is not exact")
-    start = source.index(start_marker)
-    end = source.index(end_marker, start)
-    parsed = ast.parse(textwrap.dedent(source[start:end]))
-    if (
-        len(parsed.body) != 1
-        or not isinstance(parsed.body[0], ast.Assign)
-        or len(parsed.body[0].targets) != 1
-        or not isinstance(parsed.body[0].targets[0], ast.Name)
-        or parsed.body[0].targets[0].id != "metadata_schema_source"
-        or not isinstance(parsed.body[0].value, ast.Constant)
-        or not isinstance(parsed.body[0].value.value, str)
-    ):
-        raise ValueError("database schema declaration must remain one literal")
-    declaration = parsed.body[0].value.value
+    declaration = metadata_base_schema_source()
     statements = []
     for table in (PUBLICATIONS, HIGH_WATER):
         matches = re.findall(

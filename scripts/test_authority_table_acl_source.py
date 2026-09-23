@@ -334,7 +334,15 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
     def test_source_revision_and_all_seventeen_v9_ddl_checks_are_pinned(self):
         self.assertEqual(authority_contract.SOURCE_REVISION,
             "serverware.policyCandidateAuthoritySource/2026-07-30.26")
-        _, tree = read_source("serverware/authority_store/executor_v9.py", 2 * 1024 * 1024)
+        _, executor = read_source("serverware/authority_store/executor_v9.py", 2 * 1024 * 1024)
+        self.assertFalse(any(isinstance(node, ast.FunctionDef)
+            and node.name == "authority_v9_schema_source" for node in executor.body))
+        aliases = [alias for node in executor.body if isinstance(node, ast.ImportFrom)
+            and node.module == "serverware.authority_store.v9_schema_source"
+            for alias in node.names]
+        self.assertEqual([(alias.name, alias.asname) for alias in aliases],
+            [("authority_v9_schema_source", None)])
+        _, tree = read_source("serverware/authority_store/v9_schema_source.py", 2 * 1024 * 1024)
         function = named_function(tree, "authority_v9_schema_source")
         literals = [node.value for node in ast.walk(function)
             if isinstance(node, ast.Constant) and type(node.value) is str]

@@ -17,6 +17,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from serverware import authority_contract
 from serverware import db
 from serverware.authority_store import executor_v9
+from serverware.authority_store import metadata_schema_source
 from serverware.authority_store.schema import (
     record_policy_candidate_authority_v8_to_v9_receipt,
     repair_policy_candidate_authority_completed_v9_receipt,
@@ -1294,7 +1295,7 @@ def migrate(
                     ),
                     detached_signature=detached_signature,
                     source_schema_program=(
-                        executor_v9.authority_v9_schema_source()
+                        metadata_schema_source.metadata_schema_source()
                     ),
                     connection=wrapped,
                 )
@@ -1363,7 +1364,7 @@ def migrate(
                         db.PostgresMetadataConnection(connection),
                         require_recorded_contract=True,
                         source_schema_program=(
-                            executor_v9.authority_v9_schema_source()
+                            metadata_schema_source.metadata_schema_source()
                         ),
                     )
                     contract_receipts = cursor.execute(
@@ -1491,6 +1492,49 @@ def migrate(
 
                 wrapped = db.PostgresMetadataConnection(connection)
                 db._install_policy_candidate_authority_guards(wrapped)
+                # Install the same role/ACL closure as pristine bootstrap.
+                # The complete program below is comparison input only: do not
+                # replay the base DDL or silently repair unrelated v8 objects.
+                db._seal_postgres_schema_acl(
+                    connection,
+                    schema=db._POLICY_CANDIDATE_AUTHORITY_SCHEMA_NAME,
+                    runtime_role=db._METADATA_STORE_RUNTIME_ROLE,
+                    table_privileges=("SELECT", "INSERT", "UPDATE", "DELETE"),
+                    authority_executor_role=(
+                        db._METADATA_STORE_AUTHORITY_EXECUTOR_ROLE
+                    ),
+                    authority_owner_role=db._METADATA_STORE_AUTHORITY_OWNER_ROLE,
+                    authority_capability_issuer_role=(
+                        db._METADATA_STORE_AUTHORITY_CAPABILITY_ISSUER_ROLE
+                    ),
+                    authority_planner_writer_role=(
+                        db._METADATA_STORE_AUTHORITY_PLANNER_WRITER_ROLE
+                    ),
+                    runtime_read_only_tables=(
+                        db._POLICY_AUTHORITY_RUNTIME_READ_ONLY_TABLES
+                    ),
+                    authority_executor_function_signatures=(
+                        db._POLICY_AUTHORITY_EXECUTOR_FUNCTION_SIGNATURES
+                    ),
+                    authority_capability_issuer_functions=(
+                        db._POLICY_AUTHORITY_CAPABILITY_ISSUER_FUNCTIONS
+                    ),
+                    authority_planner_writer_table_privileges=(
+                        db._POLICY_AUTHORITY_PLANNER_WRITER_TABLE_PRIVILEGES
+                    ),
+                    authority_planner_writer_function_signatures=(
+                        db.AUDIT_CAPACITY_PLANNER_FUNCTION_SIGNATURES
+                    ),
+                )
+                structural_manifest_json, structural_manifest_digest = (
+                    db._validate_policy_candidate_authority_structure(
+                        wrapped,
+                        require_recorded_contract=False,
+                        source_schema_program=(
+                            metadata_schema_source.metadata_schema_source()
+                        ),
+                    )
+                )
                 all_v9_tables = tuple(
                     sorted(
                         set(existing_tables)
@@ -1647,21 +1691,6 @@ def migrate(
                     raise MigrationError(
                         "v9 migration store did not persist the exact receipt"
                     )
-                structural_manifest = (
-                    db._policy_candidate_authority_structure_manifest(
-                        wrapped
-                    )
-                )
-                structural_manifest_json = db.dumps(
-                    structural_manifest
-                )
-                structural_manifest_digest = (
-                    db._policy_candidate_authority_framed_digest(
-                        "serverware."
-                        "policyCandidateAuthorityStructuralManifest/v1",
-                        structural_manifest_json.encode("utf-8"),
-                    )
-                )
                 cursor.execute(
                     "INSERT INTO serverware_metadata."
                     "policy_authority_schema_contracts ("
@@ -1720,6 +1749,13 @@ def migrate(
                 ).fetchone()
                 if final_version is None or int(final_version["version"]) != 9:
                     raise MigrationError("schema v9 terminal version is absent")
+                db._validate_policy_candidate_authority_structure(
+                    wrapped,
+                    require_recorded_contract=True,
+                    source_schema_program=(
+                        metadata_schema_source.metadata_schema_source()
+                    ),
+                )
                 return _terminal_response(
                     receipt=receipt,
                     receipt_digest=receipt_digest,

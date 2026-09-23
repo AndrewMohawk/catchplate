@@ -10,7 +10,13 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from serverware import authority_contract
+from serverware.authority_store import metadata_schema_source
 from serverware.authority_store import postgres_trigger_manifest
+from serverware.authority_store.completed_v9_schema_source import (
+    COMPLETED_V9_RECEIPT_TABLE as _COMPLETED_V9_RECEIPT_TABLE,
+    completed_v9_schema_programs,
+    require_metadata_schema_program,
+)
 from serverware.authority_store.wire_json_sql import WIRE_JSON_FUNCTION_NAMES
 from serverware.authority_store.audit_capacity_sql import (
     AUDIT_CAPACITY_FUNCTION_NAME,
@@ -50,60 +56,6 @@ _FACADE_EXPORTS = (
     "record_policy_candidate_authority_v8_to_v9_receipt",
     "repair_policy_candidate_authority_completed_v9_receipt",
 )
-_COMPLETED_V9_RECEIPT_TABLE = (
-    "policy_authority_v9_offline_migration_receipts"
-)
-_COMPLETED_V9_RECEIPT_TABLE_START = (
-    "CREATE TABLE IF NOT EXISTS\n"
-    "            policy_authority_v9_offline_migration_receipts ("
-)
-_COMPLETED_V9_RECEIPT_TABLE_SUCCESSOR = (
-    "CREATE TABLE IF NOT EXISTS\n"
-    "            policy_authority_authorization_dependency_manifests ("
-)
-_COMPLETED_V9_LEGACY_RECEIPT_TABLE_SOURCE = """
-        CREATE TABLE IF NOT EXISTS
-            policy_authority_v9_offline_migration_receipts (
-                contract_id TEXT PRIMARY KEY,
-                source_version BIGINT NOT NULL,
-                target_version BIGINT NOT NULL,
-                before_manifest_json TEXT NOT NULL,
-                before_manifest_digest TEXT NOT NULL,
-                before_row_counts_json TEXT NOT NULL,
-                before_row_counts_digest TEXT NOT NULL,
-                after_manifest_json TEXT NOT NULL,
-                after_manifest_digest TEXT NOT NULL,
-                after_row_counts_json TEXT NOT NULL,
-                after_row_counts_digest TEXT NOT NULL,
-                operation_contract_digest TEXT NOT NULL,
-                receipt_json TEXT NOT NULL,
-                receipt_digest TEXT NOT NULL UNIQUE,
-                signer_identity_digest TEXT,
-                signature_algorithm TEXT,
-                detached_signature TEXT,
-                detached_signature_digest TEXT UNIQUE,
-                status TEXT NOT NULL,
-                completed_at TEXT NOT NULL,
-                CHECK (
-                    contract_id =
-                    'serverware.policyCandidateAuthorityOfflineMigration/v2:v8-to-v9'
-                ),
-                CHECK (source_version = 8),
-                CHECK (target_version = 9),
-                CHECK (status = 'completed'),
-                CHECK (length(before_manifest_json) BETWEEN 2 AND 67108864),
-                CHECK (length(after_manifest_json) BETWEEN 2 AND 67108864),
-                CHECK (length(before_row_counts_json) BETWEEN 2 AND 4194304),
-                CHECK (length(after_row_counts_json) BETWEEN 2 AND 4194304),
-                CHECK (length(receipt_json) BETWEEN 2 AND 67108864),
-                CHECK (
-                    signer_identity_digest IS NOT NULL
-                    AND signature_algorithm = 'Ed25519'
-                    AND detached_signature IS NOT NULL
-                    AND detached_signature_digest IS NOT NULL
-                )
-            );
-"""
 
 
 def bind_db_globals(namespace: Mapping[str, Any]) -> None:
@@ -213,6 +165,14 @@ def _policy_candidate_authority_source_contract_digest() -> str:
                 sorted(_POLICY_AUTHORITY_RUNTIME_READ_ONLY_TABLES),
             "v9AdditionalProtectedTables":
                 list(authority_contract.V9_ADDITIONAL_PROTECTED_TABLES),
+            "objectOwnershipContract":
+                "serverware.policyAuthorityObjectOwnership/v1",
+            "authorityOwnerRole": _METADATA_STORE_AUTHORITY_OWNER_ROLE,
+            "metadataSchemaProgramDigest":
+                _policy_candidate_authority_framed_digest(
+                    "serverware.metadataSchemaProgram/v1",
+                    metadata_schema_source.metadata_schema_source().encode("utf-8"),
+                ),
             "measuredAuthorityServiceSource":
                 "serverware/authority_service.py",
             "authorityServiceSourcePresent": True,
@@ -849,19 +809,38 @@ def _policy_candidate_authority_postgres_object_authority(
     namespace: str,
 ) -> dict[str, Any]:
     namespace_row = conn.execute(
-        "SELECT namespace.nspowner = "
-        "current_user::pg_catalog.regrole::oid AS owner_is_current, "
+        "SELECT namespace.nspowner AS owner_oid, "
+        "owner_role.rolname AS owner_role, "
+        "owner_role.rolcanlogin, owner_role.rolsuper, "
+        "owner_role.rolcreaterole, owner_role.rolcreatedb, "
+        "owner_role.rolreplication, owner_role.rolbypassrls, "
         "namespace.nspacl IS NULL AS acl_is_default "
         "FROM pg_catalog.pg_namespace AS namespace "
+        "JOIN pg_catalog.pg_roles AS owner_role "
+        "ON owner_role.oid = namespace.nspowner "
         "WHERE namespace.nspname = ?",
         (namespace,),
     ).fetchone()
-    if namespace_row is None or not bool(
-        namespace_row["owner_is_current"]
+    if (
+        namespace_row is None
+        or type(_METADATA_STORE_AUTHORITY_OWNER_ROLE) is not str
+        or not _METADATA_STORE_AUTHORITY_OWNER_ROLE
+        or type(namespace_row.get("owner_role")) is not str
+        or namespace_row["owner_role"] != _METADATA_STORE_AUTHORITY_OWNER_ROLE
+        or type(namespace_row.get("owner_oid")) is not int
+        or not 0 < namespace_row["owner_oid"] <= 2**32 - 1
+        or any(
+            namespace_row.get(field) is not False
+            for field in (
+                "rolcanlogin", "rolsuper", "rolcreaterole", "rolcreatedb",
+                "rolreplication", "rolbypassrls",
+            )
+        )
     ):
         raise PolicyCandidateAuthorityError(
-            "metadata namespace is not owned by the migration role"
+            "metadata namespace authority owner is not source exact"
         )
+    owner_oid = namespace_row["owner_oid"]
 
     def normalized_acl(rows: list[Any]) -> list[dict[str, Any]]:
         return [
@@ -895,21 +874,21 @@ def _policy_candidate_authority_postgres_object_authority(
     )
     relation_rows = conn.execute(
         "SELECT relation.oid, relation.relname, relation.relkind, "
-        "relation.relowner = current_user::pg_catalog.regrole::oid "
-        "AS owner_is_current, relation.relacl IS NULL AS acl_is_default "
+        "relation.relowner = ?::pg_catalog.oid "
+        "AS owner_is_source, relation.relacl IS NULL AS acl_is_default "
         "FROM pg_catalog.pg_class AS relation "
         "JOIN pg_catalog.pg_namespace AS namespace_record "
         "ON namespace_record.oid = relation.relnamespace "
         "WHERE namespace_record.nspname = ? "
         "AND relation.relkind IN ('r', 'p', 'S', 'i') "
         "ORDER BY relation.relkind, relation.relname",
-        (namespace,),
+        (owner_oid, namespace),
     ).fetchall()
     relations: list[dict[str, Any]] = []
     for row in relation_rows:
-        if not bool(row["owner_is_current"]):
+        if row.get("owner_is_source") is not True:
             raise PolicyCandidateAuthorityError(
-                "metadata relation is not owned by the migration role"
+                "metadata relation is not owned by the source authority owner"
             )
         relation_acl = normalized_acl(
             conn.execute(
@@ -945,7 +924,7 @@ def _policy_candidate_authority_postgres_object_authority(
     function_rows = conn.execute(
         "SELECT function_record.oid, function_record.proname, "
         "function_record.proowner = "
-        "current_user::pg_catalog.regrole::oid AS owner_is_current, "
+        "?::pg_catalog.oid AS owner_is_source, "
         "function_record.proacl IS NULL AS acl_is_default, "
         "pg_catalog.pg_get_function_identity_arguments("
         "function_record.oid) AS identity_arguments "
@@ -954,13 +933,13 @@ def _policy_candidate_authority_postgres_object_authority(
         "ON namespace_record.oid = function_record.pronamespace "
         "WHERE namespace_record.nspname = ? "
         "ORDER BY function_record.proname, identity_arguments",
-        (namespace,),
+        (owner_oid, namespace),
     ).fetchall()
     functions: list[dict[str, Any]] = []
     for row in function_rows:
-        if not bool(row["owner_is_current"]):
+        if row.get("owner_is_source") is not True:
             raise PolicyCandidateAuthorityError(
-                "metadata function is not owned by the migration role"
+                "metadata function is not owned by the source authority owner"
             )
         function_acl = normalized_acl(
             conn.execute(
@@ -1340,17 +1319,17 @@ def _policy_candidate_authority_expected_structure_manifest(
     conn: Any,
     *,
     source_schema_program: str,
+    legacy_completed_v9_receipt: bool = False,
 ) -> dict[str, Any]:
-    if (
-        not isinstance(source_schema_program, str)
-        or "CREATE TABLE IF NOT EXISTS policy_authority_schema_contracts"
-        not in source_schema_program
-        or "CREATE TABLE IF NOT EXISTS policy_activation_revisions"
-        not in source_schema_program
-    ):
-        raise PolicyCandidateAuthorityError(
-            "candidate-authority source schema declaration is incomplete"
+    try:
+        require_metadata_schema_program(
+            source_schema_program,
+            legacy_completed_v9_receipt=legacy_completed_v9_receipt,
         )
+    except ValueError as exc:
+        raise PolicyCandidateAuthorityError(
+            "candidate-authority source schema declaration is not exact"
+        ) from exc
     if isinstance(conn, PostgresMetadataConnection):
         scratch_schema = "serverware_candidate_authority_expected_v9"
         existing = conn.execute(
@@ -2160,86 +2139,22 @@ def _completed_v9_receipt_schema_programs(
     *,
     connection: Any,
 ) -> tuple[str, str, dict[str, Any], dict[str, Any]]:
-    if (
-        not isinstance(source_schema_program, str)
-        or source_schema_program.count(
-            _COMPLETED_V9_RECEIPT_TABLE_START
+    try:
+        target_table_source, legacy_schema_program = completed_v9_schema_programs(
+            source_schema_program
         )
-        != 1
-        or source_schema_program.count(
-            _COMPLETED_V9_RECEIPT_TABLE_SUCCESSOR
-        )
-        != 1
-    ):
+    except ValueError as exc:
         raise PolicyCandidateAuthorityError(
             "completed-v9 repair target source is not exact"
-        )
-    table_start = source_schema_program.index(
-        _COMPLETED_V9_RECEIPT_TABLE_START
+        ) from exc
+    target_manifest = _policy_candidate_authority_expected_structure_manifest(
+        connection,
+        source_schema_program=source_schema_program,
     )
-    table_end = source_schema_program.index(
-        _COMPLETED_V9_RECEIPT_TABLE_SUCCESSOR,
-        table_start,
-    )
-    target_table_source = source_schema_program[table_start:table_end]
-    from serverware.authority_store.executor_v9 import (
-        authority_v9_schema_source,
-    )
-
-    canonical_program = authority_v9_schema_source()
-    if source_schema_program != canonical_program:
-        raise PolicyCandidateAuthorityError(
-            "completed-v9 repair schema program is not the canonical "
-            "authority-v9 source"
-        )
-    canonical_start = canonical_program.index(
-        _COMPLETED_V9_RECEIPT_TABLE_START
-    )
-    canonical_end = canonical_program.index(
-        _COMPLETED_V9_RECEIPT_TABLE_SUCCESSOR,
-        canonical_start,
-    )
-    canonical_target_table_source = canonical_program[
-        canonical_start:canonical_end
-    ]
-    required_target_fragments = (
-        "migration_name TEXT NOT NULL",
-        "migration_sha256 TEXT NOT NULL",
-        "source_revision TEXT NOT NULL",
-        "signer_identity_digest TEXT NOT NULL",
-        "signer_public_key_base64url TEXT NOT NULL",
-        "signature_algorithm TEXT NOT NULL",
-        "detached_signature TEXT NOT NULL",
-        "detached_signature_digest TEXT NOT NULL UNIQUE",
-    )
-    if (
-        not target_table_source.strip().endswith(";")
-        or target_table_source != canonical_target_table_source
-        or any(
-            target_table_source.count(fragment) != 1
-            for fragment in required_target_fragments
-        )
-    ):
-        raise PolicyCandidateAuthorityError(
-            "completed-v9 repair target receipt table is not exact"
-        )
-    legacy_schema_program = (
-        source_schema_program[:table_start]
-        + _COMPLETED_V9_LEGACY_RECEIPT_TABLE_SOURCE
-        + "\n        "
-        + source_schema_program[table_end:]
-    )
-    target_manifest = (
-        _policy_candidate_authority_expected_structure_manifest(
-            connection,
-            source_schema_program=source_schema_program,
-        )
-    )
-    legacy_manifest = (
-        _policy_candidate_authority_expected_structure_manifest(
-            connection,
-            source_schema_program=legacy_schema_program,
-        )
+    legacy_manifest = _policy_candidate_authority_expected_structure_manifest(
+        connection,
+        source_schema_program=legacy_schema_program,
+        legacy_completed_v9_receipt=True,
     )
     return (
         target_table_source,

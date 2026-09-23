@@ -64,6 +64,14 @@ corrects twelve missing runtime read-only relations and detailed table schemas.
 Source `.26` binds these inventories and adds effective table/column privilege
 checks on runtime connections. This is source-only, not native ACL admission.
 
+The [canonical schema-source correction](authority-schema-source.md) separates
+complete comparison DDL from extension-only migration execution, restricts
+receipt repair to one exact historical table variant, and requires fresh
+migration source comparison before signing. Structural capture now checks the
+configured NOLOGIN authority owner rather than the bootstrap session login.
+The full program and owner contract enter the source digest; old recorded
+digests are not automatically upgraded. All of this remains unexecuted.
+
 ## Implementation contracts still needed
 
 The following bounds are the existing contract, not permission to truncate a

@@ -168,7 +168,20 @@ class GlobalAuditCapacitySqlSourceTests(unittest.TestCase):
         source = (ROOT / "serverware/authority_store/executor_v9.py").read_text(encoding="utf-8")
         tree = ast.parse(source)
         functions = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
-        ddl = ast.get_source_segment(source, functions["authority_v9_schema_source"])
+        self.assertNotIn("authority_v9_schema_source", functions)
+        aliases = [alias for node in tree.body if isinstance(node, ast.ImportFrom)
+                   and node.module == "serverware.authority_store.v9_schema_source"
+                   for alias in node.names]
+        self.assertEqual([(alias.name, alias.asname) for alias in aliases],
+                         [("authority_v9_schema_source", None)])
+        ddl_path = ROOT / "serverware/authority_store/v9_schema_source.py"
+        self.assertLessEqual(ddl_path.stat().st_size, 2 * 1024 * 1024)
+        ddl_source = ddl_path.read_text(encoding="utf-8")
+        ddl_tree = ast.parse(ddl_source)
+        ddl_functions = [node for node in ddl_tree.body if isinstance(node, ast.FunctionDef)
+                         and node.name == "authority_v9_schema_source"]
+        self.assertEqual(len(ddl_functions), 1)
+        ddl = ast.get_source_segment(ddl_source, ddl_functions[0])
         self.assertEqual(ddl.count(authority_contract.SOURCE_REVISION), 17)
         self.assertNotIn("2026-07-30.24", ddl)
         self.assertIn("length(selected_business_rows_json)\n                    BETWEEN 2 AND __MAX_PLAN_SELECTED_BYTES__", ddl)

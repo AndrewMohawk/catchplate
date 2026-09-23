@@ -103,6 +103,12 @@ not a general restager. Current migration receipts and completed-v9 retry
 handling must keep their historical interpretation; they cannot silently add a
 new scalar or become proof of a newly authenticated population.
 
+The [canonical schema-source correction](authority-schema-source.md) now supplies
+complete comparison DDL to retry/repair, validates fresh migration against source
+before signing and checks configured authority ownership after ACL sealing.
+Those unexecuted source changes do not populate the global audit counter or
+supply independent root/cardinality authority.
+
 ## Required producer/installer integration
 
 The next coherent change must close all of these together before enabling an

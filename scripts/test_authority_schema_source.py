@@ -1,0 +1,596 @@
+#!/usr/bin/env python3
+"""Pure production schema construction/admission and source-linkage controls.
+
+Call only the actual pure schema producers and validators. Bounded AST reads
+pin their production consumers without importing db, migrations or the blocked
+registry, and without executing extracted source. The existing authority_store
+package imports inert schema/crypto definitions; this is not a stdlib-only
+package-isolation claim. These tests do not
+prove PostgreSQL syntax, structural manifests, DDL/ACL installation, migration
+locking, signed receipts, or successful production startup.
+"""
+from __future__ import annotations
+
+import ast
+import re
+import sys
+import unittest
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from serverware import authority_contract
+from serverware.authority_store.completed_v9_schema_source import (
+    COMPLETED_V9_RECEIPT_TABLE,
+    completed_v9_schema_programs,
+    require_metadata_schema_program,
+)
+from serverware.authority_store.metadata_schema_source import (
+    metadata_base_schema_source,
+    metadata_schema_source,
+)
+from serverware.authority_store.v9_schema_source import authority_v9_schema_source
+
+
+RECEIPT = "policy_authority_v9_offline_migration_receipts"
+SUCCESSOR = "policy_authority_authorization_dependency_manifests"
+START = "CREATE TABLE IF NOT EXISTS\n            " + RECEIPT + " ("
+END = "CREATE TABLE IF NOT EXISTS\n            " + SUCCESSOR + " ("
+
+# Independently spell the one admitted historical table, not a production
+# private constant or a permissive deletion of whichever new columns appear.
+LEGACY_RECEIPT = """
+        CREATE TABLE IF NOT EXISTS
+            policy_authority_v9_offline_migration_receipts (
+                contract_id TEXT PRIMARY KEY,
+                source_version BIGINT NOT NULL,
+                target_version BIGINT NOT NULL,
+                before_manifest_json TEXT NOT NULL,
+                before_manifest_digest TEXT NOT NULL,
+                before_row_counts_json TEXT NOT NULL,
+                before_row_counts_digest TEXT NOT NULL,
+                after_manifest_json TEXT NOT NULL,
+                after_manifest_digest TEXT NOT NULL,
+                after_row_counts_json TEXT NOT NULL,
+                after_row_counts_digest TEXT NOT NULL,
+                operation_contract_digest TEXT NOT NULL,
+                receipt_json TEXT NOT NULL,
+                receipt_digest TEXT NOT NULL UNIQUE,
+                signer_identity_digest TEXT,
+                signature_algorithm TEXT,
+                detached_signature TEXT,
+                detached_signature_digest TEXT UNIQUE,
+                status TEXT NOT NULL,
+                completed_at TEXT NOT NULL,
+                CHECK (
+                    contract_id =
+                    'serverware.policyCandidateAuthorityOfflineMigration/v2:v8-to-v9'
+                ),
+                CHECK (source_version = 8),
+                CHECK (target_version = 9),
+                CHECK (status = 'completed'),
+                CHECK (length(before_manifest_json) BETWEEN 2 AND 67108864),
+                CHECK (length(after_manifest_json) BETWEEN 2 AND 67108864),
+                CHECK (length(before_row_counts_json) BETWEEN 2 AND 4194304),
+                CHECK (length(after_row_counts_json) BETWEEN 2 AND 4194304),
+                CHECK (length(receipt_json) BETWEEN 2 AND 67108864),
+                CHECK (
+                    signer_identity_digest IS NOT NULL
+                    AND signature_algorithm = 'Ed25519'
+                    AND detached_signature IS NOT NULL
+                    AND detached_signature_digest IS NOT NULL
+                )
+            );
+"""
+
+
+def read_source(relative: str, maximum: int = 2 * 1024 * 1024):
+    path = ROOT / relative
+    if path.stat().st_size > maximum:
+        raise AssertionError("source fixture exceeded its explicit file bound")
+    source = path.read_text(encoding="utf-8")
+    return source, ast.parse(source)
+
+
+def function(tree, name):
+    matches = [node for node in tree.body
+               if isinstance(node, ast.FunctionDef) and node.name == name]
+    if len(matches) != 1:
+        raise AssertionError("source function is not unique: " + name)
+    return matches[0]
+
+
+def calls(node, name):
+    return [item for item in ast.walk(node) if isinstance(item, ast.Call)
+            and ((isinstance(item.func, ast.Name) and item.func.id == name)
+                 or (isinstance(item.func, ast.Attribute) and item.func.attr == name))]
+
+
+def keyword(call, name):
+    values = [item.value for item in call.keywords if item.arg == name]
+    if len(values) != 1:
+        raise AssertionError("source call keyword is not unique: " + name)
+    return values[0]
+
+
+def assignment(node, name):
+    matches = [item for item in ast.walk(node) if isinstance(item, ast.Assign)
+               and any(isinstance(target, ast.Name) and target.id == name for target in item.targets)]
+    if len(matches) != 1:
+        raise AssertionError("source assignment is not unique: " + name)
+    return matches[0]
+
+
+class AuthoritySchemaSourceTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.base = metadata_base_schema_source()
+        cls.extension = authority_v9_schema_source()
+        cls.complete = metadata_schema_source()
+
+    def assert_shape(self, node, expression):
+        # Fixed expressions are parsed for comparison, never evaluated.
+        self.assertEqual(ast.dump(node), ast.dump(ast.parse(expression, mode="eval").body))
+
+    def assert_rejected(self, value):
+        with self.assertRaises(ValueError):
+            completed_v9_schema_programs(value)
+        with self.assertRaises(ValueError):
+            require_metadata_schema_program(value)
+        with self.assertRaises(ValueError):
+            require_metadata_schema_program(value, legacy_completed_v9_receipt=True)
+
+    def test_complete_program_is_exact_base_plus_rendered_extension(self):
+        for value in (self.base, self.extension, self.complete):
+            self.assertIs(type(value), str)
+            self.assertTrue(value)
+        self.assertEqual(self.complete, self.base + self.extension)
+        self.assertEqual(metadata_schema_source(), self.complete)
+        self.assertNotIn(START, self.base)
+        self.assertNotIn("CREATE TABLE IF NOT EXISTS credentials (", self.extension)
+        self.assertTrue(self.complete.startswith(self.base))
+        self.assertTrue(self.complete.endswith(self.extension))
+
+    def test_complete_inventory_and_receipt_boundaries_are_unique(self):
+        for table in (
+            "serverware_store_migrations", "credentials",
+            "policy_authority_schema_contracts", "policy_activation_revisions",
+            "policy_authority_fence_heads", RECEIPT,
+            *authority_contract.V9_ADDITIONAL_PROTECTED_TABLES,
+        ):
+            with self.subTest(table=table):
+                pattern = r"CREATE TABLE IF NOT EXISTS\s+" + re.escape(table) + r"\s*\("
+                self.assertEqual(len(re.findall(pattern, self.complete)), 1)
+        self.assertEqual(COMPLETED_V9_RECEIPT_TABLE, RECEIPT)
+        self.assertEqual(self.complete.count(START), 1)
+        self.assertEqual(self.complete.count(END), 1)
+        self.assertLess(self.complete.index(START), self.complete.index(END))
+
+    def test_v9_source_has_only_two_named_source_owned_substitutions(self):
+        _, tree = read_source("serverware/authority_store/v9_schema_source.py")
+        body = function(tree, "authority_v9_schema_source").body
+        self.assertEqual(len(body), 1)
+        self.assertIsInstance(body[0], ast.Return)
+        value = body[0].value
+        for token, attribute in (
+            ("__MAX_PLAN_WORK_UNITS__", "MAX_PLAN_WORK_UNITS"),
+            ("__MAX_PLAN_SELECTED_BYTES__", "MAX_PLAN_SELECTED_BYTES"),
+        ):
+            self.assertIsInstance(value, ast.Call)
+            self.assertIsInstance(value.func, ast.Attribute)
+            self.assertEqual(value.func.attr, "replace")
+            self.assertEqual(value.keywords, [])
+            self.assertEqual(len(value.args), 2)
+            self.assert_shape(value.args[0], repr(token))
+            self.assert_shape(value.args[1], "str(authority_contract." + attribute + ")")
+            value = value.func.value
+        self.assertIsInstance(value, ast.Constant)
+        self.assertIs(type(value.value), str)
+        for token in ("__MAX_PLAN_WORK_UNITS__", "__MAX_PLAN_SELECTED_BYTES__"):
+            self.assertEqual(value.value.count(token), 1)
+            self.assertNotIn(token, self.extension)
+        self.assertIn("CHECK (work_units BETWEEN 1 AND "
+                      + str(authority_contract.MAX_PLAN_WORK_UNITS) + ")", self.extension)
+        self.assertIn("BETWEEN 2 AND " + str(authority_contract.MAX_PLAN_SELECTED_BYTES),
+                      self.extension)
+
+    def test_current_and_legacy_variants_require_the_exact_explicit_selection(self):
+        _, legacy = completed_v9_schema_programs(self.complete)
+        self.assertIsNone(require_metadata_schema_program(self.complete))
+        self.assertIsNone(require_metadata_schema_program(
+            self.complete, legacy_completed_v9_receipt=False))
+        self.assertIsNone(require_metadata_schema_program(
+            legacy, legacy_completed_v9_receipt=True))
+        with self.assertRaises(ValueError):
+            require_metadata_schema_program(legacy)
+        with self.assertRaises(ValueError):
+            require_metadata_schema_program(self.complete, legacy_completed_v9_receipt=True)
+        with self.assertRaises(ValueError):
+            completed_v9_schema_programs(legacy)
+
+    def test_source_and_variant_types_are_exact_not_coerced(self):
+        class StringSubclass(str):
+            pass
+
+        for value in (None, True, 1, b"", self.complete.encode("utf-8"),
+                      bytearray(self.complete.encode("utf-8")), [], {}, StringSubclass(self.complete)):
+            with self.subTest(type=type(value).__name__):
+                self.assert_rejected(value)
+        for flag in (None, 0, 1, "false", "true", [], {}):
+            with self.subTest(flag=repr(flag)):
+                with self.assertRaises(ValueError):
+                    require_metadata_schema_program(self.complete, legacy_completed_v9_receipt=flag)
+
+    def test_partial_truncated_duplicate_and_reordered_programs_are_rejected(self):
+        target, _ = completed_v9_schema_programs(self.complete)
+        for value in (
+            "", self.base, self.extension, target,
+            self.complete[1:], self.complete[:-1], self.complete.strip(),
+            self.extension + self.base, self.complete + self.extension,
+            self.complete + target, self.complete + self.complete,
+        ):
+            with self.subTest(length=len(value), prefix=value[:32]):
+                self.assert_rejected(value)
+
+    def test_base_extension_and_whitespace_tampering_are_rejected(self):
+        for old, new in (
+            ("CREATE TABLE IF NOT EXISTS credentials (", "CREATE TABLE IF NOT EXISTS other_credentials ("),
+            ("migration_name TEXT NOT NULL", "migration_name TEXT"),
+            ("signer_public_key_base64url TEXT NOT NULL", "signer_public_key_base64url TEXT"),
+            (authority_contract.SOURCE_REVISION, authority_contract.SOURCE_REVISION + ".tampered"),
+        ):
+            self.assertIn(old, self.complete)
+            with self.subTest(old=old):
+                self.assert_rejected(self.complete.replace(old, new, 1))
+        self.assert_rejected(self.complete + "\n")
+
+    def test_legacy_changes_only_the_exact_receipt_slice_preserving_complete_surroundings(self):
+        target, legacy = completed_v9_schema_programs(self.complete)
+        start, end = self.complete.index(START), self.complete.index(END)
+        prefix, suffix = self.complete[:start], self.complete[end:]
+        self.assertEqual(target, self.complete[start:end])
+        self.assertEqual(legacy, prefix + LEGACY_RECEIPT + "\n        " + suffix)
+        self.assertTrue(prefix.startswith(self.base))
+        self.assertTrue(legacy.startswith(prefix))
+        self.assertTrue(legacy.endswith(suffix))
+        self.assertEqual(legacy.count(START), 1)
+        self.assertEqual(legacy.count(END), 1)
+        self.assertEqual(target.count("CREATE TABLE IF NOT EXISTS"), 1)
+        for field in ("migration_name", "migration_sha256", "source_revision", "signer_public_key_base64url"):
+            self.assertIn(field + " TEXT NOT NULL", target)
+            self.assertNotIn(field + " TEXT", LEGACY_RECEIPT)
+        self.assertIn("signer_identity_digest TEXT NOT NULL", target)
+        self.assertIn("signer_identity_digest TEXT,", LEGACY_RECEIPT)
+
+    def test_legacy_admission_is_not_a_receipt_only_or_arbitrary_historical_schema_waiver(self):
+        _, legacy = completed_v9_schema_programs(self.complete)
+        for value in (
+            LEGACY_RECEIPT,
+            legacy[len(self.base):],
+            legacy + LEGACY_RECEIPT,
+            legacy.replace("signer_identity_digest TEXT,", "signer_identity_digest TEXT NOT NULL,", 1),
+            legacy.replace("CREATE TABLE IF NOT EXISTS credentials (", "CREATE TABLE IF NOT EXISTS stale_credentials (", 1),
+            legacy + "\n",
+        ):
+            with self.subTest(length=len(value), prefix=value[:32]):
+                self.assert_rejected(value)
+
+    def test_pure_modules_have_closed_imports_and_no_runtime_or_io_calls(self):
+        expected = {
+            "metadata_schema_source.py": {
+                ("__future__", "annotations", None),
+                ("serverware.authority_store.v9_schema_source", "authority_v9_schema_source", None),
+            },
+            "v9_schema_source.py": {
+                ("__future__", "annotations", None), ("serverware", "authority_contract", None),
+            },
+            "completed_v9_schema_source.py": {
+                ("__future__", "annotations", None),
+                ("serverware.authority_store.metadata_schema_source", "metadata_schema_source", None),
+            },
+        }
+        for filename, bindings in expected.items():
+            with self.subTest(filename=filename):
+                _, tree = read_source("serverware/authority_store/" + filename, 16 * 1024 * 1024)
+                imports = [node for node in ast.walk(tree) if isinstance(node, (ast.Import, ast.ImportFrom))]
+                self.assertTrue(all(isinstance(node, ast.ImportFrom) for node in imports))
+                actual = [(node.module, alias.name, alias.asname)
+                          for node in imports for alias in node.names]
+                self.assertEqual(len(actual), len(bindings))
+                self.assertEqual(set(actual), bindings)
+                names = {node.func.id for node in ast.walk(tree)
+                         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)}
+                self.assertTrue(names.isdisjoint({"open", "eval", "exec", "compile", "__import__"}))
+
+    def test_db_initialization_uses_one_complete_program_for_prepare_apply_and_record(self):
+        _, tree = read_source("serverware/db.py", 16 * 1024 * 1024)
+        aliases = [alias for node in tree.body if isinstance(node, ast.ImportFrom)
+                   and node.module == "serverware.authority_store" for alias in node.names
+                   if alias.name == "metadata_schema_source"]
+        self.assertEqual([(alias.name, alias.asname) for alias in aliases],
+                         [("metadata_schema_source", "_metadata_schema_source")])
+        init = function(tree, "init_db")
+        assignments = [node for node in ast.walk(init) if isinstance(node, ast.Assign)
+                       and any(isinstance(target, ast.Name) and target.id == "metadata_schema_source"
+                               for target in node.targets)]
+        self.assertEqual(len(assignments), 1)
+        self.assert_shape(assignments[0].value, "_metadata_schema_source.metadata_schema_source()")
+        self.assertEqual(len(calls(init, "metadata_schema_source")), 1)
+        self.assertEqual(calls(init, "authority_v9_schema_source"), [])
+        prepare = calls(init, "_prepare_policy_candidate_authority_schema")
+        apply = calls(init, "_execute_metadata_schema_statements")
+        record = calls(init, "_record_policy_candidate_authority_migration")
+        self.assertEqual((len(prepare), len(apply), len(record)), (1, 1, 1))
+        for call in (prepare[0], record[0]):
+            self.assert_shape(keyword(call, "source_schema_program"), "metadata_schema_source")
+        self.assertEqual(len(apply[0].args), 2)
+        self.assert_shape(apply[0].args[1], "metadata_schema_source")
+        self.assertLess(assignments[0].lineno, prepare[0].lineno)
+        self.assertLess(prepare[0].lineno, apply[0].lineno)
+        self.assertLess(apply[0].lineno, record[0].lineno)
+
+    def test_migration_compares_complete_source_but_applies_only_the_extension(self):
+        _, tree = read_source("scripts/authority/migrate_v8_to_v9.py")
+        migrate = function(tree, "migrate")
+        repair = calls(migrate, "repair_policy_candidate_authority_completed_v9_receipt")
+        validation = calls(migrate, "_validate_policy_candidate_authority_structure")
+        self.assertEqual((len(repair), len(validation)), (1, 3))
+        for call in (*repair, *validation):
+            self.assert_shape(keyword(call, "source_schema_program"),
+                              "metadata_schema_source.metadata_schema_source()")
+        self.assertEqual(len(calls(migrate, "metadata_schema_source")), 4)
+        extension = calls(migrate, "authority_v9_schema_source")
+        self.assertEqual(len(extension), 1)
+        self.assert_shape(extension[0], "executor_v9.authority_v9_schema_source()")
+        apply = [call for call in calls(migrate, "execute")
+                 if len(call.args) == 1 and call.args[0] is extension[0]]
+        self.assertEqual(len(apply), 1)
+        self.assert_shape(apply[0].func, "cursor.execute")
+        self.assertLess(repair[0].lineno, apply[0].lineno)
+        ordered = sorted(validation, key=lambda node: node.lineno)
+        for call, expected in zip(ordered, (True, False, True)):
+            self.assert_shape(keyword(call, "require_recorded_contract"), repr(expected))
+        self.assertLess(ordered[0].lineno, apply[0].lineno)
+        self.assertLess(apply[0].lineno, ordered[1].lineno)
+        self.assertLess(ordered[1].lineno, ordered[2].lineno)
+
+    def test_expected_schema_validates_exact_variant_before_any_engine_work(self):
+        _, tree = read_source("serverware/authority_store/schema.py")
+        expected = function(tree, "_policy_candidate_authority_expected_structure_manifest")
+        defaults = dict(zip((arg.arg for arg in expected.args.kwonlyargs), expected.args.kw_defaults))
+        self.assert_shape(defaults["legacy_completed_v9_receipt"], "False")
+        self.assertIsInstance(expected.body[0], ast.Try)
+        checked = calls(expected, "require_metadata_schema_program")
+        self.assertEqual(len(checked), 1)
+        self.assertIn(checked[0], list(ast.walk(expected.body[0])))
+        self.assert_shape(checked[0].args[0], "source_schema_program")
+        self.assert_shape(keyword(checked[0], "legacy_completed_v9_receipt"),
+                          "legacy_completed_v9_receipt")
+        handlers = expected.body[0].handlers
+        self.assertEqual(len(handlers), 1)
+        self.assert_shape(handlers[0].type, "ValueError")
+        self.assertIsInstance(handlers[0].body[0], ast.Raise)
+        self.assert_shape(handlers[0].body[0].exc.func, "PolicyCandidateAuthorityError")
+        engine_calls = calls(expected, "execute") + calls(expected, "_execute_metadata_schema_statements")
+        self.assertTrue(engine_calls)
+        self.assertTrue(all(checked[0].lineno < call.lineno for call in engine_calls))
+
+    def test_completed_repair_delegates_to_pure_helper_and_only_legacy_comparison_opts_in(self):
+        _, tree = read_source("serverware/authority_store/schema.py")
+        wrapper = function(tree, "_completed_v9_receipt_schema_programs")
+        prepared = calls(wrapper, "completed_v9_schema_programs")
+        self.assertEqual(len(prepared), 1)
+        self.assert_shape(prepared[0].args[0], "source_schema_program")
+        self.assertEqual(calls(wrapper, "authority_v9_schema_source"), [])
+        self.assertEqual(calls(wrapper, "index"), [])
+        self.assertIsInstance(wrapper.body[0], ast.Try)
+        self.assertIn(prepared[0], list(ast.walk(wrapper.body[0])))
+        self.assert_shape(wrapper.body[0].handlers[0].type, "ValueError")
+        compared = sorted(calls(wrapper, "_policy_candidate_authority_expected_structure_manifest"),
+                          key=lambda node: node.lineno)
+        self.assertEqual(len(compared), 2)
+        self.assert_shape(keyword(compared[0], "source_schema_program"), "source_schema_program")
+        self.assertFalse(any(item.arg == "legacy_completed_v9_receipt" for item in compared[0].keywords))
+        self.assert_shape(keyword(compared[1], "source_schema_program"), "legacy_schema_program")
+        self.assert_shape(keyword(compared[1], "legacy_completed_v9_receipt"), "True")
+        opted_in = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+                    and any(item.arg == "legacy_completed_v9_receipt"
+                            and isinstance(item.value, ast.Constant) and item.value.value is True
+                            for item in node.keywords)]
+        self.assertEqual(opted_in, [compared[1]])
+        self.assertLess(prepared[0].lineno, compared[0].lineno)
+
+    def test_source_contract_digest_binds_exact_complete_utf8_program(self):
+        _, tree = read_source("serverware/authority_store/schema.py")
+        digest = function(tree, "_policy_candidate_authority_source_contract_digest")
+        material = [node for node in digest.body if isinstance(node, ast.Assign)
+                    and any(isinstance(target, ast.Name) and target.id == "material" for target in node.targets)]
+        self.assertEqual(len(material), 1)
+        encoded = material[0].value
+        self.assertIsInstance(encoded, ast.Call)
+        self.assertIsInstance(encoded.func, ast.Attribute)
+        self.assertEqual(encoded.func.attr, "encode")
+        self.assertEqual(len(encoded.args), 1)
+        self.assert_shape(encoded.args[0], repr("utf-8"))
+        serialized = encoded.func.value
+        self.assertIsInstance(serialized, ast.Call)
+        self.assert_shape(serialized.func, "dumps")
+        self.assertEqual(len(serialized.args), 1)
+        mapping = serialized.args[0]
+        self.assertIsInstance(mapping, ast.Dict)
+        values = [value for key, value in zip(mapping.keys, mapping.values)
+                  if isinstance(key, ast.Constant) and key.value == "metadataSchemaProgramDigest"]
+        self.assertEqual(len(values), 1)
+        self.assert_shape(values[0],
+            "_policy_candidate_authority_framed_digest('serverware.metadataSchemaProgram/v1', "
+            "metadata_schema_source.metadata_schema_source().encode('utf-8'))")
+        for key_name, expression in (
+            ("objectOwnershipContract", repr("serverware.policyAuthorityObjectOwnership/v1")),
+            ("authorityOwnerRole", "_METADATA_STORE_AUTHORITY_OWNER_ROLE"),
+        ):
+            bindings = [value for key, value in zip(mapping.keys, mapping.values)
+                        if isinstance(key, ast.Constant) and key.value == key_name]
+            self.assertEqual(len(bindings), 1)
+            self.assert_shape(bindings[0], expression)
+        returns = [node for node in digest.body if isinstance(node, ast.Return)]
+        self.assertEqual(len(returns), 1)
+        self.assert_shape(returns[0].value.args[-1], "material")
+
+    def test_fresh_migration_seals_and_compares_before_signing_and_records_validated_manifest(self):
+        _, tree = read_source("scripts/authority/migrate_v8_to_v9.py")
+        migrate = function(tree, "migrate")
+        seal = calls(migrate, "_seal_postgres_schema_acl")
+        installed = calls(migrate, "_install_policy_candidate_authority_guards")
+        validation = sorted(calls(migrate, "_validate_policy_candidate_authority_structure"),
+                            key=lambda node: node.lineno)
+        self.assertEqual((len(seal), len(installed), len(validation)), (1, 1, 3))
+        fresh, final = validation[1:]
+        self.assert_shape(seal[0].func, "db._seal_postgres_schema_acl")
+        self.assert_shape(seal[0].args[0], "connection")
+        expected_keywords = {
+            "schema": "db._POLICY_CANDIDATE_AUTHORITY_SCHEMA_NAME",
+            "runtime_role": "db._METADATA_STORE_RUNTIME_ROLE",
+            "table_privileges": "('SELECT', 'INSERT', 'UPDATE', 'DELETE')",
+            "authority_executor_role": "db._METADATA_STORE_AUTHORITY_EXECUTOR_ROLE",
+            "authority_owner_role": "db._METADATA_STORE_AUTHORITY_OWNER_ROLE",
+            "authority_capability_issuer_role": "db._METADATA_STORE_AUTHORITY_CAPABILITY_ISSUER_ROLE",
+            "authority_planner_writer_role": "db._METADATA_STORE_AUTHORITY_PLANNER_WRITER_ROLE",
+            "runtime_read_only_tables": "db._POLICY_AUTHORITY_RUNTIME_READ_ONLY_TABLES",
+            "authority_executor_function_signatures": "db._POLICY_AUTHORITY_EXECUTOR_FUNCTION_SIGNATURES",
+            "authority_capability_issuer_functions": "db._POLICY_AUTHORITY_CAPABILITY_ISSUER_FUNCTIONS",
+            "authority_planner_writer_table_privileges": "db._POLICY_AUTHORITY_PLANNER_WRITER_TABLE_PRIVILEGES",
+            "authority_planner_writer_function_signatures": "db.AUDIT_CAPACITY_PLANNER_FUNCTION_SIGNATURES",
+        }
+        self.assertEqual({item.arg for item in seal[0].keywords}, set(expected_keywords))
+        for name, expression in expected_keywords.items():
+            self.assert_shape(keyword(seal[0], name), expression)
+        validated = [node for node in ast.walk(migrate) if isinstance(node, ast.Assign)
+                     and node.value is fresh]
+        self.assertEqual(len(validated), 1)
+        self.assertEqual(len(validated[0].targets), 1)
+        target = validated[0].targets[0]
+        self.assertIsInstance(target, ast.Tuple)
+        self.assertEqual([element.id for element in target.elts],
+                         ["structural_manifest_json", "structural_manifest_digest"])
+        self.assertEqual(calls(migrate, "_policy_candidate_authority_structure_manifest"), [])
+        after = [node for node in ast.walk(migrate) if isinstance(node, ast.Assign)
+                 and any(isinstance(target, ast.Name) and target.id == "after_manifest"
+                         for target in node.targets)]
+        self.assertEqual(len(after), 1)
+        self.assert_shape(after[0].value, "_schema_manifest(cursor, all_v9_tables)")
+        signed = [call for call in calls(migrate, "_signature_material") if call.lineno > fresh.lineno]
+        receipt = calls(migrate, "record_policy_candidate_authority_v8_to_v9_receipt")
+        self.assertEqual((len(signed), len(receipt)), (1, 1))
+        schema_inserts = [call for call in calls(migrate, "execute") if call.args
+                          and isinstance(call.args[0], ast.Constant)
+                          and type(call.args[0].value) is str
+                          and call.args[0].value.startswith(
+                              "INSERT INTO serverware_metadata.policy_authority_schema_contracts (")]
+        owner_inserts = [call for call in calls(migrate, "execute") if call.args
+                         and isinstance(call.args[0], ast.Constant)
+                         and type(call.args[0].value) is str
+                         and call.args[0].value.startswith(
+                             "INSERT INTO serverware_metadata.policy_authority_owner_contracts (")]
+        self.assertEqual((len(schema_inserts), len(owner_inserts)), (1, 1))
+        self.assert_shape(schema_inserts[0].args[1],
+            "('serverware.policyCandidateAuthoritySchema/v9', _NEW_SOURCE_REVISION, "
+            "db._policy_candidate_authority_source_contract_digest(), structural_manifest_json, "
+            "structural_manifest_digest, receipt_digest, str(completed_at))")
+        terminal = sorted(calls(migrate, "_terminal_response"), key=lambda node: node.lineno)[-1]
+        sequence = (installed[0], seal[0], fresh, after[0], signed[0], receipt[0],
+                    schema_inserts[0], owner_inserts[0], final, terminal)
+        for before, following in zip(sequence, sequence[1:]):
+            self.assertLess(before.lineno, following.lineno)
+
+    def test_object_authority_pins_configured_no_login_owner_before_acl_collection(self):
+        source, tree = read_source("serverware/authority_store/schema.py")
+        authority = function(tree, "_policy_candidate_authority_postgres_object_authority")
+        text = ast.get_source_segment(source, authority)
+        self.assertNotIn("current_user", text)
+        self.assertNotIn("SET ROLE", text)
+        selected = assignment(authority, "namespace_row")
+        self.assertIs(authority.body[0], selected)
+        fetch = selected.value
+        self.assertIsInstance(fetch, ast.Call)
+        self.assertIsInstance(fetch.func, ast.Attribute)
+        self.assertEqual(fetch.func.attr, "fetchone")
+        query = fetch.func.value
+        self.assertIsInstance(query, ast.Call)
+        self.assert_shape(query.func, "conn.execute")
+        self.assertEqual(len(query.args), 2)
+        self.assert_shape(query.args[1], "(namespace,)")
+        self.assertIsInstance(query.args[0], ast.Constant)
+        sql = query.args[0].value
+        for clause in (
+            "namespace.nspowner AS owner_oid", "owner_role.rolname AS owner_role",
+            "FROM pg_catalog.pg_namespace AS namespace",
+            "JOIN pg_catalog.pg_roles AS owner_role",
+            "ON owner_role.oid = namespace.nspowner", "WHERE namespace.nspname = ?",
+        ):
+            self.assertIn(clause, sql)
+        for field in ("rolcanlogin", "rolsuper", "rolcreaterole", "rolcreatedb", "rolreplication", "rolbypassrls"):
+            self.assertIn("owner_role." + field, sql)
+        guard = authority.body[1]
+        self.assertIsInstance(guard, ast.If)
+        self.assert_shape(guard.test,
+            "namespace_row is None or type(_METADATA_STORE_AUTHORITY_OWNER_ROLE) is not str "
+            "or not _METADATA_STORE_AUTHORITY_OWNER_ROLE "
+            "or type(namespace_row.get('owner_role')) is not str "
+            "or namespace_row['owner_role'] != _METADATA_STORE_AUTHORITY_OWNER_ROLE "
+            "or type(namespace_row.get('owner_oid')) is not int "
+            "or not 0 < namespace_row['owner_oid'] <= 2**32 - 1 "
+            "or any(namespace_row.get(field) is not False for field in "
+            "('rolcanlogin', 'rolsuper', 'rolcreaterole', 'rolcreatedb', 'rolreplication', 'rolbypassrls'))")
+        self.assertIsInstance(guard.body[0], ast.Raise)
+        self.assert_shape(guard.body[0].exc,
+            "PolicyCandidateAuthorityError('metadata namespace authority owner is not source exact')")
+        owner = assignment(authority, "owner_oid")
+        self.assert_shape(owner.value, "namespace_row['owner_oid']")
+        acl = assignment(authority, "namespace_acl")
+        self.assertLess(guard.lineno, owner.lineno)
+        self.assertLess(owner.lineno, acl.lineno)
+        for call in calls(authority, "execute"):
+            if call is not query:
+                self.assertLess(owner.lineno, call.lineno)
+
+    def test_relations_and_functions_share_the_validated_owner_oid_with_strict_boolean_denial(self):
+        _, tree = read_source("serverware/authority_store/schema.py")
+        authority = function(tree, "_policy_candidate_authority_postgres_object_authority")
+        owner = assignment(authority, "owner_oid")
+        for kind, rows_name, owner_expression, acl_name in (
+            ("relation", "relation_rows", "relation.relowner", "relation_acl"),
+            ("function", "function_rows", "function_record.proowner", "function_acl"),
+        ):
+            with self.subTest(kind=kind):
+                rows = assignment(authority, rows_name)
+                fetch = rows.value
+                self.assertIsInstance(fetch, ast.Call)
+                self.assertIsInstance(fetch.func, ast.Attribute)
+                self.assertEqual(fetch.func.attr, "fetchall")
+                query = fetch.func.value
+                self.assert_shape(query.func, "conn.execute")
+                self.assert_shape(query.args[1], "(owner_oid, namespace)")
+                self.assertIsInstance(query.args[0], ast.Constant)
+                self.assertIn(owner_expression + " = ?::pg_catalog.oid", query.args[0].value)
+                self.assertIn("AS owner_is_source", query.args[0].value)
+                self.assertIn("WHERE namespace_record.nspname = ?", query.args[0].value)
+                self.assertLess(owner.lineno, rows.lineno)
+                loops = [node for node in authority.body if isinstance(node, ast.For)
+                         and isinstance(node.iter, ast.Name) and node.iter.id == rows_name]
+                self.assertEqual(len(loops), 1)
+                guard = loops[0].body[0]
+                self.assertIsInstance(guard, ast.If)
+                self.assert_shape(guard.test, "row.get('owner_is_source') is not True")
+                self.assertIsInstance(guard.body[0], ast.Raise)
+                self.assert_shape(guard.body[0].exc,
+                    "PolicyCandidateAuthorityError(" + repr(
+                        "metadata " + kind + " is not owned by the source authority owner") + ")")
+                acl = assignment(loops[0], acl_name)
+                self.assertLess(guard.lineno, acl.lineno)
+                self.assertTrue(calls(acl, "execute"))
+
+
+if __name__ == "__main__":
+    unittest.main()

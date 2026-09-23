@@ -13,7 +13,6 @@ import hashlib
 import json
 import re
 import sys
-import textwrap
 import unittest
 from dataclasses import FrozenInstanceError
 from pathlib import Path
@@ -26,6 +25,11 @@ sys.path.insert(0, str(ROOT))
 
 from serverware import authority_contract
 from serverware import authority_primary_contract as primary
+from serverware.authority_store.metadata_schema_source import (
+    metadata_base_schema_source,
+    metadata_schema_source,
+)
+from serverware.authority_store.v9_schema_source import authority_v9_schema_source
 
 
 def independent_digest(domain: str, value: object) -> str:
@@ -67,22 +71,14 @@ def manifest_row_fixture(operation: str, *, authorization: bool) -> tuple[list[d
 
 
 def committed_schema_literals() -> str:
-    """Read only the existing literal schema programs, without importing them."""
-    path = ROOT / "serverware/db.py"
-    if path.stat().st_size > 16 * 1024 * 1024:
-        raise AssertionError("database source exceeded the bounded source fixture")
-    source = path.read_text(encoding="utf-8")
-    start_marker = '        metadata_schema_source = """'
-    end_marker = "        metadata_schema_source += ("
-    if source.count(start_marker) != 1 or source.count(end_marker) != 1:
-        raise AssertionError("database literal schema markers changed")
-    start, end = source.index(start_marker), source.index(end_marker)
-    assignment = ast.parse(textwrap.dedent(source[start:end]))
-    if (len(assignment.body) != 1 or not isinstance(assignment.body[0], ast.Assign)
-            or not isinstance(assignment.body[0].value, ast.Constant)
-            or type(assignment.body[0].value.value) is not str):
-        raise AssertionError("database schema is not the expected source literal")
-    database_sql = assignment.body[0].value.value
+    """Use the real pure producers, without importing db or the executor."""
+    for filename, maximum in (("metadata_schema_source.py", 16 * 1024 * 1024),
+                              ("v9_schema_source.py", 2 * 1024 * 1024)):
+        if (ROOT / "serverware/authority_store" / filename).stat().st_size > maximum:
+            raise AssertionError("schema source exceeded the bounded source fixture")
+    database_sql = metadata_schema_source()
+    if database_sql != metadata_base_schema_source() + authority_v9_schema_source():
+        raise AssertionError("complete metadata source composition changed")
     # The pre-v2 table declarations are deliberately inert, including the old
     # artifact_digest key. They must not be mistaken for current source DDL.
     retired_marker = "/*\n             * Retired pre-v2 candidate tables."
@@ -92,41 +88,7 @@ def committed_schema_literals() -> str:
     retired_end = database_sql.index("*/", retired_start) + 2
     database_sql = database_sql[:retired_start] + database_sql[retired_end:]
 
-    executor_path = ROOT / "serverware/authority_store/executor_v9.py"
-    if executor_path.stat().st_size > 2 * 1024 * 1024:
-        raise AssertionError("executor source exceeded the bounded source fixture")
-    executor = ast.parse(executor_path.read_text(encoding="utf-8"))
-    functions = [node for node in executor.body if isinstance(node, ast.FunctionDef)
-                 and node.name == "authority_v9_schema_source"]
-    if len(functions) != 1:
-        raise AssertionError("v9 schema source function is not unique")
-    returns = [node for node in functions[0].body if isinstance(node, ast.Return)]
-    if len(returns) != 1:
-        raise AssertionError("v9 schema source is not one closed return")
-    value = returns[0].value
-    # Only the two named final-plan limits may replace source-literal tokens.
-    # Inspect the exact AST; do not import, compile or evaluate the executor.
-    substitutions = (
-        ("__MAX_PLAN_WORK_UNITS__", "MAX_PLAN_WORK_UNITS", authority_contract.MAX_PLAN_WORK_UNITS),
-        ("__MAX_PLAN_SELECTED_BYTES__", "MAX_PLAN_SELECTED_BYTES", authority_contract.MAX_PLAN_SELECTED_BYTES),
-    )
-    for token, attribute, _ in substitutions:
-        if (not isinstance(value, ast.Call) or value.keywords or len(value.args) != 2
-                or not isinstance(value.func, ast.Attribute) or value.func.attr != "replace"
-                or not isinstance(value.args[0], ast.Constant) or value.args[0].value != token):
-            raise AssertionError("v9 schema budget substitution is not source exact")
-        expected = ast.parse(f"str(authority_contract.{attribute})", mode="eval").body
-        if ast.dump(value.args[1]) != ast.dump(expected):
-            raise AssertionError("v9 schema budget value is not source owned")
-        value = value.func.value
-    if not isinstance(value, ast.Constant) or type(value.value) is not str:
-        raise AssertionError("v9 schema source is not a fixed literal")
-    executor_sql = value.value
-    for token, _, limit in substitutions:
-        if executor_sql.count(token) != 1:
-            raise AssertionError("v9 schema budget token is not unique")
-        executor_sql = executor_sql.replace(token, str(limit))
-    return database_sql + "\n" + executor_sql
+    return database_sql
 
 
 class AuthorityPrimaryContractTests(unittest.TestCase):

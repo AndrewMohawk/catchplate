@@ -6138,6 +6138,100 @@ pub(crate) enum TerminalSlotAppendOutcome {
     Fork(VerifiedShadowSpillReceipt),
 }
 
+/// Untrusted transport representation. The outcome tag is bound by the
+/// enclosing exact production dispatch response; it grants no authority.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(
+    tag = "outcome",
+    content = "receipt",
+    rename_all = "kebab-case",
+    deny_unknown_fields
+)]
+pub(in crate::policy_shadow) enum TerminalSlotAppendOutcomeWire {
+    Committed(SignedShadowSpillReceipt),
+    Existing(SignedShadowSpillReceipt),
+    Fork(SignedShadowSpillReceipt),
+}
+
+impl TerminalSlotAppendOutcomeWire {
+    fn receipt_and_expected_event(
+        self,
+        request: &TerminalSlotAppendRequest,
+    ) -> Result<(Self, ShadowSpoolEvent), ShadowError> {
+        let (receipt, fork) = match &self {
+            Self::Committed(receipt) | Self::Existing(receipt) => (receipt, false),
+            Self::Fork(receipt) => (receipt, true),
+        };
+        receipt.validate_deserialized_invariants()?;
+        let requested = request.terminal_event();
+        if receipt.disposition != ShadowSpoolDisposition::Appended
+            || receipt.generation_id != requested.generation_id
+            || receipt.ingress_sequence != requested.ingress_sequence
+            || receipt.request_binding_sha256 != requested.request_binding_sha256
+            || receipt.request_commitment_sha256 != requested.request_commitment_sha256
+            || !matches!(
+                receipt.event_phase,
+                ShadowSpoolPhase::PreDispatchTerminal
+                    | ShadowSpoolPhase::PostDispatchTerminal
+            )
+            || (fork && receipt.event_sha256 == requested.event_sha256)
+            || (!fork && !receipt.matches_event(requested))
+        {
+            return Err(ShadowError::BindingDrift);
+        }
+        // A fork authenticates the stored conflicting event, not the bytes of
+        // the attempted replacement. The caller still receives Fork, never a
+        // successful terminal receipt for that replacement.
+        let expected = ShadowSpoolEvent::new(
+            receipt.generation_id.clone(),
+            receipt.ingress_sequence,
+            receipt.request_binding_sha256.clone(),
+            receipt.request_commitment_sha256.clone(),
+            receipt.event_phase,
+            receipt.event_sha256.clone(),
+            receipt.canonical_event_bytes.clone(),
+        )?;
+        Ok((self, expected))
+    }
+}
+
+pub(in crate::policy_shadow) fn verify_production_terminal_slot_append_outcome(
+    wire: TerminalSlotAppendOutcomeWire,
+    request: &TerminalSlotAppendRequest,
+    configuration: &ProductionCustodyConfiguration,
+    key_trust: &dyn EnvelopeKeyTrust,
+    trusted_time: &dyn TrustedTime,
+    proof_verifier: &dyn PolicyShadowPersistenceProofVerifier,
+) -> Result<TerminalSlotAppendOutcome, ShadowError> {
+    let (wire, event) = wire.receipt_and_expected_event(request)?;
+    match wire {
+        TerminalSlotAppendOutcomeWire::Committed(receipt) => {
+            Ok(TerminalSlotAppendOutcome::Committed(
+                verify_production_shadow_spill_receipt(
+                    receipt, &event, configuration, key_trust,
+                    trusted_time, proof_verifier,
+                )?,
+            ))
+        }
+        TerminalSlotAppendOutcomeWire::Existing(receipt) => {
+            Ok(TerminalSlotAppendOutcome::Existing(
+                verify_production_shadow_spill_receipt(
+                    receipt, &event, configuration, key_trust,
+                    trusted_time, proof_verifier,
+                )?,
+            ))
+        }
+        TerminalSlotAppendOutcomeWire::Fork(receipt) => {
+            Ok(TerminalSlotAppendOutcome::Fork(
+                verify_production_shadow_spill_receipt(
+                    receipt, &event, configuration, key_trust,
+                    trusted_time, proof_verifier,
+                )?,
+            ))
+        }
+    }
+}
+
 const PRODUCTION_CUSTODY_AUTHORITY_ROLES: [AuthorityRole; 18] = [
     AuthorityRole::CustodyIngressAdmission,
     AuthorityRole::CustodyUnavailableIngress,
@@ -11208,6 +11302,30 @@ pub(crate) struct PreparedGenerationPublication {
 }
 
 impl PreparedGenerationPublication {
+    pub(in crate::policy_shadow) fn validate_for_successor(
+        &self,
+        predecessor: Option<&Sha256Digest>,
+        successor: &ShadowGenerationIdentity,
+    ) -> Result<(), ShadowError> {
+        successor.validate()?;
+        validate_positive(self.first_ingress_sequence, "custody.first_ingress_sequence")?;
+        validate_positive(self.last_ingress_sequence, "custody.last_ingress_sequence")?;
+        if !self.matches_recovered(predecessor, successor)
+            || self.last_ingress_sequence < self.first_ingress_sequence
+            || self.last_ingress_sequence == u64::MAX
+            || self.persisted_sequence_range_sha256 != hash_domain_frames(
+                b"serverware.policyShadowPersistedSequenceRange/v1",
+                &[&canonical_json_bytes(&(
+                    successor.generation_id(), self.first_ingress_sequence,
+                    self.last_ingress_sequence, &successor.ingress_range_predecessor_head_sha256,
+                ))?],
+            )
+        {
+            return Err(ShadowError::GenerationIdentityMismatch);
+        }
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn from_custody(
         previous: Option<&ShadowGenerationIdentity>,
@@ -11326,7 +11444,7 @@ impl PreparedGenerationPublication {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum CustodyUnavailableReason {
     NoInstalledGeneration,
@@ -11336,7 +11454,7 @@ pub(crate) enum CustodyUnavailableReason {
     CustodyUnavailable,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum UnavailableGenerationInstallState {
     Uninstalled,
@@ -11346,7 +11464,8 @@ pub(crate) enum UnavailableGenerationInstallState {
     SequenceRangeExhausted,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct SignedUnavailableGenerationReceipt {
     request_binding_sha256: Sha256Digest,
     request_commitment_sha256: Sha256Digest,
@@ -11369,6 +11488,19 @@ pub(crate) struct SignedUnavailableGenerationReceipt {
 }
 
 impl SignedUnavailableGenerationReceipt {
+    fn validate_deserialized_invariants(&self) -> Result<(), ShadowError> {
+        Self::from_custody(
+            self.request_binding_sha256.clone(), self.request_commitment_sha256.clone(),
+            self.generation_id.clone(), self.generation_install_state, self.reason,
+            self.event_ordinal, self.predecessor_event_ordinal,
+            self.predecessor_head_sha256.clone(), self.resulting_head_sha256.clone(),
+            self.trusted_observed_at_unix_nanos, self.trusted_time_checkpoint_sha256.clone(),
+            self.persistence_receipt_sha256.clone(), self.retrieval_id_sha256.clone(),
+            self.retrieval_proof_sha256.clone(), self.signing_key_id.clone(),
+            self.signing_key_spki_sha256.clone(), self.signature.0.clone(), self.signed_receipt_sha256.clone(),
+        ).map(|_| ())
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn from_custody(
         request_binding_sha256: Sha256Digest,
@@ -11572,6 +11704,7 @@ fn verify_unavailable_generation_receipt(
     proof_verifier: &dyn PolicyShadowPersistenceProofVerifier,
     maximum_age_nanos: i64,
 ) -> Result<VerifiedUnavailableGenerationReceipt, ShadowError> {
+    wire.validate_deserialized_invariants()?;
     let canonical_payload = wire.canonical_signature_payload()?;
     let verified_trust_checkpoint = verify_custody_receipt_authority(
         PolicyShadowCustodySignerRole::UnavailableIngress,
@@ -11605,6 +11738,7 @@ pub(in crate::policy_shadow) fn verify_production_unavailable_generation_receipt
     trusted_time: &dyn TrustedTime,
     proof_verifier: &dyn PolicyShadowPersistenceProofVerifier,
 ) -> Result<VerifiedUnavailableGenerationReceipt, ShadowError> {
+    wire.validate_deserialized_invariants()?;
     if wire.request_binding_sha256 != *expected_request_binding_sha256 {
         return Err(ShadowError::BindingDrift);
     }
@@ -11750,6 +11884,119 @@ impl PersistedIngressAdmission {
 pub(crate) enum IngressCustodyAdmission {
     Assigned(PersistedIngressAdmission),
     Unavailable(VerifiedUnavailableGenerationReceipt),
+}
+
+/// This wire deliberately contains no deserializable verified receipt or
+/// response-supplied generation. Assigned responses use the immutable locally
+/// retained identity of the authenticated publication captured at dispatch.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(
+    tag = "outcome",
+    content = "receipt",
+    rename_all = "kebab-case",
+    deny_unknown_fields
+)]
+pub(in crate::policy_shadow) enum IngressCustodyAdmissionWire {
+    Assigned(PersistedIngressAdmissionWire),
+    Unavailable(SignedUnavailableGenerationReceipt),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(in crate::policy_shadow) struct PersistedIngressAdmissionWire {
+    observed_at_unix_nanos: i64,
+    sampling: CustodySamplingAuthorizationWire,
+    opening_spill_receipt: SignedShadowSpillReceipt,
+}
+
+impl IngressCustodyAdmissionWire {
+    fn validate_expected_binding(
+        &self,
+        expected_generation: Option<&ShadowGenerationIdentity>,
+        expected_sequence_bounds: Option<(u64, u64)>,
+        request_binding: &Sha256Digest,
+    ) -> Result<(), ShadowError> {
+        match self {
+            Self::Assigned(wire) => {
+                let generation = expected_generation
+                    .ok_or(ShadowError::GenerationIdentityMismatch)?;
+                let (first, last) = expected_sequence_bounds
+                    .ok_or(ShadowError::GenerationIdentityMismatch)?;
+                if wire.sampling.request_binding_sha256 != *request_binding {
+                    return Err(ShadowError::BindingDrift);
+                }
+                if first != generation.ingress_range_start_sequence
+                    || last < first
+                    || wire.sampling.ingress_sequence < first
+                    || wire.sampling.ingress_sequence > last
+                {
+                    return Err(ShadowError::NonContiguousIngressSequence);
+                }
+            }
+            Self::Unavailable(wire) => {
+                wire.validate_deserialized_invariants()?;
+                if wire.request_binding_sha256 != *request_binding {
+                    return Err(ShadowError::BindingDrift);
+                }
+                if let (Some(expected), Some(actual)) =
+                    (expected_generation, wire.generation_id.as_ref())
+                {
+                    if expected.generation_id() != actual {
+                        return Err(ShadowError::GenerationIdentityMismatch);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+pub(in crate::policy_shadow) fn verify_production_ingress_custody_admission(
+    wire: IngressCustodyAdmissionWire,
+    expected_generation: Option<&ShadowGenerationIdentity>,
+    expected_sequence_bounds: Option<(u64, u64)>,
+    expected_request_binding_sha256: &Sha256Digest,
+    configuration: &ProductionCustodyConfiguration,
+    key_trust: &dyn EnvelopeKeyTrust,
+    trusted_time: &dyn TrustedTime,
+    proof_verifier: &dyn PolicyShadowPersistenceProofVerifier,
+) -> Result<IngressCustodyAdmission, ShadowError> {
+    wire.validate_expected_binding(
+        expected_generation,
+        expected_sequence_bounds,
+        expected_request_binding_sha256,
+    )?;
+    match wire {
+        IngressCustodyAdmissionWire::Assigned(wire) => {
+            let generation = expected_generation
+                .ok_or(ShadowError::GenerationIdentityMismatch)?;
+            Ok(IngressCustodyAdmission::Assigned(
+                verify_production_persisted_ingress_admission(
+                    generation,
+                    expected_request_binding_sha256,
+                    wire.observed_at_unix_nanos,
+                    wire.sampling,
+                    wire.opening_spill_receipt,
+                    configuration,
+                    key_trust,
+                    trusted_time,
+                    proof_verifier,
+                )?,
+            ))
+        }
+        IngressCustodyAdmissionWire::Unavailable(wire) => {
+            Ok(IngressCustodyAdmission::Unavailable(
+                verify_production_unavailable_generation_receipt(
+                    wire,
+                    expected_request_binding_sha256,
+                    configuration,
+                    key_trust,
+                    trusted_time,
+                    proof_verifier,
+                )?,
+            ))
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -23649,6 +23896,22 @@ pub(crate) mod terminal_receipt_fixture {
         disposition: ShadowSpoolDisposition,
         fault: Fault,
     ) -> Result<VerifiedShadowSpillReceipt, ShadowError> {
+        with_wire(event, disposition, fault, |wire, signer, trust, time, store| {
+            verify_shadow_spill_receipt(wire, event, signer, trust, time, store, 100)
+        })
+    }
+
+    // Exercises the shared response joins against a real signed wire before
+    // verification. The callback cannot obtain a manufactured Verified value.
+    pub(super) fn with_wire<T>(
+        event: &ShadowSpoolEvent,
+        disposition: ShadowSpoolDisposition,
+        fault: Fault,
+        verify: impl FnOnce(
+            SignedShadowSpillReceipt, ExpectedSigner<'_>, &dyn EnvelopeKeyTrust,
+            &dyn TrustedTime, &dyn PolicyShadowPersistenceProofVerifier,
+        ) -> Result<T, ShadowError>,
+    ) -> Result<T, ShadowError> {
         let key = SigningKey::from_bytes(&[73; 32]);
         let role = custody_signer_role_for_spool_phase(event.phase());
         let key_id = Sha256Digest::compute(b"local terminal component key");
@@ -23767,15 +24030,347 @@ pub(crate) mod terminal_receipt_fixture {
             Fault::FutureTime => observed_at - 1,
             _ => observed_at + 1,
         };
-        verify_shadow_spill_receipt(
+        verify(
             wire,
-            event,
             ExpectedSigner { key_id: &expected_key, key_spki_sha256: &key_spki },
             &trust,
             &FixedTime(now),
             &store,
-            100,
         )
+    }
+}
+
+// Test data and real cryptographic verification only. These helpers do not
+// establish assignment/load admission, production RPC or durable storage.
+#[cfg(test)]
+pub(crate) mod custody_response_fixture {
+    use super::*;
+    use ed25519_dalek::{Signer, SigningKey};
+
+    pub(crate) fn generation() -> ShadowGenerationIdentity {
+        let digest = |name: &str| Sha256Digest::compute(name.as_bytes());
+        let mut value = ShadowGenerationIdentity {
+            generation_id: digest("unset"), generation_epoch: 1,
+            minimum_generation_tombstone_epoch: 1, generation_tombstone_epoch: 1,
+            assignment_revision: 1, assignment_sha256: digest("assignment"),
+            assignment_payload_sha256: digest("assignment payload"),
+            load_receipt_sha256: digest("load"), load_receipt_payload_sha256: digest("load payload"),
+            active_policy_sha256: digest("active"), active_policy_sequence: 1, active_rollback_epoch: 1,
+            active_compiled_snapshot_sha256: digest("compiled active"),
+            candidate_policy_sha256: digest("candidate"), candidate_policy_sequence: 2, candidate_rollback_epoch: 1,
+            candidate_compiled_snapshot_sha256: digest("compiled candidate"), runtime_boot_id_sha256: digest("boot"),
+            assignment_starts_at_unix_nanos: 0, assignment_ends_at_unix_nanos: 2_000_000,
+            sampling_basis_points: 5000, request_commitment_key_id: digest("commitment key"),
+            request_commitment_key_epoch: 1, request_facts_schema_sha256: digest("facts"),
+            ingress_range_start_sequence: 1, ingress_range_predecessor_head_sha256: digest("range predecessor"),
+            observation_interval_sha256: digest("interval"), response_validation_obligations_root_sha256: digest("obligations"),
+            publication_reconciliation_receipt_sha256: digest("reconciliation"), publication_revision: 1,
+            authoritative_ledger_event_ordinal: 0, authoritative_ledger_head_sha256: digest("ledger"),
+            authoritative_spool_root_sha256: digest("spool"),
+        };
+        value.generation_id = value.recompute_id().unwrap();
+        value.validate().unwrap();
+        value
+    }
+
+    pub(crate) fn preparation(generation: &ShadowGenerationIdentity) -> PreparedGenerationPublication {
+        PreparedGenerationPublication::from_custody(
+            None, generation, 1, 4, 0, Sha256Digest::compute(b"ledger"),
+            hash_domain_frames(b"serverware.policyShadowPersistedSequenceRange/v1", &[&canonical_json_bytes(&(
+                generation.generation_id(), 1_u64, 4_u64, &generation.ingress_range_predecessor_head_sha256,
+            )).unwrap()]),
+            Sha256Digest::compute(b"spool"), Sha256Digest::compute(b"prepared"),
+        ).unwrap()
+    }
+
+    struct Authority {
+        key: SigningKey,
+        role: PolicyShadowCustodySignerRole,
+        checkpoint: AtomicTrustCheckpoint,
+        key_id: Sha256Digest,
+        key_spki: Sha256Digest,
+        persisted: Vec<u8>,
+        retrieved: Vec<u8>,
+    }
+
+    impl Authority {
+        fn new(role: PolicyShadowCustodySignerRole) -> Self {
+            let key = SigningKey::from_bytes(&[91; 32]);
+            Self {
+                key_spki: ed25519_public_key_material_sha256(&key.verifying_key()), key,
+                role, key_id: Sha256Digest::compute(role.signature_domain().as_bytes()),
+                checkpoint: AtomicTrustCheckpoint::new(Sha256Digest::compute(b"response fixture checkpoint"),
+                    1_000_000, 1, Sha256Digest::compute(b"response fixture revocations")).unwrap(),
+                persisted: Vec::new(), retrieved: Vec::new(),
+            }
+        }
+        fn sign(&mut self, payload: &[u8]) -> CanonicalEd25519Signature {
+            self.persisted = payload.to_vec();
+            self.retrieved = payload.to_vec();
+            CanonicalEd25519Signature(URL_SAFE_NO_PAD.encode(self.key.sign(
+                &signature_preimage(self.role.signature_domain(), payload)).to_bytes()))
+        }
+        fn expected(&self) -> ExpectedSigner<'_> {
+            ExpectedSigner { key_id: &self.key_id, key_spki_sha256: &self.key_spki }
+        }
+    }
+
+    impl TrustedTime for Authority {
+        fn now_unix_nanos(&self) -> Result<i64, ShadowError> { Ok(1_000_001) }
+    }
+    impl EnvelopeKeyTrust for Authority {
+        fn current_checkpoint(&self) -> Result<AtomicTrustCheckpoint, ShadowError> { Ok(self.checkpoint.clone()) }
+        fn resolve_ed25519_key(&self, checkpoint: &AtomicTrustCheckpoint, domain: &str,
+            key_id: &Sha256Digest, key_spki: &Sha256Digest) -> Result<VerifyingKey, ShadowError> {
+            if checkpoint != &self.checkpoint || domain != self.role.signature_domain()
+                || key_id != &self.key_id || key_spki != &self.key_spki {
+                return Err(ShadowError::TrustResolutionFailed);
+            }
+            Ok(self.key.verifying_key())
+        }
+    }
+    impl PolicyShadowPersistenceProofVerifier for Authority {
+        fn verify_persistence_receipt(&self, role: PolicyShadowCustodySignerRole,
+            receipt: &Sha256Digest, payload: &[u8]) -> Result<(), ShadowError> {
+            if role != self.role || receipt != &Sha256Digest::compute(b"response fixture persistence")
+                || payload != self.persisted.as_slice() { return Err(ShadowError::PayloadDigestMismatch); }
+            Ok(())
+        }
+        fn verify_immutable_retrieval(&self, role: PolicyShadowCustodySignerRole,
+            id: &Sha256Digest, proof: &Sha256Digest, payload: &[u8]) -> Result<(), ShadowError> {
+            if role != self.role || id != &Sha256Digest::compute(b"response fixture retrieval")
+                || proof != &Sha256Digest::compute(b"response fixture retrieval proof")
+                || payload != self.retrieved.as_slice() { return Err(ShadowError::BindingDrift); }
+            Ok(())
+        }
+    }
+
+    pub(crate) fn publication(generation: &ShadowGenerationIdentity, prepared: &PreparedGenerationPublication,
+        revision: u64) -> VerifiedPublicationReconciliationReceipt {
+        let mut authority = Authority::new(PolicyShadowCustodySignerRole::PublicationReconciliation);
+        let mut wire = PublicationReconciliationReceiptWire {
+            state: PublicationReconciliationState::Published, publication_revision: revision,
+            predecessor_generation_sha256: None,
+            committed_generation_sha256: Some(generation.generation_id().clone()),
+            published_generation_sha256: Some(generation.generation_id().clone()),
+            first_ingress_sequence: Some(prepared.first_ingress_sequence), last_ingress_sequence: Some(prepared.last_ingress_sequence),
+            ledger_event_ordinal: 0, ledger_head_sha256: Sha256Digest::compute(b"ledger"), spool_root_sha256: Sha256Digest::compute(b"spool"),
+            prepared_publication_sha256: Some(prepared.preparation_receipt_sha256().clone()),
+            trusted_observed_at_unix_nanos: 1_000_000, trusted_time_checkpoint_sha256: authority.checkpoint.checkpoint_id.clone(),
+            persistence_receipt_sha256: Sha256Digest::compute(b"response fixture persistence"),
+            retrieval_id_sha256: Sha256Digest::compute(b"response fixture retrieval"),
+            retrieval_proof_sha256: Sha256Digest::compute(b"response fixture retrieval proof"),
+            signer_role: authority.role, signing_key_id: authority.key_id.clone(), signing_key_spki_sha256: authority.key_spki.clone(),
+            signature: CanonicalEd25519Signature(String::new()), signed_receipt_sha256: Sha256Digest::compute(b"unsigned"),
+        };
+        let payload = wire.canonical_payload().unwrap();
+        wire.signature = authority.sign(&payload);
+        wire.signed_receipt_sha256 = hash_domain_frames(b"serverware.policyShadowPublicationReconciliationReceipt/v1",
+            &[&payload, wire.signature.0.as_bytes()]);
+        verify_publication_reconciliation_receipt(wire, authority.expected(), &authority, &authority, &authority, 100).unwrap()
+    }
+
+    fn unavailable<T>(binding: &Sha256Digest, generation: Option<&ShadowGenerationIdentity>,
+        verify: impl FnOnce(SignedUnavailableGenerationReceipt, &Authority) -> Result<T, ShadowError>) -> Result<T, ShadowError> {
+        let mut authority = Authority::new(PolicyShadowCustodySignerRole::UnavailableIngress);
+        let mut wire = SignedUnavailableGenerationReceipt {
+            request_binding_sha256: binding.clone(), request_commitment_sha256: Sha256Digest::compute(b"unavailable commitment"),
+            generation_id: generation.map(|value| value.generation_id().clone()),
+            generation_install_state: if generation.is_some() { UnavailableGenerationInstallState::Installed } else { UnavailableGenerationInstallState::Uninstalled },
+            reason: if generation.is_some() { CustodyUnavailableReason::DurableSpoolBackpressure } else { CustodyUnavailableReason::NoInstalledGeneration },
+            event_ordinal: 1, predecessor_event_ordinal: 0, predecessor_head_sha256: Sha256Digest::compute(b"unavailable predecessor"),
+            resulting_head_sha256: Sha256Digest::compute(b"unset"), trusted_observed_at_unix_nanos: 1_000_000,
+            trusted_time_checkpoint_sha256: authority.checkpoint.checkpoint_id.clone(),
+            persistence_receipt_sha256: Sha256Digest::compute(b"response fixture persistence"),
+            retrieval_id_sha256: Sha256Digest::compute(b"response fixture retrieval"), retrieval_proof_sha256: Sha256Digest::compute(b"response fixture retrieval proof"),
+            signing_key_id: authority.key_id.clone(), signing_key_spki_sha256: authority.key_spki.clone(),
+            signature: CanonicalEd25519Signature(String::new()), signed_receipt_sha256: Sha256Digest::compute(b"unsigned"),
+        };
+        let record = hash_domain_frames(b"serverware.policyShadowUnavailableGenerationRecord/v1", &[&canonical_json_bytes(&(
+            &wire.request_binding_sha256, &wire.request_commitment_sha256, &wire.generation_id, wire.generation_install_state,
+            wire.reason, wire.event_ordinal, wire.predecessor_event_ordinal, &wire.predecessor_head_sha256,
+            wire.trusted_observed_at_unix_nanos, &wire.trusted_time_checkpoint_sha256, &wire.persistence_receipt_sha256,
+            &wire.retrieval_id_sha256, &wire.retrieval_proof_sha256,
+        ))?]);
+        wire.resulting_head_sha256 = hash_domain_frames(b"serverware.policyShadowUnavailableGenerationHead/v1",
+            &[&canonical_json_bytes(&(wire.predecessor_event_ordinal, &wire.predecessor_head_sha256, wire.event_ordinal, &record))?]);
+        wire.signature = authority.sign(&wire.canonical_signature_payload()?);
+        wire.signed_receipt_sha256 = hash_domain_frames(b"serverware.policyShadowUnavailableGenerationReceipt/v1", &[&canonical_json_bytes(&(
+            &record, &wire.resulting_head_sha256, &wire.signing_key_id, &wire.signing_key_spki_sha256, &wire.signature,
+        ))?]);
+        verify(wire, &authority)
+    }
+
+    fn terminal_event(payload: &[u8]) -> ShadowSpoolEvent {
+        ShadowSpoolEvent::new(Sha256Digest::compute(b"terminal generation"), 1,
+            Sha256Digest::compute(b"terminal request"), Sha256Digest::compute(b"terminal commitment"),
+            ShadowSpoolPhase::PreDispatchTerminal, Sha256Digest::compute(payload), payload.to_vec()).unwrap()
+    }
+
+    fn terminal(request: &TerminalSlotAppendRequest, event: &ShadowSpoolEvent, outcome: u8,
+        disposition: ShadowSpoolDisposition, fault: terminal_receipt_fixture::Fault) -> Result<TerminalSlotAppendOutcome, ShadowError> {
+        terminal_receipt_fixture::with_wire(event, disposition, fault, |receipt, signer, trust, time, store| {
+            let wire = match outcome {
+                0 => TerminalSlotAppendOutcomeWire::Committed(receipt),
+                1 => TerminalSlotAppendOutcomeWire::Existing(receipt),
+                _ => TerminalSlotAppendOutcomeWire::Fork(receipt),
+            };
+            // The production consumer uses this same binding check followed
+            // by the assignment-bound verifier. Here the real local verifier
+            // proves cryptography/bytes only, not production assignment/RPC.
+            let (wire, expected) = wire.receipt_and_expected_event(request)?;
+            match wire {
+                TerminalSlotAppendOutcomeWire::Committed(receipt) => Ok(TerminalSlotAppendOutcome::Committed(
+                    verify_shadow_spill_receipt(receipt, &expected, signer, trust, time, store, 100)?)),
+                TerminalSlotAppendOutcomeWire::Existing(receipt) => Ok(TerminalSlotAppendOutcome::Existing(
+                    verify_shadow_spill_receipt(receipt, &expected, signer, trust, time, store, 100)?)),
+                TerminalSlotAppendOutcomeWire::Fork(receipt) => Ok(TerminalSlotAppendOutcome::Fork(
+                    verify_shadow_spill_receipt(receipt, &expected, signer, trust, time, store, 100)?)),
+            }
+        })
+    }
+
+    #[test]
+    fn custody_terminal_wire_preserves_committed_existing_and_authenticated_fork() {
+        let event = terminal_event(b"requested terminal");
+        let request = TerminalSlotAppendRequest::new(event.clone()).unwrap();
+        assert!(matches!(terminal(&request, &event, 0, ShadowSpoolDisposition::Appended, terminal_receipt_fixture::Fault::None),
+            Ok(TerminalSlotAppendOutcome::Committed(_))));
+        assert!(matches!(terminal(&request, &event, 1, ShadowSpoolDisposition::Appended, terminal_receipt_fixture::Fault::None),
+            Ok(TerminalSlotAppendOutcome::Existing(_))));
+        let conflicting = terminal_event(b"previously stored conflicting terminal");
+        assert!(matches!(terminal(&request, &conflicting, 2, ShadowSpoolDisposition::Appended, terminal_receipt_fixture::Fault::None),
+            Ok(TerminalSlotAppendOutcome::Fork(receipt)) if receipt.matches_event(&conflicting)));
+        for outcome in [0, 1] {
+            assert_eq!(terminal(&request, &conflicting, outcome, ShadowSpoolDisposition::Appended,
+                terminal_receipt_fixture::Fault::None).err(), Some(ShadowError::BindingDrift));
+        }
+        assert_eq!(terminal(&request, &event, 2, ShadowSpoolDisposition::Appended,
+            terminal_receipt_fixture::Fault::None).err(), Some(ShadowError::BindingDrift));
+    }
+
+    #[test]
+    fn custody_terminal_wire_rejects_cross_request_tuple_phase_and_unavailable() {
+        let event = terminal_event(b"requested terminal");
+        let request = TerminalSlotAppendRequest::new(event.clone()).unwrap();
+        for field in 0..5 {
+            let mut conflicting = terminal_event(b"conflict");
+            match field {
+                0 => conflicting.generation_id = Sha256Digest::compute(b"other generation"),
+                1 => conflicting.ingress_sequence = 2,
+                2 => conflicting.request_binding_sha256 = Sha256Digest::compute(b"other request"),
+                3 => conflicting.request_commitment_sha256 = Sha256Digest::compute(b"other commitment"),
+                _ => conflicting.phase = ShadowSpoolPhase::Capture,
+            }
+            assert_eq!(terminal(&request, &conflicting, 2, ShadowSpoolDisposition::Appended,
+                terminal_receipt_fixture::Fault::None).err(), Some(ShadowError::BindingDrift), "field {field}");
+        }
+        assert_eq!(terminal(&request, &event, 0, ShadowSpoolDisposition::Unavailable,
+            terminal_receipt_fixture::Fault::None).err(), Some(ShadowError::BindingDrift));
+    }
+
+    #[test]
+    fn custody_terminal_wire_requires_real_crypto_time_and_exact_byte_proofs() {
+        use terminal_receipt_fixture::Fault;
+        let event = terminal_event(b"requested terminal");
+        let request = TerminalSlotAppendRequest::new(event.clone()).unwrap();
+        for (fault, expected) in [
+            (Fault::Signature, ShadowError::SignatureInvalid), (Fault::PinnedKey, ShadowError::SignerBindingMismatch),
+            (Fault::VerificationKey, ShadowError::SignatureInvalid), (Fault::StaleTime, ShadowError::EvidenceTooOld),
+            (Fault::FutureTime, ShadowError::EvidenceTooOld), (Fault::Checkpoint, ShadowError::TrustCheckpointMismatch),
+            (Fault::PersistenceBytes, ShadowError::PayloadDigestMismatch), (Fault::RetrievalBytes, ShadowError::BindingDrift),
+        ] {
+            assert_eq!(terminal(&request, &event, 0, ShadowSpoolDisposition::Appended, fault).err(), Some(expected), "{fault:?}");
+        }
+    }
+
+    fn assigned(expected_generation: Option<&ShadowGenerationIdentity>, expected_bounds: Option<(u64, u64)>,
+        expected_binding: &Sha256Digest, issued: &ShadowGenerationIdentity, sequence: u64,
+        decision: SamplingDecision, fault: terminal_receipt_fixture::Fault) -> Result<PersistedIngressAdmission, ShadowError> {
+        let sampling = CustodySamplingAuthorizationWire::new(issued.generation_id().clone(),
+            Sha256Digest::compute(b"ingress request"), sequence, issued.sampling_basis_points,
+            Sha256Digest::compute(b"ingress commitment"), decision)?;
+        let bytes = canonical_ingress_admission_event_bytes(issued, 1_000_000, &sampling)?;
+        let event = ShadowSpoolEvent::new(issued.generation_id().clone(), sequence,
+            sampling.request_binding_sha256.clone(), sampling.request_commitment_sha256.clone(),
+            ShadowSpoolPhase::IngressOpen, Sha256Digest::compute(&bytes), bytes)?;
+        terminal_receipt_fixture::with_wire(&event, ShadowSpoolDisposition::Appended, fault,
+            |receipt, signer, trust, time, store| {
+                let wire = IngressCustodyAdmissionWire::Assigned(PersistedIngressAdmissionWire {
+                    observed_at_unix_nanos: 1_000_000, sampling, opening_spill_receipt: receipt,
+                });
+                wire.validate_expected_binding(expected_generation, expected_bounds, expected_binding)?;
+                let IngressCustodyAdmissionWire::Assigned(wire) = wire else { unreachable!() };
+                verify_persisted_ingress_admission(expected_generation.ok_or(ShadowError::GenerationIdentityMismatch)?,
+                    wire.observed_at_unix_nanos, wire.sampling, wire.opening_spill_receipt, signer, trust, time, store, 100)
+            })
+    }
+
+    #[test]
+    fn custody_ingress_wire_binds_captured_generation_request_range_and_sampling() {
+        use terminal_receipt_fixture::Fault;
+        let generation = generation();
+        let binding = Sha256Digest::compute(b"ingress request");
+        for decision in [SamplingDecision::Included, SamplingDecision::ExcludedByAssignment] {
+            let receipt = assigned(Some(&generation), Some((1, 4)), &binding, &generation, 1, decision, Fault::None).unwrap();
+            assert_eq!(receipt.sampling.decision, decision);
+            assert_eq!(receipt.generation_id(), generation.generation_id());
+        }
+        assert_eq!(assigned(None, None, &binding, &generation, 1, SamplingDecision::Included, Fault::None).err(),
+            Some(ShadowError::GenerationIdentityMismatch));
+        assert_eq!(assigned(Some(&generation), Some((1, 4)), &Sha256Digest::compute(b"other request"), &generation,
+            1, SamplingDecision::Included, Fault::None).err(), Some(ShadowError::BindingDrift));
+        assert_eq!(assigned(Some(&generation), Some((1, 4)), &binding, &generation,
+            5, SamplingDecision::Included, Fault::None).err(), Some(ShadowError::NonContiguousIngressSequence));
+        let mut changed = generation.clone();
+        changed.runtime_boot_id_sha256 = Sha256Digest::compute(b"other boot");
+        changed.generation_id = changed.recompute_id().unwrap();
+        assert_eq!(assigned(Some(&generation), Some((1, 4)), &binding, &changed,
+            1, SamplingDecision::Included, Fault::None).err(), Some(ShadowError::BindingDrift));
+        assert_eq!(assigned(Some(&generation), Some((1, 4)), &binding, &generation,
+            1, SamplingDecision::Included, Fault::Signature).err(), Some(ShadowError::SignatureInvalid));
+        assert_eq!(assigned(Some(&generation), Some((1, 4)), &binding, &generation,
+            1, SamplingDecision::Included, Fault::RetrievalBytes).err(), Some(ShadowError::BindingDrift));
+    }
+
+    #[test]
+    fn custody_unavailable_wire_is_authenticated_and_revalidates_parsed_invariants() {
+        let binding = Sha256Digest::compute(b"unavailable request");
+        for generation in [None, Some(generation())] {
+            unavailable(&binding, generation.as_ref(), |wire, authority| {
+                let encoded = canonical_json_bytes(&IngressCustodyAdmissionWire::Unavailable(wire.clone()))?;
+                let parsed: IngressCustodyAdmissionWire = serde_json::from_slice(&encoded).unwrap();
+                parsed.validate_expected_binding(generation.as_ref(), None, &binding)?;
+                let IngressCustodyAdmissionWire::Unavailable(parsed) = parsed else { unreachable!() };
+                let verified = verify_unavailable_generation_receipt(parsed, authority.expected(), authority, authority, authority, 100)?;
+                assert_eq!(verified.request_binding_sha256(), &binding);
+                assert_eq!(IngressCustodyAdmissionWire::Unavailable(wire.clone())
+                    .validate_expected_binding(generation.as_ref(), None, &Sha256Digest::compute(b"other request")).err(), Some(ShadowError::BindingDrift));
+                let mut malformed = wire;
+                malformed.event_ordinal = 0;
+                assert_eq!(malformed.validate_deserialized_invariants().err(), Some(ShadowError::InvalidField {
+                    field: "custody_unavailable.event_ordinal", reason: "must be a positive signed-schema integer",
+                }));
+                Ok(())
+            }).unwrap();
+        }
+    }
+
+    #[test]
+    fn custody_response_wire_rejects_unknown_tags_fields_and_forged_authority_shape() {
+        let event = terminal_event(b"terminal");
+        terminal_receipt_fixture::with_wire(&event, ShadowSpoolDisposition::Appended, terminal_receipt_fixture::Fault::None,
+            |receipt, _, _, _, _| {
+                let baseline = serde_json::to_value(TerminalSlotAppendOutcomeWire::Committed(receipt)).unwrap();
+                assert!(serde_json::from_value::<TerminalSlotAppendOutcomeWire>(baseline.clone()).is_ok());
+                let mut unknown = baseline.clone(); unknown["outcome"] = serde_json::json!("verified");
+                assert!(serde_json::from_value::<TerminalSlotAppendOutcomeWire>(unknown).is_err());
+                let mut unknown = baseline; unknown["authority"] = serde_json::json!(true);
+                assert!(serde_json::from_value::<TerminalSlotAppendOutcomeWire>(unknown).is_err());
+                assert!(serde_json::from_value::<IngressCustodyAdmissionWire>(serde_json::json!({
+                    "outcome":"assigned", "receipt":{"verified":true}})).is_err());
+                Ok(())
+            }).unwrap();
     }
 }
 

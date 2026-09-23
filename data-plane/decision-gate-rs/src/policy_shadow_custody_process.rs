@@ -11,17 +11,20 @@ use super::super::{
     verify_production_active_effect_barrier,
     verify_production_active_effect_commit,
     verify_production_custody_trusted_host_attestation,
+    verify_production_ingress_custody_admission,
     verify_production_publication_reconciliation_receipt,
     verify_production_reconciled_active_effect_commit,
     verify_production_shadow_spill_receipt,
     verify_production_spool_append_reservation_receipt,
     verify_production_spool_compaction_receipt,
+    verify_production_terminal_slot_append_outcome,
     ActivationPublicationReceiptWire, AuthorityRole,
     ActivationPublicationTransaction, ActiveEffectBarrierReceiptWire,
     ActiveEffectCommitReceiptWire, ActiveEffectCommitState,
     ActiveEffectPreparation, AuthenticatedSpoolCompactionReceipt,
     AuthenticatedSpoolCompactionRequest,
     CustodyTrustedHostVerifierResultWire, EnvelopeKeyTrust,
+    IngressCustodyAdmissionWire,
     PolicyShadowCustodySignerRole,
     PolicyShadowPersistenceProofVerifier,
     ProductionCustodyConfiguration,
@@ -44,9 +47,10 @@ use super::super::{
     ProductionPolicyShadowCustodyProcess,
     ProductionPolicyShadowCustodyRpcSupervisor, Sha256Digest,
     PreparedGenerationPublication, PublicationReconciliationReceiptWire,
-    RequestCommitment, ShadowError, ShadowSpoolEvent,
+    PublicationReconciliationState, VerifiedPublicationReconciliationReceipt,
+    RequestCommitment, ShadowError, ShadowSpoolEvent, ShadowGenerationIdentity,
     SignedEnvelope, SignedShadowSpillReceipt,
-    SpoolAppendReservationReceiptWire, TerminalSlotAppendRequest,
+    SpoolAppendReservationReceiptWire, TerminalSlotAppendRequest, TerminalSlotAppendOutcomeWire,
     TrustedTime, VerifiedActiveEffectPermit, VerifiedAssignment,
 };
 use super::boottime::{BoottimeDeadline, BoottimeDomain};
@@ -604,6 +608,14 @@ struct PreparedGenerationRpcState {
 
 enum DispatchResponseContext {
     None,
+    RecoverPublication(u64),
+    PreparePublication(IngressPublicationPreparation),
+    CommitPublication(RetainedIngressPublication),
+    AbortPublication(RetainedIngressPublication),
+    BeginIngress {
+        request_binding_sha256: Sha256Digest,
+        published: Option<RetainedIngressPublication>,
+    },
     ReserveSpool(ShadowSpoolEvent),
     AppendSpool(ShadowSpoolEvent),
     CompactSpool(AuthenticatedSpoolCompactionRequest),
@@ -618,6 +630,149 @@ enum DispatchResponseContext {
     PublishActivation(ActivationPublicationTransaction),
 }
 
+#[derive(Clone, PartialEq, Eq)]
+struct IngressPublicationPreparation {
+    configuration_binding_sha256: Sha256Digest,
+    request_sha256: Sha256Digest,
+    successor: Arc<ShadowGenerationIdentity>,
+    predecessor: Option<Sha256Digest>,
+    expected_publication_revision: u64,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct RetainedIngressPublication {
+    context: IngressPublicationPreparation,
+    prepared: PreparedGenerationPublication,
+}
+
+/// One publication may be prepared at a time; ingress holds only an Arc to
+/// the previously authenticated immutable identity. No identity is learned
+/// from an ingress response. An ambiguous preparation stays reserved until an
+/// authenticated abort/recovery or configuration transition invalidates it.
+#[derive(Clone, Default)]
+struct IngressPublicationState {
+    revision: u64,
+    pending: Option<(IngressPublicationPreparation, Option<PreparedGenerationPublication>)>,
+    published: Option<RetainedIngressPublication>,
+}
+
+impl IngressPublicationState {
+    fn next_revision(&self) -> Result<u64, ShadowError> {
+        self.revision.checked_add(1).ok_or(ShadowError::CounterOverflow)
+    }
+
+    fn invalidate(&mut self) -> Result<(), ShadowError> {
+        let revision = self.next_revision()?;
+        self.pending = None;
+        self.published = None;
+        self.revision = revision;
+        Ok(())
+    }
+
+    fn reserve(&mut self, context: &IngressPublicationPreparation) -> Result<(), ShadowError> {
+        if let Some((existing, _)) = &self.pending {
+            if existing != context {
+                return Err(ShadowError::CustodyUnavailable);
+            }
+        } else {
+            let revision = self.next_revision()?;
+            self.pending = Some((context.clone(), None));
+            self.revision = revision;
+        }
+        Ok(())
+    }
+
+    fn accept_prepared(
+        &mut self,
+        context: &IngressPublicationPreparation,
+        prepared: &PreparedGenerationPublication,
+    ) -> Result<(), ShadowError> {
+        prepared.validate_for_successor(context.predecessor.as_ref(), &context.successor)?;
+        let revision = self.next_revision()?;
+        let (reserved, stored) = self.pending.as_mut().ok_or(ShadowError::BindingDrift)?;
+        if reserved != context || stored.as_ref().is_some_and(|value| value != prepared) {
+            return Err(ShadowError::BindingDrift);
+        }
+        *stored = Some(prepared.clone());
+        self.revision = revision;
+        Ok(())
+    }
+
+    fn retained(&self, prepared: &PreparedGenerationPublication) -> Result<RetainedIngressPublication, ShadowError> {
+        if let Some((context, Some(stored))) = &self.pending {
+            if stored == prepared {
+                return Ok(RetainedIngressPublication { context: context.clone(), prepared: stored.clone() });
+            }
+        }
+        self.published.as_ref().filter(|value| value.prepared == *prepared)
+            .cloned().ok_or(ShadowError::BindingDrift)
+    }
+
+    fn receipt_matches(
+        retained: &RetainedIngressPublication,
+        receipt: &VerifiedPublicationReconciliationReceipt,
+    ) -> bool {
+        receipt.state() == PublicationReconciliationState::Published
+            && receipt.published_generation_sha256() == Some(retained.context.successor.generation_id())
+            && receipt.predecessor_generation_sha256() == retained.context.predecessor.as_ref()
+            && receipt.publication_revision() == retained.context.expected_publication_revision
+            && receipt.sequence_bounds() == Some(retained.prepared.sequence_bounds())
+            && receipt.prepared_publication_sha256() == Some(retained.prepared.preparation_receipt_sha256())
+    }
+
+    fn commit(
+        &mut self,
+        retained: &RetainedIngressPublication,
+        receipt: &VerifiedPublicationReconciliationReceipt,
+    ) -> Result<(), ShadowError> {
+        if self.retained(&retained.prepared)? != *retained || !Self::receipt_matches(retained, receipt) {
+            return Err(ShadowError::BindingDrift);
+        }
+        // A delayed retry of an older publication must not erase a newer
+        // pending publication or replace its context.
+        if self.pending.as_ref().is_some_and(|(context, _)| context != &retained.context) {
+            return Err(ShadowError::BindingDrift);
+        }
+        let revision = self.next_revision()?;
+        self.published = Some(retained.clone());
+        self.pending = None;
+        self.revision = revision;
+        Ok(())
+    }
+
+    fn abort(&mut self, retained: &RetainedIngressPublication) -> Result<(), ShadowError> {
+        if self.retained(&retained.prepared)? != *retained {
+            return Err(ShadowError::BindingDrift);
+        }
+        let revision = self.next_revision()?;
+        if self.pending.as_ref().is_some_and(|(context, _)| context == &retained.context) {
+            self.pending = None;
+        }
+        if self.published.as_ref() == Some(retained) {
+            self.published = None;
+        }
+        self.revision = revision;
+        Ok(())
+    }
+
+    fn recover(&mut self, expected_revision: u64, receipt: &VerifiedPublicationReconciliationReceipt) -> Result<(), ShadowError> {
+        if self.revision != expected_revision {
+            return Err(ShadowError::BindingDrift);
+        }
+        let revision = self.next_revision()?;
+        self.pending = None;
+        if !self.published.as_ref().is_some_and(|retained| Self::receipt_matches(retained, receipt)) {
+            self.published = None;
+        }
+        self.revision = revision;
+        // A digest-only recovered publication cannot seed an absent identity.
+        // Startup must replay the ordinary verified prepare/commit chain with
+        // its locally verified assignment/load successor before Assigned can
+        // be accepted. A recovery receipt alone intentionally remains closed.
+        Ok(())
+    }
+}
+
 struct RpcProductionPolicyShadowCustodyProcess {
     active_configuration: RwLock<ProductionCustodyConfiguration>,
     manifest: ProductionCustodyDispatchManifest,
@@ -629,6 +784,7 @@ struct RpcProductionPolicyShadowCustodyProcess {
     sealed_references:
         Mutex<BTreeMap<String, SealedProductionArtifactReferenceV4>>,
     prepared_generations: Mutex<Vec<PreparedGenerationRpcState>>,
+    ingress_publication: Mutex<IngressPublicationState>,
     generation_ambiguous: Arc<AtomicBool>,
 }
 
@@ -1169,12 +1325,15 @@ impl RpcProductionPolicyShadowCustodyProcess {
         operation: PolicyShadowCustodyOperation,
         context: DispatchResponseContext,
         result: ClosedProductionDispatchResultV4,
+        expected_configuration_binding_sha256: &Sha256Digest,
     ) -> Result<ProductionCustodyDispatchResponse, ShadowError> {
         let configuration = self
             .active_configuration
             .read()
-            .map_err(|_| ShadowError::CustodyUnavailable)?
-            .clone();
+            .map_err(|_| ShadowError::CustodyUnavailable)?;
+        if configuration.production_configuration_binding_sha256() != expected_configuration_binding_sha256 {
+            return Err(ShadowError::BindingDrift);
+        }
         match (operation, context, result) {
             (
                 PolicyShadowCustodyOperation::VerifyCheckpointSuccessor,
@@ -1196,21 +1355,58 @@ impl RpcProductionPolicyShadowCustodyProcess {
                 ObservationEvidenceVerified),
             (
                 PolicyShadowCustodyOperation::AbortGenerationPublication,
-                DispatchResponseContext::None,
+                DispatchResponseContext::AbortPublication(retained),
                 ClosedProductionDispatchResultV4::Verified,
-            ) => Ok(ProductionCustodyDispatchResponse::
-                GenerationPublicationAborted),
+            ) => {
+                self.ingress_publication.lock().map_err(|_| ShadowError::CustodyUnavailable)?.abort(&retained)?;
+                Ok(ProductionCustodyDispatchResponse::GenerationPublicationAborted)
+            }
             (
                 PolicyShadowCustodyOperation::PrepareGenerationPublication,
-                DispatchResponseContext::None,
+                DispatchResponseContext::PreparePublication(context),
                 ClosedProductionDispatchResultV4::Artifact(artifact),
-            ) => Ok(ProductionCustodyDispatchResponse::
-                GenerationPublicationPrepared(Self::decode_artifact::<
-                    PreparedGenerationPublication,
-                >(
+            ) => {
+                let prepared = Self::decode_artifact::<PreparedGenerationPublication>(
                     &artifact,
                     ProductionArtifactKindV4::PreparedGenerationPublication,
-                )?)),
+                )?;
+                self.ingress_publication.lock().map_err(|_| ShadowError::CustodyUnavailable)?
+                    .accept_prepared(&context, &prepared)?;
+                Ok(ProductionCustodyDispatchResponse::GenerationPublicationPrepared(prepared))
+            }
+            (
+                PolicyShadowCustodyOperation::BeginIngress,
+                DispatchResponseContext::BeginIngress { request_binding_sha256, published },
+                ClosedProductionDispatchResultV4::Artifact(artifact),
+            ) => {
+                let wire = Self::decode_artifact::<IngressCustodyAdmissionWire>(
+                    &artifact, ProductionArtifactKindV4::IngressCustodyAdmission)?;
+                if published.as_ref().is_some_and(|value|
+                    value.context.configuration_binding_sha256 != *expected_configuration_binding_sha256)
+                {
+                    return Err(ShadowError::BindingDrift);
+                }
+                let verified = verify_production_ingress_custody_admission(
+                    wire, published.as_ref().map(|value| value.context.successor.as_ref()),
+                    published.as_ref().map(|value| value.prepared.sequence_bounds()),
+                    &request_binding_sha256, &configuration, self.key_trust.as_ref(),
+                    self.trusted_time.as_ref(), &self.persistence_verifier,
+                )?;
+                Ok(ProductionCustodyDispatchResponse::IngressBegun(verified))
+            }
+            (
+                PolicyShadowCustodyOperation::AppendTerminal,
+                DispatchResponseContext::AppendTerminal(request),
+                ClosedProductionDispatchResultV4::Artifact(artifact),
+            ) => {
+                let wire = Self::decode_artifact::<TerminalSlotAppendOutcomeWire>(
+                    &artifact, ProductionArtifactKindV4::TerminalSlotAppendOutcome)?;
+                let verified = verify_production_terminal_slot_append_outcome(
+                    wire, &request, &configuration, self.key_trust.as_ref(),
+                    self.trusted_time.as_ref(), &self.persistence_verifier,
+                )?;
+                Ok(ProductionCustodyDispatchResponse::TerminalAppended(verified))
+            }
             (
                 PolicyShadowCustodyOperation::CommitRequest,
                 DispatchResponseContext::None,
@@ -1342,10 +1538,8 @@ impl RpcProductionPolicyShadowCustodyProcess {
                     ActivationConsumedAndPublished(verified))
             }
             (
-                PolicyShadowCustodyOperation::RecoverCurrentState
-                | PolicyShadowCustodyOperation::
-                    CommitGenerationPublication,
-                DispatchResponseContext::None,
+                PolicyShadowCustodyOperation::RecoverCurrentState,
+                DispatchResponseContext::RecoverPublication(revision),
                 ClosedProductionDispatchResultV4::SealedArtifact {
                     reference,
                     exact_signed_artifact,
@@ -1366,19 +1560,28 @@ impl RpcProductionPolicyShadowCustodyProcess {
                         self.trusted_time.as_ref(),
                         &self.persistence_verifier,
                     )?;
+                let mut state = self.ingress_publication.lock().map_err(|_| ShadowError::CustodyUnavailable)?;
+                let mut next = state.clone();
+                next.recover(revision, &verified)?;
                 self.retain_sealed_reference(reference, &verified)?;
-                match operation {
-                    PolicyShadowCustodyOperation::RecoverCurrentState => {
-                        Ok(ProductionCustodyDispatchResponse::
-                            CurrentStateRecovered(verified))
-                    }
-                    PolicyShadowCustodyOperation::
-                        CommitGenerationPublication => {
-                        Ok(ProductionCustodyDispatchResponse::
-                            GenerationPublicationCommitted(verified))
-                    }
-                    _ => Err(ShadowError::CustodyUnavailable),
-                }
+                *state = next;
+                Ok(ProductionCustodyDispatchResponse::CurrentStateRecovered(verified))
+            }
+            (
+                PolicyShadowCustodyOperation::CommitGenerationPublication,
+                DispatchResponseContext::CommitPublication(retained),
+                ClosedProductionDispatchResultV4::SealedArtifact { reference, exact_signed_artifact },
+            ) => {
+                let wire = Self::decode_artifact::<PublicationReconciliationReceiptWire>(
+                    &exact_signed_artifact.artifact, ProductionArtifactKindV4::PublicationReconciliationReceipt)?;
+                let verified = verify_production_publication_reconciliation_receipt(
+                    wire, &configuration, self.key_trust.as_ref(), self.trusted_time.as_ref(), &self.persistence_verifier)?;
+                let mut state = self.ingress_publication.lock().map_err(|_| ShadowError::CustodyUnavailable)?;
+                let mut next = state.clone();
+                next.commit(&retained, &verified)?;
+                self.retain_sealed_reference(reference, &verified)?;
+                *state = next;
+                Ok(ProductionCustodyDispatchResponse::GenerationPublicationCommitted(verified))
             }
             (
                 PolicyShadowCustodyOperation::ReserveSpoolAppend,
@@ -1533,12 +1736,11 @@ impl RpcProductionPolicyShadowCustodyProcess {
             .map_err(|_| ShadowError::CustodyUnavailable)?;
         if references.len()
                 >= usize::from(self.process_config.maximum_in_flight_calls)
-            || references
-                .insert(identity.as_str().to_owned(), reference)
-                .is_some()
+            || references.contains_key(identity.as_str())
         {
             return Err(ShadowError::CustodyUnavailable);
         }
+        references.insert(identity.as_str().to_owned(), reference);
         Ok(())
     }
 
@@ -1696,9 +1898,22 @@ impl RpcProductionPolicyShadowCustodyProcess {
             permit.operation_id_sha256(),
         )?;
         let binding = self.dispatch_binding(permit)?;
+        let expected_configuration_binding_sha256 = binding.production_configuration_binding_sha256.clone();
+        // Keep local publication capture/reservation in the same configuration
+        // epoch as the request. Reconfiguration must not clear this state and
+        // then let a stale request repopulate its pending slot.
+        let configuration_guard = self.active_configuration.read()
+            .map_err(|_| ShadowError::CustodyUnavailable)?;
+        if configuration_guard.production_configuration_binding_sha256()
+            != &expected_configuration_binding_sha256
+        {
+            return Err(ShadowError::BindingDrift);
+        }
         let mut response_context = DispatchResponseContext::None;
         let closed = match request {
             ProductionCustodyDispatchRequest::RecoverCurrentState => {
+                response_context = DispatchResponseContext::RecoverPublication(
+                    self.ingress_publication.lock().map_err(|_| ShadowError::CustodyUnavailable)?.revision);
                 ClosedProductionDispatchRequestV4::RecoverCurrentState {
                     binding,
                 }
@@ -1746,13 +1961,22 @@ impl RpcProductionPolicyShadowCustodyProcess {
                 recovered,
                 previous,
                 successor,
-            } => ClosedProductionDispatchRequestV4::PrepareGenerationPublication {
-                binding,
-                recovered: self.consume_sealed_reference(
-                    ProductionArtifactKindV4::PublicationReconciliationReceipt,
-                    &recovered,
-                )?,
-                previous: previous
+            } => {
+                let recovering_same = recovered.published_generation_sha256()
+                    .or_else(|| recovered.committed_generation_sha256()) == Some(successor.generation_id());
+                let context = IngressPublicationPreparation {
+                    configuration_binding_sha256: expected_configuration_binding_sha256.clone(),
+                    request_sha256: binding.request_sha256.clone(),
+                    successor: Arc::new(successor.clone()),
+                    predecessor: if recovering_same {
+                        recovered.predecessor_generation_sha256().cloned()
+                    } else {
+                        previous.as_ref().map(|value| value.generation_id().clone())
+                    },
+                    expected_publication_revision: if recovering_same { recovered.publication_revision() }
+                        else { recovered.publication_revision().checked_add(1).ok_or(ShadowError::CounterOverflow)? },
+                };
+                let previous_artifact = previous
                     .as_ref()
                     .map(|value| {
                         Self::artifact(
@@ -1760,36 +1984,63 @@ impl RpcProductionPolicyShadowCustodyProcess {
                             value,
                         )
                     })
-                    .transpose()?,
-                successor: Self::artifact(
+                    .transpose()?;
+                let successor_artifact = Self::artifact(
                     ProductionArtifactKindV4::ShadowGenerationIdentity,
                     &successor,
-                )?,
-            },
+                )?;
+                let mut state = self.ingress_publication.lock().map_err(|_| ShadowError::CustodyUnavailable)?;
+                let mut next = state.clone();
+                next.reserve(&context)?;
+                let recovered_reference = self.consume_sealed_reference(
+                    ProductionArtifactKindV4::PublicationReconciliationReceipt, &recovered)?;
+                *state = next;
+                drop(state);
+                response_context = DispatchResponseContext::PreparePublication(context);
+                ClosedProductionDispatchRequestV4::PrepareGenerationPublication {
+                    binding, recovered: recovered_reference, previous: previous_artifact, successor: successor_artifact,
+                }
+            }
             ProductionCustodyDispatchRequest::CommitGenerationPublication {
                 prepared,
-            } => ClosedProductionDispatchRequestV4::CommitGenerationPublication {
-                binding,
-                prepared: Self::artifact(
+            } => {
+                let retained = self.ingress_publication.lock().map_err(|_| ShadowError::CustodyUnavailable)?.retained(&prepared)?;
+                if retained.context.configuration_binding_sha256 != expected_configuration_binding_sha256 {
+                    return Err(ShadowError::BindingDrift);
+                }
+                response_context = DispatchResponseContext::CommitPublication(retained);
+                ClosedProductionDispatchRequestV4::CommitGenerationPublication { binding, prepared: Self::artifact(
                     ProductionArtifactKindV4::PreparedGenerationPublication,
                     &prepared,
-                )?,
-            },
+                )? }
+            }
             ProductionCustodyDispatchRequest::AbortGenerationPublication {
                 prepared,
-            } => ClosedProductionDispatchRequestV4::AbortGenerationPublication {
-                binding,
-                prepared: Self::artifact(
+            } => {
+                let retained = self.ingress_publication.lock().map_err(|_| ShadowError::CustodyUnavailable)?.retained(&prepared)?;
+                if retained.context.configuration_binding_sha256 != expected_configuration_binding_sha256 {
+                    return Err(ShadowError::BindingDrift);
+                }
+                response_context = DispatchResponseContext::AbortPublication(retained);
+                ClosedProductionDispatchRequestV4::AbortGenerationPublication { binding, prepared: Self::artifact(
                     ProductionArtifactKindV4::PreparedGenerationPublication,
                     &prepared,
-                )?,
-            },
+                )? }
+            }
             ProductionCustodyDispatchRequest::BeginIngress {
                 request_binding_sha256,
-            } => ClosedProductionDispatchRequestV4::BeginIngress {
-                binding,
-                request_binding_sha256,
-            },
+            } => {
+                let published = self.ingress_publication.lock().map_err(|_| ShadowError::CustodyUnavailable)?.published.clone();
+                if published.as_ref().is_some_and(|value|
+                    value.context.configuration_binding_sha256 != expected_configuration_binding_sha256)
+                {
+                    return Err(ShadowError::BindingDrift);
+                }
+                response_context = DispatchResponseContext::BeginIngress {
+                    request_binding_sha256: request_binding_sha256.clone(), published,
+                };
+                ClosedProductionDispatchRequestV4::BeginIngress { binding, request_binding_sha256 }
+            }
             ProductionCustodyDispatchRequest::ReserveSpoolAppend { event } => {
                 let event_artifact = Self::artifact(
                     ProductionArtifactKindV4::ShadowSpoolEvent,
@@ -1945,6 +2196,7 @@ impl RpcProductionPolicyShadowCustodyProcess {
         let deadline = closed
             .binding()
             .operation_deadline_boottime_nanos;
+        drop(configuration_guard);
         let response = match self.call_body(
             ProductionRpcRequestBodyV4::Dispatch(closed.clone()),
             replay,
@@ -1973,6 +2225,7 @@ impl RpcProductionPolicyShadowCustodyProcess {
             parent_operation,
             response_context,
             response.result,
+            &expected_configuration_binding_sha256,
         )
     }
 }
@@ -2050,6 +2303,7 @@ impl ProductionPolicyShadowCustodyProcess
                 .active_configuration
                 .write()
                 .map_err(|_| ShadowError::CustodyUnavailable)?;
+            self.ingress_publication.lock().map_err(|_| ShadowError::CustodyUnavailable)?.invalidate()?;
             *active = configuration.clone();
             prepared.remove(index);
             self.generation_ambiguous
@@ -2558,6 +2812,7 @@ pub(super) fn install_retained_generation(
         },
         sealed_references: Mutex::new(BTreeMap::new()),
         prepared_generations: Mutex::new(Vec::new()),
+        ingress_publication: Mutex::new(IngressPublicationState::default()),
         generation_ambiguous,
     });
     let supervisor = ProductionPolicyShadowCustodyRpcSupervisor::install(
@@ -2638,4 +2893,146 @@ fn startup_deadline_from_environment(
             "absolute policy-custody startup deadline is unavailable: {error}"
         ))
     })
+}
+
+#[cfg(test)]
+mod custody_response_context_tests {
+    use super::*;
+    use crate::policy_shadow::{custody_response_fixture as fixture, terminal_receipt_fixture};
+
+    fn context() -> IngressPublicationPreparation {
+        IngressPublicationPreparation {
+            configuration_binding_sha256: Sha256Digest::compute(b"local fixture configuration"),
+            request_sha256: Sha256Digest::compute(b"local fixture prepare request"),
+            successor: Arc::new(fixture::generation()), predecessor: None, expected_publication_revision: 2,
+        }
+    }
+
+    #[test]
+    fn custody_publication_context_requires_exact_preparation_and_verified_commit() {
+        let context = context();
+        let prepared = fixture::preparation(&context.successor);
+        let mut state = IngressPublicationState::default();
+        state.reserve(&context).unwrap();
+        let mut other = context.clone(); other.request_sha256 = Sha256Digest::compute(b"concurrent request");
+        assert_eq!(state.reserve(&other).err(), Some(ShadowError::CustodyUnavailable));
+        for (name, replacement, expected) in [
+            ("last_ingress_sequence", serde_json::json!(0), ShadowError::InvalidField {
+                field: "custody.last_ingress_sequence", reason: "must be a positive signed-schema integer",
+            }),
+            ("last_ingress_sequence", serde_json::json!(u64::MAX - 1), ShadowError::InvalidField {
+                field: "custody.last_ingress_sequence", reason: "must be a positive signed-schema integer",
+            }),
+            ("persisted_sequence_range_sha256", serde_json::json!(Sha256Digest::compute(b"wrong range")), ShadowError::GenerationIdentityMismatch),
+        ] {
+            let mut raw = serde_json::to_value(&prepared).unwrap(); raw[name] = replacement;
+            let invalid: PreparedGenerationPublication = serde_json::from_value(raw).unwrap();
+            assert_eq!(state.accept_prepared(&context, &invalid).err(), Some(expected));
+        }
+        state.accept_prepared(&context, &prepared).unwrap();
+        let retained = state.retained(&prepared).unwrap();
+        let wrong = fixture::publication(&context.successor, &prepared, 3);
+        assert_eq!(state.commit(&retained, &wrong).err(), Some(ShadowError::BindingDrift));
+        assert!(state.published.is_none());
+        let authentic = fixture::publication(&context.successor, &prepared, 2);
+        state.commit(&retained, &authentic).unwrap();
+        assert!(state.published.as_ref() == Some(&retained));
+        assert!(state.pending.is_none());
+    }
+
+    #[test]
+    fn custody_publication_context_rejects_delayed_recovery_without_erasing_new_state() {
+        let context = context();
+        let prepared = fixture::preparation(&context.successor);
+        let authentic = fixture::publication(&context.successor, &prepared, 2);
+        let mut state = IngressPublicationState::default();
+        let recovery_started_at = state.revision;
+        state.reserve(&context).unwrap();
+        state.accept_prepared(&context, &prepared).unwrap();
+        let retained = state.retained(&prepared).unwrap();
+        state.commit(&retained, &authentic).unwrap();
+        assert_eq!(state.recover(recovery_started_at, &authentic).err(), Some(ShadowError::BindingDrift));
+        assert!(state.published.as_ref() == Some(&retained));
+        let recovery_started_at = state.revision;
+        let mut next = context.clone(); next.request_sha256 = Sha256Digest::compute(b"next preparation");
+        state.reserve(&next).unwrap();
+        assert_eq!(state.recover(recovery_started_at, &authentic).err(), Some(ShadowError::BindingDrift));
+        assert!(state.pending.as_ref().is_some_and(|(pending, _)| pending == &next));
+        let current_revision = state.revision;
+        state.recover(current_revision, &authentic).unwrap();
+        assert!(state.pending.is_none());
+        assert!(state.published.as_ref() == Some(&retained));
+        let mut empty = IngressPublicationState::default();
+        empty.recover(0, &authentic).unwrap();
+        assert!(empty.published.is_none(), "digest-only recovery must not invent a verified load identity");
+    }
+
+    #[test]
+    fn custody_publication_context_abort_reconfigure_and_overflow_fail_closed() {
+        let context = context();
+        let prepared = fixture::preparation(&context.successor);
+        let authentic = fixture::publication(&context.successor, &prepared, 2);
+        let mut state = IngressPublicationState::default();
+        state.reserve(&context).unwrap(); state.accept_prepared(&context, &prepared).unwrap();
+        let retained = state.retained(&prepared).unwrap();
+        state.commit(&retained, &authentic).unwrap();
+        let captured = state.published.clone();
+        state.abort(&retained).unwrap();
+        assert!(state.published.is_none());
+        assert!(captured.as_ref() == Some(&retained), "request context is immutable, not a later cache read");
+        state.reserve(&context).unwrap(); state.accept_prepared(&context, &prepared).unwrap();
+        let before = state.revision;
+        state.invalidate().unwrap();
+        assert!(state.revision > before && state.pending.is_none() && state.published.is_none());
+        assert_eq!(state.commit(&retained, &authentic).err(), Some(ShadowError::BindingDrift));
+        assert_eq!(state.recover(before, &authentic).err(), Some(ShadowError::BindingDrift));
+        state.revision = u64::MAX;
+        assert_eq!(state.reserve(&context).err(), Some(ShadowError::CounterOverflow));
+        assert!(state.pending.is_none());
+    }
+
+    #[test]
+    fn custody_response_decoder_rejects_noncanonical_nested_fields_and_wrong_kind() {
+        let bytes = b"local terminal decoder fixture".to_vec();
+        let event = ShadowSpoolEvent::new(Sha256Digest::compute(b"generation"), 1,
+            Sha256Digest::compute(b"request"), Sha256Digest::compute(b"commitment"),
+            crate::policy_shadow::ShadowSpoolPhase::PreDispatchTerminal, Sha256Digest::compute(&bytes), bytes).unwrap();
+        let verified = terminal_receipt_fixture::verify(&event, crate::policy_shadow::ShadowSpoolDisposition::Appended,
+            terminal_receipt_fixture::Fault::None).unwrap();
+        let raw = serde_json::json!({"outcome":"committed", "receipt":verified.wire});
+        let artifact = CanonicalProductionArtifactV4::from_serializable(ProductionArtifactKindV4::TerminalSlotAppendOutcome, &raw).unwrap();
+        assert!(RpcProductionPolicyShadowCustodyProcess::decode_artifact::<TerminalSlotAppendOutcomeWire>(
+            &artifact, ProductionArtifactKindV4::TerminalSlotAppendOutcome).is_ok());
+        let mut altered = raw;
+        altered["receipt"]["unexpected"] = serde_json::json!(true);
+        let artifact = CanonicalProductionArtifactV4::from_serializable(ProductionArtifactKindV4::TerminalSlotAppendOutcome, &altered).unwrap();
+        assert_eq!(RpcProductionPolicyShadowCustodyProcess::decode_artifact::<TerminalSlotAppendOutcomeWire>(
+            &artifact, ProductionArtifactKindV4::TerminalSlotAppendOutcome).err(), Some(ShadowError::CustodyUnavailable));
+        assert_eq!(RpcProductionPolicyShadowCustodyProcess::decode_artifact::<TerminalSlotAppendOutcomeWire>(
+            &artifact, ProductionArtifactKindV4::IngressCustodyAdmission).err(), Some(ShadowError::CustodyUnavailable));
+    }
+
+    #[test]
+    fn custody_response_source_pins_production_verifiers_and_request_captured_context() {
+        // Source wiring only: these assertions are not a live RPC, production
+        // assignment, peer identity, service persistence or publication proof.
+        let source = include_str!("policy_shadow_custody_process.rs");
+        let production = source.split_once("#[cfg(test)]\nmod custody_response_context_tests").unwrap().0;
+        let reconstruction = production.split_once("    fn reconstruct_dispatch_response(").unwrap().1
+            .split_once("    fn protocol_operation(").unwrap().0;
+        assert!(reconstruction.contains("verify_production_ingress_custody_admission("));
+        assert!(reconstruction.contains("verify_production_terminal_slot_append_outcome("));
+        assert!(reconstruction.contains("configuration.production_configuration_binding_sha256() != expected_configuration_binding_sha256"));
+        let dispatch = production.split_once("    fn dispatch_operation(").unwrap().1
+            .split_once("impl ProductionPolicyShadowCustodyProcess").unwrap().0;
+        assert!(dispatch.contains("DispatchResponseContext::BeginIngress {"));
+        assert!(dispatch.contains("request_binding_sha256: request_binding_sha256.clone(), published"));
+        assert!(dispatch.contains("DispatchResponseContext::RecoverPublication("));
+        assert!(dispatch.find("let configuration_guard = self.active_configuration.read()").unwrap()
+            < dispatch.find("let closed = match request").unwrap());
+        assert!(dispatch.find("drop(configuration_guard);").unwrap()
+            < dispatch.find("let response = match self.call_body(").unwrap());
+        assert!(production.contains("next.recover(revision, &verified)?;\n                self.retain_sealed_reference"));
+        assert!(production.contains("next.commit(&retained, &verified)?;\n                self.retain_sealed_reference"));
+    }
 }

@@ -18,6 +18,20 @@ scope reconstruction uses that explicit decision time, including bearer-token
 expiry. It must not call the convenience identity lookup that reads the current
 clock. This does not replace live ingress or pre-dispatch identity revalidation.
 
+Request-time and query-date window constraints in the pure evaluator also use
+the supplied semantic decision time. A query date exactly at its maximum age
+or allowed future-skew boundary remains eligible; crossing either boundary
+denies. Unrepresentable time arithmetic fails closed. Separate live callers
+retain their clock-reading wrappers; this change does not treat an old semantic
+decision as proof of current trust, credential or transport freshness.
+
+Candidate response-date checks use the explicit response capture time already
+bound into the response facts, including Gmail internal-date validation. That
+response observation time is distinct from the request decision time above.
+This removes an implicit clock from candidate response evaluation; it does not
+establish full dispatch comparability or prove that the independent live
+response path uses exactly the same reference time.
+
 The bounded receipt slots describe the existing outer generation, OAuth
 rotation, lease and decryption wrappers. They do **not** prove four distinct
 provider operations. A cache hit or singleflight follower can produce the same
@@ -75,6 +89,11 @@ production storage. It does not prove assignment-bound production authority,
 real custody RPC, provider mutations, restart recovery, one-use replay/CAS
 behavior, or the complete request path. Test-source presence is not evidence
 that those tests have run; consult the evidence for the exact frozen commit.
+
+The separate [custody response consumer](custody-response-verification.md)
+documents ingress/terminal wire verification and retained publication context.
+Its local cryptographic and state-machine tests have the same production-proof
+boundary; they do not supply the missing receiving authority service.
 
 Actual parent-to-resolved refinement must recompute the child from the same
 immutable facts and committed time with both exact credential slot and version.

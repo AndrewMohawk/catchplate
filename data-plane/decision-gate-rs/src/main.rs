@@ -30522,6 +30522,18 @@ fn query_values(url: &Url, parameter: &str) -> Vec<Zeroizing<String>> {
 }
 
 fn enforce_query_date_window(constraint: &Value, url: &Url) -> Result<(), Value> {
+    enforce_query_date_window_at_ms(
+        constraint,
+        url,
+        i128::try_from(now_epoch_ms()).unwrap_or(i128::MAX),
+    )
+}
+
+fn enforce_query_date_window_at_ms(
+    constraint: &Value,
+    url: &Url,
+    observed_at_epoch_ms: i128,
+) -> Result<(), Value> {
     let parameters = constraint
         .get("parameters")
         .and_then(Value::as_array)
@@ -30540,14 +30552,22 @@ fn enforce_query_date_window(constraint: &Value, url: &Url) -> Result<(), Value>
             "query date-window constraint is invalid",
         ));
     }
-    let now = i128::try_from(now_epoch_ms()).unwrap_or(i128::MAX);
-    let cutoff = now.saturating_sub(i128::from(max_age_days).saturating_mul(86_400_000));
+    let invalid_time = || constraint_error(
+        constraint,
+        "constraint_invalid_query_date_window",
+        "query date-window reference time is outside the supported bounds",
+    );
+    let cutoff = observed_at_epoch_ms
+        .checked_sub(i128::from(max_age_days) * 86_400_000)
+        .ok_or_else(invalid_time)?;
     let future_skew = constraint
         .get("allowFutureSkewSeconds")
         .and_then(Value::as_u64)
         .map(i128::from)
         .unwrap_or(300)
         * 1000;
+    let latest = observed_at_epoch_ms.checked_add(future_skew)
+        .ok_or_else(invalid_time)?;
     let required = constraint
         .get("required")
         .and_then(Value::as_bool)
@@ -30612,7 +30632,7 @@ fn enforce_query_date_window(constraint: &Value, url: &Url) -> Result<(), Value>
                     extra,
                 ));
             }
-            if parsed > now + future_skew {
+            if parsed > latest {
                 let mut extra = Map::new();
                 extra.insert(
                     "parameter".to_string(),
@@ -31994,7 +32014,9 @@ fn evaluate_request_semantic_constraints_at_ms(
         }
         match kind {
             "operationPolicy" => enforce_operation_policy(constraint, operation)?,
-            "queryDateWindow" => enforce_query_date_window(constraint, url)?,
+            "queryDateWindow" => {
+                enforce_query_date_window_at_ms(constraint, url, observed_at_epoch_ms)?
+            }
             "queryNumericBounds" => enforce_query_numeric_bounds(constraint, url)?,
             "requestTimeWindow" => {
                 enforce_request_time_window_at_ms(constraint, observed_at_epoch_ms)?
@@ -32011,6 +32033,18 @@ fn evaluate_request_semantic_constraints_at_ms(
 }
 
 fn enforce_response_date_window(constraint: &Value, body: &[u8]) -> Result<(), Value> {
+    enforce_response_date_window_at_ms(
+        constraint,
+        body,
+        i128::try_from(now_epoch_ms()).unwrap_or(i128::MAX),
+    )
+}
+
+fn enforce_response_date_window_at_ms(
+    constraint: &Value,
+    body: &[u8],
+    observed_at_epoch_ms: i128,
+) -> Result<(), Value> {
     let payload = sensitive_json_value_from_slice(body).map_err(|_| {
         let mut extra = Map::new();
         extra.insert("status_code".to_string(), json!(502));
@@ -32032,14 +32066,22 @@ fn enforce_response_date_window(constraint: &Value, body: &[u8]) -> Result<(), V
             "response date-window constraint is invalid",
         ));
     }
-    let now = i128::try_from(now_epoch_ms()).unwrap_or(i128::MAX);
-    let cutoff = now.saturating_sub(i128::from(max_age_days).saturating_mul(86_400_000));
+    let invalid_time = || constraint_error(
+        constraint,
+        "constraint_invalid_response_date_window",
+        "response date-window reference time is outside the supported bounds",
+    );
+    let cutoff = observed_at_epoch_ms
+        .checked_sub(i128::from(max_age_days) * 86_400_000)
+        .ok_or_else(invalid_time)?;
     let future_skew = constraint
         .get("allowFutureSkewSeconds")
         .and_then(Value::as_u64)
         .map(i128::from)
         .unwrap_or(300)
         * 1000;
+    let latest = observed_at_epoch_ms.checked_add(future_skew)
+        .ok_or_else(invalid_time)?;
     let required = constraint
         .get("required")
         .and_then(Value::as_bool)
@@ -32148,7 +32190,7 @@ fn enforce_response_date_window(constraint: &Value, body: &[u8]) -> Result<(), V
                         extra,
                     ));
                 }
-                if parsed > now + future_skew {
+                if parsed > latest {
                     let mut extra = Map::new();
                     extra.insert("field".to_string(), Value::String((*field).to_string()));
                     extra.insert(
@@ -32762,11 +32804,44 @@ fn validate_response_constraints(
     validate_response_constraints_for_type(route, body, operation, None)
 }
 
+fn validate_response_constraints_at_ms(
+    route: &Route,
+    body: &[u8],
+    operation: Option<&Value>,
+    observed_at_epoch_ms: i128,
+) -> Result<(), Value> {
+    validate_response_constraints_for_type_at_ms(
+        route, body, operation, None, observed_at_epoch_ms,
+    )
+}
+
 fn validate_response_constraints_for_type(
     route: &Route,
     body: &[u8],
     operation: Option<&Value>,
     required_type: Option<&str>,
+) -> Result<(), Value> {
+    validate_response_constraints_with_time(route, body, operation, required_type, None)
+}
+
+fn validate_response_constraints_for_type_at_ms(
+    route: &Route,
+    body: &[u8],
+    operation: Option<&Value>,
+    required_type: Option<&str>,
+    observed_at_epoch_ms: i128,
+) -> Result<(), Value> {
+    validate_response_constraints_with_time(
+        route, body, operation, required_type, Some(observed_at_epoch_ms),
+    )
+}
+
+fn validate_response_constraints_with_time(
+    route: &Route,
+    body: &[u8],
+    operation: Option<&Value>,
+    required_type: Option<&str>,
+    observed_at_epoch_ms: Option<i128>,
 ) -> Result<(), Value> {
     for constraint in &route.constraints {
         let Some(kind) = constraint.get("type").and_then(Value::as_str) else {
@@ -32814,7 +32889,10 @@ fn validate_response_constraints_for_type(
             }
         }
         match kind {
-            "responseDateWindow" => enforce_response_date_window(constraint, body)?,
+            "responseDateWindow" => match observed_at_epoch_ms {
+                Some(observed_at) => enforce_response_date_window_at_ms(constraint, body, observed_at)?,
+                None => enforce_response_date_window(constraint, body)?,
+            },
             "responseJson" => enforce_response_json(constraint, body)?,
             "responseBinding" => {
                 let Some(operation) = operation else {
@@ -64440,6 +64518,79 @@ mod tests {
     }
 
     #[test]
+    fn response_date_windows_use_exact_explicit_time_boundaries() {
+        let constraint = json!({
+            "id":"response-age","type":"responseDateWindow","phase":"response",
+            "dateFields":["created_at"],"formats":["epochMillis"],
+            "maxAgeDays":1,"required":true,"allowFutureSkewSeconds":1,
+        });
+        let observed_at = 1_000_000_000_000_i128;
+        let cutoff = observed_at - 86_400_000;
+        let body_at = |timestamp: i128| format!(r#"{{"created_at":"{timestamp}"}}"#);
+        for timestamp in [cutoff, observed_at, observed_at + 1000] {
+            enforce_response_date_window_at_ms(
+                &constraint, body_at(timestamp).as_bytes(), observed_at,
+            ).expect("response age and future-skew endpoints are inclusive");
+        }
+        for (timestamp, error) in [
+            (cutoff - 1, "response_date_window_exceeded"),
+            (observed_at + 1001, "response_date_future_denied"),
+        ] {
+            let denied = enforce_response_date_window_at_ms(
+                &constraint, body_at(timestamp).as_bytes(), observed_at,
+            ).unwrap_err();
+            assert_eq!(denied["error"], error);
+            assert_eq!(denied["status_code"], 502);
+        }
+        for invalid_time in [i128::MIN, i128::MAX] {
+            assert_eq!(enforce_response_date_window_at_ms(
+                &constraint, body_at(observed_at).as_bytes(), invalid_time,
+            ).unwrap_err()["error"], "constraint_invalid_response_date_window");
+        }
+    }
+
+    #[test]
+    fn response_date_explicit_time_preserves_formats_and_required_guards() {
+        let observed_at = parse_rfc3339_ms("2020-01-02T00:00:00Z").unwrap();
+        for (format, value) in [
+            ("date", "2020-01-02".to_string()),
+            ("rfc3339", "2020-01-02T00:00:00Z".to_string()),
+            ("epochSeconds", (observed_at / 1000).to_string()),
+            ("epochMillis", observed_at.to_string()),
+        ] {
+            let mut constraint = json!({
+                "id":"response-age","type":"responseDateWindow","phase":"response",
+                "dateFields":["created_at"],"formats":[format],
+                "maxAgeDays":1,"required":true,"allowFutureSkewSeconds":0,
+            });
+            let body = serde_json::to_vec(&json!({"created_at":value})).unwrap();
+            enforce_response_date_window_at_ms(&constraint, &body, observed_at).unwrap();
+            assert_eq!(enforce_response_date_window_at_ms(&constraint, &body, observed_at - 1)
+                .unwrap_err()["error"], "response_date_future_denied");
+            for (body, error) in [
+                (&b"not-json"[..], "response_json_invalid"),
+                (&br#"{}"#[..], "response_date_field_missing"),
+                (&br#"{"created_at":"not-a-date"}"#[..], "response_date_field_invalid"),
+            ] {
+                assert_eq!(enforce_response_date_window_at_ms(&constraint, body, observed_at)
+                    .unwrap_err()["error"], error);
+            }
+            constraint["required"] = json!(false);
+            enforce_response_date_window_at_ms(&constraint, b"{}", observed_at)
+                .expect("optional absent response date remains allowed");
+            constraint["required"] = json!(true);
+            constraint["items"] = json!(["items"]);
+            assert_eq!(enforce_response_date_window_at_ms(&constraint, b"{}", observed_at)
+                .unwrap_err()["error"], "response_items_missing");
+            enforce_response_date_window_at_ms(&constraint, br#"{"items":[]}"#, observed_at)
+                .expect("present empty item list remains valid");
+            constraint["formats"] = json!([]);
+            assert_eq!(enforce_response_date_window_at_ms(&constraint, &body, observed_at)
+                .unwrap_err()["error"], "constraint_invalid_response_date_window");
+        }
+    }
+
+    #[test]
     fn response_constraints_disable_streaming_and_require_dates() {
         let policy = ResponsePolicy {
             adapter_type: "generic.rest".to_string(),
@@ -72805,6 +72956,70 @@ mod tests {
         );
         assert_eq!(decision["allowed"], true);
         assert_eq!(decision["client_request_digest"], expected);
+    }
+
+    #[test]
+    fn query_date_windows_use_exact_explicit_time_boundaries() {
+        let constraint = json!({
+            "id":"query-age","type":"queryDateWindow","parameters":["at"],
+            "formats":["epochMillis"],"maxAgeDays":1,"required":true,
+            "allowFutureSkewSeconds":1,
+        });
+        let now_ms = 1_000_000_000_000_i128;
+        let cutoff = now_ms - 86_400_000;
+        let url_at = |value: &str| Url::parse(&format!("https://example.test/resource?at={value}")).unwrap();
+        for timestamp in [cutoff, now_ms, now_ms + 1000] {
+            enforce_query_date_window_at_ms(&constraint, &url_at(&timestamp.to_string()), now_ms)
+                .expect("exact age and future-skew endpoints are inclusive");
+        }
+        for (timestamp, error) in [
+            (cutoff - 1, "query_date_window_exceeded"),
+            (now_ms + 1001, "query_date_future_denied"),
+        ] {
+            assert_eq!(enforce_query_date_window_at_ms(
+                &constraint, &url_at(&timestamp.to_string()), now_ms,
+            ).unwrap_err()["error"], error);
+        }
+        assert_eq!(enforce_query_date_window_at_ms(
+            &constraint, &url_at("not-a-date"), now_ms,
+        ).unwrap_err()["error"], "query_date_parameter_invalid");
+        assert_eq!(enforce_query_date_window_at_ms(
+            &constraint, &Url::parse("https://example.test/resource").unwrap(), now_ms,
+        ).unwrap_err()["error"], "query_date_parameter_missing");
+        for invalid_time in [i128::MIN, i128::MAX] {
+            assert_eq!(enforce_query_date_window_at_ms(
+                &constraint, &url_at(&now_ms.to_string()), invalid_time,
+            ).unwrap_err()["error"], "constraint_invalid_query_date_window");
+        }
+    }
+
+    #[test]
+    fn query_date_explicit_time_preserves_supported_formats_and_required_checks() {
+        let now_ms = parse_rfc3339_ms("2020-01-02T00:00:00Z").unwrap();
+        for (format, value) in [
+            ("date", "2020-01-02".to_string()),
+            ("rfc3339", "2020-01-02T00:00:00Z".to_string()),
+            ("epochSeconds", (now_ms / 1000).to_string()),
+            ("epochMillis", now_ms.to_string()),
+        ] {
+            let mut constraint = json!({
+                "id":"query-age","type":"queryDateWindow","parameters":["at"],
+                "formats":[format],"maxAgeDays":1,"required":true,
+                "allowFutureSkewSeconds":0,
+            });
+            let mut url = Url::parse("https://example.test/resource").unwrap();
+            url.query_pairs_mut().append_pair("at", &value);
+            enforce_query_date_window_at_ms(&constraint, &url, now_ms).unwrap();
+            assert_eq!(enforce_query_date_window_at_ms(&constraint, &url, now_ms - 1)
+                .unwrap_err()["error"], "query_date_future_denied");
+            constraint["required"] = json!(false);
+            enforce_query_date_window_at_ms(
+                &constraint, &Url::parse("https://example.test/resource").unwrap(), now_ms,
+            ).expect("optional absent date remains allowed");
+            constraint["formats"] = json!([]);
+            assert_eq!(enforce_query_date_window_at_ms(&constraint, &url, now_ms)
+                .unwrap_err()["error"], "constraint_invalid_query_date_window");
+        }
     }
 
     #[test]

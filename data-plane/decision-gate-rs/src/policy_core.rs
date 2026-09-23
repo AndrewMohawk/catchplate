@@ -10612,8 +10612,10 @@ fn evaluate_candidate_response_behavior(
     content_type: Option<&str>,
     body: &[u8],
     operation: Option<&Value>,
-    captured_at_epoch_ms: u64,
+    response_observed_at_epoch_ms: u64,
 ) -> Result<CandidateResponseBehavior, Value> {
+    // This is the immutable response-observation time committed by the caller,
+    // not request decision time or a fresh candidate-worker wall-clock read.
     let base_response_config = route
         .adapter_config
         .get("response")
@@ -10669,11 +10671,12 @@ fn evaluate_candidate_response_behavior(
             .and_then(Value::as_bool)
             .unwrap_or(true);
         if !validate_internal_date && paths.is_empty() {
-            validate_response_constraints_for_type(
+            validate_response_constraints_for_type_at_ms(
                 route,
                 body,
                 operation,
                 Some("responseDateWindow"),
+                i128::from(response_observed_at_epoch_ms),
             )?;
             return Ok(CandidateResponseBehavior {
                 released_body_sha256: sha256_prefixed(body),
@@ -10686,7 +10689,9 @@ fn evaluate_candidate_response_behavior(
     let requires_json = mode == "json" || !paths.is_empty() || route.adapter_type == "gmail.v1";
     if !requires_json {
         if status.is_success() {
-            validate_response_constraints(route, body, operation)?;
+            validate_response_constraints_at_ms(
+                route, body, operation, i128::from(response_observed_at_epoch_ms),
+            )?;
         }
         return Ok(CandidateResponseBehavior {
             released_body_sha256: sha256_prefixed(body),
@@ -10709,7 +10714,7 @@ fn evaluate_candidate_response_behavior(
             .and_then(Value::as_bool)
             .unwrap_or(true);
         if validate_internal_date {
-            let cutoff_ms = gmail_cutoff_ms_at(u128::from(captured_at_epoch_ms), days);
+            let cutoff_ms = gmail_cutoff_ms_at(u128::from(response_observed_at_epoch_ms), days);
             if is_list_response {
                 let messages = payload
                     .get_mut("messages")
@@ -10750,16 +10755,19 @@ fn evaluate_candidate_response_behavior(
                 .map_err(|_| json!({"error":"gmail_response_serialization_failed"}))?,
         );
         for constraint_type in ["responseBinding", "responseJson", "responseDateWindow"] {
-            validate_response_constraints_for_type(
+            validate_response_constraints_for_type_at_ms(
                 route,
                 &constraint_body,
                 operation,
                 Some(constraint_type),
+                i128::from(response_observed_at_epoch_ms),
             )?;
         }
         apply_gmail_allowed_fields(&mut payload, &response_config, is_list_response);
     } else if status.is_success() {
-        validate_response_constraints(route, body, operation)?;
+        validate_response_constraints_at_ms(
+            route, body, operation, i128::from(response_observed_at_epoch_ms),
+        )?;
         if !paths.is_empty() {
             let projected = SensitiveJsonValue::new(redact_json_value(&payload, &paths));
             replace_sensitive_json_value(&mut payload, projected.into_value());
@@ -11822,6 +11830,232 @@ mod active_terminal_record_tests {
         assert!(postappend[response..state].contains("return Err("));
         assert!(postappend[state..published].contains("return Err("));
         assert_eq!(finalize.matches("matched_record.into_record()").count(), 1);
+    }
+}
+
+#[cfg(test)]
+mod response_explicit_time_tests {
+    use super::*;
+
+    const OBSERVED_AT: u64 = 1_000_000_000_000;
+
+    fn route() -> Route {
+        let mut route = super::super::tests::test_snapshot(1).routes[0].clone();
+        route.constraints.push(json!({
+            "id":"response-age","type":"responseDateWindow","phase":"response",
+            "dateFields":["created_at"],"formats":["epochMillis"],
+            "maxAgeDays":1,"required":true,"allowFutureSkewSeconds":1,
+        }));
+        route
+    }
+
+    fn evaluate(
+        route: &Route,
+        body: &[u8],
+        operation: Option<&Value>,
+        observed_at: u64,
+    ) -> Result<CandidateResponseBehavior, Value> {
+        // Actual candidate behavior component, without transport/custody mocks
+        // or a claim that active live validation shares this reference time.
+        evaluate_candidate_response_behavior(
+            route, StatusCode::OK, Some("application/json"), body, operation, observed_at,
+        )
+    }
+
+    #[test]
+    fn candidate_response_date_window_uses_observed_time_before_projection() {
+        let operation = json!({"operation":"generic.read"});
+        for mode in ["json", "any"] {
+            let mut route = route();
+            route.adapter_config["response"]["mode"] = json!(mode);
+            if mode == "any" {
+                route.adapter_config["response"]["allowedFields"] = json!([]);
+            }
+            for timestamp in [OBSERVED_AT - 86_400_000, OBSERVED_AT, OBSERVED_AT + 1000] {
+                let body = format!(r#"{{"created_at":"{timestamp}","safe":"ok"}}"#);
+                let accepted = evaluate(&route, body.as_bytes(), Some(&operation), OBSERVED_AT)
+                    .expect("historical response time admits exact endpoints");
+                let expected = if mode == "json" { &br#"{"safe":"ok"}"#[..] } else { body.as_bytes() };
+                assert_eq!(accepted.released_body_sha256, sha256_prefixed(expected));
+                assert_eq!(accepted.released_body_bytes, expected.len() as u64);
+                assert_eq!(accepted.released_content_type.as_deref(), Some("application/json"));
+                assert_eq!(accepted.release_mode, if mode == "json" { "json-projection" } else { "passthrough" });
+            }
+            for (timestamp, observed_at, error) in [
+                (OBSERVED_AT - 86_400_000, OBSERVED_AT + 1, "response_date_window_exceeded"),
+                (OBSERVED_AT + 1000, OBSERVED_AT - 1, "response_date_future_denied"),
+            ] {
+                let body = format!(r#"{{"created_at":"{timestamp}","safe":"ok"}}"#);
+                let denied = evaluate(&route, body.as_bytes(), Some(&operation), observed_at)
+                    .err().expect("one millisecond beyond the bound must deny before projection");
+                assert_eq!(denied["error"], error);
+                assert_eq!(denied["status_code"], 502);
+            }
+        }
+    }
+
+    #[test]
+    fn candidate_response_date_window_preserves_scopes_and_failure_guards() {
+        let mut route = route();
+        route.constraints.last_mut().unwrap()["operations"] = json!(["generic.read"]);
+        let operation = json!({"operation":"generic.read"});
+        let valid = format!(r#"{{"created_at":"{OBSERVED_AT}","safe":"ok"}}"#);
+        evaluate(&route, valid.as_bytes(), Some(&operation), OBSERVED_AT).unwrap();
+        let missing_operation = evaluate(&route, valid.as_bytes(), None, OBSERVED_AT)
+            .err().expect("scoped response rule requires actual operation context");
+        assert_eq!(missing_operation["error"], "response_operation_context_missing");
+        for (body, error) in [
+            (&b"not-json"[..], "response_invalid_json"),
+            (&br#"{"safe":"ok"}"#[..], "response_date_field_missing"),
+            (&br#"{"created_at":"not-a-date","safe":"ok"}"#[..], "response_date_field_invalid"),
+        ] {
+            assert_eq!(evaluate(&route, body, Some(&operation), OBSERVED_AT)
+                .err().expect("invalid response must remain denied")["error"], error);
+        }
+        evaluate(&route, br#"{"safe":"ok"}"#, Some(&json!({"operation":"generic.other"})), OBSERVED_AT)
+            .expect("a date rule scoped to another operation remains inapplicable");
+        route.constraints.last_mut().unwrap()["phase"] = json!("request");
+        assert_eq!(evaluate(&route, valid.as_bytes(), Some(&operation), OBSERVED_AT)
+            .err().expect("invalid phase is not bypassed")["error"], "constraint_type_unsupported_at_runtime");
+    }
+
+    #[test]
+    fn candidate_gmail_response_dates_share_the_explicit_observation_time() {
+        let mut route = route();
+        route.adapter_type = "gmail.v1".to_string();
+        route.adapter_config["maxAgeDays"] = json!(1);
+        route.adapter_config["response"]["allowedFields"] = json!(["id", "internalDate"]);
+        let operation = json!({"operation":"gmail.message.get"});
+        for validate_internal in [false, true] {
+            route.adapter_config["response"]["validateInternalDate"] = json!(validate_internal);
+            let cutoff = OBSERVED_AT - 86_400_000;
+            let body = format!(r#"{{"created_at":"{cutoff}","id":"message-1","internalDate":"{OBSERVED_AT}"}}"#);
+            let accepted = evaluate(&route, body.as_bytes(), Some(&operation), OBSERVED_AT).unwrap();
+            let expected = format!(r#"{{"id":"message-1","internalDate":"{OBSERVED_AT}"}}"#);
+            assert_eq!(accepted.released_body_sha256, sha256_prefixed(expected.as_bytes()));
+            assert_eq!(accepted.released_body_bytes, expected.len() as u64);
+            assert_eq!(evaluate(&route, body.as_bytes(), Some(&operation), OBSERVED_AT + 1)
+                .err().expect("generic response age remains bound to observation time")["error"],
+                "response_date_window_exceeded");
+        }
+        let cutoff = OBSERVED_AT - 86_400_000;
+        let body = format!(r#"{{"created_at":"{OBSERVED_AT}","id":"message-1","internalDate":"{cutoff}"}}"#);
+        evaluate(&route, body.as_bytes(), Some(&operation), OBSERVED_AT).unwrap();
+        assert_eq!(evaluate(&route, body.as_bytes(), Some(&operation), OBSERVED_AT + 1)
+            .err().expect("Gmail internalDate keeps the same explicit reference")["error"],
+            "gmail_response_too_old");
+        route.adapter_config["response"]["allowedFields"] = json!([]);
+        route.adapter_config["response"]["validateInternalDate"] = json!(false);
+        assert_eq!(evaluate(&route, body.as_bytes(), Some(&operation), OBSERVED_AT)
+            .err().expect("no projection guard is waived to reach a legacy branch")["error"],
+            "response_allowed_fields_invalid");
+    }
+}
+
+#[cfg(test)]
+mod query_explicit_time_tests {
+    use super::*;
+
+    const DECISION_AT: u64 = 1_000_000_000_000;
+
+    fn snapshot() -> Arc<Snapshot> {
+        // A closed, credentialless route exercises the real pure evaluator;
+        // this fixture has no custody, provider or active effect authority.
+        let mut snapshot = (*super::super::tests::test_snapshot(1)).clone();
+        snapshot.routes[0].adapter_config["request"]["allowedQueryKeys"] = json!(["at"]);
+        snapshot.routes[0].constraints.push(json!({
+            "id":"query-age","type":"queryDateWindow","parameters":["at"],
+            "formats":["epochMillis"],"maxAgeDays":1,"required":true,
+            "allowFutureSkewSeconds":1,
+        }));
+        Arc::new(snapshot)
+    }
+
+    fn request(timestamp: u64) -> DecisionRequest {
+        DecisionRequest {
+            client_ip: Some("127.0.0.1".to_string()),
+            method: "GET".to_string(),
+            url: format!("https://example.test/resource?at={timestamp}"),
+            headers: BTreeMap::new(),
+            body: String::new(),
+            body_sha256: None,
+            forwarded_body_length: None,
+            forwarded_body_utf8_valid: None,
+            credential_metadata: BTreeMap::new(),
+            gmail_proofs: Vec::new(),
+            client_request_digest: None,
+        }
+    }
+
+    fn evaluate_all(
+        snapshot: &Arc<Snapshot>,
+        request: &DecisionRequest,
+        captured_at: u64,
+        decision_at: u64,
+    ) -> [PolicyEvaluation; 4] {
+        let facts = AdmittedRequestFacts::capture(
+            request, None, ShadowIngressKind::ForwardedHttp, captured_at, None,
+        ).expect("bounded admitted facts");
+        let active = PolicyPlanSnapshot::active(snapshot).expect("active projection");
+        let candidate = PolicyPlanSnapshot::candidate(snapshot).expect("candidate projection");
+        [
+            evaluate_policy_plan(&active, &facts,
+                PolicyEvaluationContext::active(captured_at, decision_at, None)).unwrap(),
+            evaluate_policy_plan_borrowed(&active, request, None, ShadowIngressKind::ForwardedHttp,
+                captured_at, PolicyEvaluationContext::active(captured_at, decision_at, None)).unwrap(),
+            evaluate_policy_plan(&candidate, &facts,
+                PolicyEvaluationContext::candidate(captured_at, decision_at, None, None)).unwrap(),
+            evaluate_policy_plan_borrowed(&candidate, request, None, ShadowIngressKind::ForwardedHttp,
+                captured_at, PolicyEvaluationContext::candidate(captured_at, decision_at, None, None)).unwrap(),
+        ]
+    }
+
+    fn assert_denied(evaluation: &PolicyEvaluation, expected: &str) {
+        match &evaluation.disposition {
+            PureDisposition::Deny { status, reason, payload } => {
+                assert_eq!(*status, 403);
+                assert_eq!(reason, expected);
+                assert_eq!(payload["error"], expected);
+            }
+            _ => panic!("expected query denial, got {}", evaluation.disposition_label()),
+        }
+        assert!(evaluation.operation.is_none());
+    }
+
+    #[test]
+    fn query_date_window_uses_decision_time_in_both_pure_lanes() {
+        let snapshot = snapshot();
+        let request = request(DECISION_AT - 86_400_000);
+        let first = evaluate_all(&snapshot, &request, DECISION_AT - 1000, DECISION_AT);
+        let later_capture = evaluate_all(&snapshot, &request, DECISION_AT - 100, DECISION_AT);
+        for (original, repeated) in first.iter().zip(later_capture.iter()) {
+            assert_eq!(original.disposition_label(), "permit");
+            assert_eq!(repeated.disposition_label(), "permit");
+            assert_eq!(original.route_id.as_deref(), Some("route:test"));
+            assert_eq!(original.operation.as_ref(), Some(&json!({"operation":"generic.read"})));
+            assert_eq!(original.semantic_sha256, repeated.semantic_sha256);
+        }
+        assert_eq!(first[0].semantic_sha256, first[1].semantic_sha256);
+        assert_eq!(first[2].semantic_sha256, first[3].semantic_sha256);
+        assert!(first[0].active_plan().is_some() && first[0].candidate_plan().is_none());
+        assert!(first[2].candidate_plan().is_some() && first[2].active_plan().is_none());
+        // Same admitted facts, one millisecond later: neither capture time nor
+        // a fresh host-clock read may keep this formerly eligible date valid.
+        for evaluation in evaluate_all(&snapshot, &request, DECISION_AT - 1000, DECISION_AT + 1) {
+            assert_denied(&evaluation, "query_date_window_exceeded");
+        }
+    }
+
+    #[test]
+    fn query_date_window_future_skew_follows_explicit_decision_time() {
+        let snapshot = snapshot();
+        let request = request(DECISION_AT + 1000);
+        for evaluation in evaluate_all(&snapshot, &request, DECISION_AT - 1000, DECISION_AT) {
+            assert_eq!(evaluation.disposition_label(), "permit");
+        }
+        for evaluation in evaluate_all(&snapshot, &request, DECISION_AT - 1000, DECISION_AT - 1) {
+            assert_denied(&evaluation, "query_date_future_denied");
+        }
     }
 }
 

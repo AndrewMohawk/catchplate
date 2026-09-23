@@ -109,10 +109,19 @@ receipt; no operation-specific producer or admission adapter for that type is
 present in the reviewed source. Local verification results and caller-supplied
 JSON must not be promoted into signed external evidence.
 
+The [explicit trust verification and local installation path](webauthn-trust-installation.md)
+now uses one captured key/schema/time context, validates roots before checkpoint
+writes and requires exact durable-write/readback ordering, including ambiguous
+state-directory retry. Its unsigned local observation is not that missing
+publication-verification receipt; the legacy completion call remains ID-only.
+
 The existing `authority_transition_core.KernelContext` receipt machinery
 validates evidence type, binding, canonical statement and signature digests,
 verifier identity/measurement/attestation, current source revision, validity
-window, and one-time consumption state. New producers and kernels must agree
+window, and one-time consumption state. Those structural/commitment checks
+assume prior authenticated admission; they do not themselves verify an Ed25519
+signature against independent purpose-specific identity pins. The trust
+installation admission producer remains missing. New producers and kernels must agree
 on the complete authenticated binding and use those checks. The unused field
 sets alone do not establish a producer protocol.
 

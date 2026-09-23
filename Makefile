@@ -617,6 +617,8 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_authority_wire_json_source.py \
 	scripts/test_authority_transition_registry.py \
 	scripts/test_webauthn_attestation_core.py \
+	scripts/test_webauthn_trust_core.py \
+	scripts/test_webauthn_trust_installation.py \
 	scripts/test_control_plane_startup.py \
 	scripts/test_launch_authority_service.py \
 	scripts/test_launch_authorization.py \

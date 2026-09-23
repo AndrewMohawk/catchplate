@@ -186,6 +186,11 @@ cannot name the containing signature or receipt itself.
 
 ## Trust installation, completion and crash recovery
 
+The [explicit-context core and real local installer](webauthn-trust-installation.md)
+now implement deterministic bundle validation and bounded exact readback with
+state-first retry handling. These are source-only prerequisites; their unsigned
+local observations do not implement the installation authority described below.
+
 First commit the complete aggregate stage transaction and its independent root
 transition. The installation authority receives that **already committed**
 stage receipt, exact predecessor/candidate bundle bytes, signer policy,

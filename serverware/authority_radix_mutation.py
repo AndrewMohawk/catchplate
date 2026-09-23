@@ -201,6 +201,36 @@ class PrimaryRadixMembershipResult:
             raise PrimaryRadixMutationError("primary membership result shape is invalid")
 
 
+@dataclass(frozen=True, slots=True)
+class PrimaryRadixMutationInputs:
+    """Engine-owned batch observations, never an accepted authority token.
+
+    Selected rows, proofs and mutations retain the same detached dictionaries
+    that passed the sole engine's complete before-proof, full-row CAS, after
+    image and delta checks. Their nested values remain mutable; consumers must
+    derive from these owned values without exposing or changing them. Match
+    inventories by business address, not tuple position. No evaluator accepts
+    this container in place of actual inputs or skips verification because it
+    was constructed previously. No extra JSON copy or hashing is performed.
+    """
+
+    result: PrimaryRadixBatchResult
+    selected_rows: tuple[dict[str, Any], ...]
+    before_proofs: tuple[dict[str, Any], ...]
+    mutations: tuple[dict[str, Any], ...]
+
+    def __post_init__(self) -> None:
+        if (type(self.result) is not PrimaryRadixBatchResult
+                or type(self.selected_rows) is not tuple or type(self.before_proofs) is not tuple
+                or type(self.mutations) is not tuple
+                or len(self.selected_rows) != len(self.before_proofs)
+                or len(self.selected_rows) > authority_contract.MAX_PLAN_QUERY_ROWS
+                or len(self.mutations) > authority_contract.MAX_PLAN_MUTATIONS
+                or any(type(row) is not dict
+                       for row in self.selected_rows + self.before_proofs + self.mutations)):
+            raise PrimaryRadixMutationError("primary mutation inputs shape is invalid")
+
+
 def _context_fields(value: Any, expected: type, names: tuple[str, ...]) -> tuple[Any, ...]:
     if type(value) is not expected:
         raise PrimaryRadixMutationError("primary radix context has an unexpected exact type")
@@ -305,7 +335,8 @@ def _evaluate_primary_radix_batch(
     before_proofs: tuple[dict[str, Any], ...],
     mutations: tuple[dict[str, Any], ...],
     limits: PrimaryRadixLimits,
-) -> tuple[PrimaryRadixBatchResult, tuple[dict[str, Any], ...], tuple[dict[str, Any], ...]]:
+) -> tuple[PrimaryRadixBatchResult, tuple[dict[str, Any], ...],
+           tuple[dict[str, Any], ...], tuple[dict[str, Any], ...]]:
     """Calculate an exact final primary-root vector, or reject the entire batch.
 
     Mutation input order need not be the SQL sort order: distinct original keys
@@ -511,7 +542,8 @@ def _evaluate_primary_radix_batch(
         metrics=PrimaryRadixMetrics(len(selected_rows), len(mutations), vectors, child_slots,
                                    len(ancestors), budget.hash_work, input_bytes, budget.nodes),
     )
-    return result, tuple(snapshot["selected"]), tuple(snapshot["proofs"])
+    return (result, tuple(snapshot["selected"]), tuple(snapshot["proofs"]),
+            tuple(snapshot["mutations"]))
 
 
 def evaluate_primary_radix_batch(
@@ -529,12 +561,37 @@ def evaluate_primary_radix_batch(
     Distinct original-key mutations commute for final roots/counts; this does
     not claim intermediate SQL revision history or authenticated currentness.
     """
-    result, _, _ = _evaluate_primary_radix_batch(
+    result, _, _, _ = _evaluate_primary_radix_batch(
         table_contracts=table_contracts, business_before_roots=business_before_roots,
         authorization_before_roots=authorization_before_roots, selected_rows=selected_rows,
         before_proofs=before_proofs, mutations=mutations, limits=limits,
     )
     return result
+
+
+def evaluate_primary_radix_inputs(
+    *,
+    table_contracts: tuple[PrimaryTableContract, ...],
+    business_before_roots: tuple[PrimaryRoot, ...],
+    authorization_before_roots: tuple[PrimaryRoot, ...],
+    selected_rows: tuple[dict[str, Any], ...],
+    before_proofs: tuple[dict[str, Any], ...],
+    mutations: tuple[dict[str, Any], ...],
+    limits: PrimaryRadixLimits,
+) -> PrimaryRadixMutationInputs:
+    """Reverify a genuine batch and expose its same owned OLD/NEW snapshots.
+
+    The result is relative to the supplied heads and contracts, not evidence
+    of currentness, query completeness or authorized operation intent. A
+    projection consumer must call this evaluator over actual inputs itself;
+    a caller-created or previously returned container is not a substitute.
+    """
+    result, owned_selected, owned_proofs, owned_mutations = _evaluate_primary_radix_batch(
+        table_contracts=table_contracts, business_before_roots=business_before_roots,
+        authorization_before_roots=authorization_before_roots, selected_rows=selected_rows,
+        before_proofs=before_proofs, mutations=mutations, limits=limits,
+    )
+    return PrimaryRadixMutationInputs(result, owned_selected, owned_proofs, owned_mutations)
 
 
 def evaluate_primary_radix_memberships(
@@ -553,7 +610,7 @@ def evaluate_primary_radix_memberships(
     or a caller-created membership result. No extra JSON copy or hash is added.
     The result establishes membership relative to supplied heads only.
     """
-    result, owned_selected, owned_proofs = _evaluate_primary_radix_batch(
+    result, owned_selected, owned_proofs, _ = _evaluate_primary_radix_batch(
         table_contracts=table_contracts, business_before_roots=business_before_roots,
         authorization_before_roots=authorization_before_roots, selected_rows=selected_rows,
         before_proofs=before_proofs, mutations=(), limits=limits,

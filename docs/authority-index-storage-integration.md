@@ -12,6 +12,11 @@ maintenance or independently admitted current index/primary root pair. The
 planner still rejects complete-index queries before business/proof SQL. Existing
 startup and verification gates remain closed.
 
+The [all-profile mutation evaluator](authority-index-mutation.md) now also
+derives counted before/after roots from the actual primary engine's verified
+OLD/NEW snapshots. It fixes member-event revision semantics and shared component
+budgets, but is not installed SQL maintenance or executor root-vector admission.
+
 The existing `policy_authority_secondary_index_heads` declaration is metadata,
 not an implementation of the counted profile. Its relation/index names, column
 digest, root, revision, count and optional high-water fields neither store a
@@ -231,11 +236,18 @@ cache write. If it stores the new counted heads, affected operations must select
 and prove those old head rows, predict their exact new values and account for
 their primary root effects, mutation/work bounds and source permissions.
 
-Choose the update schedule before implementing DDL or triggers. The preferred
-bounded owner-batch shape is one deterministic final head transition per
-affected index, admitted and applied exactly once after its base-row changes.
-That requires all writers to participate in that barrier. A trigger must not
-also update the same head which a generic mutation template will later apply.
+The current implementation direction is a dedicated counted-head vector with
+explicitly versioned before/after admission, rather than automatic writes to
+the primary-tracked secondary-head relation. The pure mutation evaluator fixes
+the expected effects, not their SQL installation. Every counted head must be
+bound to the snapshot, root locks/CAS, receipts and independent checkpoint;
+otherwise separate storage is an unauthenticated shortcut.
+
+Reusing the primary-tracked relation would instead need one deterministic
+owner-batch head transition per affected index, admitted and applied exactly
+once after its base-row changes. That alternative requires all writers to
+participate in a finalization barrier. A trigger must not also update the same
+head which a generic mutation template will later apply.
 Conversely, per-row trigger-owned head updates require explicit modeling of
 every intermediate update and revision increment: the current primary batch
 evaluator rejects repeated mutations of one key, and cannot silently represent

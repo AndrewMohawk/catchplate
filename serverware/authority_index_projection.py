@@ -189,6 +189,18 @@ _DEFINITIONS = (
 INDEX_IDS = tuple(definition.index_id for definition in _DEFINITIONS)
 
 
+def index_ids_for_table(table: str) -> tuple[str, ...]:
+    """All fixed profiles for a table, not a query-selected maintenance subset.
+
+    A valid unindexed table has no profiles. This hashes nothing and grants no
+    write permission, installed-schema admission or operation authority.
+    """
+    if (type(table) is not str or not 1 <= len(table) <= 128
+            or re.fullmatch(r"[a-z][a-z0-9_]*", table) is None):
+        raise IndexProjectionError("index source table is not an exact bounded identifier")
+    return tuple(sorted(item.index_id for item in _DEFINITIONS if item.table == table))
+
+
 def _definition(index_id: str) -> _Definition:
     if type(index_id) is not str:
         raise IndexProjectionError("index projection identity must be an exact string")

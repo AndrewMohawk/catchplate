@@ -273,6 +273,10 @@ These are separate from provisioning the production services:
   relative to a supplied root. It does not admit current heads, perform the
   primary-row join or activate the planner. [Storage, all-writer maintenance and bootstrap](authority-index-storage-integration.md)
   remain requirements, not installed capabilities; this source is unexecuted.
+  The [all-profile mutation evaluator](authority-index-mutation.md) now derives
+  genuine counted before/after roots from the same verified primary OLD/NEW
+  images. It fixes component revision and budget semantics, but does not install
+  writer maintenance or admit a versioned counted-root transition.
 - The planner reads root revisions and digests from PostgreSQL; the executor
   locks and compares those database roots. This establishes a same-database
   compare-and-swap boundary, not an independently retained current-root

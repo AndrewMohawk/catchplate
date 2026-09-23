@@ -74,6 +74,11 @@ from serverware.authority_store.wire_json_sql import (
     WIRE_JSON_MAX_BYTES,
     wire_json_function_sql,
 )
+from serverware.authority_store.audit_capacity_sql import (
+    AUDIT_CAPACITY_FUNCTION_NAME,
+    AUDIT_CAPACITY_PLANNER_FUNCTION_SIGNATURES,
+    audit_capacity_function_sql,
+)
 from serverware.authority_store.schema import (
     _policy_candidate_authority_canonicalize_namespace,
     _policy_candidate_authority_expected_structure_manifest,
@@ -3548,8 +3553,25 @@ def _seal_postgres_schema_acl(
     authority_planner_writer_table_privileges: Mapping[
         str, frozenset[str]
     ] = MappingProxyType({}),
+    authority_planner_writer_function_signatures: tuple[
+        tuple[str, tuple[str, ...]], ...
+    ] = (),
     error_type: type[Exception] = MetadataStoreError,
 ) -> None:
+    if (
+        authority_planner_writer_function_signatures
+        and authority_planner_writer_function_signatures
+        != AUDIT_CAPACITY_PLANNER_FUNCTION_SIGNATURES
+    ):
+        raise error_type("planner writer function closure is not source exact")
+    planner_function_types = {
+        name: ", ".join(types)
+        for name, types in authority_planner_writer_function_signatures
+    }
+    planner_function_identities = sorted(
+        name + "(" + types + ")"
+        for name, types in planner_function_types.items()
+    )
     authority_executor_functions = frozenset(
         function_name
         for function_name, _argument_types
@@ -4048,6 +4070,15 @@ def _seal_postgres_schema_acl(
                     + " TO "
                     + planner_writer_role_name
                 )
+            for function, argument_types in (
+                authority_planner_writer_function_signatures
+            ):
+                cur.execute(
+                    "GRANT EXECUTE ON FUNCTION " + schema_name + "."
+                    + _policy_candidate_authority_identifier(function)
+                    + "(" + ", ".join(argument_types) + ") TO "
+                    + planner_writer_role_name
+                )
         if expected_owner_role:
             owner_role_name = _policy_candidate_authority_identifier(
                 expected_owner_role
@@ -4154,20 +4185,28 @@ def _seal_postgres_schema_acl(
             "ON grantee.oid = grant_entry.grantee "
             "WHERE namespace.nspname = %s "
             "AND grant_entry.grantee <> function_record.proowner "
-            "AND NOT ("
+            "AND NOT COALESCE(("
             "(grantee.rolname = %s "
             "AND function_record.proname || '(' || "
             "pg_catalog.pg_get_function_identity_arguments("
             "function_record.oid) || ')' = ANY(%s)) "
             "OR (grantee.rolname = %s "
-            "AND function_record.proname = ANY(%s))"
-            ") LIMIT 1",
+            "AND function_record.proname = ANY(%s)) "
+            "OR (grantee.rolname = %s "
+            "AND function_record.proname || '(' || "
+            "pg_catalog.oidvectortypes(function_record.proargtypes) "
+            "|| ')' = ANY(%s) "
+            "AND grant_entry.privilege_type = 'EXECUTE' "
+            "AND NOT grant_entry.is_grantable)"
+            "), FALSE) LIMIT 1",
             (
                 schema,
                 executor_role,
                 sorted(authority_executor_function_identities),
                 capability_issuer_role,
                 sorted(authority_capability_issuer_functions),
+                planner_writer_role,
+                planner_function_identities,
             ),
         ).fetchone()
         wrong_owner = cur.execute(
@@ -4265,6 +4304,25 @@ def _seal_postgres_schema_acl(
             "AND grantee.rolname = %s "
             "ORDER BY function_record.proname",
             (schema, capability_issuer_role),
+        ).fetchall()
+        planner_function_grants = cur.execute(
+            "SELECT function_record.proname, "
+            "pg_catalog.oidvectortypes(function_record.proargtypes) "
+            "AS argument_types, function_record.prosecdef, "
+            "function_record.proisstrict, function_record.provolatile, "
+            "function_record.proconfig, grant_entry.privilege_type, "
+            "grant_entry.is_grantable "
+            "FROM pg_catalog.pg_proc AS function_record "
+            "JOIN pg_catalog.pg_namespace AS namespace "
+            "ON namespace.oid = function_record.pronamespace "
+            "CROSS JOIN LATERAL pg_catalog.aclexplode(COALESCE("
+            "function_record.proacl, pg_catalog.acldefault("
+            "'f', function_record.proowner))) AS grant_entry "
+            "JOIN pg_catalog.pg_roles AS grantee "
+            "ON grantee.oid = grant_entry.grantee "
+            "WHERE namespace.nspname = %s AND grantee.rolname = %s "
+            "ORDER BY function_record.proname",
+            (schema, planner_writer_role),
         ).fetchall()
         runtime_object_grants = cur.execute(
             "SELECT relation.relname, relation.relkind, "
@@ -4693,6 +4751,28 @@ def _seal_postgres_schema_acl(
             + schema
             + ", pg_temp"
         )
+        exact_planner_functions = (
+            len(planner_function_grants) == len(planner_function_types)
+            and {str(row["proname"]) for row in planner_function_grants}
+            == set(planner_function_types)
+            and all(
+                str(row["argument_types"])
+                == planner_function_types[str(row["proname"])]
+                and str(row["privilege_type"]) == "EXECUTE"
+                and not bool(row["is_grantable"])
+                and not bool(row["prosecdef"])
+                and bool(row["proisstrict"])
+                == (row["proname"] != AUDIT_CAPACITY_FUNCTION_NAME)
+                and str(row["provolatile"])
+                == ("v" if row["proname"] == AUDIT_CAPACITY_FUNCTION_NAME else "i")
+                and list(row["proconfig"] or ()) == [
+                    "search_path=pg_catalog"
+                    if row["proname"] in WIRE_JSON_FUNCTION_NAMES
+                    else expected_function_search_path
+                ]
+                for row in planner_function_grants
+            )
+        )
         exact_executor_functions = (
             len(executor_function_grants)
             == len(authority_executor_function_signatures)
@@ -4795,6 +4875,7 @@ def _seal_postgres_schema_acl(
             != {"USAGE"}
             or not exact_runtime_acl
             or not exact_planner_writer_acl
+            or not exact_planner_functions
             or (
                 verifier_role not in {runtime_role, executor_role}
                 and (
@@ -7475,6 +7556,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                 "authority wire JSON and digest frame byte bounds differ"
             )
         conn.execute(wire_json_function_sql(guard_namespace))
+        conn.execute(audit_capacity_function_sql(guard_namespace))
         conn.execute(
             f"""
             CREATE OR REPLACE FUNCTION {guard_namespace}.serverware_guard_policy_activation_publication()
@@ -20649,6 +20731,7 @@ def _validate_policy_authority_owner_apply_function(
             _POLICY_AUTHORITY_OWNER_APPLY_FUNCTION,
             "serverware_policy_authority_canonical_json",
             *WIRE_JSON_FUNCTION_NAMES,
+            AUDIT_CAPACITY_FUNCTION_NAME,
             "serverware_policy_authority_domain_digest",
             "serverware_policy_authority_framed_digest",
             "serverware_policy_authority_enforce_commit_deadline",
@@ -20665,6 +20748,7 @@ def _validate_policy_authority_owner_apply_function(
         "owner_role.rolreplication AS owner_can_replicate, "
         "owner_role.rolbypassrls AS owner_can_bypass_rls, "
         "function_record.prosecdef, function_record.provolatile, "
+        "function_record.proisstrict, "
         "function_record.proconfig, "
         "language_record.lanname AS language_name, "
         "pg_catalog.oidvectortypes(function_record.proargtypes) "
@@ -20720,7 +20804,14 @@ def _validate_policy_authority_owner_apply_function(
         "OR (function_record.proname = ANY(%s) "
         "AND grant_entry.grantee = "
         "pg_catalog.to_regrole(%s)::pg_catalog.oid "
-        "AND grant_entry.privilege_type = 'EXECUTE')"
+        "AND grant_entry.privilege_type = 'EXECUTE') "
+        "OR (function_record.proname || '(' || "
+        "pg_catalog.oidvectortypes(function_record.proargtypes) "
+        "|| ')' = ANY(%s) "
+        "AND grant_entry.grantee = "
+        "pg_catalog.to_regrole(%s)::pg_catalog.oid "
+        "AND grant_entry.privilege_type = 'EXECUTE' "
+        "AND NOT grant_entry.is_grantable)"
         ") "
         "LIMIT 1",
         (
@@ -20736,6 +20827,11 @@ def _validate_policy_authority_owner_apply_function(
             _METADATA_STORE_AUTHORITY_EXECUTOR_ROLE,
             sorted(_POLICY_AUTHORITY_CAPABILITY_ISSUER_FUNCTIONS),
             _METADATA_STORE_AUTHORITY_CAPABILITY_ISSUER_ROLE,
+            sorted(
+                name + "(" + ", ".join(types) + ")"
+                for name, types in AUDIT_CAPACITY_PLANNER_FUNCTION_SIGNATURES
+            ),
+            _METADATA_STORE_AUTHORITY_PLANNER_WRITER_ROLE,
         ),
     ).fetchone()
     login_owner_membership = cur.execute(
@@ -20817,6 +20913,7 @@ def _validate_policy_authority_owner_apply_function(
             "name": str(row["proname"]),
             "owner": str(row["owner_role"]),
             "securityDefiner": bool(row["prosecdef"]),
+            "strict": bool(row["proisstrict"]),
             "searchPath": list(row["proconfig"] or ()),
             "source": str(row["function_source"]),
             "volatility": str(row["provolatile"]),
@@ -20927,6 +21024,10 @@ def _validate_policy_authority_owner_apply_function(
             "owner policy-authority transaction handler is unavailable"
         )
     function_row = apply_rows[0]
+    planner_function_types = {
+        name: ", ".join(types)
+        for name, types in AUDIT_CAPACITY_PLANNER_FUNCTION_SIGNATURES
+    }
     if (
         server_version_num // 10000
         != _POLICY_AUTHORITY_OWNER_POSTGRES_MAJOR
@@ -20946,6 +21047,21 @@ def _validate_policy_authority_owner_apply_function(
                 != [expected_search_path]
             )
             for row in function_rows
+        )
+        or any(
+            str(row["argument_types"]) != planner_function_types[row["proname"]]
+            or bool(row["prosecdef"])
+            or bool(row["proisstrict"])
+            != (row["proname"] != AUDIT_CAPACITY_FUNCTION_NAME)
+            or str(row["provolatile"])
+            != ("v" if row["proname"] == AUDIT_CAPACITY_FUNCTION_NAME else "i")
+            or list(row["proconfig"] or ()) != [
+                "search_path=pg_catalog"
+                if row["proname"] in WIRE_JSON_FUNCTION_NAMES
+                else expected_search_path
+            ]
+            for row in function_rows
+            if row["proname"] in planner_function_types
         )
         or not bool(function_row["prosecdef"])
         or str(function_row["provolatile"]) != "v"
@@ -35809,6 +35925,9 @@ def init_db(
                 ),
                 authority_planner_writer_table_privileges=(
                     _POLICY_AUTHORITY_PLANNER_WRITER_TABLE_PRIVILEGES
+                ),
+                authority_planner_writer_function_signatures=(
+                    AUDIT_CAPACITY_PLANNER_FUNCTION_SIGNATURES
                 ),
             )
         _record_policy_candidate_authority_migration(

@@ -52,15 +52,12 @@ The separate [wire JSON repair](authority-wire-json.md) now implements the SQL
 message serializer and consumer migration without changing persisted tree hashes;
 its authored component and original-byte checks remain unexecuted.
 
-The [policy audit-capacity repair](authority-audit-capacity.md) now pins the
-source-owned limit and couples four policy writers' charges to their exact fresh
-audit INSERTs. It does not establish global pending/claimed cardinality: quota
-and legacy writers still use different accounting paths, and delivery does not
-maintain that policy aggregate. Its authored helper cases remain unexecuted.
-The [global capacity components](authority-global-audit-capacity-design.md)
-now define compact OLD/NEW accounting and independent Python/SQL checks, but
-remain unintegrated. They neither create an authenticated baseline nor provide
-the missing PostgreSQL delivery transition.
+The [fresh audit helpers](authority-audit-capacity.md) retain exact INSERT and
+replay guards while dropping the old policy/quota counter paths. The common
+planner, payload admission and executor now use the [global capacity contract](authority-global-audit-capacity-design.md),
+with separate business/framework budgets and source `.25`/primary-root profile
+v2. This remains unexecuted source: authenticated initialization and general
+receipt-bound PostgreSQL delivery are missing, and SQLite remains separate.
 
 ## Implementation contracts still needed
 
@@ -72,9 +69,9 @@ transaction composition requires an explicit contract design and review.
 | Operation | Existing row / mutation / work bounds | Missing typed inputs and preserved behavior |
 | --- | --- | --- |
 | `webauthn.trust.stage` | 4 / 1 / 64 | Exact bundle, predecessor, sequence, rollback epoch, signer, actor, withdrawal IDs, and audit event. Preserve digest-reuse checks, single pending publication, monotonicity, and publication/withdrawal atomicity. |
-| `webauthn.trust.complete` | 4 / 4 / 128 | `publication_id` plus `verification_evidence_digest`. Bind a durably verified signed publication receipt to the stored bundle and signer; consume it atomically with publication, witness/high-water advancement, and the audit record. |
-| `webauthn.registration.finalize` | 112 / 40 / 1024 | In addition to legacy registration arguments: `challenge_id`, `attestation_evidence_digest`, `oidc_session_id`, `sibling_challenge_ids`. Bind fresh registration attestation and trust generation, exact unexpired unused challenge, user and label; preserve credential-ID non-reuse, pending OIDC session authorization, zero historical credentials for first enrollment, sibling invalidation, and audit. |
-| `webauthn.credential.revoke` | 192 / 136 / 2048 | In addition to legacy revocation arguments: `approval_grant_ids`, `control_plane_approval_ids`, `oidc_session_ids`, `registration_challenge_ids`. Preserve the bound verified assertion and atomic credential/session/grant/approval revocation, explicit-source global live-registration invalidation, and per-approval audit events. |
+| `webauthn.trust.complete` | 5 / 5 / 130 | Original business bounds 4 / 4 / 128 plus exact global accounting. `publication_id` plus `verification_evidence_digest`. Bind a durably verified signed publication receipt to the stored bundle and signer; consume it atomically with publication, witness/high-water advancement, and the audit record. |
+| `webauthn.registration.finalize` | 113 / 41 / 1026 | Original business bounds 112 / 40 / 1024 plus exact global accounting. In addition to legacy registration arguments: `challenge_id`, `attestation_evidence_digest`, `oidc_session_id`, `sibling_challenge_ids`. Bind fresh registration attestation and trust generation, exact unexpired unused challenge, user and label; preserve credential-ID non-reuse, pending OIDC session authorization, zero historical credentials for first enrollment, sibling invalidation, and audit. |
+| `webauthn.credential.revoke` | 193 / 137 / 2050 | Original business bounds 192 / 136 / 2048 plus exact global accounting. In addition to legacy revocation arguments: `approval_grant_ids`, `control_plane_approval_ids`, `oidc_session_ids`, `registration_challenge_ids`. Preserve the bound verified assertion and atomic credential/session/grant/approval revocation, explicit-source global live-registration invalidation, and per-approval audit events. |
 
 Exact implementation references:
 

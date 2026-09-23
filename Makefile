@@ -618,6 +618,8 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_authority_audit_capacity.py \
 	scripts/test_authority_global_audit_capacity.py \
 	scripts/test_authority_global_audit_capacity_sql_source.py \
+	scripts/test_authority_global_audit_capacity_integration_source.py \
+	scripts/test_authority_audit_trace.py \
 	scripts/test_authority_transition_registry.py \
 	scripts/test_webauthn_attestation_core.py \
 	scripts/test_webauthn_trust_core.py \

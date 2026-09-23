@@ -7,7 +7,7 @@ from types import MappingProxyType
 from typing import Any, Mapping
 
 
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.24"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.25"
 SCHEMA_VERSION = 9
 CONTRACT_SCHEMA = "serverware.policyAuthorityOperationContract/v3"
 BUSINESS_INTENT_SCHEMA = "serverware.policyAuthorityBusinessIntent/v2"
@@ -50,6 +50,24 @@ MAX_REQUEST_BYTES = 4 * 1024 * 1024
 MAX_RESULT_BYTES = 64 * 1024 * 1024
 MAX_MUTATIONS = 512
 MAX_WORK_UNITS = 16384
+# Original business bounds above remain unchanged. Only the exact framework
+# global-audit row/mutation may use these named final-plan allowances.
+AUDIT_CAPACITY_QUERY_WORK_UNITS = 1
+AUDIT_CAPACITY_MUTATION_WORK_UNITS = 1
+MAX_PLAN_QUERY_ROWS = MAX_QUERY_PROOFS + 1
+MAX_PLAN_MUTATIONS = MAX_MUTATIONS + 1
+MAX_PLAN_WORK_UNITS = MAX_WORK_UNITS + 2
+MAX_PLAN_SELECTED_BYTES = MAX_REQUEST_BYTES + 8192
+_AUDIT_COUNTER_REPLACEMENT_OPERATIONS = frozenset({
+    "policy.activation.prepare", "policy.activation.abort", "policy.genesis.prepare",
+    "rbac.binding.mutate", "control-approval.request", "control-approval.decide",
+    "control-approval.consume", "control-approval.deny", "jit.request",
+    "jit.review-receipt.issue", "jit.decide", "jit.deny",
+})
+_AUDIT_NEW_AGGREGATE_ROOT_OPERATIONS = frozenset({
+    "webauthn.trust.complete", "webauthn.registration.create",
+    "webauthn.registration.finalize", "webauthn.credential.revoke",
+})
 PROOF_PRIMITIVES = frozenset(
     {
         "primary-key-row",
@@ -250,6 +268,13 @@ class AuthorityOperation:
     opaque_value_kinds: tuple[str, ...]
 
     def compatibility_mapping(self, operation: str) -> Mapping[str, Any]:
+        audit_capacity = "metadata_audit_outbox" in self.business_writes
+        replaced_slots = int(operation in _AUDIT_COUNTER_REPLACEMENT_OPERATIONS)
+        adds_aggregate_root = operation in _AUDIT_NEW_AGGREGATE_ROOT_OPERATIONS
+        if (replaced_slots or adds_aggregate_root) and not audit_capacity:
+            raise ValueError("audit framework allowance is outside its source operation")
+        business_query_rows = self.maximum_query_rows - replaced_slots
+        business_mutations = self.maximum_mutations - replaced_slots
         reads = tuple(
             sorted(
                 set(self.business_reads)
@@ -296,9 +321,15 @@ class AuthorityOperation:
                         self.mutation_kinds,
                     ),
                 "proofPrimitives": self.proof_primitives,
-                "maximumQueryRows": self.maximum_query_rows,
-                "maximumMutations": self.maximum_mutations,
-                "maximumWorkUnits": self.maximum_work_units,
+                "globalAuditCapacity": audit_capacity,
+                "auditCapacityCounterSlotsReplaced": replaced_slots,
+                "auditCapacityAddsAggregateRoot": adds_aggregate_root,
+                "maximumBusinessQueryRows": business_query_rows,
+                "maximumBusinessMutations": business_mutations,
+                "maximumBusinessWorkUnits": self.maximum_work_units,
+                "maximumQueryRows": business_query_rows + int(audit_capacity),
+                "maximumMutations": business_mutations + int(audit_capacity),
+                "maximumWorkUnits": self.maximum_work_units + 2 * int(audit_capacity),
                 "externalEvidenceTypes": self.external_evidence_types,
                 "opaqueValueKinds": self.opaque_value_kinds,
                 "reads": reads,
@@ -1805,9 +1836,11 @@ _OPERATIONS = {
             "webauthn_trust_publications",
             "webauthn_trust_publication_high_water",
             "metadata_audit_outbox",
+            "policy_authority_bounded_aggregate_states",
         ) + _PHASE2_EVIDENCE,
         proof_primitives=(
             "primary-key-row",
+            "aggregate-high-water",
             "external-evidence-receipt",
         ),
         external_evidence_types=(
@@ -1825,7 +1858,9 @@ _OPERATIONS = {
     "webauthn.registration.create": _spec(
         "create_webauthn_credential",
         reads=_WEBAUTHN,
-        writes=("webauthn_credentials", "metadata_audit_outbox"),
+        writes=("webauthn_credentials", "metadata_audit_outbox",
+                "policy_authority_bounded_aggregate_states"),
+        proof_primitives=("primary-key-row", "aggregate-high-water"),
     ),
     "webauthn.registration.finalize": _spec(
         "finalize_webauthn_registration",
@@ -1837,12 +1872,14 @@ _OPERATIONS = {
         + _PHASE2_EVIDENCE,
         writes=(
             "metadata_audit_outbox",
+            "policy_authority_bounded_aggregate_states",
             "webauthn_credentials",
             "webauthn_challenges",
         ) + _PHASE2_EVIDENCE,
         webauthn="fresh-registration-attestation",
         proof_primitives=(
             "primary-key-row",
+            "aggregate-high-water",
             "ordered-exact-page",
             "external-evidence-receipt",
         ),
@@ -1865,6 +1902,7 @@ _OPERATIONS = {
             "approval_grants",
             "control_plane_approvals",
             "metadata_audit_outbox",
+            "policy_authority_bounded_aggregate_states",
             "oidc_browser_sessions",
             "webauthn_credentials",
             "webauthn_challenges",
@@ -1872,6 +1910,7 @@ _OPERATIONS = {
         webauthn="bound-verified-assertion-receipt",
         proof_primitives=(
             "primary-key-row",
+            "aggregate-high-water",
             "ordered-exact-page",
         ),
         maximum_query_rows=192,
@@ -2011,6 +2050,12 @@ def operation_manifest() -> dict[str, Any]:
             "selectorClosure": spec["selectorClosure"],
             "proofKind": spec["proofKind"],
             "proofPrimitives": list(spec["proofPrimitives"]),
+            "globalAuditCapacity": spec["globalAuditCapacity"],
+            "auditCapacityCounterSlotsReplaced": spec["auditCapacityCounterSlotsReplaced"],
+            "auditCapacityAddsAggregateRoot": spec["auditCapacityAddsAggregateRoot"],
+            "maximumBusinessQueryRows": spec["maximumBusinessQueryRows"],
+            "maximumBusinessMutations": spec["maximumBusinessMutations"],
+            "maximumBusinessWorkUnits": spec["maximumBusinessWorkUnits"],
             "maximumQueryRows": spec["maximumQueryRows"],
             "maximumMutations": spec["maximumMutations"],
             "maximumWorkUnits": spec["maximumWorkUnits"],
@@ -2060,6 +2105,12 @@ def operation_manifest() -> dict[str, Any]:
                         spec["approverPolicyRequired"],
                     "proofPrimitives":
                         list(spec["proofPrimitives"]),
+                    "globalAuditCapacity": spec["globalAuditCapacity"],
+                    "auditCapacityCounterSlotsReplaced": spec["auditCapacityCounterSlotsReplaced"],
+                    "auditCapacityAddsAggregateRoot": spec["auditCapacityAddsAggregateRoot"],
+                    "maximumBusinessQueryRows": spec["maximumBusinessQueryRows"],
+                    "maximumBusinessMutations": spec["maximumBusinessMutations"],
+                    "maximumBusinessWorkUnits": spec["maximumBusinessWorkUnits"],
                     "maximumQueryRows":
                         spec["maximumQueryRows"],
                     "maximumMutations":
@@ -2090,6 +2141,12 @@ OPERATION_MANIFEST_DIGEST = _digest(
         "maxProofNodes": MAX_PROOF_NODES,
         "maxMutations": MAX_MUTATIONS,
         "maxWorkUnits": MAX_WORK_UNITS,
+        "maxPlanQueryRows": MAX_PLAN_QUERY_ROWS,
+        "maxPlanMutations": MAX_PLAN_MUTATIONS,
+        "maxPlanWorkUnits": MAX_PLAN_WORK_UNITS,
+        "maxPlanSelectedBytes": MAX_PLAN_SELECTED_BYTES,
+        "auditCapacityQueryWorkUnits": AUDIT_CAPACITY_QUERY_WORK_UNITS,
+        "auditCapacityMutationWorkUnits": AUDIT_CAPACITY_MUTATION_WORK_UNITS,
         "proofPrimitives": sorted(PROOF_PRIMITIVES),
         "capabilityIssuerFunctionSignatures": {
             function_name: list(argument_types)

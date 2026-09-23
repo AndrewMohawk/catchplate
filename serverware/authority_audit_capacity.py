@@ -33,7 +33,7 @@ MAX_INTEGER = 2**63 - 1
 # Includes the full row and its embedded canonical state, not the surrounding
 # selected-row envelope. Even maximum-width bigint fields fit this fixed bound.
 MAX_COUNTER_BYTES = 4096
-_QUERY_NAME = "global_audit_capacity_before_v1"
+QUERY_NAME = "global_audit_capacity_before_v1"
 _STATUSES = frozenset({"pending", "claimed", "audited"})
 _SELECTED_FIELDS = frozenset({
     "table", "key", "keyDigest", "present", "row", "contractSelector",
@@ -154,7 +154,7 @@ def add_capacity_query(
     spec = _spec(operation)
     if type(queries) is not tuple or any(not isinstance(q, core.BoundedQuery) for q in queries):
         _fail("audit capacity query inventory is invalid")
-    query_id = core.query_program_id(operation, _QUERY_NAME, AGGREGATE_TABLE)
+    query_id = core.query_program_id(operation, QUERY_NAME, AGGREGATE_TABLE)
     for query in queries:
         if query.query_id == query_id:
             _fail("audit capacity query identity is caller supplied")
@@ -172,6 +172,9 @@ def add_capacity_query(
     if not _participates(spec):
         return core.close_queries(operation, queries)
     _require_counter_permission(spec)
+    if (sum(query.maximum_rows for query in queries) > spec["maximumBusinessQueryRows"]
+            or sum(query.work_units for query in queries) > spec["maximumBusinessWorkUnits"]):
+        _fail("audit capacity query inventory exceeds its business bound")
     capacity_query = core.BoundedQuery(
         query_id=query_id, table=AGGREGATE_TABLE,
         predicates=(core.QueryPredicate("aggregate_id", "eq", AGGREGATE_ID),),
@@ -209,6 +212,11 @@ def _global_identity(value: Mapping[str, Any]) -> bool:
     ) for row in (value.get("expectedRow"), value.get("row")))
 
 
+def _exact_counter_address(value: Any) -> bool:
+    return (type(value) is dict and value.get("table") == AGGREGATE_TABLE
+            and value.get("key") == {"aggregate_id": AGGREGATE_ID})
+
+
 def _inventory(
     operation: str, selected_rows: Any, mutations: Any
 ) -> tuple[Mapping[str, Any], dict[tuple[str, bytes], dict[str, Any]], tuple[dict[str, Any], ...]]:
@@ -218,6 +226,16 @@ def _inventory(
             or len(mutations) > spec["maximumMutations"]):
         _fail("audit capacity inventory exceeds its operation bound")
     _canonical([list(selected_rows), list(mutations)])
+    # Extra space belongs only to the exact framework address. The row's
+    # presence/profile/commitment are checked separately below; aliases never
+    # earn a business allowance merely by carrying a matching kind or partition.
+    business_selected = [item for item in selected_rows if not _exact_counter_address(item)]
+    business_mutations = [item for item in mutations if not _exact_counter_address(item)]
+    if (len(business_selected) > spec["maximumBusinessQueryRows"]
+            or len(business_mutations) > spec["maximumBusinessMutations"]
+            or len(_canonical(business_selected)) > authority_contract.MAX_REQUEST_BYTES
+            or len(_canonical(list(selected_rows))) > authority_contract.MAX_PLAN_SELECTED_BYTES):
+        _fail("audit capacity inventory exceeds its business bound")
     allowed_reads = set(spec["businessReads"]) | set(spec["businessWrites"]) | set(spec["authorizationReads"])
     selected: dict[tuple[str, bytes], dict[str, Any]] = {}
     for item in selected_rows:
@@ -293,6 +311,8 @@ def _counter(selected: Mapping[tuple[str, bytes], dict[str, Any]]) -> dict[str, 
     item = candidates[0]
     row = item["row"]
     if (item["key"] != {"aggregate_id": AGGREGATE_ID} or item["present"] is not True
+            or item["contractSelector"] is not None
+            or len(_canonical(item)) > authority_contract.MAX_PLAN_SELECTED_BYTES - authority_contract.MAX_REQUEST_BYTES
             or type(row) is not dict or set(row) != _AGGREGATE_FIELDS
             or len(_canonical(row)) > MAX_COUNTER_BYTES):
         _fail("global audit capacity before row is not exact")
@@ -401,6 +421,49 @@ def finalize_capacity(context: core.KernelContext, mutations: tuple[dict[str, An
     result = (*tuple(_copy(list(entries))), counter_mutation)
     validate_capacity_transition(operation=context.operation, selected_rows=context.selected_rows, mutations=result)
     return result
+
+
+def _framework_work(operation: str, mutations: Any) -> tuple[Mapping[str, Any], int, int]:
+    spec = _spec(operation)
+    if (type(mutations) not in (list, tuple)
+            or any(type(item) is not dict for item in mutations)):
+        _fail("audit capacity work inventory is not exact")
+    participates = _participates(spec)
+    touches_outbox = any(item.get("table") == OUTBOX_TABLE for item in mutations)
+    if touches_outbox and not participates:
+        _fail("audit capacity work is outside its source operation")
+    return (
+        spec,
+        authority_contract.AUDIT_CAPACITY_QUERY_WORK_UNITS if participates else 0,
+        authority_contract.AUDIT_CAPACITY_MUTATION_WORK_UNITS if touches_outbox else 0,
+    )
+
+
+def validate_transition_work_units(operation: str, work_units: Any, mutations: Any) -> None:
+    """Bound the signed total using only the framework work actually present.
+
+    This is not proof of kernel execution cost. The measured producer separately
+    computes business query plus kernel work and independently signs that total.
+    """
+    spec, query_work, mutation_work = _framework_work(operation, mutations)
+    if (type(work_units) is not int
+            or not 1 + query_work + mutation_work <= work_units
+                <= spec["maximumBusinessWorkUnits"] + query_work + mutation_work):
+        _fail("audit capacity transition work exceeds its business/framework bound")
+
+
+def transition_work_units(
+    operation: str, query_work_units: Any, kernel_work_units: Any, mutations: Any,
+) -> int:
+    """Charge one composed query and, only when present, one counter mutation."""
+    spec, query_work, mutation_work = _framework_work(operation, mutations)
+    if (type(query_work_units) is not int or query_work_units < query_work
+            or type(kernel_work_units) is not int or kernel_work_units < 1
+            or query_work_units - query_work + kernel_work_units > spec["maximumBusinessWorkUnits"]):
+        _fail("audit capacity transition work exceeds its business/framework bound")
+    total = query_work_units + kernel_work_units + mutation_work
+    validate_transition_work_units(operation, total, mutations)
+    return total
 
 
 def validate_capacity_transition(*, operation: str, selected_rows: Any, mutations: Any) -> None:

@@ -52,6 +52,18 @@ KIND = "metadata-audit-outbox-global-capacity-v1"
 LIMIT = 100_000
 MAX_INTEGER = 2**63 - 1
 NOW_NS = 2_000_000_000
+_DEFAULT_WORK = object()
+
+
+def fixture_work(operation: str, changes: object) -> int:
+    # Independent minimum accounting: one business unit, one framework query
+    # for a participating operation, one counter mutation if any outbox is touched.
+    if operation not in authority_contract.OPERATIONS:
+        return 1
+    participates = OUTBOX in authority_contract.operation_spec(operation)["businessWrites"]
+    touched = isinstance(changes, (list, tuple)) and any(
+        isinstance(item, dict) and item.get("table") == OUTBOX for item in changes)
+    return 1 + int(participates) + int(touched)
 
 
 def canonical(value: object) -> str:
@@ -189,18 +201,25 @@ class AuthorityGlobalAuditCapacityPostgresTests(unittest.TestCase):
         with cls.connection() as connection:
             connection.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(cls.schema)))
 
-    def sql_validate(self, selections: object, changes: object, *, operation: str = OPERATION) -> None:
+    def sql_validate(self, selections: object, changes: object, *, operation: str = OPERATION,
+                     work_units: object = _DEFAULT_WORK) -> None:
+        if work_units is _DEFAULT_WORK:
+            work_units = fixture_work(operation, changes)
         with self.connection() as connection:
             connection.execute(
-                f"SELECT {self.namespace}.{AUDIT_CAPACITY_FUNCTION_NAME}(%s,%s::jsonb,%s::jsonb)",
-                (operation, canonical(selections), canonical(changes)),
+                f"SELECT {self.namespace}.{AUDIT_CAPACITY_FUNCTION_NAME}(%s,%s::jsonb,%s::jsonb,%s)",
+                (operation, canonical(selections), canonical(changes), work_units),
             ).fetchone()
 
-    def assert_accept(self, selections: object, changes: object, *, operation: str = OPERATION) -> None:
+    def assert_accept(self, selections: object, changes: object, *, operation: str = OPERATION,
+                      work_units: object = _DEFAULT_WORK) -> None:
+        if work_units is _DEFAULT_WORK:
+            work_units = fixture_work(operation, changes)
         original = copy.deepcopy((selections, changes))
         self.assertIsNone(capacity.validate_capacity_transition(
             operation=operation, selected_rows=selections, mutations=changes))
-        self.sql_validate(selections, changes, operation=operation)
+        self.assertIsNone(capacity.validate_transition_work_units(operation, work_units, changes))
+        self.sql_validate(selections, changes, operation=operation, work_units=work_units)
         self.assertEqual((selections, changes), original)
 
     def assert_reject(self, selections: object, changes: object, *, operation: str = OPERATION,
@@ -226,7 +245,7 @@ class AuthorityGlobalAuditCapacityPostgresTests(unittest.TestCase):
                 "SELECT count(*) FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n "
                 "ON n.oid=c.relnamespace WHERE n.nspname=%s", (self.schema,),
             ).fetchone(), (0,))
-        self.assertEqual(result, [("v", False, False, "void", "text, jsonb, jsonb",
+        self.assertEqual(result, [("v", False, False, "void", "text, jsonb, jsonb, bigint",
                                   [f"search_path=pg_catalog, {self.schema}, pg_temp"])])
         # This checks the installed component, not production grants/manifest admission.
 
@@ -310,6 +329,10 @@ class AuthorityGlobalAuditCapacityPostgresTests(unittest.TestCase):
         self.assert_accept(*fixture([(None, outbox_row())], timestamp=MAX_INTEGER))
 
     def test_selected_presence_null_and_closed_field_types(self) -> None:
+        for contract_selector in ("caller-selected-contract", "x" * 8192):
+            selections, changes = fixture([(None, outbox_row())])
+            selections[0]["contractSelector"] = contract_selector
+            self.assert_reject(selections, changes, sql_message="global selection is crossed or absent")
         for value in (None, 0, 1, "false", [], {}):
             selections, changes = fixture([(None, outbox_row())])
             selections[1]["present"] = value
@@ -463,15 +486,54 @@ class AuthorityGlobalAuditCapacityPostgresTests(unittest.TestCase):
 
     def test_sql_null_inputs_reject_and_jsonb_is_not_raw_token_admission(self) -> None:
         with self.connection() as connection:
-            for values in ((None, "[]", "[]"), (OPERATION, None, "[]"), (OPERATION, "[]", None)):
+            for values in ((None, "[]", "[]", 2), (OPERATION, None, "[]", 2), (OPERATION, "[]", None, 2)):
                 with self.assertRaisesRegex(psycopg.errors.RaiseException, "source-bounded arrays"):
                     connection.execute(
-                        f"SELECT {self.namespace}.{AUDIT_CAPACITY_FUNCTION_NAME}(%s,%s::jsonb,%s::jsonb)", values)
+                        f"SELECT {self.namespace}.{AUDIT_CAPACITY_FUNCTION_NAME}(%s,%s::jsonb,%s::jsonb,%s)", values)
+            selections, changes = fixture([])
+            with self.assertRaisesRegex(psycopg.errors.RaiseException, "actual transition work bound is exceeded"):
+                connection.execute(
+                    f"SELECT {self.namespace}.{AUDIT_CAPACITY_FUNCTION_NAME}(%s,%s::jsonb,%s::jsonb,%s)",
+                    (OPERATION, canonical(selections), canonical(changes), None))
             # PostgreSQL has already discarded duplicate key and integer exponent
             # spellings. This is a boundary check, not guard acceptance of raw wire.
             self.assertEqual(connection.execute(
                 "SELECT %s::jsonb, %s::jsonb", ('{"n":1,"n":2}', '1e2')
             ).fetchone(), ({"n": 2}, 100))
+
+    def test_required_work_charges_actual_framework_and_preserves_business_ceiling(self) -> None:
+        cases = ((OPERATION, fixture([(None, outbox_row())]), 2),
+                 (OPERATION, fixture([]), 1), ("webauthn.counter.cas", ([], []), 0))
+        for operation, (selections, changes), overhead in cases:
+            maximum = authority_contract.operation_spec(operation)["maximumBusinessWorkUnits"] + overhead
+            self.assertEqual(fixture_work(operation, changes), 1 + overhead)
+            for work in (1 + overhead, maximum):
+                self.assert_accept(selections, changes, operation=operation, work_units=work)
+            for work in (0, overhead, maximum + 1):
+                with self.subTest(operation=operation, work=work):
+                    # Valid transition baseline: these must reach work admission.
+                    capacity.validate_capacity_transition(operation=operation, selected_rows=selections, mutations=changes)
+                    with self.assertRaisesRegex(capacity.AuditCapacityError, "work exceeds its business/framework bound"):
+                        capacity.validate_transition_work_units(operation, work, changes)
+                    with self.assertRaisesRegex(psycopg.errors.RaiseException, "actual transition work bound is exceeded"):
+                        self.sql_validate(selections, changes, operation=operation, work_units=work)
+
+    def test_work_token_types_and_bigint_coercion_are_separate_boundaries(self) -> None:
+        selections, changes = fixture([(None, outbox_row())])
+        self.assert_accept(selections, changes, work_units=3)
+        for work in (True, False, "3", None, 3.0):
+            with self.assertRaisesRegex(capacity.AuditCapacityError, "work exceeds its business/framework bound"):
+                capacity.validate_transition_work_units(OPERATION, work, changes)
+        # The installed bigint API does not retain the original signed JSON
+        # token type. The actual caller must keep its strict raw/canonical guard.
+        self.sql_validate(selections, changes, work_units="3")
+        with self.assertRaises(psycopg.ProgrammingError):
+            self.sql_validate(selections, changes, work_units=True)
+        with self.connection() as connection:
+            with self.assertRaises(psycopg.errors.NumericValueOutOfRange):
+                connection.execute(
+                    f"SELECT {self.namespace}.{AUDIT_CAPACITY_FUNCTION_NAME}(%s,%s::jsonb,%s::jsonb,%s::bigint)",
+                    (OPERATION, canonical(selections), canonical(changes), MAX_INTEGER + 1))
 
 
 if __name__ == "__main__":

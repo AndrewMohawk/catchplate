@@ -1,16 +1,17 @@
-# Policy audit-capacity admission
+# Audit event freshness and global capacity admission
 
-Status: implemented source component, unbuilt and unexecuted. This is not an
-authenticated global outbox count, a startup repair or production acceptance.
+Status: source implementation and source review only, unbuilt and unexecuted.
+This is not an authenticated starting count, a startup repair, successful audit
+delivery or production acceptance. See the [global integration contract](authority-global-audit-capacity-design.md).
 
 `serverware.audit_outbox_contract.MAX_PENDING` owns the existing 100,000-record
-limit. The legacy DB admission constant and the policy transition helper import
-that same value. A self-consistent aggregate row cannot choose another limit:
-after the existing aggregate commitment/source validation, the policy helper
-requires an exact integer equal to the source constant. Generic aggregates keep
-their own capacity semantics, including quota/JIT limits and negative deltas.
+limit. The legacy DB constant and global capacity validator use that value;
+an aggregate cannot choose another limit. Generic quota and maintenance
+aggregates retain their separately defined capacity and arithmetic.
 
-The four policy writers have these fixed fresh-operation costs:
+## Business audit construction
+
+The four policy writers retain fixed fresh-event counts:
 
 | Operation | Fresh audit INSERTs |
 | --- | ---: |
@@ -19,75 +20,62 @@ The four policy writers have these fixed fresh-operation costs:
 | `rbac.binding.mutate` | 1 |
 | `policy.activation.abort` | 1 |
 
-`_aggregate_mutation` requires the exact integer charge for that operation and
-the existing framed operation/request identity. It rejects reused reservation
-or commitment identities and retains the generic capacity, revision, sequence,
-state-digest and source-revision checks.
+`_fresh_audit_mutations` checks the operation/request-derived identity, exact
+tuple size, distinct bounded ASCII string IDs, pending status and one exact
+selected absence (`present: false`, explicit `row: null`) for every insertion.
+Partial/orphan identity reuse, including identical pending or audited rows,
+fails closed. It returns only the business INSERTs and has no database effects.
 
-The actual writers call `_audit_capacity_mutations` with their computed stage
-outbox rows. It requires the exact bounded tuple size, distinct bounded ASCII
-string identities and pending status. Each identity must have exactly one
-selected row with `present: false` and an explicit `row: null`. The helper
-returns the aggregate UPDATE together with the exact INSERTs it counts. The
-writers no longer construct those outbox mutations separately. Any failure
-returns no transition; constructing these mutation dictionaries has no DB
-effects.
+The eight quota/JIT emitters likewise return their fresh audit INSERT without
+a local counter update. Their existing exact event-identity replay returns no
+audit mutation and preserves pending/claimed/audited state. Fresh absence now
+requires an explicit null row as well as exact false presence. Other quota,
+traversal and maintenance aggregates remain unchanged.
 
-Previously, fresh activation preparation could charge seven while skipping
-identical pre-existing outbox rows, and the other three writers could charge
-one while updating an existing row. Partial/orphan audit reuse now fails
-closed, including an identical pending row or a previously audited identity.
-It is not silently converted to a fresh pending event or a smaller charge.
-Existing whole-operation replay branches return before this helper and remain
-unchanged. Query-time absence is deliberately not required: replay still needs
-to read its previously committed rows.
+Existing whole-operation replay branches remain. Activation preparation now
+declares `permits_empty_mutation=True`, matching its existing empty replay branch
+which retains consumed-evidence checks. This is not evidence of successful
+signed replay; the authored source linkage fixture makes that boundary explicit.
 
-## Evidence boundary
+## One framework counter
 
-`scripts/test_authority_audit_capacity.py` contains authored real
-`KernelContext` component cases with independently framed selected-row/state
-fixtures. They cover fixed limits, exact capacity edges, operation-bound cost
-and identity, one/seven returned INSERTs, existing/malformed/missing/duplicate
-audit identities, unchanged inputs and generic non-audit capacity controls.
-Supplemental source checks are linkage evidence only. The script is in the
-isolated test inventory; none of it has run.
+The common typed planner selects the new compact global row before invoking
+the kernel and derives one counter CAS from its complete outbox mutations
+before sorting, bounds, proofs or root computation. Policy and quota kernels
+no longer query/update their separate old audit counters or grow a lifetime
+operation map. Retained event/operation/evidence records still protect replay.
 
-These are helper tests, not full executions of the four kernels. Their
-self-consistent aggregate rows do not prove correspondence to 100,000 actual
-pending/claimed records, independent root authenticity or all-writer count
-maintenance. Bounded commitment maps and whole-operation row/work/byte limits
-can reject earlier than the nominal capacity; no sustained 100,000-operation
-workload has been demonstrated.
+Pending insertion costs +1, movement between pending and claimed costs 0,
+and counted-to-audited costs -1. Zero-delta updates still advance counter
+revision; an empty replay stays empty. Unknown status, reopening terminal rows,
+unselected/duplicate mutations and any nonexact counter update deny. Arithmetic
+does not authorize audit completion or a DELETE absent from source templates.
 
-## Remaining integration
+All nineteen source outbox-writing declarations participate. Measured-plan,
+reservation/completion and pre-DML SQL admission independently check the same
+relationship. Source `.25` and primary-root profile v2 distinguish business and
+framework row/mutation/work/byte/trace allowances; older profiles are not silently
+expanded. The counter always needs a valid selected before-state, including
+empty replay; there is no zero-on-missing fallback.
 
-The [global capacity components and integration contract](authority-global-audit-capacity-design.md)
-prepare a compact shared counter plus independent Python and SQL admission.
-Those components are not connected to the live planner or executor and do not
-replace the four-writer behavior described here. Their authored fixtures have
-not run; initialization and receipt-bound delivery remain required.
+## Evidence and remaining work
 
-- Policy writers use aggregate kind `metadata-audit-outbox-capacity` and a
-  one-frame partition commitment. Quota writers use a different row: kind
-  `metadata-audit-outbox`, partition `global`, with a two-frame commitment.
-  Legacy DB writers count actual pending/claimed rows instead. These are not
-  one maintained global capacity authority.
-- Audit inclusion/delivery does not maintain the policy count. All writers
-  need one reviewed identity/profile and exact OLD/NEW membership deltas:
-  pending insertion +1, pending/claimed movement 0, counted-to-audited -1,
-  deletion -1 only for counted rows, and exact replay 0. Authenticated
-  genesis/backfill and independently current roots are still required.
-- Activation preparation already returns an empty exact replay but declares
-  `permits_empty_mutation=False`; planner admission rejects that replay. This
-  separate pre-existing inconsistency is not changed by the capacity repair.
-- No operation bounds, wire schema, primary-tree framing, source revision or
-  installed function manifest is reinterpreted here. Before execution, freeze
-  the exact clean commit/tree and regenerate measured artifacts. In particular,
-  the new module must enter the independently authenticated v9 Python import
-  closure; copying it into an image alone is insufficient.
+Authored tests call real business helpers, global validators and source
+contracts with independently framed rows. They cover fresh absence/count/ID
+guards, one/seven-event composition, quota replay, fixed global bounds and
+unchanged generic aggregates. Separate pure trace tests exercise exact
+framework accounting; PostgreSQL component fixtures install the actual SQL
+guard in a disposable external cluster. AST checks prove source linkage only.
+None of these tests has executed, and none substitutes for whole-operation,
+concurrency, rollback or independently authenticated evidence.
 
-The [WebAuthn integration design](webauthn-authority-integration.md) still needs
-global authenticated capacity before signed installation completion. The four
-missing kernels and [startup blocker](authority-transition-startup-blocker.md)
-remain unresolved. Verification must follow `goal.md`'s complete-source,
-freeze, externally controlled preparation and sequential no-build gates.
+Authenticated initialization/backfill and a general receipt-bound PostgreSQL
+delivery transition remain missing. SQLite retains its separate locked COUNT
+and completion behavior. Direct production DML remains revoked. A fresh source
+manifest, import closure and explicitly admitted installed-schema transition
+are still required; image copying or this source commit alone is insufficient.
+
+The [WebAuthn integration](webauthn-authority-integration.md), four missing
+business kernels and [startup blocker](authority-transition-startup-blocker.md)
+remain open. Verification must follow `goal.md`: finish source, freeze the exact
+clean tree, then externally controlled preparation and sequential no-build checks.

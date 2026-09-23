@@ -386,6 +386,14 @@ def _audit_mutations(
                 "audit outbox replay conflicts with its prior event"
             )
         return (), event_digest, True
+    if (
+        selected.get("present") is not False
+        or "row" not in selected
+        or selected["row"] is not None
+    ):
+        raise core.TransitionKernelError(
+            "fresh audit identity is not proven absent"
+        )
     now_s = context.database_now.astimezone(timezone.utc).isoformat()
     row = {
         "id": audit_id,
@@ -418,14 +426,6 @@ def _audit_mutations(
                 operation=context.operation,
                 selected=selected,
                 row=row,
-            ),
-            _aggregate_update(
-                context,
-                kind="metadata-audit-outbox",
-                partition="global",
-                live_delta=1,
-                active_delta=1,
-                next_sequence_delta=1,
             ),
         ),
         event_digest,
@@ -1008,12 +1008,6 @@ class _ControlApprovalRequestKernel:
                 "global",
             ),
             _audit_query(self.operation, request_digest),
-            _aggregate_query(
-                self.operation,
-                "audit_capacity",
-                "metadata-audit-outbox",
-                "global",
-            ),
         )
 
     def transition(
@@ -1251,12 +1245,6 @@ class _ControlApprovalDecisionKernel:
             ),
             *_webauthn_queries(self.operation, arguments),
             _audit_query(self.operation, request_digest),
-            _aggregate_query(
-                self.operation,
-                "audit_capacity",
-                "metadata-audit-outbox",
-                "global",
-            ),
         ]
         if self.decision == "deny":
             queries.append(
@@ -1543,12 +1531,6 @@ class _ControlApprovalConsumeKernel:
             ),
             *_webauthn_queries(self.operation, arguments),
             _audit_query(self.operation, request_digest),
-            _aggregate_query(
-                self.operation,
-                "audit_capacity",
-                "metadata-audit-outbox",
-                "global",
-            ),
         )
 
     def transition(
@@ -1885,12 +1867,6 @@ class _JitRequestKernel:
                 "global",
             ),
             _audit_query(self.operation, request_digest),
-            _aggregate_query(
-                self.operation,
-                "audit_capacity",
-                "metadata-audit-outbox",
-                "global",
-            ),
         )
 
     def transition(
@@ -2252,12 +2228,6 @@ class _JitReviewReceiptKernel:
                 "global",
             ),
             _audit_query(self.operation, request_digest),
-            _aggregate_query(
-                self.operation,
-                "audit_capacity",
-                "metadata-audit-outbox",
-                "global",
-            ),
         )
 
     def transition(
@@ -2559,12 +2529,6 @@ class _JitDecideKernel:
             ),
             *_webauthn_queries(self.operation, arguments),
             _audit_query(self.operation, request_digest),
-            _aggregate_query(
-                self.operation,
-                "audit_capacity",
-                "metadata-audit-outbox",
-                "global",
-            ),
         ]
         review_receipt_id = arguments["review_receipt_id"]
         if review_receipt_id is not None:
@@ -3011,12 +2975,6 @@ class _JitDenyKernel:
             _role_query(self.operation, "denier_role", actor_id),
             *_webauthn_queries(self.operation, arguments),
             _audit_query(self.operation, request_digest),
-            _aggregate_query(
-                self.operation,
-                "audit_capacity",
-                "metadata-audit-outbox",
-                "global",
-            ),
         )
 
     def transition(

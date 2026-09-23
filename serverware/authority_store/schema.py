@@ -12,6 +12,10 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from serverware import authority_contract
 from serverware.authority_store import postgres_trigger_manifest
 from serverware.authority_store.wire_json_sql import WIRE_JSON_FUNCTION_NAMES
+from serverware.authority_store.audit_capacity_sql import (
+    AUDIT_CAPACITY_FUNCTION_NAME,
+    AUDIT_CAPACITY_PLANNER_FUNCTION_SIGNATURES,
+)
 
 _EXTRACTED_NAMES = frozenset(
     {
@@ -295,6 +299,11 @@ def _policy_candidate_authority_source_contract_digest() -> str:
                 _POLICY_AUTHORITY_OWNER_POSTGRES_MAJOR,
             "authorityExecutorFunctions":
                 sorted(_POLICY_AUTHORITY_EXECUTOR_FUNCTIONS),
+            "authorityPlannerWriterFunctionSignatures": {
+                name: list(argument_types)
+                for name, argument_types
+                in AUDIT_CAPACITY_PLANNER_FUNCTION_SIGNATURES
+            },
             "authorityCapabilityIssuerRole":
                 _METADATA_STORE_AUTHORITY_CAPABILITY_ISSUER_ROLE,
             "authorityCapabilityIssuerFunctions":
@@ -1297,6 +1306,7 @@ def _policy_candidate_authority_required_guard_names(
                 "serverware_guard_policy_activation_publication",
                 "serverware_policy_authority_canonical_json",
                 *WIRE_JSON_FUNCTION_NAMES,
+                AUDIT_CAPACITY_FUNCTION_NAME,
                 "serverware_policy_authority_domain_digest",
                 "serverware_policy_authority_framed_digest",
                 "serverware_policy_authority_authenticated_empty",
@@ -1403,6 +1413,9 @@ def _policy_candidate_authority_expected_structure_manifest(
                 ),
                 authority_planner_writer_table_privileges=(
                     _POLICY_AUTHORITY_PLANNER_WRITER_TABLE_PRIVILEGES
+                ),
+                authority_planner_writer_function_signatures=(
+                    AUDIT_CAPACITY_PLANNER_FUNCTION_SIGNATURES
                 ),
             )
             expected = _policy_candidate_authority_structure_manifest(
@@ -2568,6 +2581,9 @@ def repair_policy_candidate_authority_completed_v9_receipt(
             ),
             authority_planner_writer_table_privileges=(
                 _POLICY_AUTHORITY_PLANNER_WRITER_TABLE_PRIVILEGES
+            ),
+            authority_planner_writer_function_signatures=(
+                AUDIT_CAPACITY_PLANNER_FUNCTION_SIGNATURES
             ),
         )
         repaired_manifest = _policy_candidate_authority_structure_manifest(

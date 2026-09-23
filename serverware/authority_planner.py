@@ -11,6 +11,13 @@ from typing import Any, Callable, Mapping, Protocol
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
+from serverware import authority_audit_capacity
+from serverware.authority_audit_trace import (
+    AuditTraceBudget,
+    AuditTraceError,
+    MAX_PLAN_TRACE_ENTRIES,
+    audit_capacity_scan_key,
+)
 from serverware import authority_contract
 from serverware import authority_primary_contract
 from serverware import authority_radix_proof
@@ -50,7 +57,6 @@ EXECUTION_RESERVATION_RECEIPT_SCHEMA = (
 PLANNER_TRACE_SCHEMA = "serverware.policyAuthorityPlannerTrace/v1"
 PLANNER_PROGRAM_SCHEMA = "serverware.policyAuthorityPlannerProgram/v1"
 BUSINESS_INTENT_SCHEMA = authority_contract.BUSINESS_INTENT_SCHEMA
-MAX_TRACE_ENTRIES = 4096
 WEBAUTHN_CHALLENGE_SELECTOR_OVERFLOW_LIMIT = (
     authority_contract.MAX_QUERY_PROOFS
 )
@@ -506,6 +512,30 @@ class PlanningProgram(Protocol):
         ...
 
 
+def _query_trace_key(
+    operation: str, query: authority_transition_core.BoundedQuery,
+) -> dict[str, str] | None:
+    query_id = authority_transition_core.query_program_id(
+        operation, authority_audit_capacity.QUERY_NAME, authority_audit_capacity.AGGREGATE_TABLE,
+    )
+    if query.query_id != query_id:
+        return None
+    expected = authority_transition_core.BoundedQuery(
+        query_id=query_id,
+        table=authority_audit_capacity.AGGREGATE_TABLE,
+        predicates=(authority_transition_core.QueryPredicate(
+            "aggregate_id", "eq", authority_audit_capacity.AGGREGATE_ID,
+        ),),
+        order_by=(authority_transition_core.QueryOrder("aggregate_id"),),
+        maximum_rows=1,
+        absent_key={"aggregate_id": authority_audit_capacity.AGGREGATE_ID},
+    )
+    if (not authority_contract.operation_spec(operation)["globalAuditCapacity"]
+            or query != expected):
+        raise AuthorityPlannerError("global audit capacity trace query is not source owned")
+    return audit_capacity_scan_key()
+
+
 class PlannerTrace:
     def __init__(self, *, operation: str) -> None:
         spec = authority_contract.operation_spec(operation)
@@ -527,6 +557,7 @@ class PlannerTrace:
             set(spec["businessWrites"]) | set(spec["frameworkWrites"])
         )
         self._entries: list[dict[str, Any]] = []
+        self._budget = AuditTraceBudget(operation)
 
     def read(self, table: str, key: Mapping[str, Any] | None) -> None:
         if table not in self.allowed_reads:
@@ -548,16 +579,19 @@ class PlannerTrace:
         table: str,
         key: Mapping[str, Any] | None,
     ) -> None:
-        if len(self._entries) >= MAX_TRACE_ENTRIES:
+        if len(self._entries) >= MAX_PLAN_TRACE_ENTRIES:
             raise AuthorityPlannerError("planner trace bound was exceeded")
-        self._entries.append(
-            {
-                "ordinal": len(self._entries),
-                "access": access,
-                "table": table,
-                "key": None if key is None else dict(key),
-            }
-        )
+        entry = {
+            "ordinal": len(self._entries),
+            "access": access,
+            "table": table,
+            "key": None if key is None else dict(key),
+        }
+        try:
+            self._budget.append(entry)
+        except AuditTraceError as exc:
+            raise AuthorityPlannerError(str(exc)) from exc
+        self._entries.append(entry)
 
     def close(
         self,
@@ -585,6 +619,10 @@ class PlannerTrace:
                 raise AuthorityPlannerError(
                     "planned mutation key is not exact"
                 )
+        try:
+            self._budget.close(mutation_plan)
+        except AuditTraceError as exc:
+            raise AuthorityPlannerError(str(exc)) from exc
         return tuple(dict(entry) for entry in self._entries)
 
 
@@ -701,7 +739,7 @@ class TypedTransitionPlanningProgram:
                     database_now=database_now,
                     request_digest=str(request["requestDigest"]),
                 )
-            queries = authority_transition_core.close_queries(
+            queries = authority_audit_capacity.add_capacity_query(
                 self.operation,
                 proposed_queries,
             )
@@ -755,16 +793,15 @@ class TypedTransitionPlanningProgram:
             )
         _business_intent(request, operation=operation)
         try:
-            transition = self.kernel.transition(
-                authority_transition_core.KernelContext(
-                    operation=operation,
-                    arguments=arguments,
-                    selected_rows=selected_rows,
-                    database_now=state.database_now,
-                    request_digest=str(request["requestDigest"]),
-                    verified_webauthn_evidence=state.verified_webauthn_evidence,
-                )
+            context = authority_transition_core.KernelContext(
+                operation=operation,
+                arguments=arguments,
+                selected_rows=selected_rows,
+                database_now=state.database_now,
+                request_digest=str(request["requestDigest"]),
+                verified_webauthn_evidence=state.verified_webauthn_evidence,
             )
+            transition = self.kernel.transition(context)
         except authority_transition_core.TransitionKernelError as exc:
             raise AuthorityPlannerError(
                 "typed transition kernel denied the request"
@@ -775,13 +812,32 @@ class TypedTransitionPlanningProgram:
             raise AuthorityPlannerError(
                 "typed transition kernel returned the wrong type"
             )
+        if not isinstance(transition.mutations, tuple):
+            raise AuthorityPlannerError(
+                "typed transition kernel exceeded its operation manifest"
+            )
+        try:
+            finalized_mutations = authority_audit_capacity.finalize_capacity(
+                context, transition.mutations,
+            )
+            total_work_units = authority_audit_capacity.transition_work_units(
+                operation=operation,
+                query_work_units=state.query_work_units,
+                kernel_work_units=transition.work_units,
+                mutations=finalized_mutations,
+            )
+            authority_audit_capacity.validate_transition_work_units(
+                operation=operation,
+                work_units=total_work_units,
+                mutations=finalized_mutations,
+            )
+        except authority_transition_core.TransitionKernelError as exc:
+            raise AuthorityPlannerError(
+                "typed transition global audit capacity denied the request"
+            ) from exc
         spec = authority_contract.operation_spec(operation)
-        total_work_units = (
-            state.query_work_units + transition.work_units
-        )
         if (
-            not isinstance(transition.mutations, tuple)
-            or len(transition.mutations) > int(spec["maximumMutations"])
+            len(finalized_mutations) > int(spec["maximumMutations"])
             or not isinstance(total_work_units, int)
             or isinstance(total_work_units, bool)
             or not 1
@@ -799,14 +855,14 @@ class TypedTransitionPlanningProgram:
                         "expectedRow",
                         "row",
                     }
-                for entry in transition.mutations
+                for entry in finalized_mutations
             )
         ):
             raise AuthorityPlannerError(
                 "typed transition kernel exceeded its operation manifest"
             )
         if (
-            not transition.mutations
+            not finalized_mutations
             and not self.kernel.permits_empty_mutation
         ):
             raise AuthorityPlannerError(
@@ -814,7 +870,7 @@ class TypedTransitionPlanningProgram:
             )
         mutations = tuple(
             sorted(
-                (dict(entry) for entry in transition.mutations),
+                (dict(entry) for entry in finalized_mutations),
                 key=lambda entry: (
                     entry["table"],
                     entry["keyDigest"],
@@ -1616,7 +1672,7 @@ def _read_bounded_transition_rows(
             + ("DESC" if item.descending else "ASC")
             for item in order
         )
-        trace.read(query.table, None)
+        trace.read(query.table, _query_trace_key(operation, query))
         rows = cursor.execute(
             "SELECT pg_catalog.to_jsonb(target) AS row_value "
             f"FROM serverware_metadata.{query.table} AS target "
@@ -2121,6 +2177,11 @@ def _derive_multiproofs(
     roots: tuple[dict[str, Any], ...],
     trace: PlannerTrace,
 ) -> tuple[dict[str, Any], ...]:
+    # The final inventory may include one separately budgeted global counter.
+    # Individual business query/proof limits remain source-contract checked.
+    if (not isinstance(selected_rows, tuple)
+            or len(selected_rows) > authority_contract.MAX_PLAN_QUERY_ROWS):
+        raise AuthorityPlannerError("planner final proof inventory exceeds its bound")
     try:
         return authority_radix_proof.derive_multiproofs(
             cursor, selected_rows=selected_rows, roots=roots, trace=trace,
@@ -2415,7 +2476,7 @@ def validate_measured_plan_payload(
         or isinstance(measured_plan.get("workUnits"), bool)
         or not 1
             <= measured_plan["workUnits"]
-            <= authority_contract.MAX_WORK_UNITS
+            <= authority_contract.MAX_PLAN_WORK_UNITS
         or payload.get("plannerIdentity") != expected_identity_value
     ):
         raise AuthorityPlannerError(
@@ -2484,6 +2545,19 @@ def validate_measured_plan_payload(
             f"measured plan {field}",
         )
     reject_authoritative_input(typed_request)
+    try:
+        authority_audit_capacity.validate_capacity_transition(
+            operation=operation, selected_rows=selected, mutations=mutations,
+        )
+        authority_audit_capacity.validate_transition_work_units(
+            operation=operation,
+            work_units=measured_plan["workUnits"],
+            mutations=mutations,
+        )
+    except authority_transition_core.TransitionKernelError as exc:
+        raise AuthorityPlannerError(
+            "measured-plan global audit capacity changed"
+        ) from exc
     try:
         root_transition = authority_root_transition.verify_primary_root_transition(
             operation=operation, value=payload["rootTransition"],
@@ -2560,7 +2634,7 @@ def validate_measured_plan_payload(
         or trace.get("schema") != PLANNER_TRACE_SCHEMA
         or trace.get("operation") != operation
         or not isinstance(entries, list)
-        or len(entries) > MAX_TRACE_ENTRIES
+        or len(entries) > MAX_PLAN_TRACE_ENTRIES
         or any(
             not isinstance(entry, Mapping)
             or set(entry) != {"ordinal", "access", "table", "key"}
@@ -2586,6 +2660,13 @@ def validate_measured_plan_payload(
         raise AuthorityPlannerError(
             "measured-plan trace escaped its generated manifest"
         )
+    try:
+        trace_budget = AuditTraceBudget(operation)
+        for entry in entries:
+            trace_budget.append(entry)
+        trace_budget.close(mutations)
+    except AuditTraceError as exc:
+        raise AuthorityPlannerError(str(exc)) from exc
     expected_write_trace = [
         {
             "access": "write",
@@ -2852,6 +2933,21 @@ class MeasuredPlanner:
                         )
                     selected = transition.selected_business_rows
                     mutations = transition.mutation_plan
+                    try:
+                        authority_audit_capacity.validate_capacity_transition(
+                            operation=operation,
+                            selected_rows=selected,
+                            mutations=mutations,
+                        )
+                        authority_audit_capacity.validate_transition_work_units(
+                            operation=operation,
+                            work_units=transition.work_units,
+                            mutations=mutations,
+                        )
+                    except authority_transition_core.TransitionKernelError as exc:
+                        raise AuthorityPlannerError(
+                            "planner final global audit capacity changed"
+                        ) from exc
                     multiproofs = _derive_multiproofs(
                         cursor,
                         selected_rows=selected,

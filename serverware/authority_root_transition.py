@@ -20,7 +20,7 @@ from serverware.authority_transition_core import canonical_bytes, framed_digest
 
 
 TRANSITION_SCHEMA = "serverware.policyAuthorityPrimaryRootTransition/v1"
-TRANSITION_PROFILE = "serverware.policyAuthorityPrimaryRootTransitionProfile/v1"
+TRANSITION_PROFILE = "serverware.policyAuthorityPrimaryRootTransitionProfile/v2"
 TRANSITION_FIELDS = frozenset({
     "schema", "profile", "businessBeforeRoots", "authorizationBeforeRoots",
     "businessAfterRoots", "authorizationAfterRoots", "metrics",
@@ -31,13 +31,13 @@ ROOT_FIELDS = frozenset({"table", "rootRevision", "rootDigest", "leafCount"})
 def metric_bounds() -> dict[str, int]:
     """Return a fresh source-owned profile, shared with the SQL renderer."""
     depth = authority_contract.TREE_DEPTH
-    proofs = authority_contract.MAX_QUERY_PROOFS
+    proofs = authority_contract.MAX_PLAN_QUERY_ROWS
     return {
         "selectedRows": proofs,
-        "mutations": authority_contract.MAX_MUTATIONS,
+        "mutations": authority_contract.MAX_PLAN_MUTATIONS,
         "proofVectors": proofs * depth,
         "proofChildSlots": proofs * depth * authority_contract.TREE_RADIX,
-        "recomputedAncestors": authority_contract.MAX_MUTATIONS * depth,
+        "recomputedAncestors": authority_contract.MAX_PLAN_MUTATIONS * depth,
         "hashWork": depth + 2 + proofs * (2 * depth + 8),
         "inputBytes": authority_contract.MAX_RESULT_BYTES,
         "jsonNodes": 1_000_000,
@@ -121,7 +121,7 @@ def derive_authorization_sources(*, operation: str, selected_rows: Any) -> list[
 
     contracts = {entry.table: entry for entry in primary_table_contracts(operation)
                  if entry.root_class == "authorization"}
-    if type(selected_rows) not in (list, tuple) or len(selected_rows) > authority_contract.MAX_QUERY_PROOFS:
+    if type(selected_rows) not in (list, tuple) or len(selected_rows) > authority_contract.MAX_PLAN_QUERY_ROWS:
         raise PrimaryRadixMutationError("authorization source selections are not bounded")
     result = []
     seen = set()

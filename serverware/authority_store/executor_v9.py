@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from serverware import authority_contract
+from serverware import authority_audit_capacity
 from serverware import authority_transition_registry
 from serverware.authority_root_transition import (
     primary_root_transition_digest,
@@ -19,6 +20,7 @@ from serverware.authority_store.mutation_sql import (
     locked_primary_key_row_sql,
     selected_row_matches_sql,
 )
+from serverware.authority_store.audit_capacity_sql import AUDIT_CAPACITY_FUNCTION_NAME
 from serverware.authority_store.webauthn_trust_sql import (
     locked_webauthn_trust_projection,
 )
@@ -187,7 +189,7 @@ def authority_v9_schema_source() -> str:
                 ),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.24'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.25'
                 ),
                 CHECK (status = 'completed'),
                 CHECK (length(before_manifest_json) BETWEEN 2 AND 67108864),
@@ -220,7 +222,7 @@ def authority_v9_schema_source() -> str:
                 CHECK (length(key_columns_json) BETWEEN 2 AND 4194304),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.24'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.25'
                 )
             );
 
@@ -263,7 +265,7 @@ def authority_v9_schema_source() -> str:
                 CHECK (length(template_json) BETWEEN 2 AND 4194304),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.24'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.25'
                 )
             );
 
@@ -316,7 +318,7 @@ def authority_v9_schema_source() -> str:
                 CHECK (length(evidence_json) BETWEEN 2 AND 4194304),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.24'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.25'
                 )
             );
 
@@ -354,7 +356,7 @@ def authority_v9_schema_source() -> str:
                 CHECK (expires_at_epoch_ns > created_at_epoch_ns),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.24'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.25'
                 )
             );
 
@@ -433,7 +435,7 @@ def authority_v9_schema_source() -> str:
                 ),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.24'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.25'
                 )
             );
 
@@ -478,10 +480,10 @@ def authority_v9_schema_source() -> str:
                 ),
                 CHECK (
                     length(selected_business_rows_json)
-                    BETWEEN 2 AND 4194304
+                    BETWEEN 2 AND __MAX_PLAN_SELECTED_BYTES__
                 ),
                 CHECK (length(mutation_plan_json) BETWEEN 2 AND 67108864),
-                CHECK (work_units BETWEEN 1 AND 4096),
+                CHECK (work_units BETWEEN 1 AND __MAX_PLAN_WORK_UNITS__),
                 CHECK (deadline_monotonic_ns > 0),
                 CHECK (deadline_epoch_ns > reserved_at_epoch_ns),
                 CHECK (fence > 0),
@@ -542,7 +544,7 @@ def authority_v9_schema_source() -> str:
                 ),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.24'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.25'
                 )
             );
 
@@ -593,7 +595,7 @@ def authority_v9_schema_source() -> str:
                 CHECK (length(state_json) BETWEEN 2 AND 4194304),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.24'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.25'
                 )
             );
 
@@ -655,7 +657,7 @@ def authority_v9_schema_source() -> str:
                 CHECK (expires_at_epoch_ns > created_at_epoch_ns),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.24'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.25'
                 )
             );
 
@@ -692,7 +694,7 @@ def authority_v9_schema_source() -> str:
                 ),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.24'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.25'
                 )
             );
 
@@ -723,7 +725,7 @@ def authority_v9_schema_source() -> str:
                 CHECK (deleted_at_epoch_ns >= 0),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.24'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.25'
                 )
             );
 
@@ -768,7 +770,7 @@ def authority_v9_schema_source() -> str:
                 ),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.24'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.25'
                 )
             );
 
@@ -822,7 +824,7 @@ def authority_v9_schema_source() -> str:
                 ),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.24'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.25'
                 )
             );
 
@@ -866,7 +868,7 @@ def authority_v9_schema_source() -> str:
                 CHECK (updated_at_epoch_ns >= 0),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.24'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.25'
                 )
             );
 
@@ -914,7 +916,7 @@ def authority_v9_schema_source() -> str:
             ),
             CHECK (
                 source_revision =
-                'serverware.policyCandidateAuthoritySource/2026-07-30.24'
+                'serverware.policyCandidateAuthoritySource/2026-07-30.25'
             )
         );
 
@@ -981,7 +983,7 @@ def authority_v9_schema_source() -> str:
             ),
             CHECK (
                 source_revision =
-                'serverware.policyCandidateAuthoritySource/2026-07-30.24'
+                'serverware.policyCandidateAuthoritySource/2026-07-30.25'
             )
         );
 
@@ -1041,10 +1043,14 @@ def authority_v9_schema_source() -> str:
                 ),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.24'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.25'
                 )
             );
-    """
+    """.replace(
+        "__MAX_PLAN_SELECTED_BYTES__", str(authority_contract.MAX_PLAN_SELECTED_BYTES)
+    ).replace(
+        "__MAX_PLAN_WORK_UNITS__", str(authority_contract.MAX_PLAN_WORK_UNITS)
+    )
 
 
 def install_authority_v9_executor(
@@ -1773,6 +1779,15 @@ def install_authority_v9_executor(
                 supplied_planner_transaction_id
             FOR UPDATE;
             {load_root_transition_sql(namespace)}
+            -- Check the persisted original before-images on both first apply
+            -- and historical replay. This assertion reads no current roots or
+            -- business rows; all existing fresh-apply lock/CAS checks follow.
+            PERFORM {namespace}.{AUDIT_CAPACITY_FUNCTION_NAME}(
+                planner.operation,
+                planner.selected_business_rows_json::pg_catalog.jsonb,
+                planner.mutation_plan_json::pg_catalog.jsonb,
+                planner.work_units
+            );
             IF capability.status = 'committed' THEN
                 IF execution_envelope.status <> 'committed'
                     OR planner.status <> 'consumed'
@@ -3759,10 +3774,16 @@ def reserve_authority_planner_transaction(
         )
     ):
         raise ValueError("planner selector or mutation closure is not exact")
+    authority_audit_capacity.validate_capacity_transition(
+        operation=operation, selected_rows=selected_business_rows, mutations=mutation_plan,
+    )
+    authority_audit_capacity.validate_transition_work_units(
+        operation=operation, work_units=work_units, mutations=mutation_plan,
+    )
     selected_json = _canonical(selected_business_rows)
     mutation_json = _canonical(mutation_plan)
     if (
-        len(selected_json.encode("ascii")) > authority_contract.MAX_REQUEST_BYTES
+        len(selected_json.encode("ascii")) > authority_contract.MAX_PLAN_SELECTED_BYTES
         or len(mutation_json.encode("ascii"))
             > authority_contract.MAX_RESULT_BYTES
     ):
@@ -3798,6 +3819,10 @@ def reserve_authority_planner_transaction(
         authority_contract.SOURCE_REVISION,
     )
     with raw.cursor() as cursor:
+        cursor.execute(
+            f"SELECT serverware_metadata.{AUDIT_CAPACITY_FUNCTION_NAME}(%s,%s::jsonb,%s::jsonb,%s)",
+            (operation, selected_json, mutation_json, work_units),
+        )
         cursor.execute(
             "INSERT INTO serverware_metadata."
             "policy_authority_planner_transactions ("
@@ -4480,6 +4505,23 @@ def complete_authority_planner_transaction(
         or _canonical(planner_payload) != exact_plan_json
     ):
         raise ValueError("authority measured plan binding is not exact")
+    authority_audit_capacity.validate_capacity_transition(
+        operation=plan["operation"], selected_rows=planner_payload["selectedBusinessRows"],
+        mutations=planner_payload["mutationPlan"],
+    )
+    authority_audit_capacity.validate_transition_work_units(
+        operation=plan["operation"], work_units=plan["workUnits"],
+        mutations=planner_payload["mutationPlan"],
+    )
+    selected_json = _canonical(planner_payload["selectedBusinessRows"])
+    mutation_json = _canonical(planner_payload["mutationPlan"])
+    if (len(selected_json.encode("ascii")) > authority_contract.MAX_PLAN_SELECTED_BYTES
+            or len(mutation_json.encode("ascii")) > authority_contract.MAX_RESULT_BYTES
+            or _digest("serverware.policyAuthoritySelectedBusinessRows/v1", selected_json.encode("ascii"))
+                != plan["selectedBusinessRowsDigest"]
+            or _digest("serverware.policyAuthorityMutationPlan/v3", mutation_json.encode("ascii"))
+                != plan["mutationPlanDigest"]):
+        raise ValueError("authority measured capacity sets differ from the exact plan")
     root_transition = validate_primary_root_transition(
         planner_payload["rootTransition"]
     )
@@ -4512,6 +4554,10 @@ def complete_authority_planner_transaction(
     plan_base64url = _b64url(exact_plan_bytes)
     plan_digest = "sha256:" + hashlib.sha256(exact_plan_bytes).hexdigest()
     with raw.cursor() as cursor:
+        cursor.execute(
+            f"SELECT serverware_metadata.{AUDIT_CAPACITY_FUNCTION_NAME}(%s,%s::jsonb,%s::jsonb,%s)",
+            (plan["operation"], selected_json, mutation_json, plan["workUnits"]),
+        )
         updated = cursor.execute(
             "UPDATE serverware_metadata."
             "policy_authority_planner_transactions "
@@ -4578,7 +4624,9 @@ def complete_authority_planner_transaction(
         plan[plan_field] != row[row_field]
         for plan_field, row_field in plan_to_row.items()
     ) or (
-        planner_identity["sessionIdentityDigest"]
+        selected_json != row["selected_business_rows_json"]
+        or mutation_json != row["mutation_plan_json"]
+        or planner_identity["sessionIdentityDigest"]
             != row["planner_session_identity_digest"]
         or planner_identity["measurementDigest"]
             != row["planner_measurement_digest"]

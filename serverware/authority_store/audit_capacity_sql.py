@@ -36,6 +36,16 @@ _MUTATION_FIELDS = ("table", "key", "keyDigest", "operation", "expectedRow", "ro
 _I64_MAX = 9_223_372_036_854_775_807
 MAX_COUNTER_BYTES = 4096
 AUDIT_CAPACITY_FUNCTION_NAME = "serverware_policy_authority_assert_audit_capacity"
+# The assertion is invoker-rights. Its only non-catalog callees are these
+# source-installed, read-only serializer/digest functions; the planner role
+# needs exactly this EXECUTE closure, never any business-table write privilege.
+AUDIT_CAPACITY_PLANNER_FUNCTION_SIGNATURES = (
+    (AUDIT_CAPACITY_FUNCTION_NAME, ("text", "jsonb", "jsonb", "bigint")),
+    ("serverware_policy_authority_domain_digest", ("text", "text[]")),
+    ("serverware_policy_authority_wire_json", ("jsonb",)),
+    ("serverware_policy_authority_wire_string", ("text", "boolean", "bigint")),
+    ("serverware_policy_authority_wire_walk", ("jsonb", "integer", "bigint", "bigint", "boolean")),
+)
 
 
 def _literal(value: str) -> str:
@@ -76,6 +86,9 @@ def _source_contract() -> str:
             ),
             "maximumQueryRows": spec["maximumQueryRows"],
             "maximumMutations": spec["maximumMutations"],
+            "maximumBusinessQueryRows": spec["maximumBusinessQueryRows"],
+            "maximumBusinessMutations": spec["maximumBusinessMutations"],
+            "maximumBusinessWorkUnits": spec["maximumBusinessWorkUnits"],
             "keys": {
                 table: sorted(PRIMARY_KEY_COLUMNS[table])
                 for table in sorted(set(spec["businessReads"]) | set(spec["businessWrites"])
@@ -94,6 +107,7 @@ def _source_contract() -> str:
 
 def assert_audit_capacity_sql(
     namespace: str, *, operation_sql: str, selected_rows_sql: str, mutations_sql: str,
+    work_units_sql: str,
 ) -> str:
     """Render a nested block before *any* business DML, never a DB writer.
 
@@ -107,12 +121,14 @@ def assert_audit_capacity_sql(
     operation = _expression(operation_sql, array=False)
     selected = _expression(selected_rows_sql, array=True)
     mutations = _expression(mutations_sql, array=True)
+    work_units = _expression(work_units_sql, array=False)
     return textwrap.dedent(f"""
         <<audit_capacity_guard>>
         DECLARE
             ac_operation text := {operation};
             ac_selected pg_catalog.jsonb := {selected};
             ac_mutations pg_catalog.jsonb := {mutations};
+            ac_work_units bigint := {work_units};
             ac_contract constant pg_catalog.jsonb := {_source_contract()}::pg_catalog.jsonb;
             ac_spec pg_catalog.jsonb;
             ac_partition text := {namespace}.serverware_policy_authority_domain_digest(
@@ -143,6 +159,8 @@ def assert_audit_capacity_sql(
             ac_next_count numeric;
             ac_next_sequence numeric;
             ac_inventory_bytes bigint;
+            ac_framework_work bigint;
+            ac_business_selected pg_catalog.jsonb;
         BEGIN
             IF (ac_contract ? ac_operation) IS NOT TRUE
                 OR pg_catalog.jsonb_typeof(ac_selected) IS DISTINCT FROM 'array'
@@ -246,6 +264,7 @@ def assert_audit_capacity_sql(
                     IF ac_selection->'key' IS DISTINCT FROM
                             pg_catalog.jsonb_build_object('aggregate_id', ac_id)
                         OR ac_selection->'present' IS DISTINCT FROM 'true'::pg_catalog.jsonb
+                        OR ac_selection->'contractSelector' IS DISTINCT FROM 'null'::pg_catalog.jsonb
                         OR ac_global_selection IS NOT NULL
                     THEN
                         RAISE EXCEPTION 'authority audit capacity global selection is crossed or absent';
@@ -262,6 +281,34 @@ def assert_audit_capacity_sql(
                 AND ac_global_selection IS NOT NULL
             THEN
                 RAISE EXCEPTION 'authority audit capacity nonparticipant selected the reserved global row';
+            END IF;
+            SELECT measured.emitted_bytes INTO STRICT ac_inventory_bytes
+            FROM {namespace}.serverware_policy_authority_wire_walk(
+                ac_selected, {WIRE_JSON_MAX_DEPTH}, {WIRE_JSON_MAX_NODES},
+                {authority_contract.MAX_PLAN_SELECTED_BYTES}, FALSE
+            ) AS measured;
+            IF ac_global_selection IS NOT NULL THEN
+                SELECT measured.emitted_bytes INTO STRICT ac_inventory_bytes
+                FROM {namespace}.serverware_policy_authority_wire_walk(
+                    ac_global_selection, {WIRE_JSON_MAX_DEPTH}, {WIRE_JSON_MAX_NODES},
+                    {authority_contract.MAX_PLAN_SELECTED_BYTES - authority_contract.MAX_REQUEST_BYTES}, FALSE
+                ) AS measured;
+            END IF;
+            SELECT COALESCE(pg_catalog.jsonb_agg(item.value), '[]'::pg_catalog.jsonb)
+                INTO ac_business_selected
+            FROM pg_catalog.jsonb_array_elements(ac_selected) AS item(value)
+            WHERE NOT (item.value->>'table' = '{_AGGREGATE_TABLE}'
+                AND item.value->'key' = pg_catalog.jsonb_build_object('aggregate_id', ac_id));
+            SELECT measured.emitted_bytes INTO STRICT ac_inventory_bytes
+            FROM {namespace}.serverware_policy_authority_wire_walk(
+                ac_business_selected, {WIRE_JSON_MAX_DEPTH}, {WIRE_JSON_MAX_NODES},
+                {authority_contract.MAX_REQUEST_BYTES}, FALSE
+            ) AS measured;
+            IF pg_catalog.jsonb_array_length(ac_selected)
+                - CASE WHEN ac_global_selection IS NULL THEN 0 ELSE 1 END
+                > (ac_spec->>'maximumBusinessQueryRows')::bigint
+            THEN
+                RAISE EXCEPTION 'authority audit capacity business selected row bound is exceeded';
             END IF;
 
             FOR ac_mutation IN
@@ -355,6 +402,19 @@ def assert_audit_capacity_sql(
                 OR (ac_counter_count <> 0 AND ac_spec->'participates' <> 'true'::pg_catalog.jsonb)
             THEN
                 RAISE EXCEPTION 'authority audit capacity global mutation closure is incomplete';
+            END IF;
+            IF pg_catalog.jsonb_array_length(ac_mutations) - ac_counter_count
+                > (ac_spec->>'maximumBusinessMutations')::bigint
+            THEN
+                RAISE EXCEPTION 'authority audit capacity business mutation bound is exceeded';
+            END IF;
+            ac_framework_work := CASE WHEN ac_spec->'participates' = 'true'::pg_catalog.jsonb THEN 1 ELSE 0 END
+                + CASE WHEN ac_outbox_count > 0 THEN 1 ELSE 0 END;
+            IF ac_work_units IS NULL
+                OR ac_work_units NOT BETWEEN 1 + ac_framework_work
+                    AND (ac_spec->>'maximumBusinessWorkUnits')::bigint + ac_framework_work
+            THEN
+                RAISE EXCEPTION 'authority audit capacity actual transition work bound is exceeded';
             END IF;
             IF ac_spec->'participates' = 'true'::pg_catalog.jsonb THEN
                 ac_before := ac_global_selection->'row';
@@ -456,12 +516,14 @@ def audit_capacity_function_sql(namespace: str) -> str:
     block = assert_audit_capacity_sql(
         namespace, operation_sql="supplied_operation",
         selected_rows_sql="supplied_selected_rows", mutations_sql="supplied_mutations",
+        work_units_sql="supplied_work_units",
     )
     return textwrap.dedent(f"""
         CREATE OR REPLACE FUNCTION {namespace}.{AUDIT_CAPACITY_FUNCTION_NAME}(
             supplied_operation text,
             supplied_selected_rows pg_catalog.jsonb,
-            supplied_mutations pg_catalog.jsonb
+            supplied_mutations pg_catalog.jsonb,
+            supplied_work_units bigint
         )
         RETURNS void
         LANGUAGE plpgsql

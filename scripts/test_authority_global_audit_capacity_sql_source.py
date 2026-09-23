@@ -23,6 +23,7 @@ from serverware import authority_contract
 from serverware.authority_primary_contract import PRIMARY_KEY_COLUMNS
 from serverware.authority_store.audit_capacity_sql import (
     AUDIT_CAPACITY_FUNCTION_NAME,
+    AUDIT_CAPACITY_PLANNER_FUNCTION_SIGNATURES,
     MAX_COUNTER_BYTES,
     assert_audit_capacity_sql,
     audit_capacity_function_sql,
@@ -46,6 +47,7 @@ def render(namespace='"fixture"', **overrides):
         "operation_sql": "capability.operation",
         "selected_rows_sql": "planner.selected_business_rows_json::pg_catalog.jsonb",
         "mutations_sql": "planner.mutation_plan_json::pg_catalog.jsonb",
+        "work_units_sql": "planner.work_units",
     }
     arguments.update(overrides)
     return assert_audit_capacity_sql(namespace, **arguments)
@@ -79,6 +81,9 @@ class GlobalAuditCapacitySqlSourceTests(unittest.TestCase):
                     ),
                     "maximumQueryRows": spec["maximumQueryRows"],
                     "maximumMutations": spec["maximumMutations"],
+                    "maximumBusinessQueryRows": spec["maximumBusinessQueryRows"],
+                    "maximumBusinessMutations": spec["maximumBusinessMutations"],
+                    "maximumBusinessWorkUnits": spec["maximumBusinessWorkUnits"],
                     "keys": {table: sorted(PRIMARY_KEY_COLUMNS[table]) for table in tables},
                     "templates": {item["templateId"]: {
                         "table": item["table"], "mutation": item["mutation"],
@@ -102,7 +107,7 @@ class GlobalAuditCapacitySqlSourceTests(unittest.TestCase):
     def test_only_source_variables_are_accepted_as_input_expressions(self):
         self.assertIn("ac_operation text := operation_name;", render(operation_sql="operation_name"))
         self.assertIn("ac_selected pg_catalog.jsonb := selected_rows;", render(selected_rows_sql="selected_rows"))
-        for name in ("operation_sql", "selected_rows_sql", "mutations_sql"):
+        for name in ("operation_sql", "selected_rows_sql", "mutations_sql", "work_units_sql"):
             for invalid in (None, "", "%s", "input + other", "'literal'", "call()", "a.b.c", "input;", " input"):
                 with self.subTest(name=name, value=invalid):
                     with self.assertRaisesRegex(ValueError, "exact SQL variable"):
@@ -112,12 +117,13 @@ class GlobalAuditCapacitySqlSourceTests(unittest.TestCase):
 
     def test_installed_function_reuses_the_same_guard_without_parameter_interpolation(self):
         body = assert_audit_capacity_sql('"fixture"', operation_sql="supplied_operation",
-            selected_rows_sql="supplied_selected_rows", mutations_sql="supplied_mutations")
+            selected_rows_sql="supplied_selected_rows", mutations_sql="supplied_mutations",
+            work_units_sql="supplied_work_units")
         installed = audit_capacity_function_sql('"fixture"')
         self.assertEqual(installed.count(body), 1)
         self.assertEqual(AUDIT_CAPACITY_FUNCTION_NAME, "serverware_policy_authority_assert_audit_capacity")
         self.assertIn(f'CREATE OR REPLACE FUNCTION "fixture".{AUDIT_CAPACITY_FUNCTION_NAME}(', installed)
-        self.assertRegex(installed, r"supplied_operation text,\s+supplied_selected_rows pg_catalog\.jsonb,\s+supplied_mutations pg_catalog\.jsonb")
+        self.assertRegex(installed, r"supplied_operation text,\s+supplied_selected_rows pg_catalog\.jsonb,\s+supplied_mutations pg_catalog\.jsonb,\s+supplied_work_units bigint")
         self.assertIn("RETURNS void", installed)
         self.assertIn("SECURITY INVOKER", installed)
         self.assertNotIn("SECURITY DEFINER", installed)
@@ -125,6 +131,69 @@ class GlobalAuditCapacitySqlSourceTests(unittest.TestCase):
         self.assertNotRegex(header, r"\bSTRICT\b")  # SQL NULL inputs must reach rejecting guards.
         self.assertNotIn("DO $", installed)
         self.assertNotIn("%s", installed)
+
+    def test_planner_invoker_dependencies_are_an_exact_read_only_signature_set(self):
+        self.assertEqual(AUDIT_CAPACITY_PLANNER_FUNCTION_SIGNATURES, (
+            ("serverware_policy_authority_assert_audit_capacity", ("text", "jsonb", "jsonb", "bigint")),
+            ("serverware_policy_authority_domain_digest", ("text", "text[]")),
+            ("serverware_policy_authority_wire_json", ("jsonb",)),
+            ("serverware_policy_authority_wire_string", ("text", "boolean", "bigint")),
+            ("serverware_policy_authority_wire_walk", ("jsonb", "integer", "bigint", "bigint", "boolean")),
+        ))
+        db_source = (ROOT / "serverware/db.py").read_text(encoding="utf-8")
+        db_tree = ast.parse(db_source)
+        seal = next(node for node in db_tree.body if isinstance(node, ast.FunctionDef)
+                    and node.name == "_seal_postgres_schema_acl")
+        seal_source = ast.get_source_segment(db_source, seal)
+        for guard in ("!= AUDIT_CAPACITY_PLANNER_FUNCTION_SIGNATURES",
+                      "AND NOT grant_entry.is_grantable", "or not exact_planner_functions"):
+            self.assertIn(guard, seal_source)
+        unexpected = next(node for node in ast.walk(seal) if isinstance(node, ast.Assign)
+                          and any(isinstance(target, ast.Name) and target.id == "unexpected_function"
+                                  for target in node.targets))
+        unexpected_source = ast.get_source_segment(db_source, unexpected)
+        # PUBLIC's grantee 0 has no pg_roles row. Its NULL role-name must
+        # resolve to denied, not disappear through NOT(NULL) in the WHERE.
+        self.assertIn('"LEFT JOIN pg_catalog.pg_roles AS grantee "', unexpected_source)
+        self.assertIn('"AND NOT COALESCE(("', unexpected_source)
+        self.assertIn('"), FALSE) LIMIT 1"', unexpected_source)
+        schema_source = (ROOT / "serverware/authority_store/schema.py").read_text(encoding="utf-8")
+        self.assertIn('"authorityPlannerWriterFunctionSignatures"', schema_source)
+        self.assertEqual(schema_source.count("authority_planner_writer_function_signatures=("), 2)
+        self.assertEqual(db_source.count("authority_planner_writer_function_signatures=("), 1)
+
+    def test_executor_wiring_preserves_historical_inputs_and_narrow_ddl_budgets(self):
+        # Source wiring only: neither importing the registry nor substituting
+        # a database connection proves a successful planner transaction.
+        source = (ROOT / "serverware/authority_store/executor_v9.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        functions = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
+        ddl = ast.get_source_segment(source, functions["authority_v9_schema_source"])
+        self.assertEqual(ddl.count(authority_contract.SOURCE_REVISION), 17)
+        self.assertNotIn("2026-07-30.24", ddl)
+        self.assertIn("length(selected_business_rows_json)\n                    BETWEEN 2 AND __MAX_PLAN_SELECTED_BYTES__", ddl)
+        self.assertIn("CHECK (work_units BETWEEN 1 AND __MAX_PLAN_WORK_UNITS__)", ddl)
+        self.assertIn('str(authority_contract.MAX_PLAN_SELECTED_BYTES)', ddl)
+        self.assertIn('str(authority_contract.MAX_PLAN_WORK_UNITS)', ddl)
+        self.assertIn("CHECK (exact_request_byte_count BETWEEN 2 AND 4194304)", ddl)
+        installed = ast.get_source_segment(source, functions["install_authority_v9_executor"])
+        loaded = installed.index("{load_root_transition_sql(namespace)}")
+        guarded = installed.index("PERFORM {namespace}.{AUDIT_CAPACITY_FUNCTION_NAME}(")
+        replay = installed.index("IF capability.status = 'committed' THEN")
+        self.assertLess(loaded, guarded)
+        self.assertLess(guarded, replay)
+        self.assertIn("planner.selected_business_rows_json::pg_catalog.jsonb", installed[guarded:replay])
+        self.assertIn("planner.mutation_plan_json::pg_catalog.jsonb", installed[guarded:replay])
+        self.assertIn("planner.work_units", installed[guarded:replay])
+        for name, dml in (("reserve_authority_planner_transaction", "INSERT INTO serverware_metadata."),
+                          ("complete_authority_planner_transaction", "UPDATE serverware_metadata.")):
+            method = ast.get_source_segment(source, functions[name])
+            self.assertEqual(method.count("authority_audit_capacity.validate_capacity_transition("), 1)
+            self.assertEqual(method.count("authority_audit_capacity.validate_transition_work_units("), 1)
+            self.assertEqual(method.count("{AUDIT_CAPACITY_FUNCTION_NAME}(%s,%s::jsonb,%s::jsonb,%s)"), 1)
+            self.assertLess(method.index("authority_audit_capacity.validate_capacity_transition("),
+                            method.index("{AUDIT_CAPACITY_FUNCTION_NAME}(%s"))
+            self.assertLess(method.index("{AUDIT_CAPACITY_FUNCTION_NAME}(%s"), method.index(dml))
 
     def test_selected_source_keys_presence_and_uniqueness_are_explicit(self):
         for guard in (
@@ -180,10 +249,30 @@ class GlobalAuditCapacitySqlSourceTests(unittest.TestCase):
         self.assertLess(self.sql.index("operation lacks the source counter contract"), self.sql.index("FOR ac_selection IN"))
         self.assertLess(self.sql.index("participating operation lacks global selection"), self.sql.index("FOR ac_mutation IN"))
         self.assertIn("nonparticipant selected the reserved global row", self.sql)
+        self.assertIn("ac_selection->'contractSelector' IS DISTINCT FROM 'null'::pg_catalog.jsonb", self.sql)
         self.assertIn("(ac_outbox_count = 0 AND ac_counter_count <> 0)", self.sql)
         self.assertIn("(ac_outbox_count > 0 AND ac_counter_count <> 1)", self.sql)
         self.assertIn("ELSE pg_catalog.jsonb_build_array(ac_before) END", self.sql)
         self.assertLess(self.sql.index("global profile is invalid"), self.sql.index("IF ac_outbox_count > 0 THEN"))
+
+    def test_business_budgets_exclude_only_the_exact_framework_global_records(self):
+        self.assertIn("- CASE WHEN ac_global_selection IS NULL THEN 0 ELSE 1 END", self.sql)
+        self.assertIn("pg_catalog.jsonb_array_length(ac_mutations) - ac_counter_count", self.sql)
+        self.assertIn("(ac_spec->>'maximumBusinessQueryRows')::bigint", self.sql)
+        self.assertIn("(ac_spec->>'maximumBusinessMutations')::bigint", self.sql)
+        self.assertLess(self.sql.index("global selection is crossed or absent"), self.sql.index("business selected row bound is exceeded"))
+        self.assertLess(self.sql.index("global mutation is crossed or bootstrapped"), self.sql.index("business mutation bound is exceeded"))
+        self.assertIn("ac_work_units IS NULL", self.sql)
+        self.assertIn("ac_work_units NOT BETWEEN 1 + ac_framework_work", self.sql)
+        self.assertIn("(ac_spec->>'maximumBusinessWorkUnits')::bigint + ac_framework_work", self.sql)
+        self.assertIn("CASE WHEN ac_outbox_count > 0 THEN 1 ELSE 0 END", self.sql)
+        self.assertRegex(self.sql, r"ac_selected, 128, 1000000,\s+4202496, FALSE")
+        self.assertRegex(self.sql, r"ac_global_selection, 128, 1000000,\s+8192, FALSE")
+        self.assertRegex(self.sql, r"ac_business_selected, 128, 1000000,\s+4194304, FALSE")
+        self.assertIn("WHERE NOT (item.value->>'table' = 'policy_authority_bounded_aggregate_states'", self.sql)
+        self.assertIn("item.value->'key' = pg_catalog.jsonb_build_object('aggregate_id', ac_id)", self.sql)
+        self.assertLess(self.sql.index("nonparticipant selected the reserved global row"),
+                        self.sql.index("INTO ac_business_selected"))
 
     def test_global_counter_aliases_and_bootstrap_are_rejected(self):
         for field in ("aggregate_id", "aggregate_kind", "partition_digest"):

@@ -9,7 +9,6 @@ from typing import Any, Mapping
 
 from serverware import authority_contract
 from serverware import authority_transition_core as core
-from serverware.audit_outbox_contract import MAX_PENDING
 
 
 _TRUST_ERROR_FIELDS = frozenset({"publication_id", "error"})
@@ -314,25 +313,13 @@ _ACTIVATION_PREPARATION_INPUT_FIELDS = frozenset(
         "decisionGateEvidenceDigest",
     }
 )
-_AUDIT_CAPACITY_KIND = "metadata-audit-outbox-capacity"
-_AUDIT_CAPACITY_PARTITION_DIGEST = core.framed_digest(
-    "serverware.policyAuthorityAggregatePartition/v1",
-    b"metadata-audit-outbox",
-)
-_AUDIT_CAPACITY_ID = (
-    f"{_AUDIT_CAPACITY_KIND}:{_AUDIT_CAPACITY_PARTITION_DIGEST}"
-)
-_AUDIT_CAPACITY_CHARGES = MappingProxyType(
+_AUDIT_EVENT_COUNTS = MappingProxyType(
     {
         "policy.activation.prepare": 7,
         "policy.genesis.prepare": 1,
         "rbac.binding.mutate": 1,
         "policy.activation.abort": 1,
     }
-)
-_EMPTY_EXPIRY_ROOT = core.framed_digest(
-    "serverware.policyAuthorityAggregateExpiryIndex/v1",
-    core.canonical_bytes([]),
 )
 _VALID_RBAC_ROLES = frozenset(
     {
@@ -1157,93 +1144,40 @@ def _audit_stage(
     }
 
 
-def _aggregate_mutation(
-    context: core.KernelContext,
-    *,
-    operation_id: str,
-    live_delta: int,
-) -> dict[str, Any]:
-    aggregate = context.bounded_aggregate(
-        aggregate_id=_AUDIT_CAPACITY_ID,
-        aggregate_kind=_AUDIT_CAPACITY_KIND,
-        partition_digest=_AUDIT_CAPACITY_PARTITION_DIGEST,
-    )
-    if (
-        type(aggregate["capacity_limit"]) is not int
-        or aggregate["capacity_limit"] != MAX_PENDING
-    ):
-        raise core.TransitionKernelError(
-            "audit capacity limit differs from the source contract"
-        )
-    if (
-        type(live_delta) is not int
-        or live_delta != _AUDIT_CAPACITY_CHARGES.get(context.operation)
-        or type(operation_id) is not str
-        or operation_id != _operation_id(
-            context.operation, context.request_digest
-        )
-    ):
-        raise core.TransitionKernelError(
-            "audit capacity charge differs from the source operation"
-        )
-    reserved = _mapping_json(
-        aggregate["reserved_units_json"],
-        "audit capacity reserved units",
-    )
-    committed = _mapping_json(
-        aggregate["committed_units_json"],
-        "audit capacity committed units",
-    )
-    if operation_id in committed or operation_id in reserved:
-        raise core.TransitionKernelError(
-            "audit capacity reservation identity was reused"
-        )
-    committed[operation_id] = live_delta
-    return context.update_bounded_aggregate(
-        aggregate_id=_AUDIT_CAPACITY_ID,
-        aggregate_kind=_AUDIT_CAPACITY_KIND,
-        partition_digest=_AUDIT_CAPACITY_PARTITION_DIGEST,
-        live_delta=live_delta,
-        active_delta=live_delta,
-        reserved_units=reserved,
-        committed_units=committed,
-        next_sequence_delta=live_delta,
-        minimum_expiry_epoch_ns=aggregate.get(
-            "minimum_expiry_epoch_ns"
-        ),
-        expiry_index_root_digest=(
-            aggregate.get("expiry_index_root_digest")
-            or _EMPTY_EXPIRY_ROOT
-        ),
-        work_page_id=aggregate.get("work_page_id"),
-    )
-
-
-def _audit_capacity_mutations(
+def _fresh_audit_mutations(
     context: core.KernelContext,
     *,
     operation_id: str,
     outbox_rows: tuple[Mapping[str, Any], ...],
 ) -> tuple[dict[str, Any], ...]:
-    """Return one capacity update together with the fresh INSERTs it counts.
+    """Construct the fixed fresh audit INSERTs; the planner owns their count.
 
     Only fresh branches use this helper. Whole-operation replay is checked by
     each kernel before calling it; partial/orphan audit identity reuse is not
-    an insert and must not be charged or turned back into a pending audit.
+    an insert and must not be turned back into a pending audit. No kernel-local
+    audit counter is selected or updated here. The shared planner must derive
+    the global counter CAS from the complete business mutation list.
     """
     if (
         type(outbox_rows) is not tuple
-        or len(outbox_rows) != _AUDIT_CAPACITY_CHARGES.get(context.operation)
+        or len(outbox_rows) != _AUDIT_EVENT_COUNTS.get(context.operation)
     ):
         raise core.TransitionKernelError(
-            "audit capacity records differ from the source operation"
+            "audit records differ from the source operation"
+        )
+    if (
+        type(operation_id) is not str
+        or operation_id != _operation_id(context.operation, context.request_digest)
+    ):
+        raise core.TransitionKernelError(
+            "audit event identity differs from the source operation"
         )
     identities: set[str] = set()
     inserts: list[dict[str, Any]] = []
     for row in outbox_rows:
         if not isinstance(row, Mapping):
             raise core.TransitionKernelError(
-                "audit capacity records differ from the source operation"
+                "audit records differ from the source operation"
             )
         identity = row.get("id")
         if (
@@ -1252,10 +1186,11 @@ def _audit_capacity_mutations(
             or len(identity) > 256
             or not identity.isascii()
             or identity in identities
-            or row.get("status") != "pending"
+            or type(row.get("status")) is not str
+            or row["status"] != "pending"
         ):
             raise core.TransitionKernelError(
-                "audit capacity records differ from the source operation"
+                "audit records differ from the source operation"
             )
         identities.add(identity)
         selected = context.exact("metadata_audit_outbox", {"id": identity})
@@ -1274,14 +1209,7 @@ def _audit_capacity_mutations(
                 row=row,
             )
         )
-    return (
-        _aggregate_mutation(
-            context,
-            operation_id=operation_id,
-            live_delta=len(inserts),
-        ),
-        *inserts,
-    )
+    return tuple(inserts)
 
 
 def _activation_prepare_arguments(
@@ -1716,7 +1644,8 @@ def _activation_stages(
 class _PolicyActivationPrepareKernel:
     operation: str = "policy.activation.prepare"
     handler: str = "serverware_policy_authority_prepare"
-    permits_empty_mutation: bool = False
+    # The verified existing-preparation replay returns no business mutations.
+    permits_empty_mutation: bool = True
     program_id: str = core.transition_program_id(
         "policy.activation.prepare",
         "serverware_policy_authority_prepare",
@@ -1839,12 +1768,6 @@ class _PolicyActivationPrepareKernel:
                 name="policy_high_water",
                 table="policy_high_water",
                 key={"scope": "active"},
-            ),
-            _exact_query(
-                operation=self.operation,
-                name="audit_capacity",
-                table="policy_authority_bounded_aggregate_states",
-                key={"aggregate_id": _AUDIT_CAPACITY_ID},
             ),
         ]
         for index, member in enumerate(members, start=1):
@@ -2303,7 +2226,7 @@ class _PolicyActivationPrepareKernel:
                 )["binding_digest"],
                 operation_id=operation_id,
             ),
-            *_audit_capacity_mutations(
+            *_fresh_audit_mutations(
                 context,
                 operation_id=operation_id,
                 outbox_rows=tuple(stage["outbox"] for stage in stages),
@@ -4505,12 +4428,6 @@ class _PolicyGenesisPrepareKernel:
             ),
             _exact_query(
                 operation=self.operation,
-                name="audit_capacity",
-                table="policy_authority_bounded_aggregate_states",
-                key={"aggregate_id": _AUDIT_CAPACITY_ID},
-            ),
-            _exact_query(
-                operation=self.operation,
                 name="genesis_outbox",
                 table="metadata_audit_outbox",
                 key={"id": stage["outbox"]["id"]},
@@ -4646,7 +4563,7 @@ class _PolicyGenesisPrepareKernel:
                     binding_digest=binding_digest,
                     operation_id=operation_id,
                 ),
-                *_audit_capacity_mutations(
+                *_fresh_audit_mutations(
                     context,
                     operation_id=operation_id,
                     outbox_rows=(stage["outbox"],),
@@ -5219,12 +5136,6 @@ class _RbacBindingMutateKernel:
             ),
             _exact_query(
                 operation=self.operation,
-                name="audit_capacity",
-                table="policy_authority_bounded_aggregate_states",
-                key={"aggregate_id": _AUDIT_CAPACITY_ID},
-            ),
-            _exact_query(
-                operation=self.operation,
                 name="rbac_outbox",
                 table="metadata_audit_outbox",
                 key={"id": stage["outbox"]["id"]},
@@ -5404,7 +5315,7 @@ class _RbacBindingMutateKernel:
         )
         return core.KernelTransition(
             mutations=(
-                *_audit_capacity_mutations(
+                *_fresh_audit_mutations(
                     context,
                     operation_id=operation_id,
                     outbox_rows=(stage["outbox"],),
@@ -5585,12 +5496,6 @@ class _PolicyActivationAbortKernel:
             ),
             _exact_query(
                 operation=self.operation,
-                name="audit_capacity",
-                table="policy_authority_bounded_aggregate_states",
-                key={"aggregate_id": _AUDIT_CAPACITY_ID},
-            ),
-            _exact_query(
-                operation=self.operation,
                 name="abort_outbox",
                 table="metadata_audit_outbox",
                 key={"id": stage["outbox"]["id"]},
@@ -5722,7 +5627,7 @@ class _PolicyActivationAbortKernel:
             "finalized_at_epoch_ns": aborted_at_epoch_ns,
         }
         mutations = (
-            *_audit_capacity_mutations(
+            *_fresh_audit_mutations(
                 context,
                 operation_id=_operation_id(
                     self.operation,

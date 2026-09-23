@@ -108,16 +108,16 @@ under writer exclusion and independent admission; it must not bless whatever
 rows an existing database returns. A changed manifest requires a reviewed
 migration, not automatic repair of an accepted database.
 
-The [policy audit-capacity component](authority-audit-capacity.md) now shares
-the existing fixed limit and binds four policy writers' charges to actual fresh
-INSERTs. It does not supply this global count proof: the quota helper uses a
-different aggregate identity, legacy writers use a direct COUNT, and delivery
-does not decrement the policy aggregate. A complete all-writer transition is
-still required; the nominal row limit is not proof of the maintained population.
+The [audit-capacity integration](authority-audit-capacity.md) now shares the
+fixed limit and applies global OLD/NEW accounting at common planner/executor
+boundaries. Old policy/quota counters have been removed, but authenticated
+initialization and general receipt-bound PostgreSQL delivery remain missing.
+Legacy SQLite still uses a locked COUNT. A nominal limit and source wiring do
+not prove a maintained population.
 The [global capacity implementation contract](authority-global-audit-capacity-design.md)
-records the prepared compact-counter validators, the nineteen-operation scope,
-and the coordinated bounds, initialization and delivery changes still needed.
-No current workflow is admitted merely by the presence of those components.
+records the compact validators, nineteen-operation scope and coordinated
+business/framework bounds. No workflow is admitted without the required
+baseline, evidence and complete business kernel.
 
 ## Root authority, time and whole-operation bounds
 
@@ -226,11 +226,11 @@ advancement must be a planned mutation before after-roots are computed, not
 the disabled legacy post-root side effect. Proof/capacity inputs remain
 necessary even if only four business-row mutations are involved.
 
-The reserved completion declaration already allocates its four selected rows
-and mutations to publication, high-water, audit and external evidence. A
-maintained capacity aggregate would add another row/mutation and require its
-relation and proof primitive, or an explicitly reviewed counted-index design.
-That contract change cannot be hidden in a nominal four-mutation implementation.
+Completion's four business rows/mutations remain allocated to publication,
+high-water, audit and external evidence. Source `.25` explicitly grants one
+additional selected aggregate row and counter mutation, its UPDATE/proof
+permission and actual framework work allowance: total 5 / 5 / 130. This does
+not implement the missing completion kernel, initializer or evidence authority.
 
 Keep the digest meanings distinct: `bundleDigest` commits the unsigned bundle;
 `payloadDigest` commits the approved control-plane mutation payload, not just

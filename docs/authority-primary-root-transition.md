@@ -9,7 +9,7 @@ none of these component fixtures is production or full-operation evidence.
 The measured planner emits mandatory `rootTransition` in PlannerResponse/v3 and
 `rootTransitionDigest` in MeasuredPlan/v3. SignedMeasuredPlan also moves to v3.
 The closed `serverware.policyAuthorityPrimaryRootTransition/v1` object contains
-the fixed `serverware.policyAuthorityPrimaryRootTransitionProfile/v1` identifier,
+the fixed `serverware.policyAuthorityPrimaryRootTransitionProfile/v2` identifier,
 complete ordered business and authorization before/after root vectors, and
 strict integer work metrics. Each root includes table, revision, digest and
 leaf count. Snapshot/v3 appends the transition digest as its ninth frame. The
@@ -68,15 +68,18 @@ must cover selected authorization rows as well as business rows.
 
 ## Work and evidence boundaries
 
-The separate fixed primary-root work profile allows at most 256 selected proofs,
-512 declared mutations (unique selected keys impose a tighter effective bound),
-16,384 proof vectors, 262,144 child slots, 34,882 charged hashes, 64 MiB normalized
+The separate fixed primary-root work profile v2 allows at most 257 selected proofs,
+513 declared mutations (unique selected keys impose a tighter effective bound),
+16,448 proof vectors, 263,168 child slots, 35,018 charged hashes, 64 MiB normalized
 input, JSON depth 128 and 1,000,000 JSON nodes. Each proof carries all 16 child
 slots per level. Cold empty hashes are conservatively charged even when cached.
 These metrics describe a single evaluator invocation, not total process memory,
 wall time, SQL I/O, transport-envelope size, or the older transition `workUnits`.
-All existing operation, transport, trace, deadline and transition-work limits
-remain independently enforced.
+The old v1 profile is rejected, not reinterpreted. Source revision `.25` keeps
+the original business limits while assigning the additional row/mutation to the
+exact global audit counter. [Capacity admission](authority-global-audit-capacity-design.md)
+separately enforces that partition. Relational-root inventory remains 256;
+transport, trace, deadline and transition-work limits remain independent.
 
 Authored fixtures cover independent whole-tree rebuilds, shared-prefix batches,
 source-key closure, counter/count semantics, strict lifecycle and wire negatives,

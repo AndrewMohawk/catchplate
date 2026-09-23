@@ -266,7 +266,7 @@ class AuthorityRootTransitionTests(unittest.TestCase):
         self.assertEqual(verify(result, arguments), result)
         limits = transition.metric_bounds()
         limits["hashWork"] = 0
-        self.assertEqual(transition.metric_bounds()["hashWork"], 34882)
+        self.assertEqual(transition.metric_bounds()["hashWork"], 35018)
 
     def test_actual_authorization_sources_bind_present_and_absent_primary_rows(self) -> None:
         arguments, _ = fixture(CHALLENGE)
@@ -289,6 +289,18 @@ class AuthorityRootTransitionTests(unittest.TestCase):
             self.assertNotIn("authenticatedRelation", source["selector"])
         self.assertEqual(transition.derive_authorization_sources(operation=COUNTER,
                                                                selected_rows=self.arguments["selected_rows"]), [])
+
+    def test_framework_allowance_requires_new_profile_without_changing_business_caps(self) -> None:
+        self.assertEqual(transition.TRANSITION_PROFILE,
+                         "serverware.policyAuthorityPrimaryRootTransitionProfile/v2")
+        bounds = transition.metric_bounds()
+        self.assertEqual((bounds["selectedRows"], bounds["mutations"], bounds["proofVectors"],
+                          bounds["proofChildSlots"], bounds["hashWork"]), (257, 513, 16448, 263168, 35018))
+        self.assertEqual((authority_contract.MAX_QUERY_PROOFS, authority_contract.MAX_MUTATIONS), (256, 512))
+        result = transition.derive_primary_root_transition(**self.arguments)
+        result["profile"] = "serverware.policyAuthorityPrimaryRootTransitionProfile/v1"
+        with self.assertRaisesRegex(PrimaryRadixMutationError, "profile is not closed"):
+            transition.validate_primary_root_transition(result)
 
     def test_authorization_query_coverage_is_separate_and_fail_closed(self) -> None:
         arguments, _ = fixture(CHALLENGE)

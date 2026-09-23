@@ -229,6 +229,11 @@ class GlobalAuditCapacityTests(unittest.TestCase):
                 capacity.finalize_capacity(invalid, ())
             with self.assertRaisesRegex(capacity.AuditCapacityError, "before row"):
                 verify(invalid, ())
+        for selector in ("caller-selector", "x" * 8192):
+            selections = copy.deepcopy(context.selected_rows)
+            selections[0]["contractSelector"] = selector
+            with self.assertRaisesRegex(capacity.AuditCapacityError, "before row is not exact"):
+                verify(replace(context, selected_rows=selections), ())
 
     def test_missing_extra_duplicate_and_kernel_supplied_counter_reject(self):
         context, changes = fixture([(None, outbox_row())])
@@ -406,6 +411,72 @@ class GlobalAuditCapacityTests(unittest.TestCase):
         verify(unrelated, ())
         with self.assertRaises(capacity.AuditCapacityError):
             verify(replace(context, operation="webauthn.counter.cas"), ())
+
+    def test_named_query_allowance_replaces_old_slot_or_adds_only_one(self):
+        def business_queries(operation, count):
+            return tuple(core.BoundedQuery(
+                query_id=core.query_program_id(operation, f"business_{index}", OUTBOX),
+                table=OUTBOX, predicates=(core.QueryPredicate("id", "eq", f"audit-{index}"),),
+                order_by=(core.QueryOrder("id"),), maximum_rows=1,
+                absent_key={"id": f"audit-{index}"},
+            ) for index in range(count))
+
+        for operation, business_maximum, total in (
+                (OPERATION, 255, 256), ("webauthn.registration.create", 256, 257)):
+            with self.subTest(operation=operation):
+                spec = authority_contract.operation_spec(operation)
+                self.assertEqual(spec["maximumBusinessQueryRows"], business_maximum)
+                queries = business_queries(operation, business_maximum)
+                composed = capacity.add_capacity_query(operation, queries)
+                self.assertEqual(len(composed), total)
+                self.assertEqual(composed[:-1], queries)
+                with self.assertRaisesRegex(capacity.AuditCapacityError, "business bound"):
+                    capacity.add_capacity_query(operation, business_queries(operation, business_maximum + 1))
+
+    def test_framework_mutation_slot_cannot_subsidize_extra_business_changes(self):
+        operation = "rbac.binding.mutate"
+        spec = authority_contract.operation_spec(operation)
+        self.assertEqual((spec["maximumBusinessQueryRows"], spec["maximumBusinessMutations"]), (5, 4))
+        context, changes = fixture([(None, outbox_row(f"audit-{i}")) for i in range(5)], operation=operation)
+        self.assertEqual(len(context.selected_rows), spec["maximumQueryRows"])
+        self.assertEqual(len(changes), spec["maximumMutations"])
+        # Fits the total mutation cap only by stealing the reserved counter slot.
+        with self.assertRaisesRegex(capacity.AuditCapacityError, "business bound"):
+            capacity.finalize_capacity(context, changes)
+        with self.assertRaisesRegex(capacity.AuditCapacityError, "business bound"):
+            verify(context, changes)
+
+    def test_selected_byte_allowance_belongs_only_to_the_counter(self):
+        context, _ = fixture([])
+        row = outbox_row(padding="")
+        choice = selected(OUTBOX, {"id": row["id"]}, row)
+        choice["row"]["padding"] = "x" * (authority_contract.MAX_REQUEST_BYTES - len(canonical([choice])))
+        selections = (*context.selected_rows, choice)
+        self.assertEqual(len(canonical([choice])), authority_contract.MAX_REQUEST_BYTES)
+        self.assertLess(len(canonical(list(selections))), authority_contract.MAX_PLAN_SELECTED_BYTES)
+        verify(replace(context, selected_rows=selections), ())
+        choice["row"]["padding"] += "x"
+        with self.assertRaisesRegex(capacity.AuditCapacityError, "business bound"):
+            verify(replace(context, selected_rows=selections), ())
+
+    def test_work_charges_actual_query_and_counter_without_giving_noop_a_write_slot(self):
+        context, changes = fixture([(None, outbox_row())])
+        mutations = capacity.finalize_capacity(context, changes)
+        business_maximum = authority_contract.operation_spec(OPERATION)["maximumBusinessWorkUnits"]
+        self.assertEqual(capacity.transition_work_units(OPERATION, 1, 1, mutations), 3)
+        self.assertEqual(capacity.transition_work_units(OPERATION, 1, business_maximum, mutations), business_maximum + 2)
+        self.assertEqual(capacity.transition_work_units(OPERATION, 1, business_maximum, ()), business_maximum + 1)
+        for work in (True, False, "3", 0, 1, 2, business_maximum + 3):
+            with self.subTest(work=work), self.assertRaises(capacity.AuditCapacityError):
+                capacity.validate_transition_work_units(OPERATION, work, mutations)
+        with self.assertRaises(capacity.AuditCapacityError):
+            capacity.validate_transition_work_units(OPERATION, business_maximum + 2, ())
+        for query, kernel in ((0, 1), (True, 1), (1, True), (1, 0), (2, business_maximum)):
+            with self.subTest(query=query, kernel=kernel), self.assertRaises(capacity.AuditCapacityError):
+                capacity.transition_work_units(OPERATION, query, kernel, mutations)
+        self.assertEqual(capacity.transition_work_units("webauthn.counter.cas", 0, 1, ()), 1)
+        with self.assertRaises(capacity.AuditCapacityError):
+            capacity.validate_transition_work_units("webauthn.counter.cas", 3, mutations)
 
 
 if __name__ == "__main__":

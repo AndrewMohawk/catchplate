@@ -1,19 +1,22 @@
 # Global audit capacity: coordinated implementation contract
 
-Status: implementation in progress, not an admitted migration or enabled
-production invariant. The `de99011` checkpoint repairs four policy writers but
-does not provide this global counter. No current build or execution evidence
-exists for this work. Keep the full startup and production gates closed.
+Status: common planner/executor integration is implemented in source, unbuilt
+and unexecuted. No admitted counter initialization, receipt-bound delivery,
+migration or production invariant is established. Keep startup and production
+gates closed; a missing global baseline denies every participating operation.
 
-The prepared components are `serverware/authority_audit_capacity.py` (pure
-query composition, mutation finalization and independent validation) and
+The components are `serverware/authority_audit_capacity.py` (pure
+query composition, mutation finalization and independent validation),
+`serverware/authority_audit_trace.py` (separate exact framework trace accounting), and
 `serverware/authority_store/audit_capacity_sql.py` (an independent pre-DML SQL
-assertion renderer). They are not yet connected to the production planner,
-reservation adapter, executor or installed function inventory. Their existence
-does not supersede the live four-writer repair or initialize a shared counter.
+assertion renderer). They are connected to the common typed planner, measured
+payload admission, reservation/completion adapters, SQL executor and source
+function/ACL inventory. The SQL assertion takes `(text,jsonb,jsonb,bigint)`;
+the planner role receives only its five exact read-only invoker dependencies,
+not business DML. Source revisions and installed manifests require a reviewed
+transition, not automatic repair of an accepted database.
 
-There are 17 authored pure component methods, 13 source/rendering methods and
-23 native PostgreSQL component methods. Source review compares independent
+Authored pure, native and source-linkage fixtures compare independent
 state/key framing and real operation templates; no test has executed. The
 Python component excludes NUL and unpaired surrogates before serialization,
 matching PostgreSQL's representable string boundary. SQL JSONB has already
@@ -53,16 +56,16 @@ The nineteen declarations are `policy.activation.prepare`,
 `webauthn.registration.finalize` and `webauthn.credential.revoke`. This list is a
 review inventory, not a substitute for the source write-permission predicate.
 
-Current policy and quota counters have different keys and partition digest
-domains. Legacy staging uses a locked SQL COUNT. No admitted initializer
-produces either scalar: the v8-to-v9 migration requires the aggregate table
+The removed policy and quota counters had different keys and partition digest
+domains. Legacy staging still uses a locked SQL COUNT. No admitted initializer
+produces the new scalar: the v8-to-v9 migration requires the aggregate table
 empty, while ordinary aggregate mutation templates permit UPDATE only. The
 phase-2 backfill specification is declarative and incorrectly describes the
 audit limit as configuration-owned. Summing old counters, renaming one, or
 inserting zero on a missing row would not establish the actual population.
 
-Policy's per-operation commitment map also grows for the lifetime of the
-counter. A one-event entry uses 76 bytes plus the enclosing map, so 55,189 such
+The removed policy counter's per-operation commitment map grew for its lifetime.
+A one-event entry uses 76 bytes plus the enclosing map, so 55,189 such
 entries already exceed its 4 MiB map limit, before reaching 100,000 pending
 events. The encompassing state JSON repeats this map and has its own 4 MiB SQL
 bound. Selected rows additionally face a 4 MiB envelope limit. A global count
@@ -113,32 +116,40 @@ DELETE. An empty exact replay must remain an empty mutation plan.
 Append exactly one compact-counter UPDATE when there are outbox mutations and
 none otherwise. Include its selected row, full-row CAS, mutation template,
 query/mutation/work/byte costs and computed after-root in the existing signed
-plan. Remove per-kernel counter mutations/queries rather than charging twice.
-Independently rederive the relationship at measured-plan validation,
-planner-writer reservation and SQL executor admission before business DML.
+plan. The twelve existing emitters no longer select or update their old audit
+counters; fresh-event identity and replay guards remain. Activation preparation
+now declares the empty replay its consumed-evidence-checked branch already
+returns. The relationship is independently checked at measured-plan validation,
+planner-writer reservation/completion and SQL executor admission before business DML.
 Do not add a hidden maintenance trigger: its unplanned row/root revisions
 would escape the signed predicted transition.
 
 ## Bounds and version closure
 
-Changing this shared contract needs a coordinated source/measurement and
-installed-manifest transition, not a helper-only edit. Preserve the original
-business allowance when adding framework accounting; reclaim old counter
-query/mutation slots where they existed. Default operations already reach the
-global 256-query/512-mutation ceilings, so a blanket increment cannot pass the
-old profile. Any additional framework allowance must be named, bounded and
-carried through a new primary-root work profile, Python admission, generated
-SQL constraints and source inventories. Do not silently truncate the business
-set to make a test fit.
+Source revision `.25` and primary-root work profile `/v2` make the change
+explicit. The original business ceilings remain 256 rows, 512 mutations and
+16,384 work units; twelve reviewed operations reclaim one old query/mutation
+slot. Final-plan ceilings are 257/513/16,386, but only the exact counter address
+may consume the additional row/mutation. One composed query work unit is always
+charged for participants, and one counter-mutation unit only when outbox rows
+change. Empty replay cannot borrow the mutation unit. Generic aggregate,
+single-query, challenge and selector limits are unchanged.
 
-The planner table currently limits work to 4,096 although source operations can
-declare 16,384. Its selected-row envelope also has a separate 4 MiB limit in
-both DDL and the Python reservation adapter. Correct those specific persisted
-bounds as part of the reviewed framework allowance; raw request/challenge
-limits are not permission to raise unrelated transport or secret-input caps.
-New modules must enter the signed v9 import closure, not merely image COPY.
+The selected business array remains capped at 4 MiB. Only the exact global
+selection may use the extra 8 KiB envelope allowance; its row is at most 4096
+bytes and `contractSelector` must be null. Both Python and SQL enforce the
+separate business and total byte bounds. The planner DDL now admits the named
+16,386 final work limit rather than the old inconsistent 4,096; raw requests
+remain at 4 MiB. The 64 MiB composite plan/transport cap remains a separate
+constraint: this is not a guarantee that every individual maximum fits at once.
 
-The next integrated batch has these concrete seams:
+Trace accounting retains 4096 business entries and grants only exact framework
+identities: scan, row, leaf, 64 contiguous proof-node reads, a write when present,
+and a root read only for the four source-declared new aggregate dependencies.
+Shared-prefix reads for other proofs remain business-charged. The absolute
+trace ceiling is 4165; no-op and shared-root cases receive less allowance.
+
+The integration has these concrete seams:
 
 1. `authority_contract.py`: explicitly grant the four WebAuthn participants the
    aggregate UPDATE and proof primitive, close business versus framework
@@ -165,11 +176,11 @@ The next integrated batch has these concrete seams:
    locks, full-row CAS and after-root comparisons. No caller-selected deltas or
    new planner payload fields are needed.
 
-The current components still enforce the existing operation maxima; they do
-not yet grant that extra framework allowance. Activating the hooks alone would
-deny the four permission-incomplete WebAuthn declarations and every participant
-without an admitted baseline. The coordinated changes and baseline/delivery
-producers below are required before this can become a working global invariant.
+The four WebAuthn participants now declare the aggregate UPDATE/proof permission;
+this does not implement their missing business kernels. Final source packaging
+and measured import-root hashes must include all new modules. Existing imported
+closure artifacts are not evidence for the changed tree. Baseline and delivery
+producers below remain required before this becomes a working global invariant.
 
 ## Delivery and initial authority are separate required producers
 

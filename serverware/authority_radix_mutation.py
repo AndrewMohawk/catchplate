@@ -25,12 +25,12 @@ _DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _I64_MAX = 2**63 - 1
 _DEPTH = authority_contract.TREE_DEPTH
 _RADIX = authority_contract.TREE_RADIX
-_MAX_VECTORS = authority_contract.MAX_QUERY_PROOFS * _DEPTH
+_MAX_VECTORS = authority_contract.MAX_PLAN_QUERY_ROWS * _DEPTH
 _MAX_CHILD_SLOTS = _MAX_VECTORS * _RADIX
 # Conservative cold-cache allowance: empty_digest(0) hashes 65 nodes, and
 # empty_digest(64) hashes one leaf. Cache hits do not reduce this charged work.
 _EMPTY_HASH_WORK = _DEPTH + 2
-_MAX_HASH_WORK = _EMPTY_HASH_WORK + authority_contract.MAX_QUERY_PROOFS * (2 * _DEPTH + 8)
+_MAX_HASH_WORK = _EMPTY_HASH_WORK + authority_contract.MAX_PLAN_QUERY_ROWS * (2 * _DEPTH + 8)
 _SELECTED_FIELDS = frozenset({"table", "key", "keyDigest", "present", "row", "contractSelector"})
 _MUTATION_FIELDS = frozenset({"templateId", "operation", "table", "key", "keyDigest", "expectedRow", "row"})
 
@@ -124,8 +124,8 @@ class PrimaryRadixLimits:
 
     def __post_init__(self) -> None:
         bounds = (
-            (self.max_selected_rows, authority_contract.MAX_QUERY_PROOFS),
-            (self.max_mutations, authority_contract.MAX_MUTATIONS),
+            (self.max_selected_rows, authority_contract.MAX_PLAN_QUERY_ROWS),
+            (self.max_mutations, authority_contract.MAX_PLAN_MUTATIONS),
             (self.max_proof_vectors, _MAX_VECTORS),
             (self.max_proof_child_slots, _MAX_CHILD_SLOTS),
             (self.max_hashes, _MAX_HASH_WORK),

@@ -101,10 +101,32 @@ def committed_schema_literals() -> str:
     if len(functions) != 1:
         raise AssertionError("v9 schema source function is not unique")
     returns = [node for node in functions[0].body if isinstance(node, ast.Return)]
-    if (len(returns) != 1 or not isinstance(returns[0].value, ast.Constant)
-            or type(returns[0].value.value) is not str):
+    if len(returns) != 1:
+        raise AssertionError("v9 schema source is not one closed return")
+    value = returns[0].value
+    # Only the two named final-plan limits may replace source-literal tokens.
+    # Inspect the exact AST; do not import, compile or evaluate the executor.
+    substitutions = (
+        ("__MAX_PLAN_WORK_UNITS__", "MAX_PLAN_WORK_UNITS", authority_contract.MAX_PLAN_WORK_UNITS),
+        ("__MAX_PLAN_SELECTED_BYTES__", "MAX_PLAN_SELECTED_BYTES", authority_contract.MAX_PLAN_SELECTED_BYTES),
+    )
+    for token, attribute, _ in substitutions:
+        if (not isinstance(value, ast.Call) or value.keywords or len(value.args) != 2
+                or not isinstance(value.func, ast.Attribute) or value.func.attr != "replace"
+                or not isinstance(value.args[0], ast.Constant) or value.args[0].value != token):
+            raise AssertionError("v9 schema budget substitution is not source exact")
+        expected = ast.parse(f"str(authority_contract.{attribute})", mode="eval").body
+        if ast.dump(value.args[1]) != ast.dump(expected):
+            raise AssertionError("v9 schema budget value is not source owned")
+        value = value.func.value
+    if not isinstance(value, ast.Constant) or type(value.value) is not str:
         raise AssertionError("v9 schema source is not a fixed literal")
-    return database_sql + "\n" + returns[0].value.value
+    executor_sql = value.value
+    for token, _, limit in substitutions:
+        if executor_sql.count(token) != 1:
+            raise AssertionError("v9 schema budget token is not unique")
+        executor_sql = executor_sql.replace(token, str(limit))
+    return database_sql + "\n" + executor_sql
 
 
 class AuthorityPrimaryContractTests(unittest.TestCase):

@@ -22,6 +22,10 @@ The [operation-bound write-transition document](authority-counted-root-transitio
 now invokes this evaluator once with source-owned contracts and packaging
 reserves, retaining its actual primary result and exact counted before/after
 heads. It remains write-effects-only, not full query/root-vector admission.
+The [complete read/write composer](authority-complete-read-write.md) separately
+uses this actual evaluator with the genuine complete-query phases and one
+shared budget, computing the full read/write union without accepting a prior
+successful result. It has no retained wire or planner/SQL authority yet.
 Separate [native SQL maintenance components](authority-counted-sql-maintenance.md)
 are also implemented as uninstalled source.
 

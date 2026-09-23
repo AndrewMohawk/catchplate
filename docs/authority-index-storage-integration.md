@@ -19,6 +19,12 @@ operation-declared primary-root inventory. Its shared limits and real joins do
 not yet compose write effects, install SQL acquisition or grant root/operation
 authority.
 
+The separate [complete read/write composition](authority-complete-read-write.md)
+now combines those genuine query phases with the actual indexed writer from one
+owned raw graph and shared budget. It computes the full read/write head union
+and preserves read-only after heads. Retained proof transport, SQL acquisition
+and the planner/executor protocol remain unactivated and unverified.
+
 The [all-profile mutation evaluator](authority-index-mutation.md) now also
 derives counted before/after roots from the actual primary engine's verified
 OLD/NEW snapshots. It fixes member-event revision semantics and shared component

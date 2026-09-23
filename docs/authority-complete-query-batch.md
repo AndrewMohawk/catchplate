@@ -114,12 +114,13 @@ the 192-plus-one exact framework slot and selected-envelope bounds. Exact
 private-ledger limits are not proof that a valid full batch reaches every
 maximum. Native-suite counts and execution deadlines are unchanged.
 
-A future full read/write entry point must own mutations and write frontiers in
-the same initial graph, invoke genuine query verification and the actual indexed
-write evaluator under one shared remaining budget, and bind their identical
-before descriptors. Its counted vector is the union of read heads and all fixed
-profiles of written tables; queried-only after heads remain byte-identical.
-It cannot accept this observation as proof that a caller already verified it.
+The [combined read/write entry point](authority-complete-read-write.md) now owns
+mutations and write frontiers in the same initial graph, invokes these genuine
+query phases and the actual indexed writer under one shared remaining budget,
+and binds their identical before descriptors. Its counted vector is the union
+of read heads and every fixed profile of written tables; queried-only after
+heads remain unchanged. It does not accept this observation as prior proof,
+produce a retained transition wire or activate the planner.
 
 Retained query transport, mutation-frontier acquisition, schema/ACL and all-writer
 maintenance, authenticated population, trusted cutoff/intent, audit-capacity and

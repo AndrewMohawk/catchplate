@@ -116,12 +116,14 @@ claim that a valid document reaches the 256 KiB ceiling or exercise a valid
 maximum-size 64 MiB proof batch. This pure suite does not change native suite
 counts, deadlines or production exclusions.
 
-Production needs the union of write heads and every source complete-query head,
-including empty-query and read-only dependencies. Shared heads must agree, and
-read-only after heads must equal their before heads. Retained raw query evidence
-must pass the actual range/primary join under a shared operation budget. Only
-then can an explicitly versioned protocol bind that full vector through
-planning, SQL before/after checks, receipts and independent current-root
+The separate [complete read/write composer](authority-complete-read-write.md)
+now computes the union of write heads and every source complete-query head,
+including empty-query and read-only dependencies. It uses one shared before
+descriptor per profile, preserves read-only after heads and invokes the actual
+query joins and indexed writer under a shared operation budget. It does not
+produce retained proof transport or expand this write-effects-only document.
+Production still needs an explicitly versioned protocol binding that full
+vector through planning, SQL before/after checks, receipts and independent current-root
 authority. The existing nine-frame Snapshot/v3 is not widened by this component.
 See the [storage integration contract](authority-index-storage-integration.md)
 for all-writer maintenance, schema/ACL admission and authenticated population.

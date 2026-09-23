@@ -208,10 +208,15 @@ def _raw_roots(values: Any) -> list[dict[str, Any]]:
     return result
 
 
-def _capture(*, ledger: _Ledger, operation, arguments, cutoff_us, queries,
-             business_before_roots, authorization_before_roots, selected_rows,
-             before_proofs, read_heads, query_frontiers) -> dict[str, Any]:
-    """No constructor/profile/hash call may precede the completed JSON copy."""
+def _raw_document(*, operation, arguments, cutoff_us, queries,
+                  business_before_roots, authorization_before_roots, selected_rows,
+                  before_proofs, read_heads, query_frontiers) -> dict[str, Any]:
+    """Normalize without hashing; the result still contains caller JSON aliases.
+
+    Only the completed _JSONCapture ownership pass admits this private value
+    to verification. The read/write composer extends this same document before
+    its one capture; the standalone document and accounting remain unchanged.
+    """
     if type(operation) is not str or operation != complete.OPERATION:
         raise CompleteQueryBatchError("complete query batch operation is not source admitted")
     spec = authority_contract.operation_spec(operation)
@@ -264,7 +269,12 @@ def _capture(*, ledger: _Ledger, operation, arguments, cutoff_us, queries,
         "selectedRows": list(selected_rows), "beforeProofs": list(before_proofs),
         "readHeads": raw_heads, "queryFrontiers": raw_frontiers,
     }
-    return _JSONCapture(ledger).visit(document)
+    return document
+
+
+def _capture(*, ledger: _Ledger, **inputs) -> dict[str, Any]:
+    """No constructor/profile/hash call may precede the completed JSON copy."""
+    return _JSONCapture(ledger).visit(_raw_document(**inputs))
 
 
 def _selected_envelopes(owned: dict[str, Any], ledger: _Ledger) -> tuple[int, int]:

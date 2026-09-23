@@ -172,6 +172,13 @@ unexecuted under the unchanged `goal.md` workflow.
 
 ## Purpose-specific signature consumer
 
+The [PostgreSQL preparation reader](authority-audit-initialization-postgres.md)
+now supplies actual snapshot rows and persisted proofs to the real preparation,
+under caller-owned transaction locks and explicit scan limits. It performs no
+counter INSERT or signature/one-use admission, and does not refresh an existing
+snapshot or establish independent root currentness. Its native fixture is
+authored but unexecuted.
+
 The [signed initialization evidence component](authority-audit-initialization-evidence.md)
 now authenticates a pinned checkpoint and separate authorization, compares
 independently supplied expected facts and explicit validity windows, internally

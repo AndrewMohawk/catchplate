@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from functools import lru_cache
 from typing import Any, Mapping
 
@@ -82,13 +83,45 @@ def empty_digest(depth: int) -> str:
     return digest
 
 
+def _database_text(value: Any, *, maximum_bytes: int, label: str) -> str:
+    """Reject SQL projection sentinels and malformed driver values explicitly."""
+    if type(value) is not str or not 0 < len(value) <= maximum_bytes:
+        raise RadixProofError(f"{label} is not bounded database text")
+    try:
+        if len(value.encode("utf-8")) > maximum_bytes:
+            raise RadixProofError(f"{label} is not bounded database text")
+    except UnicodeError as exc:
+        raise RadixProofError(f"{label} is not bounded database text") from exc
+    return value
+
+
+def _database_digest(value: Any, label: str) -> str:
+    digest = _database_text(value, maximum_bytes=71, label=label)
+    if len(digest) != 71 or not digest.startswith("sha256:") or any(
+        character not in "0123456789abcdef" for character in digest[7:]
+    ):
+        raise RadixProofError(f"{label} is not a canonical database digest")
+    return digest
+
+
 def derive_multiproofs(
     cursor: Any,
     *,
     selected_rows: tuple[dict[str, Any], ...],
     roots: tuple[dict[str, Any], ...],
     trace: Any,
+    namespace: str = "serverware_metadata",
 ) -> tuple[dict[str, Any], ...]:
+    """Read bounded persisted proof records from one validated SQL namespace.
+
+    CASE projections preserve a malformed row as a rejection sentinel instead
+    of filtering it into apparent nonmembership. The SQL projections bound text
+    before driver transport; the Python checks also reject malformed responders.
+    Root authenticity/currentness and transaction isolation remain caller duties.
+    """
+    if type(namespace) is not str or re.fullmatch(r"[a-z][a-z0-9_]{0,62}", namespace) is None:
+        raise RadixProofError("authenticated proof namespace is not a lowercase ASCII identifier")
+    quoted_namespace = f'"{namespace}"'
     root_by_table = {entry["table"]: entry for entry in roots}
     proofs: list[dict[str, Any]] = []
     for selected in selected_rows:
@@ -115,10 +148,28 @@ def derive_multiproofs(
         siblings: list[dict[str, Any]] = []
         trace.read("policy_authority_authenticated_leaves", {"tableName": table, "keyDigest": tree_key_digest})
         leaf = cursor.execute(
-            "SELECT key_json, row_digest, leaf_digest, root_revision "
-            "FROM serverware_metadata.policy_authority_authenticated_leaves "
+            "SELECT CASE WHEN pg_catalog.octet_length(key_json) BETWEEN 1 AND "
+            f"{authority_contract.MAX_RESULT_BYTES} THEN key_json ELSE NULL END AS key_json, "
+            "CASE WHEN pg_catalog.octet_length(row_digest) = 71 "
+            "THEN row_digest ELSE NULL END AS row_digest, "
+            "CASE WHEN pg_catalog.octet_length(leaf_digest) = 71 "
+            "THEN leaf_digest ELSE NULL END AS leaf_digest, root_revision "
+            f"FROM {quoted_namespace}.policy_authority_authenticated_leaves "
             "WHERE table_name = %s AND key_digest = %s", (table, tree_key_digest),
         ).fetchone()
+        if leaf is not None:
+            if not isinstance(leaf, Mapping):
+                raise RadixProofError("authenticated leaf is not a database record")
+            stored_key_json = _database_text(
+                leaf.get("key_json"), maximum_bytes=authority_contract.MAX_RESULT_BYTES,
+                label="authenticated leaf key JSON",
+            )
+            stored_row_digest = _database_digest(leaf.get("row_digest"), "authenticated leaf row digest")
+            stored_leaf_digest = _database_digest(leaf.get("leaf_digest"), "authenticated leaf digest")
+            try:
+                stored_key = json.loads(stored_key_json)
+            except (ValueError, RecursionError) as exc:
+                raise RadixProofError("authenticated leaf key JSON is malformed") from exc
         row_digest = (
             _tree_digest("serverware.policyAuthorityAuthenticatedRow/v1", table.encode("utf-8"), tree_json_bytes(selected["row"]))
             if selected["present"] else None
@@ -132,9 +183,9 @@ def derive_multiproofs(
         )
         if selected["present"]:
             if (
-                leaf is None or json.loads(str(leaf["key_json"])) != selected["key"]
-                or leaf["row_digest"] != row_digest or leaf["leaf_digest"] != leaf_digest
-                or type(leaf["root_revision"]) is not int
+                leaf is None or stored_key != selected["key"]
+                or stored_row_digest != row_digest or stored_leaf_digest != leaf_digest
+                or type(leaf.get("root_revision")) is not int
                 or not 0 < leaf["root_revision"] <= root["rootRevision"]
             ):
                 raise RadixProofError("selected row differs from its authenticated leaf")
@@ -147,8 +198,11 @@ def derive_multiproofs(
             })
             expected_paths = [prefix + format(index, "x") for index in range(authority_contract.TREE_RADIX)]
             rows = cursor.execute(
-                "SELECT path_prefix, node_digest, root_revision "
-                "FROM serverware_metadata.policy_authority_authenticated_tree_nodes "
+                "SELECT CASE WHEN pg_catalog.octet_length(path_prefix) BETWEEN 1 AND 64 "
+                "THEN path_prefix ELSE NULL END AS path_prefix, "
+                "CASE WHEN pg_catalog.octet_length(node_digest) = 71 "
+                "THEN node_digest ELSE NULL END AS node_digest, root_revision "
+                f"FROM {quoted_namespace}.policy_authority_authenticated_tree_nodes "
                 "WHERE table_name = %s AND depth = %s "
                 "AND path_prefix = ANY(%s) LIMIT %s",
                 (table, depth + 1, expected_paths, authority_contract.TREE_RADIX + 1),
@@ -157,14 +211,18 @@ def derive_multiproofs(
                 raise RadixProofError("authenticated child set exceeded its fixed radix")
             by_path: dict[str, str] = {}
             for row in rows:
-                child_path = row.get("path_prefix")
+                if not isinstance(row, Mapping):
+                    raise RadixProofError("authenticated child is not a database record")
+                child_path = _database_text(
+                    row.get("path_prefix"), maximum_bytes=64, label="authenticated child path",
+                )
                 if (
                     child_path not in expected_paths or child_path in by_path
                     or type(row.get("root_revision")) is not int
                     or not 0 < row["root_revision"] <= root["rootRevision"]
                 ):
                     raise RadixProofError("authenticated child identity or revision changed")
-                by_path[child_path] = require_digest(row.get("node_digest"), "authenticated child digest")
+                by_path[child_path] = _database_digest(row.get("node_digest"), "authenticated child digest")
             child_digests = [
                 by_path.get(prefix + format(index, "x"), empty_digest(depth + 1))
                 for index in range(authority_contract.TREE_RADIX)

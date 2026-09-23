@@ -4,6 +4,8 @@
 The fixture hashes below independently implement the stored SQL tree protocol.
 They never call the production key/leaf/empty/node helpers to build expected
 data, so a shared wrong domain cannot make both fixture and verifier agree.
+Cursor cases check emitted SQL and Python rejection, not native SQL execution
+or proof that PostgreSQL applies a projection before network transport.
 """
 from __future__ import annotations
 
@@ -114,20 +116,21 @@ class TreeFixture:
 class FixtureCursor:
     """Read-only SQL responder, not a PostgreSQL transaction or acceptance mock."""
 
-    def __init__(self, tree: TreeFixture) -> None:
+    def __init__(self, tree: TreeFixture, *, namespace: str = "serverware_metadata") -> None:
         self.tree = tree
+        self.namespace = namespace
         self.calls: list[tuple[str, tuple]] = []
         self.result: list[dict] = []
 
     def execute(self, statement: str, parameters: tuple) -> FixtureCursor:
         self.calls.append((statement, parameters))
-        if "FROM serverware_metadata.policy_authority_authenticated_leaves " in statement:
+        if f'FROM "{self.namespace}".policy_authority_authenticated_leaves ' in statement:
             table, key_digest = parameters
             if table != self.tree.table:
                 raise AssertionError("unexpected table")
             leaf = self.tree.leaves.get(key_digest)
             self.result = [] if leaf is None else [copy.deepcopy(leaf)]
-        elif "FROM serverware_metadata.policy_authority_authenticated_tree_nodes " in statement:
+        elif f'FROM "{self.namespace}".policy_authority_authenticated_tree_nodes ' in statement:
             table, depth, expected_paths, limit = parameters
             if table != self.tree.table:
                 raise AssertionError("unexpected table")
@@ -184,6 +187,151 @@ class AuthorityRadixProofTests(unittest.TestCase):
             self.assertIn(("policy_authority_authenticated_leaves", {"tableName": self.tree.table, "keyDigest": tree_key}), trace.reads)
         self.assertEqual(len(cursor.calls), 2 * 65)
         self.assertEqual(len(trace.reads), 2 * 65)
+
+    def test_explicit_namespace_preserves_proof_bytes_parameters_and_read_count(self) -> None:
+        row = self.tree.selected("record-a")
+        for namespace in ("serverware_metadata", "radix_fixture_a9", "a" * 63, "select"):
+            with self.subTest(namespace=namespace):
+                cursor = FixtureCursor(self.tree, namespace=namespace)
+                trace = FixtureTrace()
+                proof, = radix.derive_multiproofs(
+                    cursor, selected_rows=(row,), roots=(self.tree.root,), trace=trace,
+                    namespace=namespace,
+                )
+                self.assertEqual(proof, self.tree.proof(row))
+                self.assertEqual(len(cursor.calls), 65)
+                self.assertEqual(len(trace.reads), 65)
+                self.assertEqual(len(cursor.calls[0][1]), 2)
+                self.assertTrue(all(len(parameters) == 4 for _, parameters in cursor.calls[1:]))
+                self.assertTrue(all(f'FROM "{namespace}".' in statement for statement, _ in cursor.calls))
+
+    def test_invalid_namespace_denies_before_any_cursor_or_trace_access(self) -> None:
+        class StringSubclass(str):
+            pass
+
+        for namespace in (None, False, 7, b"metadata", StringSubclass("metadata"), "", "a" * 64,
+                          "Metadata", "métadata", "_metadata", "1metadata", "metadata.other",
+                          'metadata"', "metadata;SELECT", "metadata\n", "metadata\0"):
+            cursor = FixtureCursor(self.tree)
+            trace = FixtureTrace()
+            with self.subTest(namespace=namespace), self.assertRaisesRegex(radix.RadixProofError, "namespace"):
+                radix.derive_multiproofs(
+                    cursor, selected_rows=(self.tree.selected("record-a"),),
+                    roots=(self.tree.root,), trace=trace, namespace=namespace,
+                )
+            self.assertEqual(cursor.calls, [])
+            self.assertEqual(trace.reads, [])
+
+    def test_sql_text_bounds_are_case_projections_not_omission_predicates(self) -> None:
+        cursor = FixtureCursor(self.tree)
+        radix.derive_multiproofs(
+            cursor, selected_rows=(self.tree.selected("record-a"),),
+            roots=(self.tree.root,), trace=FixtureTrace(),
+        )
+        leaf_sql, leaf_parameters = cursor.calls[0]
+        self.assertIn(
+            "CASE WHEN pg_catalog.octet_length(key_json) BETWEEN 1 AND "
+            f"{radix.authority_contract.MAX_RESULT_BYTES} THEN key_json ELSE NULL END AS key_json",
+            leaf_sql,
+        )
+        for field in ("row_digest", "leaf_digest"):
+            self.assertIn(
+                f"CASE WHEN pg_catalog.octet_length({field}) = 71 THEN {field} ELSE NULL END AS {field}",
+                leaf_sql,
+            )
+        self.assertEqual(leaf_sql.split("WHERE ", 1)[1], "table_name = %s AND key_digest = %s")
+        self.assertEqual(leaf_parameters[0], self.tree.table)
+        for node_sql, parameters in cursor.calls[1:]:
+            self.assertIn(
+                "CASE WHEN pg_catalog.octet_length(path_prefix) BETWEEN 1 AND 64 "
+                "THEN path_prefix ELSE NULL END AS path_prefix", node_sql,
+            )
+            self.assertIn(
+                "CASE WHEN pg_catalog.octet_length(node_digest) = 71 "
+                "THEN node_digest ELSE NULL END AS node_digest", node_sql,
+            )
+            self.assertEqual(
+                node_sql.split("WHERE ", 1)[1],
+                "table_name = %s AND depth = %s AND path_prefix = ANY(%s) LIMIT %s",
+            )
+            self.assertEqual(len(parameters[2]), 16)
+            self.assertEqual(parameters[3], 17)
+
+    def test_leaf_projection_sentinels_malformed_json_and_exact_types_deny(self) -> None:
+        row = self.tree.selected("record-a")
+        tree_key = sql_digest("serverware.policyAuthorityAuthenticatedKey/v1", self.tree.table.encode(), sql_json(row["key"]))
+        original = copy.deepcopy(self.tree.leaves[tree_key])
+
+        class StringSubclass(str):
+            pass
+
+        changes = (
+            ("key_json", None), ("key_json", False), ("key_json", b'{}'),
+            ("key_json", StringSubclass(original["key_json"])), ("key_json", ""),
+            ("key_json", "{"), ("key_json", "\ud800"),
+            ("row_digest", None), ("row_digest", False), ("row_digest", "sha256:" + "0" * 65),
+            ("row_digest", "sha256:" + "g" * 64), ("leaf_digest", None),
+            ("leaf_digest", StringSubclass(original["leaf_digest"])),
+            ("root_revision", None), ("root_revision", True),
+        )
+        for field, value in changes:
+            self.tree.leaves[tree_key] = {**original, field: value}
+            cursor = FixtureCursor(self.tree)
+            with self.subTest(field=field, value=value), self.assertRaises(radix.RadixProofError):
+                radix.derive_multiproofs(cursor, selected_rows=(row,), roots=(self.tree.root,), trace=FixtureTrace())
+            self.assertEqual(len(cursor.calls), 1)
+        self.tree.leaves[tree_key] = original
+
+    def test_oversized_driver_key_json_and_utf8_byte_bounds_deny(self) -> None:
+        row = self.tree.selected("record-a")
+        tree_key = sql_digest("serverware.policyAuthorityAuthenticatedKey/v1", self.tree.table.encode(), sql_json(row["key"]))
+        # Deliberately bypass the SQL projection as a hostile responder control.
+        # This bounded allocation is not a simulation of native PostgreSQL IO.
+        self.tree.leaves[tree_key]["key_json"] = " " * (radix.authority_contract.MAX_RESULT_BYTES + 1)
+        cursor = FixtureCursor(self.tree)
+        with self.assertRaisesRegex(radix.RadixProofError, "key JSON is not bounded"):
+            radix.derive_multiproofs(cursor, selected_rows=(row,), roots=(self.tree.root,), trace=FixtureTrace())
+        self.assertEqual(len(cursor.calls), 1)
+        self.assertEqual(radix._database_text("éé", maximum_bytes=4, label="fixture"), "éé")
+        with self.assertRaisesRegex(radix.RadixProofError, "not bounded"):
+            radix._database_text("ééé", maximum_bytes=4, label="fixture")
+
+    def test_child_projection_sentinels_oversize_and_exact_types_deny(self) -> None:
+        class StringSubclass(str):
+            pass
+
+        for field, value in (
+            ("path_prefix", None), ("path_prefix", False), ("path_prefix", []),
+            ("path_prefix", "a" * 65), ("path_prefix", StringSubclass("a")),
+            ("node_digest", None), ("node_digest", False), ("node_digest", "sha256:" + "0" * 65),
+            ("node_digest", "sha256:" + "g" * 64),
+            ("node_digest", StringSubclass("sha256:" + "0" * 64)),
+        ):
+            class ChangedCursor(FixtureCursor):
+                def fetchmany(self, size: int) -> list[dict]:
+                    rows = copy.deepcopy(super().fetchmany(size))
+                    if not rows:
+                        raise AssertionError("fixture expected its selected branch")
+                    rows[0][field] = value
+                    return rows
+
+            cursor = ChangedCursor(self.tree)
+            with self.subTest(field=field, value=value), self.assertRaises(radix.RadixProofError):
+                radix.derive_multiproofs(
+                    cursor, selected_rows=(self.tree.selected("record-a"),),
+                    roots=(self.tree.root,), trace=FixtureTrace(),
+                )
+            self.assertEqual(len(cursor.calls), 2)
+
+    def test_invalid_retained_leaf_never_becomes_nonmembership(self) -> None:
+        selected = self.tree.selected("record-a", absent=True)
+        tree_key = sql_digest("serverware.policyAuthorityAuthenticatedKey/v1", self.tree.table.encode(), sql_json(selected["key"]))
+        self.tree.leaves[tree_key]["key_json"] = None
+        with self.assertRaisesRegex(radix.RadixProofError, "key JSON is not bounded"):
+            radix.derive_multiproofs(
+                FixtureCursor(self.tree), selected_rows=(selected,),
+                roots=(self.tree.root,), trace=FixtureTrace(),
+            )
 
     def test_nonmembership_uses_authenticated_path_in_nonempty_tree(self) -> None:
         row = self.tree.selected("missing-record", absent=True)

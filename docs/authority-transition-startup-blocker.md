@@ -27,6 +27,16 @@ the contract, marked disabled, given a placeholder kernel, or delegated back to
 legacy mutation code. Changing the database backend cannot repair this
 unconditional import-time failure.
 
+The coordinated implementation direction is documented in
+[WebAuthn authority integration](webauthn-authority-integration.md), including
+aggregate staging, authenticated predicate/capacity proofs, independent roots
+and time, and non-circular evidence production. It does not change the current
+contract or waive any startup gate.
+
+The [explicit-context attestation core](webauthn-attestation-core.md) prepares
+shared registration cryptography for an eventual measured evidence producer.
+It does not itself produce signed authority evidence or fill a missing kernel.
+
 ## Implementation contracts still needed
 
 The following bounds are the existing contract, not permission to truncate a

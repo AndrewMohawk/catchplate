@@ -610,6 +610,7 @@ override CODER_TEST_SCRIPTS := \
 	scripts/test_oci_contract_source_fixtures.py
 override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_codebase_attestation.py \
+	scripts/test_webauthn_attestation_core.py \
 	scripts/test_control_plane_startup.py \
 	scripts/test_launch_authority_service.py \
 	scripts/test_launch_authorization.py \

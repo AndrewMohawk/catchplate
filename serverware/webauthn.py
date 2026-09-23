@@ -12,18 +12,37 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache
-from typing import Any
+from typing import Any, Callable, TypeVar
 from urllib.parse import urlparse
 
 import cbor2
 from cryptography import x509
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa
+from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-from cryptography.x509.oid import ExtensionOID, ObjectIdentifier
 
 from serverware import db
+from serverware import webauthn_attestation_core as attestation_core
+from serverware.webauthn_attestation_core import (
+    AT_FLAG,
+    EC2_KTY,
+    ES256_ALG,
+    FIDO_AAGUID_EXTENSION,
+    MAX_ATTESTATION_CERTIFICATE_BYTES,
+    MAX_ATTESTATION_CHAIN_BYTES,
+    MAX_ATTESTATION_CHAIN_CERTIFICATES,
+    MAX_ATTESTATION_OBJECT_BYTES,
+    MAX_AUTHENTICATOR_DATA_BYTES,
+    MAX_CLIENT_DATA_JSON_BYTES,
+    MAX_COSE_PUBLIC_KEY_BYTES,
+    MAX_CREDENTIAL_ID_BYTES,
+    P256_CRV,
+    UP_FLAG,
+    UV_FLAG,
+    WebAuthnError,
+    YUBIKEY_AAGUIDS,
+)
 from serverware.config import (
     DEV_AUTHENTICATOR_ENABLED,
     POLICY_SIGNING_KEY_PATH,
@@ -63,27 +82,6 @@ from serverware.webauthn_trust import (
 )
 
 
-UP_FLAG = 0x01
-UV_FLAG = 0x04
-AT_FLAG = 0x40
-ES256_ALG = -7
-EC2_KTY = 2
-P256_CRV = 1
-YUBIKEY_AAGUIDS = {
-    "2fc0579f-8113-47ea-b116-bb5a8db9202a",
-    "fa2b99dc-9e39-4257-8f92-4a30d23c4118",
-    "ee041bce-25e5-4cdb-8f86-897fd6418464",
-    "cb69481e-8ff7-4039-93ec-0a2729a154a8",
-}
-FIDO_AAGUID_EXTENSION = ObjectIdentifier("1.3.6.1.4.1.45724.1.1.4")
-MAX_CLIENT_DATA_JSON_BYTES = 16 * 1024
-MAX_AUTHENTICATOR_DATA_BYTES = 64 * 1024
-MAX_ATTESTATION_OBJECT_BYTES = 256 * 1024
-MAX_COSE_PUBLIC_KEY_BYTES = 4 * 1024
-MAX_CREDENTIAL_ID_BYTES = 1024
-MAX_ATTESTATION_CHAIN_CERTIFICATES = 5
-MAX_ATTESTATION_CERTIFICATE_BYTES = 64 * 1024
-MAX_ATTESTATION_CHAIN_BYTES = 256 * 1024
 MAX_TRUST_BUNDLE_BYTES = 2 * 1024 * 1024
 MAX_TRUST_STATE_BYTES = 64 * 1024
 MAX_TRUST_PUBLIC_KEY_BYTES = 16 * 1024
@@ -92,10 +90,6 @@ _TRUST_ROOT_CACHE_LOCK = threading.RLock()
 _TRUST_ROOT_CACHE: OrderedDict[tuple[str, str, str], tuple[dict[str, Any], ...]] = (
     OrderedDict()
 )
-
-
-class WebAuthnError(ValueError):
-    pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -440,34 +434,11 @@ def _rp_hash() -> bytes:
 
 def _parse_client_data(client_data_b64: str, expected_type: str) -> tuple[dict[str, Any], bytes]:
     raw = b64ud(client_data_b64, maximum_bytes=MAX_CLIENT_DATA_JSON_BYTES)
-    try:
-        client_data = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise WebAuthnError("invalid clientDataJSON") from exc
-    if client_data.get("type") != expected_type:
-        raise WebAuthnError(f"unexpected WebAuthn clientDataJSON type {client_data.get('type')}")
-    if client_data.get("origin") != WEBAUTHN_ORIGIN:
-        raise WebAuthnError("WebAuthn origin mismatch")
-    if client_data.get("crossOrigin"):
-        raise WebAuthnError("cross-origin WebAuthn assertions are not accepted")
-    return client_data, raw
+    return attestation_core.parse_client_data(raw, expected_type, origin=WEBAUTHN_ORIGIN), raw
 
 
 def _parse_authenticator_data(auth_data: bytes) -> dict[str, Any]:
-    if not isinstance(auth_data, bytes) or not 37 <= len(auth_data) <= MAX_AUTHENTICATOR_DATA_BYTES:
-        raise WebAuthnError("authenticatorData is too short")
-    if auth_data[:32] != _rp_hash():
-        raise WebAuthnError("WebAuthn RP ID hash mismatch")
-    flags = auth_data[32]
-    if not flags & UP_FLAG:
-        raise WebAuthnError("authenticator user presence flag missing")
-    return {
-        "flags": flags,
-        "user_present": bool(flags & UP_FLAG),
-        "user_verified": bool(flags & UV_FLAG),
-        "attested_credential_data": bool(flags & AT_FLAG),
-        "sign_count": int.from_bytes(auth_data[33:37], "big"),
-    }
+    return attestation_core.parse_authenticator_data(auth_data, rp_id=WEBAUTHN_RP_ID)
 
 
 def _aaguid_to_text(value: bytes) -> str:
@@ -475,24 +446,11 @@ def _aaguid_to_text(value: bytes) -> str:
 
 
 def _classify_authenticator(aaguid: str | None, attestation_trusted: bool, trust_class: str | None = None) -> str:
-    if not attestation_trusted:
-        return "unknown"
-    if trust_class in {"yubikey", "hardware", "platform"}:
-        return trust_class
-    if aaguid in YUBIKEY_AAGUIDS:
-        return "yubikey"
-    return "hardware"
+    return attestation_core.classify_authenticator(aaguid, attestation_trusted, trust_class)
 
 
 def _public_key_from_cose(public_key_cose: bytes) -> ec.EllipticCurvePublicKey:
-    if not 1 <= len(public_key_cose) <= MAX_COSE_PUBLIC_KEY_BYTES:
-        raise WebAuthnError("WebAuthn COSE public key is oversized")
-    key = cbor2.loads(public_key_cose)
-    if key.get(1) != EC2_KTY or key.get(3) != ES256_ALG or key.get(-1) != P256_CRV:
-        raise WebAuthnError("only ES256/P-256 WebAuthn credentials are supported")
-    x = int.from_bytes(key[-2], "big")
-    y = int.from_bytes(key[-3], "big")
-    return ec.EllipticCurvePublicNumbers(x, y, ec.SECP256R1()).public_key()
+    return attestation_core.public_key_from_cose(public_key_cose)
 
 
 def _cose_from_public_key(public_key: ec.EllipticCurvePublicKey) -> bytes:
@@ -522,65 +480,35 @@ def _credential_descriptor(credential: dict[str, Any]) -> dict[str, Any]:
 
 
 def _cert_digest(cert: x509.Certificate) -> str:
-    return _sha256_prefixed(cert.public_bytes(serialization.Encoding.DER))
+    return attestation_core.cert_digest(cert)
 
 
 def _not_before(cert: x509.Certificate) -> datetime:
-    value = getattr(cert, "not_valid_before_utc", None)
-    if value is not None:
-        return value
-    return cert.not_valid_before.replace(tzinfo=timezone.utc)
+    return attestation_core.not_before(cert)
 
 
 def _not_after(cert: x509.Certificate) -> datetime:
-    value = getattr(cert, "not_valid_after_utc", None)
-    if value is not None:
-        return value
-    return cert.not_valid_after.replace(tzinfo=timezone.utc)
+    return attestation_core.not_after(cert)
 
 
 def _verify_cert_time(cert: x509.Certificate) -> None:
-    now = datetime.now(timezone.utc)
-    if now < _not_before(cert) or now > _not_after(cert):
-        raise WebAuthnError("WebAuthn attestation certificate is not currently valid")
+    attestation_core.verify_cert_time(cert, datetime.now(timezone.utc))
 
 
 def _verify_cert_signature(child: x509.Certificate, issuer: x509.Certificate) -> None:
-    public_key = issuer.public_key()
-    try:
-        if isinstance(public_key, ec.EllipticCurvePublicKey):
-            public_key.verify(child.signature, child.tbs_certificate_bytes, ec.ECDSA(child.signature_hash_algorithm))
-        elif isinstance(public_key, rsa.RSAPublicKey):
-            public_key.verify(child.signature, child.tbs_certificate_bytes, padding.PKCS1v15(), child.signature_hash_algorithm)
-        else:
-            raise WebAuthnError("unsupported WebAuthn attestation certificate key type")
-    except InvalidSignature as exc:
-        raise WebAuthnError("WebAuthn attestation certificate chain signature invalid") from exc
+    attestation_core.verify_cert_signature(child, issuer)
 
 
 def _is_ca(cert: x509.Certificate) -> bool:
-    try:
-        return bool(cert.extensions.get_extension_for_oid(ExtensionOID.BASIC_CONSTRAINTS).value.ca)
-    except x509.ExtensionNotFound:
-        return False
+    return attestation_core.is_ca(cert)
 
 
 def _aaguid_from_cert(cert: x509.Certificate) -> bytes | None:
-    try:
-        raw = cert.extensions.get_extension_for_oid(FIDO_AAGUID_EXTENSION).value.value
-    except x509.ExtensionNotFound:
-        return None
-    if len(raw) == 16:
-        return raw
-    if len(raw) >= 18 and raw[0] == 0x04 and raw[1] == 0x10:
-        return raw[2:18]
-    return None
+    return attestation_core.aaguid_from_cert(cert)
 
 
 def _verify_aaguid_extension(cert: x509.Certificate, aaguid: bytes) -> None:
-    cert_aaguid = _aaguid_from_cert(cert)
-    if cert_aaguid is not None and cert_aaguid != aaguid:
-        raise WebAuthnError("WebAuthn attestation certificate AAGUID mismatch")
+    attestation_core.verify_aaguid_extension(cert, aaguid)
 
 
 def _root_allows_aaguid(root: TrustRoot, aaguid: bytes) -> bool:
@@ -589,103 +517,71 @@ def _root_allows_aaguid(root: TrustRoot, aaguid: bytes) -> bool:
     return _aaguid_to_text(aaguid) in root.aaguids
 
 
-def _verify_x5c_chain(certs: list[x509.Certificate], aaguid: bytes) -> dict[str, Any]:
-    if not certs:
-        return {"trusted": False, "path": [], "root_sha256": None, "bundle_digest": None, "bundle_sequence": None, "authenticator_class": None}
-    for cert in certs:
-        _verify_cert_time(cert)
-    leaf = certs[0]
+def _attestation_verification_context(
+    *, needs_roots: bool, verified_at: datetime,
+) -> attestation_core.VerificationContext:
+    # Trust loading/rollback-state IO and clock access stay in this live layer.
+    # The registration/recovery caller holds trust_read_locked through its
+    # final metadata operation. Untrusted formats do not require trust files.
     try:
-        if _is_ca(leaf):
-            raise WebAuthnError("WebAuthn attestation leaf certificate must not be a CA")
-        for issuer in certs[1:]:
-            if not _is_ca(issuer):
-                raise WebAuthnError("WebAuthn attestation intermediate certificate must be a CA")
-        for child, issuer in zip(certs, certs[1:]):
-            if child.issuer != issuer.subject:
-                raise WebAuthnError("WebAuthn attestation certificate issuer mismatch")
-            _verify_cert_signature(child, issuer)
-    except WebAuthnError:
-        raise
-
-    try:
-        trusted_roots = load_trust_roots()
+        roots = load_trust_roots() if needs_roots else ()
     except WebAuthnTrustError as exc:
         raise WebAuthnError(str(exc)) from exc
-    if not trusted_roots:
-        return {
-            "trusted": False,
-            "path": [_cert_digest(cert) for cert in certs],
-            "root_sha256": None,
-            "bundle_digest": None,
-            "bundle_sequence": None,
-            "authenticator_class": None,
-        }
-    chain_tail = certs[-1]
-    for root in trusted_roots:
-        root_cert = root.cert
-        if not _root_allows_aaguid(root, aaguid):
-            continue
-        _verify_cert_time(root_cert)
-        if _cert_digest(chain_tail) == _cert_digest(root_cert):
-            if not _is_ca(root_cert):
-                continue
-            return {
-                "trusted": True,
-                "path": [_cert_digest(cert) for cert in certs],
-                "root_sha256": root.certificate_sha256,
-                "bundle_digest": root.bundle_digest,
-                "bundle_sequence": root.bundle_sequence,
-                "authenticator_class": root.authenticator_class,
-            }
-        if chain_tail.issuer == root_cert.subject and _is_ca(root_cert):
-            try:
-                _verify_cert_signature(chain_tail, root_cert)
-            except WebAuthnError:
-                continue
-            return {
-                "trusted": True,
-                "path": [_cert_digest(cert) for cert in certs] + [root.certificate_sha256],
-                "root_sha256": root.certificate_sha256,
-                "bundle_digest": root.bundle_digest,
-                "bundle_sequence": root.bundle_sequence,
-                "authenticator_class": root.authenticator_class,
-            }
-    return {
-        "trusted": False,
-        "path": [_cert_digest(cert) for cert in certs],
-        "root_sha256": None,
-        "bundle_digest": None,
-        "bundle_sequence": None,
-        "authenticator_class": None,
-    }
+    if len(roots) > attestation_core.MAX_TRUST_ROOTS:
+        raise WebAuthnError("WebAuthn trust snapshot is invalid or oversized")
+    snapshots = tuple(
+        attestation_core.TrustRootSnapshot(
+            certificate_der=root.cert.public_bytes(serialization.Encoding.DER),
+            certificate_sha256=root.certificate_sha256,
+            authenticator_class=root.authenticator_class,
+            aaguids=frozenset(root.aaguids),
+            bundle_digest=root.bundle_digest,
+            bundle_sequence=root.bundle_sequence,
+            bundle_rollback_epoch=root.bundle_rollback_epoch,
+        )
+        for root in roots
+    )
+    return attestation_core.VerificationContext(
+        rp_id=WEBAUTHN_RP_ID, origin=WEBAUTHN_ORIGIN,
+        verified_at=verified_at, trust_roots=snapshots,
+    )
+
+
+_AttestationReturn = TypeVar("_AttestationReturn")
+
+
+def _verify_with_live_trust(
+    verify: Callable[[attestation_core.VerificationContext], _AttestationReturn],
+    *, needs_roots: bool,
+) -> _AttestationReturn:
+    verified_at = datetime.now(timezone.utc)
+    # Preserve legacy ordering: malformed COSE, signature, AAGUID and internal
+    # chain/time failures must precede load_trust_roots' rollback-state writes.
+    # The bounded pure preflight has no roots/IO and uses the SAME instant as
+    # the final rooted verification. Its untrusted result is never a permit.
+    preflight = verify(_attestation_verification_context(
+        needs_roots=False, verified_at=verified_at,
+    ))
+    if not needs_roots:
+        return preflight
+    return verify(_attestation_verification_context(
+        needs_roots=True, verified_at=verified_at,
+    ))
+
+
+def _verify_x5c_chain(certs: list[x509.Certificate], aaguid: bytes) -> dict[str, Any]:
+    return _verify_with_live_trust(
+        lambda context: attestation_core.verify_x5c_chain(certs, aaguid, context),
+        needs_roots=bool(certs),
+    )
 
 
 def _certs_from_x5c(x5c: Any) -> list[x509.Certificate]:
-    if (
-        not isinstance(x5c, list)
-        or not 1 <= len(x5c) <= MAX_ATTESTATION_CHAIN_CERTIFICATES
-    ):
-        raise WebAuthnError("WebAuthn attestation x5c must be a certificate list")
-    certs: list[x509.Certificate] = []
-    total_bytes = 0
-    for item in x5c:
-        if not isinstance(item, bytes) or not 1 <= len(item) <= MAX_ATTESTATION_CERTIFICATE_BYTES:
-            raise WebAuthnError("WebAuthn attestation x5c contains a non-certificate item")
-        total_bytes += len(item)
-        if total_bytes > MAX_ATTESTATION_CHAIN_BYTES:
-            raise WebAuthnError("WebAuthn attestation certificate chain is oversized")
-        certs.append(x509.load_der_x509_certificate(item))
-    return certs
+    return attestation_core.certs_from_x5c(x5c)
 
 
 def _verify_es256_signature(public_key: Any, signature: bytes, signed_data: bytes, error: str) -> None:
-    if not isinstance(public_key, ec.EllipticCurvePublicKey):
-        raise WebAuthnError("WebAuthn ES256 attestation key must be an elliptic-curve key")
-    try:
-        public_key.verify(signature, signed_data, ec.ECDSA(hashes.SHA256()))
-    except InvalidSignature as exc:
-        raise WebAuthnError(error) from exc
+    attestation_core.verify_es256_signature(public_key, signature, signed_data, error)
 
 
 def _verify_packed_attestation(
@@ -695,48 +591,13 @@ def _verify_packed_attestation(
     aaguid: bytes,
     credential_public_key: ec.EllipticCurvePublicKey,
 ) -> dict[str, Any]:
-    att_stmt = attestation.get("attStmt") or {}
-    if att_stmt.get("alg") != ES256_ALG:
-        raise WebAuthnError("only ES256 packed WebAuthn attestation is supported")
-    signature = att_stmt.get("sig")
-    if not isinstance(signature, bytes):
-        raise WebAuthnError("packed WebAuthn attestation missing signature")
-    signed_data = auth_data + client_data_hash
-    x5c = att_stmt.get("x5c")
-    if x5c:
-        certs = _certs_from_x5c(x5c)
-        leaf = certs[0]
-        _verify_aaguid_extension(leaf, aaguid)
-        _verify_es256_signature(leaf.public_key(), signature, signed_data, "packed WebAuthn attestation signature invalid")
-        chain = _verify_x5c_chain(certs, aaguid)
-        return {
-            "fmt": "packed",
-            "trusted": bool(chain["trusted"]),
-            "trust_path": chain["path"],
-            "leaf_sha256": _cert_digest(leaf),
-            "root_sha256": chain["root_sha256"],
-            "trust_bundle_digest": chain["bundle_digest"],
-            "trust_bundle_sequence": chain["bundle_sequence"],
-            "trust_class": chain["authenticator_class"],
-            "verified_at": db.iso_now() if chain["trusted"] else None,
-        }
-    _verify_es256_signature(
-        credential_public_key,
-        signature,
-        signed_data,
-        "packed self-attestation signature invalid",
-    )
-    return {
-        "fmt": "packed",
-        "trusted": False,
-        "trust_path": [],
-        "leaf_sha256": None,
-        "root_sha256": None,
-        "trust_bundle_digest": None,
-        "trust_bundle_sequence": None,
-        "trust_class": None,
-        "verified_at": None,
-    }
+    return _verify_with_live_trust(
+        lambda context: attestation_core.verify_packed_attestation(
+            attestation, auth_data, client_data_hash, aaguid,
+            credential_public_key, context=context,
+        ),
+        needs_roots=attestation_core.needs_trust_roots({**attestation, "fmt": "packed"}),
+    ).legacy_dict()
 
 
 def _verify_fido_u2f_attestation(
@@ -746,27 +607,13 @@ def _verify_fido_u2f_attestation(
     credential_id_raw: bytes,
     credential_public_key: ec.EllipticCurvePublicKey,
 ) -> dict[str, Any]:
-    att_stmt = attestation.get("attStmt") or {}
-    signature = att_stmt.get("sig")
-    if not isinstance(signature, bytes):
-        raise WebAuthnError("fido-u2f WebAuthn attestation missing signature")
-    certs = _certs_from_x5c(att_stmt.get("x5c"))
-    leaf = certs[0]
-    _verify_aaguid_extension(leaf, aaguid)
-    signed_data = b"\x00" + _rp_hash() + client_data_hash + credential_id_raw + _u2f_uncompressed_public_key(credential_public_key)
-    _verify_es256_signature(leaf.public_key(), signature, signed_data, "fido-u2f WebAuthn attestation signature invalid")
-    chain = _verify_x5c_chain(certs, aaguid)
-    return {
-        "fmt": "fido-u2f",
-        "trusted": bool(chain["trusted"]),
-        "trust_path": chain["path"],
-        "leaf_sha256": _cert_digest(leaf),
-        "root_sha256": chain["root_sha256"],
-        "trust_bundle_digest": chain["bundle_digest"],
-        "trust_bundle_sequence": chain["bundle_sequence"],
-        "trust_class": chain["authenticator_class"],
-        "verified_at": db.iso_now() if chain["trusted"] else None,
-    }
+    return _verify_with_live_trust(
+        lambda context: attestation_core.verify_fido_u2f_attestation(
+            attestation, client_data_hash, aaguid, credential_id_raw,
+            credential_public_key, context=context,
+        ),
+        needs_roots=True,
+    ).legacy_dict()
 
 
 def _verify_attestation_statement(
@@ -777,36 +624,15 @@ def _verify_attestation_statement(
     credential_id_raw: bytes,
     public_key_cose: bytes,
 ) -> dict[str, Any]:
-    fmt = attestation.get("fmt")
-    credential_public_key = _public_key_from_cose(public_key_cose)
-    client_data_hash = _sha256(client_data_raw)
-    if fmt == "packed":
-        return _verify_packed_attestation(attestation, auth_data, client_data_hash, aaguid, credential_public_key)
-    if fmt == "fido-u2f":
-        return _verify_fido_u2f_attestation(attestation, client_data_hash, aaguid, credential_id_raw, credential_public_key)
-    if fmt == "none":
-        return {
-            "fmt": "none",
-            "trusted": False,
-            "trust_path": [],
-            "leaf_sha256": None,
-            "root_sha256": None,
-            "trust_bundle_digest": None,
-            "trust_bundle_sequence": None,
-            "trust_class": None,
-            "verified_at": None,
-        }
-    return {
-        "fmt": str(fmt or "unknown"),
-        "trusted": False,
-        "trust_path": [],
-        "leaf_sha256": None,
-        "root_sha256": None,
-        "trust_bundle_digest": None,
-        "trust_bundle_sequence": None,
-        "trust_class": None,
-        "verified_at": None,
-    }
+    # Recovery keeps this six-positional-argument API and its stricter UV,
+    # hardware, ceremony and current-bundle checks at the existing call site.
+    return _verify_with_live_trust(
+        lambda context: attestation_core.verify_attestation_statement(
+            attestation, auth_data, client_data_raw, aaguid, credential_id_raw,
+            public_key_cose, context=context,
+        ),
+        needs_roots=attestation_core.needs_trust_roots(attestation),
+    ).legacy_dict()
 
 
 def registration_options(
@@ -1454,11 +1280,9 @@ def verify_registration(
     credential_id = response.get("id") or response.get("rawId")
     if not isinstance(credential_id, str):
         raise WebAuthnError("registration response missing credential id")
-    attestation = cbor2.loads(
-        b64ud(
-            response["response"]["attestationObject"],
-            maximum_bytes=MAX_ATTESTATION_OBJECT_BYTES,
-        )
+    attestation_raw = b64ud(
+        response["response"]["attestationObject"],
+        maximum_bytes=MAX_ATTESTATION_OBJECT_BYTES,
     )
     client_data, client_data_raw = _parse_client_data(response["response"]["clientDataJSON"], "webauthn.create")
     challenge_value = client_data.get("challenge")
@@ -1497,60 +1321,49 @@ def verify_registration(
                 raise WebAuthnError(
                     f"registration challenge authorization {field} mismatch"
                 )
-    auth_data = attestation.get("authData")
-    parsed = _parse_authenticator_data(auth_data)
-    if not parsed["attested_credential_data"]:
-        raise WebAuthnError("registration missing attested credential data")
-    cursor = 37
-    aaguid_raw = auth_data[cursor:cursor + 16]
-    aaguid = _aaguid_to_text(aaguid_raw)
-    cursor += 16
-    credential_len = int.from_bytes(auth_data[cursor:cursor + 2], "big")
-    if credential_len <= 0 or credential_len > MAX_CREDENTIAL_ID_BYTES:
-        raise WebAuthnError("registration credential ID is oversized")
-    cursor += 2
-    credential_id_raw = auth_data[cursor:cursor + credential_len]
-    registered_credential_id = b64u(credential_id_raw)
-    if credential_id != registered_credential_id:
-        raise WebAuthnError(
-            "registration response credential id does not match attested credential id"
-        )
+    transports = response.get("transports") or []
+    if not isinstance(transports, list):
+        raise WebAuthnError("WebAuthn transports are invalid or oversized")
+    scope = attestation_core.CeremonyScope(
+        challenge_id=challenge["id"], challenge=challenge["challenge"],
+        user_id=user_id, label=label,
+        authorization_json=canonical_json(authorization).encode("ascii"),
+    )
+    parsed = attestation_core.parse_registration_data(
+        client_data_raw, attestation_raw, credential_id,
+        scope=scope, rp_id=WEBAUTHN_RP_ID, origin=WEBAUTHN_ORIGIN,
+        transports=tuple(transports),
+    )
     if db.get_webauthn_credential(
-        registered_credential_id, include_revoked=True
+        parsed.credential_id, include_revoked=True
     ) is not None:
         raise WebAuthnError(
             "WebAuthn credential ID was already registered and cannot be reused"
         )
-    cursor += credential_len
-    public_key_cose = auth_data[cursor:]
-    attestation_result = _verify_attestation_statement(
-        attestation,
-        auth_data,
-        client_data_raw,
-        aaguid_raw,
-        credential_id_raw,
-        public_key_cose,
+    verified = _verify_with_live_trust(
+        lambda context: attestation_core.verify_registration_attestation(parsed, context),
+        needs_roots=parsed.needs_trust_roots,
     )
-    attestation_trusted = bool(attestation_result["trusted"])
+    attestation_result = verified.attestation
     try:
         finalized = db.finalize_webauthn_registration(
             challenge=challenge_value,
-            credential_id=registered_credential_id,
+            credential_id=verified.credential_id,
             user_id=user_id,
             label=label,
-            public_key_cose=b64u(public_key_cose),
-            sign_count=parsed["sign_count"],
-            aaguid=aaguid,
-            authenticator_class=_classify_authenticator(aaguid, attestation_trusted, attestation_result.get("trust_class")),
-            attestation_fmt=attestation_result["fmt"],
-            attestation_trusted=attestation_trusted,
-            attestation_trust_path=attestation_result["trust_path"],
-            attestation_leaf_sha256=attestation_result["leaf_sha256"],
-            attestation_root_sha256=attestation_result["root_sha256"],
-            attestation_trust_bundle_digest=attestation_result.get("trust_bundle_digest"),
-            attestation_trust_bundle_sequence=attestation_result.get("trust_bundle_sequence"),
-            attestation_verified_at=attestation_result["verified_at"],
-            transports=response.get("transports") or [],
+            public_key_cose=b64u(verified.public_key_cose),
+            sign_count=verified.sign_count,
+            aaguid=verified.aaguid,
+            authenticator_class=verified.authenticator_class,
+            attestation_fmt=attestation_result.fmt,
+            attestation_trusted=attestation_result.trusted,
+            attestation_trust_path=list(attestation_result.trust_path),
+            attestation_leaf_sha256=attestation_result.leaf_sha256,
+            attestation_root_sha256=attestation_result.root_sha256,
+            attestation_trust_bundle_digest=attestation_result.trust_bundle_digest,
+            attestation_trust_bundle_sequence=attestation_result.trust_bundle_sequence,
+            attestation_verified_at=attestation_result.verified_at,
+            transports=list(verified.transports),
         )
     except ValueError as exc:
         raise WebAuthnError(str(exc)) from exc

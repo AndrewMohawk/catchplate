@@ -120,6 +120,15 @@ def _copy(value: Any) -> Any:
     return json.loads(_canonical(value))
 
 
+def canonical_audit_json(value: Any) -> bytes:
+    """Bound an audit proof's lossless JSON graph before making an owned copy.
+
+    This checks representation and resource limits only, not row semantics,
+    signatures, original transport bytes or authority to initialize a counter.
+    """
+    return _canonical(value)
+
+
 def _spec(operation: str) -> Mapping[str, Any]:
     if type(operation) is not str:
         _fail("audit capacity operation is not source declared")

@@ -60,9 +60,10 @@ The removed policy and quota counters had different keys and partition digest
 domains. Legacy staging still uses a locked SQL COUNT. No admitted initializer
 produces the new scalar: the v8-to-v9 migration requires the aggregate table
 empty, while ordinary aggregate mutation templates permit UPDATE only. The
-phase-2 backfill specification is declarative and incorrectly describes the
-audit limit as configuration-owned. Summing old counters, renaming one, or
-inserting zero on a missing row would not establish the actual population.
+phase-2 backfill specification is declarative; it now names the exact global
+identity and source-owned fixed limit, with initializer and activation flags
+explicitly false. Summing old counters, renaming one, or inserting zero on a
+missing row would not establish the actual population.
 
 The removed policy counter's per-operation commitment map grew for its lifetime.
 A one-event entry uses 76 bytes plus the enclosing map, so 55,189 such
@@ -205,6 +206,14 @@ The existing migration outbox digest covers event identities/bytes and total
 row count, not status membership, and cannot be reused for this purpose.
 Offline copies preserve pending/claimed/audited status; SQLite migration first
 completes local audit. Neither is authority to fabricate a global baseline.
+
+The separate v8-to-v9 full-row migration stream does include status bytes,
+but does not prove population completeness against an independently accepted
+root descriptor. The new [streaming population verifier](authority-audit-initialization.md)
+checks distinct full-row memberships and exact descriptor cardinality using
+existing primary-radix proofs. It emits only a conditional observation; neither
+its supplied root nor its leaf count becomes trusted by hashing them. It is not
+yet connected to an authenticated checkpoint producer or offline installer.
 
 SQLite retains its separately scoped locked COUNT and inline completion
 semantics until an explicitly implemented transition covers it. PostgreSQL

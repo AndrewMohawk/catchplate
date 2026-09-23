@@ -70,7 +70,10 @@ None of these tests has executed, and none substitutes for whole-operation,
 concurrency, rollback or independently authenticated evidence.
 
 Authenticated initialization/backfill and a general receipt-bound PostgreSQL
-delivery transition remain missing. SQLite retains its separate locked COUNT
+delivery transition remain missing. The [offline population component](authority-audit-initialization.md)
+now checks complete status-bearing membership relative to a supplied root and
+cardinality, without granting that descriptor authority or installing a row.
+SQLite retains its separate locked COUNT
 and completion behavior. Direct production DML remains revoked. A fresh source
 manifest, import closure and explicitly admitted installed-schema transition
 are still required; image copying or this source commit alone is insufficient.

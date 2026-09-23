@@ -4,6 +4,7 @@ from types import MappingProxyType
 from typing import Final, Mapping
 
 from serverware import authority_contract
+from serverware import authority_audit_capacity as audit_capacity
 
 
 PHASE2_STORE_SPEC_SCHEMA: Final[str] = (
@@ -94,13 +95,29 @@ AGGREGATE_BACKFILLS: Final[
                 "capacitySource": "durable_budget_definitions.max_units",
             }
         ),
-        "metadata-audit-outbox-capacity": MappingProxyType(
+        # Declaration only: the integrated transition checker cannot establish
+        # a populated baseline. No initializer or installation receipt is
+        # implemented here, and neither legacy counter supplies this identity.
+        audit_capacity.AGGREGATE_KIND: MappingProxyType(
             {
-                "sourceTables": ("metadata_audit_outbox",),
+                "sourceTables": (audit_capacity.OUTBOX_TABLE,),
                 "liveStates": ("pending", "claimed"),
                 "groupKey": (),
                 "expiryColumn": None,
-                "capacitySource": "configuration",
+                "capacitySource": "serverware.audit_outbox_contract.MAX_PENDING",
+                "capacityLimit": audit_capacity.MAX_PENDING,
+                "aggregateId": audit_capacity.AGGREGATE_ID,
+                "partitionDigest": audit_capacity.PARTITION_DIGEST,
+                "stateSchema": audit_capacity.STATE_SCHEMA,
+                "activeCountRule": "equal-live-count",
+                "reservedUnits": MappingProxyType({}),
+                "committedUnits": MappingProxyType({}),
+                "minimumExpiryEpochNs": None,
+                "expiryIndexRootDigest": audit_capacity.EMPTY_EXPIRY_DIGEST,
+                "workPageId": None,
+                "maximumRowBytes": audit_capacity.MAX_COUNTER_BYTES,
+                "initializerImplemented": False,
+                "onlineActivationPermitted": False,
             }
         ),
         "traversal-chain-high-water": MappingProxyType(

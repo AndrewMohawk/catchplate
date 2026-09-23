@@ -478,7 +478,9 @@ class ApiAdapter:
             name = str(raw_name).strip().lower()
             if name in _GENERIC_NON_FORWARDED_HEADERS or is_serverware_internal_header(name):
                 continue
-            if name not in allowed_headers:
+            # Content-Type is reserved for the exact media/physical-field checks below,
+            # not an ordinary configurable provider request header.
+            if name != "content-type" and name not in allowed_headers:
                 return PolicyDecision(
                     allowed=False,
                     status_code=403,

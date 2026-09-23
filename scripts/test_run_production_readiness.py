@@ -2129,6 +2129,19 @@ def proof_policy_bundle(
                         },
                     },
                 },
+                "constraints": [
+                    {
+                        "id": "production-proof-response-envelope",
+                        "type": "responseEnvelope",
+                        "phase": "response",
+                        "operations": ["production.proof.health"],
+                        "statusCodes": [200],
+                        "bodyPresence": "required",
+                        "contentTypes": ["application/json"],
+                        "allowedResponseHeaderNames": [],
+                        "responseHeaderRules": [],
+                    }
+                ],
             }
         ],
     }
@@ -2148,6 +2161,27 @@ def verify_proof_policy_identity_contract() -> None:
             )
 
         validate(proof_policy_bundle())
+        for field, value, expected in (
+            ("phase", "request", "must use phase response"),
+            ("operations", ["unrelated.operation"], "responseEnvelope references unknown operations"),
+            ("statusCodes", [True], "must define 1-16 unique statuses"),
+            ("contentTypes", [], "invalid body/content-type contract"),
+            ("allowedResponseHeaderNames", ["content-type"], "allowedResponseHeaderNames is invalid"),
+            ("allowedResponseHeaderNames", ["x-proof"], "exactly one value rule for every allowed response header"),
+            (None, None, "must define at least one responseEnvelope"),
+        ):
+            bundle = proof_policy_bundle()
+            if field is None:
+                bundle["routes"][0]["constraints"] = []
+            else:
+                bundle["routes"][0]["constraints"][0][field] = value
+            try:
+                validate(bundle)
+            except ValueError as exc:
+                if expected not in str(exc):
+                    raise AssertionError(f"response envelope rejected for wrong reason: {exc}") from exc
+            else:
+                raise AssertionError(f"proof policy accepted invalid responseEnvelope.{field}")
         for selectors, expected in (
             ([], "must define at least one enforceable identity selector"),
             (["0.0.0.0/0"], "requiredHeaders require a non-universal source CIDR"),

@@ -1030,6 +1030,24 @@ def main() -> None:
         )
         stale_kind_document["kind"] = "ImageSignatures"
         write_json(paths["image_signatures"], stale_kind_document)
+        raw_tamper = run_handoff(paths)
+        if (
+            raw_tamper.returncode == 0
+            or "image signature document payload digest mismatch" not in detail(raw_tamper)
+        ):
+            raise AssertionError(
+                f"handoff did not reject unsigned kind tampering at the digest guard: {detail(raw_tamper)}"
+            )
+        # Reach the schema guard with internally consistent, genuinely signed
+        # fixture evidence, not a stale digest or signature from another payload.
+        stale_kind_summary = json.loads(
+            paths["image_signatures_summary"].read_text(encoding="utf-8")
+        )
+        test_release_completion.refresh_image_signature_bundle(
+            stale_kind_summary, stale_kind_document
+        )
+        write_json(paths["image_signatures"], stale_kind_document)
+        write_json(paths["image_signatures_summary"], stale_kind_summary)
         stale_kind = run_handoff(paths)
         if (
             stale_kind.returncode == 0

@@ -365,7 +365,6 @@ const MAX_CANONICAL_REQUEST_HEADER_VALUE_BYTES: usize = 16 * 1024;
 const GMAIL_V1_REQUEST_HEADERS: &[&str] = &[
     "accept",
     "accept-encoding",
-    "content-type",
     "user-agent",
     "x-goog-api-client",
     "x-goog-request-params",
@@ -385,7 +384,7 @@ const GMAIL_V1_REQUEST_QUERY_KEYS: &[&str] = &[
     "q",
     "quotaUser",
 ];
-const X_V2_REQUEST_HEADERS: &[&str] = &["accept", "accept-encoding", "content-type", "user-agent"];
+const X_V2_REQUEST_HEADERS: &[&str] = &["accept", "accept-encoding", "user-agent"];
 const X_V2_RECENT_SEARCH_QUERY_KEYS: &[&str] = &[
     "end_time",
     "expansions",
@@ -464,7 +463,6 @@ const X_V2_BOUNDED_READ_QUERY_KEYS: &[&str] = &[
 const NPM_REGISTRY_REQUEST_HEADERS: &[&str] = &[
     "accept",
     "accept-encoding",
-    "content-type",
     "npm-auth-type",
     "npm-command",
     "npm-in-ci",
@@ -8011,7 +8009,10 @@ fn validate_provider_request_admission(
                 })
             });
         }
-        if !is_provider_request_profile_exempt_header(name.as_str())
+        // Reserved Content-Type is admitted only by the exact media checks below.
+        // Duplicate detection above still applies before this mediated path.
+        if name.as_str() != "content-type"
+            && !is_provider_request_profile_exempt_header(name.as_str())
             && !allowed_headers.contains(name.as_str())
         {
             return Err(json!({
@@ -8225,12 +8226,17 @@ fn request_value_capture_sources(constraints: &[Value]) -> HashMap<String, Gener
     captures
 }
 
+struct OperationFieldCatalog {
+    guaranteed: HashSet<String>,
+    possible: HashSet<String>,
+}
+
 fn operation_field_catalog(
     adapter_type: &str,
     adapter_config: &Map<String, Value>,
     paths: &[Value],
     generic_sources: &HashMap<&str, GenericOperationSource>,
-) -> Result<HashSet<String>, String> {
+) -> Result<OperationFieldCatalog, String> {
     let operations = declared_policy_operations(adapter_type, adapter_config, paths)?;
     let fields_for = |operation: &str| -> Option<HashSet<String>> {
         let fields: &[&str] = match (adapter_type, operation) {
@@ -8314,10 +8320,15 @@ fn operation_field_catalog(
     let mut common = catalogs
         .pop()
         .ok_or_else(|| format!("{adapter_type} has no declared operation catalog"))?;
+    let mut possible = common.clone();
     for fields in catalogs {
         common.retain(|field| fields.contains(field));
+        possible.extend(fields);
     }
-    Ok(common)
+    Ok(OperationFieldCatalog {
+        guaranteed: common,
+        possible,
+    })
 }
 
 fn request_value_body_source_is_admitted(
@@ -8410,7 +8421,9 @@ fn validate_request_value_constraints(
     }
 
     let mut seen_sources = HashSet::new();
-    let mut captures = operation_fields.clone();
+    // Sources require intersection availability; captures reserve the union so
+    // they cannot overwrite fields emitted by only some matched operations.
+    let mut captures = operation_fields.possible;
     captures.insert(PROVIDER_ACCOUNT_OPERATION_FIELD.to_string());
     for constraint in request_value_constraints {
         let constraint_id = constraint
@@ -8515,7 +8528,7 @@ fn validate_request_value_constraints(
                         "{label} {source} {name} lacks an exact typed body allowlist proof"
                     ));
                 }
-                "operationField" if !operation_fields.contains(name) => {
+                "operationField" if !operation_fields.guaranteed.contains(name) => {
                     return Err(format!(
                         "{label} operationField {name} is not emitted by every declared adapter operation"
                     ));
@@ -28931,9 +28944,12 @@ fn validate_adapter_with_gmail_proof_mode(
                         return Err(json!({"error":"gmail_message_age_not_proven"}));
                     }
                 }
-                Ok((json!({"operation":"gmail.message.get"}), json!({})))
+                Ok((json!({
+                    "operation":"gmail.message.get",
+                    "gmailUser":gmail_user,
+                    "messageId":message_id,
+                }), json!({})))
             } else {
-                let _ = gmail_user;
                 let query = url
                     .query_pairs()
                     .find(|(key, _)| key == "q")
@@ -28945,7 +28961,7 @@ fn validate_adapter_with_gmail_proof_mode(
                 let max_results = config.get("maxResults").and_then(Value::as_u64);
                 let rewritten_q = tighten_gmail_query(&query, days);
                 Ok((
-                    json!({"operation":"gmail.messages.list"}),
+                    json!({"operation":"gmail.messages.list","gmailUser":gmail_user}),
                     json!({"query":{"q":rewritten_q,"maxResults":max_results}}),
                 ))
             }
@@ -59420,6 +59436,14 @@ mod tests {
             .expect("exact provider profile");
             assert_eq!(admitted.allowed_query_keys.len(), expected_query_count);
             assert_eq!(admitted.max_body_bytes, expected_max_body);
+            assert!(!admitted.allowed_headers.contains(&"content-type"));
+            let mut reserved_header = config.clone();
+            reserved_header["request"]["allowedHeaders"].as_array_mut().unwrap()
+                .push(json!("content-type"));
+            assert!(validate_provider_request_profile_config(
+                "route:provider-profile", adapter_type, reserved_header.as_object().unwrap(),
+            ).expect_err("mediated Content-Type is not a configurable provider header")
+                .contains("allowedHeaders must match the exact provider profile"));
 
             let mut customized_discard = config.clone();
             customized_discard["request"]["discardHeaders"] =
@@ -63602,6 +63626,26 @@ mod tests {
 
     #[test]
     fn runtime_blocks_unadmitted_credential_body_policy_before_credential_lookup() {
+        // Earlier policy-integrity checks may inspect the public injection
+        // target; these cases must deny before acquiring any secret or lease.
+        fn snapshot_with_public_credential() -> Snapshot {
+            let mut snapshot = (*test_snapshot(1)).clone();
+            snapshot.credentials.insert("credential:test".to_string(), Credential {
+                provider: "generic".to_string(),
+                provider_subject: Some("account:test".to_string()),
+                injection: json!({"type":"bearer"}),
+            });
+            let route = &mut snapshot.routes[0];
+            route.credential_ref = Some("credential:test".to_string());
+            route.adapter_config["credentialMode"] = json!("required");
+            route.adapter_config.as_object_mut().unwrap().remove("noCredentialProof");
+            route.adapter_config["credentialBinding"] = json!({
+                "credentialType":"static", "provider":"generic",
+                "subjects":["account:test"], "secretClass":"bearerToken",
+            });
+            snapshot
+        }
+
         for (body_mode, constraint_type, wrong_type, content_type, body) in [
             (
                 "json",
@@ -63637,8 +63681,7 @@ mod tests {
                     "allowedFields":["safe"]
                 })],
             ] {
-                let mut snapshot_value = (*test_snapshot(1)).clone();
-                snapshot_value.routes[0].credential_ref = Some("credential:test".to_string());
+                let mut snapshot_value = snapshot_with_public_credential();
                 snapshot_value.routes[0].adapter_config["request"] = json!({
                     "allowedHeaders":[],
                     "allowedQueryKeys":[],
@@ -63676,7 +63719,8 @@ mod tests {
                     "credential_request_body_constraint_required"
                 );
                 assert_eq!(denied["payload"]["bodyMode"], body_mode);
-                assert!(snapshot.credentials.is_empty());
+                assert_eq!(snapshot.credentials.len(), 1, "only public policy metadata is present");
+                assert!(state.credential_generations.lock().expect("generation cache").is_empty());
                 assert!(state
                     .credential_leases
                     .lock()
@@ -63686,8 +63730,7 @@ mod tests {
         }
 
         for body_mode in ["any", "stream"] {
-            let mut snapshot_value = (*test_snapshot(1)).clone();
-            snapshot_value.routes[0].credential_ref = Some("credential:test".to_string());
+            let mut snapshot_value = snapshot_with_public_credential();
             snapshot_value.routes[0].adapter_config["request"] = json!({
                 "allowedHeaders":[],
                 "allowedQueryKeys":[],
@@ -63727,12 +63770,26 @@ mod tests {
                 "credential_non_buffered_request_body_denied"
             );
             assert_eq!(denied["payload"]["bodyMode"], body_mode);
+            assert_eq!(snapshot.credentials.len(), 1, "only public policy metadata is present");
+            assert!(state.credential_generations.lock().expect("generation cache").is_empty());
             assert!(state
                 .credential_leases
                 .lock()
                 .expect("credential lease cache")
                 .is_empty());
         }
+
+        let mut missing_public = snapshot_with_public_credential();
+        missing_public.credentials.clear();
+        let snapshot = Arc::new(missing_public);
+        let state = test_gate_state(Arc::clone(&snapshot));
+        let denied = decide_internal(&state, &snapshot,
+            provider_test_request("GET", "https://example.test/resource", BTreeMap::new(), "", Some(0)),
+            Some("agent:test"));
+        assert_eq!(denied["payload"]["error"], "discard_header_policy_invalid");
+        assert_eq!(denied["status_code"], 500);
+        assert!(state.credential_generations.lock().expect("generation cache").is_empty());
+        assert!(state.credential_leases.lock().expect("credential lease cache").is_empty());
     }
 
     #[test]
@@ -67107,6 +67164,7 @@ mod tests {
             "type":"rateLimit",
             "max":1,
             "windowSeconds":86400,
+            "windowSemantics":"fixedFromFirstUse",
             "key":{
                 "scope":["route","operation"],
                 "operationFields":["providerAccount"]
@@ -69809,15 +69867,17 @@ mod tests {
         let mut valid_constraints = Vec::new();
         for calendar_window in ["utcDay", "utcIsoWeek", "utcMonth"] {
             valid_constraints.push(json!({
-                "id":"quota:calendar","type":"rateLimit","max":5,
+                "id":"quota-calendar","type":"rateLimit","max":5,
                 "calendarWindow":calendar_window,"store":"shared",
-                "windowSemantics":"calendarUTC"
+                "windowSemantics":"calendarUTC",
+                "key":{"scope":["principal","route","operation"]}
             }));
         }
         valid_constraints.push(json!({
-            "id":"quota:fixed","type":"rateLimit","max":5,
+            "id":"quota-fixed","type":"rateLimit","max":5,
             "windowSeconds":3600,"store":"local",
-            "windowSemantics":"fixedFromFirstUse"
+            "windowSemantics":"fixedFromFirstUse",
+            "key":{"scope":["principal","route","operation"]}
         }));
         for (index, constraint) in valid_constraints.into_iter().enumerate() {
             let expected_semantics = constraint["windowSemantics"].as_str().unwrap();
@@ -69849,27 +69909,27 @@ mod tests {
         for (label, constraint, expected_error) in [
             (
                 "both",
-                json!({"id":"quota:test","type":"rateLimit","max":5,"windowSeconds":60,"calendarWindow":"utcDay","store":"shared","windowSemantics":"calendarUTC"}),
+                json!({"id":"quota-test","type":"rateLimit","max":5,"windowSeconds":60,"calendarWindow":"utcDay","store":"shared","windowSemantics":"calendarUTC","key":{"scope":["principal","route","operation"]}}),
                 "exactly one",
             ),
             (
                 "neither",
-                json!({"id":"quota:test","type":"rateLimit","max":5,"store":"shared","windowSemantics":"fixedFromFirstUse"}),
+                json!({"id":"quota-test","type":"rateLimit","max":5,"store":"shared","windowSemantics":"fixedFromFirstUse","key":{"scope":["principal","route","operation"]}}),
                 "exactly one",
             ),
             (
                 "unknown",
-                json!({"id":"quota:test","type":"rateLimit","max":5,"calendarWindow":"utcWeek","store":"shared","windowSemantics":"calendarUTC"}),
+                json!({"id":"quota-test","type":"rateLimit","max":5,"calendarWindow":"utcWeek","store":"shared","windowSemantics":"calendarUTC","key":{"scope":["principal","route","operation"]}}),
                 "calendarWindow",
             ),
             (
                 "local",
-                json!({"id":"quota:test","type":"rateLimit","max":5,"calendarWindow":"utcDay","store":"local","windowSemantics":"calendarUTC"}),
+                json!({"id":"quota-test","type":"rateLimit","max":5,"calendarWindow":"utcDay","store":"local","windowSemantics":"calendarUTC","key":{"scope":["principal","route","operation"]}}),
                 "calendar windows require store shared",
             ),
             (
                 "non-integer max",
-                json!({"id":"quota:test","type":"rateLimit","max":5.5,"calendarWindow":"utcDay","store":"shared","windowSemantics":"calendarUTC"}),
+                json!({"id":"quota-test","type":"rateLimit","max":5.5,"calendarWindow":"utcDay","store":"shared","windowSemantics":"calendarUTC","key":{"scope":["principal","route","operation"]}}),
                 "max must be an integer",
             ),
         ] {
@@ -72200,6 +72260,74 @@ mod tests {
         )
         .expect_err("request value capture must not replace provider account identity");
         assert_eq!(denied["error"], "constraint_invalid_request_value");
+    }
+
+    #[test]
+    fn gmail_operation_fields_and_capture_reservations_match_typed_catalogs() {
+        let examples = strict_json_value_from_str(include_str!(
+            "../../../policies/credential-limits.examples.json"
+        )).expect("parse unsigned policy examples");
+        let mut raw_route = examples["routes"].as_array().unwrap().iter()
+            .find(|route| route.pointer("/adapter/type").and_then(Value::as_str) == Some("gmail.v1"))
+            .expect("Gmail route").clone();
+        raw_route["principals"] = json!(["agent:test"]);
+        let policy = policy_with_route(raw_route);
+        let snapshot = load_compiled_test_snapshot(policy.clone(), "gmail-operation-catalog", 2);
+        let route = &snapshot.routes[0];
+
+        for (target, message_id, expected) in [
+            ("https://gmail.googleapis.com/gmail/v1/users/me/messages", None,
+             json!({"operation":"gmail.messages.list","gmailUser":"me"})),
+            ("https://gmail.googleapis.com/gmail/v1/users/me/messages/message-1", Some("message-1"),
+             json!({"operation":"gmail.message.get","gmailUser":"me","messageId":"message-1"})),
+        ] {
+            let mut request = provider_test_request("GET", target, BTreeMap::new(), "", Some(0));
+            let mut params = BTreeMap::from([("user".to_string(), "me".to_string())]);
+            if let Some(message_id) = message_id {
+                params.insert("message_id".to_string(), message_id.to_string());
+                request.gmail_proofs.push(message_id.to_string());
+            }
+            let route_match = RouteMatch { route, params };
+            let url = Url::parse(target).unwrap();
+            let (mut operation, _) = validate_adapter(&request, &request.headers, &url, &route_match)
+                .expect("validated Gmail operation fields");
+            assert_eq!(operation, expected);
+            let before = operation.clone();
+            let collision = json!({"id":"collision", "type":"requestValue", "rules":[{
+                "source":"pathParam", "name":"user",
+                "predicate":{"kind":"equals","value":"me"}, "capture":"gmailUser",
+            }]});
+            let denied = enforce_request_value(&collision, &request, &request.headers, &url,
+                &route_match.params, &mut operation).expect_err("runtime capture cannot replace adapter identity");
+            assert_eq!(denied["error"], "constraint_invalid_request_value");
+            assert_eq!(operation, before);
+        }
+
+        for capture in ["gmailUser", "messageId"] {
+            let mut invalid = policy.clone();
+            invalid["routes"][0]["adapter"]["config"]["request"]["valueRules"][0]["capture"] = json!(capture);
+            assert!(validate_policy_capabilities(&invalid)
+                .expect_err("captures reserve every possibly emitted field")
+                .contains(&format!("capture {capture} collides with another operation field")));
+        }
+        let mut fresh = policy.clone();
+        fresh["routes"][0]["adapter"]["config"]["request"]["valueRules"][0]["capture"] = json!("approvedUser");
+        load_compiled_test_snapshot(fresh, "gmail-fresh-capture", 3);
+
+        for (name, admitted) in [("gmailUser", true), ("messageId", false)] {
+            let mut candidate = policy.clone();
+            candidate["routes"][0]["adapter"]["config"]["request"]["valueRules"] = json!([{
+                "source":"operationField", "name":name,
+                "predicate":{"kind":"stringLength","minLength":1,"maxLength":128},
+            }]);
+            if admitted {
+                load_compiled_test_snapshot(candidate, "gmail-common-operation-source", 4);
+            } else {
+                assert!(validate_policy_capabilities(&candidate)
+                    .expect_err("get-only field is not available on mixed list/get route")
+                    .contains("operationField messageId is not emitted by every declared adapter operation"));
+            }
+        }
     }
 
     #[test]
@@ -77610,7 +77738,7 @@ mod tests {
             "google".to_string();
         google_snapshot.credentials.get_mut("credential:x").unwrap().injection =
             credential_injection_with_signed_identity(
-                &json!({"type":"bearer"}),
+                &json!({"type":"bearer","field":"access_token"}),
                 json!({
                     "credentialType":"oauth2",
                     "oauthClientId":"client:google",

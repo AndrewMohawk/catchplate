@@ -8634,6 +8634,13 @@ def test_response_observation_proof_requirements(
         completed_durable_observation,
         "control-plane authorization receipt durable policy lifecycle mismatch",
         "non-null completion evidence in a dispatched observation receipt",
+        expected_nonce=durable_observation_nonce,
+    )
+    rejected(
+        durable,
+        "response observation proof statement nonce mismatch",
+        "durable observation with a different independently expected client nonce",
+        expected_nonce=valid_nonce,
     )
 
     rejected(

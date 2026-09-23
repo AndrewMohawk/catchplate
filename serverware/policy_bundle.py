@@ -231,7 +231,6 @@ PROVIDER_REQUEST_PROFILE_REQUIRED_FIELDS = (
 GMAIL_V1_REQUEST_HEADERS = (
     "accept",
     "accept-encoding",
-    "content-type",
     "user-agent",
     "x-goog-api-client",
     "x-goog-request-params",
@@ -251,7 +250,7 @@ GMAIL_V1_REQUEST_QUERY_KEYS = (
     "q",
     "quotaUser",
 )
-X_V2_REQUEST_HEADERS = ("accept", "accept-encoding", "content-type", "user-agent")
+X_V2_REQUEST_HEADERS = ("accept", "accept-encoding", "user-agent")
 
 # Frozen from the official X OpenAPI document at https://api.twitter.com/2/openapi.json
 # on 2026-07-16. Policy changes are required before a newly published query key is usable.
@@ -380,7 +379,6 @@ X_V2_BOUNDED_READ_QUERY_KEYS = (
 NPM_REGISTRY_REQUEST_HEADERS = (
     "accept",
     "accept-encoding",
-    "content-type",
     "npm-auth-type",
     "npm-command",
     "npm-in-ci",
@@ -5017,6 +5015,22 @@ def _validate_request_value_sources(
     ]
     if not request_value_constraints:
         return {}
+    operation_catalogs = [
+        adapter_operation_field_names(adapter_type, operation, set(operation_source_kinds))
+        for operation in _declared_route_operations(adapter_type, adapter_config, paths)
+    ]
+    if not operation_catalogs or any(catalog is None for catalog in operation_catalogs):
+        raise PolicyBundleError(
+            f"route {route_id} {adapter_type} has no closed operation-field catalog"
+        )
+    # A source must exist for every operation, but a capture must not overwrite
+    # a field emitted by even one operation (for example Gmail get's messageId).
+    guaranteed_operation_fields = set.intersection(
+        *(set(catalog) for catalog in operation_catalogs if catalog is not None)
+    )
+    possible_operation_fields = set.union(
+        *(set(catalog) for catalog in operation_catalogs if catalog is not None)
+    )
     request = adapter_config.get("request") or {}
     allowed_query = set(request.get("allowedQueryKeys") or [])
     allowed_headers = {
@@ -5091,25 +5105,7 @@ def _validate_request_value_sources(
                         f"{label} formBody {name} is not admitted by the adapter request profile"
                     )
             elif source == "operationField":
-                operation_catalogs = [
-                    adapter_operation_field_names(
-                        adapter_type,
-                        operation,
-                        set(operation_source_kinds),
-                    )
-                    for operation in _declared_route_operations(
-                        adapter_type, adapter_config, paths
-                    )
-                ]
-                if (
-                    not operation_catalogs
-                    or any(catalog is None for catalog in operation_catalogs)
-                    or any(
-                        name not in catalog
-                        for catalog in operation_catalogs
-                        if catalog is not None
-                    )
-                ):
+                if name not in guaranteed_operation_fields:
                     raise PolicyBundleError(
                         f"{label} operationField {name} is not emitted by the typed adapter"
                     )
@@ -5118,7 +5114,7 @@ def _validate_request_value_sources(
                 continue
             capture = str(capture)
             if (
-                capture in operation_source_kinds
+                capture in possible_operation_fields
                 or capture in captures
                 or capture in {"operation", "providerAccount"}
             ):

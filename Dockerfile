@@ -80,4 +80,15 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 USER serverware
 
+FROM development-test-runtime AS development-postgres-test-runtime
+
+# Local SQL engineering tests use a disposable Unix-socket PostgreSQL cluster.
+# The server and client tools do not enter the production or default runtime.
+USER root
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends postgresql \
+    && rm -rf /var/lib/apt/lists/*
+USER serverware
+HEALTHCHECK NONE
+
 FROM production-runtime AS runtime

@@ -9,6 +9,9 @@ from typing import Any
 
 from serverware import authority_contract
 from serverware import authority_transition_registry
+from serverware.authority_store.webauthn_trust_sql import (
+    locked_webauthn_trust_projection,
+)
 
 _DB_GLOBALS: Mapping[str, Any] | None = None
 _DIGEST_PATTERN = "sha256:" + "0" * 64
@@ -1811,30 +1814,7 @@ def install_authority_v9_executor(
                 WHERE assertion_evidence_digest =
                     authorization_projection.assertion_evidence_digest
                 FOR UPDATE;
-                SELECT *
-                INTO STRICT trust_high_water
-                FROM {namespace}.
-                    webauthn_trust_publication_high_water
-                WHERE authority_scope = 'webauthn-metadata'
-                FOR UPDATE;
-                SELECT *
-                INTO STRICT trust_publication
-                FROM {namespace}.webauthn_trust_publications
-                WHERE rollback_epoch = trust_high_water.rollback_epoch
-                  AND sequence =
-                        trust_high_water.publication_sequence
-                  AND publication_digest =
-                        trust_high_water.publication_digest
-                  AND metadata_blob_digest =
-                        trust_high_water.metadata_blob_digest
-                  AND revocation_set_digest =
-                        trust_high_water.revocation_set_digest
-                  AND witness_receipt_digest =
-                        trust_high_water.witness_receipt_digest
-                  AND witness_sequence =
-                        trust_high_water.witness_sequence
-                  AND status = 'published'
-                FOR UPDATE;
+                {locked_webauthn_trust_projection(namespace)}
                 trust_high_water_value :=
                     pg_catalog.jsonb_build_object(
                         'schema',

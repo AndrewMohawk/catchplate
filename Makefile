@@ -25,6 +25,7 @@ SHELL := /bin/sh
 .PHONY: coder-controller-v12-package-prepare coder-controller-v12-provision coder-controller-v12-install coder-controller-v12-provision-local-trusted-host coder-controller-v12-provision-external-production
 .PHONY: render-policy-custody-assets verify-policy-custody-host-ready
 .PHONY: verify-production-proxy-ingress-materials
+.PHONY: verify-provider-policy-parity verify-webauthn-trust-projection
 .PHONY: production-source-capture production-release-build production-release-publish production-release-sign production-release-deploy
 .NOTPARALLEL: production-release-build production-release-publish production-release-sign production-release-deploy production-release-proof
 
@@ -696,6 +697,8 @@ override CODER_EXCLUDED_TEST_SCRIPTS := \
 	scripts/test_sigstore_json.py \
 	scripts/test_transparency_checkpoint.py \
 	scripts/test_checkpoint_sequence.py \
+	scripts/test_provider_policy_parity.py \
+	scripts/test_webauthn_trust_projection_postgres.py \
 	scripts/test_webauthn_recovery.py
 CODER_TIMEOUT ?= timeout
 CODER_BUILD_TIMEOUT ?= 3600s
@@ -7243,6 +7246,15 @@ verify-policy-activation-evidence:
 verify-transparency-checkpoint:
 	python3 scripts/test_transparency_checkpoint.py
 	python3 scripts/test_checkpoint_sequence.py
+
+verify-provider-policy-parity:
+	python3 scripts/test_provider_policy_parity.py
+
+# The prepared external runner owns this disposable Unix-socket test cluster.
+# This target neither starts a server nor falls back to a production DSN.
+verify-webauthn-trust-projection:
+	test -n "$${SERVERWARE_TEST_POSTGRES_DSN:-}"
+	python3 scripts/test_webauthn_trust_projection_postgres.py --postgres-dsn "$$SERVERWARE_TEST_POSTGRES_DSN"
 
 verify-nitro-nsm-attest:
 	python3 scripts/test_nitro_nsm_attest.py

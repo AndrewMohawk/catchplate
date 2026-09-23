@@ -100,6 +100,30 @@ per invalidated control-plane approval. The existing 32-item cascade hint and
 136-mutation contract must be reconciled with those audit costs; silent
 truncation or dropping audits is not acceptable.
 
+## Locked trust projection repair
+
+The v9 executor's trust query previously referenced publication columns that
+exist only in the high-water table. The shared
+`authority_store/webauthn_trust_sql.py` projection joins one published row to its
+locked high-water record by rollback epoch, sequence, bundle/publication digest
+and payload/metadata digest. Witness and revocation fields come from that same
+high-water row and remain inputs to the existing signed-evidence digest check.
+High-water-first locking and both row locks are retained.
+
+`scripts/test_webauthn_trust_projection_postgres.py` executes that exact block
+against the actual two table declarations in a disposable PostgreSQL database.
+The prepared external runner owns engine startup/shutdown; the script accepts
+only a local Unix socket and creates/drops one random test schema. It checks
+projection, missing/mismatched rows, cross-row mixing and lock contention. This
+is not a full v9 dispatcher/planner/witness/executor or migration test, nor proof
+of independently authenticated database state.
+
+The rendered query remains part of the exact installed-function definition
+checked by the schema manifest. Existing v9 databases with the old function
+definition remain fail-closed and require a separately reviewed repair contract;
+the code change does not authorize silently replacing their functions. It also
+does not supply any missing kernel or remove the startup blocker.
+
 ## Authenticated storage prerequisites
 
 Source review identified additional prerequisites below the missing kernels.

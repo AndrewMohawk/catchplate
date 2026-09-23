@@ -76,6 +76,13 @@ build the `development-test-runtime` Dockerfile target during preparation and
 run it against the frozen source afterward. It adds test tooling only; the
 default application image remains unchanged.
 
+The separate `development-postgres-test-runtime` target also includes PostgreSQL
+tools for focused SQL engineering checks. Prepare it before verification; tests
+must create a disposable local Unix-socket cluster with networking disabled and
+must never point at a production database. This target does not enter the
+default or production image, and a passing query test does not establish the
+complete authority protocol, independent witness state or WebAuthn startup.
+
 Production candidates are intentionally built without network access from one
 separately published, immutable dependency snapshot. At this handoff,
 `requirements.lock` contains the patched `cryptography==50.0.0`, while

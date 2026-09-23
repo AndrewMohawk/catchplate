@@ -46,6 +46,23 @@ publication or fixture signing; operators must supply the verifiable receipt
 protocol. Valid receipt signatures do not by themselves establish trusted log
 identity: final verification still uses independently pinned log keys/provider.
 
+## Provider media and operation-field contracts
+
+`Content-Type` is a reserved, separately checked request field, not a configurable
+ordinary header. Gmail, X and npm fixed request profiles therefore omit it from
+`allowedHeaders`, as the shared schema requires. Requests still undergo exact
+media-type parsing, physical duplicate checks and body-size/presence checks.
+Removing the header from ordinary profiles is not permission to forward an
+unchecked media declaration. The same reserved-header rule applies to generic
+routes without changing their existing media validation.
+
+Typed adapter fields cannot be overwritten by request-value captures. A capture
+must not collide with a field emitted by *any* operation admitted by the route.
+By contrast, reading an `operationField` requires it to be available for *every*
+admitted operation. Gmail list/get both emit `gmailUser`; only get emits
+`messageId`. Keep those union-versus-intersection checks distinct. A path rule
+that requires Gmail user `me` does not also need to capture `gmailUser`.
+
 ## Static Compose versus runtime evidence
 
 Release provenance must account for the exact eighteen services declared in

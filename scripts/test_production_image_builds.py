@@ -5,6 +5,7 @@ import copy
 import ast
 import json
 import hashlib
+import importlib.util
 import os
 import re
 import subprocess
@@ -1137,22 +1138,218 @@ def assert_source_tree_digest_covers_untracked_source() -> None:
             raise AssertionError(f"source_tree_digest did not change for an untracked {probe.suffix} file")
 
 
-def local_copy_inputs(path: Path) -> list[str]:
-    inputs: list[str] = []
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        fields = raw.strip().split()
-        if (
-            not fields
-            or fields[0].upper() != "COPY"
-            or any(field.startswith("--from=") for field in fields[1:])
-        ):
+SOURCE_CONTRACT_INPUTS = (
+    ("ARCHIVE", "source.tar", "source_archive"),
+    ("MANIFEST", "source-manifest.json", "source_manifest"),
+    ("FILE_LIST", "source.files", "source_file_list"),
+    ("FILE_HASHES", "source.files.sha256", "source_file_hashes"),
+    ("FILE_MODES", "source.files.mode", "source_file_modes"),
+)
+PYTHON_CACHE_INPUT = "production-dependencies/cache/python-wheelhouse-linux-amd64.tar.gz"
+RUST_CACHE_INPUTS = (
+    "production-dependencies/cache/cargo-vendor.tar.gz",
+    "production-dependencies/cache/musl-1.2.5-r12.apk",
+    "production-dependencies/cache/musl-dev-1.2.5-r12.apk",
+)
+COMMITTED_COPY_INPUTS = (
+    "requirements.lock", "production-dependencies/python-linux-amd64.sha256",
+)
+
+
+def production_copy_stages(dockerfile: str) -> tuple[dict[str, list[str]], list[tuple[str, str, str]]]:
+    """Closed source regression grammar; unsupported COPY forms fail explicitly."""
+    stages: dict[str, list[str]] = {}
+    local: list[tuple[str, str, str]] = []
+    stage = ""
+    continued = False
+    for raw in dockerfile.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
             continue
+        fields = line.split()
+        opcode = fields[0].upper()
+        instruction = not continued
+        continued = line.endswith("\\")
+        if instruction and opcode == "FROM":
+            if len(fields) == 4 and fields[2].upper() == "AS":
+                stage = fields[3]
+            elif len(fields) == 2:
+                stage = f"unnamed-stage-{len(stages)}"
+            else:
+                raise AssertionError(f"unsupported production FROM: {line}")
+            if stage in stages:
+                raise AssertionError(f"duplicate production stage: {stage}")
+            stages[stage] = [line]
+            continue
+        if not stage:
+            raise AssertionError("production instruction precedes FROM")
+        stages[stage].append(line.removesuffix("\\").rstrip().removesuffix(";").rstrip())
+        if instruction and opcode == "ADD":
+            raise AssertionError("production input classification does not permit ADD")
+        if not instruction or opcode != "COPY":
+            continue
+        options = []
         while len(fields) > 1 and fields[1].startswith("--"):
-            fields.pop(1)
-        if len(fields) < 3:
-            raise AssertionError(f"unsupported production COPY instruction in {path}: {raw}")
-        inputs.extend(fields[1:-1])
-    return inputs
+            options.append(fields.pop(1))
+        if len(fields) != 3 or any(token.startswith("[") for token in fields):
+            raise AssertionError(f"unsupported production COPY: {line}")
+        from_options = [option for option in options if option.startswith("--from=")]
+        if from_options:
+            origin = from_options[0].removeprefix("--from=")
+            if len(from_options) != 1 or origin == stage or origin not in stages:
+                raise AssertionError(f"COPY must use an earlier declared stage: {line}")
+            if any(not option.startswith(("--from=", "--chown=", "--chmod=")) for option in options):
+                raise AssertionError(f"unsupported production COPY option: {line}")
+        else:
+            if options:
+                raise AssertionError(f"unsupported local production COPY option: {line}")
+            local.append((stage, fields[1], fields[2]))
+    return stages, local
+
+
+def require_stage_order(stages: dict[str, list[str]], stage: str, markers: tuple[str, ...]) -> None:
+    lines = stages.get(stage, [])
+    positions = []
+    for marker in markers:
+        if lines.count(marker) != 1:
+            raise AssertionError(f"{stage} must retain exactly one input guard: {marker}")
+        positions.append(lines.index(marker))
+    if positions != sorted(positions) or len(positions) != len(set(positions)):
+        raise AssertionError(f"{stage} input guards must precede consumption in order")
+
+
+def assert_production_copy_classification(dockerfile: str, *, family: str) -> None:
+    stages, actual = production_copy_stages(dockerfile)
+    if family not in {"python", "rust"}:
+        raise AssertionError("unknown production Dockerfile family")
+    cache_stage = f"{family}-production-dependency-cache"
+    source_stage = "verified-production-source" if family == "python" else "build"
+    cache_inputs = (PYTHON_CACHE_INPUT,) if family == "python" else RUST_CACHE_INPUTS
+    committed_inputs = COMMITTED_COPY_INPUTS if family == "python" else ()
+    expected = [
+        (cache_stage, source, f"/dependency-cache/{Path(source).name}")
+        for source in committed_inputs
+    ] + [
+        (cache_stage, source, f"/dependency-cache/cache/{Path(source).name}")
+        for source in cache_inputs
+    ] + [
+        (source_stage, "${SERVERWARE_SOURCE_" + suffix + "}", f"/source-contract/{destination}")
+        for suffix, destination, _ in SOURCE_CONTRACT_INPUTS
+    ]
+    if actual != expected:
+        raise AssertionError(f"{family} root COPY inventory differs from the closed source/dependency/contract inputs")
+    if stages[cache_stage][0] != f"FROM scratch AS {cache_stage}":
+        raise AssertionError(f"{cache_stage} must contain only explicitly copied inputs")
+
+    extraction = "tar --no-same-owner -xf /source-contract/source.tar -C /source"
+    for suffix, destination, _ in SOURCE_CONTRACT_INPUTS:
+        variable = "SERVERWARE_SOURCE_" + suffix
+        digest_check = (
+            "printf '%s  %s\\n' \"${" + variable + "_SHA256#sha256:}\" "
+            + f"/source-contract/{destination} | sha256sum -c -"
+        )
+        require_stage_order(stages, source_stage, (
+            f"ARG {variable}", f"ARG {variable}_SHA256",
+            "COPY ${" + variable + "} /source-contract/" + destination,
+            "RUN --network=none set -eu", f'test -n "${{{variable}_SHA256}}"',
+            digest_check, "tar -tf /source-contract/source.tar > /source-contract/archive.files",
+        ))
+    require_stage_order(stages, source_stage, (
+        "tar -tf /source-contract/source.tar > /source-contract/archive.files",
+        "printf '%s  %s\\n' \"${SERVERWARE_SOURCE_FILE_LIST_SHA256#sha256:}\" /source-contract/archive.files | sha256sum -c -",
+        extraction,
+        "sha256sum -c /source-contract/source.files.sha256",
+        'test -n "${expected_mode}"', 'test -n "${relative}"',
+        'test -f "/source/${relative}"', 'test ! -L "/source/${relative}"',
+        'test "$(stat -c \'%a\' "/source/${relative}")" = "${expected_mode}"',
+        "done < /source-contract/source.files.mode",
+    ))
+    if family == "python":
+        require_stage_order(stages, "python-deps", (
+            "COPY --from=python-production-dependency-cache /dependency-cache /dependency-cache",
+            "RUN --network=none set -eu", "cd /dependency-cache",
+            'test "$(grep -Ec \'^[0-9a-f]{64}  \' python-linux-amd64.sha256)" -eq 2',
+            "grep -E '^[0-9a-f]{64}  ' python-linux-amd64.sha256 | sha256sum -c -",
+            "tar -xzf cache/python-wheelhouse-linux-amd64.tar.gz",
+            "python -m pip install", "--no-index", "--only-binary=:all:",
+            "--find-links=/dependency-cache/wheelhouse", "--require-hashes",
+            "-r /dependency-cache/requirements.lock",
+        ))
+    else:
+        require_stage_order(stages, "build", (
+            "COPY --from=rust-production-dependency-cache /dependency-cache /dependency-cache",
+            "done < /source-contract/source.files.mode",
+            "cp /source/data-plane/decision-gate-rs/Cargo.toml /dependency-cache/data-plane/decision-gate-rs/Cargo.toml",
+            "cp /source/data-plane/decision-gate-rs/Cargo.lock /dependency-cache/data-plane/decision-gate-rs/Cargo.lock",
+            "cp /source/production-dependencies/rust-linux-amd64.sha256 /dependency-cache/rust-linux-amd64.sha256",
+            "cd /dependency-cache", "sha256sum -c rust-linux-amd64.sha256",
+            "tar -xzf cache/cargo-vendor.tar.gz -C /src",
+            "RUN --network=none cargo build --release --frozen",
+        ))
+        require_stage_order(stages, "launcher-build", (
+            "COPY --from=build /source /source",
+            "COPY --from=build /dependency-cache /dependency-cache",
+            "RUN --network=none set -eu", "cd /dependency-cache",
+            'test "$(grep -Ec \'^[0-9a-f]{64}  \' rust-linux-amd64.sha256)" -eq 5',
+            "grep -E '^[0-9a-f]{64}  ' rust-linux-amd64.sha256 | sha256sum -c -",
+            "apk", "--no-network", "--repositories-file /dev/null", "add",
+            "cache/musl-1.2.5-r12.apk", "cache/musl-dev-1.2.5-r12.apk",
+            "tar -xzf cache/cargo-vendor.tar.gz -C /src",
+            "RUN --network=none cargo build --release --frozen --bin serverware-production-launcher",
+        ))
+
+
+def assert_copy_input_manifests_and_arguments() -> None:
+    # Parse the actual closed, committed inventories. This does not claim the
+    # archives exist or match their pins; prefetch verify remains that gate.
+    spec = importlib.util.spec_from_file_location(
+        "copy_surface_dependency_manifest", ROOT / "production-dependencies/prefetch.py"
+    )
+    if spec is None or spec.loader is None:
+        raise AssertionError("cannot load the dependency manifest parser")
+    prefetch = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(prefetch)
+    entries = prefetch.expected_cache_entries(prefetch.manifests())
+    expected_cache = {PYTHON_CACHE_INPUT, *RUST_CACHE_INPUTS}
+    if {"production-dependencies/" + relative for relative in entries} != expected_cache:
+        raise AssertionError("Docker cache COPY inputs differ from the four pinned artifacts")
+    for source in (*COMMITTED_COPY_INPUTS, "production-dependencies/rust-linux-amd64.sha256"):
+        if not serverware_source_tree.is_source_file(ROOT / source, ROOT):
+            raise AssertionError(f"dependency authority input is not covered by source identity: {source}")
+    tracked = subprocess.run(
+        ["git", "ls-tree", "-rz", "--name-only", "HEAD", "--", *COMMITTED_COPY_INPUTS],
+        cwd=ROOT, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    ).stdout.decode("utf-8").split("\0")
+    if set(tracked) - {""} != set(COMMITTED_COPY_INPUTS):
+        raise AssertionError("literal Docker source inputs must be committed files")
+    if set(build_production_images.PRIVATE_CONTEXT_FILES) != {
+        "Dockerfile.production", "data-plane/decision-gate-rs/Dockerfile.production",
+        *COMMITTED_COPY_INPUTS, *expected_cache,
+    } or len(build_production_images.PRIVATE_CONTEXT_FILES) != 8:
+        raise AssertionError("private Docker context expanded beyond the closed literal input inventory")
+
+    # Independent sentinel values test the real pure build-argument wiring; they
+    # are not a generated source contract or evidence about an actual archive.
+    metadata = {
+        "source": "fixture-source", "revision": "fixture-revision", "created": "fixture-time",
+        "source_tree_digest": "sha256:" + "f" * 64,
+        "source_identity_mode": "production-commit", "production_release_eligible": True,
+        "source_date_epoch": "1",
+    }
+    expected_arguments = {}
+    for index, (suffix, destination, key) in enumerate(SOURCE_CONTRACT_INPUTS, 1):
+        metadata[key + "_path"] = "production-dependencies/cache/source-contract/" + destination
+        metadata[key + "_digest"] = "sha256:" + str(index) * 64
+        expected_arguments["SERVERWARE_SOURCE_" + suffix] = metadata[key + "_path"]
+        expected_arguments["SERVERWARE_SOURCE_" + suffix + "_SHA256"] = metadata[key + "_digest"]
+    arguments = build_production_images.source_build_arguments(metadata)
+    if len(arguments) % 2 or any(flag != "--build-arg" for flag in arguments[::2]):
+        raise AssertionError("source-contract argument transport changed")
+    observed = [value.split("=", 1) for value in arguments[1::2]]
+    if len({name for name, _ in observed}) != len(observed):
+        raise AssertionError("source-contract arguments contain duplicate assignments")
+    if {name: value for name, value in observed if name in expected_arguments} != expected_arguments:
+        raise AssertionError("generated source-contract paths and digests are cross-wired")
 
 
 def assert_source_tree_covers_production_copy_surface() -> None:
@@ -1160,17 +1357,51 @@ def assert_source_tree_covers_production_copy_surface() -> None:
         ROOT / "Dockerfile.production",
         ROOT / "data-plane" / "decision-gate-rs" / "Dockerfile.production",
     )
-    for dockerfile in dockerfiles:
-        for source in local_copy_inputs(dockerfile):
-            source_path = ROOT / source
-            if source_path.is_dir():
-                source_root = Path(source).parts[0]
-                if source_root not in serverware_source_tree.SOURCE_ROOTS:
-                    raise AssertionError(
-                        f"source-tree manifest does not include every untracked byte under {source} copied by {dockerfile}"
-                    )
-            elif not serverware_source_tree.is_source_file(source_path, ROOT):
-                raise AssertionError(f"source-tree manifest omits root input {source} copied by {dockerfile}")
+    assert_copy_input_manifests_and_arguments()
+    for dockerfile, family in zip(dockerfiles, ("python", "rust"), strict=True):
+        source = dockerfile.read_text(encoding="utf-8")
+        assert_production_copy_classification(source, family=family)
+        first_copy = next(line for line in source.splitlines() if line.startswith("COPY "))
+        cases = [
+            ("extra cache input", source + "\nCOPY production-dependencies/cache/unpinned.tar /extra\n", "root COPY inventory"),
+            ("unbound build argument", source + "\nCOPY ${UNBOUND_INPUT} /extra\n", "root COPY inventory"),
+            ("wrong destination", source.replace(first_copy, first_copy + "-wrong", 1), "root COPY inventory"),
+            ("wrong stage", source.replace(first_copy + "\n", "", 1) + "\n" + first_copy + "\n", "root COPY inventory"),
+            ("wrong generated destination", source.replace("COPY ${SERVERWARE_SOURCE_ARCHIVE} /source-contract/source.tar", "COPY ${SERVERWARE_SOURCE_ARCHIVE} /unverified/source.tar", 1), "root COPY inventory"),
+            ("external COPY stage", source + "\nCOPY --from=unverified-image /payload /extra\n", "earlier declared stage"),
+            ("ADD input", source + "\nADD unclassified /extra\n", "does not permit ADD"),
+        ]
+        for suffix, destination, _ in SOURCE_CONTRACT_INPUTS:
+            check = (
+                "printf '%s  %s\\n' \"${SERVERWARE_SOURCE_" + suffix
+                + "_SHA256#sha256:}\" /source-contract/" + destination + " | sha256sum -c -"
+            )
+            if source.count(check) != 1:
+                raise AssertionError("generated-input mutation fixture lacks its exact checksum guard")
+            cases.append((f"missing {suffix} digest", source.replace(check, ":", 1), "input guard"))
+        digest_line = next(line for line in source.splitlines(keepends=True)
+                           if '"${SERVERWARE_SOURCE_ARCHIVE_SHA256#sha256:}"' in line)
+        extract_line = next(line for line in source.splitlines(keepends=True)
+                            if "tar --no-same-owner -xf /source-contract/source.tar -C /source" in line)
+        cases.append(("late archive digest", source.replace(digest_line, "", 1).replace(
+            extract_line, extract_line + digest_line, 1), "precede consumption"))
+        dependency_check = (
+            "grep -E '^[0-9a-f]{64}  ' python-linux-amd64.sha256 | sha256sum -c -"
+            if family == "python" else "sha256sum -c rust-linux-amd64.sha256"
+        )
+        cases.append(("missing dependency digest", source.replace(dependency_check, ":", 1), "input guard"))
+        if family == "rust":
+            launcher_check = "grep -E '^[0-9a-f]{64}  ' rust-linux-amd64.sha256 | sha256sum -c -"
+            cases.append(("missing launcher dependency digest", source.replace(launcher_check, ":", 1), "input guard"))
+            cases.append(("online APK installation", source.replace("        --no-network \\\n", "", 1), "input guard"))
+        for label, candidate, expected_error in cases:
+            try:
+                assert_production_copy_classification(candidate, family=family)
+            except AssertionError as exc:
+                if expected_error not in str(exc):
+                    raise AssertionError(f"{family} {label} reached the wrong input guard: {exc}") from exc
+            else:
+                raise AssertionError(f"{family} Docker input contract accepted {label}")
 
     with tempfile.TemporaryDirectory(prefix="serverware-source-copy-surface-") as checkout_raw:
         checkout = Path(checkout_raw)

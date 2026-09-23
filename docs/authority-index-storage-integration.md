@@ -12,6 +12,13 @@ maintenance or independently admitted current index/primary root pair. The
 planner still rejects complete-index queries before business/proof SQL. Existing
 startup and verification gates remain closed.
 
+The [operation-bound complete-query batch](authority-complete-query-batch.md)
+now owns the raw inputs before hashing and genuinely verifies all five declared
+explicit-revocation roles against four shared read heads and the complete
+operation-declared primary-root inventory. Its shared limits and real joins do
+not yet compose write effects, install SQL acquisition or grant root/operation
+authority.
+
 The [all-profile mutation evaluator](authority-index-mutation.md) now also
 derives counted before/after roots from the actual primary engine's verified
 OLD/NEW snapshots. It fixes member-event revision semantics and shared component

@@ -115,6 +115,63 @@ exact changed paths and their untouched immediate siblings, not a contiguous
 query interval. A future bounded SQL producer must acquire this exact shape;
 the existing range reader cannot simply be relabeled as that producer.
 
+### Missing planner-side mutation acquisition
+
+The native per-event maintenance function reads its own stored paths inside SQL;
+that is not a retained planner proof producer. The pure combined evaluator
+still receives caller-supplied mutation frontiers. Before planner activation,
+acquisition must derive target keys from the same owned normalized OLD/NEW
+images used by the real primary/count evaluator, with every fixed profile of
+every written table included. A caller-selected target subset, range interval
+or already-successful result object is not an acquisition contract.
+
+For one profile, let `K` be the number of distinct target keys and `O` the number
+of nodes in their proper-ancestor union, including the root. Target changes are
+sorted and unique. Read target leaf identities separately from untouched sibling
+nodes:
+
+1. Point-read each target key, including claimed absences, with bounded batches
+   and overflow sentinels. Return the complete source-pinned scalar leaf record;
+   a stored leaf for an insertion-only target must not be hidden by a predicate.
+2. Enumerate the sixteen immediate child identities of each opened ancestor.
+   Remove identities that are themselves opened ancestors or target keys.
+   These remaining identities are the only admissible opaque siblings. Read
+   them in bounded exact-identity batches; do not scan their descendants or
+   replace them with an arbitrary complete-range complement.
+3. Validate exact profile, key/prefix/depth, commitment, count, revision and
+   original primary-ID bindings. Reject duplicate/unrequested records and
+   malformed matching rows. Missing nodes are empty candidates only. Merge the
+   actual positive records and target leaves in sorted prefix-free order, then
+   let the genuine sparse before/after evaluator reconstruct the supplied root.
+
+With no targets, `O = 1`: the root is still folded twice and the sixteen
+depth-one identities remain the sibling acquisition set. At the other extreme,
+the component ceiling is `K <= 514` and conservatively `O <= 1 + 160*K`.
+The exact number of possible opaque sibling identities is `15*O + 1 - K`:
+the sixteen child slots per opened node exclude `O-1` non-root opened nodes and
+the `K` targets. These counts concern possible read identities, not returned
+positive rows or authenticated population.
+
+Preflight physical calls, parameter bytes and retained proof work before the
+first SQL statement, across **all** affected profiles and other query phases.
+For a proposed 256-identity batch, separate target and sibling reads need at
+most `ceil(K/256) + ceil((15*O+1-K)/256)` calls before head acquisition and primary
+proof reads. The maximum-size component shape can exceed the existing 4096
+business-trace-entry ceiling even for one profile. That allowance also covers
+other business reads and writes; the separate 69-entry allowance belongs only
+to the exact global audit-capacity framework block, not index acquisition.
+A component limit therefore does not promise whole-plan admission: reject an
+over-budget plan without
+issuing partial reads or raising the source ceiling. Empty database results do
+not refund physical reads already performed.
+
+The SQL transport should preserve the range reader's exact-type CASE projection,
+bounded fetch and explicit `C`-collation identity checks, without validity
+predicates that conceal corrupt matching rows. Its trace needs a separately
+admitted mutation-read identity, one entry per physical SELECT, not the current
+range-read profile or primary proof profile. None of this section implements
+that producer, admits its trace or establishes backend query-plan cost bounds.
+
 ## Resource accounting
 
 The lower engine admits at most 514 changed paths, covering up to two projected

@@ -12,11 +12,18 @@ operation intent, and is not evidence that an entire historical index was
 correctly populated.
 
 This is source implementation, not installation or execution evidence. There
-is no counted SQL maintenance, installed head schedule, Snapshot/v4 protocol,
+is no installed counted SQL maintenance, head schedule, Snapshot/v4 protocol,
 planner/executor activation, authenticated bootstrap or independent root
 authority supplied by this component. Existing gates remain closed. The
 standalone [range reader](authority-index-storage-integration.md) does not fill
 these gaps or automatically produce the mutation frontier described below.
+
+The [operation-bound write-transition document](authority-counted-root-transition.md)
+now invokes this evaluator once with source-owned contracts and packaging
+reserves, retaining its actual primary result and exact counted before/after
+heads. It remains write-effects-only, not full query/root-vector admission.
+Separate [native SQL maintenance components](authority-counted-sql-maintenance.md)
+are also implemented as uninstalled source.
 
 ## One actual primary snapshot
 

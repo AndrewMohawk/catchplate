@@ -629,6 +629,7 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_authority_complete_query.py \
 	scripts/test_authority_radix_mutation.py \
 	scripts/test_authority_root_transition.py \
+	scripts/test_authority_counted_root_transition.py \
 	scripts/test_authority_wire_json_source.py \
 	scripts/test_authority_primary_tree_source.py \
 	scripts/test_authority_audit_capacity.py \
@@ -2470,6 +2471,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				requirements.browser.lock \
 				requirements.proxy-test.lock \
 				serverware_agent_trust/requirements.lock \
+				serverware/authority_counted_root_transition.py \
 				data-plane/decision-gate-rs/Dockerfile \
 				data-plane/decision-gate-rs/Dockerfile.production \
 				data-plane/decision-gate-rs/Cargo.lock \

@@ -16,6 +16,9 @@ The [all-profile mutation evaluator](authority-index-mutation.md) now also
 derives counted before/after roots from the actual primary engine's verified
 OLD/NEW snapshots. It fixes member-event revision semantics and shared component
 budgets, but is not installed SQL maintenance or executor root-vector admission.
+The [operation-bound transition document](authority-counted-root-transition.md)
+now packages that genuine result and recomputes claimed write transitions; it
+does not yet include read-only or complete-query counted dependencies.
 Source renderers now also define native PostgreSQL counted hashes and fixed row
 projections, fresh dedicated storage DDL, and normalized per-profile/all-profile
 [SQL maintenance](authority-counted-sql-maintenance.md). Their real-engine fixtures are
@@ -244,6 +247,13 @@ SQL consumers. The exactly nine-frame Snapshot/v3 and current primary Proof/v3
 must not acquire additional fields or completeness meaning without coordinated
 versioning. Preserve historical replay against its original before evidence;
 do not reinterpret it using current mutable heads.
+
+The [independent current-root witness design](authority-current-root-witness-integration.md)
+maps the separate enrollment, full-vector, pending-fence and uncertain-commit
+requirements. Existing result-bound replay receipts are not root currentness.
+Its proposed protected untracked framework marker avoids a circular dependency
+between a pending decision and the application after-root; no new authority or
+protocol is activated by that design.
 
 ## All-writer maintenance and head effects
 

@@ -220,6 +220,13 @@ not authenticate root revision/currentness, database generation or writer
 exclusion, and is not yet connected to an authenticated checkpoint producer or
 offline installer.
 
+The [offline initialization preparation](authority-audit-initialization.md)
+now combines that inventory with exact global-key absence, a fixed revision-1 /
+sequence-0 compact row and the real single-INSERT radix calculation. It binds
+full row and root bytes but grants no installation permission. Aggregate
+cardinality/currentness, one-use initialization ancestry, independent time and
+writer fencing still require admission; runtime INSERT remains prohibited.
+
 SQLite retains its separately scoped locked COUNT and inline completion
 semantics until an explicitly implemented transition covers it. PostgreSQL
 runtime direct DML remains revoked; the v9 executor is the integration point.

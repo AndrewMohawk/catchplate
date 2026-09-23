@@ -62,6 +62,9 @@ The offline [inventory v2 component](authority-audit-initialization.md) now
 reconstructs the complete root from enumerated leaves, removing reliance on a
 supplied count for completeness. Independent root currentness, writer exclusion
 and authenticated counter installation remain missing.
+The offline preparation now calculates the exact compact initial row and
+prospective root transition from that inventory and aggregate-key absence.
+It does not install the row or provide independent initialization authority.
 
 The [table-permission closure](authority-table-permissions.md) additionally
 corrects twelve missing runtime read-only relations and detailed table schemas.

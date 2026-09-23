@@ -103,6 +103,73 @@ It retains `initializerImplemented: false` and `onlineActivationPermitted: false
 No current population, revision, sequence or receipt is fabricated by that
 declaration. The six unrelated backfill declarations remain unchanged.
 
+## Deterministic offline preparation
+
+`authority_audit_initialization.prepare_audit_capacity_initialization` now
+composes the real v2 inventory verifier, exact global-key nonmembership and the
+real primary-radix mutation evaluator. It returns immutable canonical ASCII
+bytes under `serverware.metadataAuditCapacityInitializationPreparation/v1`.
+This is a calculation relative to supplied roots, not a signed checkpoint,
+installation receipt, admitted runtime plan or database initializer.
+
+Inputs are the complete outbox proof stream, both exact root descriptors, one
+aggregate `selectedRow` / `proof` pair and an explicit nonnegative signed-int64
+`initialized_at_epoch_ns`. The function does not accept a caller-constructed
+inventory observation as proof. It takes an owned bounded copy of the absence
+record before consuming the stream, and requires the exact global aggregate
+key, `present: false`, explicit null row and null selector. Existing rows,
+crossed keys/roots/proofs and successor revision/count overflow fail closed.
+Interrupted or incomplete streams return no preparation.
+
+The source-owned initialization profile fixes:
+
+- Counter revision `1` and next sequence `0`. Sequence means fresh pending
+  INSERTs after this new global counter's initialization, not lifetime audit
+  history, retained row count, outstanding count or an obsolete counter value.
+- Live and active counts equal to the internally verified pending-plus-claimed
+  inventory; capacity stays exactly 100,000. Retained audited history does not
+  seed the sequence or consume live capacity.
+- Exact compact empty maps, no expiry/work page, the source empty-expiry digest
+  and current source revision. The explicit input timestamp is retained and
+  committed as data, not sampled from a clock or authenticated as current time.
+  Zero is permitted as an explicit input, not silently substituted.
+
+The one prospective INSERT uses a distinct offline calculation label, never an
+online operation's template ID. The ordinary aggregate mutation inventory
+remains UPDATE-only. A writable mathematical table contract lets the pure tree
+evaluator calculate this single after image; it grants no SQL permission.
+The result retains the unchanged outbox root and the predicted aggregate root.
+The aggregate revision and leaf count advance by one, but **one absence proof
+does not authenticate aggregate cardinality or revision**. For a nonempty
+aggregate root, a false supplied count can still produce correct root-hash
+arithmetic with a false after count. Independent descriptor acceptance or
+separate aggregate-population evidence remains mandatory.
+
+The preparation commits the source/key table contracts, inventory and its
+digest, full absence record, exact 17-field row, prospective mutation, both
+before/after roots and evaluator metrics. A separate full-row digest includes
+timestamp and source revision; the existing aggregate `state_digest` intentionally
+does not. Its `installationPermitted` field is always literal false. The frozen
+result class checks only its bounded canonical outer envelope on direct
+construction, not nested proof validity. Neither its class identity nor its
+self-digest can replace rerunning the actual preparation and authenticating
+its independent authority inputs.
+
+The single-INSERT evaluator retains one selected row/proof/mutation, 64 proof
+vectors, 1024 child slots and the fixed 202-hash allowance, in addition to the
+separate full-inventory work described above. Per-record and final-document
+serialization is bounded to 64 MiB, depth 128 and one million JSON nodes; these
+are not peak-RSS or total-job limits. The preparation performs no database or
+filesystem writes, signatures, receipt consumption or source-registry changes.
+Exact absence also describes a previously deleted counter: one-use generation
+and installation ancestry must prevent unauthorized reset/rebootstrap.
+
+Authored component tests compare the complete preparation and after-root with
+independent tree/row/hash fixtures and feed its initial row into the existing
+online capacity finalizer. They do not establish SQL installation, all-writer
+fencing, independently accepted roots or successful migration. They remain
+unexecuted under the unchanged `goal.md` workflow.
+
 ## Existing migration contracts are not initialization authority
 
 Keep these two mechanisms distinct:
@@ -146,10 +213,11 @@ initializer or changing accepted schema/migration state:
    and the exact global aggregate identity's absence. Compare the observation
    with independently authorized installation evidence. No zero-on-missing
    fallback, old-counter conversion or online INSERT grant is permitted.
-3. Explicitly define initial revision, insertion-sequence baseline and timestamp
-   semantics. Bind the exact compact row, its state commitment, expected after
-   roots, initializer measurement and operation identity. A local clock cannot
-   supply independent time authority.
+3. Admit the exact versioned preparation policy above (or a separately reviewed
+   successor). Bind its compact full row, expected after roots and timestamp to
+   the independently authorized initializer measurement, operation identity and
+   one-use generation/installation ancestry. A local clock or prepared document
+   cannot supply independent time or reinitialization authority.
 4. Install the exact row and authenticated tree changes atomically with receipt
    consumption; compare actual after roots and readback before completion.
    Specify one-use replay, conflicting state, crash/retry and rollback behavior.

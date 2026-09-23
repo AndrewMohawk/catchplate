@@ -42,6 +42,13 @@ separate executor parameter, absence and identifier defects. Its shared SQL
 component fixture does not establish full executor or startup success; existing
 installed function definitions still require explicit repair admission.
 
+The [primary-root transition contract](authority-primary-root-transition.md)
+binds source-owned primary keys and complete computed before/after root sets
+through planner v3, Snapshot/v3 and pre-commit SQL checks. It also replaces
+synthetic authorization table-head selectors with actual proof-selected rows.
+This source-only component work does not establish independent root authority,
+range completeness, Unicode wire interoperability or full startup success.
+
 ## Implementation contracts still needed
 
 The following bounds are the existing contract, not permission to truncate a

@@ -9,6 +9,7 @@ from __future__ import annotations
 import runpy
 import sys
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -17,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from serverware import authority_contract  # noqa: E402
+from serverware import authority_transition_core as core  # noqa: E402
 from serverware import authority_transition_policy  # noqa: E402
 from serverware import authority_transition_quota  # noqa: E402
 from serverware import authority_transition_release  # noqa: E402
@@ -199,6 +201,80 @@ class AuthorityTransitionRegistryTests(unittest.TestCase):
                 kernels,
                 quota_kernels={operation: kernels[operation]},
             )
+
+
+class JitRequestDependencyContractTests(unittest.TestCase):
+    """Real contract/kernel checks; no synthetic registry or admitted transition."""
+
+    def _arguments(self) -> dict:
+        policy = {"schema": "serverware.jitApproverPolicy/v1", "requireWebAuthn": True,
+                  "threshold": 1, "requiredRoles": ["approver"], "roleMatch": "any",
+                  "allowedApproverIds": ["reviewer"], "allowAnyApproverId": False,
+                  "credentialPolicy": {
+                      "allowedCredentialRecordIds": [], "allowedAuthenticatorClasses": ["hardware", "yubikey"],
+                      "allowedAaguids": [], "requireAttestationTrusted": True,
+                      "requiredTrustBundleDigest": None, "minimumTrustBundleSequence": None,
+                      "rpId": "fixture.test", "origins": ["https://fixture.test"],
+                      "requireUserPresence": True, "requireUserVerification": True,
+                      "counterPolicy": "strict-or-zero", "maxAssertionAgeSeconds": 60,
+                  }}
+        digest = "sha256:" + "1" * 64
+        return {
+            "route_id": "route:fixture", "method": "GET", "url_commitment": digest,
+            "principal_id": "principal:fixture", "credential_id": "", "credential_version": 0,
+            "policy_hash": digest, "request_digest": digest, "operation_digest": None,
+            "canonical_request_digest": digest, "canonical_request_opaque_id": "canonical-value",
+            "redacted_display_digest": digest, "redacted_display_opaque_id": "display-value",
+            "pending_ttl_seconds": 60, "grant_ttl_seconds": 30, "grant_max_uses": 1,
+            "approver_policy": policy,
+            "approver_policy_digest": core.framed_digest(
+                "serverware.jitApproverPolicy/v1", core.canonical_bytes(policy)
+            ),
+        }
+
+    def test_jit_request_reads_routes_not_a_fictitious_policies_relation(self) -> None:
+        spec = authority_contract.operation_spec("jit.request")
+        self.assertNotIn("policies", authority_contract._AUTHORIZATION_SOURCE_TABLES)
+        for operation in authority_contract.OPERATIONS.values():
+            self.assertNotIn("policies", operation["reads"])
+            self.assertNotIn("policies", operation["writes"])
+        self.assertIn("routes", spec["businessWrites"])
+        self.assertIn("routes", spec["businessReadBeforeWrite"])
+        self.assertTrue(spec["approverPolicyRequired"])
+        self.assertIn("key-custody-seal/v1", spec["externalEvidenceTypes"])
+        self.assertIn("opaque-value-receipt", spec["proofPrimitives"])
+        kernel = authority_transition_quota.KERNELS["jit.request"]
+        queries = kernel.queries(arguments=self._arguments(),
+                                 database_now=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                                 request_digest="sha256:" + "2" * 64)
+        self.assertIn("routes", {query.table for query in queries})
+        self.assertLessEqual({query.table for query in queries}, set(spec["reads"]))
+
+    def test_real_jit_approver_policy_guards_remain_before_missing_custody_denial(self) -> None:
+        kernel = authority_transition_quota.KERNELS["jit.request"]
+
+        def context(arguments: dict) -> core.KernelContext:
+            return core.KernelContext(
+                operation="jit.request", arguments=arguments, selected_rows=(),
+                database_now=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                request_digest="sha256:" + "2" * 64,
+            )
+
+        arguments = self._arguments()
+        # Valid policy reaches real missing-custody rejection, not a fabricated
+        # successful transition. No registry or evidence primitive is patched.
+        with self.assertRaisesRegex(core.TransitionKernelError,
+                                    "^authority transition exact row is absent or ambiguous$"):
+            kernel.transition(context(arguments))
+        for field, value in (("requireWebAuthn", False), ("threshold", 0), ("threshold", True)):
+            changed = {**arguments, "approver_policy": {**arguments["approver_policy"], field: value}}
+            with self.subTest(field=field, value=value), self.assertRaisesRegex(
+                core.TransitionKernelError, "^JIT approver policy is not closed$"
+            ):
+                kernel.transition(context(changed))
+        changed = {**arguments, "approver_policy_digest": "sha256:" + "3" * 64}
+        with self.assertRaisesRegex(core.TransitionKernelError, "^JIT approver policy digest differs$"):
+            kernel.transition(context(changed))
 
 
 if __name__ == "__main__":

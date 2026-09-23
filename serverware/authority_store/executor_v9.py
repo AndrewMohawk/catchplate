@@ -9,6 +9,10 @@ from typing import Any
 
 from serverware import authority_contract
 from serverware import authority_transition_registry
+from serverware.authority_root_transition import (
+    primary_root_transition_digest,
+    validate_primary_root_transition,
+)
 from serverware.authority_store.mutation_sql import (
     apply_mutation_sql,
     closed_record_sql,
@@ -17,6 +21,13 @@ from serverware.authority_store.mutation_sql import (
 )
 from serverware.authority_store.webauthn_trust_sql import (
     locked_webauthn_trust_projection,
+)
+from serverware.authority_store.root_transition_sql import (
+    assert_root_transition_after_sql,
+    assert_root_transition_before_sql,
+    assert_root_transition_replay_sql,
+    load_root_transition_sql,
+    root_transition_declarations_sql,
 )
 
 _DB_GLOBALS: Mapping[str, Any] | None = None
@@ -1690,6 +1701,7 @@ def install_authority_v9_executor(
             matched_count bigint;
             mutation_count bigint;
             selected_count bigint;
+            {root_transition_declarations_sql()}
             operation_handlers constant pg_catalog.jsonb :=
                 '{operation_handlers}'::pg_catalog.jsonb;
             assertion_requirements constant pg_catalog.jsonb :=
@@ -1759,6 +1771,7 @@ def install_authority_v9_executor(
             WHERE planner_transaction_id =
                 supplied_planner_transaction_id
             FOR UPDATE;
+            {load_root_transition_sql(namespace)}
             IF capability.status = 'committed' THEN
                 IF execution_envelope.status <> 'committed'
                     OR planner.status <> 'consumed'
@@ -1796,6 +1809,7 @@ def install_authority_v9_executor(
                     RAISE EXCEPTION
                         'authority v9 committed retry is not exact';
                 END IF;
+                {assert_root_transition_replay_sql(namespace)}
                 RETURN execution_envelope.terminal_receipt_json;
             ELSIF capability.status <> 'issued'
                 OR execution_envelope.status <> 'reserved'
@@ -2093,6 +2107,7 @@ def install_authority_v9_executor(
                     'serverware.policyAuthorityRootSet/v1',
                     COALESCE(root_set_before_json, '[]')
                 );
+            {assert_root_transition_before_sql(namespace)}
 
             IF pg_catalog.jsonb_typeof(
                     planner.selected_business_rows_json::pg_catalog.jsonb
@@ -2271,6 +2286,13 @@ def install_authority_v9_executor(
                         result_bytes, 'UTF8'
                     )::pg_catalog.jsonb
                 );
+            IF rt_payload->'typedRequest' IS DISTINCT FROM
+                    pg_catalog.convert_from(request_bytes, 'UTF8')::pg_catalog.jsonb
+                OR rt_payload->'expectedResult' IS DISTINCT FROM
+                    pg_catalog.convert_from(result_bytes, 'UTF8')::pg_catalog.jsonb
+                OR rt_payload->'authorizationProjection' IS DISTINCT FROM
+                    authorization_projection.projection_json::pg_catalog.jsonb
+            THEN RAISE EXCEPTION 'authority root transition exact payload changed'; END IF;
             IF pg_catalog.convert_to(canonical_result, 'UTF8')
                     IS DISTINCT FROM result_bytes
                 OR supplied_exact_request_base64url <>
@@ -2291,7 +2313,7 @@ def install_authority_v9_executor(
                 );
             computed_authority_snapshot_digest :=
                 {namespace}.serverware_policy_authority_domain_digest(
-                    'serverware.policyAuthoritySnapshot/v2',
+                    'serverware.policyAuthoritySnapshot/v3',
                     capability.operation,
                     capability.operation_id,
                     capability.request_digest,
@@ -2300,7 +2322,8 @@ def install_authority_v9_executor(
                     authorization_projection.
                         authorization_projection_digest,
                     planner.selected_business_rows_digest,
-                    planner.mutation_plan_digest
+                    planner.mutation_plan_digest,
+                    rt_transition_digest
                 );
             now_epoch_ns := pg_catalog.floor(
                 EXTRACT(
@@ -2899,6 +2922,7 @@ def install_authority_v9_executor(
                     'serverware.policyAuthorityRootSet/v1',
                     COALESCE(root_set_after_json, '[]')
                 );
+            {assert_root_transition_after_sql(namespace)}
             receipt_value := pg_catalog.jsonb_build_object(
                 'schema',
                     'serverware.policyAuthorityWriterCommitReceipt/v2',
@@ -3225,6 +3249,7 @@ def compute_authority_v9_snapshot_digest(
     authorization_projection_digest: str,
     selected_business_rows_digest: str,
     mutation_plan_digest: str,
+    root_transition_digest: str,
 ) -> str:
     authority_contract.operation_spec(operation)
     values = (
@@ -3234,6 +3259,7 @@ def compute_authority_v9_snapshot_digest(
         authorization_projection_digest,
         selected_business_rows_digest,
         mutation_plan_digest,
+        root_transition_digest,
     )
     if (
         operation_id != _operation_id(operation, request_digest)
@@ -3241,7 +3267,7 @@ def compute_authority_v9_snapshot_digest(
     ):
         raise ValueError("authority v9 snapshot binding is invalid")
     return _digest(
-        "serverware.policyAuthoritySnapshot/v2",
+        "serverware.policyAuthoritySnapshot/v3",
         operation.encode("utf-8"),
         operation_id.encode("utf-8"),
         request_digest.encode("utf-8"),
@@ -3250,6 +3276,7 @@ def compute_authority_v9_snapshot_digest(
         authorization_projection_digest.encode("utf-8"),
         selected_business_rows_digest.encode("utf-8"),
         mutation_plan_digest.encode("utf-8"),
+        root_transition_digest.encode("utf-8"),
     )
 
 
@@ -4362,6 +4389,7 @@ def complete_authority_planner_transaction(
         "expectedResult",
         "expectedResultDigest",
         "plannerIdentity",
+        "rootTransition",
     }
     required_plan_fields = {
         "schema",
@@ -4385,6 +4413,7 @@ def complete_authority_planner_transaction(
         "deadlineMonotonicNs",
         "deadlineEpochNs",
         "fence",
+        "rootTransitionDigest",
     }
     plan = (
         planner_payload.get("measuredPlan")
@@ -4401,11 +4430,11 @@ def complete_authority_planner_transaction(
         or not isinstance(planner_payload, dict)
         or set(planner_payload) != required_payload_fields
         or planner_payload.get("schema")
-            != "serverware.policyAuthorityPlannerResponse/v2"
+            != "serverware.policyAuthorityPlannerResponse/v3"
         or not isinstance(plan, dict)
         or set(plan) != required_plan_fields
         or plan["schema"]
-            != "serverware.policyAuthorityMeasuredPlan/v2"
+            != "serverware.policyAuthorityMeasuredPlan/v3"
         or plan.get("operation")
             not in authority_transition_registry.PLANNABLE_OPERATIONS
         or plan.get("sourceRevision")
@@ -4457,6 +4486,7 @@ def complete_authority_planner_transaction(
                 "authorityRootSetBeforeDigest",
                 "authorizationProjectionDigest",
                 "authoritySnapshotDigest",
+                "rootTransitionDigest",
             )
         )
         or any(
@@ -4474,6 +4504,34 @@ def complete_authority_planner_transaction(
         or _canonical(planner_payload) != exact_plan_json
     ):
         raise ValueError("authority measured plan binding is not exact")
+    root_transition = validate_primary_root_transition(
+        planner_payload["rootTransition"]
+    )
+    spec = authority_contract.operation_spec(plan["operation"])
+    if (
+        {entry["table"] for entry in root_transition["businessBeforeRoots"]}
+            != set(spec["businessReads"]) | set(spec["businessWrites"])
+        or {entry["table"] for entry in root_transition["authorizationBeforeRoots"]}
+            != set(spec["authorizationReads"])
+        or primary_root_transition_digest(root_transition)
+            != plan["rootTransitionDigest"]
+        or _digest(
+            "serverware.policyAuthorityRootSet/v1",
+            _canonical(root_transition["businessBeforeRoots"]).encode("ascii"),
+        ) != plan["authorityRootSetBeforeDigest"]
+        or compute_authority_v9_snapshot_digest(
+            operation=plan["operation"],
+            operation_id=plan["operationId"],
+            request_digest=plan["requestDigest"],
+            query_manifest_digest=plan["queryManifestDigest"],
+            authority_root_set_before_digest=plan["authorityRootSetBeforeDigest"],
+            authorization_projection_digest=plan["authorizationProjectionDigest"],
+            selected_business_rows_digest=plan["selectedBusinessRowsDigest"],
+            mutation_plan_digest=plan["mutationPlanDigest"],
+            root_transition_digest=plan["rootTransitionDigest"],
+        ) != plan["authoritySnapshotDigest"]
+    ):
+        raise ValueError("authority measured root transition binding is not exact")
     raw = _require_planner_writer(connection)
     plan_base64url = _b64url(exact_plan_bytes)
     plan_digest = "sha256:" + hashlib.sha256(exact_plan_bytes).hexdigest()

@@ -30,7 +30,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from cryptography.hazmat.primitives.asymmetric import ec
 
-from serverware import authority_contract, grants
+from serverware import authority_contract, authority_primary_contract, grants
 from serverware.authority_store import (
     authority_dispatch as _authority_dispatch,
 )
@@ -7374,7 +7374,11 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                 frame text;
             BEGIN
                 IF pg_catalog.octet_length(digest_domain) NOT BETWEEN 1 AND 256
-                    OR pg_catalog.cardinality(digest_frames) NOT BETWEEN 1 AND 8
+                    OR CASE WHEN digest_domain =
+                        'serverware.policyAuthoritySnapshot/v3'
+                        THEN pg_catalog.cardinality(digest_frames) <> 9
+                        ELSE pg_catalog.cardinality(digest_frames)
+                            NOT BETWEEN 1 AND 8 END
                 THEN
                     RAISE EXCEPTION
                         'authority digest framing is outside its fixed bound';
@@ -8071,6 +8075,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                 key_columns = [str(row["column_name"]) for row in key_rows]
                 if (
                     not key_columns
+                    or tuple(key_columns) != authority_primary_contract.PRIMARY_KEY_COLUMNS.get(table_name)
                     or any(
                         not bool(row["column_not_null"])
                         or row["access_method"] != "btree"
@@ -8103,6 +8108,10 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                 )
                 authority_query_manifest.append(enriched)
         authority_query_manifest_json = dumps(authority_query_manifest)
+        if authority_query_manifest != authority_primary_contract.source_query_manifest():
+            raise PolicyCandidateAuthorityError(
+                "operation query manifest differs from measured source primary contract"
+            )
         authority_query_manifest_digest = (
             _policy_candidate_authority_framed_digest(
                 "serverware.policyAuthorityQueryManifest/v1",
@@ -8280,6 +8289,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                 ]
                 if (
                     not key_columns
+                    or tuple(key_columns) != authority_primary_contract.PRIMARY_KEY_COLUMNS.get(table_name)
                     or any(
                         not bool(row["column_not_null"])
                         or row["access_method"] != "btree"
@@ -8312,6 +8322,10 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                         "exactAbsence": True,
                     }
                 )
+        if authorization_manifest != authority_primary_contract.source_authorization_manifest():
+            raise PolicyCandidateAuthorityError(
+                "authorization manifest differs from measured source primary contract"
+            )
         authorization_manifest_digest = (
             _policy_candidate_authority_framed_digest(
                 "serverware.policyAuthorityAuthorizationManifest/v1",
@@ -29126,7 +29140,7 @@ def init_db(
                     CHECK (ordinal > 0),
                     CHECK (write_access IN (0, 1)),
                     CHECK (exact_absence = 1),
-                    CHECK (maximum_rows BETWEEN 1 AND 64),
+                    CHECK (maximum_rows BETWEEN 1 AND 128),
                     CHECK (
                         predicate_kind =
                             'relation-root-and-explicit-key-set'

@@ -6026,14 +6026,8 @@ class AuthorityProcess:
             or measured_plan.get("deadlineEpochNs")
                 != deadline_epoch_ns
             or measured_plan.get("fence") != reservation["fence"]
-            or persistence_receipt.get("plannerTransactionId")
-                != planner_transaction_id
-            or persistence_receipt.get(
-                "authorizationProjectionDigest"
-            )
-                != measured_plan.get(
-                    "authorizationProjectionDigest"
-                )
+            or persistence_receipt
+                != self._planner_persistence_receipt(plan_payload)
             or time.monotonic_ns() >= deadline_monotonic_ns
         ):
             raise AuthorityServiceError(
@@ -6224,9 +6218,29 @@ class AuthorityProcess:
                 "result",
                 "resultDigest",
             }
-            or executed["result"] != plan_payload["expectedResult"]
+            or _canonical(executed["result"]) != _canonical(plan_payload["expectedResult"])
             or executed["resultDigest"]
                 != plan_payload["expectedResultDigest"]
+            or not isinstance(executed["receipt"], dict)
+            or executed["receipt"].get("schema")
+                != "serverware.policyAuthorityWriterCommitReceipt/v2"
+            or executed["receipt"].get("capabilityId") != capability_id
+            or executed["receipt"].get("envelopeId") != capability["envelopeId"]
+            or executed["receipt"].get("plannerTransactionId") != planner_transaction_id
+            or executed["receipt"].get("requestDigest") != request_digest
+            or executed["receipt"].get("resultDigest") != plan_payload["expectedResultDigest"]
+            or executed["receipt"].get("authoritySnapshotDigest")
+                != measured_plan["authoritySnapshotDigest"]
+            or executed["receipt"].get("authorityRootSetBeforeDigest")
+                != measured_plan["authorityRootSetBeforeDigest"]
+            or executed["receipt"].get("authorityRootSetAfterDigest") != _domain_digest(
+                "serverware.policyAuthorityRootSet/v1",
+                _canonical(plan_payload["rootTransition"]["businessAfterRoots"]),
+            )
+            or executed["receiptDigest"] != _domain_digest(
+                "serverware.policyAuthorityWriterCommitReceipt/v2",
+                _canonical(executed["receipt"]),
+            )
         ):
             raise AuthorityServiceError(
                 "v9 executor result binding changed"

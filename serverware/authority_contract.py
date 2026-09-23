@@ -114,7 +114,6 @@ _AUTHORIZATION_SOURCE_TABLES = frozenset(
     {
         "control_plane_approvals",
         "credentials",
-        "policies",
         "policy_candidate_artifacts",
         "policy_high_water",
         "policy_publications",
@@ -1172,7 +1171,7 @@ _OPERATIONS = {
         "ensure_jit_approval_request",
         reads=(
             _APPROVAL
-            + ("routes", "policies")
+            + ("routes",)
             + _PHASE2_MAINTENANCE
             + _PHASE2_OPAQUE
             + _PHASE2_EVIDENCE

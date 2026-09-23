@@ -12,7 +12,9 @@ from typing import Any, Callable, Mapping, Protocol
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from serverware import authority_contract
+from serverware import authority_primary_contract
 from serverware import authority_radix_proof
+from serverware import authority_root_transition
 from serverware import authority_transition_core
 from serverware import authority_transition_registry
 from serverware import authority_webauthn_assertion
@@ -28,10 +30,10 @@ from serverware.config import (
 
 
 PLANNER_REQUEST_SCHEMA = "serverware.policyAuthorityPlannerRequest/v1"
-PLANNER_RESPONSE_SCHEMA = "serverware.policyAuthorityPlannerResponse/v2"
-MEASURED_PLAN_SCHEMA = "serverware.policyAuthorityMeasuredPlan/v2"
+PLANNER_RESPONSE_SCHEMA = "serverware.policyAuthorityPlannerResponse/v3"
+MEASURED_PLAN_SCHEMA = "serverware.policyAuthorityMeasuredPlan/v3"
 SIGNED_MEASURED_PLAN_SCHEMA = (
-    "serverware.signedPolicyAuthorityMeasuredPlan/v2"
+    "serverware.signedPolicyAuthorityMeasuredPlan/v3"
 )
 PLANNER_PERSIST_REQUEST_SCHEMA = (
     "serverware.policyAuthorityPlannerPersistRequest/v1"
@@ -96,6 +98,8 @@ AUTHORITATIVE_INPUT_FIELDS = frozenset(
         "publicationReceiptSha256",
         "queryMultiproofs",
         "queryProofs",
+        "rootTransition",
+        "rootTransitionDigest",
         "selectedBusinessRows",
         "selectedBusinessRowsDigest",
         "sessionIdentityDigest",
@@ -1302,77 +1306,25 @@ def _load_manifest(
         "policy_authority_query_dependency_manifests",
         {"operation": operation},
     )
+    spec = authority_contract.operation_spec(operation)
+    expected_count = len(set(spec["businessReads"]) | set(spec["businessWrites"]))
     rows = cursor.execute(
         "SELECT ordinal, predicate_id, table_name, handler_digest, "
         "key_columns_json, write_access, selector_paths_json, proof_kind, "
-        "maximum_rows, entry_digest, manifest_digest "
+        "maximum_rows, entry_digest, manifest_digest, index_contract, "
+        "predicate_kind, selector_source, exact_absence, source_revision "
         "FROM serverware_metadata."
         "policy_authority_query_dependency_manifests "
-        "WHERE operation = %s ORDER BY ordinal",
-        (operation,),
+        "WHERE operation = %s ORDER BY ordinal LIMIT %s",
+        (operation, expected_count + 1),
     ).fetchall()
-    if not rows:
-        raise AuthorityPlannerError("planner query manifest is absent")
-    spec = authority_contract.operation_spec(operation)
-    manifest_digest = str(rows[0]["manifest_digest"])
-    manifest: list[dict[str, Any]] = []
-    seen_tables: set[str] = set()
-    for row in rows:
-        table = str(row["table_name"])
-        if (
-            row["manifest_digest"] != manifest_digest
-            or table in seen_tables
-            or row["handler_digest"]
-                != authority_contract.handler_contract_digest(operation)
-            or row["proof_kind"]
-                != "radix16-canonical-multiproof-v2"
-            or bool(row["write_access"])
-                != (table in spec["businessWrites"])
-            or not isinstance(row["maximum_rows"], int)
-            or isinstance(row["maximum_rows"], bool)
-            or int(row["maximum_rows"])
-                != authority_contract.MAX_SELECTORS_PER_OPERATION
-        ):
-            raise AuthorityPlannerError(
-                "planner query manifest differs from the typed contract"
-            )
-        try:
-            key_columns = json.loads(str(row["key_columns_json"]))
-            selector_paths = json.loads(str(row["selector_paths_json"]))
-        except json.JSONDecodeError as exc:
-            raise AuthorityPlannerError(
-                "planner query manifest JSON is invalid"
-            ) from exc
-        if (
-            not isinstance(key_columns, list)
-            or not key_columns
-            or any(not isinstance(value, str) or not value for value in key_columns)
-            or not isinstance(selector_paths, list)
-        ):
-            raise AuthorityPlannerError(
-                "planner query manifest key contract is invalid"
-            )
-        seen_tables.add(table)
-        manifest.append(
-            {
-                "ordinal": int(row["ordinal"]),
-                "predicateId": str(row["predicate_id"]),
-                "table": table,
-                "keyColumns": key_columns,
-                "writeAccess": bool(row["write_access"]),
-                "selectorPaths": selector_paths,
-                "maximumRows": int(row["maximum_rows"]),
-                "entryDigest": str(row["entry_digest"]),
-            }
+    try:
+        manifest = authority_primary_contract.validate_planner_manifest_rows(
+            operation, rows, authorization=False,
         )
-    expected_tables = set(spec["businessReads"]) | set(
-        spec["businessWrites"]
-    )
-    if seen_tables != expected_tables:
-        raise AuthorityPlannerError(
-            "planner manifest does not cover the generated dependency classes"
-        )
-    return tuple(manifest), manifest_digest
+    except ValueError as exc:
+        raise AuthorityPlannerError("planner query manifest differs from measured source") from exc
+    return manifest, authority_primary_contract.source_query_manifest_digest()
 
 
 def _load_authorization_manifest(
@@ -1385,69 +1337,21 @@ def _load_authorization_manifest(
         "policy_authority_authorization_dependency_manifests",
         {"operation": operation},
     )
+    expected_count = len(authority_contract.operation_spec(operation)["authorizationReads"])
     rows = cursor.execute(
         "SELECT ordinal, table_name, key_columns_json, predicate_kind, "
         "exact_absence, entry_digest, manifest_digest, source_revision "
         "FROM serverware_metadata."
         "policy_authority_authorization_dependency_manifests "
-        "WHERE operation = %s ORDER BY ordinal",
-        (operation,),
+        "WHERE operation = %s ORDER BY ordinal LIMIT %s",
+        (operation, expected_count + 1),
     ).fetchall()
-    spec = authority_contract.operation_spec(operation)
-    expected_tables = set(spec["authorizationReads"])
-    seen_tables: set[str] = set()
-    manifest: list[dict[str, Any]] = []
-    manifest_digest = (
-        str(rows[0]["manifest_digest"]) if rows else None
-    )
-    for expected_ordinal, row in enumerate(rows, start=1):
-        table = str(row["table_name"])
-        try:
-            key_columns = json.loads(str(row["key_columns_json"]))
-        except json.JSONDecodeError as exc:
-            raise AuthorityPlannerError(
-                "authorization dependency key JSON is invalid"
-            ) from exc
-        if (
-            int(row["ordinal"]) != expected_ordinal
-            or table in seen_tables
-            or table not in expected_tables
-            or row["predicate_kind"]
-                != "primary-key-full-row-and-authenticated-root-v1"
-            or int(row["exact_absence"]) != 1
-            or row["manifest_digest"] != manifest_digest
-            or row["source_revision"] != authority_contract.SOURCE_REVISION
-            or not isinstance(key_columns, list)
-            or not key_columns
-            or any(
-                not isinstance(column, str) or not column
-                for column in key_columns
-            )
-        ):
-            raise AuthorityPlannerError(
-                "authorization dependency manifest is not exact"
-            )
-        seen_tables.add(table)
-        manifest.append(
-            {
-                "ordinal": expected_ordinal,
-                "predicateId": (
-                    "serverware.policyAuthorityAuthorizationQuery/"
-                    f"{operation}/{expected_ordinal}/{table}/v1"
-                ),
-                "table": table,
-                "keyColumns": key_columns,
-                "writeAccess": False,
-                "selectorPaths": [],
-                "maximumRows": authority_contract.MAX_QUERY_PROOFS,
-                "entryDigest": str(row["entry_digest"]),
-            }
+    try:
+        return authority_primary_contract.validate_planner_manifest_rows(
+            operation, rows, authorization=True,
         )
-    if seen_tables != expected_tables:
-        raise AuthorityPlannerError(
-            "authorization dependency manifest is incomplete"
-        )
-    return tuple(manifest)
+    except ValueError as exc:
+        raise AuthorityPlannerError("authorization dependency differs from measured source") from exc
 
 
 def _read_root_set(
@@ -1496,9 +1400,9 @@ def _read_root_set(
             roots.append(
                 {
                     "table": table,
-                    "rootRevision": int(row["root_revision"]),
-                    "rootDigest": str(row["root_digest"]),
-                    "leafCount": int(row["leaf_count"]),
+                    "rootRevision": row["root_revision"],
+                    "rootDigest": row["root_digest"],
+                    "leafCount": row["leaf_count"],
                 }
             )
         return tuple(roots)
@@ -2162,6 +2066,7 @@ def _authorization_projection(
     capability_id: str,
     planner_transaction_id: str,
     roots: tuple[dict[str, Any], ...],
+    selected_rows: tuple[dict[str, Any], ...],
     approver_policy_digest: str | None,
     assertion_evidence_digest: str | None,
     verifier_identity: Mapping[str, str],
@@ -2169,41 +2074,14 @@ def _authorization_projection(
     expires_at_epoch_ns: int,
 ) -> dict[str, Any]:
     spec = authority_contract.operation_spec(operation)
-    root_by_table = {entry["table"]: entry for entry in roots}
-    source_rows = []
-    for table in spec["authorizationReads"]:
-        root = root_by_table.get(table)
-        if root is None:
-            raise AuthorityPlannerError(
-                "authorization source has no authenticated root"
-            )
-        selector = {"authenticatedRelation": table}
-        row_value = {
-            "rootRevision": root["rootRevision"],
-            "rootDigest": root["rootDigest"],
-            "leafCount": root["leafCount"],
-        }
-        source_rows.append(
-            {
-                "table": table,
-                "selector": selector,
-                "present": True,
-                "row": row_value,
-                "rowDigest": framed_digest(
-                    "serverware.policyAuthorityAuthorizationRow/v1",
-                    table.encode("utf-8"),
-                    canonical_bytes(selector),
-                    b"present",
-                    canonical_bytes(row_value),
-                ),
-            }
+    if tuple(entry["table"] for entry in roots) != tuple(sorted(spec["authorizationReads"])):
+        raise AuthorityPlannerError("authorization root inventory differs from source contract")
+    try:
+        source_rows = authority_root_transition.derive_authorization_sources(
+            operation=operation, selected_rows=selected_rows,
         )
-    source_rows.sort(
-        key=lambda entry: (
-            entry["table"],
-            canonical_bytes(entry["selector"]),
-        )
-    )
+    except ValueError as exc:
+        raise AuthorityPlannerError("authorization query coverage is incomplete") from exc
     return {
         "plannerTransactionId": planner_transaction_id,
         "operation": operation,
@@ -2213,8 +2091,8 @@ def _authorization_projection(
         "authorizationReads": list(spec["authorizationReads"]),
         "sourceRows": source_rows,
         "sourceHighWaterDigest": framed_digest(
-            "serverware.policyAuthorityAuthorizationHighWater/v1",
-            canonical_bytes(source_rows),
+            "serverware.policyAuthorityAuthorizationRootSet/v1",
+            canonical_bytes(list(roots)),
         ),
         "approverPolicyDigest": approver_policy_digest,
         "assertionEvidenceDigest": assertion_evidence_digest,
@@ -2479,6 +2357,7 @@ def validate_measured_plan_payload(
         "expectedResult",
         "expectedResultDigest",
         "plannerIdentity",
+        "rootTransition",
     }
     plan_fields = {
         "schema",
@@ -2499,6 +2378,7 @@ def validate_measured_plan_payload(
         "authorityRootSetBeforeDigest",
         "authorizationProjectionDigest",
         "authoritySnapshotDigest",
+        "rootTransitionDigest",
         "deadlineMonotonicNs",
         "deadlineEpochNs",
         "fence",
@@ -2560,6 +2440,8 @@ def validate_measured_plan_payload(
             != authority_contract.OPERATION_MANIFEST_DIGEST
         or measured_plan["handlerContractDigest"]
             != authority_contract.handler_contract_digest(operation)
+        or measured_plan["queryManifestDigest"]
+            != authority_primary_contract.source_query_manifest_digest()
         or typed_request.get("operation") != operation
         or typed_request.get("requestDigest") != request_digest
         or measured_plan["requestDigest"] != request_digest
@@ -2595,12 +2477,47 @@ def validate_measured_plan_payload(
         "authorityRootSetBeforeDigest",
         "authorizationProjectionDigest",
         "authoritySnapshotDigest",
+        "rootTransitionDigest",
     ):
         _require_digest(
             measured_plan[field],
             f"measured plan {field}",
         )
     reject_authoritative_input(typed_request)
+    try:
+        root_transition = authority_root_transition.verify_primary_root_transition(
+            operation=operation, value=payload["rootTransition"],
+            selected_rows=selected, before_proofs=multiproofs, mutations=mutations,
+        )
+        authorization_sources = authority_root_transition.derive_authorization_sources(
+            operation=operation, selected_rows=selected,
+        )
+    except ValueError as exc:
+        raise AuthorityPlannerError("measured-plan primary root transition changed") from exc
+    if (
+        measured_plan["rootTransitionDigest"]
+            != authority_root_transition.primary_root_transition_digest(root_transition)
+        or canonical_bytes(projection.get("sourceRows")) != canonical_bytes(authorization_sources)
+        or projection.get("sourceHighWaterDigest") != framed_digest(
+            "serverware.policyAuthorityAuthorizationRootSet/v1",
+            canonical_bytes(root_transition["authorizationBeforeRoots"]),
+        )
+        or projection.get("authorizationReads") != list(spec["authorizationReads"])
+        or measured_plan["authorityRootSetBeforeDigest"]
+            != framed_digest("serverware.policyAuthorityRootSet/v1",
+                             canonical_bytes(root_transition["businessBeforeRoots"]))
+        or measured_plan["authoritySnapshotDigest"] != framed_digest(
+            "serverware.policyAuthoritySnapshot/v3",
+            operation.encode("ascii"), measured_plan["operationId"].encode("ascii"),
+            request_digest.encode("ascii"), measured_plan["queryManifestDigest"].encode("ascii"),
+            measured_plan["authorityRootSetBeforeDigest"].encode("ascii"),
+            measured_plan["authorizationProjectionDigest"].encode("ascii"),
+            measured_plan["selectedBusinessRowsDigest"].encode("ascii"),
+            measured_plan["mutationPlanDigest"].encode("ascii"),
+            measured_plan["rootTransitionDigest"].encode("ascii"),
+        )
+    ):
+        raise AuthorityPlannerError("measured-plan primary root snapshot binding changed")
     if (
         measured_plan["selectedBusinessRowsDigest"]
             != framed_digest(
@@ -2626,69 +2543,9 @@ def validate_measured_plan_payload(
         raise AuthorityPlannerError(
             "measured-plan derived set digest changed"
         )
-    expected_proof_keys = sorted(
-        (
-            str(entry.get("table")),
-            str(entry.get("keyDigest")),
-        )
-        for entry in selected
-    )
-    actual_proof_keys = sorted(
-        (
-            str(entry.get("table")),
-            str(entry.get("keyDigest")),
-        )
-        for entry in multiproofs
-        if isinstance(entry, Mapping)
-    )
-    if (
-        len(actual_proof_keys) != len(multiproofs)
-        or actual_proof_keys != expected_proof_keys
-        or any(
-            not isinstance(entry, Mapping)
-            or entry.get("schema")
-                != "serverware.policyAuthorityRadixMultiproof/v3"
-            or entry.get("proofDigest")
-                != framed_digest(
-                    "serverware.policyAuthorityRadixMultiproof/v3",
-                    canonical_bytes(
-                        {
-                            key: value
-                            for key, value in entry.items()
-                            if key != "proofDigest"
-                        }
-                    ),
-                )
-            for entry in multiproofs
-        )
-    ):
-        raise AuthorityPlannerError(
-            "measured-plan multiproof binding changed"
-        )
-    selected_by_key = {
-        (
-            str(entry["table"]),
-            str(entry["keyDigest"]),
-        ): entry
-        for entry in selected
-        if isinstance(entry, Mapping)
-    }
-    if len(selected_by_key) != len(selected):
-        raise AuthorityPlannerError(
-            "measured-plan selected row identity is not unique"
-        )
-    for proof in multiproofs:
-        selected_row = selected_by_key.get(
-            (str(proof["table"]), str(proof["keyDigest"]))
-        )
-        if selected_row is None:
-            raise AuthorityPlannerError(
-                "writer multiproof has no selected row"
-            )
-        _reconstruct_multiproof_root(
-            proof,
-            selected=selected_row,
-        )
+    # verify_primary_root_transition already authenticates every proof digest,
+    # unique selected address and before head, then computes the complete delta.
+    # Do not add an unaccounted second per-proof reconstruction here.
     allowed_reads = (
         set(spec["businessReads"])
         | set(spec["businessWrites"])
@@ -2746,7 +2603,7 @@ def validate_measured_plan_payload(
         }
         for entry in entries[write_trace_start:]
     ]
-    business_read_identities = {
+    dependency_read_identities = {
         (
             entry["table"],
             canonical_bytes(entry["key"]),
@@ -2754,7 +2611,8 @@ def validate_measured_plan_payload(
         for entry in entries[:write_trace_start]
         if entry["access"] == "read"
         and entry["table"]
-            in set(spec["businessReads"]) | set(spec["businessWrites"])
+            in (set(spec["businessReads"]) | set(spec["businessWrites"])
+                | set(spec["authorizationReads"]))
         and isinstance(entry["key"], Mapping)
     }
     expected_read_identities = {
@@ -2771,7 +2629,7 @@ def validate_measured_plan_payload(
             for entry in entries[:write_trace_start]
         )
         or actual_write_trace != expected_write_trace
-        or not expected_read_identities <= business_read_identities
+        or not expected_read_identities <= dependency_read_identities
     ):
         raise AuthorityPlannerError(
             "measured-plan trace is not mechanically derived"
@@ -3021,6 +2879,15 @@ class MeasuredPlanner:
         selected_value = list(selected)
         mutation_value = list(mutations)
         proof_value = list(multiproofs)
+        try:
+            root_transition = authority_root_transition.derive_primary_root_transition(
+                operation=operation, business_before_roots=roots,
+                authorization_before_roots=authorization_roots,
+                selected_rows=selected_value, before_proofs=proof_value, mutations=mutation_value,
+            )
+            root_transition_digest = authority_root_transition.primary_root_transition_digest(root_transition)
+        except ValueError as exc:
+            raise AuthorityPlannerError("planner primary root transition failed") from exc
         trace_value = {
             "schema": PLANNER_TRACE_SCHEMA,
             "operation": operation,
@@ -3075,6 +2942,7 @@ class MeasuredPlanner:
             capability_id=request["capabilityId"],
             planner_transaction_id=request["plannerTransactionId"],
             roots=authorization_roots,
+            selected_rows=selected,
             approver_policy_digest=request["approverPolicyDigest"],
             assertion_evidence_digest=evidence_digest,
             verifier_identity=request["verifierIdentity"],
@@ -3094,6 +2962,7 @@ class MeasuredPlanner:
             authorization_projection_digest=projection_digest,
             selected_business_rows_digest=selected_digest,
             mutation_plan_digest=mutation_digest,
+            root_transition_digest=root_transition_digest,
         )
         measured_plan = {
             "schema": MEASURED_PLAN_SCHEMA,
@@ -3117,6 +2986,7 @@ class MeasuredPlanner:
             "authorityRootSetBeforeDigest": root_set_digest,
             "authorizationProjectionDigest": projection_digest,
             "authoritySnapshotDigest": snapshot_digest,
+            "rootTransitionDigest": root_transition_digest,
             "deadlineMonotonicNs": request["deadlineMonotonicNs"],
             "deadlineEpochNs": request["deadlineEpochNs"],
             "fence": request["fence"],
@@ -3128,6 +2998,7 @@ class MeasuredPlanner:
             "selectedBusinessRows": selected_value,
             "mutationPlan": mutation_value,
             "queryMultiproofs": proof_value,
+            "rootTransition": root_transition,
             "queryMultiproofsDigest": multiproof_digest,
             "plannerTrace": trace_value,
             "plannerTraceDigest": trace_digest,
@@ -3226,6 +3097,9 @@ class PlannerPersistence:
                     ],
                     mutation_plan_digest=measured_plan[
                         "mutationPlanDigest"
+                    ],
+                    root_transition_digest=measured_plan[
+                        "rootTransitionDigest"
                     ],
                 )
         ):

@@ -3,7 +3,7 @@
 
 The result tests run only synthetic unittest cases through the real recorder;
 publication controls use small owned temporary files and actual filesystem I/O.
-Source checks inspect, but never import or execute, the ten native fixtures.
+Source checks inspect, but never import or execute, the twelve native fixtures.
 Neither these controls nor a passing cooperative report authorize a prepared
 lane, prove engine isolation/cleanup, or satisfy the external prerequisite gate.
 """
@@ -40,6 +40,8 @@ EXPECTED_SUITES = (
     ("scripts/test_authority_global_audit_capacity_postgres.py", 25, False, 300),
     ("scripts/test_authority_verifier_read_postgres.py", 21, True, 300),
     ("scripts/test_authority_wire_json_postgres.py", 14, False, 300),
+    ("scripts/test_authority_counted_hash_postgres.py", 10, False, 300),
+    ("scripts/test_authority_counted_projection_postgres.py", 16, False, 300),
 )
 SYNTHETIC_SCRIPT = "scripts/test_native_postgres_contract.py"
 SYNTHETIC_SOURCE_DIGEST = "sha256:" + "a" * 64
@@ -115,8 +117,8 @@ class NativePostgresInventoryTests(unittest.TestCase):
         self.assertEqual(tuple((suite.script, len(suite.test_ids), suite.disposable_cluster,
                                 suite.timeout_seconds) for suite in inventory.SUITES), EXPECTED_SUITES)
         self.assertIs(type(inventory.TOTAL_TESTS), int)
-        self.assertEqual(inventory.TOTAL_TESTS, 184)
-        self.assertEqual(sum(shape[1] for shape in EXPECTED_SUITES), 184)
+        self.assertEqual(inventory.TOTAL_TESTS, 210)
+        self.assertEqual(sum(shape[1] for shape in EXPECTED_SUITES), 210)
         all_ids = tuple(test_id for suite in inventory.SUITES for test_id in suite.test_ids)
         self.assertEqual(len(all_ids), len(set(all_ids)))
 
@@ -160,7 +162,7 @@ class NativePostgresInventoryTests(unittest.TestCase):
             with self.subTest(suites=suites), mock.patch.object(inventory, "SUITES", suites):
                 with self.assertRaises(ValueError):
                     inventory.validate_inventory()
-        for total in (True, 183, 184.0, "184"):
+        for total in (True, 209, 210.0, "210"):
             with self.subTest(total=total), mock.patch.object(inventory, "TOTAL_TESTS", total):
                 with self.assertRaises(ValueError):
                     inventory.validate_inventory()
@@ -182,7 +184,7 @@ class NativePostgresInventoryTests(unittest.TestCase):
             with self.subTest(script=script):
                 self.assertEqual(batch.prepared_fixture_argv(index), expected + ("-v",))
                 self.assertIs(type(batch.prepared_fixture_argv(index)), tuple)
-        for index in (-1, 10, True, False, 0.0, "0", None):
+        for index in (-1, 12, True, False, 0.0, "0", None):
             with self.subTest(index=index), self.assertRaises(batch.NativePostgresBatchError):
                 batch.prepared_fixture_argv(index)
 

@@ -16,6 +16,9 @@ The [all-profile mutation evaluator](authority-index-mutation.md) now also
 derives counted before/after roots from the actual primary engine's verified
 OLD/NEW snapshots. It fixes member-event revision semantics and shared component
 budgets, but is not installed SQL maintenance or executor root-vector admission.
+Source renderers now also define native PostgreSQL counted hashes and fixed row
+projections. Their real-engine fixtures are authored for later prepared
+verification; neither the SQL nor the fixtures have been executed or installed.
 
 The existing `policy_authority_secondary_index_heads` declaration is metadata,
 not an implementation of the counted profile. Its relation/index names, column
@@ -88,14 +91,29 @@ must additionally project overlimit or malformed fields to a rejecting sentinel
 before fetching them. A `WHERE` clause must not hide malformed matching records.
 Transport bounds do not prove backend allocation or query-plan cost bounds.
 
-The primary SQL hash helper cannot simply be reused for every counted hash:
-`primary_tree_sql.framed_digest_function_sql` admits at most eight payload
-frames. Counted empty, leaf and branch hashing respectively need eight, ten
-and forty payload frames, plus the length-framed domain. A separate closed
-counted-index renderer should implement those exact purpose-specific shapes
-and bounds. Do not enlarge the primary helper's contract or substitute its
-different primary-tree hash domains. Projection partition JSON must also match
-the fixed UTF-8 codec, not merely an approximately equivalent JSONB spelling.
+The [native counted hash renderer](../serverware/authority_store/counted_hash_sql.py)
+now implements the exact empty, leaf and branch shapes: eight, ten and forty
+payload frames, plus the length-framed domain. Its separate helper admits only
+those three domains/shapes. The primary helper remains limited to eight frames
+and its primary-tree domains remain unchanged. Source-fixed profile lookup,
+prefix/key/digest validation, exact sixteen paired child slots, fixed-key
+capacity and signed64 overflow checks precede the relevant counted hashes.
+
+The [native row projection renderer](../serverware/authority_store/counted_projection_sql.py)
+derives all eleven fixed projections from supplied full rows, including the
+actual ASCII-wire BusinessKey/v1 and UTF-8 AuthenticatedRow/v1 commitments. It
+validates every referenced field before membership, measures bounded lossless
+full-row JSON, and uses the unchanged UTF-8 tree serializer for the shallow
+partition map. Exact UTC calendar/microsecond validation and a signed-bit-flip
+ordering codec avoid session-timezone dependence or floating-point integer
+ordering. Nonmembers return no projected leaf, not an unvalidated row.
+
+These are uninstalled invoker functions, not trusted trigger inputs or a schema
+admission. PostgreSQL JSONB has already discarded duplicate fields and normalized
+some number spellings; the functions do not establish raw-input validity,
+parser/detoast allocation bounds, primary membership or currentness. Real SQL
+and Python parity, native date/Unicode behavior and negative cases remain
+unexecuted. Their installation still requires the coordinated contract below.
 
 ## Bounded frontier production
 
@@ -218,6 +236,12 @@ deterministic lock order. It cannot share primary nodes or treat empty hashes
 as prefix-independent. Dedicated store writes must not recursively index their
 own maintenance records.
 
+The shared primary trigger normalizes a primary-key-changing UPDATE into a
+DELETE and INSERT. Counted maintenance must use those same two primary events
+and their revision effects; an unchanged-primary-key partition move remains one
+event. The pure evaluator still rejects a key-changing UPDATE. This is the
+required normalization for a future hook, not an installed trigger change.
+
 Maintenance must cover every supported writer, not just the four missing
 WebAuthn kernels. Existing source contains challenge expiry/pruning, recovery,
 bulk revocation and browser-session lifecycle writers. Some are already behind
@@ -312,6 +336,10 @@ Current implementation anchors:
   genuine hash, projection, reconstruction and same-owned-row join semantics.
 - [`primary_tree_sql.py`](../serverware/authority_store/primary_tree_sql.py):
   existing bounded framing and primary row-trigger mechanics.
+- [`counted_hash_sql.py`](../serverware/authority_store/counted_hash_sql.py) and
+  [`counted_projection_sql.py`](../serverware/authority_store/counted_projection_sql.py):
+  source-fixed native counted hashing and actual row projection definitions;
+  no storage, trigger attachment, grants or installed-profile admission.
 - [`v9_schema_source.py`](../serverware/authority_store/v9_schema_source.py) and
   [`metadata_schema_source.py`](../serverware/authority_store/metadata_schema_source.py):
   existing secondary-head metadata and primary physical stores.

@@ -11,7 +11,7 @@ import re
 
 
 INVENTORY_SCHEMA = "serverware.nativePostgresInventory/v1"
-TOTAL_TESTS = 184
+TOTAL_TESTS = 210
 
 
 @dataclass(frozen=True, slots=True)
@@ -277,12 +277,52 @@ SUITES: tuple[NativePostgresSuite, ...] = (
         disposable_cluster=False,
         timeout_seconds=300,
     ),
+    NativePostgresSuite(
+        script="scripts/test_authority_counted_hash_postgres.py",
+        test_ids=(
+            "CountedHashPostgresTests.test_all_eleven_source_profiles_match_independent_literal_descriptors",
+            "CountedHashPostgresTests.test_branch_arrays_require_one_based_one_dimensional_paired_null_slots",
+            "CountedHashPostgresTests.test_branch_depth_capacity_and_signed64_sum_boundaries_are_exact",
+            "CountedHashPostgresTests.test_closed_frame_helper_rejects_domains_arity_null_nonascii_and_array_aliases",
+            "CountedHashPostgresTests.test_empty_hashes_bind_profile_depth_and_prefix_at_all_boundary_depths",
+            "CountedHashPostgresTests.test_empty_sparse_dense_and_terminal_branches_match_independent_ordered_slots",
+            "CountedHashPostgresTests.test_exact_function_catalog_contract_and_renderer_namespace_are_closed",
+            "CountedHashPostgresTests.test_leaf_hashes_match_python_and_independent_framing_for_every_profile",
+            "CountedHashPostgresTests.test_native_leaf_and_branch_folds_rebuild_one_independent_full_counted_tree",
+            "CountedHashPostgresTests.test_null_oversize_nonhex_and_noncanonical_key_commitments_reject",
+        ),
+        disposable_cluster=False,
+        timeout_seconds=300,
+    ),
+    NativePostgresSuite(
+        script="scripts/test_authority_counted_projection_postgres.py",
+        test_ids=(
+            "AuthorityCountedProjectionPostgresTests.test_all_eleven_fixed_profiles_match_independent_full_commitments",
+            "AuthorityCountedProjectionPostgresTests.test_attestation_integer_contract_preserves_signed_int32_not_boolean_aliases",
+            "AuthorityCountedProjectionPostgresTests.test_every_referenced_field_is_required_and_wrong_text_types_are_rejected",
+            "AuthorityCountedProjectionPostgresTests.test_expiry_codec_matches_literal_microseconds_and_ignores_session_timezone",
+            "AuthorityCountedProjectionPostgresTests.test_full_row_lossless_and_depth_guards_precede_membership_return",
+            "AuthorityCountedProjectionPostgresTests.test_full_row_only_changes_keep_keys_but_change_every_member_commitment",
+            "AuthorityCountedProjectionPostgresTests.test_generation_pair_order_and_int64_bounds_match_independent_codec",
+            "AuthorityCountedProjectionPostgresTests.test_noncanonical_or_invalid_expiry_is_rejected_even_for_nonmembers",
+            "AuthorityCountedProjectionPostgresTests.test_nonmembers_return_no_leaf_without_weakening_reference_checks",
+            "AuthorityCountedProjectionPostgresTests.test_null_empty_bindings_and_nullable_membership_are_distinct",
+            "AuthorityCountedProjectionPostgresTests.test_publication_scope_and_enums_are_exact_not_silent_nonmembers",
+            "AuthorityCountedProjectionPostgresTests.test_session_status_partitions_and_nonselector_expiry_are_exact",
+            "AuthorityCountedProjectionPostgresTests.test_signed_order_has_exact_signed64_boundaries_and_lexical_order",
+            "AuthorityCountedProjectionPostgresTests.test_source_identity_and_row_object_types_are_closed",
+            "AuthorityCountedProjectionPostgresTests.test_text_byte_limit_is_utf8_and_never_truncates",
+            "AuthorityCountedProjectionPostgresTests.test_unicode_controls_empty_ids_and_unmodified_primary_framing",
+        ),
+        disposable_cluster=False,
+        timeout_seconds=300,
+    ),
 )
 
 
 # The order is the closed batch order, not lexical filename order. The booleans
 # encode an extra fixture CLI acknowledgement; False never permits a real or
-# shared database. All ten suites require a prepared disposable local cluster.
+# shared database. All twelve suites require a prepared disposable local cluster.
 _SUITE_SHAPES = (
     ("scripts/test_webauthn_trust_projection_postgres.py", 8, False, 300),
     ("scripts/test_postgres_trigger_manifest.py", 5, False, 300),
@@ -294,6 +334,8 @@ _SUITE_SHAPES = (
     ("scripts/test_authority_global_audit_capacity_postgres.py", 25, False, 300),
     ("scripts/test_authority_verifier_read_postgres.py", 21, True, 300),
     ("scripts/test_authority_wire_json_postgres.py", 14, False, 300),
+    ("scripts/test_authority_counted_hash_postgres.py", 10, False, 300),
+    ("scripts/test_authority_counted_projection_postgres.py", 16, False, 300),
 )
 _TEST_ID = re.compile(r"[A-Za-z][A-Za-z0-9_]*\.test_[a-z][a-z0-9_]*", re.ASCII)
 
@@ -305,8 +347,8 @@ def validate_inventory() -> None:
     source digest binding and complete observed results are separate checks.
     """
     if (type(INVENTORY_SCHEMA) is not str or INVENTORY_SCHEMA != "serverware.nativePostgresInventory/v1"
-            or type(SUITES) is not tuple or len(SUITES) != 10
-            or type(TOTAL_TESTS) is not int or TOTAL_TESTS != 184):
+            or type(SUITES) is not tuple or len(SUITES) != 12
+            or type(TOTAL_TESTS) is not int or TOTAL_TESTS != 210):
         raise ValueError("native PostgreSQL inventory envelope differs from source")
     seen_scripts: set[str] = set()
     seen_tests: set[str] = set()

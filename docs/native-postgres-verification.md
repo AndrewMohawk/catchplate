@@ -10,7 +10,7 @@ The source now also includes a fixed, cooperative PostgreSQL cluster runner,
 described below. It has not been executed, does not install a PG16 test image,
 and is not wired to the controller's native output consumer. None of these
 source checkpoints provides native execution evidence.
-The current source remains unbuilt and unexecuted. The ten suites remain in
+The current source remains unbuilt and unexecuted. The twelve suites remain in
 `CODER_EXCLUDED_TEST_SCRIPTS`; their standalone entrypoints and result files do
 not remove that exclusion or satisfy changed-test coverage admission.
 
@@ -24,13 +24,13 @@ supply independent approval, installed controller identity or cleanup proof.
 ## Closed source inventory
 
 [native_postgres_inventory.py](../serverware/native_postgres_inventory.py)
-defines `serverware.nativePostgresInventory/v1`, ten ordered frozen
-`NativePostgresSuite` records and `TOTAL_TESTS = 184`. Each record contains an
+defines `serverware.nativePostgresInventory/v1`, twelve ordered frozen
+`NativePostgresSuite` records and `TOTAL_TESTS = 210`. Each record contains an
 exact script path, an explicit sorted tuple of `Class.test_method` IDs, its
 disposable-cluster CLI acknowledgement requirement and its timeout in seconds.
 The IDs are authored source declarations, not dynamically discovered or
 executed results. The total includes the pure representation and source-linkage
-methods contained in these fixtures; it is not a count of 184 native SQL tests.
+methods contained in these fixtures; it is not a count of 210 native SQL tests.
 
 | Order | Script under `scripts/` | Methods | Timeout | Extra disposable CLI flag |
 | --- | --- | ---: | ---: | --- |
@@ -44,8 +44,10 @@ methods contained in these fixtures; it is not a count of 184 native SQL tests.
 | 07 | `test_authority_global_audit_capacity_postgres.py` | 25 | 300 s | No |
 | 08 | `test_authority_verifier_read_postgres.py` | 21 | 300 s | Yes |
 | 09 | `test_authority_wire_json_postgres.py` | 14 | 300 s | No |
+| 10 | `test_authority_counted_hash_postgres.py` | 10 | 300 s | No |
+| 11 | `test_authority_counted_projection_postgres.py` | 16 | 300 s | No |
 
-All ten require a prepared disposable local environment. A `False`
+All twelve require a prepared disposable local environment. A `False`
 `disposable_cluster` field means that the particular fixture has no extra
 `--disposable-cluster` switch; it does not permit a production or shared
 database. The frozen records are data, not capabilities. The no-argument
@@ -64,10 +66,17 @@ controls cover the native query shape without disabling schema constraints.
 These cases are unexecuted; they do not establish current roots, complete
 predicate ranges, production planner execution or passing native admission.
 
+The appended counted-hash and row-projection suites retain all 184 previous
+method identities and their order/deadlines. Their 26 new component methods
+install only real function definitions in rollback-owned random schemas and
+compare native results with independent framing, tree and row-codec oracles.
+They do not install counted storage, maintenance triggers, heads, grants or
+bootstrap authority. Native parity remains unexecuted.
+
 ## Fixed future invocation profile
 
 [native_postgres_batch.py](../serverware/native_postgres_batch.py) constructs
-only the ten source-fixed command tuples. `prepared_fixture_argv(index)` rejects
+only the twelve source-fixed command tuples. `prepared_fixture_argv(index)` rejects
 non-integer, boolean and out-of-range indices; it accepts no caller-selected
 script, selector, DSN or executable. Its fixed profile is:
 
@@ -75,7 +84,7 @@ script, selector, DSN or executable. Its fixed profile is:
 - Read-only source: `/opt/serverware/src`.
 - DSN: `host=/run/serverware-native-postgres port=5432 dbname=postgres user=serverware_fixture_admin`.
 - Reports: `/opt/serverware/output/native-postgres/reports/00.json` through
-  `09.json`, supplied with `--prepared-result`.
+  `11.json`, supplied with `--prepared-result`.
 - The two inventory-marked scripts receive `--disposable-cluster`; every script
   receives `-v`.
 
@@ -96,11 +105,11 @@ source-owned script, its actual `__main__` file/classes, exact loaded method
 inventory and the remaining `-v` argument. It records method and subtest
 callbacks, bounded fixture/protocol errors and normal runner completion in a
 canonical ASCII `serverware.nativePostgresFixtureResult/v1` document, bounded
-to 256 KiB. The actual ten fixture CLIs expose `--prepared-result`; the helper
+to 256 KiB. The actual twelve fixture CLIs expose `--prepared-result`; the helper
 does not create a database or grant fixture permission to access one.
 
 The pure `reconcile_native_postgres_batch(observations, *, source_sha256)`
-consumer joins exactly ten ordered reports to separately supplied prepared
+consumer joins exactly twelve ordered reports to separately supplied prepared
 script digests and process/log observations. `PASS` means complete successful
 test accounting; `FAIL` means a completed negative result; `INCOMPLETE` covers
 missing/interrupted accounting, protocol failures or inconsistent process
@@ -127,6 +136,16 @@ The existing engineering Dockerfile's unversioned `postgresql` package install
 does not establish this PG16 runtime closure. A separate pinned PostgreSQL
 service image does not automatically become the Python fixture runner image.
 
+The Makefile explicitly requires the two counted fixtures' repository dependency
+closure through `CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES`: the new hash/projection
+renderers, existing canonical/wire SQL, source profile and proof code, imported
+independent tree/partition oracles, package-import dependencies, and `db.py` read
+as source by the existing native digest helper. These are frozen-file presence
+and nonsymlink checks, not a separate per-dependency digest protocol. The whole
+approved frozen archive still binds their bytes;
+`serverware.nativePostgresPreparedSources/v1` remains the unchanged script-digest
+object below.
+
 ## Fixed cluster lifecycle source
 
 [run_native_postgres.py](../scripts/run_native_postgres.py) is a no-argument,
@@ -150,11 +169,11 @@ inspection profile; it is not implicitly compatible.
 The entrypoint reads the fixed read-only artifact
 `/opt/serverware/artifacts/native-postgres-sources-v1.json`. Its exact canonical
 ASCII JSON object has only `schema: serverware.nativePostgresPreparedSources/v1`
-and `scripts`, with ten ordered objects containing only `path` and `sha256`.
+and `scripts`, with twelve ordered objects containing only `path` and `sha256`.
 Paths follow the inventory above and hashes are canonical `sha256:` strings.
 The independently admitted artifact CAS must bind these prepared expectations
 and the entire transitive source/runtime closure. Generating this small JSON
-from the current checkout is not source approval. All ten fixture files are
+from the current checkout is not source approval. All twelve fixture files are
 remeasured against the supplied expectations before and after execution.
 
 The lifecycle:
@@ -176,7 +195,7 @@ The lifecycle:
    PG16, UTF8, actual current/session admin identity, direct superuser, Unix
    transport, no recovery, the exact configuration and observed cluster system
    identifier. This is not independent server or image authentication.
-5. Starts exactly the ten fixed fixtures sequentially. Every child has an
+5. Starts exactly the twelve fixed fixtures sequentially. Every child has an
    independent deadline and live-bounded combined stdout/stderr capture.
    Reconciliation uses actual retained exit state, bounded report bytes and
    complete log hashes. Failure, timeout, log loss, unexpected server exit,
@@ -191,8 +210,8 @@ The lifecycle:
    acquisition fails immediately after spawn.
 
 [native_postgres_process.py](../serverware/native_postgres_process.py) retains
-at most twelve direct children and 8 MiB of combined log bytes per child
-(96 MiB aggregate in-memory prefixes). An overflow prefix is preserved but
+at most fourteen direct children and 8 MiB of combined log bytes per child
+(112 MiB aggregate in-memory prefixes). An overflow prefix is preserved but
 cannot qualify as a complete log. Missing pipe EOF has a finite drain window;
 cleanup continues after cancellation or selector failure. The component does
 not use Docker's rotating log as complete fixture evidence.
@@ -254,12 +273,14 @@ ports, healthcheck, shell or volumes can cause the closed inspect guard to
 deny them. Future component tests on tmpfs must not claim physical power-loss
 durability.
 
-The ten fixed per-suite ceilings sum to 3,600 seconds, before
+The twelve fixed per-suite ceilings sum to 4,200 seconds, before
 startup and cleanup, whereas the current Unit deadline profile is 900 seconds.
-The source-only native sub-job proposes a 4,200-second ceiling with 120 seconds
+The source-only native sub-job proposes a 4,800-second ceiling with 120 seconds
 for initialization, 60 for readiness, 60 for shutdown and additional bounded
-overhead. It reserves cleanup time before scheduling a fixture and never
-shortens the declared fixture ceilings. This is not an override of the signed
+overhead. The explicit 600-second increase and two additional direct-child slots
+retain the old 360-second slack and all prior per-suite limits; they do not
+authorize a controller deadline change. It reserves cleanup time before
+scheduling a fixture and never shortens the declared fixture ceilings. This is not an override of the signed
 Unit deadline: the selected lane still needs an explicit bounded deadline/resource
 reconciliation including its other work and outer cleanup. This inventory neither increases that deadline nor permits
 silently dropping suites to fit it. An installed controller must enforce the
@@ -278,7 +299,7 @@ source/artifact destinations, environment, resources, timeout and result
 consumer. A Makefile phase name or a locally authored manifest is not that
 signed invocation. No such external input was created or reissued here.
 
-Keep all ten exclusions and all mandatory prerequisite gates until the real
+Keep all twelve exclusions and all mandatory prerequisite gates until the real
 prepared lane is implemented, independently admitted and reviewed. Even a
 future successful native component batch would establish only its exact
 component behavior, not production installation, external authority enrollment,

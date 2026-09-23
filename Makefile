@@ -750,8 +750,57 @@ override CODER_EXCLUDED_TEST_SCRIPTS := \
 	scripts/test_authority_global_audit_capacity_postgres.py \
 	scripts/test_authority_verifier_read_postgres.py \
 	scripts/test_authority_wire_json_postgres.py \
+	scripts/test_authority_counted_hash_postgres.py \
+	scripts/test_authority_counted_projection_postgres.py \
 	scripts/test_traversal_response_evidence.py \
 	scripts/test_webauthn_recovery.py
+# Exact repository-source closure newly exercised by the counted SQL fixtures.
+# The complete frozen archive remains the source authority; these presence/
+# nonsymlink checks neither replace its digest nor prepare an excluded test.
+# Include package imports, imported independent oracles, and db.py, which the
+# existing native helper reads as source without importing its runtime facade.
+override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
+	scripts/test_authority_counted_hash_postgres.py \
+	scripts/test_authority_counted_projection_postgres.py \
+	scripts/test_authority_index_join.py \
+	scripts/test_authority_index_range.py \
+	scripts/test_authority_radix_mutation.py \
+	scripts/test_authority_radix_proof.py \
+	scripts/test_authority_root_transition_postgres.py \
+	scripts/test_webauthn_trust_projection_postgres.py \
+	serverware/__init__.py \
+	serverware/audit_outbox_contract.py \
+	serverware/authority_audit_capacity.py \
+	serverware/authority_complete_query.py \
+	serverware/authority_contract.py \
+	serverware/authority_index_contract.py \
+	serverware/authority_index_join.py \
+	serverware/authority_index_projection.py \
+	serverware/authority_index_range.py \
+	serverware/authority_primary_contract.py \
+	serverware/authority_query_reads.py \
+	serverware/authority_radix_mutation.py \
+	serverware/authority_radix_proof.py \
+	serverware/authority_root_transition.py \
+	serverware/authority_store/__init__.py \
+	serverware/authority_store/audit_capacity_sql.py \
+	serverware/authority_store/completed_v9_schema_source.py \
+	serverware/authority_store/counted_hash_sql.py \
+	serverware/authority_store/counted_projection_sql.py \
+	serverware/authority_store/metadata_schema_source.py \
+	serverware/authority_store/mutation_sql.py \
+	serverware/authority_store/postgres_trigger_manifest.py \
+	serverware/authority_store/primary_tree_sql.py \
+	serverware/authority_store/root_transition_sql.py \
+	serverware/authority_store/schema.py \
+	serverware/authority_store/v9_schema_source.py \
+	serverware/authority_store/verifier_read_sql.py \
+	serverware/authority_store/webauthn_trust_sql.py \
+	serverware/authority_store/wire_json_sql.py \
+	serverware/authority_transition_core.py \
+	serverware/db.py \
+	serverware/native_postgres_inventory.py \
+	serverware/native_postgres_results.py
 CODER_TIMEOUT ?= timeout
 CODER_BUILD_TIMEOUT ?= 3600s
 CODER_RUST_TEST_BUILD_TIMEOUT ?= 7200s
@@ -2431,6 +2480,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/e2e.sh \
 				$(CODER_LAUNCHER_ADVERSARIAL_TEST_SCRIPT) \
 				$(CODER_PRODUCTION_HOST_PREFLIGHT_TEST_SCRIPT) \
+				$(CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES) \
 				$(CODER_TEST_SCRIPTS) \
 				$(CODER_ISOLATED_TEST_SCRIPTS) \
 				$(CODER_BLOCKED_PREREQUISITE_TEST_SCRIPTS) \

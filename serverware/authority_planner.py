@@ -21,6 +21,7 @@ from serverware.authority_audit_trace import (
 from serverware import authority_contract
 from serverware import authority_primary_contract
 from serverware import authority_query_reads
+from serverware import authority_query_staging
 from serverware import authority_radix_proof
 from serverware import authority_root_transition
 from serverware import authority_transition_core
@@ -701,6 +702,7 @@ class TypedTransitionPlanningProgram:
         request: Mapping[str, Any],
         manifest: tuple[dict[str, Any], ...],
         trace: PlannerTrace,
+        query_sources: authority_query_staging.StagedQueryProofs,
         verified_webauthn_evidence: Mapping[str, Any] | None = None,
     ) -> tuple[tuple[dict[str, Any], ...], PlanningState]:
         if (
@@ -753,9 +755,11 @@ class TypedTransitionPlanningProgram:
                 queries=queries,
                 manifest=manifest,
                 trace=trace,
+                query_sources=query_sources,
             )
         except (authority_transition_core.TransitionKernelError,
-                authority_query_reads.QueryReadError) as exc:
+                authority_query_reads.QueryReadError,
+                authority_query_staging.QueryStagingError) as exc:
             raise AuthorityPlannerError(
                 "typed transition query program denied the request"
             ) from exc
@@ -1599,6 +1603,7 @@ def _read_bounded_transition_rows(
     queries: tuple[authority_transition_core.BoundedQuery, ...],
     manifest: tuple[dict[str, Any], ...],
     trace: PlannerTrace,
+    query_sources: authority_query_staging.StagedQueryProofs,
 ) -> tuple[tuple[dict[str, Any], ...],
            tuple[authority_transition_core.BoundedQuery, ...],
            tuple[authority_query_reads.QueryRead, ...]]:
@@ -1630,6 +1635,17 @@ def _read_bounded_transition_rows(
             raise AuthorityPlannerError(
                 "typed transition query has no exact primary key"
             )
+        # A deferred value may influence this SQL only after its source row's
+        # actual primary proof has been verified against this transaction's
+        # captured roots. This does not establish their independent currentness.
+        staged_rows = query_sources.authenticate_references(
+            cursor, query=query, query_reads=tuple(query_reads),
+            selected_rows=tuple(selected.values()), trace=trace,
+        )
+        selected = {
+            (entry["table"], canonical_bytes(entry["key"])): entry
+            for entry in staged_rows
+        }
         resolved_query = authority_query_reads.resolve_query(
             operation, query, prior_reads=tuple(query_reads),
             selected_rows=tuple(selected.values()),
@@ -1721,6 +1737,11 @@ def _read_bounded_transition_rows(
                 raise AuthorityPlannerError(
                     "typed transition queries disagree on one row"
                 )
+            # Keep a previously verified owned snapshot on an equal overlap.
+            # Replacing it with a later raw SQL dictionary would discard that
+            # ownership boundary even though its current bytes compare equal.
+            if previous is not None:
+                entry = previous
             selected[identity] = entry
             ordered_selected.append(entry)
             trace.read(query.table, key)
@@ -2083,6 +2104,7 @@ def _read_planning_inputs(
     manifest: tuple[dict[str, Any], ...],
     trace: PlannerTrace,
     program: PlanningProgram,
+    query_sources: authority_query_staging.StagedQueryProofs | None = None,
     verified_webauthn_evidence: Mapping[str, Any] | None = None,
 ) -> tuple[tuple[dict[str, Any], ...], PlanningState]:
     if operation in WEBAUTHN_CHALLENGE_OPERATIONS:
@@ -2093,11 +2115,14 @@ def _read_planning_inputs(
             trace=trace,
         )
     if isinstance(program, TypedTransitionPlanningProgram):
+        if type(query_sources) is not authority_query_staging.StagedQueryProofs:
+            raise AuthorityPlannerError("typed query proof context is unavailable")
         return program.read_inputs(
             cursor,
             request=request,
             manifest=manifest,
             trace=trace,
+            query_sources=query_sources,
             verified_webauthn_evidence=verified_webauthn_evidence,
         )
     return (
@@ -2920,6 +2945,17 @@ class MeasuredPlanner:
                         manifest=selection_manifest,
                         trace=trace,
                     )
+                    try:
+                        query_sources = (
+                            authority_query_staging.StagedQueryProofs(
+                                operation=operation, business_before_roots=roots,
+                                authorization_before_roots=authorization_roots,
+                            )
+                            if isinstance(self.programs[operation], TypedTransitionPlanningProgram)
+                            else None
+                        )
+                    except authority_query_staging.QueryStagingError as exc:
+                        raise AuthorityPlannerError("typed query proof context is invalid") from exc
                     selected, planning_state = _read_planning_inputs(
                         cursor,
                         operation=operation,
@@ -2927,18 +2963,27 @@ class MeasuredPlanner:
                         manifest=selection_manifest,
                         trace=trace,
                         program=self.programs[operation],
+                        query_sources=query_sources,
                         verified_webauthn_evidence=verified_webauthn_evidence,
                     )
-                    multiproofs = _derive_multiproofs(
-                        cursor,
-                        selected_rows=selected,
-                        roots=tuple(roots) + tuple(authorization_roots),
-                        trace=trace,
-                    )
                     try:
+                        unproved_selected = (
+                            selected if query_sources is None
+                            else query_sources.unproved_rows(selected)
+                        )
+                        multiproofs = _derive_multiproofs(
+                            cursor,
+                            selected_rows=unproved_selected,
+                            roots=tuple(roots) + tuple(authorization_roots),
+                            trace=trace,
+                        )
+                        if query_sources is not None:
+                            multiproofs = query_sources.merge_proofs(
+                                selected_rows=selected, remaining_proofs=multiproofs,
+                            )
                         # Kernels receive the actual verifier's owned snapshot.
-                        # This does not authenticate earlier dependent SQL reads
-                        # or prove completeness/currentness of a query/root.
+                        # Typed deferred sources were verified before their SQL
+                        # use, but completeness/currentness remain separate.
                         verified_inputs = authority_root_transition.verify_primary_plan_inputs(
                             operation=operation, business_before_roots=roots,
                             authorization_before_roots=authorization_roots,
@@ -2955,7 +3000,8 @@ class MeasuredPlanner:
                                 ),
                             )
                     except (authority_root_transition.PrimaryRadixMutationError,
-                            authority_query_reads.QueryReadError) as exc:
+                            authority_query_reads.QueryReadError,
+                            authority_query_staging.QueryStagingError) as exc:
                         raise AuthorityPlannerError(
                             "planner before-kernel input verification failed"
                         ) from exc

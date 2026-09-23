@@ -262,6 +262,9 @@ These are separate from provisioning the production services:
   now preserve per-query observations and verify primary membership before the
   transition. They do not yet provide range evidence, maintained indexes or a
   closed signed snapshot protocol for those observations.
+  The typed reader also [stages referenced-row proofs](authority-query-proof-staging.md)
+  before their fields drive dependent SQL. This relative membership check does
+  not add independent currentness, completeness or a missing WebAuthn kernel.
 - The planner reads root revisions and digests from PostgreSQL; the executor
   locks and compares those database roots. This establishes a same-database
   compare-and-swap boundary, not an independently retained current-root

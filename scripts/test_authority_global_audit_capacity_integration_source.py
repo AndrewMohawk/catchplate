@@ -153,12 +153,14 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
     def test_query_observations_are_retained_and_rechecked_against_owned_primary_rows(self):
         reader = definition(self.tree, "_read_bounded_transition_rows")
         snapshotted = call(reader, "authority_query_reads.snapshot_queries")
+        staged = call(reader, "query_sources.authenticate_references")
         resolved = call(reader, "authority_query_reads.resolve_query")
         executed = call(reader, "cursor.execute")
         captured = call(reader, "authority_query_reads.capture_query_read")
         bounded = call(reader, "authority_query_reads.validate_read_budget")
         validated = call(reader, "authority_query_reads.validate_query_reads")
-        self.assertLess(snapshotted.lineno, resolved.lineno)
+        self.assertLess(snapshotted.lineno, staged.lineno)
+        self.assertLess(staged.lineno, resolved.lineno)
         self.assertLess(resolved.lineno, executed.lineno)
         self.assertLess(executed.lineno, captured.lineno)
         self.assertLess(captured.lineno, bounded.lineno)
@@ -169,6 +171,15 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
         self.assertIn("parameters.append(predicate.value)", rendered)
         self.assertIn("resolved_absent_key = resolved_query.absent_key", rendered)
         self.assertIn("canonical_bytes(previous) != canonical_bytes(entry)", rendered)
+        self.assertIn("for entry in staged_rows", rendered)
+        overlaps = [node for node in ast.walk(reader) if isinstance(node, ast.If)
+                    and ast.unparse(node.test) == "previous is not None"]
+        self.assertEqual(len(overlaps), 1)
+        self.assertEqual(ast.dump(overlaps[0].body[0]), ast.dump(ast.parse("entry = previous").body[0]))
+        self.assertEqual(keywords(staged), {
+            "query": "query", "query_reads": "tuple(query_reads)",
+            "selected_rows": "tuple(selected.values())", "trace": "trace",
+        })
         state = call(self.method("read_inputs"), "PlanningState")
         self.assertEqual(keywords(state)["query_program"], "queries")
         self.assertEqual(keywords(state)["query_reads"], "query_reads")
@@ -180,6 +191,34 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
             "queries": "planning_state.query_program", "query_reads": "planning_state.query_reads",
             "selected_rows": "selected",
         })
+
+    def test_staged_proofs_are_transaction_local_and_only_unproved_rows_are_reread(self):
+        producer = self.method("derive", "MeasuredPlanner")
+        roots = call(producer, "_read_root_set")
+        created = call(producer, "authority_query_staging.StagedQueryProofs")
+        selected = call(producer, "_read_planning_inputs")
+        pending = call(producer, "query_sources.unproved_rows")
+        acquired = call(producer, "_derive_multiproofs")
+        merged = call(producer, "query_sources.merge_proofs")
+        verified = call(producer, "authority_root_transition.verify_primary_plan_inputs")
+        for before, after in zip((roots, created, selected, pending, acquired, merged),
+                                 (created, selected, pending, acquired, merged, verified)):
+            self.assertLess(before.lineno, after.lineno)
+        self.assertEqual(keywords(created), {
+            "operation": "operation", "business_before_roots": "roots",
+            "authorization_before_roots": "authorization_roots",
+        })
+        self.assertEqual(keywords(selected)["query_sources"], "query_sources")
+        self.assertEqual([ast.unparse(item) for item in pending.args], ["selected"])
+        self.assertEqual(keywords(acquired)["selected_rows"], "unproved_selected")
+        self.assertEqual(keywords(merged), {
+            "selected_rows": "selected", "remaining_proofs": "multiproofs",
+        })
+        inputs = definition(self.tree, "_read_planning_inputs")
+        self.assertEqual(keywords(call(inputs, "program.read_inputs"))["query_sources"], "query_sources")
+        self.assertIn("type(query_sources) is not authority_query_staging.StagedQueryProofs", ast.unparse(inputs))
+        reader = call(self.method("read_inputs"), "_read_bounded_transition_rows")
+        self.assertEqual(keywords(reader)["query_sources"], "query_sources")
 
     def test_transition_work_uses_finalized_batch_and_explicit_shared_accounting(self):
         method = self.method("__call__")

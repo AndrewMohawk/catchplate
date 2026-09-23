@@ -377,6 +377,49 @@ def _associations(records: tuple[QueryRead, ...], selections):
     return seen
 
 
+def reference_source_rows(operation: str, query: Any, *, prior_reads: tuple[QueryRead, ...],
+                          selected_rows: tuple[dict[str, Any], ...]) -> tuple[dict[str, Any], ...]:
+    """Select prior observed source rows for staging, without reading their values.
+
+    This validates source query shape, address associations and field presence,
+    not primary membership or authority. The original selected wrappers are
+    returned in stable table/BusinessKey-digest/key-byte order. Address/key
+    checks may inspect primary-key columns; requested fields are not resolved
+    or copied as query parameter values here.
+    A caller must genuinely verify these rows before calling resolve_query.
+    """
+    owned = snapshot_queries(operation, (query,))[0]
+    validate_read_budget(operation, query_reads=prior_reads)
+    records = tuple(_copy_read(record) for record in prior_reads)
+    if any(record.query_id == owned.query_id for record in records):
+        raise QueryReadError("query reference source inventory includes the current query")
+    selections = _selection_map(operation, selected_rows)
+    available = _associations(records, selections)
+    core = _core()
+    budget = _CopyBudget()
+    sources = {}
+
+    def include(value):
+        if type(value) is not core.SelectedRowFieldReference:
+            return
+        key_json = _key_bytes(value.table, value.key, budget)
+        identity = (value.table, key_json)
+        entry = selections.get(identity)
+        if (identity not in available or entry is None or not entry[0].present
+                or value.column not in entry[1]["row"]):
+            raise QueryReadError("query row-field reference is not an earlier present selected field")
+        sources[identity] = entry[1]
+
+    for predicate in owned.predicates:
+        include(predicate.value)
+    if owned.absent_key is not None:
+        for value in owned.absent_key.values():
+            include(value)
+    return tuple(sources[identity] for identity in sorted(
+        sources, key=lambda identity: (identity[0], sources[identity]["keyDigest"], identity[1]),
+    ))
+
+
 def _resolve(query, prior_reads: tuple[QueryRead, ...], selections):
     core = _core()
     available = _associations(prior_reads, selections)

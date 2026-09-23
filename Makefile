@@ -621,6 +621,7 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_authority_index_range.py \
 	scripts/test_authority_index_join.py \
 	scripts/test_authority_query_reads.py \
+	scripts/test_authority_query_staging.py \
 	scripts/test_authority_radix_mutation.py \
 	scripts/test_authority_root_transition.py \
 	scripts/test_authority_wire_json_source.py \

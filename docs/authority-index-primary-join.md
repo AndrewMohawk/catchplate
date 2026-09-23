@@ -204,8 +204,9 @@ The [planner retention and pre-kernel verification](authority-query-read-retenti
 now preserves query IDs, ordered member addresses and empty observations, and
 verifies actual primary membership before invoking the transition. It does not
 yet acquire or verify indexed-query frontiers. Integration must verify joined
-complete-query evidence before the kernel consumes it, and authenticate deferred
-selector sources before dependent SQL execution. Query-local null
+complete-query evidence before the kernel consumes it. The typed reader now
+[stages primary proofs for deferred sources](authority-query-proof-staging.md)
+before dependent SQL; independently admitted roots remain required. Query-local null
 `contractSelector` metadata must remain
 distinct from legitimate selector metadata on the global selected-row union;
 both views must agree on the exact key and full row. The closed transport and

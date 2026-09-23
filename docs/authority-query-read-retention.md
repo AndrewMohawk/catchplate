@@ -21,9 +21,12 @@ row counts. Address records hold table, canonical key bytes, BusinessKey/v1
 digest and exact presence. They contain no mutable row or query aliases.
 
 The source program is snapshotted before SQL. Deferred field references resolve
-only from previously observed present rows, and an omitted ordering becomes the
-source-owned primary-key ordering. SQL uses that resolved query; retention does
-not independently reinterpret its parameters afterward.
+only from previously observed present rows. The typed reader's
+[staged primary verification](authority-query-proof-staging.md) verifies those
+source rows before resolving their values into SQL parameters or absence keys.
+An omitted ordering becomes the source-owned primary-key ordering. SQL uses
+that resolved query; retention does not independently reinterpret its parameters
+afterward. Retained records alone still provide no membership authority.
 
 The distinction between zero SQL results and an exact-key absence is explicit:
 
@@ -87,11 +90,11 @@ passes; its work is not included in the primary phase's hash metric.
 
 ## Remaining boundaries
 
-Deferred reference resolution still precedes dependent SQL execution. Rechecking
-the recorded association against subsequently verified rows before the kernel
-does not establish that the reference was authenticated before that SQL ran.
-That earlier trust boundary needs staged proof acquisition or a separately
-admitted query producer when indexed query dispatch is introduced.
+The typed reader now stages membership proofs before deferred values influence
+dependent SQL. This is membership relative to the captured database roots, not
+independently current root authority, trusted time, or query completeness. Other
+database-derived admission inputs do not acquire those guarantees merely from
+the staged-reference path. Full final verification remains mandatory.
 
 Query records are currently ephemeral planner state. They are not committed by
 the existing Snapshot/v3, persisted as a new evidence protocol, or independently
@@ -101,9 +104,10 @@ declarations, retained proof frontiers, same-checkpoint root-pair authority and
 closed versioned Python/SQL transport admission. Existing exact-page metadata
 does not gain completeness authority from these records.
 
-Coverage adds 24 query-record component methods, nine pre-kernel primary-input
-methods and one planner source-order method, preserving all existing method
-identities. The retained-byte boundary fixture checks the real 64 MiB record
+The original retention slice added 24 query-record component methods, nine
+pre-kernel primary-input methods and one planner source-order method, preserving
+all existing method identities. Staging adds separate reference and lifecycle
+coverage. The retained-byte boundary fixture checks the real 64 MiB record
 admission ceiling, not the separate source-copy budget. The primary-input
 fixture composes actual membership verification, the counter-update kernel and
 final root recomputation against independent tree hashes.

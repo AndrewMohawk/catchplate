@@ -568,6 +568,73 @@ class AuthorityQueryReadTests(unittest.TestCase):
         with self.assertRaisesRegex(reads.QueryReadError, "original key"):
             self.capture(definition, (numeric,))
 
+    def test_reference_source_enumeration_deduplicates_and_orders_actual_prior_addresses(self):
+        first_record = self.capture(self.one, (self.first,))
+        second_record = self.capture(exact("second", "b"), (self.second,))
+        challenge = selection(CHALLENGES, {"id": "challenge-雪"}, {"id": "challenge-雪", "user_id": "bob"})
+        challenge_query = query("challenge-source", table=CHALLENGES, maximum_rows=1,
+            predicates=(core.QueryPredicate("id", "eq", "challenge-雪"),), absent_key={"id": "challenge-雪"})
+        challenge_record = self.capture(challenge_query, (challenge,))
+        selected = (self.second, challenge, self.first)
+        prior = (first_record, second_record, challenge_record)
+        references = (
+            core.SelectedRowFieldReference(CREDENTIALS, {"id": "b"}, "user_id"),
+            core.SelectedRowFieldReference(CHALLENGES, {"id": "challenge-雪"}, "user_id"),
+            core.SelectedRowFieldReference(CREDENTIALS, {"id": "a-雪"}, "user_id"),
+            core.SelectedRowFieldReference(CREDENTIALS, {"id": "b"}, "credential_id"),
+        )
+        dependent = query("reference-inventory", predicates=tuple(
+            core.QueryPredicate("user_id", "eq", reference) for reference in references))
+        expected = tuple(sorted(selected, key=lambda row: (row["table"], row["keyDigest"], canonical(row["key"]))))
+        actual = reads.reference_source_rows(OPERATION, dependent, prior_reads=prior, selected_rows=selected)
+        self.assertEqual(actual, expected)
+        self.assertTrue(all(left is right for left, right in zip(actual, expected)))
+        reordered = replace(dependent, predicates=tuple(reversed(dependent.predicates)))
+        self.assertEqual(reads.reference_source_rows(OPERATION, reordered,
+            prior_reads=prior, selected_rows=tuple(reversed(selected))), expected)
+        self.assertEqual(reads.reference_source_rows(OPERATION, query("no-reference"),
+            prior_reads=prior, selected_rows=selected), ())
+
+    def test_reference_enumeration_includes_absent_key_but_never_copies_source_field_value(self):
+        record = self.capture(self.one, (self.first,))
+        reference = core.SelectedRowFieldReference(CREDENTIALS, {"id": "a-雪"}, "credential_id")
+        dependent = query("reference-absence", table=CHALLENGES, maximum_rows=1,
+            predicates=(core.QueryPredicate("id", "eq", reference),), absent_key={"id": reference})
+        # An opaque unsupported value cannot pass actual resolution. Enumeration
+        # only finds the original wrapper; it is not a successful proof/value
+        # conversion and must not consume the value before staged verification.
+        opaque = object()
+        self.first["row"]["credential_id"] = opaque
+        sources = reads.reference_source_rows(OPERATION, dependent,
+            prior_reads=(record,), selected_rows=(self.first,))
+        self.assertEqual(len(sources), 1)
+        self.assertIs(sources[0], self.first)
+        self.assertIs(sources[0]["row"]["credential_id"], opaque)
+        with self.assertRaises(reads.QueryReadError):
+            reads.resolve_query(OPERATION, dependent, prior_reads=(record,), selected_rows=(self.first,))
+
+    def test_reference_enumeration_rejects_current_forward_absent_missing_and_malformed_sources(self):
+        first_record = self.capture(self.one, (self.first,))
+        missing = selection(CREDENTIALS, {"id": "missing"}, None)
+        missing_record = self.capture(exact("missing", "missing"), (missing,))
+        for key, column, prior, selected in (
+            ({"id": "a-雪"}, "user_id", (), (self.first,)),
+            ({"id": "a-雪"}, "user_id", (first_record,), ()),
+            ({"id": "a-雪"}, "not_a_column", (first_record,), (self.first,)),
+            ({"id": "missing"}, "user_id", (missing_record,), (missing,)),
+            ({"wrong_key": "a-雪"}, "user_id", (first_record,), (self.first,)),
+        ):
+            dependent = query("reference-rejection", predicates=(core.QueryPredicate("user_id", "eq",
+                core.SelectedRowFieldReference(CREDENTIALS, key, column)),))
+            with self.subTest(key=key, column=column), self.assertRaises(reads.QueryReadError):
+                reads.reference_source_rows(OPERATION, dependent, prior_reads=prior, selected_rows=selected)
+        with self.assertRaisesRegex(reads.QueryReadError, "includes the current query"):
+            reads.reference_source_rows(OPERATION, self.one,
+                prior_reads=(first_record,), selected_rows=(self.first,))
+        with self.assertRaises(reads.QueryReadError):
+            reads.reference_source_rows(OPERATION, query("new"),
+                prior_reads=(first_record,), selected_rows=(self.first, self.first))
+
 
 if __name__ == "__main__":
     unittest.main()

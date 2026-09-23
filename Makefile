@@ -615,6 +615,7 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_authority_radix_mutation.py \
 	scripts/test_authority_root_transition.py \
 	scripts/test_authority_wire_json_source.py \
+	scripts/test_authority_audit_capacity.py \
 	scripts/test_authority_transition_registry.py \
 	scripts/test_webauthn_attestation_core.py \
 	scripts/test_webauthn_trust_core.py \

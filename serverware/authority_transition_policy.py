@@ -9,6 +9,7 @@ from typing import Any, Mapping
 
 from serverware import authority_contract
 from serverware import authority_transition_core as core
+from serverware.audit_outbox_contract import MAX_PENDING
 
 
 _TRUST_ERROR_FIELDS = frozenset({"publication_id", "error"})
@@ -320,6 +321,14 @@ _AUDIT_CAPACITY_PARTITION_DIGEST = core.framed_digest(
 )
 _AUDIT_CAPACITY_ID = (
     f"{_AUDIT_CAPACITY_KIND}:{_AUDIT_CAPACITY_PARTITION_DIGEST}"
+)
+_AUDIT_CAPACITY_CHARGES = MappingProxyType(
+    {
+        "policy.activation.prepare": 7,
+        "policy.genesis.prepare": 1,
+        "rbac.binding.mutate": 1,
+        "policy.activation.abort": 1,
+    }
 )
 _EMPTY_EXPIRY_ROOT = core.framed_digest(
     "serverware.policyAuthorityAggregateExpiryIndex/v1",
@@ -1159,6 +1168,24 @@ def _aggregate_mutation(
         aggregate_kind=_AUDIT_CAPACITY_KIND,
         partition_digest=_AUDIT_CAPACITY_PARTITION_DIGEST,
     )
+    if (
+        type(aggregate["capacity_limit"]) is not int
+        or aggregate["capacity_limit"] != MAX_PENDING
+    ):
+        raise core.TransitionKernelError(
+            "audit capacity limit differs from the source contract"
+        )
+    if (
+        type(live_delta) is not int
+        or live_delta != _AUDIT_CAPACITY_CHARGES.get(context.operation)
+        or type(operation_id) is not str
+        or operation_id != _operation_id(
+            context.operation, context.request_digest
+        )
+    ):
+        raise core.TransitionKernelError(
+            "audit capacity charge differs from the source operation"
+        )
     reserved = _mapping_json(
         aggregate["reserved_units_json"],
         "audit capacity reserved units",
@@ -1189,6 +1216,71 @@ def _aggregate_mutation(
             or _EMPTY_EXPIRY_ROOT
         ),
         work_page_id=aggregate.get("work_page_id"),
+    )
+
+
+def _audit_capacity_mutations(
+    context: core.KernelContext,
+    *,
+    operation_id: str,
+    outbox_rows: tuple[Mapping[str, Any], ...],
+) -> tuple[dict[str, Any], ...]:
+    """Return one capacity update together with the fresh INSERTs it counts.
+
+    Only fresh branches use this helper. Whole-operation replay is checked by
+    each kernel before calling it; partial/orphan audit identity reuse is not
+    an insert and must not be charged or turned back into a pending audit.
+    """
+    if (
+        type(outbox_rows) is not tuple
+        or len(outbox_rows) != _AUDIT_CAPACITY_CHARGES.get(context.operation)
+    ):
+        raise core.TransitionKernelError(
+            "audit capacity records differ from the source operation"
+        )
+    identities: set[str] = set()
+    inserts: list[dict[str, Any]] = []
+    for row in outbox_rows:
+        if not isinstance(row, Mapping):
+            raise core.TransitionKernelError(
+                "audit capacity records differ from the source operation"
+            )
+        identity = row.get("id")
+        if (
+            type(identity) is not str
+            or not identity
+            or len(identity) > 256
+            or not identity.isascii()
+            or identity in identities
+            or row.get("status") != "pending"
+        ):
+            raise core.TransitionKernelError(
+                "audit capacity records differ from the source operation"
+            )
+        identities.add(identity)
+        selected = context.exact("metadata_audit_outbox", {"id": identity})
+        if (
+            selected.get("present") is not False
+            or "row" not in selected
+            or selected["row"] is not None
+        ):
+            raise core.TransitionKernelError(
+                "fresh audit identity is not proven absent"
+            )
+        inserts.append(
+            core.mutation(
+                operation=context.operation,
+                selected=selected,
+                row=row,
+            )
+        )
+    return (
+        _aggregate_mutation(
+            context,
+            operation_id=operation_id,
+            live_delta=len(inserts),
+        ),
+        *inserts,
     )
 
 
@@ -2211,10 +2303,10 @@ class _PolicyActivationPrepareKernel:
                 )["binding_digest"],
                 operation_id=operation_id,
             ),
-            _aggregate_mutation(
+            *_audit_capacity_mutations(
                 context,
                 operation_id=operation_id,
-                live_delta=7,
+                outbox_rows=tuple(stage["outbox"] for stage in stages),
             ),
         ]
         attempt_mutation = _immutable_mutation(
@@ -2227,12 +2319,6 @@ class _PolicyActivationPrepareKernel:
             mutations.append(attempt_mutation)
         prepared_mutations: list[dict[str, Any]] = []
         for ordinal, stage in enumerate(stages, start=1):
-            outbox_mutation = _immutable_mutation(
-                context,
-                table="metadata_audit_outbox",
-                key={"id": stage["outbox"]["id"]},
-                row=stage["outbox"],
-            )
             transition_mutation = _immutable_mutation(
                 context,
                 table="policy_authority_transition_audits",
@@ -2271,12 +2357,8 @@ class _PolicyActivationPrepareKernel:
                 },
                 row=prepared_transition,
             )
-            for mutation_value in (
-                outbox_mutation,
-                transition_mutation,
-            ):
-                if mutation_value is not None:
-                    mutations.append(mutation_value)
+            if transition_mutation is not None:
+                mutations.append(transition_mutation)
             if prepared_mutation is not None:
                 prepared_mutations.append(prepared_mutation)
         preparation_mutation = _immutable_mutation(
@@ -4564,18 +4646,10 @@ class _PolicyGenesisPrepareKernel:
                     binding_digest=binding_digest,
                     operation_id=operation_id,
                 ),
-                _aggregate_mutation(
+                *_audit_capacity_mutations(
                     context,
                     operation_id=operation_id,
-                    live_delta=1,
-                ),
-                core.mutation(
-                    operation=self.operation,
-                    selected=context.exact(
-                        "metadata_audit_outbox",
-                        {"id": stage["outbox"]["id"]},
-                    ),
-                    row=stage["outbox"],
+                    outbox_rows=(stage["outbox"],),
                 ),
                 core.mutation(
                     operation=self.operation,
@@ -5330,18 +5404,10 @@ class _RbacBindingMutateKernel:
         )
         return core.KernelTransition(
             mutations=(
-                _aggregate_mutation(
+                *_audit_capacity_mutations(
                     context,
                     operation_id=operation_id,
-                    live_delta=1,
-                ),
-                core.mutation(
-                    operation=self.operation,
-                    selected=context.exact(
-                        "metadata_audit_outbox",
-                        {"id": stage["outbox"]["id"]},
-                    ),
-                    row=stage["outbox"],
+                    outbox_rows=(stage["outbox"],),
                 ),
                 core.mutation(
                     operation=self.operation,
@@ -5656,21 +5722,13 @@ class _PolicyActivationAbortKernel:
             "finalized_at_epoch_ns": aborted_at_epoch_ns,
         }
         mutations = (
-            _aggregate_mutation(
+            *_audit_capacity_mutations(
                 context,
                 operation_id=_operation_id(
                     self.operation,
                     context.request_digest,
                 ),
-                live_delta=1,
-            ),
-            core.mutation(
-                operation=self.operation,
-                selected=context.exact(
-                    "metadata_audit_outbox",
-                    {"id": stage["outbox"]["id"]},
-                ),
-                row=stage["outbox"],
+                outbox_rows=(stage["outbox"],),
             ),
             core.mutation(
                 operation=self.operation,

@@ -108,6 +108,13 @@ under writer exclusion and independent admission; it must not bless whatever
 rows an existing database returns. A changed manifest requires a reviewed
 migration, not automatic repair of an accepted database.
 
+The [policy audit-capacity component](authority-audit-capacity.md) now shares
+the existing fixed limit and binds four policy writers' charges to actual fresh
+INSERTs. It does not supply this global count proof: the quota helper uses a
+different aggregate identity, legacy writers use a direct COUNT, and delivery
+does not decrement the policy aggregate. A complete all-writer transition is
+still required; the nominal row limit is not proof of the maintained population.
+
 ## Root authority, time and whole-operation bounds
 
 The planner currently reads roots and time from PostgreSQL. The executor's
@@ -191,6 +198,16 @@ now implement deterministic bundle validation and bounded exact readback with
 state-first retry handling. These are source-only prerequisites; their unsigned
 local observations do not implement the installation authority described below.
 
+The current producer path cannot yet supply an authoritative committed stage.
+The legacy stage returns publication metadata. The v9 writer commit receipt
+binds snapshot and before/after roots but is DB-computed and unsigned; the
+signed replay witness receipt binds operation/request/capability/result and
+generation/log ancestry, not those root transitions or aggregate withdrawal
+completeness. The authority service response exposes receipt digests, not the
+full independently authenticated stage evidence. Do not wrap this metadata or
+the unsigned local installation observation in a new signature and treat that
+as the missing root authority.
+
 First commit the complete aggregate stage transaction and its independent root
 transition. The installation authority receives that **already committed**
 stage receipt, exact predecessor/candidate bundle bytes, signer policy,
@@ -204,6 +221,22 @@ high-water, audit and receipt state in one authorized transaction. High-water
 advancement must be a planned mutation before after-roots are computed, not
 the disabled legacy post-root side effect. Proof/capacity inputs remain
 necessary even if only four business-row mutations are involved.
+
+The reserved completion declaration already allocates its four selected rows
+and mutations to publication, high-water, audit and external evidence. A
+maintained capacity aggregate would add another row/mutation and require its
+relation and proof primitive, or an explicitly reviewed counted-index design.
+That contract change cannot be hidden in a nominal four-mutation implementation.
+
+Keep the digest meanings distinct: `bundleDigest` commits the unsigned bundle;
+`payloadDigest` commits the approved control-plane mutation payload, not just
+that bundle; the canonical envelope digest also includes its bundle signature.
+The reserved verification statement does not bind exact installed file bytes,
+an independently configured target, or committed aggregate-stage/root ancestry.
+It therefore needs a new closed version, not a reinterpretation of the reserved
+v1 fields. Purpose-specific verifier key/measurement/attestation/target/time
+pins and authenticated evidence admission remain missing; the local bundle
+signing key and generic receipt structure checks are not substitutes.
 
 An installed-but-uncompleted crash remains a pending, reconciliable operation;
 a local file alone does not publish authority. Retry verifies the same stage,

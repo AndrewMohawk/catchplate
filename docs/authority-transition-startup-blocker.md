@@ -52,6 +52,12 @@ The separate [wire JSON repair](authority-wire-json.md) now implements the SQL
 message serializer and consumer migration without changing persisted tree hashes;
 its authored component and original-byte checks remain unexecuted.
 
+The [policy audit-capacity repair](authority-audit-capacity.md) now pins the
+source-owned limit and couples four policy writers' charges to their exact fresh
+audit INSERTs. It does not establish global pending/claimed cardinality: quota
+and legacy writers still use different accounting paths, and delivery does not
+maintain that policy aggregate. Its authored helper cases remain unexecuted.
+
 ## Implementation contracts still needed
 
 The following bounds are the existing contract, not permission to truncate a

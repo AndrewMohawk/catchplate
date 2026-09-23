@@ -31,6 +31,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from cryptography.hazmat.primitives.asymmetric import ec
 
 from serverware import authority_contract, authority_primary_contract, grants
+from serverware.audit_outbox_contract import MAX_PENDING
 from serverware.authority_store import (
     authority_dispatch as _authority_dispatch,
 )
@@ -164,7 +165,7 @@ _AUDIT_EVENT_JSON_WRITE_MAX_BYTES = 2 * 1024 * 1024
 _AUDIT_EVENT_JSON_STORED_MAX_BYTES = 8 * 1024 * 1024
 _AUDIT_VERIFY_BATCH_TARGET_BYTES = 64 * 1024 * 1024
 _AUDIT_VERIFY_BATCH_SIZE = 32
-_METADATA_AUDIT_OUTBOX_MAX_PENDING = 100_000
+_METADATA_AUDIT_OUTBOX_MAX_PENDING = MAX_PENDING
 _METADATA_AUDIT_OUTBOX_CLAIM_TTL_SECONDS = 60
 _AUDIT_POSTGRES_SCHEMA = "serverware_audit"
 _RECOVERY_WITNESS_POSTGRES_SCHEMA = "serverware_recovery_witness"

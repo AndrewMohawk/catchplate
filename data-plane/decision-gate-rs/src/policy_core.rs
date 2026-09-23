@@ -10,7 +10,7 @@ use super::policy_shadow::{
     ActiveEffectCommitState, ActiveEffectIntent, ActiveEffectPreparation,
     ActiveEffectRequirement, ActiveEffectRequirements,
     ActiveEffectTerminalEvidence, ActiveEffectTerminalState,
-    ActiveMutableEffectKind, ActivePolicyPlan,
+    ActiveMutableEffectKind, ActivePolicyPlan, CompactActiveEffectCommitReceipt,
     AuthenticatedSpoolCompactionRequest,
     canonical_json_bytes,
     CandidateEffectIntent, CandidatePolicyPlan, IngressCustodyAdmission,
@@ -60,9 +60,15 @@ const SHADOW_MAX_JOB_BYTES: usize = 20 * 1024 * 1024;
 // queued job conservatively even when jobs share that lifecycle. This is not
 // an extension of the receipt-arena budget or a total heap/RSS measurement.
 const SHADOW_ACTIVE_TERMINAL_RETENTION_BYTES: usize = 384;
+// Four inline outer-wrapper slots, plus parent/result context. Conservatively
+// charge four simultaneous lifecycle/pending/final/job copies. No wire strings,
+// credential metadata graph, provider secret, or receipt-arena allocation is
+// retained in this increment. This remains a modeled queue budget, not RSS.
+const SHADOW_CREDENTIAL_PREREQUISITE_RETENTION_BYTES: usize = 4 * 4096;
 
 fn shadow_job_bytes_with_terminal_retention(payload_bytes: usize) -> usize {
     payload_bytes.saturating_add(SHADOW_ACTIVE_TERMINAL_RETENTION_BYTES)
+        .saturating_add(SHADOW_CREDENTIAL_PREREQUISITE_RETENTION_BYTES)
 }
 const SHADOW_MAX_FACT_HEADERS: usize = 128;
 const SHADOW_MAX_FACT_HEADER_BYTES: usize = 64 * 1024;
@@ -1503,7 +1509,10 @@ fn evaluate_policy_plan_request(
             .iter()
             .find(|principal| principal.id == principal_id)
     } else {
-        compiled.identify_principal(request.client_ip.as_deref(), &normalized_headers)
+        compiled.principals.iter().find(|principal| principal.matches_at(
+            request.client_ip.as_deref(), &normalized_headers, None,
+            u128::from(context.decision_at_epoch_ms),
+        ))
     };
     let Some(principal) = principal else {
         return denied(
@@ -1905,15 +1914,21 @@ impl ShadowAdmission {
                             .active_plan()
                             .map(ActiveEffectRequirements::from_plan);
                         if let Some(effect_requirements) = requirements {
-                            state.decision_time_binding =
-                                Some(DecisionTimeBinding {
-                                    decision_at_epoch_ms,
-                                    active_plan_sha256:
-                                        active.semantic_sha256.clone(),
-                                    effect_requirements,
-                                    active_evaluation: active.clone(),
-                                });
-                            None
+                            if !state.credential_prerequisites.permits_binding(
+                                &active.semantic_sha256, decision_at_epoch_ms,
+                            ) {
+                                Some((b"decision-time binding is frozen by credential prerequisites", false))
+                            } else {
+                                state.decision_time_binding =
+                                    Some(DecisionTimeBinding {
+                                        decision_at_epoch_ms,
+                                        active_plan_sha256:
+                                            active.semantic_sha256.clone(),
+                                        effect_requirements,
+                                        active_evaluation: active.clone(),
+                                    });
+                                None
+                            }
                         } else {
                             Some((b"decision-time active plan is unavailable", false))
                         }
@@ -3175,7 +3190,7 @@ impl ImmutableUnavailableReceiptRef {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 struct InlineSha256Digest {
     bytes: [u8; SHADOW_RECEIPT_DIGEST_BYTES],
 }
@@ -5203,6 +5218,290 @@ impl Drop for QueueByteReservation {
     }
 }
 
+// These slots describe only the four existing OUTER credential wrappers.
+// Cache hits, singleflight sharing and nested refreshes are not individual
+// provider-operation proofs and cannot discharge new plan requirements.
+fn credential_outer_slot(kind: ActiveMutableEffectKind) -> Result<usize, String> {
+    match kind {
+        ActiveMutableEffectKind::CredentialGeneration => Ok(0),
+        ActiveMutableEffectKind::OauthRotation => Ok(1),
+        ActiveMutableEffectKind::CredentialLease => Ok(2),
+        ActiveMutableEffectKind::CredentialDecrypt => Ok(3),
+        _ => Err("unsupported outer credential prerequisite kind".to_string()),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+struct CredentialPrerequisiteParent {
+    commitment: InlineSha256Digest,
+    generation: InlineSha256Digest,
+    request_binding: InlineSha256Digest,
+    request_commitment: InlineSha256Digest,
+    active_plan: InlineSha256Digest,
+    scope: InlineSha256Digest,
+    credential_slot: InlineSha256Digest,
+    ingress_sequence: u64,
+    decision_at_epoch_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+struct CredentialOuterResult {
+    version: u64,
+    metadata: InlineSha256Digest,
+    secret_available: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+struct CredentialOuterSlot {
+    effect_id: InlineSha256Digest,
+    attempted: bool,
+    barrier: Option<InlineSha256Digest>,
+    receipt: Option<CompactActiveEffectCommitReceipt>,
+    result: Option<CredentialOuterResult>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+struct CredentialPrerequisiteEvidence {
+    parent: Option<CredentialPrerequisiteParent>,
+    slots: [Option<CredentialOuterSlot>; 4],
+    resolved: Option<CredentialOuterResult>,
+    failed: bool,
+}
+
+const _: () = assert!(std::mem::size_of::<CredentialPrerequisiteEvidence>() <= 4096);
+const _: () = assert!(std::mem::size_of::<Option<CredentialPrerequisiteEvidence>>() <= 4096);
+
+impl CredentialPrerequisiteEvidence {
+    fn commitment(&self) -> String {
+        digest_json_ensure_ascii(&json!({
+            "domain":"serverware.policyShadowOuterCredentialPrerequisites/v1",
+            "evidence":self,
+        }))
+    }
+
+    fn permits_binding(&self, plan: &str, time: u64) -> bool {
+        self.parent.is_none_or(|parent| {
+            InlineSha256Digest::from_str(plan).ok() == Some(parent.active_plan)
+                && time == parent.decision_at_epoch_ms
+        })
+    }
+
+    fn reserve(
+        &mut self,
+        parent: CredentialPrerequisiteParent,
+        preparations: &[Option<ActiveEffectPreparation>; 2],
+    ) -> Result<(), String> {
+        validate_credential_preparation_group(preparations)?;
+        if self.failed || self.parent.is_some_and(|bound| bound != parent) {
+            return Err("credential prerequisite parent binding changed".to_string());
+        }
+        let mut reserved = self.slots;
+        for preparation in preparations.iter().flatten() {
+            let (generation, ingress) = preparation.reconciliation_identity();
+            if InlineSha256Digest::from_digest(generation)? != parent.generation || ingress != parent.ingress_sequence {
+                return Err("credential prerequisite preparation parent mismatch".to_string());
+            }
+            let index = credential_outer_slot(preparation.effect_kind())?;
+            if reserved[index].is_some() {
+                return Err("credential prerequisite outer slot already reserved".to_string());
+            }
+            reserved[index] = Some(CredentialOuterSlot {
+                effect_id: InlineSha256Digest::from_digest(preparation.effect_id_sha256())?,
+                attempted: false,
+                barrier: None,
+                receipt: None,
+                result: None,
+            });
+        }
+        self.parent = Some(parent);
+        self.slots = reserved;
+        Ok(())
+    }
+
+    fn retain(
+        &mut self,
+        parent: CredentialPrerequisiteParent,
+        preparation: &ActiveEffectPreparation,
+        receipt: CompactActiveEffectCommitReceipt,
+        result: Option<CredentialOuterResult>,
+    ) -> Result<(), String> {
+        if self.parent != Some(parent) {
+            return Err("credential prerequisite receipt parent mismatch".to_string());
+        }
+        let slot = self.slots[credential_outer_slot(preparation.effect_kind())?]
+            .as_mut().ok_or("credential prerequisite receipt has no reservation")?;
+        if slot.effect_id != InlineSha256Digest::from_digest(preparation.effect_id_sha256())?
+            || slot.receipt.is_some() || !slot.attempted || slot.barrier.is_none()
+            || (receipt.terminal_state() == ActiveEffectCommitState::Committed) != result.is_some()
+        {
+            return Err("credential prerequisite receipt slot mismatch".to_string());
+        }
+        if let Some(result) = result {
+            let digest = Sha256Digest::parse(result.result_commitment()?).map_err(shadow_error)?;
+            if !receipt.matches_result(&digest) {
+                return Err("credential prerequisite signed result mismatch".to_string());
+            }
+        }
+        if !receipt.matches_preparation_and_barrier(preparation.effect_id_sha256(),
+            &slot.barrier.ok_or("credential prerequisite barrier missing")?.to_digest()?)
+        {
+            return Err("credential prerequisite recorded barrier mismatch".to_string());
+        }
+        slot.receipt = Some(receipt);
+        slot.result = result;
+        if receipt.terminal_state() != ActiveEffectCommitState::Committed {
+            self.failed = true;
+        }
+        Ok(())
+    }
+
+    fn publish_resolution(
+        &mut self,
+        parent: CredentialPrerequisiteParent,
+        preparations: &[Option<ActiveEffectPreparation>; 2],
+        result: CredentialOuterResult,
+    ) -> Result<(), String> {
+        validate_credential_preparation_group(preparations)?;
+        if self.failed || self.parent != Some(parent) || result.version == 0 {
+            return Err("credential prerequisite group is not committed".to_string());
+        }
+        for preparation in preparations.iter().flatten() {
+            let slot = self.slots[credential_outer_slot(preparation.effect_kind())?]
+                .ok_or("credential prerequisite group reservation missing")?;
+            if slot.effect_id != InlineSha256Digest::from_digest(preparation.effect_id_sha256())?
+                || slot.receipt.is_none_or(|receipt| receipt.terminal_state() != ActiveEffectCommitState::Committed)
+                || slot.result != Some(result)
+            {
+                return Err("credential prerequisite group lacks matching commits".to_string());
+            }
+        }
+        if self.resolved.is_some_and(|prior| prior.version != result.version || prior.metadata != result.metadata) {
+            self.failed = true;
+            return Err("credential prerequisite generation changed between outer groups".to_string());
+        }
+        self.resolved = Some(result);
+        Ok(())
+    }
+
+    fn validate_decision(&self, decision: &Value, dispatch: bool) -> Result<(), String> {
+        let Some(parent) = self.parent else { return Ok(()); };
+        let supplied_slot = decision.get("credential_ref").filter(|value| !value.is_null());
+        let supplied_version = decision.get("credential_version").filter(|value| !value.is_null());
+        let supplied_secret = decision.get("policy_effect_results")
+            .and_then(|effects| effects.get("credential_secret_available"))
+            .filter(|value| !value.is_null());
+        let slot = decision.get("credential_ref").and_then(Value::as_str);
+        let version = decision.get("credential_version").and_then(Value::as_u64);
+        if supplied_slot.is_some_and(|value| !value.is_string())
+            || supplied_version.is_some_and(|value| value.as_u64().is_none())
+            || supplied_secret.is_some_and(|value| value.as_bool().is_none())
+            || slot.is_some_and(|slot| InlineSha256Digest::compute(slot.as_bytes()) != parent.credential_slot)
+            || version.is_some_and(|version| self.resolved.is_none_or(|result| result.version != version))
+            || ((slot.is_some() || version.is_some()) && supplied_secret.is_some_and(|value|
+                self.resolved.is_none_or(|result| Some(result.secret_available) != value.as_bool())))
+            || (dispatch && (self.failed || slot.is_none() || version.is_none()
+                || self.resolved.is_none_or(|result| !result.secret_available)
+                || self.slots.iter().flatten().any(|slot| slot.receipt.is_none_or(|receipt|
+                    receipt.terminal_state() != ActiveEffectCommitState::Committed))
+                || [2, 3].into_iter().any(|index| self.slots[index].and_then(|slot| slot.receipt)
+                    .is_none_or(|receipt| receipt.terminal_state() != ActiveEffectCommitState::Committed))))
+        {
+            return Err("active decision contradicts retained credential prerequisite result".to_string());
+        }
+        // A genuine later denial need not invent a slot/version. Any completed
+        // prerequisites remain retained even when that denial omits resolution.
+        Ok(())
+    }
+}
+
+fn validate_credential_preparation_group(
+    preparations: &[Option<ActiveEffectPreparation>; 2],
+) -> Result<(), String> {
+    let kinds = preparations.each_ref().map(|item| item.as_ref().map(ActiveEffectPreparation::effect_kind));
+    if !matches!(kinds,
+        [Some(ActiveMutableEffectKind::CredentialGeneration), None]
+        | [Some(ActiveMutableEffectKind::CredentialGeneration), Some(ActiveMutableEffectKind::OauthRotation)]
+        | [Some(ActiveMutableEffectKind::CredentialLease), Some(ActiveMutableEffectKind::CredentialDecrypt)])
+    {
+        return Err("invalid outer credential prerequisite group".to_string());
+    }
+    Ok(())
+}
+
+impl CredentialOuterResult {
+    fn from_info(info: &CredentialLeaseInfo) -> Result<Self, String> {
+        let metadata = credential_lease_metadata_sha256(&info.metadata);
+        if info.version == 0 || metadata != info.metadata_sha256 {
+            return Err("credential prerequisite result metadata or version is invalid".to_string());
+        }
+        Ok(Self {
+            version: info.version,
+            metadata: InlineSha256Digest::from_str(&metadata)?,
+            secret_available: info.secret_available,
+        })
+    }
+
+    fn result_commitment(&self) -> Result<String, String> {
+        Ok(digest_json_ensure_ascii(&json!({
+            "domain":"serverware.policyShadowCredentialEffectResult/v1",
+            "version":self.version,
+            "metadataSha256":self.metadata.to_digest()?.as_str(),
+            "secretAvailable":self.secret_available,
+        })))
+    }
+}
+
+#[derive(Clone, Copy)]
+struct PrerequisiteEffectRoot {
+    prerequisite_commitment: InlineSha256Digest,
+    effect_results: InlineSha256Digest,
+}
+
+const _: () = assert!(4 * (std::mem::size_of::<CredentialPrerequisiteEvidence>()
+    + std::mem::size_of::<PrerequisiteEffectRoot>()) <= SHADOW_CREDENTIAL_PREREQUISITE_RETENTION_BYTES);
+
+impl PrerequisiteEffectRoot {
+    fn new(evidence: &CredentialPrerequisiteEvidence, effect_results: &Value) -> Result<Self, String> {
+        let commitment = evidence.commitment();
+        let explicit = effect_results.get("explicitCommitments").and_then(Value::as_array)
+            .ok_or("prerequisite effect root lacks explicit commitments")?;
+        if explicit.iter().filter(|item| item.as_str() == Some(commitment.as_str())).count() != 1 {
+            return Err("prerequisite evidence is not bound exactly once in effect root".to_string());
+        }
+        Ok(Self {
+            prerequisite_commitment: InlineSha256Digest::from_str(&commitment)?,
+            effect_results: InlineSha256Digest::from_str(&digest_json_ensure_ascii(effect_results))?,
+        })
+    }
+}
+
+// Move-only bounded transient reservation. Strings here are canonical digests;
+// only the inline evidence above survives in lifecycle/pending/terminal state.
+pub(crate) struct CredentialPrerequisiteReservation {
+    parent: CredentialPrerequisiteParent,
+    preparations: [Option<ActiveEffectPreparation>; 2],
+    intent_sha256: String,
+    prepared_state_sha256: String,
+}
+
+impl CredentialPrerequisiteReservation {
+    pub(crate) fn effect_count(&self) -> usize {
+        self.preparations.iter().flatten().count()
+    }
+
+    pub(crate) fn result_commitment(&self, info: &CredentialLeaseInfo) -> Result<String, String> {
+        CredentialOuterResult::from_info(info)?.result_commitment()
+    }
+}
+
+// Non-authorizing and move-only: provenance for this wrapper result, not a
+// child-plan capability. Only successful full-group publication constructs it.
+pub(crate) struct CommittedCredentialPrerequisite {
+    parent: CredentialPrerequisiteParent,
+    result: CredentialOuterResult,
+    evidence_commitment: InlineSha256Digest,
+}
+
 #[derive(Clone)]
 struct FinalActiveDecision {
     decision_at_epoch_ms: u64,
@@ -5217,6 +5516,8 @@ struct FinalActiveDecision {
     resolved_credential_slot: Option<String>,
     resolved_credential_version: Option<u64>,
     dispatch_authorized: bool,
+    credential_prerequisites: CredentialPrerequisiteEvidence,
+    prerequisite_effect_root: PrerequisiteEffectRoot,
 }
 
 // A retained reference to a genuinely appended terminal, never an execution
@@ -5330,6 +5631,22 @@ impl PreparedActiveTerminalRecord {
         }
         let plan = decision.active_evaluation.active_plan()
             .ok_or("terminal record lacks an active plan")?;
+        if decision.prerequisite_effect_root.prerequisite_commitment
+                != InlineSha256Digest::from_str(&decision.credential_prerequisites.commitment())?
+            || decision.prerequisite_effect_root.effect_results
+                != InlineSha256Digest::from_str(&decision.effect_results_sha256)?
+            || decision.credential_prerequisites.parent.is_some_and(|parent|
+                parent.generation != generation_id || parent.ingress_sequence != ingress_sequence
+                || parent.request_binding != request_binding || parent.request_commitment != request_commitment
+                || parent.decision_at_epoch_ms != decision.decision_at_epoch_ms
+                || InlineSha256Digest::from_str(&decision.active_evaluation.semantic_sha256).ok() != Some(parent.active_plan))
+        {
+            return Err("terminal record credential prerequisite commitment mismatch".to_string());
+        }
+        decision.credential_prerequisites.validate_decision(&json!({
+            "credential_ref":decision.resolved_credential_slot,
+            "credential_version":decision.resolved_credential_version,
+        }), decision.dispatch_authorized)?;
         if plan.semantic_commitment().map_err(shadow_error)?.as_str()
                 != decision.active_evaluation.semantic_sha256
             || decision.effect_requirements != ActiveEffectRequirements::from_plan(plan)
@@ -5418,6 +5735,7 @@ struct PendingActiveDecision {
     resolved_credential_version: Option<u64>,
     dispatch_authorized: bool,
     active_decision: Value,
+    credential_prerequisites: CredentialPrerequisiteEvidence,
 }
 
 #[derive(Clone)]
@@ -5435,6 +5753,8 @@ struct LifecycleState {
     candidate: Option<PolicyEvaluation>,
     decision_time_binding: Option<DecisionTimeBinding>,
     response_finished: bool,
+    credential_prerequisites: CredentialPrerequisiteEvidence,
+    credential_prerequisites_sealed: bool,
 }
 
 struct ShadowRequestLifecycle {
@@ -5515,22 +5835,315 @@ impl ShadowActiveEffectPermit {
 }
 
 impl ShadowRequestHandle {
+    fn validate_credential_reservation(&self, reservation: &CredentialPrerequisiteReservation) -> Result<(), String> {
+        let parent = reservation.parent;
+        if parent.generation != InlineSha256Digest::from_str(self.inner.generation.generation_id())?
+            || parent.ingress_sequence != self.inner.ingress_sequence
+            || parent.request_binding != InlineSha256Digest::from_str(&self.inner.request_binding_sha256)?
+            || parent.request_commitment != InlineSha256Digest::from_str(&self.inner.request_commitment_sha256)?
+        {
+            return Err("credential prerequisite reservation belongs to another lifecycle".to_string());
+        }
+        let state = self.inner.state.try_lock().map_err(|_| "credential prerequisite ownership state is unavailable")?;
+        if state.credential_prerequisites.parent != Some(parent)
+            || !state.credential_prerequisites.permits_binding(
+                &state.decision_time_binding.as_ref().ok_or("credential prerequisite parent was removed")?.active_plan_sha256,
+                state.decision_time_binding.as_ref().ok_or("credential prerequisite parent was removed")?.decision_at_epoch_ms,
+            )
+        {
+            return Err("credential prerequisite reservation parent drift".to_string());
+        }
+        validate_credential_preparation_group(&reservation.preparations)?;
+        for preparation in reservation.preparations.iter().flatten() {
+            let slot = state.credential_prerequisites.slots[credential_outer_slot(preparation.effect_kind())?]
+                .ok_or("credential prerequisite ownership slot missing")?;
+            if slot.effect_id != InlineSha256Digest::from_digest(preparation.effect_id_sha256())? {
+                return Err("credential prerequisite ownership slot drift".to_string());
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn reserve_credential_prerequisites(
+        &self,
+        snapshot: &Arc<Snapshot>,
+        scope: &CredentialLeaseScope,
+        primary: ActiveMutableEffectKind,
+        intent_sha256: &str,
+        prepared_state_sha256: &str,
+    ) -> Result<CredentialPrerequisiteReservation, String> {
+        if !self.inner.generation_is_current_for(snapshot) {
+            return Err("credential prerequisite generation is not current".to_string());
+        }
+        let mut state = self.inner.state.try_lock()
+            .map_err(|_| "credential prerequisite reservation state is unavailable")?;
+        let binding = state.decision_time_binding.as_ref()
+            .ok_or("credential prerequisite lacks a decision-time parent")?;
+        // Re-establish scope from immutable admitted identity/target facts,
+        // not from the caller's proposed scope or a later enriched request.
+        let facts = &self.inner.facts;
+        let headers = lower_headers(&discard_declared_request_headers(&facts.headers, &[])?);
+        let principal = if let Some(id) = facts.authenticated_principal_id.as_deref() {
+            snapshot.principals.iter().find(|principal| principal.id == id)
+        } else {
+            snapshot.principals.iter().find(|principal| principal.matches_at(
+                facts.client_ip.as_deref(), &headers, None,
+                u128::from(binding.decision_at_epoch_ms),
+            ))
+        }.ok_or("credential prerequisite admitted principal is unavailable")?;
+        let (_, url) = parse_validated_absolute_target(&facts.url)?;
+        let matched = snapshot.match_route(&principal.id, &facts.method, &url)
+            .ok_or("credential prerequisite admitted route is unavailable")?;
+        if principal.id != scope.principal_id || matched.route.id != scope.route_id
+            || matched.route.credential_ref.as_deref() != Some(scope.credential_id.as_str())
+            || !snapshot.credentials.contains_key(&scope.credential_id)
+        {
+            return Err("credential prerequisite admitted scope mismatch".to_string());
+        }
+        let kinds = match primary {
+            ActiveMutableEffectKind::CredentialGeneration => [Some(primary),
+                snapshot.credentials.get(&scope.credential_id)
+                    .filter(|credential| credential.kind() == "oauth2")
+                    .map(|_| ActiveMutableEffectKind::OauthRotation)],
+            ActiveMutableEffectKind::CredentialLease => [Some(primary), Some(ActiveMutableEffectKind::CredentialDecrypt)],
+            _ => return Err("unsupported primary credential prerequisite kind".to_string()),
+        };
+        if state.credential_prerequisites_sealed || state.pending_active.is_some() || state.final_active.is_some()
+            || self.inner.finalization_consumed.load(Ordering::Acquire)
+        {
+            return Err("credential prerequisite reservation follows finalization".to_string());
+        }
+        let scope_digest = digest_json_ensure_ascii(&credential_lease_scope_commitment(scope));
+        let parent_digest = digest_json_ensure_ascii(&json!({
+            "domain":"serverware.policyShadowCredentialPrerequisiteParent/v1",
+            "generation":self.inner.generation.generation_id(),
+            "ingressSequence":self.inner.ingress_sequence,
+            "requestBinding":self.inner.request_binding_sha256,
+            "requestCommitment":self.inner.request_commitment_sha256,
+            "policySha256":snapshot.hash,
+            "snapshotEpoch":snapshot.epoch,
+            "policySequence":snapshot.policy_sequence,
+            "rollbackEpoch":snapshot.rollback_epoch,
+            "activePlanSha256":binding.active_plan_sha256,
+            "decisionAtEpochMs":binding.decision_at_epoch_ms,
+            "scopeSha256":scope_digest,
+        }));
+        let parent = CredentialPrerequisiteParent {
+            commitment: InlineSha256Digest::from_str(&parent_digest)?,
+            generation: InlineSha256Digest::from_str(self.inner.generation.generation_id())?,
+            request_binding: InlineSha256Digest::from_str(&self.inner.request_binding_sha256)?,
+            request_commitment: InlineSha256Digest::from_str(&self.inner.request_commitment_sha256)?,
+            active_plan: InlineSha256Digest::from_str(&binding.active_plan_sha256)?,
+            scope: InlineSha256Digest::from_str(&scope_digest)?,
+            credential_slot: InlineSha256Digest::compute(scope.credential_id.as_bytes()),
+            ingress_sequence: self.inner.ingress_sequence,
+            decision_at_epoch_ms: binding.decision_at_epoch_ms,
+        };
+        // Existing barrier wire signs these opaque digests; the closed parent
+        // preimage adds no new wire/profile interpretation or permission.
+        let intent = digest_json_ensure_ascii(&json!({
+            "domain":"serverware.policyShadowCredentialOuterIntent/v2",
+            "parent":parent_digest,
+            "intent":Sha256Digest::parse(intent_sha256.to_string()).map_err(shadow_error)?,
+        }));
+        let prepared = digest_json_ensure_ascii(&json!({
+            "domain":"serverware.policyShadowCredentialOuterPreparedState/v2",
+            "parent":parent_digest,
+            "preparedState":Sha256Digest::parse(prepared_state_sha256.to_string()).map_err(shadow_error)?,
+        }));
+        let mut preparations = [None, None];
+        for (index, kind) in kinds.into_iter().enumerate() {
+            if let Some(kind) = kind {
+                preparations[index] = Some(ActiveEffectPreparation::new(
+                    parent.generation.to_digest()?, parent.ingress_sequence, kind,
+                    Sha256Digest::parse(intent.clone()).map_err(shadow_error)?,
+                    Sha256Digest::parse(prepared.clone()).map_err(shadow_error)?,
+                ).map_err(shadow_error)?);
+            }
+        }
+        state.credential_prerequisites.reserve(parent, &preparations)?;
+        Ok(CredentialPrerequisiteReservation {
+            parent, preparations, intent_sha256: intent, prepared_state_sha256: prepared,
+        })
+    }
+
+    pub(crate) fn fail_credential_prerequisites(&self) {
+        if let Ok(mut state) = self.inner.state.try_lock() {
+            if !state.credential_prerequisites_sealed {
+                state.credential_prerequisites.failed = true;
+            }
+        }
+        self.inner.ledger.mark_hard_unready();
+    }
+
+    pub(crate) fn prepare_credential_prerequisite(
+        &self,
+        snapshot: &Arc<Snapshot>,
+        reservation: &CredentialPrerequisiteReservation,
+        index: usize,
+    ) -> Result<ShadowActiveEffectPermit, String> {
+        self.validate_credential_reservation(reservation)?;
+        let preparation = reservation.preparations.get(index).and_then(Option::as_ref)
+            .ok_or("credential prerequisite index is invalid")?;
+        {
+            let mut state = self.inner.state.try_lock().map_err(|_| "credential prerequisite preparation state is unavailable")?;
+            if state.credential_prerequisites_sealed || state.credential_prerequisites.failed {
+                return Err("credential prerequisite preparation is sealed or failed".to_string());
+            }
+            let slot = state.credential_prerequisites.slots[credential_outer_slot(preparation.effect_kind())?]
+                .as_mut().ok_or("credential prerequisite preparation slot missing")?;
+            if slot.attempted {
+                return Err("credential prerequisite preparation was already attempted".to_string());
+            }
+            slot.attempted = true;
+        }
+        let prepared = self.prepare_mutable_effect(snapshot, preparation.effect_kind(),
+            &reservation.intent_sha256, &reservation.prepared_state_sha256);
+        match prepared {
+            Ok(ShadowActiveEffectPermit::Verified { permit, generation_id, ingress_sequence, effect_kind })
+                if permit.preparation() == preparation => {
+                    let retained = (|| {
+                        let barrier = InlineSha256Digest::from_digest(permit.signed_receipt_sha256())?;
+                        let mut state = self.inner.state.try_lock().map_err(|_| "credential prerequisite barrier retention state is unavailable")?;
+                        if state.credential_prerequisites_sealed {
+                            return Err("credential prerequisite barrier retention is sealed".to_string());
+                        }
+                        state.credential_prerequisites.slots[credential_outer_slot(effect_kind)?]
+                            .as_mut().ok_or("credential prerequisite barrier slot missing")?.barrier = Some(barrier);
+                        Ok(())
+                    })();
+                    if let Err(error) = retained {
+                        self.reconcile_mutable_effect(preparation.effect_id_sha256());
+                        self.fail_credential_prerequisites();
+                        return Err(error);
+                    }
+                    Ok(ShadowActiveEffectPermit::Verified { permit, generation_id, ingress_sequence, effect_kind })
+                },
+            _ => {
+                // The append may already be durable even when its reply or
+                // supervisor deadline fails. Preserve and reconcile this exact
+                // reserved ID as well as settling earlier known siblings.
+                self.reconcile_mutable_effect(preparation.effect_id_sha256());
+                self.fail_credential_prerequisites();
+                Err("credential prerequisite barrier failed or was ambiguous".to_string())
+            }
+        }
+    }
+
+    pub(crate) fn settle_credential_prerequisite(
+        &self,
+        reservation: &CredentialPrerequisiteReservation,
+        index: usize,
+        permit: ShadowActiveEffectPermit,
+        terminal: ActiveEffectCommitState,
+        result_sha256: &str,
+        info: Option<&CredentialLeaseInfo>,
+    ) -> Result<(), String> {
+        let actual_binding = match &permit {
+            ShadowActiveEffectPermit::Verified { permit, .. } => {
+                let (generation, ingress) = permit.preparation().reconciliation_identity();
+                Some((generation.clone(), ingress, permit.preparation().effect_id_sha256().clone()))
+            },
+            #[cfg(test)]
+            ShadowActiveEffectPermit::InactiveForwardingTest => None,
+        };
+        let preparation = reservation.preparations.get(index).and_then(Option::as_ref);
+        let result = (|| {
+            self.validate_credential_reservation(reservation)?;
+            let preparation = preparation.ok_or("credential prerequisite settlement index is invalid")?;
+            let barrier = match &permit {
+                ShadowActiveEffectPermit::Verified { permit, .. } if permit.preparation() == preparation =>
+                    permit.signed_receipt_sha256().clone(),
+                _ => {
+                    return Err("credential prerequisite permit changed".to_string());
+                }
+            };
+            {
+                let state = self.inner.state.try_lock().map_err(|_| "credential prerequisite barrier join state is unavailable")?;
+                if state.credential_prerequisites.slots[credential_outer_slot(preparation.effect_kind())?]
+                    .and_then(|slot| slot.barrier) != Some(InlineSha256Digest::from_digest(&barrier)?)
+                {
+                    return Err("credential prerequisite permit differs from retained barrier".to_string());
+                }
+            }
+            let retained_result = info.map(CredentialOuterResult::from_info).transpose()?;
+            if (terminal == ActiveEffectCommitState::Committed) != retained_result.is_some()
+                || retained_result.map(|result| result.result_commitment()).transpose()?
+                    .is_some_and(|expected| expected != result_sha256)
+            {
+                return Err("credential prerequisite result commitment mismatch".to_string());
+            }
+            let receipt = self.commit_mutable_effect(permit, terminal, result_sha256)?;
+            let compact = receipt.compact_for(preparation, &barrier, terminal,
+                &Sha256Digest::parse(result_sha256.to_string()).map_err(shadow_error)?)
+                .map_err(shadow_error)?;
+            let mut state = self.inner.state.try_lock()
+                .map_err(|_| "credential prerequisite receipt retention state is unavailable")?;
+            if state.credential_prerequisites_sealed {
+                return Err("credential prerequisite receipt retention is sealed".to_string());
+            }
+            state.credential_prerequisites.retain(reservation.parent, preparation, compact, retained_result)
+        })();
+        if result.is_err() {
+            if let Some((generation, ingress, actual)) = actual_binding.as_ref() {
+                self.reconcile_bound_mutable_effect(generation, *ingress, actual);
+            }
+            if let Some(expected) = preparation {
+                if actual_binding.as_ref().map(|(_, _, effect)| effect) != Some(expected.effect_id_sha256()) {
+                    let (generation, ingress) = expected.reconciliation_identity();
+                    self.reconcile_bound_mutable_effect(generation, ingress, expected.effect_id_sha256());
+                }
+            }
+            self.fail_credential_prerequisites();
+        }
+        result
+    }
+
+    pub(crate) fn publish_credential_resolution(
+        &self,
+        reservation: CredentialPrerequisiteReservation,
+        info: &CredentialLeaseInfo,
+    ) -> Result<CommittedCredentialPrerequisite, String> {
+        self.validate_credential_reservation(&reservation)?;
+        if !self.inner.generation_is_current() {
+            return Err("credential prerequisite publication generation is not current".to_string());
+        }
+        let result = CredentialOuterResult::from_info(info)?;
+        let mut state = self.inner.state.try_lock()
+            .map_err(|_| "credential prerequisite publication state is unavailable")?;
+        if state.credential_prerequisites_sealed || self.inner.finalization_consumed.load(Ordering::Acquire) {
+            return Err("credential prerequisite publication is sealed".to_string());
+        }
+        state.credential_prerequisites.publish_resolution(reservation.parent, &reservation.preparations, result)?;
+        Ok(CommittedCredentialPrerequisite {
+            parent: reservation.parent,
+            result,
+            evidence_commitment: InlineSha256Digest::from_str(&state.credential_prerequisites.commitment())?,
+        })
+    }
+
     fn reconcile_mutable_effect(
         &self,
+        effect_id_sha256: &Sha256Digest,
+    ) -> bool {
+        let Ok(generation) = Sha256Digest::parse(self.inner.generation.generation_id().to_string()) else {
+            self.inner.ledger.mark_hard_unready();
+            return false;
+        };
+        self.reconcile_bound_mutable_effect(&generation, self.inner.ingress_sequence, effect_id_sha256)
+    }
+
+    // Binding comes only from this lifecycle or a genuine verified permit's
+    // preparation; never reassign a crossed permit to the receiving handle.
+    fn reconcile_bound_mutable_effect(
+        &self,
+        generation_id: &Sha256Digest,
+        ingress_sequence: u64,
         effect_id_sha256: &Sha256Digest,
     ) -> bool {
         let Some(custody) = self.inner.ledger.custody.get() else {
             self.inner.ledger.mark_hard_unready();
             return false;
-        };
-        let generation_id = match Sha256Digest::parse(
-            self.inner.generation.generation_id().to_string(),
-        ) {
-            Ok(generation_id) => generation_id,
-            Err(_) => {
-                self.inner.ledger.mark_hard_unready();
-                return false;
-            }
         };
         let context = match custody_call_context(
             custody.as_ref(),
@@ -5546,8 +6159,8 @@ impl ShadowRequestHandle {
         };
         let receipt_result = custody.reconcile_active_effect(
             &context,
-            &generation_id,
-            self.inner.ingress_sequence,
+            generation_id,
+            ingress_sequence,
             effect_id_sha256,
         );
         let completed = finish_custody_call(custody.as_ref(), context);
@@ -5618,14 +6231,26 @@ impl ShadowRequestHandle {
         let permit_result =
             custody.append_active_effect_barrier(&context, &preparation);
         if !finish_custody_call(custody.as_ref(), context) {
+            if let Ok(permit) = permit_result.as_ref() {
+                let (generation, ingress) = permit.preparation().reconciliation_identity();
+                self.reconcile_bound_mutable_effect(generation, ingress, permit.preparation().effect_id_sha256());
+            }
+            self.reconcile_mutable_effect(preparation.effect_id_sha256());
             self.inner.ledger.mark_hard_unready();
             return Err(
                 "active effect barrier supervisor exceeded its deadline"
                     .to_string(),
             );
         }
-        let permit = permit_result.map_err(shadow_error)?;
+        let permit = permit_result.map_err(|error| {
+            self.reconcile_mutable_effect(preparation.effect_id_sha256());
+            self.inner.ledger.mark_hard_unready();
+            shadow_error(error)
+        })?;
         if permit.preparation() != &preparation {
+            let (generation, ingress) = permit.preparation().reconciliation_identity();
+            self.reconcile_bound_mutable_effect(generation, ingress, permit.preparation().effect_id_sha256());
+            self.reconcile_mutable_effect(preparation.effect_id_sha256());
             self.inner.ledger.mark_hard_unready();
             return Err(
                 "active effect permit does not match its preparation"
@@ -5670,6 +6295,8 @@ impl ShadowRequestHandle {
             Sha256Digest::parse(result_sha256.to_string())
                 .map_err(shadow_error)?;
         let effect_id_sha256 = permit.preparation().effect_id_sha256().clone();
+        let expected_preparation = permit.preparation().clone();
+        let expected_barrier = permit.signed_receipt_sha256().clone();
         let custody = self
             .inner
             .ledger
@@ -5722,9 +6349,9 @@ impl ShadowRequestHandle {
                 });
             }
         };
-        if receipt.terminal_state() != terminal_state
-            || receipt.result_sha256() != &result_sha256
+        if receipt.compact_for(&expected_preparation, &expected_barrier, terminal_state, &result_sha256).is_err()
         {
+            self.reconcile_mutable_effect(&effect_id_sha256);
             self.inner.ledger.mark_hard_unready();
             return Err(
                 "active effect commit receipt binding mismatch".to_string(),
@@ -5779,14 +6406,20 @@ impl ShadowRequestHandle {
         {
             return Err("active snapshot changed before shadow finalization".to_string());
         }
-        let decision_time_binding = self
-            .inner
-            .state
-            .try_lock()
-            .map_err(|_| "shadow lifecycle mutex poisoned".to_string())?
-            .decision_time_binding
-            .clone()
-            .ok_or("decision-time active evaluation is unavailable")?;
+        let (decision_time_binding, credential_prerequisites) = {
+            let mut state = self.inner.state.try_lock()
+                .map_err(|_| "shadow lifecycle mutex poisoned".to_string())?;
+            state.credential_prerequisites.validate_decision(decision, dispatch_authorized)?;
+            if state.credential_prerequisites.slots.iter().flatten().any(|slot| slot.receipt.is_none())
+                && !state.credential_prerequisites.failed
+            {
+                return Err("credential prerequisites are still in flight before terminal sealing".to_string());
+            }
+            state.credential_prerequisites_sealed = true;
+            (state.decision_time_binding.clone()
+                .ok_or("decision-time active evaluation is unavailable")?, state.credential_prerequisites)
+        };
+        credential_prerequisites.validate_decision(decision, dispatch_authorized)?;
         if decision_time_binding.decision_at_epoch_ms
             != decision_at_epoch_ms
         {
@@ -5859,6 +6492,7 @@ impl ShadowRequestHandle {
             "dispatch-authorization",
             Some(&Value::Bool(dispatch_authorized)),
         )?;
+        explicit_effect_commitments.push(credential_prerequisites.commitment());
         explicit_effect_commitments.sort();
         explicit_effect_commitments.dedup();
         if explicit_effect_commitments.is_empty() {
@@ -5888,6 +6522,7 @@ impl ShadowRequestHandle {
                 .filter(|version| *version != 0),
             dispatch_authorized,
             active_decision: decision.clone(),
+            credential_prerequisites,
         })
     }
 
@@ -5981,7 +6616,7 @@ impl ShadowRequestHandle {
                 "decision-time typed active plan binding mismatch".to_string(),
             );
         }
-        let effect_results_sha256 = digest_json_ensure_ascii(&json!({
+        let effect_results_value = json!({
             "domain":"serverware.policyShadowFinalEffectResults/v2",
             "activePlanSha256":pending.active_plan_sha256.as_str(),
             "explicitCommitments":pending.explicit_effect_commitments.as_slice(),
@@ -5990,7 +6625,11 @@ impl ShadowRequestHandle {
             "activeResponseValidationSha256":active_response_validation_sha256.as_deref(),
             "gmailMetadataEvidenceSha256":gmail_metadata_evidence_sha256.as_deref(),
             "terminalEffectCommitments":terminal_effect_commitments,
-        }));
+        });
+        let prerequisite_effect_root = PrerequisiteEffectRoot::new(
+            &pending.credential_prerequisites, &effect_results_value,
+        )?;
+        let effect_results_sha256 = digest_json_ensure_ascii(&effect_results_value);
         let final_decision_sha256 = final_active_outcome_digest(
             &pending.active_plan_sha256,
             terminal_outcome,
@@ -6012,6 +6651,8 @@ impl ShadowRequestHandle {
             resolved_credential_slot: pending.resolved_credential_slot,
             resolved_credential_version: pending.resolved_credential_version,
             dispatch_authorized: pending.dispatch_authorized,
+            credential_prerequisites: pending.credential_prerequisites,
+            prerequisite_effect_root,
         };
         let state = match self.inner.state.try_lock() {
             Ok(state) => state,
@@ -6022,6 +6663,9 @@ impl ShadowRequestHandle {
                 return Err("shadow lifecycle state is busy".to_string());
             }
         };
+        if state.credential_prerequisites != final_active.credential_prerequisites {
+            return Err("credential prerequisite evidence changed before terminal append".to_string());
+        }
         if self.inner.finalization_consumed.load(Ordering::Acquire)
             || state.final_active.is_some()
         {
@@ -6114,6 +6758,12 @@ impl ShadowRequestHandle {
                 );
             }
         };
+        if !state.credential_prerequisites_sealed
+            || state.credential_prerequisites != matched_record.prepared.decision.credential_prerequisites
+        {
+            self.inner.ledger.mark_hard_unready();
+            return Err("credential prerequisite evidence changed after terminal append".to_string());
+        }
         state.final_active = Some(matched_record.into_record());
         state.response_finished = true;
         drop(state);
@@ -10570,6 +11220,7 @@ fn shadow_worker(receiver: Receiver<ShadowWork>, ledger: Arc<AccountingLedger>) 
 mod active_terminal_record_tests {
     use super::*;
     use super::super::policy_shadow::terminal_receipt_fixture::{self, Fault};
+    use super::super::policy_shadow::credential_effect_receipt_fixture as effect_fixture;
 
     // These are exact local receipt/retention component tests, not a running
     // authority, successful effect execution, or production custody RPC proof.
@@ -10583,7 +11234,10 @@ mod active_terminal_record_tests {
         let semantic_sha256 = plan.semantic_commitment().unwrap().as_str().to_string();
         let effect_requirements = ActiveEffectRequirements::from_plan(&plan);
         let final_outcome = if dispatch { "allow" } else { "deny" }.to_string();
-        let effect_results_sha256 = sha256_prefixed(b"component effect commitment only");
+        let credential_prerequisites = CredentialPrerequisiteEvidence::default();
+        let component_effects = json!({"explicitCommitments":[credential_prerequisites.commitment()]});
+        let prerequisite_effect_root = PrerequisiteEffectRoot::new(&credential_prerequisites, &component_effects).unwrap();
+        let effect_results_sha256 = digest_json_ensure_ascii(&component_effects);
         let terminal_response_sha256 = sha256_prefixed(b"component response bytes");
         let final_decision_sha256 = final_active_outcome_digest(
             &semantic_sha256,
@@ -10621,6 +11275,8 @@ mod active_terminal_record_tests {
             resolved_credential_slot: None,
             resolved_credential_version: None,
             dispatch_authorized: dispatch,
+            credential_prerequisites,
+            prerequisite_effect_root,
         }
     }
 
@@ -10734,7 +11390,9 @@ mod active_terminal_record_tests {
                 _ => unreachable!(),
             }
             assert_eq!(prepare(changed, &event, status).err().as_deref(),
-                Some("terminal record decision commitment mismatch"), "{label}");
+                Some(if label == "effect" {
+                    "terminal record credential prerequisite commitment mismatch"
+                } else { "terminal record decision commitment mismatch" }), "{label}");
         }
         assert_eq!(prepare(baseline, &event, 199).err().as_deref(),
             Some("terminal record status or identity is invalid"));
@@ -10840,6 +11498,282 @@ mod active_terminal_record_tests {
         }
     }
 
+    fn credential_parent(baseline: &FinalActiveDecision) -> CredentialPrerequisiteParent {
+        CredentialPrerequisiteParent {
+            commitment: InlineSha256Digest::compute(b"component parent context"),
+            generation: InlineSha256Digest::compute(b"component generation"),
+            request_binding: InlineSha256Digest::compute(b"component request binding"),
+            request_commitment: InlineSha256Digest::compute(b"component request commitment"),
+            active_plan: InlineSha256Digest::from_str(&baseline.active_evaluation.semantic_sha256).unwrap(),
+            scope: InlineSha256Digest::compute(b"component principal-route-slot scope"),
+            credential_slot: InlineSha256Digest::compute(b"credential:component"),
+            ingress_sequence: 1,
+            decision_at_epoch_ms: baseline.decision_at_epoch_ms,
+        }
+    }
+
+    fn credential_info(version: u64, secret_available: bool) -> CredentialLeaseInfo {
+        let metadata = BTreeMap::from([("component".to_string(), json!("public metadata"))]);
+        CredentialLeaseInfo { version, metadata_sha256: credential_lease_metadata_sha256(&metadata), metadata, secret_available }
+    }
+
+    fn credential_group(parent: CredentialPrerequisiteParent, lease: bool) -> [Option<ActiveEffectPreparation>; 2] {
+        let kinds = if lease {
+            [ActiveMutableEffectKind::CredentialLease, ActiveMutableEffectKind::CredentialDecrypt]
+        } else {
+            [ActiveMutableEffectKind::CredentialGeneration, ActiveMutableEffectKind::OauthRotation]
+        };
+        kinds.map(|kind| Some(ActiveEffectPreparation::new(parent.generation.to_digest().unwrap(),
+            parent.ingress_sequence, kind, parent.commitment.to_digest().unwrap(), parent.scope.to_digest().unwrap()).unwrap()))
+    }
+
+    // Set up the actual production-used reservation/retention primitives with
+    // real verified local receipts. This does not construct a live lifecycle,
+    // assignment or RPC supervisor, and never manufactures a Verified value.
+    fn retain_credential_group(
+        evidence: &mut CredentialPrerequisiteEvidence,
+        parent: CredentialPrerequisiteParent,
+        group: &[Option<ActiveEffectPreparation>; 2],
+        info: &CredentialLeaseInfo,
+        state: ActiveEffectCommitState,
+    ) {
+        evidence.reserve(parent, group).unwrap();
+        let result = CredentialOuterResult::from_info(info).unwrap();
+        let digest = Sha256Digest::parse(result.result_commitment().unwrap()).unwrap();
+        for preparation in group.iter().flatten() {
+            let permit = effect_fixture::permit(preparation, effect_fixture::Fault::None).unwrap();
+            let receipt = effect_fixture::commit(&permit, state, &digest, effect_fixture::Fault::None).unwrap();
+            let compact = receipt.compact_for(preparation, permit.signed_receipt_sha256(), state, &digest).unwrap();
+            let slot = evidence.slots[credential_outer_slot(preparation.effect_kind()).unwrap()].as_mut().unwrap();
+            slot.attempted = true;
+            slot.barrier = Some(InlineSha256Digest::from_digest(permit.signed_receipt_sha256()).unwrap());
+            evidence.retain(parent, preparation, compact,
+                (state == ActiveEffectCommitState::Committed).then_some(result)).unwrap();
+        }
+    }
+
+    #[test]
+    fn credential_prerequisites_retain_real_verified_outer_groups_and_exact_results() {
+        let parent = credential_parent(&decision(false));
+        let generation = credential_group(parent, false);
+        let lease = credential_group(parent, true);
+        let mut evidence = CredentialPrerequisiteEvidence::default();
+        let metadata = credential_info(7, false);
+        retain_credential_group(&mut evidence, parent, &generation, &metadata, ActiveEffectCommitState::Committed);
+        evidence.publish_resolution(parent, &generation, CredentialOuterResult::from_info(&metadata).unwrap()).unwrap();
+        let available = credential_info(7, true);
+        retain_credential_group(&mut evidence, parent, &lease, &available, ActiveEffectCommitState::Committed);
+        evidence.publish_resolution(parent, &lease, CredentialOuterResult::from_info(&available).unwrap()).unwrap();
+        assert_eq!(evidence.slots.iter().flatten().count(), 4);
+        assert!(!evidence.slots[0].unwrap().result.unwrap().secret_available);
+        assert!(evidence.slots[2].unwrap().result.unwrap().secret_available);
+        evidence.validate_decision(&json!({"credential_ref":"credential:component","credential_version":7,
+            "policy_effect_results":{"credential_secret_available":true}}), true).unwrap();
+        assert!(4 * (std::mem::size_of::<CredentialPrerequisiteEvidence>()
+            + std::mem::size_of::<PrerequisiteEffectRoot>()) <= SHADOW_CREDENTIAL_PREREQUISITE_RETENTION_BYTES);
+    }
+
+    #[test]
+    fn credential_prerequisites_freeze_parent_and_reserve_only_closed_nonempty_groups() {
+        let baseline = decision(false);
+        let parent = credential_parent(&baseline);
+        let group = credential_group(parent, false);
+        let mut evidence = CredentialPrerequisiteEvidence::default();
+        evidence.reserve(parent, &group).unwrap();
+        assert!(evidence.permits_binding(&baseline.active_evaluation.semantic_sha256, 1));
+        assert!(!evidence.permits_binding(&baseline.active_evaluation.semantic_sha256, 2));
+        assert!(!evidence.permits_binding(&sha256_prefixed(b"changed plan"), 1));
+        assert_eq!(evidence.reserve(parent, &group).unwrap_err(), "credential prerequisite outer slot already reserved");
+        assert_eq!(CredentialPrerequisiteEvidence::default().reserve(parent, &[None, None]).unwrap_err(), "invalid outer credential prerequisite group");
+        for field in 0..7 {
+            let mut changed = parent;
+            match field {
+                0 => changed.generation = InlineSha256Digest::compute(b"other generation"),
+                1 => changed.ingress_sequence += 1,
+                2 => changed.request_binding = InlineSha256Digest::compute(b"other request"),
+                3 => changed.request_commitment = InlineSha256Digest::compute(b"other commitment"),
+                4 => changed.active_plan = InlineSha256Digest::compute(b"other plan"),
+                5 => changed.scope = InlineSha256Digest::compute(b"other scope"),
+                _ => changed.decision_at_epoch_ms += 1,
+            }
+            assert_eq!(evidence.reserve(changed, &credential_group(changed, true)).unwrap_err(), "credential prerequisite parent binding changed");
+        }
+        let mut other = parent;
+        other.ingress_sequence += 1;
+        assert_eq!(CredentialPrerequisiteEvidence::default().reserve(parent, &credential_group(other, false)).unwrap_err(),
+            "credential prerequisite preparation parent mismatch");
+    }
+
+    #[test]
+    fn credential_prerequisites_reject_crossed_signed_results_and_recorded_barriers() {
+        let parent = credential_parent(&decision(false));
+        let group = credential_group(parent, false);
+        let preparation = group[0].as_ref().unwrap();
+        let info = credential_info(7, true);
+        let result = CredentialOuterResult::from_info(&info).unwrap();
+        let digest = Sha256Digest::parse(result.result_commitment().unwrap()).unwrap();
+        let permit = effect_fixture::permit(preparation, effect_fixture::Fault::None).unwrap();
+        let receipt = effect_fixture::commit(&permit, ActiveEffectCommitState::Committed, &digest, effect_fixture::Fault::None).unwrap();
+        let compact = receipt.compact_for(preparation, permit.signed_receipt_sha256(), ActiveEffectCommitState::Committed, &digest).unwrap();
+        let mut baseline = CredentialPrerequisiteEvidence::default();
+        baseline.reserve(parent, &group).unwrap();
+        baseline.slots[0].as_mut().unwrap().attempted = true;
+        baseline.slots[0].as_mut().unwrap().barrier = Some(InlineSha256Digest::from_digest(permit.signed_receipt_sha256()).unwrap());
+        let mut valid = baseline;
+        valid.retain(parent, preparation, compact, Some(result)).unwrap();
+        for field in 0..3 {
+            let mut crossed = result;
+            match field { 0 => crossed.version += 1,
+                1 => crossed.metadata = InlineSha256Digest::compute(b"other metadata"),
+                _ => crossed.secret_available = false }
+            assert_eq!(baseline.retain(parent, preparation, compact, Some(crossed)).unwrap_err(), "credential prerequisite signed result mismatch");
+        }
+        let alternate = effect_fixture::alternate_permit(preparation).unwrap();
+        let alternate_receipt = effect_fixture::commit(&alternate, ActiveEffectCommitState::Committed, &digest, effect_fixture::Fault::None).unwrap();
+        let alternate_compact = alternate_receipt.compact_for(preparation, alternate.signed_receipt_sha256(), ActiveEffectCommitState::Committed, &digest).unwrap();
+        assert_eq!(baseline.retain(parent, preparation, alternate_compact, Some(result)).unwrap_err(), "credential prerequisite recorded barrier mismatch");
+        assert_eq!(receipt.compact_for(preparation, alternate.signed_receipt_sha256(), ActiveEffectCommitState::Committed, &digest).unwrap_err(), ShadowError::BindingDrift);
+        let other = group[1].as_ref().unwrap();
+        let other_permit = effect_fixture::permit(other, effect_fixture::Fault::None).unwrap();
+        let other_receipt = effect_fixture::commit(&other_permit, ActiveEffectCommitState::Committed, &digest, effect_fixture::Fault::None).unwrap();
+        let other_compact = other_receipt.compact_for(other, other_permit.signed_receipt_sha256(), ActiveEffectCommitState::Committed, &digest).unwrap();
+        assert_eq!(baseline.retain(parent, preparation, other_compact, Some(result)).unwrap_err(), "credential prerequisite recorded barrier mismatch");
+        let other_lifecycle = ActiveEffectPreparation::new(parent.generation.to_digest().unwrap(),
+            parent.ingress_sequence + 1, ActiveMutableEffectKind::CredentialGeneration,
+            parent.commitment.to_digest().unwrap(), parent.scope.to_digest().unwrap()).unwrap();
+        let crossed_permit = effect_fixture::permit(&other_lifecycle, effect_fixture::Fault::None).unwrap();
+        let crossed_receipt = effect_fixture::commit(&crossed_permit, ActiveEffectCommitState::Committed, &digest, effect_fixture::Fault::None).unwrap();
+        let crossed_compact = crossed_receipt.compact_for(&other_lifecycle, crossed_permit.signed_receipt_sha256(),
+            ActiveEffectCommitState::Committed, &digest).unwrap();
+        assert_eq!(baseline.retain(parent, preparation, crossed_compact, Some(result)).unwrap_err(), "credential prerequisite recorded barrier mismatch");
+    }
+
+    #[test]
+    fn credential_prerequisites_preserve_failures_and_reject_cross_group_generation_drift() {
+        let parent = credential_parent(&decision(false));
+        let generation = credential_group(parent, false);
+        let lease = credential_group(parent, true);
+        for state in [ActiveEffectCommitState::Aborted, ActiveEffectCommitState::OutcomeUnknown, ActiveEffectCommitState::ReconcileRequired] {
+            let mut evidence = CredentialPrerequisiteEvidence::default();
+            let info = credential_info(7, false);
+            retain_credential_group(&mut evidence, parent, &generation, &info, state);
+            assert!(evidence.failed && evidence.resolved.is_none());
+            assert_eq!(evidence.slots[0].unwrap().receipt.unwrap().terminal_state(), state);
+            assert_eq!(evidence.publish_resolution(parent, &generation, CredentialOuterResult::from_info(&info).unwrap()).unwrap_err(), "credential prerequisite group is not committed");
+            evidence.validate_decision(&json!({}), false).unwrap();
+        }
+        for metadata_drift in [false, true] {
+            let mut evidence = CredentialPrerequisiteEvidence::default();
+            let info = credential_info(7, false);
+            retain_credential_group(&mut evidence, parent, &generation, &info, ActiveEffectCommitState::Committed);
+            evidence.publish_resolution(parent, &generation, CredentialOuterResult::from_info(&info).unwrap()).unwrap();
+            let mut changed = credential_info(if metadata_drift { 7 } else { 8 }, true);
+            if metadata_drift {
+                changed.metadata.insert("component".into(), json!("different coherent metadata"));
+                changed.metadata_sha256 = credential_lease_metadata_sha256(&changed.metadata);
+            }
+            retain_credential_group(&mut evidence, parent, &lease, &changed, ActiveEffectCommitState::Committed);
+            assert_eq!(evidence.publish_resolution(parent, &lease, CredentialOuterResult::from_info(&changed).unwrap()).unwrap_err(), "credential prerequisite generation changed between outer groups");
+            assert!(evidence.failed);
+            assert_eq!(evidence.resolved.unwrap().version, 7);
+            assert_eq!(evidence.slots[2].unwrap().result.unwrap().version, changed.version);
+        }
+    }
+
+    #[test]
+    fn credential_prerequisites_distinguish_denial_omission_from_dispatch_and_false_claims() {
+        let parent = credential_parent(&decision(false));
+        let group = credential_group(parent, false);
+        let info = credential_info(7, true);
+        let mut evidence = CredentialPrerequisiteEvidence::default();
+        retain_credential_group(&mut evidence, parent, &group, &info, ActiveEffectCommitState::Committed);
+        evidence.publish_resolution(parent, &group, CredentialOuterResult::from_info(&info).unwrap()).unwrap();
+        for denial in [json!({}), json!({"credential_ref":null,"credential_version":null}), json!({"credential_ref":"credential:component"})] {
+            evidence.validate_decision(&denial, false).unwrap();
+        }
+        let dispatch = json!({"credential_ref":"credential:component","credential_version":7,
+            "policy_effect_results":{"credential_secret_available":true}});
+        assert!(evidence.validate_decision(&dispatch, true).is_err()); // generation-only is insufficient
+        let lease = credential_group(parent, true);
+        retain_credential_group(&mut evidence, parent, &lease, &info, ActiveEffectCommitState::Committed);
+        evidence.publish_resolution(parent, &lease, CredentialOuterResult::from_info(&info).unwrap()).unwrap();
+        evidence.validate_decision(&dispatch, true).unwrap();
+        for denied in [json!({"credential_ref":7}), json!({"credential_version":"7"}),
+            json!({"credential_ref":"other"}), json!({"credential_version":8}),
+            json!({"credential_ref":"credential:component","policy_effect_results":{"credential_secret_available":false}}),
+            json!({"credential_ref":"credential:component","policy_effect_results":{"credential_secret_available":"true"}})]
+        {
+            assert_eq!(evidence.validate_decision(&denied, false).unwrap_err(), "active decision contradicts retained credential prerequisite result");
+        }
+        let mut invalid = credential_info(0, true);
+        assert!(CredentialOuterResult::from_info(&invalid).is_err());
+        invalid.version = 7;
+        invalid.metadata_sha256 = sha256_prefixed(b"not actual metadata");
+        assert!(CredentialOuterResult::from_info(&invalid).is_err());
+        let metadata_only = credential_info(7, false);
+        let mut no_secret = CredentialPrerequisiteEvidence::default();
+        for group in [&group, &lease] {
+            retain_credential_group(&mut no_secret, parent, group, &metadata_only, ActiveEffectCommitState::Committed);
+            no_secret.publish_resolution(parent, group, CredentialOuterResult::from_info(&metadata_only).unwrap()).unwrap();
+        }
+        assert!(no_secret.validate_decision(&json!({"credential_ref":"credential:component","credential_version":7,
+            "policy_effect_results":{"credential_secret_available":false}}), true).is_err());
+    }
+
+    #[test]
+    fn credential_prerequisite_refs_are_bound_by_the_real_terminal_receipt() {
+        let mut baseline = decision(false);
+        let parent = credential_parent(&baseline);
+        let group = credential_group(parent, false);
+        let info = credential_info(7, false);
+        retain_credential_group(&mut baseline.credential_prerequisites, parent, &group, &info, ActiveEffectCommitState::Committed);
+        baseline.credential_prerequisites.publish_resolution(parent, &group, CredentialOuterResult::from_info(&info).unwrap()).unwrap();
+        let commitment = baseline.credential_prerequisites.commitment();
+        assert!(PrerequisiteEffectRoot::new(&baseline.credential_prerequisites, &json!({"explicitCommitments":[]})).is_err());
+        assert!(PrerequisiteEffectRoot::new(&baseline.credential_prerequisites, &json!({"explicitCommitments":[commitment,commitment]})).is_err());
+        let root = json!({"explicitCommitments":[commitment]});
+        baseline.prerequisite_effect_root = PrerequisiteEffectRoot::new(&baseline.credential_prerequisites, &root).unwrap();
+        baseline.effect_results_sha256 = digest_json_ensure_ascii(&root);
+        baseline.final_decision_sha256 = final_active_outcome_digest(&baseline.active_evaluation.semantic_sha256,
+            "deny", 403, false, &baseline.effect_results_sha256, &baseline.terminal_response_sha256);
+        let terminal_event = event(&baseline);
+        let signed = verified(&spool(&terminal_event, &sha256_prefixed(b"component generation")));
+        let record = prepare(baseline.clone(), &terminal_event, 403).unwrap()
+            .match_receipt(durable(&signed)).unwrap().into_record();
+        assert_eq!(record.decision.credential_prerequisites, baseline.credential_prerequisites);
+        let mut changed = baseline.clone();
+        changed.credential_prerequisites.resolved.as_mut().unwrap().version += 1;
+        assert_eq!(prepare(changed, &terminal_event, 403).err().as_deref(), Some("terminal record credential prerequisite commitment mismatch"));
+        let mut changed = baseline;
+        changed.prerequisite_effect_root.effect_results = InlineSha256Digest::compute(b"different root");
+        assert_eq!(prepare(changed, &terminal_event, 403).err().as_deref(), Some("terminal record credential prerequisite commitment mismatch"));
+    }
+
+    #[test]
+    fn credential_prerequisite_rpc_seal_and_recovery_boundaries_are_source_pinned_only() {
+        // No claim of executed production RPC, generation race or lock/CAS
+        // failure. These bounded source slices cannot match their own literals.
+        let source = include_str!("policy_core.rs");
+        let prepare = source.split_once("pub(crate) fn prepare_credential_prerequisite(").unwrap().1
+            .split_once("pub(crate) fn settle_credential_prerequisite(").unwrap().0;
+        assert!(prepare.find("self.validate_credential_reservation(reservation)?").unwrap()
+            < prepare.find("self.prepare_mutable_effect(").unwrap());
+        assert!(prepare.contains("self.reconcile_mutable_effect(preparation.effect_id_sha256())"));
+        let settle = source.split_once("pub(crate) fn settle_credential_prerequisite(").unwrap().1
+            .split_once("pub(crate) fn publish_credential_resolution(").unwrap().0;
+        assert!(settle.find("let result = (||").unwrap() < settle.find("CredentialOuterResult::from_info").unwrap());
+        assert!(settle.find("self.commit_mutable_effect(").unwrap() < settle.find("if state.credential_prerequisites_sealed").unwrap());
+        assert!(settle.contains("self.reconcile_bound_mutable_effect(generation, *ingress, actual)"));
+        let pending = source.split_once("fn explicit_pending_active(").unwrap().1
+            .split_once("fn record_failure(").unwrap().0;
+        assert!(pending.contains("state.credential_prerequisites_sealed = true"));
+        let finalize = source.split_once("fn finalize_terminal(").unwrap().1
+            .split_once("pub(crate) fn record_unready_accounting").unwrap().0;
+        let postappend = finalize.split_once("let matched_record = prepared_record.match_receipt").unwrap().1;
+        assert!(postappend.find("state.credential_prerequisites != matched_record.prepared.decision.credential_prerequisites").unwrap()
+            < postappend.find("state.final_active = Some(matched_record.into_record())").unwrap());
+    }
+
     #[test]
     fn active_terminal_retention_has_fixed_bounded_queue_charge() {
         assert_eq!(std::mem::size_of::<DurableShadowEventReceipt>(), 272);
@@ -10847,10 +11781,11 @@ mod active_terminal_record_tests {
             - std::mem::size_of::<FinalActiveDecision>() <= SHADOW_ACTIVE_TERMINAL_RETENTION_BYTES);
         assert!(std::mem::size_of::<Option<ActiveTerminalRecord>>()
             - std::mem::size_of::<Option<FinalActiveDecision>>() <= SHADOW_ACTIVE_TERMINAL_RETENTION_BYTES);
-        assert_eq!(shadow_job_bytes_with_terminal_retention(0), 384);
-        assert_eq!(shadow_job_bytes_with_terminal_retention(SHADOW_MAX_JOB_BYTES - 384),
+        let surcharge = SHADOW_ACTIVE_TERMINAL_RETENTION_BYTES + SHADOW_CREDENTIAL_PREREQUISITE_RETENTION_BYTES;
+        assert_eq!(shadow_job_bytes_with_terminal_retention(0), surcharge);
+        assert_eq!(shadow_job_bytes_with_terminal_retention(SHADOW_MAX_JOB_BYTES - surcharge),
             SHADOW_MAX_JOB_BYTES);
-        assert!(shadow_job_bytes_with_terminal_retention(SHADOW_MAX_JOB_BYTES - 383)
+        assert!(shadow_job_bytes_with_terminal_retention(SHADOW_MAX_JOB_BYTES - surcharge + 1)
             > SHADOW_MAX_JOB_BYTES);
         assert_eq!(shadow_job_bytes_with_terminal_retention(usize::MAX), usize::MAX);
         // Source wiring is distinct from executing queue admission under RPC.
@@ -10887,5 +11822,138 @@ mod active_terminal_record_tests {
         assert!(postappend[response..state].contains("return Err("));
         assert!(postappend[state..published].contains("return Err("));
         assert_eq!(finalize.matches("matched_record.into_record()").count(), 1);
+    }
+}
+
+#[cfg(test)]
+mod principal_explicit_time_tests {
+    use super::*;
+
+    const CAPTURED_AT: u64 = 1_000;
+    const EXPIRES_AT: u64 = 2_000;
+    const TOKEN: &str = "local-explicit-time-selector";
+
+    fn snapshot() -> Arc<Snapshot> {
+        // Reuse the real closed generic route fixture. No effect executor,
+        // credential store, custody authority or network is installed here.
+        let mut snapshot = (*super::super::tests::test_snapshot(1)).clone();
+        snapshot.principals[0].source_cidrs = vec!["127.0.0.0/8".parse().unwrap()];
+        snapshot.principals[0].proxy_authorization = Some(ProxyAuthorizationPolicy::BearerToken {
+            token_sha256: sha256_prefixed(TOKEN.as_bytes()),
+            source_cidrs: vec!["127.0.0.1/32".parse().unwrap()],
+            expires_at_ms: Some(u128::from(EXPIRES_AT)),
+        });
+        Arc::new(snapshot)
+    }
+
+    fn request(token: &str, client_ip: &str) -> DecisionRequest {
+        DecisionRequest {
+            client_ip: Some(client_ip.to_string()),
+            method: "GET".to_string(),
+            url: "https://example.test/resource".to_string(),
+            headers: BTreeMap::from([("Proxy-Authorization".to_string(), format!("Bearer {token}"))]),
+            body: String::new(),
+            body_sha256: None,
+            forwarded_body_length: None,
+            forwarded_body_utf8_valid: None,
+            credential_metadata: BTreeMap::new(),
+            gmail_proofs: Vec::new(),
+            client_request_digest: None,
+        }
+    }
+
+    fn evaluate_all(
+        snapshot: &Arc<Snapshot>,
+        request: &DecisionRequest,
+        decision_at: u64,
+    ) -> [PolicyEvaluation; 4] {
+        let facts = AdmittedRequestFacts::capture(
+            request, None, ShadowIngressKind::ForwardedHttp, CAPTURED_AT, None,
+        ).expect("actual admitted facts");
+        let active = PolicyPlanSnapshot::active(snapshot).expect("active projection");
+        let candidate = PolicyPlanSnapshot::candidate(snapshot).expect("candidate projection");
+        [
+            evaluate_policy_plan(&active, &facts,
+                PolicyEvaluationContext::active(CAPTURED_AT, decision_at, None))
+                .expect("active captured-facts evaluation"),
+            evaluate_policy_plan_borrowed(&active, request, None, ShadowIngressKind::ForwardedHttp,
+                CAPTURED_AT, PolicyEvaluationContext::active(CAPTURED_AT, decision_at, None))
+                .expect("active borrowed evaluation"),
+            evaluate_policy_plan(&candidate, &facts,
+                PolicyEvaluationContext::candidate(CAPTURED_AT, decision_at, None, None))
+                .expect("candidate captured-facts evaluation"),
+            evaluate_policy_plan_borrowed(&candidate, request, None, ShadowIngressKind::ForwardedHttp,
+                CAPTURED_AT, PolicyEvaluationContext::candidate(CAPTURED_AT, decision_at, None, None))
+                .expect("candidate borrowed evaluation"),
+        ]
+    }
+
+    fn assert_permitted(evaluation: &PolicyEvaluation) {
+        assert_eq!(evaluation.disposition_label(), "permit");
+        assert_eq!(evaluation.route_id.as_deref(), Some("route:test"));
+        assert_eq!(evaluation.operation.as_ref(), Some(&json!({"operation":"generic.read"})));
+        match &evaluation.plan {
+            SeparatedPolicyPlan::Active(plan) => assert!(matches!(plan.outcome(), PolicyOutcome::Permit)),
+            SeparatedPolicyPlan::Candidate(plan) => assert!(matches!(plan.outcome(), PolicyOutcome::Permit)),
+        }
+    }
+
+    fn assert_principal_denied(evaluation: &PolicyEvaluation) {
+        match &evaluation.disposition {
+            PureDisposition::Deny { status, reason, payload } => {
+                assert_eq!(*status, 403);
+                assert_eq!(reason, "client_principal_denied");
+                assert_eq!(payload, &json!({"error":"client_principal_denied","status_code":403}));
+            }
+            _ => panic!("expected principal denial, got {}", evaluation.disposition_label()),
+        }
+        assert!(evaluation.route_id.is_none());
+        assert!(evaluation.operation.is_none());
+    }
+
+    #[test]
+    fn principal_matching_uses_historical_explicit_time_in_both_pure_lanes() {
+        let snapshot = snapshot();
+        let request = request(TOKEN, "127.0.0.1");
+        // These fixed historical times deliberately differ from the host
+        // clock: the former implicit-clock fallback cannot pass this baseline.
+        let first = evaluate_all(&snapshot, &request, EXPIRES_AT - 1);
+        let repeated = evaluate_all(&snapshot, &request, EXPIRES_AT - 1);
+        for (original, repeat) in first.iter().zip(repeated.iter()) {
+            assert_permitted(original);
+            assert_permitted(repeat);
+            assert_eq!(original.semantic_sha256, repeat.semantic_sha256);
+        }
+        assert_eq!(first[0].semantic_sha256, first[1].semantic_sha256);
+        assert_eq!(first[2].semantic_sha256, first[3].semantic_sha256);
+        assert!(first[0].active_plan().is_some() && first[0].candidate_plan().is_none());
+        assert!(first[2].candidate_plan().is_some() && first[2].active_plan().is_none());
+    }
+
+    #[test]
+    fn principal_matching_denies_at_exact_explicit_expiry_not_capture_time() {
+        let snapshot = snapshot();
+        let request = request(TOKEN, "127.0.0.1");
+        for evaluation in evaluate_all(&snapshot, &request, EXPIRES_AT - 1) {
+            assert_permitted(&evaluation);
+        }
+        for decision_at in [EXPIRES_AT, EXPIRES_AT + 1] {
+            for evaluation in evaluate_all(&snapshot, &request, decision_at) {
+                assert_principal_denied(&evaluation);
+            }
+        }
+    }
+
+    #[test]
+    fn principal_explicit_time_keeps_token_and_source_ip_denials() {
+        let snapshot = snapshot();
+        for evaluation in evaluate_all(&snapshot, &request(TOKEN, "127.0.0.1"), EXPIRES_AT - 1) {
+            assert_permitted(&evaluation);
+        }
+        for invalid in [request("wrong-local-token", "127.0.0.1"), request(TOKEN, "127.0.0.2")] {
+            for evaluation in evaluate_all(&snapshot, &invalid, EXPIRES_AT - 1) {
+                assert_principal_denied(&evaluation);
+            }
+        }
     }
 }

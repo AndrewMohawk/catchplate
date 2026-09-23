@@ -5465,6 +5465,10 @@ impl ActiveEffectPreparation {
         self.effect_kind
     }
 
+    pub(crate) fn reconciliation_identity(&self) -> (&Sha256Digest, u64) {
+        (&self.generation_id, self.ingress_sequence)
+    }
+
     fn canonical_payload(&self) -> Result<Vec<u8>, ShadowError> {
         canonical_json_bytes(&(
             &self.generation_id,
@@ -5810,6 +5814,35 @@ pub(crate) struct VerifiedActiveEffectCommitReceipt {
     verified_trust_checkpoint: AtomicTrustCheckpoint,
 }
 
+/// Fixed-size reference to an already verified OUTER effect receipt. This is
+/// neither an execution permit nor evidence of which nested provider/cache
+/// operations occurred. The custody store retains the signed wire bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub(crate) struct CompactActiveEffectCommitReceipt {
+    digests: [[u8; 32]; 11],
+    observed_at_unix_nanos: i64,
+    terminal_state: ActiveEffectCommitState,
+}
+
+impl CompactActiveEffectCommitReceipt {
+    pub(crate) fn terminal_state(&self) -> ActiveEffectCommitState {
+        self.terminal_state
+    }
+
+    pub(crate) fn matches_result(&self, expected: &Sha256Digest) -> bool {
+        let mut bytes = [0_u8; 32];
+        hex::decode_to_slice(&expected.as_str()[7..], &mut bytes).is_ok()
+            && bytes == self.digests[2]
+    }
+
+    pub(crate) fn matches_preparation_and_barrier(&self, effect: &Sha256Digest, barrier: &Sha256Digest) -> bool {
+        [effect, barrier].into_iter().zip(self.digests[..2].iter()).all(|(expected, actual)| {
+            let mut bytes = [0_u8; 32];
+            hex::decode_to_slice(&expected.as_str()[7..], &mut bytes).is_ok() && &bytes == actual
+        })
+    }
+}
+
 #[cfg(test)]
 fn verify_active_effect_commit(
     wire: ActiveEffectCommitReceiptWire,
@@ -6011,6 +6044,45 @@ pub(in crate::policy_shadow) fn verify_production_reconciled_active_effect_commi
 }
 
 impl VerifiedActiveEffectCommitReceipt {
+    pub(crate) fn compact_for(
+        &self,
+        preparation: &ActiveEffectPreparation,
+        barrier_receipt_sha256: &Sha256Digest,
+        expected_state: ActiveEffectCommitState,
+        expected_result_sha256: &Sha256Digest,
+    ) -> Result<CompactActiveEffectCommitReceipt, ShadowError> {
+        preparation.validate_deserialized_invariants()?;
+        if self.wire.effect_id_sha256 != *preparation.effect_id_sha256()
+            || self.wire.barrier_receipt_sha256 != *barrier_receipt_sha256
+            || self.wire.terminal_state != expected_state
+            || self.wire.result_sha256 != *expected_result_sha256
+        {
+            return Err(ShadowError::BindingDrift);
+        }
+        let mut digests = [[0_u8; 32]; 11];
+        for (target, source) in digests.iter_mut().zip([
+            &self.wire.effect_id_sha256,
+            &self.wire.barrier_receipt_sha256,
+            &self.wire.result_sha256,
+            &self.wire.signed_receipt_sha256,
+            &self.canonical_payload_sha256,
+            &self.verified_trust_checkpoint.checkpoint_id,
+            &self.wire.persistence_receipt_sha256,
+            &self.wire.retrieval_id_sha256,
+            &self.wire.retrieval_proof_sha256,
+            &self.wire.signing_key_id,
+            &self.wire.signing_key_spki_sha256,
+        ]) {
+            hex::decode_to_slice(&source.as_str()[7..], target)
+                .map_err(|_| ShadowError::PayloadDigestMismatch)?;
+        }
+        Ok(CompactActiveEffectCommitReceipt {
+            digests,
+            observed_at_unix_nanos: self.wire.trusted_observed_at_unix_nanos,
+            terminal_state: expected_state,
+        })
+    }
+
     pub(crate) fn effect_id_sha256(&self) -> &Sha256Digest {
         &self.wire.effect_id_sha256
     }
@@ -23704,6 +23776,367 @@ pub(crate) mod terminal_receipt_fixture {
             &store,
             100,
         )
+    }
+}
+
+// Local component fixture only: the real legacy barrier/commit verifiers must
+// authenticate each signature, role/key pin, time checkpoint and exact stored
+// payload. This is not production assignment/attestation, RPC or durable I/O
+// evidence, and it never constructs a Verified* value directly.
+#[cfg(test)]
+pub(crate) mod credential_effect_receipt_fixture {
+    use super::*;
+    use ed25519_dalek::{Signer, SigningKey};
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(crate) enum Fault {
+        None,
+        Signature,
+        PinnedKey,
+        VerificationKey,
+        StaleTime,
+        FutureTime,
+        Checkpoint,
+        PersistenceBytes,
+        RetrievalBytes,
+    }
+
+    const OBSERVED_AT: i64 = 2_000_000;
+    const MAXIMUM_AGE: i64 = 100;
+
+    struct FixtureAuthority {
+        key: SigningKey,
+        role: PolicyShadowCustodySignerRole,
+        key_id: Sha256Digest,
+        key_spki: Sha256Digest,
+        checkpoint: AtomicTrustCheckpoint,
+        persistence_id: Sha256Digest,
+        retrieval_id: Sha256Digest,
+        retrieval_proof: Sha256Digest,
+        persisted: Vec<u8>,
+        retrieved: Vec<u8>,
+        fault: Fault,
+    }
+
+    impl FixtureAuthority {
+        fn new(role: PolicyShadowCustodySignerRole, fault: Fault) -> Result<Self, ShadowError> {
+            let key = SigningKey::from_bytes(&[81; 32]);
+            Ok(Self {
+                key_spki: ed25519_public_key_material_sha256(&key.verifying_key()),
+                key,
+                role,
+                key_id: Sha256Digest::compute(b"local credential effect component key"),
+                checkpoint: AtomicTrustCheckpoint::new(
+                    Sha256Digest::compute(b"local credential effect checkpoint"),
+                    OBSERVED_AT,
+                    1,
+                    Sha256Digest::compute(b"local credential effect revocations"),
+                )?,
+                persistence_id: Sha256Digest::compute(b"local credential effect stored slot"),
+                retrieval_id: Sha256Digest::compute(b"local credential effect retrieval slot"),
+                retrieval_proof: Sha256Digest::compute(b"local credential effect retrieval proof"),
+                persisted: Vec::new(),
+                retrieved: Vec::new(),
+                fault,
+            })
+        }
+
+        fn sign_and_store(&mut self, payload: &[u8]) -> CanonicalEd25519Signature {
+            // Keep independent copies of the originally issued payload, not
+            // the bytes subsequently presented to either proof verifier.
+            self.persisted = payload.to_vec();
+            self.retrieved = payload.to_vec();
+            if self.fault == Fault::PersistenceBytes {
+                self.persisted.push(b' ');
+            }
+            if self.fault == Fault::RetrievalBytes {
+                self.retrieved.push(b' ');
+            }
+            let mut signature = self.key
+                .sign(&signature_preimage(self.role.signature_domain(), payload))
+                .to_bytes();
+            if self.fault == Fault::Signature {
+                signature[0] ^= 1;
+            }
+            CanonicalEd25519Signature(URL_SAFE_NO_PAD.encode(signature))
+        }
+
+        fn expected_key_id(&self) -> Sha256Digest {
+            if self.fault == Fault::PinnedKey {
+                Sha256Digest::compute(b"different independently pinned credential effect key")
+            } else {
+                self.key_id.clone()
+            }
+        }
+    }
+
+    impl EnvelopeKeyTrust for FixtureAuthority {
+        fn current_checkpoint(&self) -> Result<AtomicTrustCheckpoint, ShadowError> {
+            let mut checkpoint = self.checkpoint.clone();
+            if self.fault == Fault::Checkpoint {
+                checkpoint.checkpoint_id = Sha256Digest::compute(b"different credential effect checkpoint");
+            }
+            Ok(checkpoint)
+        }
+
+        fn resolve_ed25519_key(
+            &self,
+            checkpoint: &AtomicTrustCheckpoint,
+            signature_domain: &str,
+            key_id: &Sha256Digest,
+            key_spki_sha256: &Sha256Digest,
+        ) -> Result<VerifyingKey, ShadowError> {
+            if checkpoint != &self.checkpoint
+                || signature_domain != self.role.signature_domain()
+                || key_id != &self.key_id
+                || key_spki_sha256 != &self.key_spki
+            {
+                return Err(ShadowError::TrustResolutionFailed);
+            }
+            Ok(if self.fault == Fault::VerificationKey {
+                SigningKey::from_bytes(&[82; 32]).verifying_key()
+            } else {
+                self.key.verifying_key()
+            })
+        }
+    }
+
+    impl TrustedTime for FixtureAuthority {
+        fn now_unix_nanos(&self) -> Result<i64, ShadowError> {
+            Ok(match self.fault {
+                Fault::StaleTime => OBSERVED_AT + MAXIMUM_AGE + 1,
+                Fault::FutureTime => OBSERVED_AT - 1,
+                _ => OBSERVED_AT + 1,
+            })
+        }
+    }
+
+    impl PolicyShadowPersistenceProofVerifier for FixtureAuthority {
+        fn verify_persistence_receipt(
+            &self,
+            role: PolicyShadowCustodySignerRole,
+            persistence_receipt_sha256: &Sha256Digest,
+            canonical_payload: &[u8],
+        ) -> Result<(), ShadowError> {
+            if role != self.role || persistence_receipt_sha256 != &self.persistence_id
+                || canonical_payload != self.persisted.as_slice()
+            {
+                return Err(ShadowError::PayloadDigestMismatch);
+            }
+            Ok(())
+        }
+
+        fn verify_immutable_retrieval(
+            &self,
+            role: PolicyShadowCustodySignerRole,
+            retrieval_id_sha256: &Sha256Digest,
+            retrieval_proof_sha256: &Sha256Digest,
+            canonical_payload: &[u8],
+        ) -> Result<(), ShadowError> {
+            if role != self.role || retrieval_id_sha256 != &self.retrieval_id
+                || retrieval_proof_sha256 != &self.retrieval_proof
+                || canonical_payload != self.retrieved.as_slice()
+            {
+                return Err(ShadowError::BindingDrift);
+            }
+            Ok(())
+        }
+    }
+
+    fn permit_against(
+        issued: &ActiveEffectPreparation,
+        expected: &ActiveEffectPreparation,
+        barrier_ordinal: u64,
+        fault: Fault,
+    ) -> Result<VerifiedActiveEffectPermit, ShadowError> {
+        let mut authority = FixtureAuthority::new(PolicyShadowCustodySignerRole::ActiveEffectBarrier, fault)?;
+        let mut wire = ActiveEffectBarrierReceiptWire {
+            preparation: issued.clone(),
+            barrier_ordinal,
+            predecessor_head_sha256: Sha256Digest::compute(b"local credential barrier predecessor"),
+            resulting_head_sha256: Sha256Digest::compute(b"local credential barrier head"),
+            trusted_observed_at_unix_nanos: OBSERVED_AT,
+            trusted_time_checkpoint_sha256: authority.checkpoint.checkpoint_id.clone(),
+            persistence_receipt_sha256: authority.persistence_id.clone(),
+            retrieval_id_sha256: authority.retrieval_id.clone(),
+            retrieval_proof_sha256: authority.retrieval_proof.clone(),
+            signing_key_id: authority.key_id.clone(),
+            signing_key_spki_sha256: authority.key_spki.clone(),
+            signature: CanonicalEd25519Signature(String::new()),
+            signed_receipt_sha256: Sha256Digest::compute(b"not yet signed"),
+        };
+        let payload = wire.canonical_payload()?;
+        wire.signature = authority.sign_and_store(&payload);
+        // Even signature-negative controls refresh the outer digest so they
+        // must reach actual signature verification, not a stale-hash guard.
+        wire.signed_receipt_sha256 = hash_domain_frames(
+            b"serverware.policyShadowActiveEffectBarrierReceipt/v1",
+            &[payload.as_slice(), wire.signature.0.as_bytes()],
+        );
+        let expected_key = authority.expected_key_id();
+        verify_active_effect_barrier(
+            wire,
+            expected,
+            ExpectedSigner { key_id: &expected_key, key_spki_sha256: &authority.key_spki },
+            &authority,
+            &authority,
+            &authority,
+            MAXIMUM_AGE,
+        )
+    }
+
+    pub(crate) fn permit(
+        preparation: &ActiveEffectPreparation,
+        fault: Fault,
+    ) -> Result<VerifiedActiveEffectPermit, ShadowError> {
+        permit_against(preparation, preparation, 1, fault)
+    }
+
+    pub(crate) fn alternate_permit(
+        preparation: &ActiveEffectPreparation,
+    ) -> Result<VerifiedActiveEffectPermit, ShadowError> {
+        permit_against(preparation, preparation, 2, Fault::None)
+    }
+
+    fn commit_against(
+        issued_permit: &VerifiedActiveEffectPermit,
+        expected_permit: &VerifiedActiveEffectPermit,
+        issued_state: ActiveEffectCommitState,
+        expected_state: ActiveEffectCommitState,
+        issued_result: &Sha256Digest,
+        expected_result: &Sha256Digest,
+        fault: Fault,
+    ) -> Result<VerifiedActiveEffectCommitReceipt, ShadowError> {
+        let mut authority = FixtureAuthority::new(PolicyShadowCustodySignerRole::ActiveEffectCommit, fault)?;
+        let mut wire = ActiveEffectCommitReceiptWire {
+            effect_id_sha256: issued_permit.preparation().effect_id_sha256().clone(),
+            barrier_receipt_sha256: issued_permit.signed_receipt_sha256().clone(),
+            terminal_state: issued_state,
+            result_sha256: issued_result.clone(),
+            reconcile_required: matches!(issued_state, ActiveEffectCommitState::OutcomeUnknown | ActiveEffectCommitState::ReconcileRequired),
+            trusted_observed_at_unix_nanos: OBSERVED_AT,
+            trusted_time_checkpoint_sha256: authority.checkpoint.checkpoint_id.clone(),
+            persistence_receipt_sha256: authority.persistence_id.clone(),
+            retrieval_id_sha256: authority.retrieval_id.clone(),
+            retrieval_proof_sha256: authority.retrieval_proof.clone(),
+            signing_key_id: authority.key_id.clone(),
+            signing_key_spki_sha256: authority.key_spki.clone(),
+            signature: CanonicalEd25519Signature(String::new()),
+            signed_receipt_sha256: Sha256Digest::compute(b"not yet signed"),
+        };
+        let payload = wire.canonical_payload()?;
+        wire.signature = authority.sign_and_store(&payload);
+        wire.signed_receipt_sha256 = hash_domain_frames(
+            b"serverware.policyShadowActiveEffectCommitReceipt/v1",
+            &[payload.as_slice(), wire.signature.0.as_bytes()],
+        );
+        let expected_key = authority.expected_key_id();
+        verify_active_effect_commit(
+            wire,
+            expected_permit,
+            expected_state,
+            expected_result,
+            ExpectedSigner { key_id: &expected_key, key_spki_sha256: &authority.key_spki },
+            &authority,
+            &authority,
+            &authority,
+            MAXIMUM_AGE,
+        )
+    }
+
+    pub(crate) fn commit(
+        permit: &VerifiedActiveEffectPermit,
+        state: ActiveEffectCommitState,
+        result: &Sha256Digest,
+        fault: Fault,
+    ) -> Result<VerifiedActiveEffectCommitReceipt, ShadowError> {
+        commit_against(permit, permit, state, state, result, result, fault)
+    }
+
+    fn preparation() -> ActiveEffectPreparation {
+        ActiveEffectPreparation::new(
+            Sha256Digest::compute(b"local credential generation"),
+            7,
+            ActiveMutableEffectKind::CredentialGeneration,
+            Sha256Digest::compute(b"local credential parent-bound intent"),
+            Sha256Digest::compute(b"local credential parent-bound prepared state"),
+        ).expect("valid local preparation")
+    }
+
+    #[test]
+    fn credential_effect_receipts_authenticate_exact_barrier_and_all_terminal_states() {
+        let preparation = preparation();
+        let permit = permit(&preparation, Fault::None).expect("authentic barrier");
+        assert_eq!(permit.preparation(), &preparation);
+        let result = Sha256Digest::compute(b"local credential result");
+        // Independent verifier cases, not repeated commits to a real custody
+        // supervisor. This fixture does not prove one-use/replay/CAS behavior.
+        for state in [ActiveEffectCommitState::Committed, ActiveEffectCommitState::Aborted,
+            ActiveEffectCommitState::OutcomeUnknown, ActiveEffectCommitState::ReconcileRequired]
+        {
+            let receipt = commit(&permit, state, &result, Fault::None).expect("authentic commit");
+            assert_eq!(receipt.effect_id_sha256(), preparation.effect_id_sha256());
+            assert_eq!(receipt.terminal_state(), state);
+            assert_eq!(receipt.result_sha256(), &result);
+        }
+    }
+
+    #[test]
+    fn credential_effect_barrier_rejects_crossed_preparation_components() {
+        let expected = preparation();
+        for component in 0..5 {
+            let issued = ActiveEffectPreparation::new(
+                if component == 0 { Sha256Digest::compute(b"another generation") } else { expected.generation_id.clone() },
+                if component == 1 { 8 } else { expected.ingress_sequence },
+                if component == 2 { ActiveMutableEffectKind::CredentialLease } else { expected.effect_kind },
+                if component == 3 { Sha256Digest::compute(b"another intent") } else { expected.effect_intent_sha256.clone() },
+                if component == 4 { Sha256Digest::compute(b"another prepared state") } else { expected.prepared_state_sha256.clone() },
+            ).expect("coherent different preparation");
+            assert_eq!(permit_against(&issued, &expected, 1, Fault::None).err(), Some(ShadowError::BindingDrift));
+        }
+    }
+
+    #[test]
+    fn credential_effect_commit_rejects_crossed_effect_barrier_state_and_result() {
+        let preparation = preparation();
+        let expected = permit(&preparation, Fault::None).expect("authentic expected barrier");
+        let other_barrier = permit_against(&preparation, &preparation, 2, Fault::None).expect("authentic different barrier");
+        let other_preparation = ActiveEffectPreparation::new(
+            preparation.generation_id.clone(), 8, preparation.effect_kind,
+            preparation.effect_intent_sha256.clone(), preparation.prepared_state_sha256.clone(),
+        ).expect("different effect preparation");
+        let other_effect = permit(&other_preparation, Fault::None).expect("authentic different effect");
+        let result = Sha256Digest::compute(b"local credential result");
+        let other_result = Sha256Digest::compute(b"other local credential result");
+        for issued in [&other_barrier, &other_effect] {
+            assert_eq!(commit_against(issued, &expected, ActiveEffectCommitState::Committed,
+                ActiveEffectCommitState::Committed, &result, &result, Fault::None).err(), Some(ShadowError::BindingDrift));
+        }
+        assert_eq!(commit_against(&expected, &expected, ActiveEffectCommitState::Aborted,
+            ActiveEffectCommitState::Committed, &result, &result, Fault::None).err(), Some(ShadowError::BindingDrift));
+        assert_eq!(commit_against(&expected, &expected, ActiveEffectCommitState::Committed,
+            ActiveEffectCommitState::Committed, &other_result, &result, Fault::None).err(), Some(ShadowError::BindingDrift));
+    }
+
+    #[test]
+    fn credential_effect_receipts_reject_crypto_time_and_independent_storage_faults() {
+        let preparation = preparation();
+        let authentic_permit = permit(&preparation, Fault::None).expect("authentic barrier baseline");
+        let result = Sha256Digest::compute(b"local credential result");
+        for (fault, expected) in [
+            (Fault::Signature, ShadowError::SignatureInvalid),
+            (Fault::PinnedKey, ShadowError::SignerBindingMismatch),
+            (Fault::VerificationKey, ShadowError::SignatureInvalid),
+            (Fault::StaleTime, ShadowError::EvidenceTooOld),
+            (Fault::FutureTime, ShadowError::EvidenceTooOld),
+            (Fault::Checkpoint, ShadowError::TrustCheckpointMismatch),
+            (Fault::PersistenceBytes, ShadowError::PayloadDigestMismatch),
+            (Fault::RetrievalBytes, ShadowError::BindingDrift),
+        ] {
+            assert_eq!(permit(&preparation, fault).err(), Some(expected.clone()), "barrier {fault:?}");
+            assert_eq!(commit(&authentic_permit, ActiveEffectCommitState::Committed, &result, fault).err(),
+                Some(expected), "commit {fault:?}");
+        }
     }
 }
 

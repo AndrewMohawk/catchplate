@@ -45,3 +45,8 @@ facts and completed active evidence, not an effect-capable lifecycle.
 
 The requirements in `goal.md` remain authoritative. A local receipt component
 test is not completion of that integrated runtime or production acceptance.
+
+The accompanying [credential prerequisite retention](credential-prerequisite-receipts.md)
+step preserves compact outer-wrapper receipts and binds their evidence to the
+terminal effect-result root. It does not implement or activate parent-to-resolved
+plan substitution.

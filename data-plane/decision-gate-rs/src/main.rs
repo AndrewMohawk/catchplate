@@ -25718,16 +25718,78 @@ fn prepare_shadow_release_effect(
     }
 }
 
+// The committed branch is non-authorizing provenance retained by the matching
+// lifecycle. The explicit test-only branch cannot supply a refinement input.
+enum CredentialPrerequisiteReference {
+    Committed(policy_core::CommittedCredentialPrerequisite),
+    #[cfg(test)]
+    InactiveForwardingTest,
+}
+
+struct CommittedCredentialResolution {
+    info: CredentialLeaseInfo,
+    prerequisite_ref: CredentialPrerequisiteReference,
+}
+
+fn settle_credential_siblings<T, F>(
+    permits: &mut [Option<T>; 2],
+    mut settle: F,
+) -> Result<(), String>
+where F: FnMut(usize, T) -> Result<(), String> {
+    let mut failure = None;
+    for (index, slot) in permits.iter_mut().enumerate() {
+        if let Some(permit) = slot.take() {
+            if let Err(error) = settle(index, permit) {
+                failure.get_or_insert(error);
+            }
+        }
+    }
+    failure.map_or(Ok(()), Err)
+}
+
+fn prepare_credential_siblings<T, P, S>(
+    count: usize,
+    mut prepare: P,
+    abort: S,
+) -> Result<[Option<T>; 2], String>
+where P: FnMut(usize) -> Result<T, String>, S: FnMut(usize, T) -> Result<(), String> {
+    if !(1..=2).contains(&count) {
+        return Err("invalid credential prerequisite sibling count".to_string());
+    }
+    let mut permits = [None, None];
+    for index in 0..count {
+        match prepare(index) {
+            Ok(permit) => permits[index] = Some(permit),
+            Err(error) => {
+                let settled = settle_credential_siblings(&mut permits, abort);
+                return Err(match settled {
+                    Ok(()) => error,
+                    Err(abort_error) => format!("{error}; sibling settlement failed: {abort_error}"),
+                });
+            }
+        }
+    }
+    Ok(permits)
+}
+
 fn execute_shadow_credential_effect<F>(
     finalization: Option<&policy_core::ShadowRequestHandle>,
     snapshot: &Arc<Snapshot>,
     effect_kind: ActiveMutableEffectKind,
     scope: &CredentialLeaseScope,
     operation: F,
-) -> Result<CredentialLeaseInfo, String>
+) -> Result<CommittedCredentialResolution, String>
 where
     F: FnOnce() -> Result<CredentialLeaseInfo, String>,
 {
+    #[cfg(test)]
+    if finalization.is_none() {
+        // Existing forwarding-only fixtures are not active authority evidence.
+        return operation().map(|info| CommittedCredentialResolution {
+            info, prerequisite_ref: CredentialPrerequisiteReference::InactiveForwardingTest,
+        });
+    }
+    let finalization = finalization.ok_or("credential prerequisite lost its active lifecycle")?;
     let intent = json!({
         "domain":"serverware.policyShadowCredentialEffectIntent/v1",
         "effectKind":effect_kind,
@@ -25742,37 +25804,27 @@ where
         "policySequence":snapshot.policy_sequence,
         "rollbackEpoch":snapshot.rollback_epoch,
     });
-    let mut permits = vec![prepare_shadow_active_effect(
-        finalization,
-        snapshot,
-        effect_kind,
-        &intent,
-        &prepared_state,
-    )?];
-    if effect_kind == ActiveMutableEffectKind::CredentialGeneration
-        && snapshot
-            .credentials
-            .get(&scope.credential_id)
-            .is_some_and(|credential| credential.kind() == "oauth2")
-    {
-        permits.push(prepare_shadow_active_effect(
-            finalization,
-            snapshot,
-            ActiveMutableEffectKind::OauthRotation,
-            &intent,
-            &prepared_state,
-        )?);
-    }
-    if effect_kind == ActiveMutableEffectKind::CredentialLease {
-        permits.push(prepare_shadow_active_effect(
-            finalization,
-            snapshot,
-            ActiveMutableEffectKind::CredentialDecrypt,
-            &intent,
-            &prepared_state,
-        )?);
-    }
-    let result = operation();
+    let reservation = finalization.reserve_credential_prerequisites(
+        snapshot, scope, effect_kind, &digest_json_ensure_ascii(&intent),
+        &digest_json_ensure_ascii(&prepared_state),
+    )?;
+    let aborted = digest_json_ensure_ascii(&json!({
+        "domain":"serverware.policyShadowCredentialEffectResult/v1",
+        "outcome":"credential-provider-not-started",
+    }));
+    let mut permits = prepare_credential_siblings(
+        reservation.effect_count(),
+        |index| finalization.prepare_credential_prerequisite(snapshot, &reservation, index),
+        |index, permit| finalization.settle_credential_prerequisite(
+            &reservation, index, permit, ActiveEffectCommitState::Aborted, &aborted, None,
+        ),
+    ).map_err(|error| { finalization.fail_credential_prerequisites(); error })?;
+    // Execute once. Invalid result shape is an unknown provider outcome, never
+    // permission to retry or to skip settlement of a prepared sibling.
+    let result = operation().and_then(|info| {
+        reservation.result_commitment(&info)?;
+        Ok(info)
+    });
     let (terminal_state, result_commitment) = match result.as_ref() {
         Ok(info) => (
             ActiveEffectCommitState::Committed,
@@ -25791,15 +25843,79 @@ where
             }),
         ),
     };
-    for permit in permits {
-        commit_shadow_active_effect(
-            finalization,
-            permit,
-            terminal_state,
-            &result_commitment,
-        )?;
+    let result_digest = digest_json_ensure_ascii(&result_commitment);
+    settle_credential_siblings(&mut permits, |index, permit| {
+        finalization.settle_credential_prerequisite(
+            &reservation, index, permit, terminal_state, &result_digest, result.as_ref().ok(),
+        )
+    })?;
+    let info = result?;
+    let prerequisite = finalization.publish_credential_resolution(reservation, &info)
+        .map_err(|error| { finalization.fail_credential_prerequisites(); error })?;
+    Ok(CommittedCredentialResolution {
+        info, prerequisite_ref: CredentialPrerequisiteReference::Committed(prerequisite),
+    })
+}
+
+#[cfg(test)]
+mod credential_prerequisite_sibling_tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    // Production-used drain/prepare components, not custody RPC or actual
+    // provider effects. The real receipt verifier has separate signed tests.
+    #[test]
+    fn credential_siblings_abort_prior_preparations_without_starting_provider() {
+        let events = RefCell::new(Vec::new());
+        let prepared = prepare_credential_siblings(2,
+            |index| { events.borrow_mut().push(("prepare", index));
+                if index == 1 { Err("second barrier unavailable".to_string()) } else { Ok(index) } },
+            |index, permit| { assert_eq!(index, permit); events.borrow_mut().push(("abort", index)); Ok(()) });
+        assert_eq!(prepared.err().as_deref(), Some("second barrier unavailable"));
+        assert_eq!(*events.borrow(), vec![("prepare", 0), ("prepare", 1), ("abort", 0)]);
+        // The production caller invokes its provider only after this Result
+        // succeeds. No unverified permit or provider-success claim is made.
+        let source = include_str!("main.rs");
+        let helper = source.split_once("fn execute_shadow_credential_effect<F>(").unwrap().1
+            .split_once("#[cfg(test)]\nmod credential_prerequisite_sibling_tests").unwrap().0;
+        assert!(helper.find("let mut permits = prepare_credential_siblings(").unwrap()
+            < helper.find("let result = operation().and_then(").unwrap());
+        assert_eq!(helper.matches("let result = operation().and_then(").count(), 1);
     }
-    result
+
+    #[test]
+    fn credential_siblings_drain_after_first_commit_or_retention_failure() {
+        for failure in ["commit failed", "local retention failed", "unknown reconciliation failed"] {
+            let mut permits = [Some(10_u64), Some(20_u64)];
+            let mut observed = Vec::new();
+            let result = settle_credential_siblings(&mut permits, |index, value| {
+                observed.push((index, value));
+                if index == 0 { Err(failure.to_string()) } else { Ok(()) }
+            });
+            assert_eq!(result.err().as_deref(), Some(failure));
+            assert_eq!(observed, vec![(0, 10), (1, 20)]);
+            assert_eq!(permits, [None, None]);
+        }
+    }
+
+    #[test]
+    fn credential_siblings_reject_bounds_and_preserve_abort_failure() {
+        for count in [0, 3, usize::MAX] {
+            let result: Result<[Option<usize>; 2], String> = prepare_credential_siblings(count,
+                |_| panic!("invalid group must not prepare"), |_, _| panic!("nothing was prepared"));
+            assert_eq!(result.err().as_deref(), Some("invalid credential prerequisite sibling count"));
+        }
+        let result = prepare_credential_siblings(2,
+            |index| if index == 0 { Ok(index) } else { Err("barrier lost".to_string()) },
+            |_, _| Err("abort lost".to_string()));
+        assert_eq!(result.err().as_deref(), Some("barrier lost; sibling settlement failed: abort lost"));
+        for count in [1, 2] {
+            let mut prepared = prepare_credential_siblings(count, Ok::<usize, String>, |_, _| unreachable!()).unwrap();
+            let mut settled = 0;
+            settle_credential_siblings(&mut prepared, |_, _| { settled += 1; Ok(()) }).unwrap();
+            assert_eq!(settled, count);
+        }
+    }
 }
 
 fn execute_shadow_constraint_effects<F>(
@@ -33136,7 +33252,7 @@ fn decide_internal_with_mode_and_shadow<'a>(
             }
         };
         req.credential_metadata
-            .insert(credential_id.clone(), info.metadata.clone());
+            .insert(credential_id.clone(), info.info.metadata.clone());
         Some(info)
     } else {
         None
@@ -33366,7 +33482,7 @@ fn decide_internal_with_mode_and_shadow<'a>(
                     mark_credential_lease_activity(state, scope);
                 }
                 if precredential_gmail_version
-                    .is_some_and(|expected| expected != info.version)
+                    .is_some_and(|expected| expected != info.info.version)
                 {
                     return deny_for_route(
                         409,
@@ -33374,15 +33490,15 @@ fn decide_internal_with_mode_and_shadow<'a>(
                         json!({
                             "error":"gmail_proof_credential_generation_changed",
                             "admitted_credential_version":precredential_gmail_version,
-                            "active_credential_version":info.version,
+                            "active_credential_version":info.info.version,
                         }),
                         route,
                         started,
                     );
                 }
                 req.credential_metadata
-                    .insert(credential_id.clone(), info.metadata);
-                (info.version, info.secret_available)
+                    .insert(credential_id.clone(), info.info.metadata);
+                (info.info.version, info.info.secret_available)
             }
             Err(_) => {
                 return deny(
@@ -33926,10 +34042,10 @@ fn decide_internal_with_mode_and_shadow<'a>(
                     )
                 },
             ) {
-                Ok(info) if info.version == credential_version => {
+                Ok(info) if info.info.version == credential_version => {
                     req.credential_metadata
-                        .insert(credential_id.clone(), info.metadata);
-                    secret_available = info.secret_available;
+                        .insert(credential_id.clone(), info.info.metadata);
+                    secret_available = info.info.secret_available;
                 }
                 Ok(info) => {
                     return add_decision_correlation(
@@ -33939,7 +34055,7 @@ fn decide_internal_with_mode_and_shadow<'a>(
                             json!({
                                 "error":"credential_generation_changed_after_reserve",
                                 "reserved_credential_version":credential_version,
-                                "active_credential_version":info.version,
+                                "active_credential_version":info.info.version,
                             }),
                             route,
                             started,
@@ -50713,7 +50829,7 @@ mod tests {
         }
     }
 
-    fn test_snapshot(epoch: u64) -> Arc<Snapshot> {
+    pub(super) fn test_snapshot(epoch: u64) -> Arc<Snapshot> {
         Arc::new(Snapshot {
             epoch,
             hash: sha256_prefixed(format!("serverware:test-policy:epoch:{epoch}").as_bytes()),

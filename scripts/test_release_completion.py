@@ -8419,8 +8419,13 @@ def expect_proxy_proof_failure(
 ) -> None:
     write(tmp / "proxy-response-proof.json", document)
     rejected = run_verifier(tmp, *extra)
-    if rejected.returncode == 0 or expected_error not in detail(rejected):
+    if rejected.returncode == 0:
         raise AssertionError(f"completion verifier accepted {label}: {detail(rejected)}")
+    if expected_error not in detail(rejected):
+        raise AssertionError(
+            f"completion verifier rejected {label} for the wrong reason; "
+            f"expected {expected_error!r}, exit {rejected.returncode}: {detail(rejected)}"
+        )
 
 
 def verify_streaming_proxy_fixture(
@@ -9514,6 +9519,92 @@ def test_observation_release_completion_cli(
     write(tmp / "proxy-response-proof.json", buffered_document)
 
 
+def test_durable_receipt_full_binding_contract(
+    document: dict[str, Any],
+    provenance_digest: str,
+) -> None:
+    """Keep the full-preimage API distinct from the public custody-envelope API."""
+    statement = document["server_statement"]
+    authority = statement["release_authority"]
+    receipt = statement["control_plane_authorization_receipt"]
+    full_binding = release_authorization_binding_fixture(
+        receipt_version="v2",
+        attempt_id=authority["attempt_id"],
+        principal_id=PROXY_PRINCIPAL_ID,
+        route_id="demo.echo",
+        credential_id="cred-demo-bearer",
+        credential_version=7,
+        request_digest=PROXY_REQUEST_DIGEST,
+        operation_digest=PROXY_OPERATION_DIGEST,
+        operation_context=PROXY_OPERATION_CONTEXT,
+        require_jit_grant=False,
+        durable_policy=release_authorization_durable_policy_fixture(
+            "v2", attempt_id=authority["attempt_id"]
+        ),
+    )
+    if sha256_prefixed_json(full_binding) != authority["consumption_identity_digest"]:
+        raise AssertionError("v2 receipt fixture does not match its independently reconstructed full binding")
+
+    def verify_receipt(candidate: dict[str, Any]) -> dict[str, Any]:
+        return verify_release_completion.verify_control_plane_authorization_receipt(
+            candidate,
+            trusted_public_key_pem=control_plane_response_signing_key_info()["public_key_pem"],
+            expected_trusted_public_key_id=control_plane_response_signing_key_info()["key_id"],
+            expected_release_authority=authority,
+            expected_principal_id=PROXY_PRINCIPAL_ID,
+            expected_route_id="demo.echo",
+            expected_runtime_manifest_digest=digest("7"),
+            expected_policy_digest=POLICY_DIGEST,
+            expected_provenance_digest=provenance_digest,
+            expected_image_signatures_digest=IMAGE_SIGNATURES_DIGEST,
+            expected_source_tree_digest=SOURCE_TREE_DIGEST,
+            expected_authorization_binding=full_binding,
+        )
+
+    summary = verify_receipt(receipt)
+    if (
+        summary.get("canonical_signature_verified") is not True
+        or summary.get("durable_policy_verified") is not True
+        or summary.get("custody_authorization_envelope_verified") is not False
+        or summary.get("dispatch_request_api_version")
+        != verify_release_completion.RELEASE_AUTHORIZATION_DISPATCH_V2
+        or summary.get("dispatch_response_api_version")
+        != verify_release_completion.RELEASE_AUTHORIZATION_RESPONSE_V2
+    ):
+        raise AssertionError("full-binding API did not authenticate the valid signed v2 receipt")
+
+    for field, substituted in (
+        ("actorId", "spiffe://prod.serverware.dev/decision-gate/substituted"),
+        ("claimDigest", digest("2")),
+    ):
+        candidate = clone_document(receipt)
+        request_body = json.loads(b64d(candidate["request"]["body_b64"]).decode("utf-8"))
+        response_body = json.loads(b64d(candidate["response"]["body_b64"]).decode("utf-8"))
+        # Keep request/response lifecycle values equal and sign the changed
+        # response. Only the independently retained full binding stays fixed.
+        request_body["durablePolicy"][field] = substituted
+        response_body["durablePolicy"][field] = substituted
+        replace_control_plane_receipt_request_body(candidate, request_body)
+        replace_control_plane_receipt_response_body(candidate, response_body)
+        try:
+            verify_receipt(candidate)
+        except ValueError as exc:
+            if str(exc) != "control-plane authorization receipt request durable policy differs from the trusted binding":
+                raise AssertionError(f"full-binding {field} substitution failed at the wrong guard: {exc}") from exc
+        else:
+            raise AssertionError(f"full-binding API accepted a signed durable {field} substitution")
+
+    forged_signature = clone_document(receipt)
+    forged_signature["response"]["signature"] = "ed25519:" + b64e(b"x" * 64)
+    try:
+        verify_receipt(forged_signature)
+    except ValueError as exc:
+        if str(exc) != "control-plane authorization receipt signature verification failed":
+            raise
+    else:
+        raise AssertionError("full-binding API accepted a v2 receipt without its authentic response signature")
+
+
 def test_proxy_response_proof_requirements(
     tmp: Path,
     valid_document: dict[str, Any],
@@ -9762,6 +9853,7 @@ def test_proxy_response_proof_requirements(
             "completion verifier rejected a valid v2 durable dispatch receipt: "
             + detail(durable_result)
         )
+    test_durable_receipt_full_binding_contract(durable_document, provenance_digest)
 
     same_attempt_replay_receipt = clone_document(durable_receipt)
     same_attempt_replay_body = clone_document(durable_response_body)
@@ -10018,11 +10110,27 @@ def test_proxy_response_proof_requirements(
     durable_request_body = json.loads(
         b64d(durable_receipt["request"]["body_b64"]).decode("utf-8")
     )
+    # In custody-envelope mode, malformed request syntax is checked before
+    # matching its lifecycle values against the signed response.
+    for field, malformed, description in (
+        ("actorId", " actor-with-leading-space", "malformed durable request actor syntax"),
+        ("claimDigest", "sha256:" + "0" * 63, "malformed durable request claim digest syntax"),
+    ):
+        malformed_receipt = clone_document(durable_receipt)
+        malformed_body = clone_document(durable_request_body)
+        malformed_body["durablePolicy"][field] = malformed
+        replace_control_plane_receipt_request_body(malformed_receipt, malformed_body)
+        expect_durable_receipt_failure(
+            malformed_receipt,
+            "control-plane authorization receipt request durable policy binding mismatch",
+            description,
+        )
+
     for field, substituted, expected_error, description in (
         (
             "actorId",
             "spiffe://prod.serverware.dev/decision-gate/substituted",
-            "control-plane authorization receipt request durable policy binding mismatch",
+            "control-plane authorization receipt durable policy lifecycle mismatch",
             "durable request actor substitution",
         ),
         (
@@ -10034,7 +10142,7 @@ def test_proxy_response_proof_requirements(
         (
             "claimDigest",
             digest("2"),
-            "control-plane authorization receipt request durable policy binding mismatch",
+            "control-plane authorization receipt durable policy lifecycle mismatch",
             "durable request claim substitution",
         ),
         (

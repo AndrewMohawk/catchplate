@@ -1,18 +1,20 @@
-"""Real PostgreSQL snapshot reader for offline audit preparation, not installation.
+"""Real PostgreSQL snapshot reader for offline audit evidence, not installation.
 
 The caller owns an active SERIALIZABLE read-write transaction, its independently
 admitted schema/session and any external writer fence. Locks do NOT refresh an
 already established snapshot. This module never begins, commits, rolls back or
 retries a transaction, inserts a counter, or consumes initialization authority.
-Every returned preparation remains non-actionable and snapshot-relative.
+Every returned preparation or signed evidence remains non-actionable and
+snapshot-relative. Signatures authenticate pinned claims, not currentness.
 """
 from __future__ import annotations
 
 import re
 import time
 import uuid
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, fields
-from typing import Any
+from typing import Any, TypeVar
 
 import psycopg
 from psycopg import sql
@@ -21,6 +23,7 @@ from psycopg.rows import dict_row
 
 from serverware import authority_audit_capacity as capacity
 from serverware import authority_audit_initialization as initialization
+from serverware import authority_audit_initialization_admission as admission
 from serverware import authority_contract
 from serverware import authority_radix_proof as radix
 from serverware import authority_transition_core as core
@@ -34,6 +37,8 @@ NODES = "policy_authority_authenticated_tree_nodes"
 HISTORY = "policy_authority_authenticated_root_revisions"
 # Base-table locks precede root locks, matching the direction of AFTER triggers.
 LOCK_TABLES = (capacity.OUTBOX_TABLE, capacity.AGGREGATE_TABLE, ROOTS, LEAVES, NODES, HISTORY)
+_ReadResult = TypeVar("_ReadResult", initialization.AuditCapacityInitializationPreparation,
+                      admission.AuditInitializationEvidence)
 
 
 class AuditInitializationPostgresError(ValueError):
@@ -77,9 +82,11 @@ def _root(value: PrimaryRoot, table: str) -> PrimaryRoot:
 
 
 class _Budget:
-    def __init__(self, limits: AuditInitializationReadLimits, control: Any) -> None:
+    def __init__(self, limits: AuditInitializationReadLimits, control: Any, *,
+                 started_at_ns: int | None = None) -> None:
         self.limits, self.control = limits, control
-        self.deadline = time.monotonic_ns() + limits.total_timeout_ms * 1_000_000
+        started = time.monotonic_ns() if started_at_ns is None else started_at_ns
+        self.deadline = started + limits.total_timeout_ms * 1_000_000
         self.queries = 0
         self.bytes = 0
         self.rows = 0
@@ -263,19 +270,13 @@ def _outbox_records(connection: psycopg.Connection, cursor: _ReadCursor,
             raise AuditInitializationPostgresError("offline outbox stream ended before the accepted count")
 
 
-def prepare_audit_capacity_initialization_from_postgres(
+def _read_from_postgres(
     connection: psycopg.Connection, *, expected_outbox_root: PrimaryRoot,
     expected_aggregate_root: PrimaryRoot, initialized_at_epoch_ns: int,
-    limits: AuditInitializationReadLimits, namespace: str = "serverware_metadata",
-) -> initialization.AuditCapacityInitializationPreparation:
-    """Calculate from actual locked snapshot rows/proofs without installing.
-
-    The active transaction and locks remain owned by the caller on success AND
-    error. SQL/serialization errors propagate; never retry inside this function.
-    Local statement/lock timeouts and row_security=off remain until transaction
-    end. Inputs are expectations, not proof that their roots/fence are current.
-    A process watchdog and DB CPU/memory/spill/storage budgets remain mandatory.
-    """
+    limits: AuditInitializationReadLimits, namespace: str, started_at_ns: int,
+    consume: Callable[[PrimaryRoot, Iterable[dict[str, Any]], PrimaryRoot, dict[str, Any]], _ReadResult],
+) -> _ReadResult:
+    """Own one bounded actual snapshot; only fixed public consumers call here."""
     accepted_namespace = _namespace(namespace)
     if type(limits) is not AuditInitializationReadLimits:
         raise AuditInitializationPostgresError("offline read limits have the wrong type")
@@ -293,7 +294,7 @@ def prepare_audit_capacity_initialization_from_postgres(
         raise AuditInitializationPostgresError("offline preparation requires PostgreSQL 16")
     try:
         with connection.cursor(row_factory=dict_row) as control, connection.cursor(row_factory=dict_row) as raw:
-            budget = _Budget(limits, control)
+            budget = _Budget(limits, control, started_at_ns=started_at_ns)
             cursor = _ReadCursor(raw, budget)
             context = cursor.execute(
                 "SELECT pg_catalog.current_setting('transaction_isolation') AS isolation, "
@@ -315,9 +316,7 @@ def prepare_audit_capacity_initialization_from_postgres(
                              aggregate, accepted_namespace)
             records = _outbox_records(connection, cursor, budget, outbox, accepted_namespace)
             try:
-                result = initialization.prepare_audit_capacity_initialization(
-                    outbox_root=outbox, outbox_records=records, aggregate_root=aggregate,
-                    aggregate_absence=absence, initialized_at_epoch_ns=initialized_at_epoch_ns)
+                result = consume(outbox, records, aggregate, absence)
             finally:
                 records.close()
             budget.data(result.json_projection())
@@ -326,3 +325,65 @@ def prepare_audit_capacity_initialization_from_postgres(
     except (capacity.AuditCapacityError, initialization.AuditCapacityInitializationError,
             radix.RadixProofError, PrimaryRadixMutationError) as exc:
         raise AuditInitializationPostgresError("offline snapshot preparation failed admission") from exc
+
+
+def prepare_audit_capacity_initialization_from_postgres(
+    connection: psycopg.Connection, *, expected_outbox_root: PrimaryRoot,
+    expected_aggregate_root: PrimaryRoot, initialized_at_epoch_ns: int,
+    limits: AuditInitializationReadLimits, namespace: str = "serverware_metadata",
+) -> initialization.AuditCapacityInitializationPreparation:
+    """Calculate from actual locked snapshot rows/proofs without installing.
+
+    The active transaction and locks remain owned by the caller on success AND
+    error. SQL/serialization errors propagate; never retry inside this function.
+    Local statement/lock timeouts and row_security=off remain until transaction
+    end. Inputs are expectations, not proof that their roots/fence are current.
+    A process watchdog and DB CPU/memory/spill/storage budgets remain mandatory.
+    """
+    started_at_ns = time.monotonic_ns()
+
+    def prepare(outbox, records, aggregate, absence):
+        return initialization.prepare_audit_capacity_initialization(
+            outbox_root=outbox, outbox_records=records, aggregate_root=aggregate,
+            aggregate_absence=absence, initialized_at_epoch_ns=initialized_at_epoch_ns)
+
+    return _read_from_postgres(connection, expected_outbox_root=expected_outbox_root,
+        expected_aggregate_root=expected_aggregate_root, initialized_at_epoch_ns=initialized_at_epoch_ns,
+        limits=limits, namespace=namespace, started_at_ns=started_at_ns, consume=prepare)
+
+
+def verify_audit_initialization_evidence_from_postgres(
+    connection: psycopg.Connection, checkpoint_bytes: bytes, authorization_bytes: bytes, *,
+    trust: admission.AuditInitializationTrust, expectation: admission.AuditInitializationExpectation,
+    now_epoch_ns: int, expected_outbox_root: PrimaryRoot, expected_aggregate_root: PrimaryRoot,
+    limits: AuditInitializationReadLimits, namespace: str = "serverware_metadata",
+) -> admission.AuditInitializationEvidence:
+    """Reverify signed commitments against the actual bounded database stream.
+
+    Invalid signed intent is rejected before any SQL. Preflight is not an
+    admission token: the full verifier repeats signature/binding checks and
+    recomputes the preparation from the reader's owned roots, rows and proofs.
+    Signed-admission errors propagate unchanged. SQL/transaction ownership and
+    resource obligations are the same as the preparation-only entry point.
+
+    now_epoch_ns is a supplied verification instant, not a trusted clock or a
+    commit-time freshness check. Exact retries remain repeatable; no authority
+    is consumed and installationPermitted remains false.
+    """
+    started_at_ns = time.monotonic_ns()
+    accepted_trust, accepted_expectation = admission.snapshot_audit_initialization_context(trust, expectation)
+    outbox = _root(expected_outbox_root, capacity.OUTBOX_TABLE)
+    aggregate = _root(expected_aggregate_root, capacity.AGGREGATE_TABLE)
+    admission.validate_audit_initialization_intent(
+        checkpoint_bytes, authorization_bytes, trust=accepted_trust, expectation=accepted_expectation,
+        now_epoch_ns=now_epoch_ns, outbox_root=outbox, aggregate_root=aggregate)
+
+    def verify(outbox, records, aggregate, absence):
+        return admission.verify_audit_initialization_evidence(
+            checkpoint_bytes, authorization_bytes, trust=accepted_trust, expectation=accepted_expectation,
+            now_epoch_ns=now_epoch_ns, outbox_root=outbox, outbox_records=records,
+            aggregate_root=aggregate, aggregate_absence=absence)
+
+    return _read_from_postgres(connection, expected_outbox_root=outbox,
+        expected_aggregate_root=aggregate, initialized_at_epoch_ns=accepted_expectation.initialized_at_epoch_ns,
+        limits=limits, namespace=namespace, started_at_ns=started_at_ns, consume=verify)

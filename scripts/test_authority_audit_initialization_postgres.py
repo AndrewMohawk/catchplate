@@ -5,6 +5,7 @@ The external prepared harness supplies disposable PG16/UTF8 via an owned
 0700 Unix socket. Production DDL, actual tree triggers and the actual bounded
 SQL adapter are used. Independent tiny trees supply expected hashes/proofs,
 not the adapter's DB proof producer. Every schema and mutation is rolled back.
+Signed cases use real in-memory Ed25519 fixture keys, not an authority issuer.
 
 The caller owns an already-active serializable transaction; acquiring locks
 does not make its snapshot independently fresh. These tests grant no schema,
@@ -16,11 +17,13 @@ from __future__ import annotations
 
 import argparse
 import ast
+import copy
 import json
 import sys
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 import psycopg
 from psycopg import sql
@@ -33,9 +36,11 @@ sys.path.insert(0, str(ROOT))
 
 from serverware import authority_audit_initialization_postgres as adapter
 from serverware import authority_audit_initialization as initialization
+from serverware import authority_audit_initialization_admission as admission
 from serverware import authority_radix_proof as radix
 import test_authority_primary_tree_postgres as tree_fixture
 import test_authority_audit_initialization as initialization_fixture
+import test_authority_audit_initialization_admission as admission_fixture
 from test_authority_audit_inventory import InventoryTree, outbox_row
 from test_authority_audit_initialization import AGGREGATE, OUTBOX, aggregate_tree, initial_row
 from test_authority_radix_proof import sql_digest, sql_json, wire_digest, wire_json
@@ -115,6 +120,53 @@ class AuditInitializationPostgresTests(unittest.TestCase):
     def expected(self, timestamp=TIME_NS):
         return initialization_fixture.AuditCapacityInitializationTests.expected(
             self, outbox=self.outbox, aggregate=self.aggregate, timestamp=timestamp)
+
+    def signed_fixture(self):
+        # Compose fixture helpers, not inherited tests or a verifier substitute.
+        # Its setup uses real deterministic Ed25519 keys and independent tiny
+        # tree/hash construction; replace its roots with this real DB fixture's
+        # independently expected roots before signing either envelope.
+        signed = admission_fixture.InitializationAdmissionTests("runTest")
+        signed.setUp()
+        signed.outbox, signed.aggregate = self.outbox, self.aggregate
+        signed.prepared_document = self.expected()
+        signed.checkpoint_payload, signed.authorization_payload = signed.payloads()
+        signed.checkpoint, signed.authorization = signed.signed_pair()
+        return signed
+
+    def evidence(self, signed, checkpoint=None, authorization=None, *, connection=None, **changes):
+        arguments = dict(trust=signed.trust, expectation=signed.expectation,
+            now_epoch_ns=signed.now, expected_outbox_root=self.outbox.root,
+            expected_aggregate_root=self.aggregate.root, limits=read_limits(), namespace=self.store.schema)
+        arguments.update(changes)
+        return adapter.verify_audit_initialization_evidence_from_postgres(
+            self.connection if connection is None else connection,
+            signed.checkpoint if checkpoint is None else checkpoint,
+            signed.authorization if authorization is None else authorization, **arguments)
+
+    def expected_evidence(self, signed):
+        prepared = self.expected()
+        return {
+            "schema": "serverware.metadataAuditInitializationEvidence/v1",
+            "checkpoint": json.loads(signed.checkpoint),
+            "checkpointEnvelopeDigest": admission_fixture.signed_digest(
+                admission_fixture.ROLES["checkpoint"]["envelope"], signed.checkpoint),
+            "authorization": json.loads(signed.authorization),
+            "authorizationEnvelopeDigest": admission_fixture.signed_digest(
+                admission_fixture.ROLES["authorization"]["envelope"], signed.authorization),
+            "preparation": prepared,
+            "preparationDigest": wire_digest(initialization_fixture.SCHEMA, wire_json(prepared)),
+            "verifiedAtEpochNs": signed.now,
+            "verificationBoundary": "pinned-signatures-and-local-recomputation",
+            "installationPermitted": False,
+        }
+
+    def assert_no_reader_cursor(self):
+        # Real session cursor state, not a mocked close callback. This is a
+        # cleanup observation, not proof of bounded server sort/detoast memory.
+        self.assertEqual(self.connection.execute(
+            "SELECT name FROM pg_catalog.pg_cursors WHERE name LIKE 'audit_init_%'"
+        ).fetchall(), [])
 
     def reject(self, expected_message=None, **changes):
         with self.assertRaises(adapter.AuditInitializationPostgresError) as raised:
@@ -356,6 +408,268 @@ class AuditInitializationPostgresTests(unittest.TestCase):
                     connection.rollback()
                     connection.close()
 
+    def test_signed_empty_snapshot_matches_independent_evidence_and_leaves_no_counter(self):
+        signed = self.signed_fixture()
+        before, expected = self.store.snapshot(), self.expected_evidence(signed)
+        result = self.evidence(signed, limits=read_limits(max_rows=0))
+        self.assertIs(type(result), admission.AuditInitializationEvidence)
+        self.assertEqual(result.json_projection(), expected)
+        self.assertEqual(result.canonical_bytes, wire_json(expected))
+        self.assertEqual(result.digest, wire_digest(expected["schema"], wire_json(expected)))
+        self.assertEqual(result.preparation.canonical_bytes, wire_json(self.expected()))
+        self.assertIs(result.json_projection()["installationPermitted"], False)
+        self.assertEqual(self.store.snapshot(), before)
+        self.assertEqual(self.store.table_rows(AGGREGATE), [])
+        self.assert_no_reader_cursor()
+
+    def test_signed_mixed_unicode_and_other_aggregate_use_real_proofs_and_exact_bytes(self):
+        self.seed(self.mixed(), [other_aggregate("signed-other-雪")])
+        signed = self.signed_fixture()
+        before, expected = self.store.snapshot(), self.expected_evidence(signed)
+        result = self.evidence(signed)
+        self.assertEqual(result.json_projection(), expected)
+        self.assertEqual(result.canonical_bytes, wire_json(expected))
+        self.assertEqual(result.digest, wire_digest(expected["schema"], wire_json(expected)))
+        self.assertEqual(result.preparation.json_projection()["inventory"]["outstandingCount"], 2)
+        self.assertEqual(self.store.snapshot(), before)
+        self.assert_no_reader_cursor()
+
+    def test_both_bad_real_signatures_reject_before_idle_connection_runs_sql(self):
+        signed = self.signed_fixture()
+        connection = psycopg.connect(**CONNECTION_PARAMETERS, autocommit=False)
+        try:
+            for role in admission_fixture.ROLES:
+                other = "authorization" if role == "checkpoint" else "checkpoint"
+                canonical = signed.checkpoint if role == "checkpoint" else signed.authorization
+                # Keep all signed bindings valid; change only the signing key.
+                payload = json.loads(canonical)["payload"]
+                wrong_key = signed.signing.sign(role, payload, key=signed.signing.keys[other])
+                for changed in (wrong_key, canonical + b"\n"):
+                    pair = (changed, signed.authorization) if role == "checkpoint" else (signed.checkpoint, changed)
+                    with self.subTest(role=role, wrong_key=changed == wrong_key), self.assertRaises(
+                        admission.AuditInitializationAdmissionError,
+                    ) as raised:
+                        self.evidence(signed, *pair, connection=connection)
+                    self.assertEqual(str(raised.exception), "audit initialization signed evidence is invalid")
+                    self.assertEqual(connection.info.transaction_status, TransactionStatus.IDLE)
+        finally:
+            connection.rollback()
+            connection.close()
+
+    def test_changed_context_time_and_root_inputs_reject_before_idle_database_access(self):
+        self.seed([outbox_row("signed-root")], [other_aggregate("signed-root")])
+        signed = self.signed_fixture()
+        cases = [
+            {"trust": None}, {"expectation": {}},
+            {"trust": replace(signed.trust, policy_digest=WRONG_DIGEST)},
+            {"expectation": replace(signed.expectation, database_generation_digest=WRONG_DIGEST)},
+            {"expectation": replace(signed.expectation, nonce_digest=WRONG_DIGEST)},
+            {"now_epoch_ns": True}, {"now_epoch_ns": 100_000_000_000},
+        ]
+        for name, root in (("expected_outbox_root", self.outbox.root),
+                           ("expected_aggregate_root", self.aggregate.root)):
+            cases.extend({name: changed} for changed in (
+                replace(root, root_revision=root.root_revision + 1),
+                replace(root, leaf_count=root.leaf_count + 1), replace(root, root_digest=WRONG_DIGEST)))
+        connection = psycopg.connect(**CONNECTION_PARAMETERS, autocommit=False)
+        try:
+            for changes in cases:
+                with self.subTest(changes=changes), self.assertRaises(admission.AuditInitializationAdmissionError):
+                    self.evidence(signed, connection=connection, **changes)
+                self.assertEqual(connection.info.transaction_status, TransactionStatus.IDLE)
+        finally:
+            connection.rollback()
+            connection.close()
+
+    def test_authentic_wrong_purpose_source_pin_and_checkpoint_link_reject_before_sql(self):
+        signed = self.signed_fixture()
+        pairs = []
+        for role in admission_fixture.ROLES:
+            baseline = signed.checkpoint_payload if role == "checkpoint" else signed.authorization_payload
+            for field, value in (("purpose", "not-initialization"), ("sourceRevision", "stale-source"),
+                                 ("authorityIdentityDigest", WRONG_DIGEST)):
+                pairs.append((role + ":" + field, signed.signed_pair(**{
+                    role + "_payload": {**baseline, field: value}})))
+        changed = {**signed.checkpoint_payload, "issuedAtEpochNs": 11_000_000_000}
+        checkpoint, _ = signed.signed_pair(checkpoint_payload=changed)
+        pairs.append(("crossed-checkpoint", (checkpoint, signed.authorization)))
+        connection = psycopg.connect(**CONNECTION_PARAMETERS, autocommit=False)
+        try:
+            for label, pair in pairs:
+                with self.subTest(label=label), self.assertRaises(admission.AuditInitializationAdmissionError):
+                    self.evidence(signed, *pair, connection=connection)
+                self.assertEqual(connection.info.transaction_status, TransactionStatus.IDLE)
+        finally:
+            connection.rollback()
+            connection.close()
+
+    def test_valid_signed_intent_still_requires_caller_owned_active_transaction(self):
+        signed = self.signed_fixture()
+        self.assertIsNone(admission.validate_audit_initialization_intent(
+            signed.checkpoint, signed.authorization, trust=signed.trust, expectation=signed.expectation,
+            now_epoch_ns=signed.now, outbox_root=self.outbox.root, aggregate_root=self.aggregate.root))
+        connection = psycopg.connect(**CONNECTION_PARAMETERS, autocommit=False)
+        try:
+            with self.assertRaises(adapter.AuditInitializationPostgresError) as raised:
+                self.evidence(signed, connection=connection)
+            self.assertEqual(str(raised.exception), "offline preparation requires an active caller-owned transaction")
+            self.assertEqual(connection.info.transaction_status, TransactionStatus.IDLE)
+        finally:
+            connection.rollback()
+            connection.close()
+
+    def test_authentic_wrong_computed_commitments_pass_preflight_but_not_real_database_recomputation(self):
+        self.seed(self.mixed(), [other_aggregate("recompute")])
+        signed, before = self.signed_fixture(), self.store.snapshot()
+        changed_roots = copy.deepcopy(signed.authorization_payload["afterRoots"])
+        changed_roots[1]["rootDigest"] = WRONG_DIGEST
+        for field, value in (("preparationDigest", WRONG_DIGEST), ("counterRowDigest", WRONG_DIGEST),
+                             ("afterRoots", changed_roots)):
+            pair = signed.signed_pair(authorization_payload={**signed.authorization_payload, field: value})
+            with self.subTest(field=field):
+                self.assertIsNone(admission.validate_audit_initialization_intent(
+                    *pair, trust=signed.trust, expectation=signed.expectation, now_epoch_ns=signed.now,
+                    outbox_root=self.outbox.root, aggregate_root=self.aggregate.root))
+                with self.assertRaises(admission.AuditInitializationAdmissionError) as raised:
+                    self.evidence(signed, *pair)
+                self.assertEqual(str(raised.exception), "audit initialization authorization differs from recomputation")
+                self.assertEqual(self.connection.info.transaction_status, TransactionStatus.INTRANS)
+                self.assertEqual(self.store.snapshot(), before)
+                self.assert_no_reader_cursor()
+
+    def test_signed_claims_cannot_replace_corrupted_stored_full_row_or_proof(self):
+        row = outbox_row("signed-corruption")
+        self.seed([row])
+        signed, before = self.signed_fixture(), self.store.snapshot()
+        with self.store.rollback_variant():
+            self.without_tree_trigger(sql.SQL("UPDATE {} SET status=%s WHERE id=%s")
+                .format(self.store.object(OUTBOX)), ("audited", row["id"]))
+            with self.assertRaises(adapter.AuditInitializationPostgresError) as raised:
+                self.evidence(signed)
+            self.assertEqual(str(raised.exception), "offline snapshot preparation failed admission")
+            self.assertIsInstance(raised.exception.__cause__, radix.RadixProofError)
+            self.assertEqual(str(raised.exception.__cause__), "selected row differs from its authenticated leaf")
+            self.assert_no_reader_cursor()
+        with self.store.rollback_variant():
+            self.assertEqual(self.connection.execute(sql.SQL(
+                "UPDATE {} SET node_digest=%s WHERE table_name=%s AND depth=1"
+            ).format(self.store.object(tree_fixture.NODES)), (WRONG_DIGEST, OUTBOX)).rowcount, 1)
+            with self.assertRaises(admission.AuditInitializationAdmissionError) as raised:
+                self.evidence(signed)
+            self.assertEqual(str(raised.exception), "audit initialization preparation failed")
+            self.assertIsInstance(raised.exception.__cause__, initialization.AuditCapacityInitializationError)
+            self.assert_no_reader_cursor()
+        self.assertEqual(self.store.snapshot(), before)
+
+    def test_signed_retry_is_repeatable_and_caller_retains_rollback_and_cursor_ownership(self):
+        self.seed(self.mixed())
+        signed, before = self.signed_fixture(), self.store.snapshot()
+        txid = self.connection.execute("SELECT pg_catalog.txid_current()::text").fetchone()[0]
+        first, second = self.evidence(signed), self.evidence(signed)
+        self.assertEqual(first.canonical_bytes, second.canonical_bytes)
+        self.assertEqual(first.digest, second.digest)
+        self.assertEqual(first.canonical_bytes, wire_json(self.expected_evidence(signed)))
+        self.assertIs(second.json_projection()["installationPermitted"], False)
+        with self.store.rollback_variant():
+            self.store.insert(OUTBOX, outbox_row("caller-after-signed-verification"))
+            self.assertEqual(len(self.store.table_rows(OUTBOX)), 4)
+        self.assertEqual(self.store.snapshot(), before)
+        self.assertEqual(self.connection.execute("SELECT pg_catalog.txid_current()::text").fetchone()[0], txid)
+        self.assertEqual(self.connection.info.transaction_status, TransactionStatus.INTRANS)
+        self.assert_no_reader_cursor()
+
+    def test_owned_context_survives_controlled_caller_mutation_after_first_real_sql(self):
+        self.seed(self.mixed(), [other_aggregate("snapshot-boundary")])
+        signed = self.signed_fixture()
+        expected, before = self.expected_evidence(signed), self.store.snapshot()
+        caller_trust = copy.deepcopy(signed.trust)
+        caller_expectation = replace(signed.expectation)
+        caller_outbox, caller_aggregate = replace(self.outbox.root), replace(self.aggregate.root)
+        original_policy = signed.trust.policy_digest
+        original_pins = (signed.trust.checkpoint_signer.measurement_digest,
+                         signed.trust.authorization_signer.attestation_receipt_digest)
+        seen = []
+        actual_data = adapter._Budget.data
+
+        def mutate_caller(budget, value, *, record=False):
+            # A deterministic caller-mutation boundary, not a thread race.
+            # Delegate EVERY actual data charge unchanged before touching only
+            # original input objects. SQL, cursor, proof and verifier results
+            # are neither replaced nor mutated by this observer.
+            result = actual_data(budget, value, record=record)
+            if not seen:
+                self.assertIs(type(value), dict)
+                self.assertEqual(set(value), {"statement_timeout", "lock_timeout", "row_security"})
+                seen.append("first-real-timeout-query-result")
+                object.__setattr__(caller_trust, "policy_digest", WRONG_DIGEST)
+                object.__setattr__(caller_trust.checkpoint_signer, "measurement_digest", WRONG_DIGEST)
+                object.__setattr__(caller_trust.authorization_signer, "attestation_receipt_digest", WRONG_DIGEST)
+                object.__setattr__(caller_expectation, "nonce_digest", WRONG_DIGEST)
+                object.__setattr__(caller_expectation, "initialized_at_epoch_ns", 9_000_000_000)
+                for root in (caller_outbox, caller_aggregate):
+                    object.__setattr__(root, "root_revision", 999)
+                    object.__setattr__(root, "leaf_count", 999)
+                    object.__setattr__(root, "root_digest", WRONG_DIGEST)
+            return result
+
+        with patch.object(adapter._Budget, "data", mutate_caller):
+            result = self.evidence(signed, trust=caller_trust, expectation=caller_expectation,
+                expected_outbox_root=caller_outbox, expected_aggregate_root=caller_aggregate)
+        self.assertEqual(seen, ["first-real-timeout-query-result"])
+        self.assertEqual(result.canonical_bytes, wire_json(expected))
+        self.assertEqual(result.digest, wire_digest(expected["schema"], wire_json(expected)))
+        self.assertEqual(caller_expectation.initialized_at_epoch_ns, 9_000_000_000)
+        self.assertEqual(caller_trust.policy_digest, WRONG_DIGEST)
+        self.assertEqual((caller_outbox.root_revision, caller_aggregate.leaf_count), (999, 999))
+        self.assertEqual(signed.trust.policy_digest, original_policy)
+        self.assertEqual((signed.trust.checkpoint_signer.measurement_digest,
+                          signed.trust.authorization_signer.attestation_receipt_digest), original_pins)
+        self.assertEqual(signed.expectation.initialized_at_epoch_ns, TIME_NS)
+        self.assertEqual([self.outbox.root.json_projection(), self.aggregate.root.json_projection()],
+                         expected["preparation"]["beforeRoots"])
+        self.assertEqual(self.store.snapshot(), before)
+        self.assert_no_reader_cursor()
+
+    def test_full_signed_evidence_is_charged_not_only_its_smaller_preparation(self):
+        signed = self.signed_fixture()
+        expected = self.expected_evidence(signed)
+        before = self.store.snapshot()
+        events = []
+        actual_data = adapter._Budget.data
+
+        def observe(budget, value, *, record=False):
+            # Accounting instrumentation only. Every original value, bound,
+            # result and exception passes through the real production method;
+            # no SQL, proof, verifier or successful outcome is substituted.
+            events.append((budget.bytes, len(wire_json(value)),
+                           value.get("schema") if type(value) is dict else None))
+            return actual_data(budget, value, record=record)
+
+        with patch.object(adapter._Budget, "data", observe):
+            result = self.evidence(signed)
+        self.assertEqual(result.canonical_bytes, wire_json(expected))
+        prefix, charged, schema = events[-1]
+        self.assertEqual(schema, expected["schema"])
+        self.assertEqual(charged, len(wire_json(expected)))
+        self.assertEqual(prefix, sum(size for _, size, _ in events[:-1]))
+        smaller = len(wire_json(expected["preparation"]))
+        self.assertGreater(charged, smaller + 1024)
+        # Midpoint, not an exact total-minus-one oracle: timeout result strings
+        # can change length. Each rerun below confirms the actual failure layer.
+        limit = prefix + (smaller + charged) // 2
+        self.assertEqual(self.prepare(limits=read_limits(max_total_bytes=limit)).json_projection(), self.expected())
+        events.clear()
+        with patch.object(adapter._Budget, "data", observe):
+            with self.assertRaises(adapter.AuditInitializationPostgresError) as raised:
+                self.evidence(signed, limits=read_limits(max_total_bytes=limit))
+        self.assertEqual(str(raised.exception), "offline preparation exceeded its total byte limit")
+        before_final, final_size, final_schema = events[-1]
+        self.assertEqual((final_schema, final_size), (expected["schema"], charged))
+        self.assertLessEqual(before_final + smaller, limit)
+        self.assertGreater(before_final + final_size, limit)
+        self.assertEqual(self.store.snapshot(), before)
+        self.assert_no_reader_cursor()
+
 
 class AuditInitializationPostgresSourceTests(unittest.TestCase):
     def test_actual_adapter_owns_no_transaction_or_dml_and_closes_stream(self):
@@ -371,14 +685,86 @@ class AuditInitializationPostgresSourceTests(unittest.TestCase):
             if isinstance(node, ast.Constant) and isinstance(node.value, str):
                 self.assertNotIn(node.value.lstrip().split(" ", 1)[0].upper(),
                     {"INSERT", "UPDATE", "DELETE", "TRUNCATE", "BEGIN", "COMMIT", "ROLLBACK"})
-        prepare = methods["prepare_audit_capacity_initialization_from_postgres"]
-        closers = [node for node in ast.walk(prepare) if isinstance(node, ast.Try)
+        reader = methods["_read_from_postgres"]
+        closers = [node for node in ast.walk(reader) if isinstance(node, ast.Try)
             and any(isinstance(item, ast.Expr) and isinstance(item.value, ast.Call)
                 and ast.unparse(item.value.func) == "records.close" for item in node.finalbody)]
         self.assertEqual(len(closers), 1)
-        self.assertTrue(any(isinstance(node, ast.Call)
-            and ast.unparse(node.func) == "initialization.prepare_audit_capacity_initialization"
-            for node in ast.walk(closers[0])))
+        consumed = [node for node in ast.walk(closers[0]) if isinstance(node, ast.Call)
+                    and ast.unparse(node.func) == "consume"]
+        self.assertEqual(len(consumed), 1)
+        self.assertEqual([ast.unparse(arg) for arg in consumed[0].args],
+                         ["outbox", "records", "aggregate", "absence"])
+        final_charges = [node for node in ast.walk(reader) if isinstance(node, ast.Call)
+            and ast.unparse(node.func) == "budget.data"
+            and [ast.unparse(arg) for arg in node.args] == ["result.json_projection()"]]
+        self.assertEqual(len(final_charges), 1)
+        self.assertLess(closers[0].end_lineno, final_charges[0].lineno)
+        budgets = [node for node in ast.walk(reader) if isinstance(node, ast.Call)
+                   and ast.unparse(node.func) == "_Budget"]
+        self.assertEqual(len(budgets), 1)
+        self.assertEqual({item.arg: ast.unparse(item.value) for item in budgets[0].keywords},
+                         {"started_at_ns": "started_at_ns"})
+        for public, closure_name, actual in (
+            ("prepare_audit_capacity_initialization_from_postgres", "prepare",
+             "initialization.prepare_audit_capacity_initialization"),
+            ("verify_audit_initialization_evidence_from_postgres", "verify",
+             "admission.verify_audit_initialization_evidence"),
+        ):
+            wrapper = methods[public]
+            closures = [node for node in wrapper.body if isinstance(node, ast.FunctionDef)]
+            self.assertEqual([node.name for node in closures], [closure_name])
+            self.assertEqual([arg.arg for arg in closures[0].args.args],
+                             ["outbox", "records", "aggregate", "absence"])
+            consumers = [node for node in ast.walk(closures[0]) if isinstance(node, ast.Call)
+                         and ast.unparse(node.func) == actual]
+            self.assertEqual(len(consumers), 1)
+            arguments = {item.arg: ast.unparse(item.value) for item in consumers[0].keywords}
+            self.assertEqual({key: arguments[key] for key in (
+                "outbox_root", "outbox_records", "aggregate_root", "aggregate_absence")},
+                {"outbox_root": "outbox", "outbox_records": "records",
+                 "aggregate_root": "aggregate", "aggregate_absence": "absence"})
+            reads = [node for node in ast.walk(wrapper) if isinstance(node, ast.Call)
+                     and ast.unparse(node.func) == "_read_from_postgres"]
+            self.assertEqual(len(reads), 1)
+            read_arguments = {item.arg: ast.unparse(item.value) for item in reads[0].keywords}
+            self.assertEqual(read_arguments["consume"], closure_name)
+            self.assertEqual(read_arguments["started_at_ns"], "started_at_ns")
+            started = wrapper.body[1]  # Docstring then entry-time deadline origin.
+            self.assertIsInstance(started, ast.Assign)
+            self.assertEqual(ast.unparse(started), "started_at_ns = time.monotonic_ns()")
+            if closure_name == "verify":
+                snapshots = [node for node in wrapper.body if isinstance(node, ast.Assign)
+                    and isinstance(node.value, ast.Call)
+                    and ast.unparse(node.value.func) == "admission.snapshot_audit_initialization_context"]
+                self.assertEqual(len(snapshots), 1)
+                target = snapshots[0].targets[0]
+                self.assertIsInstance(target, ast.Tuple)
+                self.assertEqual([ast.unparse(item) for item in target.elts],
+                                 ["accepted_trust", "accepted_expectation"])
+                self.assertEqual([ast.unparse(arg) for arg in snapshots[0].value.args], ["trust", "expectation"])
+                preflights = [node for node in ast.walk(wrapper) if isinstance(node, ast.Call)
+                    and ast.unparse(node.func) == "admission.validate_audit_initialization_intent"]
+                self.assertEqual(len(preflights), 1)
+                preflight = preflights[0]
+                self.assertLess(snapshots[0].lineno, preflight.lineno)
+                self.assertLess(preflight.lineno, reads[0].lineno)
+                for call in (preflight, consumers[0]):
+                    values = {item.arg: ast.unparse(item.value) for item in call.keywords}
+                    self.assertEqual(values["trust"], "accepted_trust")
+                    self.assertEqual(values["expectation"], "accepted_expectation")
+                    self.assertEqual(values["now_epoch_ns"], "now_epoch_ns")
+                self.assertEqual(read_arguments["expected_outbox_root"], "outbox")
+                self.assertEqual(read_arguments["expected_aggregate_root"], "aggregate")
+                self.assertEqual(read_arguments["initialized_at_epoch_ns"],
+                                 "accepted_expectation.initialized_at_epoch_ns")
+                owned_roots = [node for node in wrapper.body if isinstance(node, ast.Assign)
+                    and isinstance(node.value, ast.Call) and ast.unparse(node.value.func) == "_root"]
+                self.assertEqual([(ast.unparse(node.targets[0]),
+                    [ast.unparse(arg) for arg in node.value.args]) for node in owned_roots],
+                    [("outbox", ["expected_outbox_root", "capacity.OUTBOX_TABLE"]),
+                     ("aggregate", ["expected_aggregate_root", "capacity.AGGREGATE_TABLE"])])
+                self.assertTrue(all(node.lineno < preflight.lineno for node in owned_roots))
         stream = methods["_outbox_records"]
         cursors = [node for node in ast.walk(stream) if isinstance(node, ast.Call)
                    and ast.unparse(node.func) == "connection.cursor"]

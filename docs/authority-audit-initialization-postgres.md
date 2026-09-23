@@ -1,11 +1,49 @@
-# PostgreSQL audit initialization preparation reader
+# PostgreSQL audit initialization preparation and signed evidence
 
 Status: source implementation and read-only review only, unbuilt and unexecuted.
-`authority_audit_initialization_postgres.prepare_audit_capacity_initialization_from_postgres`
-now feeds actual PostgreSQL rows and persisted radix proofs into the real
-[initialization preparation](authority-audit-initialization.md). It is not a
-counter installer, current-root authority, signed checkpoint producer or
-one-use decision consumer. The result still has `installationPermitted: false`.
+`authority_audit_initialization_postgres` feeds actual PostgreSQL rows and
+persisted radix proofs into the real
+[initialization preparation](authority-audit-initialization.md) and optionally
+the [signed evidence consumer](authority-audit-initialization-evidence.md).
+`prepare_audit_capacity_initialization_from_postgres` returns the preparation;
+`verify_audit_initialization_evidence_from_postgres` also verifies the pinned
+checkpoint and authorization signatures against that actual preparation.
+Neither is a counter installer, current-root authority, signed checkpoint
+producer or one-use decision consumer. Both results retain
+`installationPermitted: false`.
+
+## Signed admission before and after database reads
+
+The signed entry point accepts the connection, exact checkpoint/authorization
+bytes, explicit trust and expectation contexts, `now_epoch_ns`, both expected
+root descriptors, read limits and namespace. It owns revalidated copies of the
+contexts, including nested signer pins, and both roots before preflight. Caller
+mutation cannot rebind those retained inputs during database work.
+
+`validate_audit_initialization_intent` verifies both actual signatures, closed
+payloads, all expected bindings, supplied time, checkpoint roots/key contracts,
+authorization linkage and commitment-digest syntax before any SQL. It returns
+`None`, not a verification token. In particular, authentic but false preparation,
+counter-row or after-root commitments can pass preflight and must still fail
+the full consumer. The input-copy helper likewise validates representation
+only, not signatures or permission.
+
+After preflight, the same private reader used by preparation-only calls locks
+and checks the actual snapshot. It passes its owned database-checked roots,
+actual absence proof and actual complete outbox stream to
+`verify_audit_initialization_evidence`. That full consumer repeats signatures
+and bindings, recomputes the preparation and compares every signed commitment.
+No preconstructed evidence or preparation substitutes for this call, no
+preflight result is cached, and the public APIs expose no custom consumer.
+
+The immutable returned evidence retains the original signed bytes and actual
+preparation. Signature/admission errors propagate as
+`AuditInitializationAdmissionError`; reader/session/budget errors retain their
+existing adapter boundary and SQL/serialization errors propagate. Own cursors
+close on success or failure. Exact retries remain repeatable: this consumes no
+nonce or ancestry. The explicit `now_epoch_ns` is used in both signature passes;
+the local monotonic deadline is not a trusted clock or a fresh commit-time
+authority check.
 
 ## Transaction and trust boundary
 
@@ -63,7 +101,9 @@ aggregate rows may exist and remain unchanged.
 The pure preparation still reconstructs the complete outbox root, calculates
 the exact compact 17-field initial counter and its prospective root transition,
 and returns immutable canonical bytes. The adapter performs no INSERT, no
-manual after-root assignment, no nonce consumption and no signature admission.
+manual after-root assignment and no nonce consumption. The preparation-only
+entry point admits no signatures; the signed entry point adds the full consumer
+without replacing the actual database proof path.
 Matching database counts does not remove the independent aggregate-cardinality
 and currentness requirements.
 
@@ -84,8 +124,9 @@ CLOSE commands are unconditional and excluded from the read-command budget.
 The empty successful path costs 146 command units under this exact source.
 
 The total-byte budget charges canonical returned SQL data, composed row/proof
-records and the final preparation; material encountered at more than one step
-is charged again. This is a bounded accounting policy, not wire-byte telemetry
+records and the final result: preparation or complete signed evidence, including
+its envelopes. Material encountered at more than one step is charged again.
+This is a bounded accounting policy, not wire-byte telemetry
 or peak RSS. Per-record acceptance additionally checks canonical full rows and
 composed proofs. The shared proof reader's key-JSON transport ceiling remains
 64 MiB even when a job requests a smaller record-acceptance cap; digest/path
@@ -96,8 +137,10 @@ sentinels through SQL CASE, never WHERE-filtered omissions or truncated data.
 Full-row size evaluation, key sorting and detoasting still perform work inside
 PostgreSQL. Named fetches do not themselves bound the server's sort memory or
 temporary storage. The total deadline is checked around commands, returned
-data, proof work and final preparation; it is not a preemptive interruption of
-Python work or a stuck driver/server/transport. The job owner must enforce a
+data, proof work and final result. Both public wrappers start elapsed accounting
+at entry, so initial signed preflight time is included and is checked before
+the first SQL command. This is not a preemptive interruption of Python work or
+a stuck driver/server/transport. The job owner must enforce a
 watchdog and database/process CPU, memory and spill/storage limits. The reader
 does not raise any online row or proof budget.
 
@@ -109,16 +152,23 @@ uses real production DDL, shared tree functions and triggers, actual stored
 proofs and independent row/tree/preparation oracles. It covers mixed/Unicode and
 empty/history populations, preserved other aggregates, inconsistent base/leaf
 state, corruption, existing counter, session/resource boundaries, and caller
-transaction ownership. Its separate source check does not execute the guarded
-authority service or claim a successful production launch.
+transaction ownership. Signed integration controls use real deterministic test
+keys, independently constructed expected preparations and actual stored proofs.
+They cover pre-SQL rejection, authentic false commitments, repeatability, final
+evidence accounting and caller-owned transactions. A deterministic caller-input
+mutation at the first real SQL result checks the owned-context boundary; it is
+not a thread-concurrency test. Any accounting observer
+delegates to the real budget method without replacing its results or guards;
+it is not a peak-memory or watchdog test. The separate source check does not
+execute the guarded authority service or claim a successful production launch.
 
 Nothing has run. The new native file remains in the external-engine inventory;
 as a newly changed excluded native test it blocks preparation until explicitly
 covered, not a passing exclusion. All `goal.md` frozen-source, controller,
 dependency, cleanroom and sequential no-build prerequisites remain unchanged.
 
-This reader closes the real database-to-preparation path only. Joining it to
-purpose-specific signature verification, independently enrolled decision
-storage, all-writer exclusion and atomic row/tree/materialization receipt
-installation remains required. No new external backend was selected or
-provisioned. See the [independent decision requirements](authority-audit-initialization-decision.md).
+This reader closes the real database-to-preparation and pinned-signature
+admission paths only. Independently enrolled decision storage, all-writer
+exclusion and atomic row/tree/materialization receipt installation remain
+required. No new external backend was selected or provisioned. See the
+[independent decision requirements](authority-audit-initialization-decision.md).

@@ -3,6 +3,8 @@
 Status: protocol requirements, not an implemented service or admitted wire
 contract. The [signed consumer](authority-audit-initialization-evidence.md)
 authenticates an exact calculation but consumes no initialization entitlement.
+The [PostgreSQL reader](authority-audit-initialization-postgres.md) now connects
+that consumer to actual snapshot rows/proofs, still without installing anything.
 The [local journal repair](authority-witness-journal-durability.md) supplies no
 independent rollback authority. Production counter installation remains disabled.
 
@@ -86,7 +88,8 @@ an opportunity to derive a new initial counter.
 
 These requirements still need the actual service/enrollment/transport producer,
 independent head backend, signed decision and materialization admission,
-purpose-specific database receipt schema/ACL/migration closure, proof-stream
-adapter and installer integration, plus concurrency/crash/lost-ack coverage.
+purpose-specific database receipt schema/ACL/migration closure, actual writer
+fence/schema admission and integration of the proof-stream reader with the
+installer, plus concurrency/crash/lost-ack coverage.
 No current class, self-digest, local journal or component fixture fills those
 roles. Global aggregate online INSERT and initializer activation remain disabled.

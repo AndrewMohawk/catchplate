@@ -15,6 +15,12 @@ and expected facts, an explicit nanosecond verification time, both primary-root
 descriptors, the complete outbox proof stream and exact aggregate-key absence.
 It accepts no preconstructed preparation or inventory observation as proof.
 
+The [PostgreSQL reader](authority-audit-initialization-postgres.md) now supplies
+the real snapshot rows and persisted proofs to this consumer. Its signed entry
+point owns the expected inputs, rejects invalid signed intent before SQL, and
+then invokes this full verifier again on the actual stream. This joins signed
+admission to database preparation; it does not install or consume authority.
+
 `AuditInitializationTrust` supplies separate Ed25519 SPKI pins for checkpoint
 and authorization. Each pin binds its role, authority identity, measurement
 and attestation-receipt digest. The keys and authority identity digests must
@@ -93,6 +99,9 @@ are canonical unpadded base64url encodings of exactly 64 bytes. The raw byte cap
 bounds parsing input; graph bounds are checked on the parsed owned document.
 
 The consumer snapshots and revalidates trust, expected facts and both roots.
+The public `snapshot_audit_initialization_context` helper returns independently
+owned and representation-validated trust/expectation copies, including both
+nested signer pins. Those copies convey no signature verification or authority.
 Before touching the outbox iterator it verifies both actual signatures, closes
 both payload schemas, compares every expected binding and the exact checkpoint
 root/key contract, and links authorization to the original signed checkpoint.
@@ -100,6 +109,12 @@ Canonical-byte comparison prevents Python boolean/integer equality aliases.
 For each envelope, trust-start <= issued <= now < expires <= trust-end and
 expires - issued <= maximum lifetime. Authorization cannot precede checkpoint
 issuance or outlive it. There is no ambient clock.
+
+`validate_audit_initialization_intent` exposes those same initial checks without
+accepting an iterator or absence proof. Success returns `None`, caches nothing
+and is deliberately insufficient to admit the signed preparation commitments.
+Both entry points share the check implementation; the full verifier still
+performs its own check on every call and always follows it with preparation.
 
 It then calls the real initialization preparation on the supplied stream and
 absence proof, and joins the returned digest, full-row digest and after roots

@@ -341,6 +341,16 @@ class InitializationAdmissionTests(unittest.TestCase):
             self.checkpoint if checkpoint is None else checkpoint,
             self.authorization if authorization is None else authorization, **arguments)
 
+    def preflight(self, checkpoint=None, authorization=None, **changes):
+        arguments = {
+            "trust": self.trust, "expectation": self.expectation, "now_epoch_ns": self.now,
+            "outbox_root": self.outbox.root, "aggregate_root": self.aggregate.root,
+        }
+        arguments.update(changes)
+        return admission.validate_audit_initialization_intent(
+            self.checkpoint if checkpoint is None else checkpoint,
+            self.authorization if authorization is None else authorization, **arguments)
+
     def reject_before_stream(self, checkpoint=None, authorization=None, **changes):
         def records():
             raise AssertionError("envelope admission must precede outbox iteration")
@@ -372,6 +382,66 @@ class InitializationAdmissionTests(unittest.TestCase):
         self.assertEqual(evidence.checkpoint_bytes, self.checkpoint)
         self.assertEqual(evidence.authorization_bytes, self.authorization)
         self.assertEqual(evidence.verified_at_epoch_ns, self.now)
+
+    def test_intent_preflight_returns_none_and_preserves_full_evidence_bytes(self):
+        expected = self.verify().canonical_bytes
+        for now in (20_000_000_000, self.now, 99_999_999_999):
+            with self.subTest(now=now):
+                self.assertIsNone(self.preflight(now_epoch_ns=now))
+        self.assertIsNone(self.preflight())
+        self.assertEqual(self.verify().canonical_bytes, expected)
+
+    def test_intent_preflight_checks_both_real_signatures_without_caching_success(self):
+        self.assertIsNone(self.preflight())
+        for role in ROLES:
+            other_role = "authorization" if role == "checkpoint" else "checkpoint"
+            payload = json.loads(self.checkpoint if role == "checkpoint" else self.authorization)["payload"]
+            changed = self.signing.sign(role, payload, key=self.signing.keys[other_role])
+            pair = (changed, self.authorization) if role == "checkpoint" else (self.checkpoint, changed)
+            with self.subTest(role=role):
+                with self.assertRaisesRegex(admission.AuditInitializationAdmissionError,
+                                            "^audit initialization signed evidence is invalid$"):
+                    self.preflight(*pair)
+                # A previously valid preflight cannot replace the full
+                # verifier's own signature checks or open its proof iterator.
+                self.reject_before_stream(*pair)
+
+    def test_intent_preflight_rechecks_explicit_time_binding_and_root_inputs(self):
+        cases = (
+            ({"now_epoch_ns": 19_999_999_999}, "audit initialization envelope is outside its validity interval"),
+            ({"now_epoch_ns": 100_000_000_000}, "audit initialization envelope is outside its validity interval"),
+            ({"now_epoch_ns": True}, "audit initialization integer is outside its exact bound"),
+            ({"expectation": replace(self.expectation, nonce_digest=label_digest("other-intent"))},
+             "audit initialization payload fields or bindings differ"),
+            ({"trust": replace(self.trust, policy_digest=label_digest("other-policy"))},
+             "audit initialization payload fields or bindings differ"),
+            ({"outbox_root": replace(self.outbox.root, root_revision=self.outbox.root.root_revision + 1)},
+             "audit initialization checkpoint or authorization linkage differs"),
+            ({"aggregate_root": self.outbox.root}, "audit initialization root has the wrong table"),
+        )
+        for changes, message in cases:
+            with self.subTest(argument=next(iter(changes))):
+                with self.assertRaises(admission.AuditInitializationAdmissionError) as raised:
+                    self.preflight(**changes)
+                self.assertEqual(str(raised.exception), message)
+
+    def test_intent_preflight_preserves_closed_payload_and_digest_syntax_guards(self):
+        for role in ROLES:
+            baseline = self.checkpoint_payload if role == "checkpoint" else self.authorization_payload
+            for changed in ({**baseline, "extra": None},
+                            {key: value for key, value in baseline.items() if key != "sourceRevision"}):
+                with self.subTest(role=role, fields=tuple(changed)), self.assertRaisesRegex(
+                    admission.AuditInitializationAdmissionError,
+                    "^audit initialization payload fields or bindings differ$",
+                ):
+                    self.preflight(*self.signed_pair(**{role + "_payload": changed}))
+        for field in ("preparationDigest", "counterRowDigest"):
+            changed = {**self.authorization_payload, field: "not-a-digest"}
+            with self.subTest(field=field), self.assertRaisesRegex(
+                admission.AuditInitializationAdmissionError,
+                "^audit initialization expected digest is invalid$",
+            ):
+                self.preflight(*self.signed_pair(authorization_payload=changed))
 
     def test_each_role_signature_failure_and_cross_role_bytes_precede_stream(self):
         for role in ROLES:
@@ -426,6 +496,37 @@ class InitializationAdmissionTests(unittest.TestCase):
         checkpoint, authorization = self.payloads()
         accepted = self.verify(*self.signed_pair(checkpoint_payload=checkpoint, authorization_payload=authorization))
         self.assertEqual(accepted.json_projection()["checkpoint"]["payload"]["binding"]["checkpointSequence"], 2)
+
+    def test_public_context_snapshot_owns_nested_pins_without_verifying_authority(self):
+        # Representation/ownership only: this API consumes no signed envelope.
+        caller_trust, caller_expectation = copy.deepcopy(self.trust), replace(self.expectation)
+        snapshots = admission.snapshot_audit_initialization_context(caller_trust, caller_expectation)
+        self.assertIs(type(snapshots), tuple)
+        self.assertEqual(snapshots, (self.trust, self.expectation))
+        owned_trust, owned_expectation = snapshots
+        for original, owned in ((caller_trust, owned_trust), (caller_expectation, owned_expectation),
+                (caller_trust.checkpoint_signer, owned_trust.checkpoint_signer),
+                (caller_trust.authorization_signer, owned_trust.authorization_signer)):
+            self.assertIsNot(original, owned)
+            self.assertIs(type(owned), type(original))
+        for target, field in ((caller_trust, "policy_digest"), (caller_expectation, "nonce_digest"),
+                (caller_trust.checkpoint_signer, "measurement_digest"),
+                (caller_trust.authorization_signer, "attestation_receipt_digest")):
+            changed = label_digest("changed-caller-" + field)
+            object.__setattr__(target, field, changed)
+            self.assertEqual(getattr(target, field), changed)
+        self.assertEqual(snapshots, (self.trust, self.expectation))
+        self.assertNotEqual(caller_trust, owned_trust)
+        self.assertNotEqual(caller_expectation, owned_expectation)
+        invalid = (
+            (bypassed_dataclass(self.trust, maximum_lifetime_ns=True), self.expectation),
+            (self.trust, bypassed_dataclass(self.expectation, checkpoint_sequence=True)),
+            (bypassed_dataclass(self.trust, checkpoint_signer=bypassed_dataclass(
+                self.trust.checkpoint_signer, measurement_digest=None)), self.expectation),
+        )
+        for index, (trust, expectation) in enumerate(invalid):
+            with self.subTest(case=index), self.assertRaises(admission.AuditInitializationAdmissionError):
+                admission.snapshot_audit_initialization_context(trust, expectation)
 
     def test_context_and_root_snapshots_revalidate_incomplete_or_bypassed_dataclasses(self):
         cases = []
@@ -576,8 +677,15 @@ class InitializationAdmissionTests(unittest.TestCase):
                 for record in self.records:
                     consumed.append(record["selectedRow"]["key"]["id"])
                     yield record
-            with self.subTest(changed=changed), self.assertRaises(admission.AuditInitializationAdmissionError):
-                self.verify(*self.signed_pair(authorization_payload=changed), outbox_records=records())
+            pair = self.signed_pair(authorization_payload=changed)
+            # Genuine signatures on false preparation commitments pass only
+            # intent syntax/binding checks, never the complete verifier.
+            self.assertIsNone(self.preflight(*pair))
+            with self.subTest(changed=changed), self.assertRaisesRegex(
+                admission.AuditInitializationAdmissionError,
+                "^audit initialization authorization differs from recomputation$",
+            ):
+                self.verify(*pair, outbox_records=records())
             self.assertEqual(len(consumed), 3)
 
     def test_changed_missing_outbox_and_forged_preparation_cannot_replace_proof_stream(self):

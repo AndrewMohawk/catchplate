@@ -155,9 +155,15 @@ class AuditInitializationExpectation:
         return {wire: getattr(self, field) for field, wire in _DIGEST_BINDINGS + _OTHER_BINDINGS}
 
 
-def _context_snapshots(
+def snapshot_audit_initialization_context(
     trust: AuditInitializationTrust, expectation: AuditInitializationExpectation,
 ) -> tuple[AuditInitializationTrust, AuditInitializationExpectation]:
+    """Return validated owned input copies, never verification tokens.
+
+    This checks representation and owns nested signer pins. It does not check
+    signatures, roots, currentness or authorization. Both signed verification
+    stages must still validate the original envelope bytes independently.
+    """
     if type(trust) is not AuditInitializationTrust or type(expectation) is not AuditInitializationExpectation:
         raise AuditInitializationAdmissionError("audit initialization context has the wrong type")
     try:
@@ -264,21 +270,14 @@ class AuditInitializationEvidence:
         return core.framed_digest(SCHEMA, self.canonical_bytes)
 
 
-def verify_audit_initialization_evidence(
+def _validated_intent(
     checkpoint_bytes: bytes, authorization_bytes: bytes, *,
     trust: AuditInitializationTrust, expectation: AuditInitializationExpectation,
     now_epoch_ns: int, outbox_root: PrimaryRoot,
-    outbox_records: Iterable[dict[str, Any]], aggregate_root: PrimaryRoot,
-    aggregate_absence: dict[str, Any],
-) -> AuditInitializationEvidence:
-    """Verify pinned issuer claims and recompute the actual proof stream.
-
-    Time is checked only at the supplied instant. The offline job owner must
-    enforce deadlines/resource bounds and recheck live authority at actual
-    commit. Repeating these inputs is allowed: no nonce or ancestry is consumed.
-    Valid signatures do not turn a false checkpoint claim into physical truth.
-    """
-    accepted_trust, accepted_expectation = _context_snapshots(trust, expectation)
+    aggregate_root: PrimaryRoot,
+) -> tuple[AuditInitializationExpectation, PrimaryRoot, PrimaryRoot, dict[str, Any]]:
+    """Own and check signed inputs; returned internals are not admission tokens."""
+    accepted_trust, accepted_expectation = snapshot_audit_initialization_context(trust, expectation)
     _integer(now_epoch_ns)
     outbox_before = _root_snapshot(outbox_root, capacity.OUTBOX_TABLE)
     aggregate_before = _root_snapshot(aggregate_root, capacity.AGGREGATE_TABLE)
@@ -309,6 +308,45 @@ def verify_audit_initialization_evidence(
         raise AuditInitializationAdmissionError("audit initialization checkpoint or authorization linkage differs")
     for field in ("preparationDigest", "counterRowDigest"):
         _digest(authorization[field])
+    return accepted_expectation, outbox_before, aggregate_before, authorization
+
+
+def validate_audit_initialization_intent(
+    checkpoint_bytes: bytes, authorization_bytes: bytes, *,
+    trust: AuditInitializationTrust, expectation: AuditInitializationExpectation,
+    now_epoch_ns: int, outbox_root: PrimaryRoot, aggregate_root: PrimaryRoot,
+) -> None:
+    """Reject invalid signed intent without reading or preparing any inventory.
+
+    Success returns no verification token. It authenticates the existing closed
+    claims and supplied root/time bindings, not their physical truth or the
+    claimed preparation, row and after-root commitments. The full evidence
+    verifier must run again over actual proofs; no result is cached or consumed.
+    """
+    _validated_intent(
+        checkpoint_bytes, authorization_bytes, trust=trust, expectation=expectation,
+        now_epoch_ns=now_epoch_ns, outbox_root=outbox_root, aggregate_root=aggregate_root,
+    )
+
+
+def verify_audit_initialization_evidence(
+    checkpoint_bytes: bytes, authorization_bytes: bytes, *,
+    trust: AuditInitializationTrust, expectation: AuditInitializationExpectation,
+    now_epoch_ns: int, outbox_root: PrimaryRoot,
+    outbox_records: Iterable[dict[str, Any]], aggregate_root: PrimaryRoot,
+    aggregate_absence: dict[str, Any],
+) -> AuditInitializationEvidence:
+    """Verify pinned issuer claims and recompute the actual proof stream.
+
+    Time is checked only at the supplied instant. The offline job owner must
+    enforce deadlines/resource bounds and recheck live authority at actual
+    commit. Repeating these inputs is allowed: no nonce or ancestry is consumed.
+    Valid signatures do not turn a false checkpoint claim into physical truth.
+    """
+    accepted_expectation, outbox_before, aggregate_before, authorization = _validated_intent(
+        checkpoint_bytes, authorization_bytes, trust=trust, expectation=expectation,
+        now_epoch_ns=now_epoch_ns, outbox_root=outbox_root, aggregate_root=aggregate_root,
+    )
     # The complete inventory and absence proof are always verified here. No
     # caller-constructed observation/preparation/Verified dataclass is accepted.
     try:

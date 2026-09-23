@@ -62,6 +62,24 @@ counters remain integer-only. A checksum supplies no independent authentication:
 this metadata and any embedded host-readiness context remain readiness-only,
 never final release or action authority.
 
+## Streaming authorization commitments
+
+A public streaming proof carries an operation-context digest, not the full
+authorization-binding preimage retained inside custody. Do not pass that
+projection to the full-binding validator or hash it as though it were the full
+binding. The streaming consumer checks the independently expected context
+digest and exact public commitment, then uses the explicit signed custody
+envelope to bind the consumption identity and exact control-plane receipt.
+
+The envelope must carry the actual statement, digest and signature under the
+independently pinned, attested response key. Custody checks the full binding and
+reconstructs its projection before signing. The public consumer still verifies
+the control-plane receipt signature, request/response bindings, JIT and quota
+claims, and proof-role key separation. Full-binding and custody-envelope inputs
+are distinct trust paths; supplying both is rejected. None of this establishes
+production custody or independent attestation merely because a local signed
+fixture verifies.
+
 ## Provider media and operation-field contracts
 
 `Content-Type` is a reserved, separately checked request field, not a configurable

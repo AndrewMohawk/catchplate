@@ -9860,9 +9860,9 @@ def verify_control_plane_authorization_receipt(
             f"{label} v1 request cannot carry a durable authorization binding",
         )
     elif request_version == RELEASE_AUTHORIZATION_DISPATCH_V2:
-        # Buffered and observation proofs intentionally keep the full durable
-        # binding preimage inside custody. Their callers set the explicit marker
-        # only after verifying the custody-signed envelope that binds this receipt.
+        # Buffered, streaming, and observation proofs keep the full durable
+        # binding preimage inside custody. The explicit envelope mode above
+        # verifies custody's actual signed statement and exact embedded receipt.
         require(
             trusted_durable_binding is not None
             or custody_authorization_binding is not None,
@@ -11587,7 +11587,17 @@ def verify_production_streaming_proxy_response_proof(
         expected_provenance_digest=expected_release_digest,
         expected_image_signatures_digest=expected_image_signatures_digest,
         expected_source_tree_digest=expected_source_tree_digest,
-        expected_authorization_binding=authorization_binding,
+        # The public streaming commitment contains a context digest, not the
+        # full private binding. Authenticate custody's actual signed statement
+        # and exact embedded receipt instead of treating that projection as a
+        # full binding preimage. The independently expected context digest was
+        # checked above by verify_streaming_authorization_binding.
+        custody_authorization_envelope={
+            "statement": statement,
+            "statement_sha256": statement_digest,
+            "signature": server_signature,
+        },
+        expected_custody_signing_key_id=expected_response_signing_key_id,
     )
     verify_route_authorization_evidence(
         matched_route,

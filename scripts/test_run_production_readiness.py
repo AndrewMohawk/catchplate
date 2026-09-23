@@ -110,6 +110,7 @@ def verify_readiness_observation_body_revalidation(
     collected_bytes = collector_args.collected_proxy_observation_body_bytes
     if collected_digest is None or collected_bytes != 4:
         raise AssertionError("observation collector fixture did not retain its body measurement")
+    collector_inputs = vars(collector_args).copy()
 
     original_bootstrap_validator = (
         run_production_readiness.validate_bootstrap_receipt_summary
@@ -140,6 +141,18 @@ def verify_readiness_observation_body_revalidation(
                 proof_path, generation
             )
             generated_at = int(time.time())
+            # The collector is not a persisted-proof verifier context. Keep
+            # its retained inputs unchanged and select the reader's mode and
+            # per-invocation freshness context explicitly. This fixture proves
+            # rejection prefixes, not a complete valid readiness receipt.
+            expected_readiness = SimpleNamespace(
+                **{
+                    **collector_inputs,
+                    "verification_mode": "readiness",
+                    "runner_started_at_unix": generated_at,
+                    "pre_run_completion_proof_state": {"exists": False},
+                }
+            )
             manual_nonce_assurance = {
                 "apiVersion": (
                     run_production_readiness.NONCE_ROLLBACK_ASSURANCE_BINDING_API_VERSION
@@ -346,6 +359,33 @@ def verify_readiness_observation_body_revalidation(
                     "readiness consumer accepted pretty-printed proof bytes"
                 )
             if label == "changed":
+                for mode_label, invalid_mode in (
+                    ("missing", None),
+                    ("final", "final"),
+                    ("unknown", "unknown"),
+                ):
+                    invalid_expected = SimpleNamespace(
+                        **vars(expected_readiness)
+                    )
+                    if mode_label == "missing":
+                        del invalid_expected.verification_mode
+                    else:
+                        invalid_expected.verification_mode = invalid_mode
+                    try:
+                        run_production_readiness.verify_completion_output(
+                            proof_path, invalid_expected
+                        )
+                    except ValueError as exc:
+                        if str(exc) != (
+                            "completionProof/v6 cannot satisfy a final-mode "
+                            "readiness runner"
+                        ):
+                            raise
+                    else:
+                        raise AssertionError(
+                            "readiness consumer accepted an expected context "
+                            f"with {mode_label} verification mode"
+                        )
                 boundary_proof = json.loads(json.dumps(proof))
                 boundary_proof_path = (
                     tmp / "readiness-observation-authority-boundary.json"
@@ -383,13 +423,9 @@ def verify_readiness_observation_body_revalidation(
                     encoding="ascii",
                 )
                 boundary_digest_path.chmod(0o600)
-                collector_args.runner_started_at_unix = generated_at
-                collector_args.pre_run_completion_proof_state = {
-                    "exists": False
-                }
                 try:
                     run_production_readiness.verify_completion_output(
-                        boundary_proof_path, collector_args
+                        boundary_proof_path, expected_readiness
                     )
                 except ValueError as exc:
                     if "readiness-only authority boundary" not in str(exc):
@@ -400,11 +436,9 @@ def verify_readiness_observation_body_revalidation(
                         "action authority"
                     )
             observation_body.write_bytes(mutated_body)
-            collector_args.runner_started_at_unix = generated_at
-            collector_args.pre_run_completion_proof_state = {"exists": False}
             try:
                 run_production_readiness.verify_completion_output(
-                    proof_path, collector_args
+                    proof_path, expected_readiness
                 )
             except ValueError as exc:
                 if expected_error not in str(exc):
@@ -433,6 +467,10 @@ def verify_readiness_observation_body_revalidation(
                 raise AssertionError(
                     "oversized observation mutation did not exercise fresh byte-count revalidation"
                 )
+        if vars(collector_args) != collector_inputs:
+            raise AssertionError(
+                "persisted-proof verification changed the collector inputs"
+            )
     finally:
         run_production_readiness.validate_bootstrap_receipt_summary = (
             original_bootstrap_validator

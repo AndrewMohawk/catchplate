@@ -5026,7 +5026,9 @@ def streaming_response_proof(
         "request_digest": PROXY_REQUEST_DIGEST,
         "operation_digest": PROXY_OPERATION_DIGEST,
         "operation_context_digest": PROXY_OPERATION_CONTEXT_DIGEST,
-        "require_jit_grant": True,
+        # proxy_response_proof supplies a non-JIT full binding and signed
+        # dispatch receipt with no grant/approval pair.
+        "require_jit_grant": False,
         "shared_quotas": [],
     }
     receipt_digest = sha256_prefixed_json(receipt)
@@ -8889,6 +8891,132 @@ def test_route_authorization_evidence_contract() -> None:
             raise AssertionError(f"route authorization accepted {description}")
 
 
+def test_streaming_receipt_authority_modes(
+    document: dict[str, Any],
+    provenance_digest: str,
+) -> None:
+    """Verify both explicit receipt trust modes with real fixture signatures."""
+    statement = document["streaming_response_statement"]
+    authority = statement["release_authority"]
+    receipt = statement["control_plane_authorization_receipt"]
+    custody_key_id = proxy_response_key_info()["key_id"]
+    envelope = {
+        "statement": clone_document(statement),
+        "statement_sha256": sha256_prefixed_json(statement),
+        "signature": clone_document(document["server_signature"]),
+    }
+    full_binding = release_authorization_binding_fixture(
+        receipt_version="v1",
+        attempt_id=authority["attempt_id"],
+        principal_id=PROXY_PRINCIPAL_ID,
+        route_id="demo.echo",
+        credential_id="cred-demo-bearer",
+        credential_version=7,
+        request_digest=PROXY_REQUEST_DIGEST,
+        operation_digest=PROXY_OPERATION_DIGEST,
+        operation_context=PROXY_OPERATION_CONTEXT,
+        require_jit_grant=False,
+    )
+    if sha256_prefixed_json(full_binding) != authority["consumption_identity_digest"]:
+        raise AssertionError("streaming fixture no longer matches its explicit full binding")
+
+    def verify_receipt(**trust_mode: Any) -> dict[str, Any]:
+        return verify_release_completion.verify_control_plane_authorization_receipt(
+            receipt,
+            trusted_public_key_pem=control_plane_response_signing_key_info()["public_key_pem"],
+            expected_trusted_public_key_id=control_plane_response_signing_key_info()["key_id"],
+            expected_release_authority=authority,
+            expected_principal_id=PROXY_PRINCIPAL_ID,
+            expected_route_id="demo.echo",
+            expected_runtime_manifest_digest=digest("7"),
+            expected_policy_digest=POLICY_DIGEST,
+            expected_provenance_digest=provenance_digest,
+            expected_image_signatures_digest=IMAGE_SIGNATURES_DIGEST,
+            expected_source_tree_digest=SOURCE_TREE_DIGEST,
+            **trust_mode,
+        )
+
+    full_summary = verify_receipt(expected_authorization_binding=full_binding)
+    custody_summary = verify_receipt(
+        custody_authorization_envelope=envelope,
+        expected_custody_signing_key_id=custody_key_id,
+    )
+    if (
+        full_summary["custody_authorization_envelope_verified"] is not False
+        or custody_summary["custody_authorization_envelope_verified"] is not True
+        or custody_summary["custody_authorization_statement_sha256"] != envelope["statement_sha256"]
+        or custody_summary["custody_authorization_signing_key_id"] != custody_key_id
+        or any(summary["canonical_signature_verified"] is not True for summary in (full_summary, custody_summary))
+        or full_summary["response_statement_sha256"] != custody_summary["response_statement_sha256"]
+    ):
+        raise AssertionError("explicit receipt trust modes did not verify the same real signed receipt")
+
+    def reject(label: str, expected_error: str, **trust_mode: Any) -> None:
+        try:
+            verify_receipt(**trust_mode)
+        except ValueError as exc:
+            if expected_error not in str(exc):
+                raise AssertionError(f"streaming receipt {label} failed for the wrong reason: {exc}") from exc
+        else:
+            raise AssertionError(f"streaming receipt accepted {label}")
+
+    reject("missing trust source", "requires an authenticated custody authorization binding")
+    reject(
+        "ambiguous trust sources", "authorization binding trust source is ambiguous",
+        expected_authorization_binding=full_binding,
+        custody_authorization_envelope=envelope,
+        expected_custody_signing_key_id=custody_key_id,
+    )
+    reject(
+        "projection as full binding", "trusted authorization binding fields do not match the contract",
+        expected_authorization_binding=statement["authorization_binding_validation"]["binding_commitment"],
+    )
+    reject(
+        "wrong independent custody pin", "custody authorization envelope response signer mismatch",
+        custody_authorization_envelope=envelope,
+        expected_custody_signing_key_id=proxy_vendor_verifier_key_info()["key_id"],
+    )
+    wrong_digest = clone_document(envelope)
+    wrong_digest["statement_sha256"] = digest("f")
+    reject(
+        "wrong statement digest", "custody authorization envelope statement digest mismatch",
+        custody_authorization_envelope=wrong_digest,
+        expected_custody_signing_key_id=custody_key_id,
+    )
+    stale_signature = clone_document(envelope)
+    stale_signature["statement"]["issued_at_unix"] += 1
+    stale_signature["statement_sha256"] = sha256_prefixed_json(stale_signature["statement"])
+    reject(
+        "stale statement signature", "custody authorization envelope statement signature verification failed",
+        custody_authorization_envelope=stale_signature,
+        expected_custody_signing_key_id=custody_key_id,
+    )
+    for label, expected_error in (
+        ("signed binding substitution", "custody authorization envelope authorization binding mismatch"),
+        ("signed receipt substitution", "custody authorization envelope receipt mismatch"),
+    ):
+        changed = clone_document(document)
+        changed_statement = changed["streaming_response_statement"]
+        if label == "signed binding substitution":
+            changed_statement["release_authority"]["consumption_identity_digest"] = digest("e")
+        else:
+            different = proxy_response_proof(
+                provenance_digest, now=statement["issued_at_unix"], attempt_id=digest("c")
+            )["server_statement"]["control_plane_authorization_receipt"]
+            changed_statement["control_plane_authorization_receipt"] = different
+            changed_statement["control_plane_authorization_receipt_sha256"] = sha256_prefixed_json(different)
+        resign_streaming_response_proof(changed)
+        reject(
+            label, expected_error,
+            custody_authorization_envelope={
+                "statement": changed_statement,
+                "statement_sha256": sha256_prefixed_json(changed_statement),
+                "signature": changed["server_signature"],
+            },
+            expected_custody_signing_key_id=custody_key_id,
+        )
+
+
 def test_streaming_proxy_response_proof_requirements(
     tmp: Path,
     provenance_digest: str,
@@ -8906,8 +9034,15 @@ def test_streaming_proxy_response_proof_requirements(
         or summary.get("emitted_body_bytes") != len(body)
         or summary.get("released_body_artifact_bound") is not True
         or summary.get("compiled_route_authority_verified") is not True
+        or summary.get("authorization_binding_commitment", {}).get("require_jit_grant") is not False
+        or summary.get("control_plane_authorization_receipt", {}).get("custody_authorization_envelope_verified") is not True
+        or summary.get("control_plane_authorization_receipt", {}).get("custody_authorization_statement_sha256")
+        != summary.get("streaming_response_statement_sha256")
+        or summary.get("control_plane_authorization_receipt", {}).get("custody_authorization_signing_key_id")
+        != proxy_response_key_info()["key_id"]
     ):
         raise AssertionError(f"streaming completion summary is incomplete: {summary}")
+    test_streaming_receipt_authority_modes(valid_document, provenance_digest)
 
     def reject_streaming(label: str, document: dict[str, Any], candidate_body: bytes, expected: str) -> None:
         try:
@@ -9034,6 +9169,7 @@ def test_streaming_proxy_response_proof_requirements(
             digest("e"),
             "operation_context_digest claim substitution",
         ),
+        ("require_jit_grant", True, "JIT commitment does not match release authority"),
     ):
         substituted = clone_document(valid_document)
         commitment = substituted["streaming_response_statement"][
@@ -9045,6 +9181,29 @@ def test_streaming_proxy_response_proof_requirements(
         ] = replacement
         resign_streaming_response_proof(substituted)
         reject_streaming(f"authorization binding {field}", substituted, body, expected_error)
+
+    # Fresh outer signatures must not turn a wrong or unauthenticated embedded
+    # control-plane receipt into valid streaming release authority.
+    for label, expected_error in (
+        ("other signed receipt", "control-plane authorization receipt release authority mismatch"),
+        ("invalid receipt signature", "control-plane authorization receipt signature verification failed"),
+    ):
+        substituted = clone_document(valid_document)
+        if label == "other signed receipt":
+            receipt = proxy_response_proof(
+                provenance_digest,
+                now=valid_document["streaming_response_statement"]["issued_at_unix"],
+                attempt_id=digest("c"),
+            )["server_statement"]["control_plane_authorization_receipt"]
+        else:
+            receipt = clone_document(substituted["streaming_response_statement"]["control_plane_authorization_receipt"])
+            receipt["response"]["signature"] = "ed25519:" + b64e(b"s" * 64)
+        receipt_digest = sha256_prefixed_json(receipt)
+        for target in (substituted["streaming_response_statement"], substituted["external_capture"]):
+            target["control_plane_authorization_receipt"] = clone_document(receipt)
+            target["control_plane_authorization_receipt_sha256"] = receipt_digest
+        resign_streaming_response_proof(substituted)
+        reject_streaming(label, substituted, body, expected_error)
 
     forged_claim = clone_document(valid_document)
     forged_claim["vendor_tee"]["trusted_verifier"]["statement"]["attested_claims"][

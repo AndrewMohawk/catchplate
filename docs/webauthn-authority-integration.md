@@ -39,6 +39,11 @@ cases, as well as the existing development exception. Prove the complete union
 of rejected index partitions/ranges; an operator-supplied address list is only
 a signed hint and cannot determine that union.
 
+The [explicit-context classifier](webauthn-credential-trust.md) now implements
+that shared decision in the live wrapper and captures one candidate policy for
+both publication impact passes. This is classification reuse, not a proof of
+the database population or admission of the aggregate authority transaction.
+
 Registration finalization must preserve global credential-ID nonreuse,
 including revoked history, and consume the exact unused, unexpired,
 user/label-bound registration challenge. OIDC first enrollment additionally

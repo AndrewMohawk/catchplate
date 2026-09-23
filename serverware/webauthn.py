@@ -24,6 +24,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from serverware import db
 from serverware import webauthn_attestation_core as attestation_core
+from serverware import webauthn_credential_trust as credential_trust_core
 from serverware.webauthn_attestation_core import (
     AT_FLAG,
     EC2_KTY,
@@ -1609,101 +1610,88 @@ def oidc_session_binding_options(
     }
 
 
+def credential_trust_context(
+    trust_roots: list[TrustRoot], *, development_enabled: bool | None = None
+) -> credential_trust_core.CredentialTrustContext:
+    """Capture classification policy, not certificate or root authority.
+
+    Copy only bounded primitive descriptors. A TrustRoot object and a context
+    are not evidence that its bundle was independently admitted or is current.
+    """
+    if development_enabled is None:
+        development_enabled = DEV_AUTHENTICATOR_ENABLED
+    try:
+        if type(trust_roots) is not list or len(trust_roots) > credential_trust_core.MAX_ROOTS:
+            raise credential_trust_core.CredentialTrustError("trust roots must be a bounded exact list")
+        roots: list[credential_trust_core.RootTrustPolicy] = []
+        input_bytes = 1  # Explicit development-policy boolean.
+        for root in trust_roots:
+            if type(root) is not TrustRoot:
+                raise credential_trust_core.CredentialTrustError("trust root descriptor has the wrong type")
+            if (type(root.aaguids) is not frozenset
+                    or len(root.aaguids) > credential_trust_core.MAX_ROOT_AAGUIDS):
+                raise credential_trust_core.CredentialTrustError("root AAGUIDs must be a bounded exact frozenset")
+            policy = credential_trust_core.RootTrustPolicy(
+                id=root.id,
+                certificate_sha256=root.certificate_sha256,
+                authenticator_class=root.authenticator_class,
+                aaguids=tuple(root.aaguids),
+                bundle_digest=root.bundle_digest,
+                bundle_sequence=root.bundle_sequence,
+            )
+            input_bytes += policy.input_size_bytes()
+            if input_bytes > credential_trust_core.MAX_INPUT_BYTES:
+                raise credential_trust_core.CredentialTrustError("credential trust policy exceeds the aggregate byte bound")
+            roots.append(policy)
+        return credential_trust_core.CredentialTrustContext(tuple(roots), development_enabled)
+    except (credential_trust_core.CredentialTrustError, AttributeError) as exc:
+        raise WebAuthnTrustError("invalid credential trust policy: " + str(exc)) from exc
+
+
 def credential_trust_status(
-    credential: dict[str, Any], *, trust_roots: list[TrustRoot] | None = None
+    credential: dict[str, Any],
+    *,
+    trust_roots: list[TrustRoot] | None = None,
+    trust_context: credential_trust_core.CredentialTrustContext | None = None,
 ) -> dict[str, Any]:
-    enrollment_trusted = bool(credential.get("attestation_trusted"))
-    stored_class = str(credential.get("authenticator_class") or "unknown")
-    if (
-        stored_class == "dev"
-        and DEV_AUTHENTICATOR_ENABLED
-        and credential.get("dev_private_key_pem")
-    ):
-        return {
-            "enrollment_trusted": enrollment_trusted,
-            "currently_trusted": enrollment_trusted,
-            "reason": "development_authenticator" if enrollment_trusted else "not_attested",
-            "effective_authenticator_class": "dev" if enrollment_trusted else "unknown",
-            "current_trust_bundle_digest": credential.get(
-                "attestation_trust_bundle_digest"
-            ),
-            "current_trust_bundle_sequence": credential.get(
-                "attestation_trust_bundle_sequence"
-            ),
-        }
-    if not enrollment_trusted:
-        return {
-            "enrollment_trusted": False,
-            "currently_trusted": False,
-            "reason": "not_attested",
-            "effective_authenticator_class": "unknown",
-            "current_trust_bundle_digest": None,
-            "current_trust_bundle_sequence": None,
-        }
-    root_digest = credential.get("attestation_root_sha256")
-    if not root_digest:
-        return {
-            "enrollment_trusted": True,
-            "currently_trusted": False,
-            "reason": "attestation_root_missing",
-            "effective_authenticator_class": "unknown",
-            "current_trust_bundle_digest": None,
-            "current_trust_bundle_sequence": None,
-        }
-    roots = _load_trust_roots_cached() if trust_roots is None else trust_roots
-    root = next(
-        (item for item in roots if item.certificate_sha256 == root_digest), None
-    )
-    if root is None:
-        return {
-            "enrollment_trusted": True,
-            "currently_trusted": False,
-            "reason": "trust_root_withdrawn",
-            "effective_authenticator_class": "unknown",
-            "current_trust_bundle_digest": None,
-            "current_trust_bundle_sequence": None,
-        }
-    aaguid = str(credential.get("aaguid") or "").lower()
-    if root.aaguids and aaguid not in {item.lower() for item in root.aaguids}:
-        return {
-            "enrollment_trusted": True,
-            "currently_trusted": False,
-            "reason": "aaguid_no_longer_trusted",
-            "effective_authenticator_class": "unknown",
-            "current_trust_bundle_digest": root.bundle_digest,
-            "current_trust_bundle_sequence": root.bundle_sequence,
-        }
-    if root.authenticator_class and root.authenticator_class != stored_class:
-        return {
-            "enrollment_trusted": True,
-            "currently_trusted": False,
-            "reason": "authenticator_class_changed",
-            "effective_authenticator_class": "unknown",
-            "current_trust_bundle_digest": root.bundle_digest,
-            "current_trust_bundle_sequence": root.bundle_sequence,
-        }
-    return {
-        "enrollment_trusted": True,
-        "currently_trusted": True,
-        "reason": "trusted_by_current_root",
-        "effective_authenticator_class": stored_class,
-        "current_trust_bundle_digest": root.bundle_digest,
-        "current_trust_bundle_sequence": root.bundle_sequence,
-        "current_trust_root_id": root.id,
-        "current_trust_root_sha256": root.certificate_sha256,
-    }
+    if trust_roots is not None and trust_context is not None:
+        raise WebAuthnTrustError("supply either trust roots or a captured trust context")
+    try:
+        facts = credential_trust_core.CredentialTrustFacts(
+            enrollment_trusted=bool(credential.get("attestation_trusted")),
+            authenticator_class=str(credential.get("authenticator_class") or "unknown"),
+            has_development_key=bool(credential.get("dev_private_key_pem")),
+            root_sha256=credential.get("attestation_root_sha256"),
+            aaguid=str(credential.get("aaguid") or ""),
+            enrolled_bundle_digest=credential.get("attestation_trust_bundle_digest"),
+            enrolled_bundle_sequence=credential.get("attestation_trust_bundle_sequence"),
+        )
+        if trust_context is None:
+            development_enabled = DEV_AUTHENTICATOR_ENABLED
+            roots = trust_roots
+            if roots is None:
+                roots = (_load_trust_roots_cached()
+                         if credential_trust_core.needs_current_roots(
+                             facts, development_enabled=development_enabled)
+                         else [])
+            trust_context = credential_trust_context(
+                roots, development_enabled=development_enabled)
+        return credential_trust_core.classify(facts, trust_context).as_dict()
+    except credential_trust_core.CredentialTrustError as exc:
+        raise WebAuthnTrustError("invalid credential trust facts or context: " + str(exc)) from exc
 
 
 def _credential_descriptors_for_policy(
     user_id: str, authn_policy: dict[str, Any]
 ) -> list[dict[str, Any]]:
     credentials = db.list_webauthn_credentials(user_id)
-    roots: list[TrustRoot] | None = None
+    development_enabled = DEV_AUTHENTICATOR_ENABLED
+    roots: list[TrustRoot] = []
     if any(
         item.get("attestation_trusted")
         and not (
             item.get("authenticator_class") == "dev"
-            and DEV_AUTHENTICATOR_ENABLED
+            and development_enabled
             and item.get("dev_private_key_pem")
         )
         for item in credentials
@@ -1712,10 +1700,15 @@ def _credential_descriptors_for_policy(
             roots = _load_trust_roots_cached()
         except WebAuthnTrustError:
             return []
+    try:
+        trust_context = credential_trust_context(
+            roots, development_enabled=development_enabled)
+    except WebAuthnTrustError:
+        return []
     eligible: list[dict[str, Any]] = []
     for item in credentials:
         try:
-            _allowed_authenticator(item, authn_policy, trust_roots=roots)
+            _allowed_authenticator(item, authn_policy, trust_context=trust_context)
         except WebAuthnError:
             continue
         eligible.append(_credential_descriptor(item))
@@ -1727,9 +1720,11 @@ def _allowed_authenticator(
     authn_policy: dict[str, Any],
     *,
     trust_roots: list[TrustRoot] | None = None,
+    trust_context: credential_trust_core.CredentialTrustContext | None = None,
 ) -> dict[str, Any]:
     try:
-        trust = credential_trust_status(credential, trust_roots=trust_roots)
+        trust = credential_trust_status(
+            credential, trust_roots=trust_roots, trust_context=trust_context)
     except WebAuthnTrustError as exc:
         raise WebAuthnError(f"WebAuthn attestation trust unavailable: {exc}") from exc
     allowed = set(authn_policy.get("allowedAuthenticatorClasses") or [])

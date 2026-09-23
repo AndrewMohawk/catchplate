@@ -241,6 +241,7 @@ from serverware.setup_receipts import (
 from serverware.webauthn import (
     WebAuthnError,
     authority_approval_options,
+    credential_trust_context,
     credential_trust_status,
     control_plane_mutation_options,
     create_dev_credential,
@@ -257,6 +258,7 @@ from serverware.webauthn import (
     verify_lost_active_key_revocation,
     verify_recovery_registration,
 )
+from serverware.webauthn_credential_trust import CredentialTrustContext
 from serverware.webauthn_trust import (
     WebAuthnTrustError,
     reconcile_trust_publications,
@@ -15104,11 +15106,19 @@ def _redacted_webauthn_credential(item: dict[str, Any]) -> dict[str, Any]:
 
 
 def _webauthn_trust_withdrawal_impact(
-    candidate_roots: list[Any],
+    candidate_roots: list[Any] | None = None,
+    *,
+    trust_context: CredentialTrustContext | None = None,
 ) -> list[dict[str, Any]]:
+    if candidate_roots is not None and trust_context is not None:
+        raise WebAuthnTrustError("supply either candidate roots or a captured trust context")
+    if trust_context is None:
+        if candidate_roots is None:
+            raise WebAuthnTrustError("candidate trust policy is required")
+        trust_context = credential_trust_context(candidate_roots)
     affected: list[dict[str, Any]] = []
     for item in db.list_webauthn_credentials():
-        after = credential_trust_status(item, trust_roots=candidate_roots)
+        after = credential_trust_status(item, trust_context=trust_context)
         if after.get("enrollment_trusted") and not after.get("currently_trusted"):
             affected.append(
                 {
@@ -15344,10 +15354,11 @@ def webauthn_trust_publish(
         candidate_roots = trust_roots_from_bundle(
             payload.bundle, update_state=False
         )
+        candidate_context = credential_trust_context(candidate_roots)
         current_status = webauthn_trust_status()
+        affected = _webauthn_trust_withdrawal_impact(trust_context=candidate_context)
     except WebAuthnTrustError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    affected = _webauthn_trust_withdrawal_impact(candidate_roots)
     action = "webauthn.trust.publish"
     mutation_payload = {
         "bundle_digest": candidate_info["digest"],
@@ -15399,7 +15410,10 @@ def webauthn_trust_publish(
                 status_code=409,
                 detail="WebAuthn trust state changed; review and approve the new transition",
             )
-        locked_affected = _webauthn_trust_withdrawal_impact(candidate_roots)
+        try:
+            locked_affected = _webauthn_trust_withdrawal_impact(trust_context=candidate_context)
+        except WebAuthnTrustError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         if sorted(item["credential_record_id"] for item in locked_affected) != mutation_payload[
             "withdrawn_credential_record_ids"
         ]:

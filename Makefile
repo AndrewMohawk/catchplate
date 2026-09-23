@@ -637,6 +637,9 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_authority_verifier_read_source.py \
 	scripts/test_authority_transition_registry.py \
 	scripts/test_webauthn_attestation_core.py \
+	scripts/test_webauthn_credential_trust.py \
+	scripts/test_webauthn_revoke_authorization.py \
+	scripts/test_webauthn_revoke_transition.py \
 	scripts/test_webauthn_trust_core.py \
 	scripts/test_webauthn_trust_installation.py \
 	scripts/test_control_plane_startup.py \

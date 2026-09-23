@@ -27,17 +27,31 @@ Every audit key is deterministic and requires an absent row. A used key or
 already-revoked credential is denied; transport replay belongs to the existing
 execution-envelope machinery, not a new business replay that rewrites audits.
 
-The 192 query-row, 136 mutation and 2048 work limits are unchanged. The admission
-budget conservatively reserves both assertion CAS writes even when they merge.
-No partial mutation plan is returned on overflow or a dependency failure.
-Per-list limits are not substituted for the total mutation limit.
+The business limits remain 192 query rows, 136 mutations and 2048 work units.
+The common planner separately reserves one global counter row/mutation and two
+framework work units: total ceilings are 193 / 137 / 2050, not extra business
+allowance. The candidate conservatively reserves both assertion CAS writes even
+when they merge. No partial mutation plan is returned on overflow or a dependency
+failure. Per-list limits are not substituted for the total mutation limit.
 
-Audit capacity uses complete bounded predicates for pending and claimed outbox
-rows and compares the actual count plus every proposed audit against the legacy
-100,000-row capacity. It does not use the inconsistent aggregate counter kinds
-found in other writers. An outbox larger than the remaining query budget denies
-the operation, even far below 100,000 rows. This deliberately narrower
-availability is not a claim of full legacy feature equivalence.
+Audit capacity uses the [shared global accounting contract](authority-global-audit-capacity-design.md).
+The candidate no longer scans pending/claimed outbox populations or counts
+selected outbox rows locally. Its only outbox queries are exact planned audit
+identities. `add_capacity_query` appends the source-owned global counter query;
+`finalize_capacity` validates the initialized compact row and derives one counter
+CAS from the complete actual outbox mutations before root derivation. The kernel
+never supplies that counter mutation or spends its framework budget. This also
+fixes the candidate's old query sizing, which consumed the new 193-row total
+before the framework could reserve its own row.
+
+Every invalidated approval still charges one fresh pending audit, plus the
+optional credential audit. A no-audit cascade still requires the valid selected
+counter baseline, but emits no counter write and may proceed at capacity.
+Missing, malformed or inconsistent counters fail closed; no zero bootstrap or
+local COUNT substitutes for them. The full outbox no longer needs to fit the
+candidate's business row budget. This does not establish independently admitted
+initialization, maintained population correctness, current roots, delivery, or
+full legacy feature equivalence. Those prerequisites remain mandatory.
 
 `authority_webauthn_assertion.py` authenticates the verifier's exact receipt with
 an independently configured Ed25519 public key and independently configured
@@ -67,7 +81,7 @@ malicious database. Merely declaring `ordered-exact-page` is not that proof.
 
 The source must not convert this assumption into an enabled signed operation.
 The next prerequisite is an authenticated predicate/secondary-index primitive
-that binds each cascade and outbox predicate, ordering, complete terminal range,
+that binds each cascade predicate, ordering, complete terminal range,
 source relation root/revision, returned rows and absence/overflow boundary. It
 must be maintained by every writer of each indexed relation and verified before
 mutation derivation. Existing `KernelContext.exact_page_receipt` describes an
@@ -91,7 +105,12 @@ Run the new authorization and transition fixture scripts sequentially in the
 prepared runtime. The authorization fixtures exercise real locally generated
 Ed25519 verifier signatures; they make no physical-authenticator claim. The
 transition fixtures use explicit selected-row/evidence projections to exercise
-pure business logic; they make no PostgreSQL or hostile-database proof claim.
+pure business logic. They now also compose the actual shared query, finalization,
+work and validation helpers using independently hashed synthetic compact counter
+rows. Exact full-capacity/overflow, one-versus-two audits, no-audit baseline,
+missing/malformed/stale-CAS state and business-budget controls do not prove the
+counter was authentically initialized or kept current. The tests make no
+PostgreSQL, real planner execution or hostile-database proof claim.
 Neither fixture replaces registry entries or creates fake successful startup.
 
 Before activation, additionally require authenticated completeness negative

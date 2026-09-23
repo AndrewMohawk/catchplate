@@ -4,6 +4,9 @@
 The evidence here is an explicit projection of a previously verified receipt.
 Real pinned-signature controls live in test_webauthn_revoke_authorization.py.
 No registry substitution or fake startup is used: this kernel stays inactive.
+The shared capacity composition is exercised with independently hashed synthetic
+counter rows, not authenticated initialization, maintained population or current
+root authority. No blocked planner import is needed to call its real helpers.
 """
 from __future__ import annotations
 
@@ -22,6 +25,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from serverware import authority_contract
+from serverware import authority_audit_capacity as capacity
 from serverware import authority_transition_core as core
 from serverware import authority_transition_policy as policy
 from serverware import authority_transition_webauthn as candidate
@@ -29,6 +33,62 @@ from serverware import authority_transition_webauthn as candidate
 
 def digest(value: bytes) -> str:
     return "sha256:" + hashlib.sha256(value).hexdigest()
+
+
+def canonical(value) -> bytes:
+    return json.dumps(value, ensure_ascii=True, allow_nan=False,
+                      sort_keys=True, separators=(",", ":")).encode("ascii")
+
+
+def framed(domain: str, *frames: bytes) -> str:
+    value = hashlib.sha256(domain.encode("ascii") + b"\0")
+    for frame in frames:
+        value.update(len(frame).to_bytes(8, "big"))
+        value.update(frame)
+    return "sha256:" + value.hexdigest()
+
+
+COUNTER_TABLE = "policy_authority_bounded_aggregate_states"
+COUNTER_KIND = "metadata-audit-outbox-global-capacity-v1"
+COUNTER_PARTITION = framed("serverware.metadataAuditOutboxCapacityPartition/v1", b"global")
+COUNTER_ID = COUNTER_KIND + ":" + COUNTER_PARTITION
+
+
+def counter_row(**changes) -> dict:
+    """Independent compact state/hash oracle; a constructed row has no authority."""
+    row = {
+        "aggregate_id": COUNTER_ID, "aggregate_kind": COUNTER_KIND,
+        "partition_digest": COUNTER_PARTITION, "revision": 7,
+        "live_count": 0, "active_count": 0, "capacity_limit": 100_000,
+        "reserved_units_json": "{}", "committed_units_json": "{}", "next_sequence": 19,
+        "minimum_expiry_epoch_ns": None,
+        "expiry_index_root_digest": framed("serverware.policyAuthorityAggregateExpiryIndex/v1", b"[]"),
+        "work_page_id": None, "updated_at_epoch_ns": 1_000_000_000,
+        "source_revision": authority_contract.SOURCE_REVISION, **changes,
+    }
+    state = {
+        "schema": "serverware.policyAuthorityAggregateState/v1",
+        "aggregateId": row["aggregate_id"], "aggregateKind": row["aggregate_kind"],
+        "partitionDigest": row["partition_digest"], "revision": row["revision"],
+        "liveCount": row["live_count"], "activeCount": row["active_count"],
+        "capacityLimit": row["capacity_limit"],
+        "reservedUnits": json.loads(row["reserved_units_json"]),
+        "committedUnits": json.loads(row["committed_units_json"]),
+        "nextSequence": row["next_sequence"], "minimumExpiryEpochNs": row["minimum_expiry_epoch_ns"],
+        "expiryIndexRootDigest": row["expiry_index_root_digest"], "workPageId": row["work_page_id"],
+    }
+    row["state_json"] = canonical(state).decode("ascii")
+    row["state_digest"] = framed("serverware.policyAuthorityAggregateState/v1", canonical(state))
+    return row
+
+
+def counter_selected(row: dict | None) -> dict:
+    key = {"aggregate_id": COUNTER_ID}
+    return {
+        "table": COUNTER_TABLE, "key": key,
+        "keyDigest": framed("serverware.policyAuthorityBusinessKey/v1", COUNTER_TABLE.encode("ascii"), canonical(key)),
+        "present": row is not None, "row": copy.deepcopy(row), "contractSelector": None,
+    }
 
 
 def selected(table: str, item_id: str, row: dict | None) -> dict:
@@ -154,6 +214,24 @@ class RevokeTransitionTests(unittest.TestCase):
     def mutation_rows(self, transition: core.KernelTransition) -> dict:
         return {(item["table"], item["key"]["id"]): item for item in transition.mutations}
 
+    def with_capacity(self, context: core.KernelContext, **changes) -> core.KernelContext:
+        return replace(context, selected_rows=(*context.selected_rows, counter_selected(counter_row(**changes))))
+
+    def composed(self, context: core.KernelContext):
+        # Actual common-planner helper order, not a replacement planner/registry.
+        queries = capacity.add_capacity_query(candidate.OPERATION, self.kernel.queries_with_evidence(
+            arguments=context.arguments, database_now=context.database_now,
+            request_digest=context.request_digest, evidence=context.verified_webauthn_evidence,
+        ))
+        business = self.kernel.transition(context)
+        mutations = capacity.finalize_capacity(context, business.mutations)
+        work = capacity.transition_work_units(candidate.OPERATION,
+            sum(query.work_units for query in queries), business.work_units, mutations)
+        capacity.validate_capacity_transition(operation=candidate.OPERATION,
+            selected_rows=context.selected_rows, mutations=mutations)
+        capacity.validate_transition_work_units(candidate.OPERATION, work, mutations)
+        return queries, business, mutations, work
+
     def test_all_cascades_and_merged_self_assertion_are_one_pure_plan(self) -> None:
         context = self.context()
         before = copy.deepcopy(context.selected_rows)
@@ -239,10 +317,16 @@ class RevokeTransitionTests(unittest.TestCase):
                 self.assertIsNone(query.page_size)
                 self.assertIsNone(query.continuation_token_digest)
                 self.assertNotIn("id", {item.column for item in query.predicates})
-        capacity = [query for query in queries if "audit_capacity_" in query.query_id]
-        self.assertEqual({predicate_values(query)[("status", "eq")] for query in capacity}, {"pending", "claimed"})
-        self.assertEqual(sum(query.maximum_rows for query in queries), 192)
-        self.assertLess(sum(query.maximum_rows for query in capacity), candidate.AUDIT_CAPACITY)
+        audit_queries = [query for query in queries if query.table == "metadata_audit_outbox"]
+        self.assertEqual(len(audit_queries), 2)
+        self.assertTrue(all(query.absent_key is not None and query.maximum_rows == 1 for query in audit_queries))
+        self.assertFalse(any("audit_capacity_" in query.query_id or query.table == COUNTER_TABLE for query in queries))
+        self.assertEqual(sum(query.maximum_rows for query in queries), 11)
+        composed_queries = capacity.add_capacity_query(candidate.OPERATION, queries)
+        self.assertEqual(composed_queries[:-1], queries)
+        self.assertEqual(composed_queries[-1].absent_key, {"aggregate_id": COUNTER_ID})
+        self.assertEqual(composed_queries[-1].maximum_rows, 1)
+        self.assertEqual(sum(query.maximum_rows for query in composed_queries), 12)
 
     def test_every_invalidated_approval_has_its_own_absent_key_audit(self) -> None:
         context = self.context()
@@ -326,6 +410,143 @@ class RevokeTransitionTests(unittest.TestCase):
         excess = tuple(selected("metadata_audit_outbox", f"unrelated-{number}", {"id": f"unrelated-{number}", "status": "audited"}) for number in range(193))
         with self.assertRaisesRegex(core.TransitionKernelError, "aggregate plan"):
             self.kernel.transition(replace(context, selected_rows=context.selected_rows + excess))
+
+    def test_shared_capacity_two_audits_fill_exact_limit_with_one_independent_counter_cas(self) -> None:
+        context = self.with_capacity(self.context(), live_count=99_998, active_count=99_998)
+        before = copy.deepcopy((context.arguments, context.selected_rows, context.verified_webauthn_evidence))
+        queries, business, mutations, work = self.composed(context)
+        self.assertEqual((len(business.mutations), len(mutations), len(queries), work), (9, 10, 10, 68))
+        self.assertTrue(all(item["table"] != COUNTER_TABLE for item in business.mutations))
+        counter = mutations[-1]
+        self.assertEqual((counter["table"], counter["key"], counter["operation"]),
+                         (COUNTER_TABLE, {"aggregate_id": COUNTER_ID}, "UPDATE"))
+        self.assertEqual(counter["expectedRow"], counter_row(live_count=99_998, active_count=99_998))
+        elapsed = self.now - datetime(1970, 1, 1, tzinfo=timezone.utc)
+        now_ns = (elapsed.days * 86400 + elapsed.seconds) * 1_000_000_000
+        self.assertEqual(counter["row"], counter_row(revision=8, live_count=100_000,
+            active_count=100_000, next_sequence=21, updated_at_epoch_ns=now_ns))
+        self.assertEqual(sum(item["table"] == "metadata_audit_outbox" for item in mutations), 2)
+        self.assertEqual((context.arguments, context.selected_rows, context.verified_webauthn_evidence), before)
+
+    def test_shared_capacity_overflow_denies_complete_batch_without_changing_inputs(self) -> None:
+        for outstanding in (99_999, 100_000):
+            with self.subTest(outstanding=outstanding):
+                context = self.with_capacity(self.context(), live_count=outstanding, active_count=outstanding)
+                before = copy.deepcopy(context.selected_rows)
+                business = self.kernel.transition(context)
+                self.assertEqual(sum(item["table"] == "metadata_audit_outbox" for item in business.mutations), 2)
+                with self.assertRaisesRegex(capacity.AuditCapacityError, "transition exceeds"):
+                    self.composed(context)
+                self.assertEqual(context.selected_rows, before)
+
+    def test_shared_capacity_optional_audit_absence_does_not_remove_per_approval_charge(self) -> None:
+        context = self.context()
+        omitted = candidate.audit_id(candidate.OPERATION, self.request_digest, None)
+        context = replace(context, arguments=self.arguments({**self.values, "audit_event": None}),
+            selected_rows=tuple(item for item in context.selected_rows
+                if not (item["table"] == "metadata_audit_outbox" and item["key"] == {"id": omitted})))
+        _, business, mutations, _ = self.composed(self.with_capacity(context, live_count=99_999, active_count=99_999))
+        audits = [item for item in business.mutations if item["table"] == "metadata_audit_outbox"]
+        self.assertEqual(len(audits), 1)
+        self.assertEqual(audits[0]["row"]["event_type"], "control_plane.approval.invalidated")
+        self.assertEqual((mutations[-1]["row"]["live_count"], mutations[-1]["row"]["next_sequence"]), (100_000, 20))
+        occupied = self.with_capacity(context)
+        audit = next(item for item in occupied.selected_rows if item["table"] == "metadata_audit_outbox")
+        audit.update(present=True, row={"id": audit["key"]["id"], "status": "audited"})
+        before = copy.deepcopy(occupied.selected_rows)
+        with self.assertRaisesRegex(core.TransitionKernelError, "audit identity"):
+            self.composed(occupied)
+        self.assertEqual(occupied.selected_rows, before)
+
+    def test_shared_capacity_no_audit_cascade_still_requires_baseline_without_counter_write(self) -> None:
+        context = self.context()
+        values = {**self.values, "audit_event": None, "control_plane_approval_ids": []}
+        context = replace(context, arguments=self.arguments(values), selected_rows=tuple(
+            item for item in context.selected_rows
+            if item["table"] not in {"control_plane_approvals", "metadata_audit_outbox"}))
+        complete = self.with_capacity(context, live_count=100_000, active_count=100_000)
+        queries, business, mutations, work = self.composed(complete)
+        self.assertEqual((len(business.mutations), len(mutations), work), (6, 6, 50))
+        self.assertEqual(mutations, business.mutations)
+        self.assertEqual(sum(query.table == COUNTER_TABLE for query in queries), 1)
+        self.assertFalse(any(item["table"] in {COUNTER_TABLE, "metadata_audit_outbox"} for item in mutations))
+        with self.assertRaises(capacity.AuditCapacityError):
+            self.composed(context)
+
+    def test_shared_capacity_missing_absent_duplicate_and_malformed_counter_deny(self) -> None:
+        malformed = counter_row()
+        malformed["state_digest"] = digest(b"altered compact state")
+        variants = (
+            (), (counter_selected(None),),
+            (counter_selected(counter_row()), counter_selected(counter_row())),
+            (counter_selected(counter_row(capacity_limit=99_999)),),
+            (counter_selected(counter_row(active_count=1)),),
+            (counter_selected(counter_row(reserved_units_json='{"operation":1}')),),
+            (counter_selected(counter_row(source_revision="retired-source")),),
+            (counter_selected(malformed),),
+        )
+        for index, extra in enumerate(variants):
+            context = self.context()
+            context = replace(context, selected_rows=(*context.selected_rows, *extra))
+            before = copy.deepcopy(context.selected_rows)
+            with self.subTest(index=index), self.assertRaises(capacity.AuditCapacityError):
+                self.composed(context)
+            self.assertEqual(context.selected_rows, before)
+
+    def test_shared_capacity_old_cas_future_time_and_forged_delta_are_rejected(self) -> None:
+        context = self.with_capacity(self.context())
+        _, _, mutations, _ = self.composed(context)
+        newer = self.with_capacity(self.context(), revision=8)
+        with self.assertRaises(capacity.AuditCapacityError):
+            capacity.validate_capacity_transition(operation=candidate.OPERATION,
+                selected_rows=newer.selected_rows, mutations=mutations)
+        elapsed = self.now - datetime(1970, 1, 1, tzinfo=timezone.utc)
+        now_ns = (elapsed.days * 86400 + elapsed.seconds) * 1_000_000_000
+        with self.assertRaisesRegex(capacity.AuditCapacityError, "update time"):
+            self.composed(self.with_capacity(self.context(), updated_at_epoch_ns=now_ns + 1))
+        forged = copy.deepcopy(mutations)
+        forged[-1]["row"] = counter_row(revision=8, live_count=1, active_count=1,
+            next_sequence=20, updated_at_epoch_ns=now_ns)
+        with self.assertRaises(capacity.AuditCapacityError):
+            capacity.validate_capacity_transition(operation=candidate.OPERATION,
+                selected_rows=context.selected_rows, mutations=forged)
+
+    def test_business_budget_reserves_counter_slot_and_does_not_spend_framework_credit(self) -> None:
+        spec = authority_contract.operation_spec(candidate.OPERATION)
+        self.assertEqual((spec["maximumBusinessQueryRows"], spec["maximumBusinessMutations"],
+                          spec["maximumBusinessWorkUnits"]), (192, 136, 2048))
+        self.assertEqual((spec["maximumQueryRows"], spec["maximumMutations"], spec["maximumWorkUnits"]),
+                         (193, 137, 2050))
+        values = copy.deepcopy(self.values)
+        for field, count in (("oidc_session_ids", 32), ("approval_grant_ids", 32),
+                             ("control_plane_approval_ids", 20), ("registration_challenge_ids", 28)):
+            values[field] = [f"{field}-{index:02d}" for index in range(count)]
+        self.assertEqual(candidate.prepare_revocation_input(values), values)
+        evidence = self.context(separate_signer=True).verified_webauthn_evidence
+        queries = self.kernel.queries_with_evidence(arguments=self.arguments(values), database_now=self.now,
+            request_digest=self.request_digest, evidence=evidence)
+        self.assertEqual(sum(query.maximum_rows for query in queries), 168)
+        self.assertEqual(sum(query.maximum_rows for query in capacity.add_capacity_query(candidate.OPERATION, queries)), 169)
+        values["registration_challenge_ids"].append("registration_challenge_ids-28")
+        with self.assertRaisesRegex(core.TransitionKernelError, "aggregate mutation bound"):
+            candidate.prepare_revocation_input(values)
+
+    def test_exact_framework_row_is_outside_business_row_and_kernel_work_allowance(self) -> None:
+        context = self.context()
+        business = self.kernel.transition(context)
+        with_counter = self.with_capacity(context)
+        self.assertEqual(self.kernel.transition(with_counter), business)
+        # Synthetic selected-envelope accounting only; these extra rows do not
+        # claim to be produced by this candidate's real query predicates.
+        padding = tuple(selected("metadata_audit_outbox", f"unused-{index}", {
+            "id": f"unused-{index}", "status": "audited",
+        }) for index in range(192 - len(context.selected_rows)))
+        boundary = replace(with_counter, selected_rows=(*with_counter.selected_rows, *padding))
+        bounded = self.kernel.transition(boundary)
+        capacity.finalize_capacity(boundary, bounded.mutations)
+        extra = selected("metadata_audit_outbox", "one-too-many", {"id": "one-too-many", "status": "audited"})
+        with self.assertRaisesRegex(core.TransitionKernelError, "aggregate plan"):
+            self.kernel.transition(replace(boundary, selected_rows=(*boundary.selected_rows, extra)))
 
     def test_candidate_is_not_registered_or_presented_as_startup_closure(self) -> None:
         registry_source = (ROOT / "serverware/authority_transition_registry.py").read_text()

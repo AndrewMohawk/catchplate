@@ -15,6 +15,11 @@ registry fails closed before startup. See
 The commands below describe the intended development workflow, not a verified
 working deployment.
 
+The [credential trust classifier](docs/webauthn-credential-trust.md) now captures
+one explicit policy for both trust-withdrawal checks, and the unactivated
+revocation candidate uses shared audit-capacity accounting. These are unexecuted
+source changes, not completion of the missing authority transitions.
+
 ```bash
 make up
 open http://localhost:3000

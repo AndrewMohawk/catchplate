@@ -37,6 +37,12 @@ The [explicit-context attestation core](webauthn-attestation-core.md) prepares
 shared registration cryptography for an eventual measured evidence producer.
 It does not itself produce signed authority evidence or fill a missing kernel.
 
+The [explicit-context credential classifier](webauthn-credential-trust.md) now
+shares the actual enrollment/root/AAGUID/class/development decision with the
+live wrapper and both trust-withdrawal passes. Its immutable context does not
+prove the queried credential population is complete or the root is current;
+no startup kernel or aggregate authority transaction is activated by this work.
+
 The [row-mutation SQL correction](authority-row-mutation-sql.md) addresses
 separate executor parameter, absence and identifier defects. Its shared SQL
 component fixture does not establish full executor or startup success; existing

@@ -2,10 +2,10 @@
 
 Address lists are signed hints, never row-selection authority. The measured
 planner queries the complete live predicates, including GLOBAL registration
-challenges, and rejects overflow. Audits use exact absent keys. Capacity uses
-complete pending/claimed outbox reads, not an unmaintained aggregate counter.
-Consequently a busy outbox can deny this bounded operation well below its
-legacy 100,000-row capacity. The old aggregate HTTP route remains unchanged.
+challenges, and rejects overflow. Audits use exact absent keys. The common
+planner owns the initialized global audit-capacity query, counter CAS and
+framework budget; this business kernel does not scan or count the outbox.
+The old aggregate HTTP route remains unchanged.
 
 The current reader's measured SQL predicates and LIMIT+1 provide completeness
 only if PostgreSQL query semantics are trusted. Selected-row membership proofs
@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from typing import Any, Mapping
 
 from serverware import authority_contract
+from serverware import authority_audit_capacity
 from serverware import authority_transition_core as core
 
 
@@ -32,7 +33,6 @@ REVOKE_FIELDS = frozenset({
     "registration_challenge_ids",
 })
 CASCADE_MAX = 32
-AUDIT_CAPACITY = 100_000
 _CHALLENGE_FIELDS = frozenset({
     "id", "challenge", "challenge_type", "user_id", "scope_key",
     "approval_request_id", "payload_json", "expires_at", "used_at", "created_at",
@@ -79,7 +79,7 @@ def prepare_revocation_input(arguments: Mapping[str, Any]) -> dict[str, Any]:
         + 2 * len(values["control_plane_approval_ids"])
         + len(values["registration_challenge_ids"]) + int(event is not None)
     )
-    if mutation_bound > authority_contract.operation_spec(OPERATION)["maximumMutations"]:
+    if mutation_bound > authority_contract.operation_spec(OPERATION)["maximumBusinessMutations"]:
         raise core.TransitionKernelError("revocation aggregate mutation bound exceeded")
     core.canonical_bytes(values)
     return values
@@ -370,14 +370,10 @@ class WebAuthnCredentialRevokeKernel:
         if signer != values["record_id"]:
             queries.append(_exact_query(self.operation, "assertion_credential", "webauthn_credentials", signer))
         queries.append(_exact_query(self.operation, "assertion_challenge", "webauthn_challenges", challenge))
-        audit_count = len(values["control_plane_approval_ids"]) + int(values["audit_event"] is not None)
-        if audit_count:
-            remaining = authority_contract.operation_spec(self.operation)["maximumQueryRows"] - sum(query.maximum_rows for query in queries)
-            if remaining < 2:
-                raise core.TransitionKernelError("revocation has no complete audit capacity query budget")
-            for status, limit in (("pending", remaining // 2), ("claimed", remaining - remaining // 2)):
-                queries.append(_complete_query(self.operation, "audit_capacity_" + status, "metadata_audit_outbox",
-                    (core.QueryPredicate("status", "eq", status),), limit))
+        spec = authority_contract.operation_spec(self.operation)
+        if (sum(query.maximum_rows for query in queries) > spec["maximumBusinessQueryRows"]
+                or sum(query.work_units for query in queries) > spec["maximumBusinessWorkUnits"]):
+            raise core.TransitionKernelError("revocation query program exceeds its business bound")
         return core.close_queries(self.operation, tuple(queries))
 
     def transition(self, context: core.KernelContext) -> core.KernelTransition:
@@ -397,18 +393,21 @@ class WebAuthnCredentialRevokeKernel:
                 current["row"] = {**current["row"], **{field: item["row"][field] for field in ("sign_count", "last_used_at", "updated_at")}}
             else:
                 mutations[key] = dict(item)
-        audits = sum(item["table"] == "metadata_audit_outbox" for item in mutations.values())
-        outstanding = sum(_row(item).get("status") in {"pending", "claimed"} for item in context.present_rows("metadata_audit_outbox"))
-        if audits and outstanding + audits > AUDIT_CAPACITY:
-            raise core.TransitionKernelError("metadata audit outbox is at capacity")
         result = dict(cascade.result)
         result["credential"] = dict(result["credential"])
         final_credential = next(item["row"] for item in mutations.values() if item["table"] == "webauthn_credentials" and item["key"] == {"id": values["record_id"]})
         for field in ("sign_count", "last_used_at", "updated_at"):
             result["credential"][field] = final_credential.get(field)
         planned = tuple(sorted(mutations.values(), key=lambda item: (item["table"], item["keyDigest"], item["operation"])))
-        work = cascade.work_units + 8 + len(context.selected_rows)
+        # Only the exact common-framework address is outside business accounting.
+        # The common finalizer still requires and validates that row, including
+        # no-audit plans, and alone may append its counter mutation.
+        business_rows = tuple(item for item in context.selected_rows if not (
+            item.get("table") == authority_audit_capacity.AGGREGATE_TABLE
+            and item.get("key") == {"aggregate_id": authority_audit_capacity.AGGREGATE_ID}
+        ))
+        work = cascade.work_units + 8 + len(business_rows)
         spec = authority_contract.operation_spec(self.operation)
-        if len(planned) > spec["maximumMutations"] or len(context.selected_rows) > spec["maximumQueryRows"] or work > spec["maximumWorkUnits"]:
+        if len(planned) > spec["maximumBusinessMutations"] or len(business_rows) > spec["maximumBusinessQueryRows"] or work > spec["maximumBusinessWorkUnits"]:
             raise core.TransitionKernelError("revocation aggregate plan exceeds its manifest")
         return core.KernelTransition(mutations=planned, result=result, work_units=work)

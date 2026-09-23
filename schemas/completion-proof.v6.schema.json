@@ -2334,14 +2334,16 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "generation",
+        "apiVersion",
+        "publicationToken",
         "detached_sha256_path",
         "scope",
         "independently_authenticated",
         "authenticity_requires_external_signature_or_checkpoint"
       ],
       "properties": {
-        "generation": {"$ref": "#/$defs/hex32"},
+        "apiVersion": {"const": "serverware.readinessChecksum/v1"},
+        "publicationToken": {"$ref": "#/$defs/hex32"},
         "detached_sha256_path": {"$ref": "#/$defs/normalizedPath"},
         "scope": {"const": "checksum-only"},
         "independently_authenticated": {"const": false},

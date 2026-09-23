@@ -266,7 +266,8 @@ def verify_readiness_observation_body_revalidation(
                 },
                 "proof_path": str(proof_path),
                 "integrity_metadata": {
-                    "generation": generation,
+                    "apiVersion": "serverware.readinessChecksum/v1",
+                    "publicationToken": generation,
                     "detached_sha256_path": str(digest_path),
                     "scope": "checksum-only",
                     "independently_authenticated": False,
@@ -282,6 +283,18 @@ def verify_readiness_observation_body_revalidation(
                 encoding="ascii",
             )
             digest_path.chmod(0o600)
+            # File privacy is an independent guard, not the intended cause of
+            # the pretty-printed canonicalization negative below.
+            proof_path.chmod(0o640)
+            try:
+                run_production_readiness.verify_completion_output(proof_path)
+            except ValueError as exc:
+                if "owner-only mode 0400 or 0600" not in str(exc):
+                    raise
+            else:
+                raise AssertionError("readiness consumer accepted a group-readable proof")
+            finally:
+                proof_path.chmod(0o600)
             noncanonical_path = (
                 tmp / f"readiness-observation-{label}-pretty.json"
             )
@@ -298,7 +311,7 @@ def verify_readiness_observation_body_revalidation(
             noncanonical_proof["proof_path"] = str(noncanonical_path)
             noncanonical_proof["integrity_metadata"] = {
                 **noncanonical_proof["integrity_metadata"],
-                "generation": noncanonical_generation,
+                "publicationToken": noncanonical_generation,
                 "detached_sha256_path": str(noncanonical_digest_path),
             }
             noncanonical_path.write_bytes(
@@ -312,6 +325,7 @@ def verify_readiness_observation_body_revalidation(
                     + "\n"
                 ).encode("utf-8")
             )
+            noncanonical_path.chmod(0o600)
             noncanonical_digest_path.write_text(
                 run_production_readiness.sha256_prefixed_file(
                     noncanonical_path
@@ -347,7 +361,7 @@ def verify_readiness_observation_body_revalidation(
                 boundary_proof["proof_path"] = str(boundary_proof_path)
                 boundary_proof["integrity_metadata"] = {
                     **boundary_proof["integrity_metadata"],
-                    "generation": boundary_generation,
+                    "publicationToken": boundary_generation,
                     "detached_sha256_path": str(boundary_digest_path),
                 }
                 boundary_proof["production_host_preflight"][

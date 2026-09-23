@@ -78542,6 +78542,112 @@ mod tests {
     }
 
     #[test]
+    fn traversal_query_embedded_schema_compiles_through_the_signed_loader() {
+        // Compile the complete production schema, including every embedded
+        // adapter. A helper-only selector test cannot detect an invalid regex
+        // that prevents all signed policies from loading.
+        let schema = closed_embedded_policy_schema().expect("closed production schema");
+        jsonschema::draft202012::options()
+            .build(&schema)
+            .expect("the full production schema must compile");
+        let snapshot = load_compiled_test_snapshot(
+            policy_with_credential_route(literal_selector_traversal_route()),
+            "traversal-schema-compilation", 1,
+        );
+        assert_eq!(snapshot.routes[0].id, "route.traversal-parity");
+        assert_eq!(snapshot.routes[0].constraints[0]["traversal"]["lineage"]["queryFields"][0],
+                   json!("$.xgafv"));
+    }
+
+    #[test]
+    fn traversal_query_policy_json_rejects_non_scalar_unicode() {
+        let mut route = literal_selector_traversal_route();
+        route["adapter"]["config"]["request"]["allowedQueryKeys"][1] =
+            json!("__traversal_scalar_fixture__");
+        route["constraints"][0]["traversal"]["lineage"]["queryFields"][0] =
+            json!("__traversal_scalar_fixture__");
+        let template = serde_json::to_string(&policy_with_credential_route(route))
+            .expect("serialize a complete unsigned policy parser fixture");
+        let marker = r#""__traversal_scalar_fixture__""#;
+        let parts = template.split(marker).collect::<Vec<_>>();
+        assert_eq!(parts.len(), 3, "replace only the two selector values");
+        let baseline = strict_json_value_from_slice(template.as_bytes())
+            .expect("the unmodified policy JSON parses");
+        validate_policy_capabilities(&baseline).expect("the baseline semantics are valid");
+
+        // A valid JSON surrogate pair decodes to one supplementary scalar.
+        // This is a parser/admission fixture, not a fabricated signed policy.
+        let paired = template.replace(marker, r#""\uD83D\uDE80""#);
+        let parsed = strict_json_value_from_slice(paired.as_bytes())
+            .expect("a paired escape is valid policy JSON");
+        assert_eq!(parsed["routes"][0]["constraints"][0]["traversal"]["lineage"]["queryFields"][0],
+                   json!("\u{1f680}"));
+        validate_policy_capabilities(&parsed).expect("a supplementary query name is admitted");
+
+        for fragment in [
+            br#""\uD800""#.as_slice(),
+            br#""\uDC00""#.as_slice(),
+            br#""\uD800x""#.as_slice(),
+            br#""\uD800\u0041""#.as_slice(),
+            br#""\uDC00\uD800""#.as_slice(),
+            b"\"\xff\"".as_slice(),
+            b"\"\xed\xa0\x80\"".as_slice(),
+        ] {
+            let mut wire = Vec::new();
+            for (index, part) in parts.iter().enumerate() {
+                if index != 0 {
+                    wire.extend_from_slice(fragment);
+                }
+                wire.extend_from_slice(part.as_bytes());
+            }
+            assert!(strict_json_value_from_slice(&wire).is_err(),
+                    "the real policy parser must reject non-scalar/invalid UTF-8 bytes: {fragment:?}");
+        }
+    }
+
+    #[test]
+    fn traversal_query_supplementary_names_keep_utf8_byte_bounds() {
+        for source in ["cursor", "lineage"] {
+            for (name, byte_count, accepted) in [
+                (format!("{}aaa", "\u{1f680}".repeat(63)), 255, true),
+                ("\u{1f680}".repeat(64), 256, true),
+                (format!("{}a", "\u{1f680}".repeat(64)), 257, false),
+                ("\u{1f680}".repeat(65), 260, false),
+            ] {
+                assert_eq!(name.len(), byte_count);
+                assert_eq!(valid_traversal_query_name(&name), accepted);
+                let mut route = literal_selector_traversal_route();
+                if source == "cursor" {
+                    route["adapter"]["config"]["request"]["allowedQueryKeys"][0] = json!(name);
+                    route["constraints"][0]["traversal"]["cursor"]["requestField"] = json!(name);
+                } else {
+                    route["adapter"]["config"]["request"]["allowedQueryKeys"][1] = json!(name);
+                    route["constraints"][0]["traversal"]["lineage"]["queryFields"][0] = json!(name);
+                }
+                let policy = policy_with_credential_route(route);
+                if accepted {
+                    validate_policy_capabilities(&policy).expect("valid scalar name at byte bound");
+                    let snapshot = load_compiled_test_snapshot(
+                        policy, &format!("traversal-scalar-{source}-{byte_count}"), 1,
+                    );
+                    let traversal = &snapshot.routes[0].constraints[0]["traversal"];
+                    let actual = if source == "cursor" {
+                        &traversal["cursor"]["requestField"]
+                    } else {
+                        &traversal["lineage"]["queryFields"][0]
+                    };
+                    assert_eq!(actual.as_str(), Some(name.as_str()));
+                } else {
+                    let error = validate_policy_capabilities(&policy)
+                        .expect_err("UTF-8 bytes, not scalar count, bound admitted query names");
+                    assert!(error.contains("generic.rest allowed query key")
+                            && error.contains("is invalid or duplicated"), "{error}");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn traversal_query_selectors_keep_literal_names_and_strict_wire_decoding() {
         for name in ["$.xgafv", "tweet.fields", "page[token]", &"é".repeat(128)] {
             assert!(valid_traversal_query_name(name), "{name:?}");
@@ -79232,6 +79338,13 @@ mod tests {
             Some(&completion),
         )
         .expect("aligned outer and nested committed replay preserves exact validated evidence"));
+        assert_eq!(validate_complete_release_authorization_transition(
+            &committed_replay,
+            &outer_reservation,
+            "unknown",
+            Some(&uncertain),
+        ).expect_err("committed replay still requires locally validated response evidence"),
+            "durable completion evidence disposition mismatch");
 
         let mut aborted = indeterminate.clone();
         aborted.state = "aborted".to_string();
@@ -79246,11 +79359,20 @@ mod tests {
         cancelled_replay.binding_digest = outer_binding_digest.clone();
         cancelled_replay.reservation_expires_at_epoch_ms = Some(reservation_deadline);
         cancelled_replay.durable_policy = Some(aborted);
+        for stale_evidence in [&uncertain, &completion] {
+            assert_eq!(validate_complete_release_authorization_transition(
+                &cancelled_replay,
+                &outer_reservation,
+                "unknown",
+                Some(stale_evidence),
+            ).expect_err("cancelled replay cannot carry provider response evidence"),
+                "not-forwarded durable completion must not carry response evidence");
+        }
         assert!(!validate_complete_release_authorization_transition(
             &cancelled_replay,
             &outer_reservation,
             "unknown",
-            Some(&uncertain),
+            None,
         )
         .expect("aligned outer cancellation and nested abort remains non-releasable"));
 
@@ -79269,12 +79391,19 @@ mod tests {
             crossed.binding_digest = outer_binding_digest.clone();
             crossed.reservation_expires_at_epoch_ms = Some(reservation_deadline);
             crossed.durable_policy = Some(indeterminate.clone());
+            // Admit the evidence shape for the resolved outer outcome first,
+            // so this negative reaches the distinct nested-lifecycle guard.
+            let matching_outer_evidence = if outer_outcome == "forwarded" {
+                Some(&completion)
+            } else {
+                None
+            };
             assert!(
                 validate_complete_release_authorization_transition(
                     &crossed,
                     &outer_reservation,
                     "unknown",
-                    Some(&uncertain),
+                    matching_outer_evidence,
                 )
                 .expect_err(
                     "outer replay terminals must not cross a required nested indeterminate terminal",

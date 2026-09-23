@@ -119,6 +119,7 @@ KEY_GENERATION_VERSION = "serverware.enclaveKeyGeneration/v1"
 KMS_AUDIT_VERSION = "serverware.awsKmsRecipientAuditProof/v1"
 EIF_BUILD_VERSION = "serverware.manifestV6EifBuildStatement/v1"
 COMPLETION_PROOF_VERSION = "serverware.completionProof/v6"
+READINESS_CHECKSUM_API_VERSION = "serverware.readinessChecksum/v1"
 COMPLETION_AUTHENTICATION_VERSION = (
     "serverware.completionProofAuthentication/v1"
 )
@@ -14088,13 +14089,24 @@ def validate_completion_v6_contract_shape(
     integrity = exact_keys(
         document["integrity_metadata"],
         {
+            "apiVersion",
             "authenticity_requires_external_signature_or_checkpoint",
             "detached_sha256_path",
-            "generation",
+            "publicationToken",
             "independently_authenticated",
             "scope",
         },
         "completionProof/v6 readiness integrity metadata",
+    )
+    require(
+        integrity["apiVersion"] == READINESS_CHECKSUM_API_VERSION
+        and isinstance(integrity["publicationToken"], str)
+        and re.fullmatch(r"[0-9a-f]{32}", integrity["publicationToken"]) is not None
+        and isinstance(integrity["detached_sha256_path"], str)
+        and 1 <= len(integrity["detached_sha256_path"]) <= 4096
+        and "\x00" not in integrity["detached_sha256_path"]
+        and re.search(r"(^|/)\.{1,2}(/|$)|//", integrity["detached_sha256_path"]) is None,
+        "completionProof/v6 integrity metadata is not the closed readinessChecksum/v1 contract",
     )
     require(
         integrity["scope"] == "checksum-only"

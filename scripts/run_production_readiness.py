@@ -112,6 +112,7 @@ BOOTSTRAP_RECEIPT_API_VERSION = "serverware.bootstrapReceipt/v3"
 BOOTSTRAP_RECEIPT_KIND = "ProductionBootstrapReceipt"
 BOOTSTRAP_RECEIPT_FIXED_FD = 198
 COMPLETION_PROOF_API_VERSION = "serverware.completionProof/v6"
+READINESS_CHECKSUM_API_VERSION = "serverware.readinessChecksum/v1"
 COMPLETION_PROOF_V6_ENVELOPE_FIELDS = frozenset(
     {
         "proof_core_sha256",
@@ -2819,10 +2820,36 @@ def validate_docker_toolchain_settings(loaded: dict[str, str]) -> dict[str, str]
     return {name: str(value) for name, value in values.items()}
 
 
-def completion_proof_digest_path(path: Path, generation: str) -> Path:
-    if re.fullmatch(r"[0-9a-f]{32}", generation) is None:
-        raise ValueError("completion proof checksum generation is invalid")
-    return path.with_name(f"{path.name}.sha256.{generation}")
+def completion_proof_digest_path(path: Path, publication_token: str) -> Path:
+    if not isinstance(publication_token, str) or re.fullmatch(r"[0-9a-f]{32}", publication_token) is None:
+        raise ValueError("completion proof checksum publication token is invalid")
+    return path.with_name(f"{path.name}.sha256.{publication_token}")
+
+
+def validate_readiness_integrity_metadata(value: Any) -> dict[str, Any]:
+    if (
+        not isinstance(value, dict)
+        or set(value) != {
+            "apiVersion",
+            "publicationToken",
+            "detached_sha256_path",
+            "scope",
+            "independently_authenticated",
+            "authenticity_requires_external_signature_or_checkpoint",
+        }
+        or value["apiVersion"] != READINESS_CHECKSUM_API_VERSION
+        or not isinstance(value["publicationToken"], str)
+        or re.fullmatch(r"[0-9a-f]{32}", value["publicationToken"]) is None
+        or not isinstance(value["detached_sha256_path"], str)
+        or not 1 <= len(value["detached_sha256_path"]) <= 4096
+        or "\x00" in value["detached_sha256_path"]
+        or re.search(r"(^|/)\.{1,2}(/|$)|//", value["detached_sha256_path"]) is not None
+        or value["scope"] != "checksum-only"
+        or value["independently_authenticated"] is not False
+        or value["authenticity_requires_external_signature_or_checkpoint"] is not True
+    ):
+        raise ValueError("completion proof integrity metadata is not the closed readinessChecksum/v1 contract")
+    return value
 
 
 def completion_proof_v6_core(proof: dict[str, Any]) -> dict[str, Any]:
@@ -2858,9 +2885,11 @@ def capture_optional_proof_state(path: Path) -> dict[str, Any]:
     except (UnicodeDecodeError, json.JSONDecodeError):
         return state
     if isinstance(parsed, dict):
-        integrity = parsed.get("integrity_metadata")
-        if isinstance(integrity, dict) and isinstance(integrity.get("generation"), str):
-            state["generation"] = integrity["generation"]
+        try:
+            integrity = validate_readiness_integrity_metadata(parsed.get("integrity_metadata"))
+        except ValueError:
+            return state
+        state["publicationToken"] = integrity["publicationToken"]
     return state
 
 
@@ -3187,35 +3216,10 @@ def verify_completion_output(path: Path, expected: argparse.Namespace | None = N
             "readiness proof must not claim independent final authentication"
         )
 
-    integrity = proof.get("integrity_metadata")
-    readiness_integrity_fields = {
-        "generation",
-        "detached_sha256_path",
-        "scope",
-        "independently_authenticated",
-        "authenticity_requires_external_signature_or_checkpoint",
-    }
-    if (
-        not isinstance(integrity, dict)
-        or set(integrity) != readiness_integrity_fields
-    ):
-        raise ValueError("completion proof detached integrity metadata is invalid")
-    generation = integrity.get("generation")
-    if not isinstance(generation, str) or re.fullmatch(
-        r"[0-9a-f]{32}", generation
-    ) is None:
-        raise ValueError("completion proof checksum generation is invalid")
-    digest_path = completion_proof_digest_path(path, generation)
+    integrity = validate_readiness_integrity_metadata(proof.get("integrity_metadata"))
+    publication_token = integrity["publicationToken"]
+    digest_path = completion_proof_digest_path(path, publication_token)
     if integrity.get("detached_sha256_path") != str(digest_path):
-        raise ValueError("completion proof detached integrity metadata is invalid")
-    if (
-        integrity.get("scope") != "checksum-only"
-        or integrity.get("independently_authenticated") is not False
-        or integrity.get(
-            "authenticity_requires_external_signature_or_checkpoint"
-        )
-        is not True
-    ):
         raise ValueError("completion proof detached integrity metadata is invalid")
     digest_bytes, digest_metadata = read_regular_file_once(
         digest_path,
@@ -3240,8 +3244,8 @@ def verify_completion_output(path: Path, expected: argparse.Namespace | None = N
         if previous.get("exists"):
             if previous.get("sha256") == actual_digest:
                 raise ValueError("completion proof path was not changed by the current verifier invocation")
-            if previous.get("generation") == generation:
-                raise ValueError("completion proof generation was reused from the pre-run output")
+            if previous.get("publicationToken") == publication_token:
+                raise ValueError("completion proof publication token was reused from the pre-run output")
             if (previous.get("device"), previous.get("inode")) == (
                 proof_metadata.st_dev,
                 proof_metadata.st_ino,

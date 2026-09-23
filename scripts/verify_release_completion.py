@@ -190,6 +190,7 @@ MONOTONIC_WITNESS_STATE_API_VERSION = "serverware.monotonicReleaseWitnessState/v
 COMPLETION_AUTHENTICATION_API_VERSION = "serverware.completionProofAuthentication/v1"
 COMPLETION_CHECKPOINT_API_VERSION = "serverware.completionProofCheckpoint/v1"
 COMPLETION_PROOF_API_VERSION = "serverware.completionProof/v6"
+READINESS_CHECKSUM_API_VERSION = "serverware.readinessChecksum/v1"
 CANONICAL_JSON_PROFILE = (
     "serverware.canonicalJson/integer-string-bool-null-array-object-nfc-v1"
 )
@@ -13407,12 +13408,39 @@ def verify_production_proxy_response_proof(
     )
 
 
-def completion_proof_digest_path(path: Path, generation: str) -> Path:
+def completion_proof_digest_path(path: Path, publication_token: str) -> Path:
     require(
-        re.fullmatch(r"[0-9a-f]{32}", generation) is not None,
-        "completion proof checksum generation is invalid",
+        isinstance(publication_token, str)
+        and re.fullmatch(r"[0-9a-f]{32}", publication_token) is not None,
+        "completion proof checksum publication token is invalid",
     )
-    return path.with_name(f"{path.name}.sha256.{generation}")
+    return path.with_name(f"{path.name}.sha256.{publication_token}")
+
+
+def validate_readiness_integrity_metadata(value: Any) -> dict[str, Any]:
+    require(
+        isinstance(value, dict)
+        and set(value) == {
+            "apiVersion",
+            "publicationToken",
+            "detached_sha256_path",
+            "scope",
+            "independently_authenticated",
+            "authenticity_requires_external_signature_or_checkpoint",
+        }
+        and value["apiVersion"] == READINESS_CHECKSUM_API_VERSION
+        and isinstance(value["publicationToken"], str)
+        and re.fullmatch(r"[0-9a-f]{32}", value["publicationToken"]) is not None
+        and isinstance(value["detached_sha256_path"], str)
+        and 1 <= len(value["detached_sha256_path"]) <= 4096
+        and "\x00" not in value["detached_sha256_path"]
+        and re.search(r"(^|/)\.{1,2}(/|$)|//", value["detached_sha256_path"]) is None
+        and value["scope"] == "checksum-only"
+        and value["independently_authenticated"] is False
+        and value["authenticity_requires_external_signature_or_checkpoint"] is True,
+        "completion proof integrity metadata is not the closed readinessChecksum/v1 contract",
+    )
+    return value
 
 
 def fsync_directory(path: Path) -> None:
@@ -13441,12 +13469,12 @@ def validate_existing_private_output(path: Path, label: str) -> None:
     require(stat.S_IMODE(metadata.st_mode) == 0o600, f"{label} must use mode 0600")
 
 
-def cleanup_stale_completion_checksums(path: Path, current_generation: str, *, retain: int = 3) -> None:
+def cleanup_stale_completion_checksums(path: Path, current_publication_token: str, *, retain: int = 3) -> None:
     candidates: list[tuple[int, Path]] = []
     pattern = re.compile(rf"^{re.escape(path.name)}\.sha256\.([0-9a-f]{{32}})$")
     for candidate in path.parent.iterdir():
         match = pattern.fullmatch(candidate.name)
-        if match is None or match.group(1) == current_generation:
+        if match is None or match.group(1) == current_publication_token:
             continue
         try:
             metadata = candidate.lstat()
@@ -13474,14 +13502,12 @@ def write_output(
 ) -> str:
     payload = canonical_json(proof).encode("utf-8") + b"\n"
     proof_digest = sha256_prefixed_bytes(payload)
-    integrity = proof.get("integrity_metadata")
-    require(isinstance(integrity, dict), "completion proof is missing integrity metadata")
-    generation = integrity.get("generation")
-    require(isinstance(generation, str), "completion proof checksum generation is invalid")
-    digest_path = completion_proof_digest_path(path, generation)
+    integrity = validate_readiness_integrity_metadata(proof.get("integrity_metadata"))
+    publication_token = integrity["publicationToken"]
+    digest_path = completion_proof_digest_path(path, publication_token)
     require(
         integrity.get("detached_sha256_path") == str(digest_path),
-        "completion proof checksum path does not match its generation",
+        "completion proof checksum path does not match its publication token",
     )
     digest_payload = f"{proof_digest}\n".encode("ascii")
     verify_private_output_directory(path.parent)
@@ -13503,7 +13529,7 @@ def write_output(
         except FileNotFoundError:
             pass
         else:
-            raise ValueError("completion proof checksum generation already exists")
+            raise ValueError("completion proof checksum publication token already exists")
         temporary_paths: list[Path] = []
         try:
             staged: dict[Path, Path] = {}
@@ -13538,7 +13564,7 @@ def write_output(
             os.replace(staged[path], path)
             temporary_paths.remove(staged[path])
             fsync_directory(path.parent)
-            cleanup_stale_completion_checksums(path, generation)
+            cleanup_stale_completion_checksums(path, publication_token)
         finally:
             for temporary_path in temporary_paths:
                 temporary_path.unlink(missing_ok=True)
@@ -15653,25 +15679,7 @@ def validate_host_readiness_completion_proof_v6(value: Any) -> dict[str, Any]:
         value["proof_core_sha256"],
         "host readiness proof core digest",
     )
-    integrity = value["integrity_metadata"]
-    require(
-        isinstance(integrity, dict)
-        and set(integrity)
-        == {
-            "generation",
-            "detached_sha256_path",
-            "scope",
-            "independently_authenticated",
-            "authenticity_requires_external_signature_or_checkpoint",
-        }
-        and integrity["scope"] == "checksum-only"
-        and integrity["independently_authenticated"] is False
-        and integrity[
-            "authenticity_requires_external_signature_or_checkpoint"
-        ]
-        is True,
-        "host readiness proof integrity metadata is not the closed v6 wire shape",
-    )
+    validate_readiness_integrity_metadata(value["integrity_metadata"])
     proof_core = host_readiness_completion_proof_v6_core(value)
     require(
         hmac.compare_digest(
@@ -21946,10 +21954,11 @@ def main() -> None:
         "scope": "readiness-only",
     }
     proof["proof_path"] = args.out
-    generation = secrets.token_hex(16)
-    proof_digest_path = completion_proof_digest_path(Path(args.out), generation)
+    publication_token = secrets.token_hex(16)
+    proof_digest_path = completion_proof_digest_path(Path(args.out), publication_token)
     proof["integrity_metadata"] = {
-        "generation": generation,
+        "apiVersion": READINESS_CHECKSUM_API_VERSION,
+        "publicationToken": publication_token,
         "detached_sha256_path": str(proof_digest_path),
         "scope": "checksum-only",
         "independently_authenticated": False,

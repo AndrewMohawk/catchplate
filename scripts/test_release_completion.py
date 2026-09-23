@@ -11346,8 +11346,109 @@ def verify_release_artifact_authority_contracts() -> None:
     )
 
 
+def test_readiness_checksum_publication_contract() -> None:
+    """Exercise checksum publication, not a synthetic final-authority proof."""
+    validator = verify_release_completion.host_readiness_completion_proof_v6_schema_validator()
+    integrity_validator = validator.evolve(schema={
+        "$ref": "#/$defs/readinessIntegrity",
+        "$defs": validator.schema["$defs"],
+    })
+    with tempfile.TemporaryDirectory() as tmp_raw:
+        output = Path(tmp_raw) / "checksum-component.json"
+        token = "0123456789abcdef" * 2
+        sidecar = output.with_name(output.name + ".sha256." + token)
+        integrity = {
+            "apiVersion": "serverware.readinessChecksum/v1",
+            "publicationToken": token,
+            "detached_sha256_path": str(sidecar),
+            "scope": "checksum-only",
+            "independently_authenticated": False,
+            "authenticity_requires_external_signature_or_checkpoint": True,
+        }
+        for validate in (
+            verify_release_completion.validate_readiness_integrity_metadata,
+            run_production_readiness.validate_readiness_integrity_metadata,
+            integrity_validator.validate,
+        ):
+            validate(integrity)
+        component = {"generation": 7, "sequence": 3, "integrity_metadata": integrity}
+        written_digest = verify_release_completion.write_output(output, component)
+        expected_bytes = canonical_json(component).encode("utf-8") + b"\n"
+        if (
+            output.read_bytes() != expected_bytes
+            or written_digest != sha256_prefixed_bytes(expected_bytes)
+            or sidecar.read_bytes() != (written_digest + "\n").encode("ascii")
+            or stat.S_IMODE(output.stat().st_mode) != 0o600
+            or stat.S_IMODE(sidecar.stat().st_mode) != 0o600
+        ):
+            raise AssertionError("checksum writer did not bind exact private canonical bytes")
+        parsed, raw = verify_release_completion.verify_nitro_tee.load_json_file(
+            output, "checksum component fixture"
+        )
+        if parsed != component or raw != expected_bytes:
+            raise AssertionError("strict Nitro parser did not preserve checksum token and integer counters")
+        before = run_production_readiness.capture_optional_proof_state(output)
+        if before.get("publicationToken") != token or before.get("sha256") != written_digest:
+            raise AssertionError("pre-run capture did not bind the versioned publication token")
+        invalid = [
+            ("version", {**integrity, "apiVersion": "serverware.readinessChecksum/v2"}),
+            ("unversioned", {key: value for key, value in integrity.items() if key != "apiVersion"}),
+            ("legacy", {**{key: value for key, value in integrity.items() if key not in {"apiVersion", "publicationToken"}}, "generation": token}),
+            ("alias", {**integrity, "generation": 7}),
+            ("extra", {**integrity, "unexpected": False}),
+            ("authority", {**integrity, "independently_authenticated": True}),
+            ("scope", {**integrity, "scope": "final-completion"}),
+            ("path", {**integrity, "detached_sha256_path": "../checksum"}),
+        ]
+        invalid.extend(
+            (f"token-{index}", {**integrity, "publicationToken": value})
+            for index, value in enumerate((None, True, 7, "", "a" * 31, "a" * 33, "A" * 32, "g" * 32))
+        )
+        inventory = set(output.parent.iterdir())
+        for label, changed in invalid:
+            if not list(integrity_validator.iter_errors(changed)):
+                raise AssertionError(f"checksum schema accepted {label}")
+            for validate in (
+                verify_release_completion.validate_readiness_integrity_metadata,
+                run_production_readiness.validate_readiness_integrity_metadata,
+            ):
+                try:
+                    validate(changed)
+                except ValueError as exc:
+                    if "closed readinessChecksum/v1 contract" not in str(exc):
+                        raise
+                else:
+                    raise AssertionError(f"checksum validator accepted {label}")
+            try:
+                verify_release_completion.write_output(output, {**component, "integrity_metadata": changed})
+            except ValueError as exc:
+                expected_error = "generation must be an unsigned integer" if label == "legacy" else "closed readinessChecksum/v1 contract"
+                if expected_error not in str(exc):
+                    raise AssertionError(f"checksum writer rejected {label} for the wrong reason: {exc}") from exc
+            else:
+                raise AssertionError(f"checksum writer accepted {label}")
+            if output.read_bytes() != expected_bytes or set(output.parent.iterdir()) != inventory:
+                raise AssertionError(f"rejected {label} changed checksum publication")
+        for value in ("7", True, -1):
+            try:
+                verify_release_completion.write_output(output, {**component, "generation": value})
+            except ValueError as exc:
+                if "generation must be an unsigned integer" not in str(exc):
+                    raise
+            else:
+                raise AssertionError("checksum publication relaxed the numeric generation contract")
+        try:
+            verify_release_completion.write_output(output, component)
+        except ValueError as exc:
+            if "publication token already exists" not in str(exc):
+                raise
+        else:
+            raise AssertionError("checksum writer reused a committed publication token")
+
+
 def main() -> None:
     completion_schema_validator, receipt_schema_fixture = verify_release_proof_schemas()
+    test_readiness_checksum_publication_contract()
     test_exact_benchmark_nanosecond_contract()
     verify_bootstrap_binding_cold_dependency_validation()
     verify_launcher_three_way_binding()
@@ -11521,7 +11622,7 @@ def main() -> None:
             raise AssertionError(
                 "final-v1 did not consume the exact persisted readiness bytes"
             )
-        generation = (persisted_proof.get("integrity_metadata") or {}).get("generation")
+        generation = (persisted_proof.get("integrity_metadata") or {}).get("publicationToken")
         detached_digest_path = run_production_readiness.completion_proof_digest_path(
             out_path,
             generation,
@@ -11589,15 +11690,32 @@ def main() -> None:
             "sha256": verified_output_digest,
             "device": out_path.stat().st_dev,
             "inode": out_path.stat().st_ino,
-            "generation": generation,
+            "publicationToken": generation,
         }
         try:
             run_production_readiness.verify_completion_output(out_path, runner_expected)
         except ValueError as exc:
-            if "not changed" not in str(exc) and "generation was reused" not in str(exc):
+            if "not changed" not in str(exc) and "publication token was reused" not in str(exc):
                 raise
         else:
             raise AssertionError("runner accepted a zero-return substitute that left the old proof in place")
+        # Change valid canonical bytes and their checksum, but deliberately
+        # retain the pre-run token. Freshness cannot rely on the file hash alone.
+        reused_token_proof = clone_document(persisted_proof)
+        reused_token_proof["generated_at_unix"] += 1
+        refresh_readiness_v6_proof_core(reused_token_proof)
+        run_production_readiness.write_private_json(out_path, reused_token_proof)
+        detached_digest_path.write_text(sha256_file(out_path) + "\n", encoding="ascii")
+        try:
+            run_production_readiness.verify_completion_output(out_path, runner_expected)
+        except ValueError as exc:
+            if "publication token was reused from the pre-run output" not in str(exc):
+                raise
+        else:
+            raise AssertionError("runner accepted changed proof bytes with a reused publication token")
+        finally:
+            run_production_readiness.write_private_json(out_path, persisted_proof)
+            detached_digest_path.write_text(verified_output_digest + "\n", encoding="ascii")
         runner_expected.pre_run_completion_proof_state = {"exists": False}
         if (
             proof.get("verificationOk") is not True
@@ -11647,7 +11765,7 @@ def main() -> None:
         )
         mutated_contract["integrity_metadata"] = {
             **mutated_contract["integrity_metadata"],
-            "generation": mutated_generation,
+            "publicationToken": mutated_generation,
             "detached_sha256_path": str(mutated_contract_digest_path),
         }
         refresh_readiness_v6_proof_core(mutated_contract)
@@ -11673,7 +11791,7 @@ def main() -> None:
         )
         unknown_mode_contract["integrity_metadata"] = {
             **unknown_mode_contract["integrity_metadata"],
-            "generation": unknown_mode_generation,
+            "publicationToken": unknown_mode_generation,
             "detached_sha256_path": str(unknown_mode_digest_path),
         }
         refresh_readiness_v6_proof_core(unknown_mode_contract)
@@ -11701,7 +11819,7 @@ def main() -> None:
         )
         stale_contract["integrity_metadata"] = {
             **stale_contract["integrity_metadata"],
-            "generation": stale_generation,
+            "publicationToken": stale_generation,
             "detached_sha256_path": str(stale_digest_path),
         }
         refresh_readiness_v6_proof_core(stale_contract)
@@ -11725,7 +11843,7 @@ def main() -> None:
         )
         interrupted_proof["integrity_metadata"] = {
             **interrupted_proof["integrity_metadata"],
-            "generation": interrupted_generation,
+            "publicationToken": interrupted_generation,
             "detached_sha256_path": str(interrupted_digest_path),
         }
         try:
@@ -11762,7 +11880,7 @@ def main() -> None:
         )
         replacement_proof["integrity_metadata"] = {
             **replacement_proof["integrity_metadata"],
-            "generation": replacement_generation,
+            "publicationToken": replacement_generation,
             "detached_sha256_path": str(replacement_digest_path),
         }
         replacement_digest = verify_release_completion.write_output(
@@ -11789,7 +11907,7 @@ def main() -> None:
             "proof=json.loads(template.read_text(encoding='utf-8')); "
             "proof['proof_path']=str(out); "
             "sidecar=v.completion_proof_digest_path(out,generation); "
-            "proof['integrity_metadata']={**proof['integrity_metadata'],'generation':generation,"
+            "proof['integrity_metadata']={**proof['integrity_metadata'],'publicationToken':generation,"
             "'detached_sha256_path':str(sidecar)}; v.write_output(out,proof)"
         )
         writers = [
@@ -11816,7 +11934,7 @@ def main() -> None:
         if writer_failures:
             raise AssertionError(f"concurrent completion writers failed: {writer_failures}")
         concurrent_proof = json.loads(out_path.read_text(encoding="utf-8"))
-        concurrent_generation = concurrent_proof["integrity_metadata"]["generation"]
+        concurrent_generation = concurrent_proof["integrity_metadata"]["publicationToken"]
         concurrent_sidecar = run_production_readiness.completion_proof_digest_path(
             out_path,
             concurrent_generation,
@@ -11834,6 +11952,46 @@ def main() -> None:
             raise AssertionError(
                 "native host-context validator changed a valid readiness proof"
             )
+        for label, update in (
+            ("version", {"apiVersion": "serverware.readinessChecksum/v2"}),
+            ("boolean-token", {"publicationToken": True}),
+            ("short-token", {"publicationToken": "a" * 31}),
+            ("extra", {"unexpected": False}),
+            ("legacy", {}),
+        ):
+            rejected = clone_document(persisted_proof)
+            rejected_path = tmp / f"checksum-contract-{label}.json"
+            rejected_digest_path = run_production_readiness.completion_proof_digest_path(
+                rejected_path, generation
+            )
+            rejected["proof_path"] = str(rejected_path)
+            rejected["integrity_metadata"].update({
+                "detached_sha256_path": str(rejected_digest_path),
+                **update,
+            })
+            if label == "legacy":
+                rejected["integrity_metadata"].pop("apiVersion")
+                rejected["integrity_metadata"]["generation"] = rejected["integrity_metadata"].pop("publicationToken")
+            # Deliberately bypass the production writer for malformed input;
+            # retain correct private-file mode, canonical bytes and checksum.
+            run_production_readiness.write_private_json(rejected_path, rejected)
+            rejected_digest_path.write_text(sha256_file(rejected_path) + "\n", encoding="ascii")
+            rejected_digest_path.chmod(0o600)
+            try:
+                run_production_readiness.verify_completion_output(rejected_path)
+            except ValueError as exc:
+                if "closed readinessChecksum/v1 contract" not in str(exc):
+                    raise AssertionError(f"readiness rejected {label} for the wrong reason: {exc}") from exc
+            else:
+                raise AssertionError(f"readiness consumed invalid checksum contract {label}")
+            try:
+                verify_release_completion._load_host_readiness_context(str(rejected_path))
+            except ValueError as exc:
+                expected_error = "generation must be an unsigned integer" if label == "legacy" else "failed its closed schema"
+                if expected_error not in str(exc):
+                    raise AssertionError(f"host context rejected {label} for the wrong reason: {exc}") from exc
+            else:
+                raise AssertionError(f"final verifier consumed invalid checksum context {label}")
         core_mismatch = clone_document(persisted_proof)
         core_mismatch["generated_at_unix"] += 1
         core_mismatch_path = tmp / "readiness-core-mismatch.json"

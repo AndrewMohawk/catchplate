@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import ast
+import base64
 import json
 import hashlib
 import importlib.util
@@ -1906,23 +1907,95 @@ def assert_production_reproducibility_binds_image_outputs() -> None:
 
     with tempfile.TemporaryDirectory() as tmp_raw:
         verification_path = Path(tmp_raw) / "reproducible-build-verification.json"
+        signature_path = Path(tmp_raw) / "reproducible-build-verification.signature.json"
+        trusted_public_key_path = Path(tmp_raw) / "reproducible-build-verification.pub.pem"
+        # This local key authenticates only synthetic fixture bytes. It does not
+        # establish that independent production builders actually ran.
+        signing_key = Ed25519PrivateKey.from_private_bytes(b"\x19" * 32)
+        key_info = generate_release_provenance.public_key_info(signing_key)
+        trusted_public_key_path.write_text(key_info["pem"], encoding="ascii")
+
+        def verify_binding() -> dict[str, object]:
+            return generate_release_provenance.production_reproducibility_binding(
+                verification_path,
+                signature_path=signature_path,
+                trusted_public_key_path=trusted_public_key_path,
+                expected_source_tree_digest=source_tree_digest,
+                expected_images=expected_images,
+            )
 
         def bind() -> dict[str, object]:
             verification_path.write_text(
                 json.dumps(verification, indent=2, sort_keys=True) + "\n",
                 encoding="utf-8",
             )
-            return generate_release_provenance.production_reproducibility_binding(
-                verification_path,
-                expected_source_tree_digest=source_tree_digest,
-                expected_images=expected_images,
+            payload = {
+                "apiVersion": "serverware.externalArtifactSignature/v1",
+                "artifactSha256": "sha256:" + hashlib.sha256(verification_path.read_bytes()).hexdigest(),
+                "purpose": "reproducible-build-verification",
+            }
+            signature = {
+                **payload,
+                "kind": "ExternalArtifactSignature",
+                "algorithm": "Ed25519",
+                "signerKeyId": key_info["spki_sha256"],
+                "signature": "ed25519:" + base64.urlsafe_b64encode(
+                    signing_key.sign(
+                        json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+                    )
+                ).decode("ascii").rstrip("="),
+            }
+            signature_path.write_text(
+                json.dumps(signature, sort_keys=True) + "\n", encoding="ascii"
             )
+            return verify_binding()
 
         binding = bind()
         if binding.get("images") != verification["images"]:
             raise AssertionError(
                 f"production provenance did not retain exact reproducible image outputs: {binding}"
             )
+        for field, artifact in (
+            ("verification_sha256", verification_path),
+            ("verification_signature_sha256", signature_path),
+            ("verification_trusted_public_key_sha256", trusted_public_key_path),
+        ):
+            if binding.get(field) != "sha256:" + hashlib.sha256(artifact.read_bytes()).hexdigest():
+                raise AssertionError(f"reproducibility binding did not retain authenticated {field}")
+        if binding.get("verification_signer_key_id") != key_info["spki_sha256"]:
+            raise AssertionError("reproducibility binding did not retain the separately pinned fixture signer")
+
+        def reject_authentication(expected_error: str) -> None:
+            try:
+                verify_binding()
+            except ValueError as exc:
+                if expected_error not in str(exc):
+                    raise AssertionError(f"reproducibility authentication failed for the wrong reason: {exc}") from exc
+            else:
+                raise AssertionError("reproducibility binding accepted unauthenticated fixture bytes")
+
+        report_bytes = verification_path.read_bytes()
+        verification_path.write_bytes(report_bytes + b" ")
+        reject_authentication("detached signature binding is invalid")
+        verification_path.write_bytes(report_bytes)
+        signature_bytes = signature_path.read_bytes()
+        signature = json.loads(signature_bytes)
+        signature["signature"] = "ed25519:" + base64.urlsafe_b64encode(b"\x00" * 64).decode("ascii").rstrip("=")
+        signature_path.write_text(json.dumps(signature) + "\n", encoding="ascii")
+        reject_authentication("detached signature verification failed")
+        signature_path.write_bytes(signature_bytes)
+        signature = json.loads(signature_bytes)
+        signature["purpose"] = "policy-activation-verification"
+        signature_path.write_text(json.dumps(signature) + "\n", encoding="ascii")
+        reject_authentication("detached signature binding is invalid")
+        signature_path.write_bytes(signature_bytes)
+        wrong_key = Ed25519PrivateKey.from_private_bytes(b"\x20" * 32)
+        trusted_public_key_path.write_text(
+            generate_release_provenance.public_key_info(wrong_key)["pem"], encoding="ascii"
+        )
+        reject_authentication("detached signature binding is invalid")
+        trusted_public_key_path.write_text(key_info["pem"], encoding="ascii")
+        verify_binding()
 
         mutations = (
             (0, "image_id", digest("9"), "serverware-control image ID"),

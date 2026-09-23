@@ -488,8 +488,8 @@
       "type": "string",
       "minLength": 1,
       "maxLength": 256,
-      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F\\uD800-\\uDFFF]+$",
-      "description": "Exact decoded query name, not an object path. Semantic admission also enforces at most 256 UTF-8 bytes; no normalization or percent-decoding is applied to policy names."
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "description": "Exact decoded query name, not an object path. Semantic admission requires valid UTF-8 and at most 256 bytes, rejecting lone surrogates without embedding invalid Unicode scalar ranges in the shared regex. No normalization or percent-decoding is applied to policy names."
     },
     "traversalPolicy": {
       "type": "object",

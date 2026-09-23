@@ -23,6 +23,7 @@ from serverware.policy_bundle import (
     compile_policy_bundle,
     demo_policy_bundle,
     provider_request_profile,
+    strict_json_loads,
     valid_traversal_query_name,
     valid_traversal_request_field,
     validate_raw_absolute_target,
@@ -230,7 +231,14 @@ class ProviderPolicyParityTests(unittest.TestCase):
         for capture in ("gmailUser", "messageId", "operation", "providerAccount"):
             invalid = copy.deepcopy(base)
             invalid["routes"][0]["adapter"]["config"]["request"]["valueRules"][0]["capture"] = capture
-            with self.subTest(capture=capture), self.assertRaisesRegex(PolicyBundleError, "collides with another operation field"):
+            # The operation discriminator is reserved before adapter-emitted
+            # field collision analysis. Keep each exact denial guard visible.
+            expected = (
+                "capture is invalid, reserved, or duplicated"
+                if capture == "operation"
+                else "collides with another operation field"
+            )
+            with self.subTest(capture=capture), self.assertRaisesRegex(PolicyBundleError, expected):
                 compile_policy_bundle(invalid, validate_schema=True)
         fresh = copy.deepcopy(base)
         fresh["routes"][0]["adapter"]["config"]["request"]["valueRules"][0]["capture"] = "approvedUser"
@@ -288,6 +296,49 @@ class ProviderPolicyParityTests(unittest.TestCase):
                     else:
                         with self.assertRaises(PolicyBundleError):
                             compile_policy_bundle(bundle, validate_schema=schema)
+
+    def test_traversal_unicode_scalar_compiler_boundary(self) -> None:
+        scalar = strict_json_loads(r'"\ud83d\ude80"')
+        self.assertEqual(scalar, "\U0001f680")
+        for schema in (True, False):
+            compile_policy_bundle(self.traversal_bundle(), validate_schema=schema)
+        cases = (
+            (scalar * 63 + "aaa", 255, True),
+            (scalar * 64, 256, True),
+            (scalar * 64 + "a", 257, False),
+            (scalar * 65, 260, False),
+            (strict_json_loads(r'"\ud800"'), None, False),
+            (strict_json_loads(r'"\udc00"'), None, False),
+        )
+        for name, byte_count, accepted in cases:
+            if byte_count is not None:
+                self.assertEqual(len(name.encode("utf-8")), byte_count)
+            self.assertEqual(valid_traversal_query_name(name), accepted)
+            for source in ("cursor", "lineage"):
+                bundle = self.traversal_bundle()
+                route = bundle["routes"][0]
+                traversal = next(item["traversal"] for item in route["constraints"]
+                                 if item["type"] == "traversalBudget")
+                if source == "cursor":
+                    route["adapter"]["config"]["request"]["allowedQueryKeys"][0] = name
+                    traversal["cursor"]["requestField"] = name
+                else:
+                    route["adapter"]["config"]["request"]["allowedQueryKeys"][1] = name
+                    traversal["lineage"]["queryFields"][0] = name
+                for schema in (True, False):
+                    with self.subTest(name=repr(name), source=source, schema=schema):
+                        if accepted:
+                            compiled = compile_policy_bundle(bundle, validate_schema=schema).routes[0]
+                            actual = next(item["traversal"] for item in compiled.constraints
+                                          if item["type"] == "traversalBudget")
+                            self.assertEqual(actual["cursor"]["requestField"] if source == "cursor"
+                                             else actual["lineage"]["queryFields"][0], name)
+                        else:
+                            # Python JSON can retain lone surrogate strings.
+                            # Actual semantic admission, with schema on or off,
+                            # must reject them; schema-only rejection is not the oracle.
+                            with self.assertRaisesRegex(PolicyBundleError, "invalid closed traversal contract"):
+                                compile_policy_bundle(bundle, validate_schema=schema)
 
     def test_traversal_adapter_catalog_and_selector_domains_stay_closed(self) -> None:
         base = self.traversal_bundle()

@@ -46,6 +46,22 @@ publication or fixture signing; operators must supply the verifiable receipt
 protocol. Valid receipt signatures do not by themselves establish trusted log
 identity: final verification still uses independently pinned log keys/provider.
 
+## Readiness checksum publication
+
+Readiness `completionProof/v6` uses a closed `integrity_metadata` object with
+`apiVersion: serverware.readinessChecksum/v1`. Its `publicationToken` is exactly
+32 lowercase hexadecimal characters: a random publication identifier, not a
+generation or rollback counter. The token selects the `<proof>.sha256.<token>`
+sidecar. Owner-only atomic publication and local readers' exact path,
+canonical-byte digest, and current-invocation token/inode checks remain required.
+
+Unversioned metadata and the old string-valued `generation` field are rejected,
+not aliased or coerced. Regenerate readiness output through the current writer;
+do not rewrite retained evidence. Serverware generation, sequence and epoch
+counters remain integer-only. A checksum supplies no independent authentication:
+this metadata and any embedded host-readiness context remain readiness-only,
+never final release or action authority.
+
 ## Provider media and operation-field contracts
 
 `Content-Type` is a reserved, separately checked request field, not a configurable

@@ -1338,10 +1338,11 @@ class CompletionIdentityAndHeaderFixtures(unittest.TestCase):
                 "hardware_proof": False,
                 "independently_authenticated": False,
                 "integrity_metadata": {
+                    "apiVersion": "serverware.readinessChecksum/v1",
                     "authenticity_requires_external_signature_or_checkpoint":
                     True,
                     "detached_sha256_path": "/run/readiness.sha256",
-                    "generation": 1,
+                    "publicationToken": "a" * 32,
                     "independently_authenticated": False,
                     "scope": "checksum-only",
                 },
@@ -1393,6 +1394,41 @@ class CompletionIdentityAndHeaderFixtures(unittest.TestCase):
                 verifier.VerificationError
             ):
                 verifier.validate_completion_v6_contract_shape(changed)
+
+    def test_readiness_checksum_context_is_versioned_and_non_authoritative(self) -> None:
+        # This is only the embedded context shape check. It neither opens a
+        # producer-local sidecar nor proves the nested readiness measurements.
+        valid = self.completion_v6_contract_fixture()
+        verifier.validate_completion_v6_contract_shape(valid)
+        metadata = valid["integrity_metadata"]
+        for label, field, value, expected_error in (
+            ("version", "apiVersion", "serverware.readinessChecksum/v2", "closed readinessChecksum/v1 contract"),
+            ("integer-token", "publicationToken", 1, "closed readinessChecksum/v1 contract"),
+            ("boolean-token", "publicationToken", True, "closed readinessChecksum/v1 contract"),
+            ("uppercase-token", "publicationToken", "A" * 32, "closed readinessChecksum/v1 contract"),
+            ("short-token", "publicationToken", "a" * 31, "closed readinessChecksum/v1 contract"),
+            ("relative-parent-path", "detached_sha256_path", "../checksum", "closed readinessChecksum/v1 contract"),
+            ("authenticated", "independently_authenticated", True, "cannot carry final or public-verifier bridge authority"),
+            ("final-scope", "scope", "final-completion", "cannot carry final or public-verifier bridge authority"),
+        ):
+            changed = copy.deepcopy(valid)
+            changed["integrity_metadata"][field] = value
+            with self.subTest(label=label), self.assertRaisesRegex(verifier.VerificationError, expected_error):
+                verifier.validate_completion_v6_contract_shape(changed)
+        for label, changed_metadata in (
+            ("unversioned", {key: value for key, value in metadata.items() if key != "apiVersion"}),
+            ("extra", {**metadata, "unexpected": False}),
+            ("counter-alias", {**metadata, "generation": 1}),
+        ):
+            changed = copy.deepcopy(valid)
+            changed["integrity_metadata"] = changed_metadata
+            with self.subTest(label=label), self.assertRaisesRegex(verifier.VerificationError, "readiness integrity metadata fields are not exact"):
+                verifier.validate_completion_v6_contract_shape(changed)
+        legacy = copy.deepcopy(valid)
+        legacy["integrity_metadata"].pop("apiVersion")
+        legacy["integrity_metadata"]["generation"] = legacy["integrity_metadata"].pop("publicationToken")
+        with self.assertRaisesRegex(verifier.VerificationError, "generation must be an unsigned integer"):
+            verifier.validate_completion_v6_contract_shape(legacy)
 
     def test_signed_completion_authentication_artifact_substitution_fails(
         self,

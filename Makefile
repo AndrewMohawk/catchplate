@@ -998,6 +998,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_transport.py \
 	serverware/authority_webauthn_assertion.py \
 	serverware/authority_webauthn_evidence.py \
+	serverware/authority_webauthn_registration_production.py \
 	serverware/authority_webauthn_trust.py \
 	serverware/db.py \
 	serverware/native_postgres_inventory.py \
@@ -2731,6 +2732,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_planner.py \
 				serverware/authority_webauthn_assertion.py \
 				serverware/authority_webauthn_evidence.py \
+				serverware/authority_webauthn_registration_production.py \
 				serverware/authority_transition_webauthn.py \
 				serverware/authority_transition_webauthn_registration.py \
 				serverware/authority_transition_webauthn_completion.py \

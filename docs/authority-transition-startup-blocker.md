@@ -42,6 +42,11 @@ production composers remain necessary; all four startup gaps remain visible.
 Source `.75` connects registration to real source queries, mutation rendering,
 complete-range acquisition and shared proof verification. It does not supply
 the missing evidence custody, operation owner or registry activation.
+Source `.76` adds original-envelope v2 receipt projection and one-use consumption
+to registration/completion effects. Registration's private acquisition now joins
+actual reads, independently expected primary/counted roots, capacity finalization
+and write proofs. These are source integrations, not durable evidence admission
+or a configured operation owner; the four registry/startup gaps remain.
 
 The [registry-free request commitment](authority-request-commitment.md) separates
 the actual hash/intent workers needed by the inactive revocation verifier from

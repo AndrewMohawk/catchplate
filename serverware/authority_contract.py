@@ -10,7 +10,7 @@ from serverware import authority_complete_query
 from serverware.authority_query_read_work import _ValidationWork
 
 
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.75"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.76"
 SCHEMA_VERSION = 9
 CONTRACT_SCHEMA = "serverware.policyAuthorityOperationContract/v3"
 BUSINESS_INTENT_SCHEMA = "serverware.policyAuthorityBusinessIntent/v2"
@@ -2301,7 +2301,7 @@ _OPERATIONS = {
             "external-evidence-receipt",
         ),
         external_evidence_types=(
-            "webauthn-trust-publication-verification/v1",
+            "webauthn-trust-installation/v2",
         ),
         maximum_query_rows=4,
         maximum_mutations=4,
@@ -2341,7 +2341,7 @@ _OPERATIONS = {
             "external-evidence-receipt",
         ),
         external_evidence_types=(
-            "webauthn-registration-attestation/v1",
+            "webauthn-registration-attestation/v2",
         ),
         maximum_query_rows=112,
         maximum_mutations=40,

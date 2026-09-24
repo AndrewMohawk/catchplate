@@ -148,14 +148,15 @@ def validate_complete_read_trace(operation: str, table: str, key: Any) -> None:
 
 
 def validate_mutation_read_trace(operation: str, table: str, key: Any) -> None:
-    """Check the private revoke writer's bounded physical marker shape only.
+    """Check a private revoke/registration producer's fixed physical marker.
 
     This does not derive targets, prove OLD/NEW, or authenticate before heads.
     The real producer computes the request from genuine primary projections;
     signed replay separately requires its exact complete source-derived block.
     Ordinary complete-read permission is not public v3 writer admission.
     """
-    if (type(operation) is not str or operation != complete.OPERATION
+    if (type(operation) is not str or operation not in
+            (complete.OPERATION, complete.REGISTRATION_OPERATION)
             or type(table) is not str or table not in (reader.LEAF_TABLE, reader.NODE_TABLE)):
         raise IndexTraceError("mutation read operation or table is not source admitted")
     _closed(key, _MUTATION_LEAF_FIELDS if table == reader.LEAF_TABLE else _MUTATION_NODE_FIELDS)

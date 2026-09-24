@@ -60,6 +60,7 @@ from serverware import authority_revocation_retention
 from serverware import authority_transition_core
 from serverware import authority_transition_registry
 from serverware import authority_transition_webauthn
+from serverware import authority_transition_webauthn_registration
 from serverware import authority_webauthn_assertion
 from serverware.config import (
     WEBAUTHN_CHALLENGE_GLOBAL_LIVE_MAX,
@@ -454,6 +455,20 @@ class PlanningState:
 @dataclass(frozen=True, slots=True)
 class _RevocationAcquisition:
     """Invocation-owned raw observations, not a signed plan or commit token."""
+
+    request: dict[str, Any]
+    selected_rows: tuple[dict[str, Any], ...]
+    state: PlanningState
+    kernel: authority_transition_core.KernelTransition
+    mutations: tuple[dict[str, Any], ...]
+    work_units: int
+    write_evidence: authority_index_mutation_reader.AcquiredIndexedMutation
+    trace: tuple[dict[str, Any], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _RegistrationAcquisition:
+    """Actual registration observations, not a signed plan or commit token."""
 
     request: dict[str, Any]
     selected_rows: tuple[dict[str, Any], ...]
@@ -2061,6 +2076,165 @@ def _read_database_now(cursor: Any) -> datetime:
     if database_now.tzinfo is None:
         database_now = database_now.replace(tzinfo=timezone.utc)
     return database_now.astimezone(timezone.utc)
+
+
+def _acquire_registration_transition_on_work(
+    cursor: Any, *, request: dict[str, Any], manifest: tuple[dict[str, Any], ...],
+    business_before_roots: Any, authorization_before_roots: Any,
+    expected_counted_heads: tuple[dict[str, Any], ...],
+    evidence_public_key: Ed25519PublicKey, expected_signer_identity: dict[str, Any],
+    expected_signer_spki_digest: str, expected_rp_id: str, expected_origin: str,
+    now_epoch_ns: int, deadline_epoch_ns: int, maximum_age_ns: int,
+    maximum_clock_skew_ns: int, query_work: _ValidationWork,
+    trace: PlannerTrace | None = None,
+) -> _RegistrationAcquisition:
+    """Compose actual registration reads, custody consumption and write proofs.
+
+    The private owner must independently admit the request, configured signer,
+    RP/origin, current primary/counted root vectors and clock/deadline, and own a read-only MVCC
+    transaction. This function does not provide those permissions, persist new
+    evidence, sign a plan, reserve execution, or bypass the registry/public gate.
+    It accepts raw roots/rows only through actual SQL and proof acquisition,
+    never an input successful-proof or business-effect object.
+
+    One physical ledger covers counted reads and mutation-frontier acquisition;
+    one work meter covers the real query/crypto/kernel/capacity/write engines.
+    Ordinary and primary-proof SQL, staged stamps and driver/native internals
+    retain their existing separate bounds. Results are observations, not a
+    whole-operation CPU claim or an independently authenticated root transition.
+    """
+    registration = authority_transition_webauthn_registration
+    operation = registration.OPERATION
+    if type(query_work) is not _ValidationWork:
+        raise AuthorityPlannerError("registration acquisition requires the actual shared meter")
+    if trace is None:
+        trace = PlannerTrace(operation=operation, _complete_queries=True)
+    if (type(trace) is not PlannerTrace or type(trace.operation) is not str
+            or trace.operation != operation or trace._complete_queries is not True):
+        raise AuthorityPlannerError("registration acquisition trace identity changed")
+    acquisition = authority_index_reader._ReadAcquisitionBudget(cursor, trace, work=query_work)
+    try:
+        if (type(request) is not dict or type(manifest) is not tuple
+                or type(expected_counted_heads) is not tuple
+                or not 1 <= len(expected_counted_heads) <= authority_index_heads.MAX_HEADS
+                or type(expected_signer_identity) is not dict):
+            raise AuthorityPlannerError("registration acquisition requires exact raw inputs")
+        # Detach all variable inputs before any key or database callback.
+        owned = authority_query_reads._CopyBudget(query_work).copy({
+            "request": request, "manifest": manifest,
+            "businessBeforeRoots": business_before_roots,
+            "authorizationBeforeRoots": authorization_before_roots,
+            "expectedCountedHeads": expected_counted_heads,
+            "signerIdentity": expected_signer_identity,
+            "signerSpkiDigest": expected_signer_spki_digest,
+            "rpId": expected_rp_id, "origin": expected_origin,
+            "nowEpochNs": now_epoch_ns, "deadlineEpochNs": deadline_epoch_ns,
+            "maximumAgeNs": maximum_age_ns, "maximumClockSkewNs": maximum_clock_skew_ns,
+        })
+        actual_request = owned["request"]
+        if (actual_request.get("operation") != operation
+                or actual_request.get("handler") != "finalize_webauthn_registration"
+                or type(actual_request.get("arguments")) is not dict):
+            raise AuthorityPlannerError("registration acquisition request identity changed")
+        registration._integer(owned["nowEpochNs"], "independent current time", 1)
+        registration._integer(owned["deadlineEpochNs"], "independent deadline", 1)
+        registration._integer(owned["maximumAgeNs"], "maximum age", 1,
+                              authority_contract.VERIFIER_RESPONSE_MAX_AGE_NS)
+        registration._integer(owned["maximumClockSkewNs"], "clock skew", 0,
+                              authority_contract.VERIFIER_MAX_CLOCK_SKEW_NS)
+        if owned["nowEpochNs"] >= owned["deadlineEpochNs"]:
+            raise AuthorityPlannerError("registration acquisition deadline has expired")
+        request_digest = _typed_request_digest(actual_request, work=query_work)
+        claimed_request = _require_digest(actual_request.get("requestDigest"), "registration request digest")
+        if _request_different(request_digest, claimed_request, work=query_work):
+            raise AuthorityPlannerError("registration acquisition request digest changed")
+        query_work.prepare_utf8(operation)
+        query_work.prepare_utf8(request_digest)
+        query_work.charge(hashes=1)
+        expected_operation = operation_id(operation, request_digest)
+        if _request_different(expected_operation, actual_request.get("operationId"), work=query_work):
+            raise AuthorityPlannerError("registration acquisition operation id changed")
+        with acquisition.read_phase(cursor, trace, query_work):
+            observed_business, observed_authorization, _ = _read_root_set(
+                cursor, operation=operation, manifest=owned["manifest"], trace=trace, work=query_work)
+            authority_revocation_semantics._canonical_equal(
+                (observed_business, observed_authorization),
+                (owned["businessBeforeRoots"], owned["authorizationBeforeRoots"]),
+                work=query_work, label="registration database roots differ from independent expectations")
+            database_now = _read_database_now(cursor)
+            database_now_ns = registration._now(database_now)
+            if (abs(database_now_ns - owned["nowEpochNs"]) > owned["maximumClockSkewNs"]
+                    or database_now_ns >= owned["deadlineEpochNs"]):
+                raise AuthorityPlannerError("registration database cutoff differs from admitted time/deadline")
+            queries = registration._query_recipe_on_work(arguments=actual_request["arguments"],
+                database_now=database_now, request_digest=request_digest, work=query_work)
+            # The common finalizer genuinely reconstructs these declarations.
+            authority_transition_webauthn._prepare_complete_copies(queries, query_work)
+            authority_transition_webauthn._prepare_complete_copies(queries, query_work)
+            queries = authority_audit_capacity.add_capacity_query(operation, queries)
+            collector = authority_complete_acquisition._CompleteQueryAcquisition(
+                cursor, operation=operation, arguments=actual_request["arguments"],
+                cutoff_us=authority_complete_query.cutoff_microseconds(database_now),
+                queries=tuple(query for query in queries
+                              if type(query) is authority_complete_query.CompleteIndexQuery),
+                business_before_roots=observed_business, authorization_before_roots=observed_authorization,
+                trace=trace, work=query_work, acquisition=acquisition, include_write_heads=True)
+            staging = authority_query_staging.StagedQueryProofs(operation=operation,
+                business_before_roots=observed_business, authorization_before_roots=observed_authorization,
+                query_work=query_work)
+            selected, queries, records = _read_bounded_transition_rows(cursor,
+                operation=operation, request=actual_request, queries=queries, manifest=owned["manifest"],
+                trace=trace, query_sources=staging, query_work=query_work, complete_acquisition=collector)
+            retained = collector.retained_evidence()
+            actual_heads = tuple({"indexId": head.index_id, "indexRevision": head.index_revision,
+                "rootDigest": head.index_root.digest, "leafCount": head.index_root.count}
+                for head in retained.heads)
+            authority_revocation_semantics._canonical_equal(actual_heads, owned["expectedCountedHeads"],
+                work=query_work, label="registration counted heads differ from independent expectations")
+            acquisition.require_idle(cursor, trace, query_work)
+        context = authority_transition_core.KernelContext(operation, actual_request["arguments"],
+            selected, database_now, request_digest, query_reads=records)
+        kernel = registration._kernel_transition_on_work(context,
+            evidence_public_key=evidence_public_key, expected_signer_identity=owned["signerIdentity"],
+            expected_signer_spki_digest=owned["signerSpkiDigest"], expected_rp_id=owned["rpId"],
+            expected_origin=owned["origin"], maximum_age_ns=owned["maximumAgeNs"],
+            maximum_clock_skew_ns=owned["maximumClockSkewNs"], work=query_work)
+        finalized = authority_audit_capacity._finalize_capacity(context, kernel.mutations, work=query_work)
+        work_units = authority_audit_capacity.transition_work_units(operation=operation,
+            query_work_units=sum(query.work_units for query in queries),
+            kernel_work_units=kernel.work_units, mutations=finalized)
+        authority_audit_capacity.validate_transition_work_units(operation, work_units, finalized)
+        query_work.prepare_copy(finalized)
+        ordered = sorted(finalized, key=lambda item: (item["table"], item["keyDigest"], item["operation"]))
+        query_work.prepare_copy(ordered)
+        mutations = tuple(ordered)
+        write_ids = {name for item in mutations
+                     for name in authority_index_projection.index_ids_for_table(item["table"])}
+        heads = tuple(authority_indexed_mutation.IndexedMutationHead(
+            item.index_id, item.index_revision, item.index_root)
+            for item in retained.heads if item.index_id in write_ids)
+        limits = authority_complete_read_write._write_limits(authority_contract.operation_spec(operation),
+            authority_complete_query_batch._SharedLedger(query_work))
+        writer = authority_index_mutation_reader._AcquisitionBudget(
+            shared_acquisition=acquisition, work=query_work)
+        write_evidence = authority_index_mutation_reader._acquire_indexed_primary_batch(
+            cursor, table_contracts=authority_primary_contract.primary_table_contracts(operation),
+            business_before_roots=authority_complete_query_batch._roots(retained.business_before_roots),
+            authorization_before_roots=authority_complete_query_batch._roots(retained.authorization_before_roots),
+            selected_rows=selected, before_proofs=retained.before_proofs, mutations=mutations,
+            index_before_heads=heads, limits=limits, trace=trace, acquisition_budget=writer)
+        acquisition.require_idle(cursor, trace, query_work)
+        for mutation in mutations:
+            trace.write(mutation["table"], mutation["key"])
+        closed_trace = trace.close(selected_rows=selected, mutation_plan=mutations)
+        state = PlanningState(database_now=database_now,
+            query_work_units=sum(query.work_units for query in queries), query_program=queries,
+            query_reads=records, complete_query_evidence=retained)
+        return _RegistrationAcquisition(actual_request, selected, state, kernel,
+            mutations, work_units, write_evidence, closed_trace)
+    except BaseException:
+        acquisition.failed = True
+        raise
 
 
 def _read_bounded_transition_rows(

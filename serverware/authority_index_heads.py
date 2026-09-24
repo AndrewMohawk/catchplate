@@ -55,15 +55,17 @@ class CapturedIndexHead:
     index_root: counted.CountedNode
 
 
-def required_index_ids(operation: str, *, arguments=None, queries=None) -> tuple[str, ...]:
+def required_index_ids(operation: str, *, arguments=None, queries=None,
+                       include_write_heads: bool = False) -> tuple[str, ...]:
     """Hash-free fixed inventory, never a caller-selected index subset.
 
     Revocation preserves its existing role/potential-write union and no-context
-    API. Registration is acquisition-only here: its exact two/four read heads
-    follow the actual argument mode and the already rebound query family. This
-    does not grant registration mutation-frontier or public planner admission.
+    API. Registration's read heads follow the actual argument mode and rebound
+    query family; its private transition owner can additionally require every
+    potential source-write profile. No arbitrary index subset is accepted.
     """
-    if (type(operation) is not str or not 1 <= len(operation) <= 128
+    if (type(include_write_heads) is not bool
+            or type(operation) is not str or not 1 <= len(operation) <= 128
             or operation not in (complete.OPERATION, complete.REGISTRATION_OPERATION)):
         raise IndexHeadReadError("counted head operation has no declared complete roles")
     if operation == complete.REGISTRATION_OPERATION or arguments is not None or queries is not None:
@@ -85,29 +87,35 @@ def required_index_ids(operation: str, *, arguments=None, queries=None) -> tuple
     roles = tuple(complete._role(operation, name) for name in names)
     spec = authority_contract.operation_spec(operation)
     identities = {role.index_id for role in roles}
-    if operation == complete.OPERATION:
+    if operation == complete.REGISTRATION_OPERATION and len(identities) != limits["head_count"]:
+        raise IndexHeadReadError("registration counted heads differ from the source family bound")
+    if operation == complete.OPERATION or include_write_heads:
         for table in spec["businessWrites"]:
             identities.update(projection.index_ids_for_table(table))
-    elif len(identities) != limits["head_count"]:
-        raise IndexHeadReadError("registration counted heads differ from the source family bound")
     result = tuple(sorted(identities))
     if not roles or not 1 <= len(result) <= MAX_HEADS:
         raise IndexHeadReadError("counted head source inventory is not bounded")
     return result
 
 
-def validate_head_trace_key(operation: str, key: Any, *, arguments=None, queries=None) -> None:
+def validate_head_trace_key(operation: str, key: Any, *, arguments=None, queries=None,
+                            include_write_heads: bool = False) -> None:
     """Validate one physical source-owned SELECT marker without hashing."""
-    if type(operation) is not str:
+    if type(operation) is not str or type(include_write_heads) is not bool:
         raise IndexHeadReadError("counted head operation is not an exact source identity")
     if operation == complete.REGISTRATION_OPERATION and arguments is None and queries is None:
-        # Trace markers carry no mode authority. Admit only the two literal
-        # source inventories here; the actual producer below binds precisely
-        # one to its owned arguments and complete query family before SQL.
-        inventories = tuple(tuple(sorted(complete._role(operation, name).index_id for name in names))
-            for names in (complete.REGISTRATION_BASE_ROLES, complete.REGISTRATION_ROLES))
+        # Trace markers carry no mode authority. The actual producer binds one
+        # fixed mode/read-or-read-write inventory before SQL. Trace admission
+        # alone cannot choose a subset or confer any operation authority.
+        write_ids = {index_id for table in authority_contract.operation_spec(operation)["businessWrites"]
+                     for index_id in projection.index_ids_for_table(table)}
+        inventories = tuple(tuple(sorted({complete._role(operation, name).index_id for name in names}
+                                         | (write_ids if with_writes else set())))
+            for names in (complete.REGISTRATION_BASE_ROLES, complete.REGISTRATION_ROLES)
+            for with_writes in (False, True))
     else:
-        inventories = (required_index_ids(operation, arguments=arguments, queries=queries),)
+        inventories = (required_index_ids(operation, arguments=arguments, queries=queries,
+                                          include_write_heads=include_write_heads),)
     if (type(key) is not dict or len(key) != len(_TRACE_FIELDS)
             or any(type(name) is not str or len(name) > 32 for name in key)
             or set(key) != _TRACE_FIELDS
@@ -158,7 +166,7 @@ def _owned_row(raw: Any, acquisition, work: _ValidationWork) -> dict[str, Any]:
 def read_operation_index_heads(
     cursor: Any, *, operation: str, trace: Any, work: _ValidationWork,
     acquisition: reader._ReadAcquisitionBudget,
-    arguments=None, queries=None,
+    arguments=None, queries=None, include_write_heads: bool = False,
 ) -> tuple[CapturedIndexHead, ...]:
     """Read every potential source-required head once, without locking it.
 
@@ -171,12 +179,14 @@ def read_operation_index_heads(
     if type(acquisition) is not reader._ReadAcquisitionBudget:
         raise IndexHeadReadError("counted heads require the actual shared acquisition ledger")
     with acquisition.scope(cursor, trace, work):
-        identities = required_index_ids(operation, arguments=arguments, queries=queries)
+        identities = required_index_ids(operation, arguments=arguments, queries=queries,
+                                        include_write_heads=include_write_heads)
         if type(getattr(trace, "operation", None)) is not str or trace.operation != operation:
             raise IndexHeadReadError("counted head trace operation changed")
         profiles, empty, manifest = _source_context(identities, work)
         key = {"profile": READ_PROFILE, "indexIds": list(identities), "rowLimit": len(identities) + 1}
-        validate_head_trace_key(operation, key, arguments=arguments, queries=queries)
+        validate_head_trace_key(operation, key, arguments=arguments, queries=queries,
+                                include_write_heads=include_write_heads)
         placeholders = ", ".join("%s" for _ in identities)
         rows = acquisition.read(HEAD_TABLE, key,
             f"SELECT {_HEAD_SELECT} FROM serverware_metadata.{HEAD_TABLE} AS head "

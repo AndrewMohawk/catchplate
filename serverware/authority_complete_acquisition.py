@@ -62,7 +62,8 @@ class _CompleteQueryAcquisition:
                  cutoff_us: int, queries: tuple[complete.CompleteIndexQuery, ...],
                  business_before_roots: Any, authorization_before_roots: Any,
                  trace: Any, work: _ValidationWork,
-                 acquisition: reader._ReadAcquisitionBudget | None = None) -> None:
+                 acquisition: reader._ReadAcquisitionBudget | None = None,
+                 include_write_heads: bool = False) -> None:
         self._failed = self._busy = False
         self._phase = "new"
         self._cursor, self._trace, self._work = cursor, trace, work
@@ -72,7 +73,8 @@ class _CompleteQueryAcquisition:
         self._proofs: tuple[dict[str, Any], ...] = ()
         self._next = 0
         try:
-            if (type(operation) is not str or operation not in
+            if (type(include_write_heads) is not bool
+                    or type(operation) is not str or operation not in
                     (complete.OPERATION, complete.REGISTRATION_OPERATION)
                     or type(work) is not _ValidationWork
                     or type(queries) is not tuple or not 1 <= len(queries) <= len(
@@ -82,6 +84,7 @@ class _CompleteQueryAcquisition:
                            or not 1 <= len(query.role) <= 128 for query in queries)):
                 raise CompleteAcquisitionError("complete acquisition source inventory is invalid")
             self.operation = operation
+            self._include_write_heads = include_write_heads
             copier = reads._CopyBudget(work)
             self._arguments = copier.copy(arguments)
             if type(self._arguments) is not dict:
@@ -173,7 +176,8 @@ class _CompleteQueryAcquisition:
                 raise CompleteAcquisitionError("complete acquisition reader inputs changed")
             self._heads = heads.read_operation_index_heads(cursor, operation=operation,
                 trace=trace, work=work, acquisition=self._acquisition,
-                arguments=self._arguments, queries=self._queries)
+                arguments=self._arguments, queries=self._queries,
+                include_write_heads=self._include_write_heads)
             self._require_running()
             self._phase = "reading"
 

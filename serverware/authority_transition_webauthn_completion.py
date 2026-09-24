@@ -6,12 +6,12 @@ Neither an arbitrary KernelContext nor the supplied stage graph establishes
 those facts. The genuine signature binds the complete expected installation,
 including its original bytes; no unsigned local installer observation is used.
 
-This module returns three ordinary (owned selected row, updated row) pairs and
-a closed evidence consumption recipe. It does NOT render mutation templates,
-return a KernelTransition or register a kernel:
-the reserved v1 evidence table cannot consume the new original-byte v2 evidence
-without a coordinated successor adapter. That adapter must plan the fourth
-business mutation and the existing audit-capacity mutation before after-roots.
+The business helper returns four ordinary (owned selected row, updated row)
+pairs: publication, high-water, audit and exact v2 evidence consumption. The
+private mutation adapter renders all four together as a KernelTransition;
+neither helper registers a kernel or reinterprets a v1 evidence receipt. The
+existing common finalizer must still plan the audit-capacity mutation before
+after-roots, using the same original work allowance.
 There is no database/file write, post-root side effect, signing, future witness
 receipt, or claim that local rows establish root currentness. Exact execution
 replay belongs to the execution envelope; a published row cannot be re-emitted.
@@ -22,6 +22,7 @@ import hashlib
 import json
 from datetime import datetime, timezone
 
+from serverware import authority_audit_capacity as capacity
 from serverware import authority_contract as authority
 from serverware import authority_transition_core as core
 from serverware import authority_webauthn_evidence as evidence
@@ -32,7 +33,6 @@ from serverware import webauthn_trust_core as bundle_core
 OPERATION = "webauthn.trust.complete"
 CLAIMS_SCHEMA = "serverware.policyAuthorityWebAuthnTrustInstallation/v2"
 PUBLICATION_DOMAIN = "serverware.policyAuthorityWebAuthnStagedPublication/v2"
-CONSUMPTION_SCHEMA = "serverware.policyAuthorityWebAuthnInstallationConsumption/v2"
 EVIDENCE_TYPE = "webauthn-trust-installation/v2"
 MAX_STAGED_WITHDRAWAL_IDS = 192
 _ARGUMENT_FIELDS = frozenset({"publication_id", "verification_evidence_digest", "businessIntent"})
@@ -136,18 +136,41 @@ def _audit_id(request_digest, work):
         purpose="webauthn-trust-publication-audit", work=work)
 
 
-def completion_queries(*, publication_id, request_digest, work):
-    """Fixed business reads only; the successor also needs evidence/capacity."""
+def completion_queries(*, publication_id, verification_evidence_digest, request_digest, work):
+    """Close all four exact business queries; common capacity remains separate."""
     evidence.capture._SharedLedger(work)
     _text(publication_id, "publication ID")
     core.require_digest(request_digest, "completion request digest")
+    core.require_digest(verification_evidence_digest, "completion evidence digest")
     values = ((trust.PUBLICATION_TABLE, "id", publication_id),
         (trust.HIGH_WATER_TABLE, "authority_scope", trust.AUTHORITY_SCOPE),
-        ("metadata_audit_outbox", "id", _audit_id(request_digest, work)))
-    return tuple(core.BoundedQuery(query_id=core.query_program_id(OPERATION, name, table),
+        ("metadata_audit_outbox", "id", _audit_id(request_digest, work)),
+        ("policy_authority_external_evidence_receipts", "evidence_digest", verification_evidence_digest))
+    queries = tuple(core.BoundedQuery(query_id=core.query_program_id(OPERATION, name, table),
         table=table, predicates=(core.QueryPredicate(column, "eq", value),),
-        order_by=(core.QueryOrder(column),), maximum_rows=1, absent_key={column: value})
-        for name, (table, column, value) in zip(("publication", "high_water", "audit"), values))
+        order_by=(core.QueryOrder(column),), maximum_rows=1, absent_key={column: value},
+        require_absence=name == "audit")
+        for name, (table, column, value) in zip(("publication", "high_water", "audit", "evidence"), values))
+    spec = authority.operation_spec(OPERATION)
+    if (sum(query.maximum_rows for query in queries) > spec["maximumBusinessQueryRows"]
+            or sum(query.work_units for query in queries) > spec["maximumBusinessWorkUnits"]):
+        raise WebAuthnTrustCompletionError("completion queries exceed their business allowance")
+    return core.close_queries(OPERATION, queries)
+
+
+def _business_count(context, work):
+    if (type(context) is not core.KernelContext or type(context.operation) is not str
+            or context.operation != OPERATION or type(context.selected_rows) is not tuple
+            or len(context.selected_rows) > authority.operation_spec(OPERATION)["maximumQueryRows"]
+            or any(type(selected) is not dict for selected in context.selected_rows)):
+        raise WebAuthnTrustCompletionError("completion context is not source-bounded")
+    work.prepare_scan(context.selected_rows)
+    count = sum(not (selected.get("table") == capacity.AGGREGATE_TABLE
+        and selected.get("key") == {"aggregate_id": capacity.AGGREGATE_ID})
+        for selected in context.selected_rows)
+    if count > authority.operation_spec(OPERATION)["maximumBusinessQueryRows"]:
+        raise WebAuthnTrustCompletionError("completion selected business rows exceed their allowance")
+    return count
 
 
 def _complete_on_work(context, *, installation_envelope_bytes, installed_bundle_bytes,
@@ -164,8 +187,7 @@ def _complete_on_work(context, *, installation_envelope_bytes, installed_bundle_
     retry bookkeeping; it is not mislabeled as the primary-tree row digest.
     """
     ledger = evidence.capture._SharedLedger(work)
-    if type(context) is not core.KernelContext or context.operation != OPERATION:
-        raise WebAuthnTrustCompletionError("completion context operation differs from source")
+    _business_count(context, work)
     request_digest, database_now = context.request_digest, context.database_now
     _object(context.arguments, _ARGUMENT_FIELDS, "completion arguments")
     _text(context.arguments["publication_id"], "publication ID")
@@ -292,7 +314,8 @@ def _complete_on_work(context, *, installation_envelope_bytes, installed_bundle_
         "witnessReceiptDigest": stage["witnessReceiptDigest"], "witnessSequence": stage["witnessSequence"]}
     evidence_digest = evidence._evidence_digest_on_work(installation_envelope_bytes, work)
     _same(evidence_digest, arguments["verification_evidence_digest"], work, "completion original evidence identity changed")
-    evidence._verify_on_work(envelope_bytes=installation_envelope_bytes, purpose="trust-installation",
+    consumed_evidence = evidence._consume_on_work(owned_context,
+        envelope_bytes=installation_envelope_bytes, purpose="trust-installation",
         expected_claims=claims, public_key=installer_public_key, expected_signer_identity=owned["identity"],
         expected_signer_spki_digest=expected_installer_spki_digest, now_epoch_ns=now_ns,
         maximum_age_ns=maximum_age_ns, maximum_clock_skew_ns=maximum_clock_skew_ns, work=work)
@@ -313,11 +336,53 @@ def _complete_on_work(context, *, installation_envelope_bytes, installed_bundle_
         "storage_format_version": 2, "status": "pending", "claim_id": None, "claimed_at": None,
         "attempts": 0, "audited_at": None, "audit_event_hash": None, "last_error": None, "created_at": now_iso}
     effects = ((publication_selected, updated_publication), (high_selected, updated_high),
-        (audit_selected, audit))
-    operation_id = evidence.plan._frame("serverware.policyAuthorityOperation/v2",
-        (evidence.plan._ascii(OPERATION, work), evidence.plan._ascii(request_digest, work)), work)
-    consumption = {"schema": CONSUMPTION_SCHEMA, "sourceRevision": authority.SOURCE_REVISION,
-        "evidenceType": EVIDENCE_TYPE, "evidenceDigest": evidence_digest, "operationId": operation_id,
-        "requestDigest": request_digest, "publicationId": publication["id"],
-        "claimsDigest": _frame(CLAIMS_SCHEMA, claims, work), "consumedAtEpochNs": now_ns}
-    return effects, consumption
+        (audit_selected, audit), consumed_evidence)
+    work.prepare_copy(updated_publication)
+    return effects, dict(updated_publication)
+
+
+def _kernel_transition_on_work(context, *, installation_envelope_bytes, installed_bundle_bytes,
+        installed_state_bytes, installation_target_digest, expected_committed_stage,
+        installer_public_key, expected_installer_identity, expected_installer_spki_digest,
+        maximum_age_ns, maximum_clock_skew_ns, work):
+    """Render the four actual business mutations; never finalize capacity here.
+
+    The worker genuinely verifies and consumes the selected original v2
+    evidence. Independent configured pins, committed-stage authority and
+    selected-row/current-root admission remain required; no keyless default or
+    evidence-success token is accepted. All final row copies, ordering and
+    canonical result validation are charged on the same supplied work.
+    """
+    evidence.capture._SharedLedger(work)
+    business_count = _business_count(context, work)
+    spec = authority.operation_spec(OPERATION)
+    effects, result = _complete_on_work(context,
+        installation_envelope_bytes=installation_envelope_bytes,
+        installed_bundle_bytes=installed_bundle_bytes, installed_state_bytes=installed_state_bytes,
+        installation_target_digest=installation_target_digest, expected_committed_stage=expected_committed_stage,
+        installer_public_key=installer_public_key, expected_installer_identity=expected_installer_identity,
+        expected_installer_spki_digest=expected_installer_spki_digest,
+        maximum_age_ns=maximum_age_ns, maximum_clock_skew_ns=maximum_clock_skew_ns, work=work)
+    if len(effects) != 4 or len(effects) > spec["maximumBusinessMutations"]:
+        raise WebAuthnTrustCompletionError("completion must render exactly four business effects")
+    mutations, addresses = [], set()
+    for selected, updated in effects:
+        core.require_digest(selected["keyDigest"], "completion mutation key digest")
+        address = selected["table"], selected["keyDigest"]
+        if address in addresses:
+            raise WebAuthnTrustCompletionError("completion produced duplicate row mutations")
+        addresses.add(address)
+        work.prepare_copy(selected["key"])
+        if selected["present"] is True:
+            work.prepare_copy(selected["row"])
+        work.prepare_copy(updated)
+        mutations.append(core.mutation(operation=OPERATION, selected=selected, row=updated))
+    work.prepare_copy(mutations)
+    ordered = sorted(mutations, key=lambda item: (item["table"], item["keyDigest"], item["operation"]))
+    work.prepare_copy(ordered)
+    planned = tuple(ordered)
+    business_work = 8 + business_count + 4 * len(planned)
+    if business_work > spec["maximumBusinessWorkUnits"]:
+        raise WebAuthnTrustCompletionError("completion exceeds its business work allowance")
+    work.prepare_encoding(result)
+    return core.KernelTransition(mutations=planned, result=result, work_units=business_work)

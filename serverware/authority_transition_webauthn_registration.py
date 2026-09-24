@@ -11,7 +11,8 @@ and both still require independently admitted inputs, not a keyless registry stu
 
 Evidence signs an acyclic semantic intent and derived attestation result, not
 the final request digest, future credential UUID, evidence ID or signature.
-The original challenge is the one-use barrier; no v1 receipt is fabricated.
+The original challenge and the exact stored v2 evidence are consumed in the
+same business mutation set; no v1 receipt is fabricated or reinterpreted.
 No database, clock, legacy finalizer, signer or replacement work budget is used.
 """
 from __future__ import annotations
@@ -246,6 +247,8 @@ def _query_recipe_on_work(*, arguments, database_now, request_digest, work):
         {"id": _identity(request_digest, "credential-record", work)}, require_absence=True)
     exact("registration_audit", "metadata_audit_outbox",
         {"id": _identity(request_digest, "registration-audit", work)}, require_absence=True)
+    exact("registration_evidence", "policy_authority_external_evidence_receipts",
+        {"evidence_digest": values["attestation_evidence_digest"]})
     exact("trust_high_water", trust.HIGH_WATER_TABLE, {"authority_scope": trust.AUTHORITY_SCOPE})
     source_key = {"authority_scope": trust.AUTHORITY_SCOPE}
     predicates = [core.QueryPredicate("scope", "eq", "global"),
@@ -419,7 +422,8 @@ def _transition_on_work(context, *, evidence_public_key, expected_signer_identit
     if (values["verified_at_epoch_ns"] > now_ns + maximum_clock_skew_ns
             or now_ns - values["verified_at_epoch_ns"] > maximum_age_ns):
         _fail("registration cryptographic verification is stale")
-    evidence._verify_on_work(envelope_bytes=raw, purpose="registration-attestation", expected_claims=claims,
+    consumed_evidence = evidence._consume_on_work(current,
+        envelope_bytes=raw, purpose="registration-attestation", expected_claims=claims,
         public_key=evidence_public_key, expected_signer_identity=identity,
         expected_signer_spki_digest=expected_signer_spki_digest, now_epoch_ns=now_ns,
         maximum_age_ns=maximum_age_ns, maximum_clock_skew_ns=maximum_clock_skew_ns, work=work)
@@ -439,7 +443,7 @@ def _transition_on_work(context, *, evidence_public_key, expected_signer_identit
         "revoked_at": None, "revoked_by": None, "revocation_reason": None, "revocation_source": None})
     work.prepare_copy(challenge)
     consumed = {**challenge, "used_at": now_iso}
-    effects = [(new_selected, row), (challenge_selected, consumed)]
+    effects = [(new_selected, row), (challenge_selected, consumed), consumed_evidence]
     siblings = []
     if values["oidc_session_id"] is not None:
         for selected in _present(current, "webauthn_challenges", work):
@@ -479,7 +483,7 @@ def _transition_on_work(context, *, evidence_public_key, expected_signer_identit
     result = {"challenge": returned_challenge, "credential": returned_credential}
     if values["oidc_session_id"] is not None:
         result["invalidated_sibling_registration_challenge_count"] = len(siblings)
-    if len(effects) > MAX_SIBLINGS + 3:
+    if len(effects) > MAX_SIBLINGS + 4:
         _fail("registration effects exceed the source mutation bound")
     work.prepare_copy(effects)
     work.prepare_encoding(result)

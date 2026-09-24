@@ -34,7 +34,7 @@ BUNDLE_SCHEMA = "serverware.policyAuthorityRevocationProofBundle/v1"
 BUNDLE_PROFILE = "serverware.policyAuthorityRevocationProofBundleProfile/v1"
 TRANSITION_SCHEMA = "serverware.policyAuthorityRevocationReadWriteTransition/v1"
 TRANSITION_PROFILE = "serverware.policyAuthorityRevocationReadWriteTransitionProfile/v1"
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.35"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.36"
 COUNTED_PROFILE = "serverware.policyAuthorityCountedIndex/v1"
 PHASES = (("generation", "generation"), ("declarationBinding", "declaration_binding"),
     ("observationValidation", "observation_validation"), ("pointBinding", "point_binding"),
@@ -1058,6 +1058,50 @@ class RevocationProofBundleTests(unittest.TestCase):
         self.assertIs(type(tuples[0]), tuple)
         self.assertEqual(len(tuples[0]), 2)
         self.assertIs(public, tuples[0][0])
+
+    def test_shared_original_limit_corruption_denies_before_release_and_after_final_hash(self):
+        fixture = fixture_oracle.RevocationObservationFixture()
+        expected, inputs, prior = expected_packaging(fixture), fixture.inputs(), units(3, 19, 7)
+        genuine = retained.core.framed_digest
+        for late in (False, True):
+            for change in (None, "widen", "float"):
+                work = accounting._ValidationWork(accounting.QueryReadValidationLimits(
+                    max_input_bytes=64 * 1024 * 1024 - 100))
+                work.charge(hashes=3, input_bytes=19, json_nodes=7)
+                entering, changed = work.limits, []
+                original_bytes = entering.max_input_bytes
+                target = TRANSITION_SCHEMA if late else BUNDLE_SCHEMA
+
+                def digest(domain, *frames):
+                    result = genuine(domain, *frames)
+                    if domain == target and not changed:
+                        changed.append(True)
+                        if change is not None:
+                            object.__setattr__(entering, "max_input_bytes",
+                                original_bytes + 1 if change == "widen" else float(original_bytes))
+                    return result
+
+                with self.subTest(late=late, change=change), \
+                        patch.object(retained.core, "framed_digest", side_effect=digest), \
+                        patch.object(retained.mixed, "_verify", wraps=retained.mixed._verify) as actual:
+                    if change is None:
+                        derived = retained._derive_on_work(work=work, **inputs)
+                        self.assert_documents(fixture, derived.retained)
+                    else:
+                        with self.assertRaisesRegex(retained.RevocationProofBundleError, "entering limits"):
+                            retained._derive_on_work(work=work, **inputs)
+                self.assertEqual((changed, actual.call_count), ([True], 1))
+                spent = expected["total"]
+                if change is not None and not late:
+                    spent = {name: value - expected["finalization"][name] for name, value in spent.items()}
+                self.assertEqual(observed_units(work.metrics), add_units(prior, spent))
+                self.assertIs(work.limits, entering)
+                self.assertFalse(hasattr(work, "_revocation_packaging_owner"))
+                # Unwind restores identity, not externally corrupted values;
+                # failed work is terminal and is not reused by this control.
+                self.assertEqual(entering.max_input_bytes,
+                    original_bytes + 1 if change == "widen" else original_bytes)
+                self.assertIs(type(entering.max_input_bytes), float if change == "float" else int)
 
 
 if __name__ == "__main__":

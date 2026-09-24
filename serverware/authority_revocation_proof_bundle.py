@@ -131,6 +131,8 @@ class _PackagingLedger(mixed._Ledger):
 
     def _reserve_compact(self, *, comparing: bool):
         self.original_limits = self.work.limits
+        self._original_limit_values = (self.original_limits.max_hashes,
+            self.original_limits.max_input_bytes, self.original_limits.max_json_nodes)
         self._original_work = self.work
         self._entering_metrics = self.work.metrics
         self.reserved = QueryReadValidationMetrics(1,
@@ -145,7 +147,19 @@ class _PackagingLedger(mixed._Ledger):
         self.work.limits = self._held_limits = QueryReadValidationLimits(*reduced)
         self._held = True
 
+    def _require_original_limits(self) -> None:
+        # An external callback can retain this object while the live work uses
+        # held limits. Identity checks on the live object alone cannot detect
+        # an in-place change to the ceiling that will later be restored.
+        if type(self.original_limits) is not QueryReadValidationLimits:
+            raise RevocationProofBundleError("retained proof entering limits were changed")
+        values = (self.original_limits.max_hashes, self.original_limits.max_input_bytes,
+                  self.original_limits.max_json_nodes)
+        if any(type(value) is not int for value in values) or values != self._original_limit_values:
+            raise RevocationProofBundleError("retained proof entering limits were changed")
+
     def release_compact_hold(self) -> QueryReadValidationMetrics:
+        self._require_original_limits()
         if (not self._held or getattr(self, "_attachment_failed", False)
                 or self.work is not self._original_work
                 or self.work.limits is not self._held_limits
@@ -160,13 +174,18 @@ class _PackagingLedger(mixed._Ledger):
         return peak
 
     def _restore_entering_limits(self) -> None:
-        """Unwind a private attachment, restoring ceilings but never counters."""
+        """Restore the entering reference, never counters or corrupted scalars.
+
+        External mutation of that object denies publication; unwind does not
+        repair caller state or make a failed invocation safe to reuse.
+        """
         self._original_work.limits = self.original_limits
         self._held = False
         if getattr(self._original_work, "_revocation_packaging_owner", None) is self:
             del self._original_work._revocation_packaging_owner
 
     def _require_attachment_complete(self) -> None:
+        self._require_original_limits()
         if (self._attachment_failed or self._held or self.work is not self._original_work
                 or self.work.limits is not self.original_limits
                 or getattr(self.work, "_revocation_packaging_owner", None) is not self
@@ -284,9 +303,10 @@ def _derive_on_work(*, work: _ValidationWork, **inputs) -> _DerivedRevocationPro
     Earlier acquisition is not accepted as proof: the actual mixed verifier
     runs and is charged again. Packaging phase deltas retain their existing
     meaning; cumulative totals and reservation peaks include prior spending.
-    A failure aborts the owning invocation. This restores its exact entering
-    ceiling (including any outer hold), but never refunds spent work and never
-    creates an independent allowance. Returned graphs are not authority tokens.
+    A failure aborts the owning invocation. This restores its entering limit
+    object (including any outer hold), but never repairs externally corrupted
+    scalars, refunds spent work or creates an independent allowance. Returned
+    graphs are not authority tokens.
     """
     ledger = None
     try:

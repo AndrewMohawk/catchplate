@@ -74,8 +74,10 @@ ceilings does not imply the combined producer fits them.
 
 The private packaging attachment reserves compact output against the entering
 ceiling and all earlier spending. Caught nested attachment poisons the active
-owner. Completion and failure restore that exact ceiling, including an outer
-hold, without refunding counters. Public proof-packaging APIs preserve their
+owner. Normal unwind restores the entering limit object, including an outer
+hold, without refunding counters. External mutation of its scalar limits is
+detected and denied, not silently repaired; failed work must be discarded.
+Public proof-packaging APIs preserve their
 existing behavior and return types; their private two-result worker remains
 compatible with the semantic verifier.
 
@@ -105,8 +107,9 @@ public v3 and production v4 admission disabled. Public planner, service,
 persistence and registry consumers are not switched to v4 by this component.
 All four missing registered WebAuthn kernels remain production gates.
 
-The next required step is coordinated original-envelope and independent-context
-retention: versioned storage, digest binding, identical retries, conflict denial,
+The next required step is coordinated [original-envelope and independent-context
+retention](authority-revocation-retention.md): versioned storage, digest binding,
+identical retries, conflict denial,
 independent replay expectations, current-state admission, one-use consumption,
 SQL/executor checks and terminal witness binding. Historical evaluation context
 must remain separate from current execution authority and deadline enforcement.

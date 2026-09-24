@@ -16,7 +16,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from serverware import authority_contract
 from serverware import authority_transition_core as core
-from serverware.authority_query_read_work import _ValidationWork
+from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
 
 
 OPERATION = "webauthn.credential.revoke"
@@ -148,9 +148,27 @@ def _verify_receipt_signature(
     public_key: Ed25519PublicKey, signature: bytes, message: bytes,
     *, work: _ReceiptWork | None = None,
 ) -> None:
-    if work is not None:
-        work._consume_signature()
+    if work is None:
+        public_key.verify(signature, message)
+        return
+    _require_work(work)
+    work._consume_signature()
+    shared, limits, metrics = work.shared, work.shared.limits, work.shared.metrics
+    limit_values = (limits.max_hashes, limits.max_input_bytes, limits.max_json_nodes)
     public_key.verify(signature, message)
+    _require_work(work)
+    if work.shared is not shared or work.signature_attempts != MAX_SIGNATURE_ATTEMPTS:
+        raise AssertionEvidenceError("assertion receipt work changed during signature verification")
+    if type(shared.limits) is not QueryReadValidationLimits:
+        raise AssertionEvidenceError("assertion receipt limits changed during signature verification")
+    checked = QueryReadValidationLimits(shared.limits.max_hashes,
+        shared.limits.max_input_bytes, shared.limits.max_json_nodes)
+    current = (shared.hash_work, shared.input_bytes, shared.json_nodes)
+    maxima = (checked.max_hashes, checked.max_input_bytes, checked.max_json_nodes)
+    if (any(type(value) is not int or not 0 <= value <= maximum for value, maximum in zip(current, maxima))
+            or shared.limits is not limits or shared.metrics != metrics
+            or maxima != limit_values):
+        raise AssertionEvidenceError("assertion receipt work changed during signature verification")
 
 
 def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:

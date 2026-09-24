@@ -1636,6 +1636,78 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
         self.assertEqual(signed.envelope_bytes, plan_oracle.wire(signed.envelope))
         self.assertEqual((signed.signing_attempts, signed.signature_verifications), (1, 1))
 
+    def test_private_original_wire_replays_actual_production_with_external_expectations(self):
+        from serverware import authority_query_read_work as accounting
+        from serverware import authority_revocation_plan as replay
+        from serverware import authority_revocation_read_write as mixed
+        from serverware import authority_revocation_wire as wire
+
+        for separate, audit in ((False, True), (True, False)):
+            with self.subTest(separate_signer=separate, include_audit=audit):
+                expected, fixture, cursor, program, arguments, writer_scope = self.revocation_plan_fixture(
+                    separate_signer=separate, include_audit=audit)
+                with writer_scope:
+                    produced = program._produce_revocation_plan(cursor, **arguments)
+                self.assert_produced_revocation_plan(expected, fixture, produced)
+                supplied = expected.arguments()
+                supplied.pop("envelope")
+                # This consumer invocation owns its own work, including any
+                # earlier admission. It never adopts a producer result meter.
+                work = accounting._ValidationWork(accounting.QueryReadValidationLimits())
+                work.charge(hashes=3, input_bytes=11, json_nodes=7)
+                entering_limits = work.limits
+                calls_before = copy.deepcopy(cursor.calls)
+                with patch.object(wire, "_decode_envelope", wraps=wire._decode_envelope) as decode, \
+                        patch.object(replay, "_verify_signed_revocation_plan_on_work",
+                                     wraps=replay._verify_signed_revocation_plan_on_work) as verify, \
+                        patch.object(mixed, "_verify", wraps=mixed._verify) as proof, \
+                        patch.object(replay, "verify_signed_revocation_plan",
+                                     side_effect=AssertionError("fresh verification allowance")):
+                    observed = wire._verify_signed_envelope_on_work(
+                        produced.signed.envelope_bytes, work=work, **supplied)
+                self.assertEqual((decode.call_count, verify.call_count, proof.call_count), (1, 1, 1))
+                self.assertIs(decode.call_args.kwargs["work"], work)
+                self.assertIs(verify.call_args.kwargs["work"], work)
+                self.assertIs(verify.call_args.kwargs["original_envelope_bytes"], produced.signed.envelope_bytes)
+                self.assertIs(work.limits, entering_limits)
+                self.assertEqual(observed.envelope_bytes, produced.signed.envelope_bytes)
+                self.assertEqual(observed.payload_bytes, produced.signed.payload_bytes)
+                self.assertEqual(observed.semantics.mutations, fixture.final_mutations)
+                self.assertEqual(observed.semantics.kernel.result, fixture.kernel_expected["result"])
+                self.assertEqual((observed.metrics.total_hashes, observed.metrics.total_input_bytes,
+                                  observed.metrics.total_json_nodes),
+                                 (work.hash_work, work.input_bytes, work.json_nodes))
+                self.assertEqual((observed.metrics.planner_signature_attempts,
+                                  observed.metrics.assertion_signature_attempts), (1, 1))
+                self.assertEqual(cursor.calls, calls_before)
+
+    def test_private_original_wire_does_not_adopt_mutated_producer_graphs_or_currentness(self):
+        from serverware import authority_query_read_work as accounting
+        from serverware import authority_revocation_wire as wire
+
+        expected, fixture, cursor, program, arguments, writer_scope = self.revocation_plan_fixture()
+        with writer_scope:
+            produced = program._produce_revocation_plan(cursor, **arguments)
+        original = produced.signed.envelope_bytes
+        # Returned graphs are ordinary mutable observations. The consumer
+        # accepts only original bytes and independently supplied expectations.
+        produced.signed.payload["typedRequest"]["arguments"]["reason"] = "changed after production"
+        produced.signed.envelope["signatureBase64Url"] = "A" * 86
+        supplied = expected.arguments()
+        supplied.pop("envelope")
+        observed = wire._verify_signed_envelope_on_work(original,
+            work=accounting._ValidationWork(accounting.QueryReadValidationLimits()), **supplied)
+        self.assertEqual(observed.envelope_bytes, original)
+        self.assertEqual(observed.semantics.mutations, fixture.final_mutations)
+        stale = dict(supplied)
+        stale["now_epoch_ns"] = expected.deadline_epoch_ns
+        with self.assertRaises(ValueError):
+            wire._verify_signed_envelope_on_work(original,
+                work=accounting._ValidationWork(accounting.QueryReadValidationLimits()), **stale)
+        with self.assertRaises(ValueError):
+            wire._verify_signed_envelope_on_work(produced,
+                work=accounting._ValidationWork(accounting.QueryReadValidationLimits()), **supplied)
+
     def test_private_plan_production_replays_real_acquisition_packaging_and_signed_verification(self):
         from serverware import authority_revocation_plan as replay
         from serverware import authority_revocation_plan_production as production

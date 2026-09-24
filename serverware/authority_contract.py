@@ -10,7 +10,7 @@ from serverware import authority_complete_query
 from serverware.authority_query_read_work import _ValidationWork
 
 
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.35"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.36"
 SCHEMA_VERSION = 9
 CONTRACT_SCHEMA = "serverware.policyAuthorityOperationContract/v3"
 BUSINESS_INTENT_SCHEMA = "serverware.policyAuthorityBusinessIntent/v2"
@@ -193,6 +193,42 @@ SIGNED_REVOCATION_PRODUCTION_CONTRACT = MappingProxyType({
         "key-and-identity-enrollment", "read-only-transaction-ownership",
         "before-root-and-cutoff-currentness", "capability-reservation",
         "one-use-persistence", "sql-commit", "registry-admission", "terminal-witness",
+    ),
+})
+# Original-byte admission is a private verification boundary, not a storage
+# protocol or permission to execute a historically valid plan.
+SIGNED_REVOCATION_WIRE_CONTRACT = MappingProxyType({
+    "schema": "serverware.policyAuthoritySignedRevocationWireAdmission/v1",
+    "admission": "private-wire-verifier-only",
+    "operation": "webauthn.credential.revoke",
+    "publicV3Enabled": False,
+    "productionV4Enabled": False,
+    "inputEncoding": "canonical-ascii-json/v1",
+    "workOwnership": "existing-invocation-remaining-allowance/v1",
+    "decoderByteReservation": "four-times-original-byte-count/v1",
+    "decoderNodeReservation": "tokens-plus-objects-plus-two-members/v1",
+    "canonicalComparison": "actual-transport-encoder-before-signature/v1",
+    "maxPayloadBytes": 64 * 1024 * 1024,
+    "maxSharedHashes": 8_000_000,
+    "maxSharedInputBytes": 64 * 1024 * 1024,
+    "maxSharedJsonNodes": 1_000_000,
+    "maxJsonDepth": 128,
+    "maxIntegerBits": 16384,
+    "includedPhases": (
+        "raw-lexical-preflight", "ascii-decode", "strict-json-parse",
+        "duplicate-and-integer-callback-reservation",
+        "joint-envelope-and-independent-expectation-capture",
+        "original-canonical-wire-comparison", "signature-callback-meter-stability",
+        "genuine-signed-semantic-verification",
+    ),
+    "excludedWork": (
+        "transport-buffer-acquisition", "indexed-projection-allocation",
+        "fixed-metadata-scaffolding", "whole-process-memory", "whole-plan",
+    ),
+    "excludedAuthority": (
+        "key-and-identity-enrollment", "before-root-and-cutoff-currentness",
+        "capability-reservation", "one-use-persistence", "sql-commit",
+        "registry-admission", "terminal-witness",
     ),
 })
 # Current measured verifier evidence reads, not planner/business query closure
@@ -2376,6 +2412,7 @@ OPERATION_MANIFEST_DIGEST = _digest(
         "plannerCompleteAcquisition": dict(PLANNER_COMPLETE_ACQUISITION_CONTRACT),
         "signedRevocationPlanVerification": dict(SIGNED_REVOCATION_PLAN_CONTRACT),
         "signedRevocationPlanProduction": dict(SIGNED_REVOCATION_PRODUCTION_CONTRACT),
+        "signedRevocationWireAdmission": dict(SIGNED_REVOCATION_WIRE_CONTRACT),
         "auditCapacityQueryWorkUnits": AUDIT_CAPACITY_QUERY_WORK_UNITS,
         "auditCapacityMutationWorkUnits": AUDIT_CAPACITY_MUTATION_WORK_UNITS,
         "phase2StoreTables": list(PHASE2_STORE_TABLES),

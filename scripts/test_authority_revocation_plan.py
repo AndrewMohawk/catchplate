@@ -18,7 +18,7 @@ import sys
 import unittest
 from unittest.mock import patch
 
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -512,6 +512,30 @@ def independent_production_work(fixture):
     values.extend((graph_cost(payload, 6, 4), graph_cost(fixture.envelope), (0, 566, 0),
         frame_cost(SIGNED_SCHEMA, (wire(payload),)), utf8_cost(framed(SIGNED_SCHEMA, wire(payload)))))
     return add(*values)
+
+
+class _CallbackPublicKey(Ed25519PublicKey):
+    """Fixture observer: every verdict delegates to the actual Ed25519 key."""
+
+    def __init__(self, key, callback):
+        self.key, self.callback, self.calls = key, callback, 0
+
+    def verify(self, signature, data):
+        self.key.verify(signature, data)
+        self.calls += 1
+        self.callback()
+
+    def public_bytes(self, encoding, format):
+        return self.key.public_bytes(encoding, format)
+
+    def public_bytes_raw(self):
+        return self.key.public_bytes_raw()
+
+    def __eq__(self, other):
+        return self.key == (other.key if isinstance(other, _CallbackPublicKey) else other)
+
+    def __copy__(self):
+        return self
 
 
 class RevocationPlanTests(unittest.TestCase):
@@ -1241,6 +1265,265 @@ class RevocationPlanTests(unittest.TestCase):
             with self.subTest(change=change), patch.object(production, "_sign_and_verify", side_effect=sign):
                 with self.assertRaises(ValueError):
                     production._build_and_sign(**arguments)
+
+    def test_shared_verifier_reuses_real_body_and_original_work_with_exclusive_phase_parity(self):
+        fixture = PlanFixture(separate_signer=True, include_audit=False)
+        expected, prior = independent_metrics(fixture), (7, 101, 13)
+        raw = wire(fixture.envelope)
+        for original in (None, raw):
+            work = accounting._ValidationWork(accounting.QueryReadValidationLimits())
+            work.charge(hashes=prior[0], input_bytes=prior[1], json_nodes=prior[2])
+            entering = work.limits
+            actual_body = plan._verify_on_ledger
+            ledgers = []
+            def body(**kwargs):
+                self.assertIs(kwargs["ledger"].work, work)
+                ledgers.append(kwargs["ledger"])
+                return actual_body(**kwargs)
+            with self.subTest(original_bytes=original is not None), \
+                    patch.object(plan.retained._PackagingLedger, "__init__",
+                                 side_effect=AssertionError("fresh outer allowance")), \
+                    patch.object(plan, "_verify_on_ledger", side_effect=body) as shared, \
+                    patch.object(plan.semantics, "_verify", wraps=plan.semantics._verify) as semantic, \
+                    patch.object(plan.mixed, "_verify", wraps=plan.mixed._verify) as proof, \
+                    patch.object(plan, "verify_signed_revocation_plan", wraps=plan.verify_signed_revocation_plan) as public:
+                actual = plan._verify_signed_revocation_plan_on_work(
+                    work=work, original_envelope_bytes=original, **fixture.arguments())
+            extra = (0, 2 * len(raw) if original is not None else 0, 0)
+            self.assertEqual((shared.call_count, semantic.call_count, proof.call_count, public.call_count), (1, 1, 1, 0))
+            self.assertIs(semantic.call_args.args[1], ledgers[0])
+            self.assertIs(proof.call_args.args[1], ledgers[0])
+            for name in PHASES:
+                self.assertEqual(units(getattr(actual.metrics, name)),
+                    add(expected[name], extra) if name == "transport" else expected[name])
+            self.assertEqual((actual.metrics.total_hashes, actual.metrics.total_input_bytes,
+                actual.metrics.total_json_nodes), add(prior, expected["total"], extra))
+            self.assertEqual(units(work.metrics), add(prior, expected["total"], extra))
+            self.assertEqual((actual.envelope_bytes, actual.payload_bytes), (raw, wire(fixture.payload)))
+            self.assertEqual(actual.semantics.mutations, fixture.semantic.final_mutations)
+            self.assertEqual((actual.metrics.planner_signature_attempts, actual.metrics.assertion_signature_attempts), (1, 1))
+            self.assertIs(work.limits, entering)
+            self.assertFalse(hasattr(work, "_revocation_packaging_owner"))
+
+    def test_shared_verifier_independent_peak_exact_and_minus_one_preserve_entering_ceiling(self):
+        fixture = PlanFixture()
+        expected, prior = independent_metrics(fixture), (11, 127, 17)
+        raw = wire(fixture.envelope)
+        comparison = (0, 2 * len(raw), 0)
+        admitted = add(prior, expected["admission"], comparison)
+        for dimension in (None, 0, 1, 2):
+            maximum = list(admitted)
+            if dimension is not None:
+                maximum[dimension] -= 1
+            work = accounting._ValidationWork(accounting.QueryReadValidationLimits(*maximum))
+            work.charge(hashes=prior[0], input_bytes=prior[1], json_nodes=prior[2])
+            entering = work.limits  # Also models an already installed outer ceiling.
+            with self.subTest(dimension=dimension):
+                if dimension is None:
+                    actual = plan._verify_signed_revocation_plan_on_work(
+                        work=work, original_envelope_bytes=raw, **fixture.arguments())
+                    self.assertEqual(units(work.metrics), add(prior, expected["total"], comparison))
+                    self.assertEqual(actual.envelope_bytes, raw)
+                else:
+                    with self.assertRaises(plan.RevocationPlanError):
+                        plan._verify_signed_revocation_plan_on_work(
+                            work=work, original_envelope_bytes=raw, **fixture.arguments())
+                    self.assertTrue(all(start <= spent <= ceiling
+                        for start, spent, ceiling in zip(prior, units(work.metrics), maximum)))
+            self.assertIs(work.limits, entering)
+            self.assertFalse(hasattr(work, "_revocation_packaging_owner"))
+
+    def test_shared_verifier_two_genuine_invocations_accumulate_without_cached_success(self):
+        fixture = PlanFixture()
+        expected = independent_metrics(fixture)
+        work = accounting._ValidationWork(accounting.QueryReadValidationLimits())
+        entering = work.limits
+        results = []
+        with patch.object(plan.mixed, "_verify", wraps=plan.mixed._verify) as proof, \
+                patch.object(plan.semantics, "_derive_revocation_effects",
+                             wraps=plan.semantics._derive_revocation_effects) as effects:
+            for count in (1, 2):
+                actual = plan._verify_signed_revocation_plan_on_work(work=work, **fixture.arguments())
+                results.append(actual)
+                self.assertEqual(units(work.metrics), tuple(count * value for value in expected["total"]))
+                self.assertEqual((actual.metrics.total_hashes, actual.metrics.total_input_bytes,
+                    actual.metrics.total_json_nodes), units(work.metrics))
+                self.assertIs(work.limits, entering)
+        self.assertEqual((proof.call_count, effects.call_count), (2, 2))
+        self.assertIsNot(results[0].semantics, results[1].semantics)
+        self.assertEqual(results[0].envelope_bytes, results[1].envelope_bytes)
+
+    def test_shared_verifier_real_signature_proof_and_callback_failures_restore_without_refund(self):
+        for changed in ("key", "proof", "callback"):
+            fixture = PlanFixture()
+            if changed == "proof":
+                fixture.payload["revocationProofBundle"]["inputs"]["beforeProofs"][0]["rowDigest"] = sha(b"wrong primary row")
+                fixture.rehash()
+            supplied = fixture.arguments()
+            if changed == "key":
+                supplied["planner_public_key"] = fixture.other_key.public_key()
+            work = accounting._ValidationWork(accounting.QueryReadValidationLimits())
+            work.charge(hashes=3, input_bytes=19, json_nodes=7)
+            entering = work.limits
+            real = plan.semantics._verify
+            def semantic(*args):
+                if changed == "callback":
+                    raise RuntimeError("observer failure after real planner signature")
+                return real(*args)
+            with self.subTest(changed=changed), \
+                    patch.object(plan.semantics, "_verify", side_effect=semantic) as replay, \
+                    patch.object(plan.mixed, "_verify", wraps=plan.mixed._verify) as proof:
+                with self.assertRaises(RuntimeError if changed == "callback" else plan.RevocationPlanError):
+                    plan._verify_signed_revocation_plan_on_work(work=work, **supplied)
+            self.assertEqual(replay.call_count, int(changed != "key"))
+            self.assertEqual(proof.call_count, int(changed == "proof"))
+            self.assertGreater(work.hash_work, 3)
+            self.assertGreater(work.input_bytes, 19)
+            self.assertGreater(work.json_nodes, 7)
+            self.assertIs(work.limits, entering)
+            self.assertFalse(hasattr(work, "_revocation_packaging_owner"))
+
+    def test_shared_verifier_caught_reentry_poison_denies_before_and_after_compact_release(self):
+        fixture = PlanFixture()
+        for late in (False, True):
+            work = accounting._ValidationWork(accounting.QueryReadValidationLimits())
+            entering, caught = work.limits, []
+            real = plan._bindings if late else plan._wire
+            def callback(*args):
+                if not caught:
+                    try:
+                        plan._verify_signed_revocation_plan_on_work(work=work, **fixture.arguments())
+                    except plan.RevocationPlanError:
+                        caught.append(True)
+                    else:
+                        self.fail("nested shared verifier returned a result")
+                return real(*args)
+            with self.subTest(late=late), patch.object(plan, "_bindings" if late else "_wire", side_effect=callback):
+                with self.assertRaises(plan.RevocationPlanError):
+                    plan._verify_signed_revocation_plan_on_work(work=work, **fixture.arguments())
+            self.assertEqual(caught, [True])
+            self.assertGreater(work.input_bytes, 0)
+            self.assertIs(work.limits, entering)
+            self.assertFalse(hasattr(work, "_revocation_packaging_owner"))
+
+    def test_shared_verifier_original_byte_aliases_deny_before_signature_or_semantics(self):
+        fixture = PlanFixture()
+        canonical = wire(fixture.envelope)
+        aliases = (b" " + canonical, canonical + b"\n",
+            canonical.replace(b'"payload"', b'"\\u0070ayload"', 1),
+            json.dumps(fixture.envelope, ensure_ascii=True, separators=(",", ":")).encode("ascii"))
+        for raw in aliases:
+            self.assertNotEqual(raw, canonical)
+            work = accounting._ValidationWork(accounting.QueryReadValidationLimits())
+            entering = work.limits
+            with self.subTest(prefix=raw[:25]), patch.object(hashlib, "sha256", wraps=hashlib.sha256) as hashes, \
+                    patch.object(plan, "_wire", wraps=plan._wire) as encoded, \
+                    patch.object(plan.semantics, "_verify", wraps=plan.semantics._verify) as replay:
+                with self.assertRaisesRegex(plan.RevocationPlanError, "original envelope bytes"):
+                    plan._verify_signed_revocation_plan_on_work(
+                        work=work, original_envelope_bytes=raw, **fixture.arguments())
+            self.assertEqual((hashes.call_count, encoded.call_count, replay.call_count), (0, 1, 0))
+            self.assertIs(work.limits, entering)
+
+    def test_shared_verifier_exact_work_raw_bytes_and_keyword_inventory_fail_before_capture(self):
+        fixture = PlanFixture()
+        class DerivedWork(accounting._ValidationWork):
+            pass
+        class DerivedBytes(bytes):
+            pass
+        forged = accounting._ValidationWork(accounting.QueryReadValidationLimits())
+        forged.input_bytes = 0.0
+        for bad in (None, {}, DerivedWork(accounting.QueryReadValidationLimits()),
+                    object.__new__(accounting._ValidationWork), forged):
+            with self.subTest(work=type(bad).__name__), \
+                    patch.object(plan, "_verify_on_ledger", wraps=plan._verify_on_ledger) as body:
+                with self.assertRaises(plan.RevocationPlanError):
+                    plan._verify_signed_revocation_plan_on_work(work=bad, **fixture.arguments())
+            self.assertEqual(body.call_count, 0)
+        work = accounting._ValidationWork(accounting.QueryReadValidationLimits())
+        for raw in (b"", b"x", bytearray(b"{}"), DerivedBytes(b"{}"), b"x" * (64 * 1024 * 1024 + 1)):
+            with self.subTest(raw_type=type(raw).__name__, size=len(raw)), \
+                    patch.object(plan, "_verify_on_ledger", wraps=plan._verify_on_ledger) as body:
+                with self.assertRaises(plan.RevocationPlanError):
+                    plan._verify_signed_revocation_plan_on_work(work=work, original_envelope_bytes=raw,
+                        **fixture.arguments())
+            self.assertEqual((body.call_count, units(work.metrics)), (0, (0, 0, 0)))
+        original = fixture.arguments()
+        for supplied in ({**original, "successful_result": {}}, {**original, "limits": work.limits},
+                         {name: value for name, value in original.items() if name != "expected_request"}):
+            with self.assertRaisesRegex(plan.RevocationPlanError, "inputs are not closed"):
+                plan._verify_signed_revocation_plan_on_work(work=work, **supplied)
+            self.assertEqual(units(work.metrics), (0, 0, 0))
+        with self.assertRaises(TypeError):
+            plan.verify_signed_revocation_plan(**original, original_envelope_bytes=wire(fixture.envelope))
+
+    def test_shared_verifier_owns_all_graphs_before_real_planner_signature_frame(self):
+        fixture = PlanFixture()
+        supplied = fixture.arguments()
+        canonical = wire(fixture.envelope)
+        work = accounting._ValidationWork(accounting.QueryReadValidationLimits())
+        real, changed = plan._frame, []
+        def frame(domain, frames, actual_work):
+            if domain == SIGNED_SCHEMA and not changed:
+                changed.append(True)
+                supplied["envelope"]["payload"]["typedRequest"]["arguments"]["record_id"] = "caller changed"
+                supplied["expected_request"].clear()
+                supplied["expected_planner_identity"].clear()
+                supplied["expected_before"]["indexBeforeHeads"].clear()
+            return real(domain, frames, actual_work)
+        with patch.object(plan, "_frame", side_effect=frame):
+            actual = plan._verify_signed_revocation_plan_on_work(
+                work=work, original_envelope_bytes=canonical, **supplied)
+        self.assertEqual(changed, [True])
+        self.assertEqual(actual.envelope_bytes, canonical)
+        self.assertEqual(actual.semantics.mutations, fixture.semantic.final_mutations)
+
+    def test_shared_verifier_real_planner_and_receipt_callbacks_cannot_change_live_meter(self):
+        fixture = PlanFixture()
+        expected = independent_metrics(fixture)
+        for phase in ("planner", "receipt"):
+            for change in (None, "replace", "widen", "spend", "refund", "float_counter", "float_limit",
+                           "entering_widen", "entering_float"):
+                work = accounting._ValidationWork(accounting.QueryReadValidationLimits())
+                entering = work.limits
+                supplied = fixture.arguments()
+                def callback():
+                    if change == "replace":
+                        work.limits = accounting.QueryReadValidationLimits(work.limits.max_hashes,
+                            work.limits.max_input_bytes, work.limits.max_json_nodes)
+                    elif change == "widen":
+                        object.__setattr__(work.limits, "max_input_bytes", work.limits.max_input_bytes + 1)
+                    elif change == "spend":
+                        work.charge(input_bytes=1)
+                    elif change == "refund":
+                        work.input_bytes -= 1
+                    elif change == "float_counter":
+                        work.input_bytes = float(work.input_bytes)
+                    elif change == "float_limit":
+                        object.__setattr__(work.limits, "max_json_nodes", float(work.limits.max_json_nodes))
+                    elif change == "entering_widen":
+                        object.__setattr__(entering, "max_input_bytes", entering.max_input_bytes + 1)
+                    elif change == "entering_float":
+                        object.__setattr__(entering, "max_json_nodes", float(entering.max_json_nodes))
+                field = "planner_public_key" if phase == "planner" else "verifier_public_key"
+                observed_key = _CallbackPublicKey(supplied[field], callback)
+                supplied[field] = observed_key
+                with self.subTest(phase=phase, change=change), \
+                        patch.object(assertion, "_verify_receipt_signature",
+                                     wraps=assertion._verify_receipt_signature) as receipt:
+                    if change is None:
+                        actual = plan._verify_signed_revocation_plan_on_work(work=work, **supplied)
+                        self.assertEqual(actual.envelope_bytes, wire(fixture.envelope))
+                        self.assertEqual(units(work.metrics), expected["total"])
+                    else:
+                        with self.assertRaises(plan.RevocationPlanError):
+                            plan._verify_signed_revocation_plan_on_work(work=work, **supplied)
+                self.assertEqual(observed_key.calls, 1)  # Real signature verified before callback.
+                self.assertEqual(receipt.call_count, int(phase == "receipt" or change is None))
+                if receipt.call_count:
+                    self.assertEqual(receipt.call_args.kwargs["work"].signature_attempts, 1)
+                self.assertIs(work.limits, entering)
+                self.assertFalse(hasattr(work, "_revocation_packaging_owner"))
 
 
 if __name__ == "__main__":

@@ -10,6 +10,8 @@ The source is **unbuilt and unexecuted**. This is not production protocol
 activation, a startup repair, SQL persistence or a successful deployment.
 Source `.34` additionally binds the complete writer acquisition marker block
 to the actual proved OLD/NEW mutations.
+Source `.36` adds [original-byte admission](authority-revocation-wire.md) and
+a private same-work verification entry while preserving the public graph API.
 
 The existing v3 schemas and consumers stay closed to complete-query plans.
 The new verifier cannot be substituted for admission of current roots,
@@ -133,6 +135,8 @@ Database Snapshot/persistence, one-use consumption, executor and terminal
 witness semantics must move together before activation. Registry admission and
 the other three missing WebAuthn kernels remain outstanding.
 
+The [retention migration design](authority-revocation-retention.md) identifies
+the required storage constraints and coordinated consumer changes.
 Current `exact_plan` storage retains a closed v3 payload, not the original v4
 signed envelope or independent evaluation context. The successor needs explicit
 versioned storage binding those original bytes and their digests, identical

@@ -32,7 +32,7 @@ from serverware import authority_revocation_semantics as semantics
 from serverware import authority_revocation_write_trace as write_trace
 from serverware import authority_root_transition as roots
 from serverware import authority_transition_core as core
-from serverware.authority_query_read_work import QueryReadValidationLimits, QueryReadValidationMetrics
+from serverware.authority_query_read_work import QueryReadValidationLimits, QueryReadValidationMetrics, _ValidationWork
 
 
 _SPEC = authority_contract.operation_spec(contract.OPERATION)
@@ -40,6 +40,14 @@ _HANDLER_DIGEST = authority_contract.handler_contract_digest(contract.OPERATION)
 _QUERY_MANIFEST_DIGEST = primary_contract.source_query_manifest_digest()
 _PROFILE_DIGESTS = tuple((name, projection.profile_for(name).projection_digest)
                          for name in heads.required_index_ids(contract.OPERATION))
+_VERIFICATION_INPUTS = frozenset({
+    "envelope", "expected_request", "expected_planner_identity", "planner_public_key",
+    "expected_verifier_identity", "verifier_public_key", "expected_capability_id",
+    "expected_planner_transaction_id", "expected_fence", "reserved_at_epoch_ns",
+    "deadline_epoch_ns", "deadline_monotonic_ns", "now_epoch_ns", "now_monotonic_ns",
+    "database_now", "maximum_assertion_age_ns", "maximum_plan_age_ns",
+    "maximum_clock_skew_ns", "expected_before", "expected_approver_policy_digest",
+})
 
 
 class RevocationPlanError(ValueError):
@@ -341,7 +349,14 @@ def _bindings(payload, owned, actual, ledger):
     _trace(payload, ledger, actual.proof.primary.business_after_roots)
 
 
-def verify_signed_revocation_plan(
+def _verification_types(planner_public_key, verifier_public_key, database_now):
+    if (not isinstance(planner_public_key, Ed25519PublicKey)
+            or not isinstance(verifier_public_key, Ed25519PublicKey)
+            or type(database_now) is not datetime or database_now.tzinfo is not timezone.utc):
+        raise RevocationPlanError("revocation verification keys or UTC time have invalid types")
+
+
+def _verify_on_ledger(
     *, envelope: Any, expected_request: Any, expected_planner_identity: Any,
     planner_public_key: Ed25519PublicKey, expected_verifier_identity: Any,
     verifier_public_key: Ed25519PublicKey, expected_capability_id: str,
@@ -349,23 +364,10 @@ def verify_signed_revocation_plan(
     deadline_epoch_ns: int, deadline_monotonic_ns: int, now_epoch_ns: int,
     now_monotonic_ns: int, database_now: datetime, maximum_assertion_age_ns: int,
     maximum_plan_age_ns: int, maximum_clock_skew_ns: int, expected_before: Any,
-    expected_approver_policy_digest: str | None, limits: QueryReadValidationLimits | None = None,
+    expected_approver_policy_digest: str | None, ledger, original_envelope_bytes=None,
 ) -> RevocationPlanObservation:
-    """Verify one complete signed graph against mandatory external expectations.
-
-    One capture precedes SHA or signatures. Both actual transport encodings
-    happen before proof replay, so there is no unreserved final outer buffer.
-    Only the existing compact-output hold is released by the semantic worker.
-    Failure aborts this invocation; return data grants no replay/persistence
-    permission and cannot replace the independent inputs of another call.
-    """
+    """The sole actual capture/signature/replay body on an internal held ledger."""
     try:
-        if (not isinstance(planner_public_key, Ed25519PublicKey)
-                or not isinstance(verifier_public_key, Ed25519PublicKey)
-                or type(database_now) is not datetime or database_now.tzinfo is not timezone.utc):
-            raise RevocationPlanError("revocation verification keys or UTC time have invalid types")
-        ledger = retained._PackagingLedger(
-            QueryReadValidationLimits() if limits is None else limits, comparing=True)
         work, before = ledger.work, ledger.work.metrics
         cutoff = semantics.complete.cutoff_microseconds(database_now)
         owned = capture._JSONCapture(ledger).visit({
@@ -386,6 +388,13 @@ def verify_signed_revocation_plan(
         payload = owned["envelope"]["payload"]
         before = work.metrics
         envelope_wire = _wire(owned["envelope"], ledger)
+        if original_envelope_bytes is not None:
+            # The immutable original transport was bounded by the private
+            # entry. Length mismatch needs no full scan; equal lengths reserve
+            # both complete byte comparisons before any signature or replay.
+            work.charge(input_bytes=2 * len(original_envelope_bytes))
+            if envelope_wire != original_envelope_bytes:
+                raise RevocationPlanError("revocation original envelope bytes are not canonical")
         payload_wire = _wire(payload, ledger)
         transported = mixed._delta(before, work.metrics)
         before = work.metrics
@@ -400,7 +409,15 @@ def verify_signed_revocation_plan(
         if len(signature) != 64:
             raise RevocationPlanError("revocation planner signature has invalid length")
         message = _ascii(_frame(contract.SIGNED_MEASURED_PLAN_SCHEMA, (payload_wire,), work), work)
+        signature_limits, signature_metrics = work.limits, work.metrics
+        signature_limit_values = (signature_limits.max_hashes,
+            signature_limits.max_input_bytes, signature_limits.max_json_nodes)
         planner_public_key.verify(signature, message)
+        capture._SharedLedger(work)  # Exact integer types, not equality aliases.
+        if (work.limits is not signature_limits or work.metrics != signature_metrics
+                or (work.limits.max_hashes, work.limits.max_input_bytes, work.limits.max_json_nodes)
+                != signature_limit_values):
+            raise RevocationPlanError("revocation work changed during planner signature verification")
         authenticated = mixed._delta(before, work.metrics)
         before = work.metrics
         semantic_owned = {
@@ -424,3 +441,86 @@ def verify_signed_revocation_plan(
         if isinstance(exc, RevocationPlanError):
             raise
         raise RevocationPlanError("signed revocation plan verification failed") from exc
+
+
+def verify_signed_revocation_plan(
+    *, envelope: Any, expected_request: Any, expected_planner_identity: Any,
+    planner_public_key: Ed25519PublicKey, expected_verifier_identity: Any,
+    verifier_public_key: Ed25519PublicKey, expected_capability_id: str,
+    expected_planner_transaction_id: str, expected_fence: int, reserved_at_epoch_ns: int,
+    deadline_epoch_ns: int, deadline_monotonic_ns: int, now_epoch_ns: int,
+    now_monotonic_ns: int, database_now: datetime, maximum_assertion_age_ns: int,
+    maximum_plan_age_ns: int, maximum_clock_skew_ns: int, expected_before: Any,
+    expected_approver_policy_digest: str | None, limits: QueryReadValidationLimits | None = None,
+) -> RevocationPlanObservation:
+    """Verify one complete signed graph against mandatory external expectations.
+
+    Public behavior is unchanged: this invocation owns its source-bounded work.
+    One capture precedes SHA or signatures, and both outer transport encodings
+    precede proof replay. The compact hold is the sole output reservation.
+    Return data grants no replay/persistence permission and cannot replace
+    another invocation's independent inputs. Bounded parsing remains external.
+    """
+    try:
+        _verification_types(planner_public_key, verifier_public_key, database_now)
+        ledger = retained._PackagingLedger(
+            QueryReadValidationLimits() if limits is None else limits, comparing=True)
+        return _verify_on_ledger(
+            envelope=envelope, expected_request=expected_request,
+            expected_planner_identity=expected_planner_identity, planner_public_key=planner_public_key,
+            expected_verifier_identity=expected_verifier_identity, verifier_public_key=verifier_public_key,
+            expected_capability_id=expected_capability_id,
+            expected_planner_transaction_id=expected_planner_transaction_id, expected_fence=expected_fence,
+            reserved_at_epoch_ns=reserved_at_epoch_ns, deadline_epoch_ns=deadline_epoch_ns,
+            deadline_monotonic_ns=deadline_monotonic_ns, now_epoch_ns=now_epoch_ns,
+            now_monotonic_ns=now_monotonic_ns, database_now=database_now,
+            maximum_assertion_age_ns=maximum_assertion_age_ns, maximum_plan_age_ns=maximum_plan_age_ns,
+            maximum_clock_skew_ns=maximum_clock_skew_ns, expected_before=expected_before,
+            expected_approver_policy_digest=expected_approver_policy_digest, ledger=ledger,
+        )
+    except (AttributeError, KeyError, TypeError, ValueError, OverflowError, RecursionError,
+            InvalidSignature, core.TransitionKernelError) as exc:
+        if isinstance(exc, RevocationPlanError):
+            raise
+        raise RevocationPlanError("signed revocation plan verification failed") from exc
+
+
+def _verify_signed_revocation_plan_on_work(
+    *, work: _ValidationWork, original_envelope_bytes: bytes | None = None, **inputs,
+) -> RevocationPlanObservation:
+    """Replay original raw evidence on the caller's existing remaining budget.
+
+    The closed keyword inventory is the public verifier's mandatory inputs,
+    excluding ``limits``. No successful result or caller-created ledger is an
+    input. Optional original immutable envelope bytes are compared using the
+    actual transport encoder, not parsed here. Any preceding bounded parsing
+    must debit the same work object and preserve embedded QueryRead strings.
+
+    Named phase metrics remain exclusive deltas. Total metrics include prior
+    work (for example a separately charged transport parser), not a renewed
+    allowance. The actual shared body captures all raw graphs before hashes.
+    On success or failure, restore the entering limit object, including any
+    outer reservation, without refunding counters. External corruption of its
+    scalars denies; this does not repair a caller-mutated object. Failure aborts
+    the owning invocation: a partly failed child phase is not a retry allowance.
+    """
+    ledger = None
+    try:
+        if len(inputs) != len(_VERIFICATION_INPUTS) or set(inputs) != _VERIFICATION_INPUTS:
+            raise RevocationPlanError("shared revocation verification inputs are not closed")
+        if original_envelope_bytes is not None and (type(original_envelope_bytes) is not bytes
+                or not 2 <= len(original_envelope_bytes) <= contract.MAX_PAYLOAD_BYTES):
+            raise RevocationPlanError("revocation original envelope bytes are not exact and bounded")
+        _verification_types(inputs["planner_public_key"], inputs["verifier_public_key"], inputs["database_now"])
+        ledger = retained._PackagingLedger._attach(work, comparing=True)
+        result = _verify_on_ledger(ledger=ledger, original_envelope_bytes=original_envelope_bytes, **inputs)
+        ledger._require_attachment_complete()
+        return result
+    except (AttributeError, KeyError, TypeError, ValueError, OverflowError, RecursionError,
+            InvalidSignature, core.TransitionKernelError) as exc:
+        if isinstance(exc, RevocationPlanError):
+            raise
+        raise RevocationPlanError("signed revocation plan verification failed") from exc
+    finally:
+        if ledger is not None:
+            ledger._restore_entering_limits()

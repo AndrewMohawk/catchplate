@@ -91,6 +91,13 @@ transport. Public v3, service/persistence and registry admission remain unchange
 Producing an original signed envelope does not establish current roots, durable
 replay, one-use execution or a terminal witness.
 
+Source `.36` adds [private original-byte admission](authority-revocation-wire.md)
+on the same remaining verification work, including strict decoding and comparison
+with the actual canonical encoder before signature checks. The
+[retention migration](authority-revocation-retention.md) remains a design, not an
+installed schema or service. None of the four missing registered kernels is
+enabled by these private producer/verification components.
+
 The [explicit-context credential classifier](webauthn-credential-trust.md) now
 shares the actual enrollment/root/AAGUID/class/development decision with the
 live wrapper and both trust-withdrawal passes. Its immutable context does not

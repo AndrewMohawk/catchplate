@@ -863,7 +863,7 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
         method = self.method("_produce_revocation_plan")
         self.assertEqual({item.arg for item in method.args.kwonlyargs}, {
             "request", "manifest", "evidence", "context", "verifier_public_key",
-            "planner_private_key", "planner_public_key", "query_work"})
+            "planner_private_key", "planner_public_key", "query_work", "trace"})
         copied = call(method, "authority_query_reads._CopyBudget(query_work).copy")
         checked = call(method, "authority_revocation_plan_production._validate_context")
         acquired = call(method, "self._acquire_revocation_transition")
@@ -879,6 +879,7 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
         self.assertEqual([ast.unparse(item) for item in checked.args], ["actual_context", "query_work"])
         self.assertEqual([ast.unparse(item) for item in acquired.args], ["cursor"])
         self.assertEqual(keywords(acquired)["query_work"], "query_work")
+        self.assertEqual(keywords(acquired)["trace"], "trace")
         self.assertEqual(keywords(acquired)["business_before_roots"], "expected_before['businessBeforeRoots']")
         self.assertEqual(keywords(acquired)["authorization_before_roots"], "expected_before['authorizationBeforeRoots']")
         bindings = sorted(calls(method, "authority_revocation_semantics._canonical_equal"), key=lambda item: item.lineno)
@@ -958,6 +959,89 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
         self.assertFalse(calls(facade, "mixed._verify"))
         returned, = [node for node in facade.body if isinstance(node, ast.Return)]
         self.assertEqual([ast.unparse(item) for item in returned.value.elts], ["derived.retained", "derived.result"])
+
+    def test_configured_owner_threads_actual_manifest_prefix_and_private_trace_without_reset(self):
+        _, tree = source("serverware/authority_revocation_coordinator.py")
+        method = definition(tree, "produce_and_persist", "RevocationPlanningCoordinator")
+        self.assertEqual({item.arg for item in method.args.kwonlyargs},
+                         {"request", "evidence", "context", "planned_at_epoch_ns", "work"})
+        snapshot = call(method, "persistence._snapshot_configuration")
+        checked = call(method, "retention.capture._SharedLedger")
+        copied = call(method, "authority_query_reads._CopyBudget(work).copy")
+        validated = call(method, "retention.production._validate_context")
+        self.assertLess(snapshot.lineno, checked.lineno)
+        self.assertLess(checked.lineno, copied.lineno)
+        self.assertLess(copied.lineno, validated.lineno)
+        self.assertEqual({key.value: ast.unparse(value)
+                          for key, value in zip(copied.args[0].keys, copied.args[0].values)},
+                         {"request": "request", "evidence": "evidence", "context": "context"})
+        trace = call(method, "planner.PlannerTrace")
+        identity = call(method, "planner._validate_database_identity")
+        business = call(method, "planner._load_manifest")
+        authorization = call(method, "planner._load_authorization_manifest")
+        produced = call(method, "program._produce_revocation_plan")
+        for before, after in zip((validated, trace, identity, business, authorization),
+                                 (trace, identity, business, authorization, produced)):
+            self.assertLess(before.lineno, after.lineno)
+        self.assertEqual(keywords(trace), {"operation": "operation", "_complete_queries": "True"})
+        self.assertEqual([ast.unparse(item) for item in identity.args], ["guarded", "database_identity"])
+        for acquired in (business, authorization):
+            self.assertEqual([ast.unparse(item) for item in acquired.args], ["guarded"])
+            self.assertEqual(keywords(acquired), {"operation": "operation", "trace": "trace"})
+        self.assertEqual([ast.unparse(item) for item in produced.args], ["guarded"])
+        for name, value in {"trace": "trace", "query_work": "work", "manifest": "manifest + authorization",
+            "request": "owned['request']", "evidence": "owned['evidence']", "context": "actual_context",
+            "verifier_public_key": "configured[3]", "planner_public_key": "configured[2]",
+            "planner_private_key": "private_key"}.items():
+            self.assertEqual(keywords(produced)[name], value)
+        for name in ("_produce_revocation_plan", "_acquire_revocation_transition"):
+            private = self.method(name)
+            defaults = dict(zip((arg.arg for arg in private.args.kwonlyargs), private.args.kw_defaults))
+            self.assertEqual(ast.unparse(defaults["trace"]), "None")
+        acquisition = self.method("_acquire_revocation_transition")
+        constructor = call(acquisition, "PlannerTrace")
+        branch, = [node for node in acquisition.body if isinstance(node, ast.If)
+                   and ast.unparse(node.test) == "trace is None"]
+        self.assertIn(constructor, list(ast.walk(branch)))
+        self.assertFalse(calls(method, "planner._read_root_set"))
+        for forbidden in ("_ValidationWork", "planner.MeasuredPlanner", "planner.validate_planner_request"):
+            self.assertFalse(calls(method, forbidden))
+
+    def test_configured_owner_captures_original_bytes_before_cleanup_and_only_then_persists(self):
+        _, tree = source("serverware/authority_revocation_coordinator.py")
+        method = definition(tree, "produce_and_persist", "RevocationPlanningCoordinator")
+        produced = call(method, "program._produce_revocation_plan")
+        persistence = call(method, "persistence_module._run_on_configuration")
+        scopes = [node for node in ast.walk(method) if isinstance(node, ast.With)]
+        self.assertEqual(len(scopes), 3)
+        for scope in scopes:
+            self.assertIn(produced, list(ast.walk(scope)))
+            self.assertNotIn(persistence, list(ast.walk(scope)))
+        captures = {node.targets[0].id: node for node in ast.walk(method)
+                    if isinstance(node, ast.Assign) and len(node.targets) == 1
+                    and isinstance(node.targets[0], ast.Name)
+                    and node.targets[0].id in {"envelope_bytes", "context_bytes", "database_now"}}
+        self.assertEqual({name: ast.unparse(node.value) for name, node in captures.items()}, {
+            "envelope_bytes": "produced.signed.envelope_bytes",
+            "context_bytes": "produced.evaluation_context_bytes", "database_now": "produced.database_now"})
+        for node in captures.values():
+            self.assertLess(produced.lineno, node.lineno)
+            self.assertLess(node.lineno, persistence.lineno)
+            for scope in scopes:
+                self.assertIn(node, list(ast.walk(scope)))
+        self.assertEqual([ast.unparse(item) for item in persistence.args], [
+            "configured", "store.persist_revocation_planner_record",
+            "{'envelope_bytes': envelope_bytes, 'evaluation_context_bytes': context_bytes, 'planned_at_epoch_ns': planned_at_epoch_ns}",
+            "expectations", "work"])
+        self.assertEqual(keywords(call(method, "expectations.update")),
+                         {"expected_request": "owned['request']", "database_now": "database_now"})
+        self.assertIn("owned['context'][name]", ast.unparse(method))
+        self.assertIn("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE READ ONLY DEFERRABLE", ast.unparse(method))
+        for forbidden in ("persistence.persist", "json.loads", "retention._verify_record_on_work",
+                          "time.time_ns", "time.monotonic_ns"):
+            self.assertFalse(calls(method, forbidden))
+        self.assertIsInstance(method.body[-1], ast.Return)
+        self.assertIs(method.body[-1].value, persistence)
 
 
 if __name__ == "__main__":

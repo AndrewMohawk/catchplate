@@ -19,6 +19,13 @@ record authority: database observations and stored context still cannot supply
 their own independent currentness expectations. See the
 [private producer boundary](authority-revocation-production.md).
 
+Source `.40` connects the private producer and this storage API through the
+configured `RevocationPlanningCoordinator`. It closes its actual serializable,
+read-only, deferrable scopes before the separate writer transaction and passes
+unchanged original bytes with the original independent expectations and work.
+This is authored source integration, not an executed transaction or public v4
+service admission.
+
 The existing `exact_plan_*` fields continue to contain canonical **payload**
 bytes. Legacy v3 service replay reconstructs its envelope; private v4 replay
 returns the original envelope and context from the new immutable sidecar.
@@ -153,10 +160,16 @@ API and service routes remain unchanged. Actual database startup still depends
 on resolving the missing registered kernels; a registry-free verifier does not
 repair that startup gate.
 
-The private producer now supplies original context bytes, but it does not call
-this configured coordinator or open a service route. Storage still requires
-both original byte strings and all independent expectations explicitly; the
-producer observation is not an accepted authority token.
+The low-level producer supplies original context bytes without writing. Source
+`.40` adds a configured owner that calls this persistence coordinator only after
+closing all read scopes. Its thirteen per-call context fields cannot replace
+the persistence configuration's two identity triples or pinned public keys.
+The same captured six-setting configuration is reused; callback changes to the
+coordinator's slots do not redirect the writer or replace its key/identity pins.
+Storage still requires both original byte strings and all independent
+expectations; the owner forwards captured request/root/context expectations,
+not values recovered from its signed payload. No service route is opened and
+the producer observation is not an accepted authority token.
 
 One cumulative work object pays for context/envelope decoding, captures,
 canonical comparisons, genuine signature/proof verification, raw32 key outputs,
@@ -165,15 +178,23 @@ base64 codecs/comparisons. Parser work remains `4B/(N+O+2P)` with no hashes.
 Exact admission is the larger of the genuine replay's held peak and the full
 retention total, component by component. No new outer allowance is created.
 SQL/driver CPU and fixed metadata scaffolding are excluded, not heap guarantees.
+The read owner's database-identity and source-manifest admission, including its
+source reconstruction/hashes, is also outside H/B/N; callback guards do not
+turn that work into metered work. The same allowance continues into persistence.
 Driver callbacks must preserve the work. Failure cleanup still invokes actual
 rollback/close if work was corrupted; this does not claim rollback of a malicious
 driver that has already committed and then fails a callback guard.
+Both phases also close a returned connection when its post-open guard fails,
+preserving the first error and leaving corrupted work untouched. An opener
+that never returns a handle, or an unfinished context entry, still depends on
+the actual driver's cleanup behavior.
 
 ## Migration at the actual consumers
 
-| Consumer | Source `.39` status / remaining work |
+| Consumer | Source `.40` status / remaining work |
 | --- | --- |
 | Configured retention coordinator | Separate `RevocationPlannerPersistence` implemented; configuration pins keys/identities and calls genuine raw-byte storage. |
+| Configured read-to-persist owner | Private `RevocationPlanningCoordinator` closes read scopes before separate persistence, preserving original bytes, expectations and work. |
 | Transaction reserve/complete | Private v4 reservation, sidecar insert, exact comparisons and locked CAS implemented. |
 | Store replay | Private original-byte replay and versioned observations implemented; no re-signing. |
 | Service persist/replay | Admit the explicit successor protocol; preserve original bytes and require independent context. |

@@ -891,7 +891,7 @@ class TypedTransitionPlanningProgram:
         evidence: dict[str, Any], verifier_identity: dict[str, Any],
         verifier_public_key: Ed25519PublicKey, capability_id: str,
         now_epoch_ns: int, deadline_epoch_ns: int, maximum_age_ns: int,
-        query_work: _ValidationWork,
+        query_work: _ValidationWork, trace: PlannerTrace | None = None,
     ) -> _RevocationAcquisition:
         """Acquire genuine read/effect/write observations on one transaction.
 
@@ -907,11 +907,17 @@ class TypedTransitionPlanningProgram:
         explicit staged-proof/stamp, trace and allocation exclusions; this is
         neither whole-plan resource accounting nor signed-v4 activation.
         No successful effects/proof object is accepted as an input.
+        The configured owner may supply its actual metadata-read trace; the
+        standalone facade creates one. Neither form grants public admission.
         """
         if type(query_work) is not _ValidationWork:
             raise AuthorityPlannerError("private revocation producer requires an exact shared meter")
         operation = authority_transition_webauthn.OPERATION
-        trace = PlannerTrace(operation=operation, _complete_queries=True)
+        if trace is None:
+            trace = PlannerTrace(operation=operation, _complete_queries=True)
+        if (type(trace) is not PlannerTrace or type(trace.operation) is not str
+                or trace.operation != operation or trace._complete_queries is not True):
+            raise AuthorityPlannerError("private revocation producer trace identity changed")
         acquisition = authority_index_reader._ReadAcquisitionBudget(cursor, trace, work=query_work)
         try:
             if (type(request) is not dict or type(manifest) is not tuple
@@ -1010,6 +1016,7 @@ class TypedTransitionPlanningProgram:
         evidence: dict[str, Any], context: dict[str, Any],
         verifier_public_key: Ed25519PublicKey, planner_private_key: Ed25519PrivateKey,
         planner_public_key: Ed25519PublicKey, query_work: _ValidationWork,
+        trace: PlannerTrace | None = None,
     ) -> _ProducedRevocationPlan:
         """Privately acquire, package and sign the genuine revoke-only v4 plan.
 
@@ -1024,6 +1031,8 @@ class TypedTransitionPlanningProgram:
         phase metrics. Repeated proof work is charged, not replaced by an
         acquisition success token. The output retains the original signed
         envelope/context bytes and database cutoff; it authorizes no commit or replay.
+        A supplied private trace retains the configured owner's real manifest
+        reads instead of resetting their trace budget before acquisition.
         """
         if (type(query_work) is not _ValidationWork
                 or type(request) is not dict or type(manifest) is not tuple
@@ -1061,6 +1070,7 @@ class TypedTransitionPlanningProgram:
                 now_epoch_ns=actual_context["nowEpochNs"],
                 deadline_epoch_ns=actual_context["deadlineEpochNs"],
                 maximum_age_ns=actual_context["maximumAssertionAgeNs"], query_work=query_work,
+                trace=trace,
             )
             raw, state = acquired.state.complete_query_evidence, acquired.state
             if raw is None or type(state.database_now) is not datetime:

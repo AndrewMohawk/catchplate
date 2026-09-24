@@ -6,9 +6,10 @@ Source `.35` adds a private revoke-only producer that connects actual database
 acquisition to the original signed v4 envelope. Source `.38` also returns its
 original canonical evaluation-context bytes. Source `.39` binds actual primary
 root-table reads to independent expectations before the original database clock.
-It is **unbuilt and unexecuted**.
-It is not a public endpoint, registered kernel, durable replay implementation,
-SQL commit or deployed release.
+Source `.40` connects this primitive to a configured read-transaction owner and
+separate original-byte persistence. These implementations are **unbuilt and
+unexecuted**, not a public endpoint, registered kernel, observed SQL commit or
+deployed release.
 
 [`TypedTransitionPlanningProgram._produce_revocation_plan`](../serverware/authority_planner.py)
 accepts a raw typed request, manifest and assertion, fifteen explicit evaluation
@@ -25,6 +26,39 @@ do not establish key enrollment, current roots, trusted clocks or a real
 reservation. The caller must independently admit those authorities and own the
 transaction. The producer's observed database instant is retained unchanged;
 it is not promoted into independently trusted current time.
+
+## Configured read-to-persist owner
+
+[`RevocationPlanningCoordinator`](../serverware/authority_revocation_coordinator.py)
+is configured with a read DSN, actual `PlannerIdentity`, connection timeout,
+planner private key and exact `RevocationPlannerPersistence`. Its
+`produce_and_persist` method accepts raw request/evidence, the thirteen context
+fields other than the two configured identities, a planned timestamp and
+existing work. Callers cannot replace manifests, traces, public keys or identity
+pins with per-call values or successful-result objects.
+
+The owner snapshots configuration and captures caller graphs before external
+callbacks. The read identity's three authority digests must match the captured
+planner identity. One six-setting persistence snapshot retains its DSN, timeout,
+public-key handles and identity triples across both phases; it does not enroll
+keys or freeze arbitrary key-implementation internals.
+It opens an actual `SERIALIZABLE READ ONLY DEFERRABLE` transaction,
+checks database TLS/role privileges with the existing identity validator, and
+loads both manifests through their genuine source-comparison bodies. Metadata
+SQL precedes assertion verification; the genuine receipt is checked before
+business root/query SQL. One actual trace retains the manifest-read prefix and
+continues through acquisition, proof reads, the writer block and final closure.
+
+Every read cursor, transaction and connection scope exits before the separate
+writer is opened. The configured persistence path receives unchanged original
+envelope/context bytes, the original observed cutoff, independently captured
+request/context expectations and the same work. It genuinely re-verifies those
+bytes; a producer result is not accepted as an authority token. This ordering
+does not make the historical read snapshot current at execution time.
+Both connection opens close any returned handle if the post-open work guard
+rejects it, without repairing the meter or replacing the first failure. This
+does not promise cleanup of a handle never returned by an opener or of a
+context manager whose entry raises before completing.
 
 ## Actual pipeline
 
@@ -139,11 +173,16 @@ acquisition exclusions remain: clock/root-table/ordinary/primary-proof SQL are o
 shared physical counters; staged proof/stamp work, acquisition trace encoding,
 driver/process allocation, indexed projection internals and fixed scaffolding
 have separate or explicitly excluded accounting.
+The configured owner's database identity checks and source-metadata admission,
+including manifest reconstruction and hashes, are outside H/B/N accounting.
+They still use the real source validators and guarded callbacks; guards are not
+work metering. No allowance is reset between production and persistence, and
+the production descriptor's included-phase list is unchanged by this owner.
 
 ## Remaining integration
 
 The immutable production descriptor remains `private-producer-only`, with
-public v3 and production v4 admission disabled. Public planner, service,
+public v3 and production v4 admission disabled. Legacy planner, service,
 persistence and registry consumers are not switched to v4 by this component.
 All four missing registered WebAuthn kernels remain production gates.
 
@@ -151,8 +190,8 @@ Source `.37` adds private [original-envelope and independent-context
 retention](authority-revocation-retention.md): versioned storage, digest binding,
 identical retries, conflict denial and independent replay expectations.
 Source `.38` supplies the producer's original context bytes for that private
-handoff; connecting the producer to the configured retention coordinator or
-public service remains separate work.
+handoff. Source `.40` connects the private configured owner to retention after
+closing its read scopes; public service integration remains separate work.
 Current-state admission, public service activation, one-use consumption,
 mixed-root SQL/executor checks and terminal witness binding remain required. Historical evaluation context
 must remain separate from current execution authority and deadline enforcement.

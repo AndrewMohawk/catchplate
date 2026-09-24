@@ -21,12 +21,90 @@ _CALL_INPUTS = retention.wire._EXPECTATIONS - _CONFIGURED
 _IDENTITY_FIELDS = ("sessionIdentityDigest", "measurementDigest", "attestationReceiptDigest")
 
 
+def _validate_configuration(configuration):
+    """Admit fixed local custody, not key enrollment or a verification token."""
+    if type(configuration) is not tuple or len(configuration) != 6:
+        raise ValueError("revocation persistence configuration is not an exact six-tuple")
+    dsn, timeout, planner_key, verifier_key, planner_identity, verifier_identity = configuration
+    if (type(dsn) is not str or not 1 <= len(dsn) <= 65536
+            or type(timeout) is not int or not 1 <= timeout <= 300
+            or not isinstance(planner_key, Ed25519PublicKey)
+            or not isinstance(verifier_key, Ed25519PublicKey)):
+        raise ValueError("revocation persistence configuration is invalid")
+    for identity in (planner_identity, verifier_identity):
+        if type(identity) is not tuple or len(identity) != 3:
+            raise ValueError("revocation persistence identity is not an exact triple")
+        for digest in identity:
+            retention.plan.contract._digest(digest)
+
+
+def _inputs_from_configuration(configuration, expectations, work):
+    _validate_configuration(configuration)
+    if len(expectations) != len(_CALL_INPUTS) or set(expectations) != _CALL_INPUTS:
+        raise ValueError("revocation persistence requires exactly fifteen external expectations")
+    _, _, planner_key, verifier_key, planner_identity, verifier_identity = configuration
+    pins = {"planner_public_key": planner_key, "verifier_public_key": verifier_key,
+        "expected_planner_identity": dict(zip(_IDENTITY_FIELDS, planner_identity)),
+        "expected_verifier_identity": dict(zip(_IDENTITY_FIELDS, verifier_identity))}
+    return store._owned_expectations({**expectations, **pins}, work)
+
+
+def _connect(work, opener):
+    """Close a returned connection if its post-open work guard rejects it.
+
+    Cleanup must still run with corrupted work and cannot suppress the original
+    failure. An opener that raises before returning provides no handle to own.
+    This does not broaden the separate context manager's entry guarantees.
+    """
+    connection = None
+
+    def open_connection():
+        nonlocal connection
+        connection = opener()
+        return connection
+
+    try:
+        return store._callback(work, open_connection)
+    except BaseException:
+        if connection is not None:
+            try:
+                connection.close()
+            except BaseException:
+                pass
+        raise
+
+
+def _run_on_configuration(configuration, operation, arguments, expectations, work):
+    # The private combined read/write owner passes the same locally captured
+    # tuple across both phases. Never recapture mutable coordinator slots here.
+    owned = _inputs_from_configuration(configuration, expectations, work)
+    dsn, timeout = configuration[:2]
+    import psycopg
+    from psycopg.rows import dict_row
+    from serverware import db
+
+    connection = _connect(work, lambda: psycopg.connect(dsn,
+        row_factory=dict_row, connect_timeout=timeout, options="-c search_path=pg_catalog"))
+    with store._context(connection, work):
+        transaction = store._callback(work, connection.transaction)
+        with store._context(transaction, work):
+            cursor = store._callback(work, connection.cursor)
+            with store._context(cursor, work) as active:
+                store._callback(work, active.execute,
+                    "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE READ WRITE NOT DEFERRABLE")
+            result = operation(connection=db.PostgresMetadataConnection(connection),
+                work=work, **arguments, **owned)
+    return result
+
+
 @dataclass(frozen=True, slots=True, init=False, repr=False, eq=False)
 class RevocationPlannerPersistence:
     """Independently configured keys, not keys enrolled by a retained record.
 
-    Fixed bounded configuration is admitted once, outside per-invocation work.
-    Each call owns its fifteen external inputs before any connection callback.
+    Fixed bounded configuration is revalidated and captured once per invocation,
+    outside JSON work. Each call owns its fifteen external inputs before any
+    connection callback. The private six-tuple pins key handles, not mutable
+    internals of arbitrary key implementations or independent provenance.
     Driver/transaction work is excluded from H/B/N but cannot alter the meter.
     This opens its own SERIALIZABLE writer transaction and commits only after
     the real store has completed; nested store rollback uses a real savepoint.
@@ -57,35 +135,20 @@ class RevocationPlannerPersistence:
         ):
             object.__setattr__(self, name, value)
 
+    def _snapshot_configuration(self):
+        if type(self) is not RevocationPlannerPersistence:
+            raise ValueError("revocation persistence requires its exact configured owner")
+        configuration = (self.persistence_dsn, self.connect_timeout_seconds,
+            self.planner_public_key, self.verifier_public_key,
+            self._planner_identity, self._verifier_identity)
+        _validate_configuration(configuration)
+        return configuration
+
     def _inputs(self, expectations, work):
-        if len(expectations) != len(_CALL_INPUTS) or set(expectations) != _CALL_INPUTS:
-            raise ValueError("revocation persistence requires exactly fifteen external expectations")
-        # Snapshot immutable configuration before the first external callback.
-        pins = {"planner_public_key": self.planner_public_key,
-            "verifier_public_key": self.verifier_public_key,
-            "expected_planner_identity": dict(zip(_IDENTITY_FIELDS, self._planner_identity)),
-            "expected_verifier_identity": dict(zip(_IDENTITY_FIELDS, self._verifier_identity))}
-        return store._owned_expectations({**expectations, **pins}, work)
+        return _inputs_from_configuration(self._snapshot_configuration(), expectations, work)
 
     def _run(self, operation, arguments, expectations, work):
-        dsn, timeout = self.persistence_dsn, self.connect_timeout_seconds
-        owned = self._inputs(expectations, work)
-        import psycopg
-        from psycopg.rows import dict_row
-        from serverware import db
-
-        connection = store._callback(work, lambda: psycopg.connect(dsn,
-            row_factory=dict_row, connect_timeout=timeout, options="-c search_path=pg_catalog"))
-        with store._context(connection, work):
-            transaction = store._callback(work, connection.transaction)
-            with store._context(transaction, work):
-                cursor = store._callback(work, connection.cursor)
-                with store._context(cursor, work) as active:
-                    store._callback(work, active.execute,
-                        "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE READ WRITE NOT DEFERRABLE")
-                result = operation(connection=db.PostgresMetadataConnection(connection),
-                    work=work, **arguments, **owned)
-        return result
+        return _run_on_configuration(self._snapshot_configuration(), operation, arguments, expectations, work)
 
     def persist(self, *, envelope_bytes, evaluation_context_bytes, planned_at_epoch_ns,
                 work, **expectations):

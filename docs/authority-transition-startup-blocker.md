@@ -103,8 +103,9 @@ Source `.38` adds the producer's original canonical eighteen-field context
 bytes as a fourth output, preserving its first three fields. It checks the
 original acquisition cutoff and encodes the same owned context after packaging,
 before signing, on existing work (`0H/2L/2N`; 512 KiB, 4,096 nodes, depth 8).
-Producer-to-coordinator/service wiring remains separate; no registered kernel,
-public execution path or production authority is enabled.
+That context-encoding change did not wire the producer to its coordinator or
+service; no registered kernel, public execution path or production authority
+was enabled.
 
 Source `.39` repairs a concrete private-producer trace-closure defect: it now
 performs the real business/authorization root reads after assertion verification,
@@ -114,6 +115,17 @@ sample. Bounded copies, canonical comparison and the existing framed commitment
 use the same remaining work; no synthetic marker or budget expansion is used.
 This source correction is unexecuted and does not establish independent root
 currentness, transaction ownership, registry admission or public v4 activation.
+
+Source `.40` adds `RevocationPlanningCoordinator`, a configured private owner
+that performs actual database identity/manifest checks in a serializable
+read-only deferrable scope, threads one real manifest-prefix trace through the
+producer, and closes all read scopes before separate original-byte persistence.
+Its thirteen caller context fields exclude the configured identities; original
+request/root expectations, cutoff and work survive the handoff. Metadata SQL
+precedes the genuine receipt check, which still precedes business SQL. Identity
+and source-manifest admission are explicitly outside H/B/N. This remains
+unexecuted source; no registered kernel, service route or execution authority
+is activated.
 
 The [explicit-context credential classifier](webauthn-credential-trust.md) now
 shares the actual enrollment/root/AAGUID/class/development decision with the

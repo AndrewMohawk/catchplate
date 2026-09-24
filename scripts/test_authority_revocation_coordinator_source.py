@@ -69,7 +69,7 @@ class RevocationCoordinatorSourceTests(unittest.TestCase):
         self.assert_shape(self.owner.decorator_list[0],
                          "dataclass(frozen=True, slots=True, init=False, repr=False, eq=False)")
         self.assertEqual({node.name for node in self.owner.body if isinstance(node, ast.FunctionDef)},
-                         {"__init__", "_inputs", "_run", "persist", "read"})
+                         {"__init__", "_snapshot_configuration", "_inputs", "_run", "persist", "read"})
 
     def test_constructor_pins_real_keys_and_copies_exact_identity_scalars(self):
         constructor = self.method("__init__")
@@ -103,17 +103,22 @@ class RevocationCoordinatorSourceTests(unittest.TestCase):
         self.assertEqual({node.value for node in configured.args[0].elts}, CONFIGURED)
         self.assert_shape(assignments["_CALL_INPUTS"], "retention.wire._EXPECTATIONS - _CONFIGURED")
         self.assertEqual(tuple(item.value for item in assignments["_IDENTITY_FIELDS"].elts), IDENTITY_FIELDS)
-        inputs = self.method("_inputs")
-        self.assert_shape(inputs.body[0].test,
+        inputs = definition(self.tree, "_inputs_from_configuration")
+        self.assert_shape(inputs.body[0].value, "_validate_configuration(configuration)")
+        self.assert_shape(inputs.body[1].test,
                          "len(expectations) != len(_CALL_INPUTS) or set(expectations) != _CALL_INPUTS")
-        pins = inputs.body[1].value
-        self.assert_shape(pins, '{"planner_public_key": self.planner_public_key, '
-            '"verifier_public_key": self.verifier_public_key, '
-            '"expected_planner_identity": dict(zip(_IDENTITY_FIELDS, self._planner_identity)), '
-            '"expected_verifier_identity": dict(zip(_IDENTITY_FIELDS, self._verifier_identity))}')
+        pins = inputs.body[3].value
+        self.assert_shape(pins, '{"planner_public_key": planner_key, '
+            '"verifier_public_key": verifier_key, '
+            '"expected_planner_identity": dict(zip(_IDENTITY_FIELDS, planner_identity)), '
+            '"expected_verifier_identity": dict(zip(_IDENTITY_FIELDS, verifier_identity))}')
         owned = calls(inputs, "store._owned_expectations")
         self.assertEqual(len(owned), 1)
         self.assert_shape(owned[0], "store._owned_expectations({**expectations, **pins}, work)")
+        facade = self.method("_inputs")
+        self.assertEqual(len(facade.body), 1)
+        self.assert_shape(facade.body[0].value,
+            "_inputs_from_configuration(self._snapshot_configuration(), expectations, work)")
         # Pin the actual decoder/verifier inventory, not just a subtraction.
         _, plan_tree = source("serverware/authority_revocation_plan.py", 256 * 1024)
         inventory = next(node.value for node in plan_tree.body if isinstance(node, ast.Assign)
@@ -126,17 +131,27 @@ class RevocationCoordinatorSourceTests(unittest.TestCase):
             "maximum_plan_age_ns", "maximum_clock_skew_ns", "expected_before", "expected_approver_policy_digest"})
 
     def test_capture_precedes_real_connect_and_transaction_mode_is_literal(self):
-        run = self.method("_run")
-        self.assert_shape(run.body[0].value, "(self.persistence_dsn, self.connect_timeout_seconds)")
-        owned = calls(run, "self._inputs")
+        facade = self.method("_run")
+        self.assertEqual(len(facade.body), 1)
+        self.assert_shape(facade.body[0].value,
+            "_run_on_configuration(self._snapshot_configuration(), operation, arguments, expectations, work)")
+        run = definition(self.tree, "_run_on_configuration")
+        self.assert_shape(run.body[1].value, "configuration[:2]")
+        owned = calls(run, "_inputs_from_configuration")
         connect = calls(run, "psycopg.connect")
         self.assertEqual((len(owned), len(connect)), (1, 1))
         self.assertLess(owned[0].lineno, connect[0].lineno)
-        self.assert_shape(owned[0], "self._inputs(expectations, work)")
+        self.assert_shape(owned[0], "_inputs_from_configuration(configuration, expectations, work)")
+        self.assertFalse(any(isinstance(node, ast.Name) and node.id == "self" for node in ast.walk(run)))
         self.assert_shape(connect[0], 'psycopg.connect(dsn, row_factory=dict_row, '
             'connect_timeout=timeout, options="-c search_path=pg_catalog")')
+        opening = calls(run, "_connect")
+        self.assertEqual(len(opening), 1)
+        self.assert_shape(opening[0].args[0], "work")
+        self.assert_shape(opening[0].args[1], 'lambda: psycopg.connect(dsn, row_factory=dict_row, '
+            'connect_timeout=timeout, options="-c search_path=pg_catalog")')
         callbacks = calls(run, "store._callback")
-        self.assertEqual(len(callbacks), 4)
+        self.assertEqual(len(callbacks), 3)
         for callback in callbacks:
             self.assert_shape(callback.args[0], "work")
         execution = next(item for item in callbacks if isinstance(item.args[1], ast.Attribute)
@@ -181,9 +196,62 @@ class RevocationCoordinatorSourceTests(unittest.TestCase):
         attributes = {node.attr for node in ast.walk(self.tree) if isinstance(node, ast.Attribute)}
         self.assertTrue(attributes.isdisjoint({"sign", "verify", "loads", "dumps", "now", "time_ns",
                                                "monotonic_ns", "commit", "derive"}))
-        run = self.method("_run")
+        run = definition(self.tree, "_run_on_configuration")
         self.assert_shape(run.body[-1].value, "result")
         self.assertEqual(len(calls(run, "operation")), 1)
+
+    def test_invocation_snapshot_admits_all_six_values_before_callback_free_handoff(self):
+        snapshot = self.method("_snapshot_configuration")
+        self.assert_shape(snapshot.body[0].test, "type(self) is not RevocationPlannerPersistence")
+        self.assert_shape(snapshot.body[1].value,
+            "(self.persistence_dsn, self.connect_timeout_seconds, self.planner_public_key, "
+            "self.verifier_public_key, self._planner_identity, self._verifier_identity)")
+        self.assert_shape(snapshot.body[2].value, "_validate_configuration(configuration)")
+        self.assert_shape(snapshot.body[3].value, "configuration")
+        validation = definition(self.tree, "_validate_configuration")
+        self.assert_shape(validation.body[1].test,
+                         "type(configuration) is not tuple or len(configuration) != 6")
+        self.assert_shape(validation.body[3].test,
+            "type(dsn) is not str or not 1 <= len(dsn) <= 65536 "
+            "or type(timeout) is not int or not 1 <= timeout <= 300 "
+            "or not isinstance(planner_key, Ed25519PublicKey) "
+            "or not isinstance(verifier_key, Ed25519PublicKey)")
+        identities = validation.body[4]
+        self.assert_shape(identities.iter, "(planner_identity, verifier_identity)")
+        self.assert_shape(identities.body[0].test,
+                         "type(identity) is not tuple or len(identity) != 3")
+        self.assert_shape(calls(identities, "retention.plan.contract._digest")[0],
+                         "retention.plan.contract._digest(digest)")
+        for function in (snapshot, validation):
+            attributes = {node.attr for node in ast.walk(function) if isinstance(node, ast.Attribute)}
+            self.assertTrue(attributes.isdisjoint({"verify", "public_bytes", "public_bytes_raw", "connect"}))
+        for name in ("_inputs_from_configuration", "_run_on_configuration"):
+            function = definition(self.tree, name)
+            self.assertFalse(any(isinstance(node, ast.Name) and node.id == "self"
+                                 for node in ast.walk(function)))
+
+    def test_connect_guard_owns_returned_handle_and_closes_without_requiring_valid_work(self):
+        connect = definition(self.tree, "_connect")
+        opened = definition(connect, "open_connection")
+        self.assertIsInstance(opened.body[0], ast.Nonlocal)
+        self.assertEqual(opened.body[0].names, ["connection"])
+        self.assert_shape(opened.body[1].value, "opener()")
+        self.assert_shape(opened.body[2].value, "connection")
+        guarded, = [node for node in connect.body if isinstance(node, ast.Try)]
+        self.assert_shape(guarded.body[0].value, "store._callback(work, open_connection)")
+        self.assertEqual(len(guarded.handlers), 1)
+        self.assert_shape(guarded.handlers[0].type, "BaseException")
+        cleanup = guarded.handlers[0].body
+        self.assert_shape(cleanup[0].test, "connection is not None")
+        attempted = cleanup[0].body[0]
+        self.assertIsInstance(attempted, ast.Try)
+        self.assert_shape(attempted.body[0].value, "connection.close()")
+        self.assert_shape(attempted.handlers[0].type, "BaseException")
+        self.assertIsInstance(attempted.handlers[0].body[0], ast.Pass)
+        self.assertIsInstance(cleanup[-1], ast.Raise)
+        self.assertIsNone(cleanup[-1].exc)
+        self.assertEqual(len(calls(connect, "store._callback")), 1)
+        self.assertFalse(calls(connect, "_ValidationWork"))
 
     def test_legacy_v3_and_service_routes_do_not_activate_the_new_coordinator(self):
         service, _ = source("serverware/authority_service.py", 2 * 1024 * 1024)

@@ -119,8 +119,9 @@ and exact retry comparison to that separate authenticated path. This action's
 public owner still uses the original two-store atomic API. The separate `.67`
 [signed ACK custody](authority-revocation-writer-acknowledgment.md) connects
 operation-bound signing to that authenticated composition, not this action's
-independent-input API. Serving integration, historical recovery and detached-body
-transport remain unfinished. The separate `.66`
+independent-input API. Source `.68` adds [detached-body transport](authority-revocation-writer-transport.md)
+to the separate authenticated writer branch, not this independent-input method.
+Configured producer/client integration and historical recovery remain unfinished. The separate `.66`
 [startup key binding](authority-revocation-writer-signer.md) does not alter this
 action's inputs, work or output.
 The method does not enable public dispatch, alter

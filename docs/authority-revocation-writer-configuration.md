@@ -58,7 +58,7 @@ actual [connection-admission and cleanup checks](authority-revocation-writer-con
 
 ## What is not activated
 
-There is no new serving purpose or authenticated writer RPC. The `.62` private
+This factory introduces no serving purpose or authenticated writer RPC. The `.62` private
 action owns bounded original byte strings, planned timestamp and all fifteen
 independent expectations before callbacks. Its exact UTC database instant
 remains outside JSON, and its historical age/skew policy must match the same
@@ -75,8 +75,10 @@ retry checks. Source `.66` adds a separate startup-only
 [writer response signer](authority-revocation-writer-signer.md); it does not
 change this mapper's four-hash, two-key schedule or seven-item owner. Source
 `.67` adds [signed ACK custody](authority-revocation-writer-acknowledgment.md)
-to the separate authenticated composition. Serving integration, authenticated
-historical recovery and the whole-message size contract remain unfinished.
+to the separate authenticated composition. Source `.68` supplies a
+[fixed detached transfer](authority-revocation-writer-transport.md) and writer-only
+server branch. Configured producer/client authentication, complete serving
+integration and authenticated historical recovery remain unfinished.
 Legacy writer routes and planner-only peer restrictions are
 unchanged. Registry closure and four WebAuthn gates are
 still incomplete. Production Nitro/KMS, signing and independent witness

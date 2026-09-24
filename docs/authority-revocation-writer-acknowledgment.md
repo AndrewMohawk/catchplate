@@ -5,6 +5,11 @@ revocation writer. It does not activate an RPC, execute revocation, provision a
 production key, or establish deployment readiness. This source remains unbuilt
 and unexecuted under [goal.md](../goal.md).
 
+Source `.68` adds [fixed detached transport](authority-revocation-writer-transport.md)
+and a writer-only server branch that sends these exact stored bytes after normal
+owner exits. The raw client returns opaque bytes, not authenticated success;
+configured planner-side verification and historical recovery are still absent.
+
 ## What is signed
 
 The closed `serverware.policyAuthorityRevocationWriterAcknowledgment/v1` envelope
@@ -115,5 +120,5 @@ Component fixtures use genuine synthetic keys/signatures and independent work
 oracles; startup fixtures keep real proof workers and the actual registry gate
 with synthetic driver observations. Native schema fixtures cover constraints,
 not cryptographic admission. None has been executed for this snapshot. Public
-serving/transport, all remaining WebAuthn kernels, release verification and the
+end-to-end serving and client authentication, all remaining WebAuthn kernels, release verification and the
 independently provisioned production trust services remain required.

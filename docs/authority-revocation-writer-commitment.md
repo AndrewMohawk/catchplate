@@ -33,8 +33,10 @@ with one held key/configuration tuple, current clocks and genuine atomic replay.
 It remains unexecuted and is not an enabled service path.
 Source `.65` adds [immutable request storage](authority-revocation-writer-request-storage.md)
 to that fixed composition; `.67` adds the separate
-[signed ACK child](authority-revocation-writer-acknowledgment.md). Transport and
-authenticated historical recovery remain open.
+[signed ACK child](authority-revocation-writer-acknowledgment.md). Source `.68`
+adds [fixed detached transfer](authority-revocation-writer-transport.md) to the
+writer-only server path. Configured intent/relay production, client ACK
+authentication and authenticated historical recovery remain open.
 No API accepts a previously authenticated result in place of original bytes.
 
 ## Two signed controls, three detached bodies
@@ -85,8 +87,9 @@ Controls remain bounded to 4 MiB. The detached plan retains its 64 MiB bound,
 the context its 512 KiB bound, and history the existing 64 MiB, one-million-node,
 depth-128 root capture limits. No nested base64 wrapper is introduced. These
 are local contract limits, **not proof that the existing one-frame socket
-transport can carry all bodies**. A separately specified bounded transfer and
-custody protocol is still needed.
+transport can carry all bodies**. The `.68` [dedicated transfer](authority-revocation-writer-transport.md)
+adds a fixed raw-body format with an explicit 64 MiB aggregate ceiling; it does
+not widen the older frame helper or authenticate replies for a planner client.
 
 The unchanged cumulative work ceiling also applies. Repeated ownership,
 encoding and authentication can exhaust it below an individual body's local

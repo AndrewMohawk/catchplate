@@ -8,6 +8,10 @@ Source `.65` adds [immutable original-request custody](authority-revocation-writ
 inside that same transaction, with exact retry comparison. Source `.67` adds
 the dedicated measured response signer and an immutable acknowledgment child
 inside that same common scope; it does not activate transport or public dispatch.
+Source `.68` adds a writer-only [detached transfer branch](authority-revocation-writer-transport.md)
+on the existing activated socket. It passes the exact five originals to this
+composition and sends only stored ACK bytes after normal owner exits; it does
+not change the public canonical purpose gate or authenticate replies for a client.
 The private service adapter accepts five original immutable byte strings and
 the existing work object. It accepts no caller keys, clocks, configuration,
 database credentials, alternate operation or prior successful result.
@@ -152,9 +156,10 @@ durability, a socket exchange or independently operated production services.
 The source now retains original intent, relay and history bytes with their
 retained-plan and reserved-execution links and the signed ACK child. The
 [startup response-key binding](authority-revocation-writer-signer.md) does not
-prove production key custody. Bounded detached-body transport, public dispatch,
-historical acknowledgment lookup and independently pinned remote verification
-remain separate work. A rotated key cannot silently re-sign an old child or
+prove production key custody. The `.68` fixed transfer supplies bounded original
+byte ingress and raw ACK egress, not a configured end-to-end planner flow.
+Public execution, historical acknowledgment lookup and independently pinned
+remote verification remain separate work. A rotated key cannot silently re-sign an old child or
 enroll itself through an ACK. This private path is not a complete authenticated
 RPC retry protocol, and its native durability is unverified. The remaining requirements are in the
 [durable integration contract](authority-revocation-writer-commitment.md#durable-integration-and-remaining-recovery).

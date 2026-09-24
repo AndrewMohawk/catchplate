@@ -3,11 +3,13 @@
 ## Status
 
 Source `.51` adds real, importable raw transport helpers and a configured
-issuer factory. These components are **unbuilt and unexecuted**. They are not
-an enabled serving route: `AuthorityServer._serve_connection`, the public
-`AuthorityProcess.handle` purpose gates and the transition registry remain
-unchanged. No socket exchange, measured launch, PostgreSQL admission or
-committed issuance has been verified for this source.
+issuer factory. These components are **unbuilt and unexecuted**. Source `.68`
+adds a distinct writer-only [detached transfer branch](authority-revocation-writer-transport.md)
+to `AuthorityServer._serve_connection`; the public canonical
+`AuthorityProcess.handle` purposes and the transition registry remain unchanged.
+This is not a complete serving flow. No socket exchange, measured launch,
+PostgreSQL admission, ACK delivery or committed issuance has been verified for
+this source.
 
 Source `.55` adds a private configured verifier method for the
 [authenticated planner handoff](authority-revocation-handoff.md#configured-verifier-ownership).
@@ -37,6 +39,15 @@ interprets a response as an authorization grant.
 Legacy service helpers delegate framing primitives but retain their existing
 64 MiB ceiling and canonical JSON parser. The new byte path is separate;
 calling a legacy helper does not establish strict pre-parse admission.
+
+The separate `.68` writer transfer has fixed request/response magic, five raw
+original bodies, per-body limits and a 64 MiB aggregate ceiling. It requires
+request write-half-close and EOF, then returns an original ACK of at most
+16 KiB with response EOF. The client and accepted server connection each use
+one absolute monotonic deadline; the server starts it before its worker queue.
+The actual writer branch keeps the same planner-only peer check and measured
+composition. The transport neither decodes nor authenticates the returned ACK,
+and it does not widen the older 4 MiB invocation helper or legacy frame limit.
 
 ## Configured issuer construction
 
@@ -103,9 +114,9 @@ alternate opener can replace that private composition.
 
 ## Remaining production work
 
-The helpers and private process method are callable components, not a complete
-network handler. Enabling dispatch still requires coordinated original-byte
-ingress, serving integration of the [independently observed planning path](authority-revocation-observed-planning.md)
+The helpers and private process methods are not a complete public flow.
+The writer-only binary branch supplies original-byte ingress; full dispatch
+still requires serving integration of the [independently observed planning path](authority-revocation-observed-planning.md)
 and its [original-byte verifier handoff](authority-revocation-handoff.md),
 durable original invocation retention, and the successor order: retain plan,
 reserve execution, produce capability, sign/send invocation, issue capability.
@@ -122,11 +133,15 @@ guarded current clocks, genuine authentication, historical-policy comparison
 and actual atomic retention/reservation. Source `.65` adds immutable
 [original-request custody](authority-revocation-writer-request-storage.md)
 inside the same common savepoint, including exact retry comparison and both
-real replays. It does not enable dispatch, provide signed acknowledgment
-custody or implement detached-body transport.
+real replays. Source `.67` adds immutable signed ACK custody after matched
+request readback, still within that common scope.
 Source `.66` separately loads a [writer-only response key](authority-revocation-writer-signer.md)
 through the exact retained descriptor closure. Its dedicated slot cannot enable
-the generic internal-envelope signer; no ACK creation or release is added.
+the generic internal-envelope signer. The `.67` composition binds and uses it
+only for the custody ACK; `.68` sends stored bytes after normal owner exits.
+Configured intent/relay producers, planner-side independently pinned ACK
+authentication and authenticated historical recovery are still required.
+Socket or deadline failure after commit does not imply rollback or safe retry.
 Post-plan witness binding, current-root one-use execution and atomic terminal
 publication remain incomplete. The four unfinished WebAuthn authority kernels
 must not be bypassed to make the registry import or tests succeed.

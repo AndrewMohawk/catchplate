@@ -50,6 +50,7 @@ from serverware import authority_contract
 from serverware import authority_planner
 from serverware import authority_transition_registry
 from serverware import authority_transport
+from serverware import authority_revocation_writer_transport as writer_transport
 from serverware import authority_webauthn_trust
 from serverware.authority_store.verifier_read_sql import (
     verifier_read_privilege_check,
@@ -1800,6 +1801,17 @@ def _recv_message_with_bytes(
 def _send_message(connection: socket.socket, value: Mapping[str, Any]) -> None:
     encoded = _canonical(dict(value))
     _send_encoded_message(connection, encoded)
+
+
+def _send_message_until(connection: socket.socket, value: Mapping[str, Any], *,
+        deadline_ns: int) -> None:
+    """Legacy canonical response under the accepted connection's deadline."""
+    encoded = _canonical(dict(value))
+    if not 2 <= len(encoded) <= MAX_MESSAGE_BYTES:
+        raise AuthorityServiceError("authority response size is invalid")
+    writer_transport._send_exact_until(connection, len(encoded).to_bytes(8, "big"),
+        deadline_ns=deadline_ns)
+    writer_transport._send_exact_until(connection, encoded, deadline_ns=deadline_ns)
 
 
 def _send_encoded_message(connection: socket.socket, encoded: bytes) -> None:
@@ -3926,7 +3938,7 @@ class AuthorityProcess:
     def _persist_and_reserve_revocation_commitments(self, *, intent_bytes,
             relay_bytes, envelope_bytes, evaluation_context_bytes,
             historical_expectations_bytes, work):
-        """Private detached-control composition, not a transport or purpose.
+        """Private detached-control composition, not a legacy public purpose.
 
         Root-signed configuration and active writer launch remain real upstream
         requirements. Hold the original byte references and own the complete
@@ -3940,8 +3952,10 @@ class AuthorityProcess:
         claims nor constructed owners are admission tokens. The held dedicated
         response key signs only within exact request/ACK custody's atomic scope;
         original ACK bytes return only after normal owner exits. This does not
-        establish execution or current-root authority, and transport and public
-        dispatch remain unimplemented.
+        establish execution or current-root authority. The separate fixed
+        writer transfer handler may return these bytes, but the configured
+        planner producers and authenticated acknowledgment consumption remain
+        separate requirements; legacy public purposes are unchanged.
         """
         if (self.role_name != "planner-writer"
                 or self.process_mode != "policy-authority-planner-writer"
@@ -7420,28 +7434,103 @@ class AuthorityServer:
     def serve_forever(self) -> None:
         while True:
             connection, _ = self.socket.accept()
+            try:
+                deadline_ns = writer_transport._deadline_ns(self.timeout_seconds)
+            except BaseException:
+                try:
+                    connection.close()
+                except BaseException:
+                    pass
+                raise
             if not self.in_flight.acquire(blocking=False):
                 connection.close()
                 continue
-            future = self.pool.submit(self._serve_connection, connection)
+            try:
+                future = self.pool.submit(
+                    self._serve_connection, connection, deadline_ns=deadline_ns,
+                )
+            except BaseException:
+                try:
+                    connection.close()
+                except BaseException:
+                    pass
+                self.in_flight.release()
+                raise
             future.add_done_callback(
                 lambda _future: self.in_flight.release()
             )
 
-    def _serve_connection(self, connection: socket.socket) -> None:
+    def _serve_revocation_writer(self, connection: socket.socket, *,
+            deadline_ns: int, prefix: bytes) -> None:
+        """Fixed raw writer ingress, behind real service and registry admission.
+
+        Peer credentials have already been checked by the sole serving caller.
+        The complete five-body request and EOF must precede work or custody.
+        One new invocation owns one source-bounded allowance; no subordinate
+        component gets a replacement. The actual configured composition must
+        return normally through every transaction/connection exit before any
+        acknowledgment byte is sent. A later timeout or socket failure means
+        uncertain delivery, never permission to undo or retry committed work.
+        """
+        process = self.process
+        if (type(process) is not AuthorityProcess
+                or process.role_name != "planner-writer"
+                or process.process_mode != "policy-authority-planner-writer"):
+            raise AuthorityServiceError("detached writer transfer has the wrong service role")
+        originals = writer_transport._recv_request(
+            connection, deadline_ns=deadline_ns, prefix=prefix,
+        )
+        from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
+
+        work = _ValidationWork(QueryReadValidationLimits())
+        writer_transport._check_deadline(deadline_ns)
+        _receipt, _reservation, acknowledgment_bytes = process._persist_and_reserve_revocation_commitments(
+            intent_bytes=originals[0], relay_bytes=originals[1], envelope_bytes=originals[2],
+            evaluation_context_bytes=originals[3], historical_expectations_bytes=originals[4],
+            work=work,
+        )
+        writer_transport._check_deadline(deadline_ns)
+        writer_transport._send_ack(connection, acknowledgment_bytes, deadline_ns=deadline_ns)
+
+    def _serve_connection(self, connection: socket.socket, *, deadline_ns: int) -> None:
+        detached = False
         try:
-            connection.settimeout(self.timeout_seconds)
+            writer_transport._check_deadline(deadline_ns)
             uid, gid, _pid = _peer_identity(connection)
             if uid != self.peer_uid or gid != self.peer_gid:
                 raise AuthorityServiceError(
                     "authority socket peer identity is not allowed"
                 )
-            request = _recv_message(connection)
-            response = self.process.handle(request)
-            _send_message(connection, response)
-        except Exception as exc:
+            prefix = writer_transport._recv_prefix(connection, deadline_ns=deadline_ns)
+            detached = prefix == writer_transport.REQUEST_MAGIC
+            if detached:
+                self._serve_revocation_writer(connection, deadline_ns=deadline_ns, prefix=prefix)
+                return
+            # Preserve the legacy canonical mapping and 64 MiB whole-frame
+            # ceiling. Its first eight bytes have only been read, not parsed
+            # as JSON or re-encoded into a successor control.
+            size = int.from_bytes(prefix, "big")
+            if not 2 <= size <= MAX_MESSAGE_BYTES:
+                raise AuthorityServiceError("authority message size is invalid")
+            encoded = writer_transport._recv_exact_until(connection, size, deadline_ns=deadline_ns)
             try:
-                _send_message(
+                request = json.loads(encoded)
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise AuthorityServiceError("authority message is not JSON") from exc
+            if not isinstance(request, dict) or _canonical(request) != encoded:
+                raise AuthorityServiceError("authority message is not canonical")
+            response = self.process.handle(request)
+            writer_transport._check_deadline(deadline_ns)
+            _send_message_until(connection, response, deadline_ns=deadline_ns)
+        except Exception as exc:
+            # There is no detached error/success union. A missing, partial or
+            # late ACK is uncertain delivery; never send a legacy error frame
+            # after any detached response bytes or retry either operation.
+            if detached:
+                return
+            try:
+                writer_transport._check_deadline(deadline_ns)
+                _send_message_until(
                     connection,
                     {
                         "schema": "serverware.policyAuthorityError/v1",
@@ -7450,6 +7539,7 @@ class AuthorityServer:
                             str(exc).encode("utf-8")
                         ),
                     },
+                    deadline_ns=deadline_ns,
                 )
             except Exception:
                 pass

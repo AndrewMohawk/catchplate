@@ -3850,6 +3850,133 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
             self.assertTrue(all(call.kwargs["work"] is work for call in replay.call_args_list))
             self.assertFalse(hasattr(work, "_revocation_packaging_owner"))
 
+    def transfer_revocation_composition_components(self, fixture, connection):
+        """Actual framing plus gated custody, not a fabricated service launch.
+
+        The recorder supplies only stream/clock/driver observations. No
+        AuthorityProcess is constructed, admitted or monkeypatched here. The
+        separate source controls bind this same ordering to the real server.
+        """
+        from serverware import authority_revocation_writer_transport as transfer
+        import test_authority_revocation_writer_transport as transport_oracle
+
+        deadline = fixture.expected.now_monotonic_ns + 1_000_000_000
+        prefix = transfer._recv_prefix(connection, deadline_ns=deadline)
+        received = transfer._recv_request(connection, deadline_ns=deadline, prefix=prefix)
+
+        def use_received(_owner, arguments):
+            for name, value in zip(transport_oracle.NAMES, received):
+                arguments[name] = value
+
+        result = self.run_revocation_composition_components(fixture, after_preparation=use_received)
+        transfer._send_ack(connection, result[2], deadline_ns=deadline)
+        return result
+
+    def test_writer_transfer_originals_replay_twice_and_release_stored_ack_only_after_owner_exit(self):
+        from serverware import authority_revocation_retention as retention
+        from serverware import authority_revocation_writer_acknowledgment as acknowledgment
+        import test_authority_revocation_writer_transport as transport_oracle
+        import test_authority_revocation_writer_acknowledgment_storage as ack_oracle
+        import test_authority_revocation_plan as oracle
+
+        first = self.revocation_composition_fixture()
+        retry = self.revocation_composition_fixture(recorder=first.recorder)
+        replies = []
+        with patch.object(retention, "_verify_record_on_work", wraps=retention._verify_record_on_work) as replay, \
+                patch.object(acknowledgment, "_sign_on_work", wraps=acknowledgment._sign_on_work) as sign:
+            for index, fixture in enumerate((first, retry)):
+                originals = fixture.detached.originals()
+                segments = transport_oracle.request_segments(tuple(originals[name] for name in transport_oracle.NAMES))
+
+                def observe(_socket, event, *_arguments):
+                    if event == "sendall":
+                        self.assertIs(fixture.write.closed, True)
+                        self.assertEqual(fixture.write.info.transaction_status, 0)
+                        self.assertTrue(fixture.recorder.acknowledgments)
+
+                connection = transport_oracle.SocketRecorder(segments, fragment_size=97, hook=observe)
+                expected = self.revocation_composition_work(fixture, retry=bool(index))
+                with self.revocation_owner_scope(fixture):
+                    result = self.transfer_revocation_composition_components(fixture, connection)
+                replies.append(result[2])
+                self.assertEqual(connection.received_bytes, sum(map(len, segments)))
+                self.assertEqual(connection.sent, list(transport_oracle.ack_segments(result[2])))
+                self.assertEqual(result[2], ack_oracle.expected_bytes(fixture.detached))
+                self.assertEqual(result[1], self.assert_revocation_composition_rows(fixture))
+                self.assertEqual(fixture.write.transactions, 4)
+                self.assertEqual(oracle.units(fixture.arguments["work"].metrics), expected["total"])
+                self.assertEqual(connection.close_count, 0)  # Actual server owns close, not component helpers.
+        self.assertEqual((replay.call_count, sign.call_count), (4, 1))
+        self.assertEqual(replies[0], replies[1])
+
+    def test_writer_transfer_truncation_and_trailing_bytes_never_reach_actual_custody(self):
+        from serverware import authority_revocation_writer_transport as transfer
+        import test_authority_revocation_writer_transport as transport_oracle
+
+        for changed in ("short_header", "short_body", "trailing"):
+            fixture = self.revocation_composition_fixture()
+            originals = fixture.detached.originals()
+            segments = transport_oracle.request_segments(tuple(originals[name] for name in transport_oracle.NAMES))
+            if changed == "short_header":
+                segments = (segments[0][:-1],)
+            elif changed == "short_body":
+                segments = (*segments[:-1], segments[-1][:-1])
+            else:
+                segments = (*segments, b"x")
+            connection = transport_oracle.SocketRecorder(segments, fragment_size=113)
+            before = fixture.recorder.snapshot()
+            with self.subTest(changed=changed), self.revocation_owner_scope(fixture):
+                with self.assertRaises(transfer.AuthorityTransportError):
+                    self.transfer_revocation_composition_components(fixture, connection)
+            self.assertEqual(fixture.connected, [])
+            self.assertEqual(fixture.recorder.snapshot(), before)
+            self.assertEqual(connection.sent, [])
+            self.assertEqual((fixture.arguments["work"].hash_work,
+                fixture.arguments["work"].input_bytes, fixture.arguments["work"].json_nodes), (0, 0, 0))
+
+    def test_writer_transfer_failure_before_ack_and_after_custody_have_distinct_storage_outcomes(self):
+        from serverware import authority_revocation_retention as retention
+        from serverware import db
+        import test_authority_revocation_writer_transport as transport_oracle
+
+        for changed in ("ack_readback", "outer_exit", "send"):
+            fixture = self.revocation_composition_fixture()
+            originals = fixture.detached.originals()
+            segments = transport_oracle.request_segments(tuple(originals[name] for name in transport_oracle.NAMES))
+            failure = OSError("recorded transfer or owner exit failure")
+            connection = transport_oracle.SocketRecorder(segments,
+                fail_at="sendall" if changed == "send" else None, failure=failure)
+            before = fixture.recorder.snapshot()
+            if changed == "ack_readback":
+                fixture.recorder.missing_ack_readback = True
+            elif changed == "outer_exit":
+                def exit_failure(event):
+                    if event == "write.transaction1.exit":
+                        raise failure
+                fixture.write.on_event = exit_failure
+            expected_error = db.MetadataStoreError if changed == "ack_readback" else OSError
+            with self.subTest(changed=changed), self.revocation_owner_scope(fixture), \
+                    patch.object(retention, "_verify_record_on_work", wraps=retention._verify_record_on_work) as replay:
+                with self.assertRaises(expected_error) as raised:
+                    self.transfer_revocation_composition_components(fixture, connection)
+            self.assertEqual(replay.call_count, 2)
+            self.assertEqual(fixture.write.transactions, 4)
+            if changed == "ack_readback":
+                self.assertEqual(str(raised.exception), "revocation writer ACK row is not a closed object")
+            else:
+                self.assertIs(raised.exception, failure)
+            self.assertEqual((fixture.recorder.releases, fixture.recorder.rollbacks),
+                (2, 2) if changed == "ack_readback" else (4, 0))
+            self.assertEqual(connection.sent, [])
+            self.assertEqual(connection.counts.get("sendall", 0), int(changed == "send"))
+            self.assertIs(fixture.write.closed, True)
+            if changed == "ack_readback":
+                self.assertEqual(fixture.recorder.snapshot(), before)
+            else:
+                # Late outer-exit or response failure cannot imply rollback.
+                self.assert_revocation_composition_rows(fixture)
+                self.assertTrue(fixture.recorder.acknowledgments)
+
     def test_writer_ack_legacy_request_attachment_still_authenticates_and_replays_both_originals(self):
         from serverware import authority_revocation_retention as retention
         from serverware import authority_revocation_writer_acknowledgment as acknowledgment

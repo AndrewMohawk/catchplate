@@ -108,8 +108,9 @@ Remote ACK verification also needs an independently pinned public-key and
 historical key/configuration resolution contract. A public key supplied by an
 ACK cannot enroll itself, and a rotated key must not re-sign stored custody.
 Historical lookup must not masquerade as fresh authorization or bypass the
-current action's checks. Transport framing, remote admission and public routes
-remain unimplemented; the startup helper itself still never signs.
+current action's checks. Source `.68` adds [fixed framing](authority-revocation-writer-transport.md)
+and a writer-only server branch, but configured remote ACK authentication and
+public end-to-end routes remain unimplemented; the startup helper itself still never signs.
 
 Authored component fixtures use genuine local PEM parsing, key derivation and
 serialization with synthetic keys. Bounded source fixtures inspect the actual

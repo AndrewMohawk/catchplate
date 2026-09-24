@@ -129,9 +129,10 @@ Source `.67` adds [signed ACK custody](authority-revocation-writer-acknowledgmen
 and operation-bound response signing to that separate request suffix, after
 both real replays and the complete request readback in the same common scope.
 It returns exact stored ACK bytes only after normal outer/connection exit;
-the older public atomic API above keeps its original result pair. Serving
-integration, detached-body transfer and authenticated historical recovery
-remain unfinished. The separate `.66`
+the older public atomic API above keeps its original result pair. Source `.68`
+adds [detached-body transfer](authority-revocation-writer-transport.md) to the
+writer-only server branch. Configured producer/client integration and
+authenticated historical recovery remain unfinished. The separate `.66`
 [startup key loader](authority-revocation-writer-signer.md) neither signs an ACK
 nor changes this atomic API. Registry closure and
 the four WebAuthn authority gates remain incomplete. Production Nitro/KMS, signing and independent

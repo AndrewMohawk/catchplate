@@ -68,6 +68,11 @@ This proves a pinned verifier receipt, not physical-authenticator provenance.
 Existing executor trust-generation, full-row CAS, witness and capability checks
 remain unchanged and must still succeed.
 
+The [shared receipt-work seam](authority-assertion-receipt-work.md) adds private
+accounting around those actual checks for a future bounded semantic composer.
+Its separate one-attempt Ed25519 limit is not a SHA-equivalent allowance, and
+it does not make the retained proof or the unregistered kernel authoritative.
+
 `webauthn_revocation_admission.py` defines the exact raw-assertion challenge and
 execute client shapes. It does not call the obsolete `transactionResult` /
 `queryMultiproofs` client, and does not remove `_connection` from any old caller.

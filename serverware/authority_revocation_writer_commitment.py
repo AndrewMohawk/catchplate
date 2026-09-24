@@ -89,6 +89,7 @@ class _ProducedIntent:
 class _ProducedRelay:
     relay_bytes: bytes
     metrics: CommitmentMetrics
+    freshness_pins: tuple
 
 
 @dataclass(frozen=True, slots=True)
@@ -242,6 +243,30 @@ def _fresh(envelope, history, now_epoch, now_monotonic, age, skew):
             or remaining_mono > age or remaining_epoch > age + skew
             or abs(remaining_epoch - remaining_mono) > skew):
         raise RevocationWriterCommitmentError("writer commitment current clocks or deadlines are not fresh and consistent")
+
+
+def _check_freshness_pins(pins, *, now_epoch_ns, now_monotonic_ns,
+        maximum_age_ns, maximum_clock_skew_ns):
+    """Recheck held authenticated times; these scalars are not proof inputs.
+
+    Callers capture the fixed tuple before later callbacks. A caller checking
+    only an intent duplicates its issuance pair in the second pair of slots;
+    that does not invent a relay or authenticate one. No historical value is
+    replaced with the new current clocks and no work allowance is allocated.
+    """
+    if type(pins) is not tuple or len(pins) != 6:
+        raise RevocationWriterCommitmentError("writer commitment freshness pins are not a fixed six-tuple")
+    for value in pins:
+        plan.contract._integer(value, minimum=1)
+    _current(now_epoch_ns, now_monotonic_ns, maximum_age_ns, maximum_clock_skew_ns)
+    intent_epoch, intent_mono, relay_epoch, relay_mono, deadline_epoch, deadline_mono = pins
+    if intent_mono >= deadline_mono or relay_mono >= deadline_mono:
+        raise RevocationWriterCommitmentError("writer commitment issuance does not precede its held deadline")
+    for epoch, monotonic in ((intent_epoch, intent_mono), (relay_epoch, relay_mono)):
+        _fresh({"issuedAtEpochNs": epoch, "issuedMonotonicNs": monotonic,
+                "deadlineMonotonicNs": deadline_mono},
+            {"deadline_epoch_ns": deadline_epoch}, now_epoch_ns, now_monotonic_ns,
+            maximum_age_ns, maximum_clock_skew_ns)
 
 
 def _bind_intent(intent, envelope_bytes, evaluation_context_bytes, historical_expectations_bytes,
@@ -419,15 +444,59 @@ def _produce_relay_on_work(*, intent_bytes, envelope_bytes, evaluation_context_b
             parent=intent["envelopeId"], relay=True, configuration=expected_configuration_digest,
             epoch=now_epoch_ns, monotonic=now_monotonic_ns,
             deadline=history["deadline_monotonic_ns"], fence=history["expected_fence"])
+        # Hold actual authenticated intent times and this relay's issuance
+        # before signing callbacks. These observations only support a later
+        # current-clock recheck; they are never accepted as authentication.
+        freshness_pins = (intent["issuedAtEpochNs"], intent["issuedMonotonicNs"],
+            now_epoch_ns, now_monotonic_ns, history["deadline_epoch_ns"],
+            history["deadline_monotonic_ns"])
         phases["bindings"] = plan.mixed._delta(before, work.metrics)
         before = work.metrics
         raw = _sign_wire(unsigned, planner_private_key, planner_public_key, work, relay=True)
         phases["signing"] = plan.mixed._delta(before, work.metrics)
-        return _ProducedRelay(raw, _metrics(phases, 1, 2, work))
+        return _ProducedRelay(raw, _metrics(phases, 1, 2, work), freshness_pins)
     except _FAILURES as exc:
         if isinstance(exc, RevocationWriterCommitmentError):
             raise
         raise RevocationWriterCommitmentError("writer relay production failed") from exc
+
+
+def _verify_intent_on_work(*, intent_bytes, envelope_bytes, evaluation_context_bytes,
+        historical_expectations_bytes, planner_public_key, verifier_public_key,
+        expected_configuration_digest, expected_generation_sequence, expected_generation_digest,
+        now_epoch_ns, now_monotonic_ns, maximum_age_ns, maximum_clock_skew_ns, work):
+    """Authenticate originals before requesting a separate planner relay.
+
+    Return ordinary arguments, owned historical expectations and held times,
+    not semantic-plan admission. The absent relay's two freshness slots repeat
+    the authenticated intent times. Existing two-control verification remains
+    required after a real relay response and before any custody forwarding.
+    """
+    try:
+        ledger = capture._SharedLedger(work)
+        _raw(intent_bytes, MAX_CONTROL_BYTES)
+        _body_bounds(envelope_bytes, evaluation_context_bytes, historical_expectations_bytes)
+        _pins(expected_configuration_digest, expected_generation_sequence, expected_generation_digest)
+        _current(now_epoch_ns, now_monotonic_ns, maximum_age_ns, maximum_clock_skew_ns)
+        _public_keys(planner_public_key, verifier_public_key)
+        intent, signature, unsigned_wire = _read_control(intent_bytes, ledger, relay=False)
+        _distinct_public_keys(planner_public_key, verifier_public_key, work)
+        capability._signature(verifier_public_key, signature, ENVELOPE_SCHEMA, unsigned_wire, ledger)
+        # Recheck the complete graph after the callback before adopting any
+        # header, body commitment or historical value from that graph.
+        capability._canonical(intent_bytes, intent, ledger, MAX_CONTROL_BYTES, MAX_CONTROL_NODES)
+        arguments, history = _bind_intent(intent, envelope_bytes, evaluation_context_bytes,
+            historical_expectations_bytes, expected_configuration_digest, expected_generation_sequence,
+            expected_generation_digest, now_epoch_ns, now_monotonic_ns, maximum_age_ns,
+            maximum_clock_skew_ns, ledger)
+        pins = (intent["issuedAtEpochNs"], intent["issuedMonotonicNs"],
+            intent["issuedAtEpochNs"], intent["issuedMonotonicNs"],
+            history["deadline_epoch_ns"], history["deadline_monotonic_ns"])
+        return arguments, history, pins
+    except _FAILURES as exc:
+        if isinstance(exc, RevocationWriterCommitmentError):
+            raise
+        raise RevocationWriterCommitmentError("writer intent authentication failed") from exc
 
 
 def _verify_commitments_on_work(*, intent_bytes, relay_bytes, envelope_bytes, evaluation_context_bytes,

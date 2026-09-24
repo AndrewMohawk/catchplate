@@ -17,7 +17,8 @@ class RevocationWriterAckExpectationSourceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.text, cls.tree = source("serverware/authority_revocation_writer_ack_expectation.py", 64 * 1024)
-        cls.worker = definition(cls.tree, "_expected_ack_request_on_work")
+        cls.worker = definition(cls.tree, "_expected_ack_request_and_freshness_on_work")
+        cls.compatibility = definition(cls.tree, "_expected_ack_request_on_work")
 
     def shape(self, actual, expected):
         self.assertEqual(ast.dump(actual), ast.dump(ast.parse("(" + expected.strip() + ")", mode="eval").body))
@@ -42,6 +43,20 @@ class RevocationWriterAckExpectationSourceTests(unittest.TestCase):
         self.assertTrue(all(item is None for item in self.worker.args.kw_defaults))
         self.assertIsNone(self.worker.args.vararg)
         self.assertIsNone(self.worker.args.kwarg)
+        self.assertEqual(ast.dump(self.compatibility.args), ast.dump(self.worker.args))
+        forwarded = call(self.compatibility, "_expected_ack_request_and_freshness_on_work")
+        self.assertEqual(forwarded.args, [])
+        self.assertEqual([(item.arg, ast.unparse(item.value)) for item in forwarded.keywords],
+                         [(item.arg, item.arg) for item in self.worker.args.kwonlyargs])
+        self.assertEqual(len(self.compatibility.body), 3)
+        captured = self.compatibility.body[1]
+        self.assertIsInstance(captured, ast.Assign)
+        self.assertIs(captured.value, forwarded)
+        self.assertEqual(len(captured.targets), 1)
+        self.assertIsInstance(captured.targets[0], ast.Tuple)
+        self.assertEqual([item.id for item in captured.targets[0].elts], ["request", "_freshness_pins"])
+        self.assertIsInstance(self.compatibility.body[-1], ast.Return)
+        self.shape(self.compatibility.body[-1].value, "request")
         imports = [(node.module, [(item.name, item.asname) for item in node.names])
             for node in self.tree.body if isinstance(node, ast.ImportFrom)]
         self.assertEqual(imports, [("__future__", [("annotations", None)]),
@@ -51,7 +66,7 @@ class RevocationWriterAckExpectationSourceTests(unittest.TestCase):
             ("serverware", [("authority_revocation_writer_commitment", "commitment")])])
         self.assertFalse(any(isinstance(node, ast.Import) for node in ast.walk(self.tree)))
         self.assertEqual([node.name for node in self.tree.body if isinstance(node, ast.FunctionDef)],
-                         ["_expected_ack_request_on_work"])
+                         ["_expected_ack_request_and_freshness_on_work", "_expected_ack_request_on_work"])
         error = definition(self.tree, "RevocationWriterAckExpectationError")
         self.assertEqual(len(error.bases), 1)
         self.shape(error.bases[0], "ValueError")
@@ -101,6 +116,11 @@ class RevocationWriterAckExpectationSourceTests(unittest.TestCase):
 
     def test_checked_scalar_links_and_exact_policy_join_precede_closed_nineteen_expectation_replay(self):
         receiver = call(self.worker, "commitment._verify_commitments_on_work")
+        freshness = assigned(self.worker, "freshness_pins")
+        self.shape(freshness, '''(received.intent_envelope["issuedAtEpochNs"],
+            received.intent_envelope["issuedMonotonicNs"], received.relay_envelope["issuedAtEpochNs"],
+            received.relay_envelope["issuedMonotonicNs"], received.expectations["deadline_epoch_ns"],
+            received.expectations["deadline_monotonic_ns"])''')
         identities = self.tuple_assignment(["intent_id", "relay_id"])
         arguments = self.tuple_assignment(["execution_id", "planner_id", "planned_at"])
         self.shape(identities.value, '(received.intent_envelope["envelopeId"], received.relay_envelope["envelopeId"])')
@@ -120,8 +140,9 @@ class RevocationWriterAckExpectationSourceTests(unittest.TestCase):
             expected_verifier_identity=identities["expectedVerifierIdentity"],
             work=work, **received.expectations)''')
         self.assertIs(assigned(self.worker, "record"), replay)
-        self.assertEqual([receiver.lineno, identities.lineno, arguments.lineno, policy.lineno, replay.lineno],
-            sorted([receiver.lineno, identities.lineno, arguments.lineno, policy.lineno, replay.lineno]))
+        self.assertEqual([receiver.lineno, freshness.lineno, identities.lineno, arguments.lineno,
+            policy.lineno, replay.lineno], sorted([receiver.lineno, freshness.lineno, identities.lineno,
+            arguments.lineno, policy.lineno, replay.lineno]))
         # Current clocks are used by receiver freshness, never substituted for
         # the signed historical clocks carried in its closed fifteen fields.
         self.assertNotIn("now_epoch_ns", [item.arg for item in replay.keywords])
@@ -162,7 +183,7 @@ class RevocationWriterAckExpectationSourceTests(unittest.TestCase):
         closed = call(self.worker, "acknowledgment._request_shape")
         self.shape(closed, "acknowledgment._request_shape(request)")
         returned, = [node for node in ast.walk(self.worker) if isinstance(node, ast.Return)]
-        self.shape(returned.value, "request")
+        self.shape(returned.value, "(request, freshness_pins)")
         replay = call(self.worker, "retention._verify_record_on_work")
         self.assertEqual([replay.lineno, request.lineno, loop.lineno, closed.lineno, returned.lineno],
             sorted([replay.lineno, request.lineno, loop.lineno, closed.lineno, returned.lineno]))

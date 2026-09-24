@@ -101,7 +101,7 @@ def _send_on_configuration(*, payload, configuration_digest, generation,
         writer_public_key = configuration._key(writer_key_bytes, work, expected_spki=writer_pin)
         now_monotonic_ns = configuration.production._callback(work, time.monotonic_ns)
         now_epoch_ns = configuration.production._callback(work, time.time_ns)
-        request_fields = expectation._expected_ack_request_on_work(
+        request_fields, freshness_pins = expectation._expected_ack_request_and_freshness_on_work(
             intent_bytes=intent_bytes, relay_bytes=relay_bytes, envelope_bytes=envelope_bytes,
             evaluation_context_bytes=evaluation_context_bytes,
             historical_expectations_bytes=historical_expectations_bytes,
@@ -113,6 +113,14 @@ def _send_on_configuration(*, payload, configuration_digest, generation,
             now_monotonic_ns=now_monotonic_ns, maximum_age_ns=maximum_age_ns,
             maximum_assertion_age_ns=fixed[4], maximum_plan_age_ns=fixed[5],
             maximum_clock_skew_ns=fixed[6], work=work)
+        # Genuine replay and key callbacks may consume the remaining lifetime.
+        # Recheck held authenticated scalar clocks immediately before sending;
+        # never retime history or infer rollback from a later delivery failure.
+        before_send_monotonic = configuration.production._callback(work, time.monotonic_ns)
+        before_send_epoch = configuration.production._callback(work, time.time_ns)
+        commitment._check_freshness_pins(freshness_pins,
+            now_epoch_ns=before_send_epoch, now_monotonic_ns=before_send_monotonic,
+            maximum_age_ns=maximum_age_ns, maximum_clock_skew_ns=fixed[6])
         acknowledgment_bytes = configuration.production._callback(work, lambda: transport._socket_request(
             path, intent_bytes=intent_bytes, relay_bytes=relay_bytes, envelope_bytes=envelope_bytes,
             evaluation_context_bytes=evaluation_context_bytes,

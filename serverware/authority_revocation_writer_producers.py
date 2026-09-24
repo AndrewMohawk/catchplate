@@ -177,7 +177,14 @@ def _produce_relay_on_configuration(*, payload, configuration_digest, generation
             expected_generation_digest=fixed[9], now_epoch_ns=now_epoch,
             now_monotonic_ns=now_monotonic, maximum_age_ns=maximum_age,
             maximum_clock_skew_ns=fixed[6], work=work)
-        return produced.relay_bytes
+        relay_bytes, freshness_pins = produced.relay_bytes, produced.freshness_pins
+        commitment._raw(relay_bytes, commitment.MAX_CONTROL_BYTES)
+        after_monotonic = configuration.production._callback(work, time.monotonic_ns)
+        after_epoch = configuration.production._callback(work, time.time_ns)
+        commitment._check_freshness_pins(freshness_pins,
+            now_epoch_ns=after_epoch, now_monotonic_ns=after_monotonic,
+            maximum_age_ns=maximum_age, maximum_clock_skew_ns=fixed[6])
+        return relay_bytes
     except _FAILURES as exc:
         if isinstance(exc, RevocationWriterProducerError):
             raise

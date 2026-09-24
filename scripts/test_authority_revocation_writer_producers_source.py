@@ -270,9 +270,11 @@ class RevocationWriterProducersSourceTests(unittest.TestCase):
         fixed = assigned(worker, "fixed")
         self.shape(fixed, "owner._snapshot_configuration()")
         callbacks = calls(worker, "configuration.production._callback")
-        self.assertEqual(len(callbacks), 2)
+        self.assertEqual(len(callbacks), 4)
         self.shape(callbacks[0], "configuration.production._callback(work, time.monotonic_ns)")
         self.shape(callbacks[1], "configuration.production._callback(work, time.time_ns)")
+        self.shape(callbacks[2], "configuration.production._callback(work, time.monotonic_ns)")
+        self.shape(callbacks[3], "configuration.production._callback(work, time.time_ns)")
         produced = assigned(worker, "produced")
         self.shape(produced, '''commitment._produce_relay_on_work(intent_bytes=intent_bytes,
             envelope_bytes=envelope_bytes, evaluation_context_bytes=evaluation_context_bytes,
@@ -282,10 +284,27 @@ class RevocationWriterProducersSourceTests(unittest.TestCase):
             expected_generation_digest=fixed[9], now_epoch_ns=now_epoch,
             now_monotonic_ns=now_monotonic, maximum_age_ns=maximum_age,
             maximum_clock_skew_ns=fixed[6], work=work)''')
-        ordered = [payload, fixed, *callbacks, produced]
+        held, = [node for node in ast.walk(worker) if isinstance(node, ast.Assign)
+                 and len(node.targets) == 1 and isinstance(node.targets[0], ast.Tuple)
+                 and all(isinstance(item, ast.Name) for item in node.targets[0].elts)
+                 and [item.id for item in node.targets[0].elts] == ["relay_bytes", "freshness_pins"]]
+        self.assertEqual(len(held.targets), 1)
+        self.assertEqual([item.id for item in held.targets[0].elts], ["relay_bytes", "freshness_pins"])
+        self.shape(held.value, "(produced.relay_bytes, produced.freshness_pins)")
+        raw = [node for node in calls(worker, "commitment._raw") if node.lineno > produced.lineno]
+        self.assertEqual(len(raw), 1)
+        self.shape(raw[0], "commitment._raw(relay_bytes, commitment.MAX_CONTROL_BYTES)")
+        self.assertIs(assigned(worker, "after_monotonic"), callbacks[2])
+        self.assertIs(assigned(worker, "after_epoch"), callbacks[3])
+        fresh = call(worker, "commitment._check_freshness_pins")
+        self.shape(fresh, '''commitment._check_freshness_pins(freshness_pins,
+            now_epoch_ns=after_epoch, now_monotonic_ns=after_monotonic,
+            maximum_age_ns=maximum_age, maximum_clock_skew_ns=fixed[6])''')
+        ordered = [payload, fixed, *callbacks[:2], produced, held, raw[0], *callbacks[2:], fresh]
         self.assertEqual([node.lineno for node in ordered], sorted(node.lineno for node in ordered))
         returned, = [node for node in ast.walk(worker) if isinstance(node, ast.Return)]
-        self.shape(returned.value, "produced.relay_bytes")
+        self.shape(returned.value, "relay_bytes")
+        self.assertLess(fresh.lineno, returned.lineno)
         _, controls = source("serverware/authority_revocation_writer_commitment.py", 64 * 1024)
         for name in ("_produce_intent_on_work", "_produce_relay_on_work"):
             actual = definition(controls, name)

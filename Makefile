@@ -927,6 +927,9 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_revocation_planning_transport.py \
 	serverware/authority_revocation_planning_client.py \
 	serverware/authority_revocation_planning_receiver.py \
+	serverware/authority_revocation_planner_custody_transport.py \
+	serverware/authority_revocation_planner_custody_client.py \
+	serverware/authority_revocation_planner_custody_receiver.py \
 	serverware/authority_revocation_planner_configuration.py \
 	serverware/authority_revocation_invocation.py \
 	serverware/authority_revocation_issuance.py \
@@ -2679,6 +2682,9 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_revocation_planning_transport.py \
 				serverware/authority_revocation_planning_client.py \
 				serverware/authority_revocation_planning_receiver.py \
+				serverware/authority_revocation_planner_custody_transport.py \
+				serverware/authority_revocation_planner_custody_client.py \
+				serverware/authority_revocation_planner_custody_receiver.py \
 				serverware/authority_revocation_planner_configuration.py \
 				serverware/authority_transport.py \
 				serverware/authority_revocation_invocation.py \

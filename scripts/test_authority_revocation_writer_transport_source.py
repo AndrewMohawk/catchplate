@@ -44,12 +44,15 @@ class RevocationWriterTransportSourceTests(unittest.TestCase):
         self.assertLess(guard.end_lineno, receive.lineno)
         self.assertLess(receive.lineno, allowance.lineno)
         planning_ingress = definition(self.server, "_serve_revocation_planning")
+        custody_ingress = definition(self.server, "_serve_revocation_custody")
         self.assertEqual(calls(self.ingress, "_ValidationWork"), [allowance])
         self.assertEqual(calls(self.server, "_ValidationWork"),
-                         [allowance, call(planning_ingress, "_ValidationWork")])
+                         [allowance, call(planning_ingress, "_ValidationWork"),
+                          call(custody_ingress, "_ValidationWork")])
         self.assertEqual(calls(self.server, "QueryReadValidationLimits"),
                          [call(self.ingress, "QueryReadValidationLimits"),
-                          call(planning_ingress, "QueryReadValidationLimits")])
+                          call(planning_ingress, "QueryReadValidationLimits"),
+                          call(custody_ingress, "QueryReadValidationLimits")])
 
     def test_original_five_and_same_work_reach_real_composition_before_exact_ack_send(self):
         operation = call(self.ingress, "process._persist_and_reserve_revocation_commitments")
@@ -89,7 +92,8 @@ class RevocationWriterTransportSourceTests(unittest.TestCase):
         self.assertEqual(len(assignments), 2)
         self.shape(assignments[0].value, "False")
         self.shape(assignments[1].value,
-                   "prefix in (writer_transport.REQUEST_MAGIC, planning_transport.REQUEST_MAGIC)")
+                   '''prefix in (writer_transport.REQUEST_MAGIC, planning_transport.REQUEST_MAGIC,
+                       custody_transport.RELAY_REQUEST_MAGIC, custody_transport.FORWARD_REQUEST_MAGIC)''')
         routed = call(self.served, "self._serve_revocation_writer")
         self.shape(routed, "self._serve_revocation_writer(connection, deadline_ns=deadline_ns, prefix=prefix)")
         branch, = [node for node in ast.walk(self.served) if isinstance(node, ast.If)

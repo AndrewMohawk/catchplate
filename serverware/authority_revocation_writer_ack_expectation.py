@@ -25,7 +25,7 @@ class RevocationWriterAckExpectationError(ValueError):
     pass
 
 
-def _expected_ack_request_on_work(*, intent_bytes, relay_bytes, envelope_bytes,
+def _expected_ack_request_and_freshness_on_work(*, intent_bytes, relay_bytes, envelope_bytes,
         evaluation_context_bytes, historical_expectations_bytes,
         planner_public_key, verifier_public_key,
         expected_planner_identity, expected_verifier_identity,
@@ -33,7 +33,7 @@ def _expected_ack_request_on_work(*, intent_bytes, relay_bytes, envelope_bytes,
         expected_generation_digest, now_epoch_ns, now_monotonic_ns,
         maximum_age_ns, maximum_clock_skew_ns, maximum_assertion_age_ns,
         maximum_plan_age_ns, work):
-    """Return closed request19 from originals, never from an ACK or stored row.
+    """Return request19 and fixed authenticated clocks from original bytes.
 
     The only initial graph copy is the two independent identity dictionaries
     (actual JSONCapture, 0H/1L/1N), before any key callback. The real receiver
@@ -41,6 +41,9 @@ def _expected_ack_request_on_work(*, intent_bytes, relay_bytes, envelope_bytes,
     policy before original plan/context replay. Current clocks go only to the
     receiver: they never overwrite signed historical verification times.
 
+    The fixed six-scalar clock tuple is captured before retention callbacks;
+    later current-time checks cannot read a mutable authenticated carrier.
+    It is local data for those checks, not a proof token or new authority.
     Three additional hashes cover original intent, relay and history. Stable
     IDs were genuinely derived and checked by the receiver, while record/key
     digests come only from this call's genuine retention result. Fixed scalar
@@ -76,6 +79,14 @@ def _expected_ack_request_on_work(*, intent_bytes, relay_bytes, envelope_bytes,
             work=work)
         # Hold the checked immutable scalar links before retention's next key
         # callbacks. The ordinary receiver graphs are not reusable authority.
+        freshness_pins = (
+            received.intent_envelope["issuedAtEpochNs"],
+            received.intent_envelope["issuedMonotonicNs"],
+            received.relay_envelope["issuedAtEpochNs"],
+            received.relay_envelope["issuedMonotonicNs"],
+            received.expectations["deadline_epoch_ns"],
+            received.expectations["deadline_monotonic_ns"],
+        )
         intent_id, relay_id = (received.intent_envelope["envelopeId"],
             received.relay_envelope["envelopeId"])
         execution_id, planner_id, planned_at = (received.arguments[name]
@@ -109,8 +120,34 @@ def _expected_ack_request_on_work(*, intent_bytes, relay_bytes, envelope_bytes,
             request[name + "_bytes_digest"] = retention._bytes_digest(raw, work)
             request[name + "_byte_count"] = len(raw)
         acknowledgment._request_shape(request)
-        return request
+        return request, freshness_pins
     except (AttributeError, KeyError, TypeError, ValueError, OverflowError, RecursionError) as exc:
         if isinstance(exc, RevocationWriterAckExpectationError):
             raise
         raise RevocationWriterAckExpectationError("writer ACK expectation derivation failed") from exc
+
+
+def _expected_ack_request_on_work(*, intent_bytes, relay_bytes, envelope_bytes,
+        evaluation_context_bytes, historical_expectations_bytes,
+        planner_public_key, verifier_public_key,
+        expected_planner_identity, expected_verifier_identity,
+        expected_configuration_digest, expected_generation_sequence,
+        expected_generation_digest, now_epoch_ns, now_monotonic_ns,
+        maximum_age_ns, maximum_clock_skew_ns, maximum_assertion_age_ns,
+        maximum_plan_age_ns, work):
+    """Compatibility surface returning only the independently derived row19."""
+    request, _freshness_pins = _expected_ack_request_and_freshness_on_work(
+        intent_bytes=intent_bytes, relay_bytes=relay_bytes, envelope_bytes=envelope_bytes,
+        evaluation_context_bytes=evaluation_context_bytes,
+        historical_expectations_bytes=historical_expectations_bytes,
+        planner_public_key=planner_public_key, verifier_public_key=verifier_public_key,
+        expected_planner_identity=expected_planner_identity,
+        expected_verifier_identity=expected_verifier_identity,
+        expected_configuration_digest=expected_configuration_digest,
+        expected_generation_sequence=expected_generation_sequence,
+        expected_generation_digest=expected_generation_digest,
+        now_epoch_ns=now_epoch_ns, now_monotonic_ns=now_monotonic_ns,
+        maximum_age_ns=maximum_age_ns, maximum_clock_skew_ns=maximum_clock_skew_ns,
+        maximum_assertion_age_ns=maximum_assertion_age_ns,
+        maximum_plan_age_ns=maximum_plan_age_ns, work=work)
+    return request

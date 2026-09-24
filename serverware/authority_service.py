@@ -50,6 +50,7 @@ from serverware import authority_contract
 from serverware import authority_planner
 from serverware import authority_transition_registry
 from serverware import authority_transport
+from serverware import authority_revocation_planner_custody_transport as custody_transport
 from serverware import authority_revocation_planning_transport as planning_transport
 from serverware import authority_revocation_writer_transport as writer_transport
 from serverware import authority_webauthn_trust
@@ -294,6 +295,46 @@ def _read_dsn_descriptor(environment_name: str) -> str:
             "authority database DSN descriptor is invalid"
         )
     return dsn
+
+
+def _revocation_custody_originals(originals, *, relay):
+    """Validate fixed raw references before any custody-service callback."""
+    if type(originals) is not tuple or any(type(raw) is not bytes for raw in originals):
+        raise AuthorityServiceError("revocation custody inputs are not original bytes")
+    lengths = tuple(len(raw) for raw in originals)
+    if relay:
+        custody_transport._validate_relay_lengths(lengths)
+    else:
+        custody_transport._validate_forward_lengths(lengths)
+
+
+def _revocation_custody_context(process, *, role_name, work):
+    """Hold one admitted role's full configuration and final launch snapshot.
+
+    This returns ordinary owned configuration data, not an admission or proof
+    token. Every fixed consumer genuinely maps its configuration and launch
+    again on the same work. Original byte references must already be bounded;
+    any required signer is held by the caller before these callbacks. No DSN,
+    private key, current clock or mutable process method is returned or called.
+    """
+    if (type(process) is not AuthorityProcess or role_name not in ("verifier", "planner")
+            or process.role_name != role_name or process.process_mode != "policy-authority-" + role_name):
+        raise AuthorityServiceError("revocation custody process is not configured")
+    measured = process.configuration
+    if type(measured) is not MeasuredConfiguration:
+        raise AuthorityServiceError("revocation custody measured configuration is unavailable")
+    payload, digest = measured.payload, measured.digest
+    from serverware import authority_revocation_configuration as configuration
+
+    ledger = configuration.capability.capture._SharedLedger(work)
+    configuration.capability.shape._digest(digest)
+    if type(payload) is not dict:
+        raise AuthorityServiceError("revocation custody configuration is not closed data")
+    owned = configuration._ConfigurationCapture(
+        ledger, maximum_bytes=authority_contract.MAX_REQUEST_BYTES).visit(payload)
+    configuration.production._callback(work, lambda: authority_launch_guard.require_active(role_name))
+    generation = configuration.production._callback(work, lambda: dict(authority_launch_guard.generation()))
+    return owned, digest, generation
 
 
 def _revocation_writer_from_owned_configuration(*, owned_payload, configuration_digest, work):
@@ -4105,6 +4146,78 @@ class AuthorityProcess:
             historical_expectations_bytes=historical_expectations_bytes,
             planner_private_key=planner_private_key, work=work)
 
+    def _request_revocation_writer_relay(self, *, intent_bytes, envelope_bytes,
+            evaluation_context_bytes, historical_expectations_bytes, work):
+        """Obtain and authenticate original relay bytes without custody I/O.
+
+        This preparatory call never invokes the forwarding method. Its caller
+        must retain the returned originals before a separate potentially
+        committing request; a stable relay ID alone is not retry authority.
+        """
+        from serverware import authority_revocation_planner_custody_client as client
+
+        _revocation_custody_originals((intent_bytes, envelope_bytes,
+            evaluation_context_bytes, historical_expectations_bytes), relay=True)
+        payload, digest, generation = _revocation_custody_context(self, role_name="verifier", work=work)
+        return client._request_relay_on_configuration(payload=payload, configuration_digest=digest,
+            generation=generation, intent_bytes=intent_bytes, envelope_bytes=envelope_bytes,
+            evaluation_context_bytes=evaluation_context_bytes,
+            historical_expectations_bytes=historical_expectations_bytes, work=work)
+
+    def _forward_revocation_writer_originals(self, *, intent_bytes, relay_bytes,
+            envelope_bytes, evaluation_context_bytes, historical_expectations_bytes, work):
+        """Forward retained originals and authenticate the writer's custody ACK.
+
+        No signer is acquired, no relay is generated and no automatic retry is
+        made. A failure after dispatch can follow a durable writer commit;
+        it never establishes rollback or authorizes replacing these originals.
+        """
+        from serverware import authority_revocation_planner_custody_client as client
+
+        _revocation_custody_originals((intent_bytes, relay_bytes, envelope_bytes,
+            evaluation_context_bytes, historical_expectations_bytes), relay=False)
+        payload, digest, generation = _revocation_custody_context(self, role_name="verifier", work=work)
+        return client._forward_on_configuration(payload=payload, configuration_digest=digest,
+            generation=generation, intent_bytes=intent_bytes, relay_bytes=relay_bytes,
+            envelope_bytes=envelope_bytes, evaluation_context_bytes=evaluation_context_bytes,
+            historical_expectations_bytes=historical_expectations_bytes, work=work)
+
+    def _prepare_revocation_writer_relay(self, *, intent_bytes, envelope_bytes,
+            evaluation_context_bytes, historical_expectations_bytes, work):
+        """Authenticate verifier originals and sign a relay; never forward it."""
+        if (type(self) is not AuthorityProcess or self.role_name != "planner"
+                or self.process_mode != "policy-authority-planner"):
+            raise AuthorityServiceError("revocation custody relay preparation requires the planner role")
+        from serverware import authority_revocation_planner_custody_receiver as receiver
+
+        _revocation_custody_originals((intent_bytes, envelope_bytes,
+            evaluation_context_bytes, historical_expectations_bytes), relay=True)
+        planner_private_key = self.signing_key
+        if not isinstance(planner_private_key, Ed25519PrivateKey):
+            raise AuthorityServiceError("revocation custody planner signer is unavailable")
+        payload, digest, generation = _revocation_custody_context(self, role_name="planner", work=work)
+        return receiver._produce_relay_on_configuration(payload=payload, configuration_digest=digest,
+            generation=generation, raw4=(intent_bytes, envelope_bytes,
+                evaluation_context_bytes, historical_expectations_bytes),
+            planner_private_key=planner_private_key, work=work)
+
+    def _forward_revocation_writer_custody(self, *, intent_bytes, relay_bytes,
+            envelope_bytes, evaluation_context_bytes, historical_expectations_bytes, work):
+        """Authenticate exact held originals and deliver them to the writer.
+
+        Preparation is a separate route. This fixed path has no signer and
+        performs genuine configured request replay and ACK verification through
+        the existing writer client; it never regenerates an intent or relay.
+        """
+        from serverware import authority_revocation_planner_custody_receiver as receiver
+
+        _revocation_custody_originals((intent_bytes, relay_bytes, envelope_bytes,
+            evaluation_context_bytes, historical_expectations_bytes), relay=False)
+        payload, digest, generation = _revocation_custody_context(self, role_name="planner", work=work)
+        return receiver._forward_on_configuration(payload=payload, configuration_digest=digest,
+            generation=generation, raw5=(intent_bytes, relay_bytes, envelope_bytes,
+                evaluation_context_bytes, historical_expectations_bytes), work=work)
+
     def _send_revocation_writer_commitments(self, *, intent_bytes,
             relay_bytes, envelope_bytes, evaluation_context_bytes,
             historical_expectations_bytes, work):
@@ -7798,6 +7911,43 @@ class AuthorityServer:
         planning_transport._send_response(connection, envelope_bytes, evaluation_context_bytes,
             deadline_ns=deadline_ns)
 
+    def _serve_revocation_custody(self, connection: socket.socket, *,
+            deadline_ns: int, prefix: bytes) -> None:
+        """Separate relay preparation from forwarding already-held originals.
+
+        The sole caller has checked the verifier peer. Complete bounded input
+        and EOF precede the single allowance and fixed service operation. No
+        path silently falls through from signing into custody, and forwarding
+        failures are uncertain delivery, not proof of rollback.
+        """
+        process = self.process
+        if (type(process) is not AuthorityProcess or process.role_name != "planner"
+                or process.process_mode != "policy-authority-planner"):
+            raise AuthorityServiceError("detached custody transfer has the wrong service role")
+        preparing_relay = prefix == custody_transport.RELAY_REQUEST_MAGIC
+        if preparing_relay:
+            originals = custody_transport._recv_relay_request(connection, deadline_ns=deadline_ns, prefix=prefix)
+        elif prefix == custody_transport.FORWARD_REQUEST_MAGIC:
+            originals = custody_transport._recv_forward_request(connection, deadline_ns=deadline_ns, prefix=prefix)
+        else:
+            raise AuthorityServiceError("detached custody transfer purpose is invalid")
+        from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
+
+        work = _ValidationWork(QueryReadValidationLimits())
+        custody_transport._check_deadline(deadline_ns)
+        if preparing_relay:
+            relay_bytes = process._prepare_revocation_writer_relay(intent_bytes=originals[0],
+                envelope_bytes=originals[1], evaluation_context_bytes=originals[2],
+                historical_expectations_bytes=originals[3], work=work)
+            custody_transport._check_deadline(deadline_ns)
+            custody_transport._send_relay(connection, relay_bytes, deadline_ns=deadline_ns)
+        else:
+            acknowledgment_bytes = process._forward_revocation_writer_custody(
+                intent_bytes=originals[0], relay_bytes=originals[1], envelope_bytes=originals[2],
+                evaluation_context_bytes=originals[3], historical_expectations_bytes=originals[4], work=work)
+            custody_transport._check_deadline(deadline_ns)
+            custody_transport._send_ack(connection, acknowledgment_bytes, deadline_ns=deadline_ns)
+
     def _serve_connection(self, connection: socket.socket, *, deadline_ns: int) -> None:
         detached = False
         try:
@@ -7808,12 +7958,16 @@ class AuthorityServer:
                     "authority socket peer identity is not allowed"
                 )
             prefix = writer_transport._recv_prefix(connection, deadline_ns=deadline_ns)
-            detached = prefix in (writer_transport.REQUEST_MAGIC, planning_transport.REQUEST_MAGIC)
+            detached = prefix in (writer_transport.REQUEST_MAGIC, planning_transport.REQUEST_MAGIC,
+                custody_transport.RELAY_REQUEST_MAGIC, custody_transport.FORWARD_REQUEST_MAGIC)
             if prefix == writer_transport.REQUEST_MAGIC:
                 self._serve_revocation_writer(connection, deadline_ns=deadline_ns, prefix=prefix)
                 return
             if prefix == planning_transport.REQUEST_MAGIC:
                 self._serve_revocation_planning(connection, deadline_ns=deadline_ns, prefix=prefix)
+                return
+            if prefix in (custody_transport.RELAY_REQUEST_MAGIC, custody_transport.FORWARD_REQUEST_MAGIC):
+                self._serve_revocation_custody(connection, deadline_ns=deadline_ns, prefix=prefix)
                 return
             # Preserve the legacy canonical mapping and 64 MiB whole-frame
             # ceiling. Its first eight bytes have only been read, not parsed

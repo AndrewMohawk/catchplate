@@ -96,9 +96,11 @@ class RevocationWriterClientSourceTests(unittest.TestCase):
         key = call(self.client, "configuration._key")
         self.shape(key, "configuration._key(writer_key_bytes, work, expected_spki=writer_pin)")
         callbacks = calls(self.client, "configuration.production._callback")
-        self.assertEqual(len(callbacks), 3)
+        self.assertEqual(len(callbacks), 5)
         self.shape(callbacks[0], "configuration.production._callback(work, time.monotonic_ns)")
         self.shape(callbacks[1], "configuration.production._callback(work, time.time_ns)")
+        self.shape(callbacks[2], "configuration.production._callback(work, time.monotonic_ns)")
+        self.shape(callbacks[3], "configuration.production._callback(work, time.time_ns)")
         self.assertLess(fixed.lineno, key.lineno)
         self.assertLess(key.lineno, callbacks[0].lineno)
         self.assertLess(callbacks[0].lineno, callbacks[1].lineno)
@@ -111,7 +113,12 @@ class RevocationWriterClientSourceTests(unittest.TestCase):
         self.assertEqual(len(calls(snapshot, "_validate_configuration")), 1)
 
     def test_originals_and_configured_expectations_replay_before_guarded_transport_and_ack_verification(self):
-        expected = call(self.client, "expectation._expected_ack_request_on_work")
+        expected = call(self.client, "expectation._expected_ack_request_and_freshness_on_work")
+        captured, = [node for node in ast.walk(self.client) if isinstance(node, ast.Assign)
+                     and node.value is expected]
+        self.assertEqual(len(captured.targets), 1)
+        self.assertIsInstance(captured.targets[0], ast.Tuple)
+        self.assertEqual([item.id for item in captured.targets[0].elts], ["request_fields", "freshness_pins"])
         arguments = keywords(expected)
         self.assertEqual(set(arguments), {*ORIGINALS, "planner_public_key", "verifier_public_key",
             "expected_planner_identity", "expected_verifier_identity", "expected_configuration_digest",
@@ -126,6 +133,14 @@ class RevocationWriterClientSourceTests(unittest.TestCase):
             self.shape(arguments[name], f"fixed[{index}]")
         self.shape(arguments["expected_planner_identity"], "dict(zip(_IDENTITY_FIELDS, fixed[2]))")
         self.shape(arguments["expected_verifier_identity"], "dict(zip(_IDENTITY_FIELDS, fixed[3]))")
+        monotonic = assigned(self.client, "before_send_monotonic")
+        epoch = assigned(self.client, "before_send_epoch")
+        self.shape(monotonic, "configuration.production._callback(work, time.monotonic_ns)")
+        self.shape(epoch, "configuration.production._callback(work, time.time_ns)")
+        fresh = call(self.client, "commitment._check_freshness_pins")
+        self.shape(fresh, '''commitment._check_freshness_pins(freshness_pins,
+            now_epoch_ns=before_send_epoch, now_monotonic_ns=before_send_monotonic,
+            maximum_age_ns=maximum_age_ns, maximum_clock_skew_ns=fixed[6])''')
         received = assigned(self.client, "acknowledgment_bytes")
         self.shape(received, '''configuration.production._callback(work, lambda: transport._socket_request(
             path, intent_bytes=intent_bytes, relay_bytes=relay_bytes, envelope_bytes=envelope_bytes,
@@ -137,6 +152,8 @@ class RevocationWriterClientSourceTests(unittest.TestCase):
             request_fields=request_fields, writer_public_key=writer_public_key,
             expected_writer_spki_digest=writer_pin, work=work)''')
         self.assertLess(expected.lineno, received.lineno)
+        ordered = [expected, monotonic, epoch, fresh, received]
+        self.assertEqual([node.lineno for node in ordered], sorted(node.lineno for node in ordered))
         self.assertLess(received.lineno, verified.lineno)
         result, = [node for node in ast.walk(self.client) if isinstance(node, ast.Return)]
         self.shape(result.value, "acknowledgment_bytes")

@@ -10,7 +10,7 @@ from serverware import authority_complete_query
 from serverware.authority_query_read_work import _ValidationWork
 
 
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.38"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.39"
 SCHEMA_VERSION = 9
 CONTRACT_SCHEMA = "serverware.policyAuthorityOperationContract/v3"
 BUSINESS_INTENT_SCHEMA = "serverware.policyAuthorityBusinessIntent/v2"
@@ -181,6 +181,7 @@ SIGNED_REVOCATION_PRODUCTION_CONTRACT = MappingProxyType({
     "maxJsonDepth": 128,
     "includedPhases": (
         "joint-request-evidence-context-capture", "reservation-context-binding",
+        "actual-root-read-binding",
         "single-cutoff-read-effects-write-acquisition", "independent-before-vector-binding",
         "raw-proof-normalization", "genuine-mixed-proof-replay", "compact-proof-packaging",
         "original-evaluation-context-encoding",

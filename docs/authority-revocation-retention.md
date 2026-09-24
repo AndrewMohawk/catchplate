@@ -12,6 +12,13 @@ and verification on the same invocation work. Source `.38` returns the private
 producer's original encoded context alongside its signed output. Public service,
 mixed-root SQL, one-use execution and terminal witness activation remain outstanding.
 
+Source `.39` also binds the producer's actual business/authorization root-table
+reads to independent expected vectors before its one original database-clock
+sample. This repairs a missing framework root-read trace entry, not retained
+record authority: database observations and stored context still cannot supply
+their own independent currentness expectations. See the
+[private producer boundary](authority-revocation-production.md).
+
 The existing `exact_plan_*` fields continue to contain canonical **payload**
 bytes. Legacy v3 service replay reconstructs its envelope; private v4 replay
 returns the original envelope and context from the new immutable sidecar.
@@ -164,7 +171,7 @@ driver that has already committed and then fails a callback guard.
 
 ## Migration at the actual consumers
 
-| Consumer | Source `.38` status / remaining work |
+| Consumer | Source `.39` status / remaining work |
 | --- | --- |
 | Configured retention coordinator | Separate `RevocationPlannerPersistence` implemented; configuration pins keys/identities and calls genuine raw-byte storage. |
 | Transaction reserve/complete | Private v4 reservation, sidecar insert, exact comparisons and locked CAS implemented. |

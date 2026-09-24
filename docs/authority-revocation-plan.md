@@ -134,6 +134,15 @@ context as canonical eighteen-field bytes before signing. The existing meter
 pays `0H/2L/2N`, within 512 KiB, 4,096 nodes and depth 8. This does not connect
 the producer to the retention coordinator or public service.
 
+Source `.39` fixes the private acquisition path's missing genuine global
+audit-capacity root read, which otherwise fails trace closure. After verifying
+the assertion, the actual root reader observes business and authorization
+vectors on the same cursor/trace/work and canonically binds both to independent
+expected vectors before the single original database-clock sample. Real SQL
+produces the required framework trace entry; no synthetic marker or larger
+budget is introduced. The observations do not establish independent currentness
+or activate a public planner, service or executor path.
+
 Source `.37` implements private original-byte storage and historical replay.
 Public verifier-response admission and service persistence still require
 coordinated v4 admission and consumer changes. They need

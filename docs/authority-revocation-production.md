@@ -4,7 +4,9 @@
 
 Source `.35` adds a private revoke-only producer that connects actual database
 acquisition to the original signed v4 envelope. Source `.38` also returns its
-original canonical evaluation-context bytes. It is **unbuilt and unexecuted**.
+original canonical evaluation-context bytes. Source `.39` binds actual primary
+root-table reads to independent expectations before the original database clock.
+It is **unbuilt and unexecuted**.
 It is not a public endpoint, registered kernel, durable replay implementation,
 SQL commit or deployed release.
 
@@ -29,7 +31,8 @@ it is not promoted into independently trusted current time.
 ```mermaid
 flowchart TD
     A[Own request, assertion and external context] --> B[Bind reservation and verify assertion]
-    B --> C[One database cutoff: real reads, effects and write proofs]
+    B --> R[Read actual primary roots and bind independent vectors]
+    R --> C[One database cutoff: real reads, effects and write proofs]
     C --> D[Bind observed exact read/write head union]
     D --> E[Normalize raw evidence and genuinely replay mixed proofs]
     E --> F[Build compact proof]
@@ -40,7 +43,20 @@ flowchart TD
 
 The producer calls the existing [read/effect/write coordinator](authority-complete-acquisition.md)
 once. It does not resample the database clock or accept a caller's mutation
-recipe. The collector's nine potential heads are narrowed to the exact union
+recipe. After genuine assertion verification, it calls the existing
+`_read_root_set` on the same cursor, trace and work, then compares both observed
+business and authorization vectors canonically with the invocation-owned,
+independently supplied expectations. Those observed roots feed the real reader;
+the original database clock is sampled once, after these root reads.
+
+This fixes a concrete source defect: the private acquisition path previously
+omitted the genuine global audit-capacity root read required by `trace.close`.
+Source `.39` performs that SQL and lets the existing trace classifier account
+for its framework marker; it does not insert a synthetic marker or loosen trace
+closure. A matching database observation is not independent root-currentness
+authority or proof of transaction ownership.
+
+The collector's nine potential heads are narrowed to the exact union
 of six-role read indexes and genuinely written indexes. The observed vector is
 compared canonically with the independent expected vector before packaging.
 Unused potential heads cannot be smuggled into the closed proof document.
@@ -83,6 +99,13 @@ object. Source ceilings remain eight million hashes, 64 MiB of defined byte
 work, one million JSON-node visits and depth 128. A standalone component's success under those
 ceilings does not imply the combined producer fits them.
 
+Actual root-row copying, the existing canonical/framed root-set commitment and
+the comparison with independent vectors debit that same remaining work. The
+source descriptor includes `actual-root-read-binding`; the legacy root-reader
+default and all shared ceilings are unchanged.
+Root trace, execute and fetch callbacks must leave the meter's limits and
+counters unchanged; callback spending, refunds or replacement limits abort.
+
 Context measurement and canonical encoding charge `0H/2L/2N` on that existing
 meter: zero hashes, twice the context byte length and twice its node count.
 The separate context bounds are 512 KiB, 4,096 nodes and depth 8; its closed
@@ -112,7 +135,7 @@ signing helper's metrics are its own invocation delta. Context encoding occurs
 between packaging and that signing delta. Do not sum cumulative snapshots as
 if they were exclusive phases. These are defined work limits, not
 a whole-process memory, SQL-cost or wall-clock deadline guarantee. The existing
-acquisition exclusions remain: clock/ordinary/primary-proof SQL are outside
+acquisition exclusions remain: clock/root-table/ordinary/primary-proof SQL are outside
 shared physical counters; staged proof/stamp work, acquisition trace encoding,
 driver/process allocation, indexed projection internals and fixed scaffolding
 have separate or explicitly excluded accounting.

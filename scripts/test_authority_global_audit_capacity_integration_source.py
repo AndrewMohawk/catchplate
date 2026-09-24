@@ -550,8 +550,27 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
         self.assertEqual(keywords(call(coordinator, "authority_index_mutation_reader._AcquisitionBudget")),
                          {"shared_acquisition": "acquisition", "work": "query_work"})
         self.assertLess(call(coordinator, "_typed_request_digest").lineno, shared_read.lineno)
-        self.assertLess(call(coordinator, "authority_webauthn_assertion._verify_revoke_assertion_evidence").lineno,
-                        shared_read.lineno)
+        receipt = call(coordinator, "authority_webauthn_assertion._verify_revoke_assertion_evidence")
+        roots = call(coordinator, "_read_root_set")
+        bound = call(coordinator, "authority_revocation_semantics._canonical_equal")
+        effects = call(coordinator, "authority_revocation_semantics._derive_revocation_effects")
+        for before, after in zip((receipt, roots, bound, shared_read),
+                                 (roots, bound, shared_read, effects)):
+            self.assertLess(before.lineno, after.lineno)
+        self.assertEqual([ast.unparse(item) for item in roots.args], ["cursor"])
+        self.assertEqual(keywords(roots), {
+            "operation": "operation", "manifest": "owned['manifest']", "trace": "trace", "work": "query_work"})
+        self.assertEqual([ast.unparse(item) for item in bound.args], [
+            "(observed_business, observed_authorization)",
+            "(owned['businessBeforeRoots'], owned['authorizationBeforeRoots'])"])
+        self.assertEqual(keywords(bound), {"work": "query_work",
+            "label": "'private producer database roots differ from independent expectations'"})
+        self.assertEqual(keywords(shared_read)["business_before_roots"], "observed_business")
+        self.assertEqual(keywords(shared_read)["authorization_before_roots"], "observed_authorization")
+        self.assertEqual(keywords(shared_read)["trace"], "trace")
+        self.assertEqual(keywords(call(coordinator, "PlannerTrace")),
+                         {"operation": "operation", "_complete_queries": "True"})
+        self.assertNotIn("work", keywords(call(producer, "_read_root_set")))
         self.assertFalse(calls(coordinator, "_ValidationWork"))
         defaults = dict(zip((arg.arg for arg in method.args.kwonlyargs), method.args.kw_defaults))
         self.assertEqual(ast.unparse(defaults["complete_acquisition"]), "None")
@@ -570,6 +589,58 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
         self.assertIn("successor retained-evidence protocol", ast.unparse(denial.body[0]))
         self.assertLess(denial.lineno, call(kernel, "authority_transition_core.KernelContext").lineno)
         self.assertLess(denial.lineno, call(kernel, "self.kernel.transition").lineno)
+
+    def test_private_root_reader_preserves_legacy_default_and_owns_actual_guarded_rows(self):
+        reader = definition(self.tree, "_read_root_set")
+        defaults = dict(zip((arg.arg for arg in reader.args.kwonlyargs), reader.args.kw_defaults))
+        self.assertEqual(ast.unparse(defaults["work"]), "None")
+        self.assertFalse(calls(reader, "_ValidationWork"))
+        callback = definition(reader, "callback")
+        legacy, = [node for node in callback.body if isinstance(node, ast.If)
+                   and ast.unparse(node.test) == "work is None"]
+        self.assertEqual(ast.unparse(legacy.body[0]), "return function(*arguments)")
+        guards = sorted(calls(callback, "authority_complete_query_batch._SharedLedger"),
+                        key=lambda node: node.lineno)
+        delegated = sorted(calls(callback, "function"), key=lambda node: node.lineno)
+        self.assertEqual(len(guards), 2)
+        self.assertEqual(len(delegated), 2)
+        self.assertLess(guards[0].lineno, delegated[1].lineno)
+        self.assertLess(delegated[1].lineno, guards[1].lineno)
+        for guard in guards:
+            self.assertEqual([ast.unparse(item) for item in guard.args], ["work"])
+        for predicate in ("work.limits is not limits", "work.metrics != metrics",
+                "(limits.max_hashes, limits.max_input_bytes, limits.max_json_nodes) != values"):
+            self.assertIn(predicate, ast.unparse(callback))
+        rows = definition(reader, "read_roots")
+        callbacks = sorted(calls(rows, "callback"), key=lambda node: node.lineno)
+        self.assertEqual([ast.unparse(node.args[0]) for node in callbacks],
+                         ["trace.read", "cursor.execute", "result.fetchone"])
+        self.assertEqual([ast.unparse(item) for item in callbacks[0].args[1:]],
+                         ["'policy_authority_authenticated_table_roots'", "{'tableName': table}"])
+        self.assertEqual(callbacks[1].args[1].value,
+            "SELECT root_revision, root_digest, leaf_count FROM serverware_metadata."
+            "policy_authority_authenticated_table_roots WHERE table_name = %s")
+        self.assertEqual(ast.unparse(callbacks[1].args[2]), "(table,)")
+        for predicate in ("type(row) is not dict", "len(row) != 3",
+                          "type(name) is not str", "len(name) > 32"):
+            self.assertIn(predicate, ast.unparse(rows))
+        closed, = [node for node in ast.walk(rows) if isinstance(node, ast.Compare)
+                   and ast.unparse(node.left) == "set(row)"]
+        self.assertEqual({item.value for item in closed.comparators[0].elts},
+                         {"root_revision", "root_digest", "leaf_count"})
+        copied = call(rows, "authority_query_reads._CopyBudget(work).copy")
+        self.assertEqual([ast.unparse(item) for item in copied.args], ["root"])
+        self.assertLess(closed.lineno, copied.lineno)
+        for scalar in calls(rows, "authority_revocation_plan.contract._integer") + calls(
+                rows, "authority_revocation_plan.contract._digest"):
+            self.assertLess(scalar.lineno, copied.lineno)
+        self.assertEqual(len(calls(rows, "authority_revocation_plan.contract._integer")), 2)
+        self.assertEqual(len(calls(rows, "authority_revocation_plan.contract._digest")), 1)
+        committed = call(reader, "authority_revocation_plan._json_digest")
+        self.assertEqual([ast.unparse(item) for item in committed.args],
+                         ["'serverware.policyAuthorityRootSet/v1'", "business_roots", "ledger"])
+        self.assertEqual([ast.unparse(item) for item in call(reader, "framed_digest").args],
+                         ["'serverware.policyAuthorityRootSet/v1'", "canonical_bytes(list(business_roots))"])
 
     def test_private_revocation_factory_captures_exact_context_before_one_clock_and_one_generation(self):
         facade = self.method("_read_revocation_inputs")

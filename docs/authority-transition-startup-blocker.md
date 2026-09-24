@@ -106,6 +106,15 @@ before signing, on existing work (`0H/2L/2N`; 512 KiB, 4,096 nodes, depth 8).
 Producer-to-coordinator/service wiring remains separate; no registered kernel,
 public execution path or production authority is enabled.
 
+Source `.39` repairs a concrete private-producer trace-closure defect: it now
+performs the real business/authorization root reads after assertion verification,
+including the required framework global audit-capacity root read, and binds both
+vectors to independent expectations before the one original database-clock
+sample. Bounded copies, canonical comparison and the existing framed commitment
+use the same remaining work; no synthetic marker or budget expansion is used.
+This source correction is unexecuted and does not establish independent root
+currentness, transaction ownership, registry admission or public v4 activation.
+
 The [explicit-context credential classifier](webauthn-credential-trust.md) now
 shares the actual enrollment/root/AAGUID/class/development decision with the
 live wrapper and both trust-withdrawal passes. Its immutable context does not

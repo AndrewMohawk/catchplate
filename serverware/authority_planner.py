@@ -948,10 +948,21 @@ class TypedTransitionPlanningProgram:
                 deadline_epoch_ns=owned["deadlineEpochNs"], maximum_age_ns=owned["maximumAgeNs"],
                 work=authority_webauthn_assertion._ReceiptWork(query_work),
             )
+            # These are actual root-table reads on this transaction and trace,
+            # including the separately charged global audit-capacity root.
+            # A caller's expected root vector cannot substitute for that SQL
+            # observation or synthesize the framework marker required at close.
+            observed_business, observed_authorization, _ = _read_root_set(
+                cursor, operation=operation, manifest=owned["manifest"],
+                trace=trace, work=query_work)
+            authority_revocation_semantics._canonical_equal(
+                (observed_business, observed_authorization),
+                (owned["businessBeforeRoots"], owned["authorizationBeforeRoots"]),
+                work=query_work, label="private producer database roots differ from independent expectations")
             selected, state = self._read_revocation_inputs_with_acquisition(
                 cursor, request=actual_request, manifest=owned["manifest"], trace=trace,
-                query_work=query_work, business_before_roots=owned["businessBeforeRoots"],
-                authorization_before_roots=owned["authorizationBeforeRoots"],
+                query_work=query_work, business_before_roots=observed_business,
+                authorization_before_roots=observed_authorization,
                 verified_webauthn_evidence=verified, acquisition=acquisition,
             )
             kernel, finalized, work_units, _, _ = authority_revocation_semantics._derive_revocation_effects(
@@ -1769,11 +1780,16 @@ def _read_root_set(
     operation: str,
     manifest: tuple[dict[str, Any], ...],
     trace: PlannerTrace,
+    work: _ValidationWork | None = None,
 ) -> tuple[
     tuple[dict[str, Any], ...],
     tuple[dict[str, Any], ...],
     str,
 ]:
+    # The legacy caller retains its existing accounting. The private v4 path
+    # owns each exact scalar row before later driver callbacks, and pays the
+    # real canonical root-set commitment on its existing remaining work.
+    ledger = authority_complete_query_batch._SharedLedger(work) if work is not None else None
     spec = authority_contract.operation_spec(operation)
     manifest_tables = {entry["table"] for entry in manifest}
     business_tables = set(spec["businessReads"]) | set(
@@ -1788,32 +1804,54 @@ def _read_root_set(
             "authenticated root classes escaped the generated manifest"
         )
 
+    def callback(function, *arguments):
+        if work is None:
+            return function(*arguments)
+        authority_complete_query_batch._SharedLedger(work)
+        limits, metrics = work.limits, work.metrics
+        values = (limits.max_hashes, limits.max_input_bytes, limits.max_json_nodes)
+        result = function(*arguments)
+        authority_complete_query_batch._SharedLedger(work)
+        if (work.limits is not limits or work.metrics != metrics
+                or (limits.max_hashes, limits.max_input_bytes, limits.max_json_nodes) != values):
+            raise AuthorityPlannerError("planner root callback changed its shared work")
+        return result
+
     def read_roots(tables: set[str]) -> tuple[dict[str, Any], ...]:
         roots: list[dict[str, Any]] = []
         for table in sorted(tables):
-            trace.read(
+            callback(trace.read,
                 "policy_authority_authenticated_table_roots",
                 {"tableName": table},
             )
-            row = cursor.execute(
+            result = callback(cursor.execute,
                 "SELECT root_revision, root_digest, leaf_count "
                 "FROM serverware_metadata."
                 "policy_authority_authenticated_table_roots "
                 "WHERE table_name = %s",
                 (table,),
-            ).fetchone()
+            )
+            row = callback(result.fetchone)
             if row is None:
                 raise AuthorityPlannerError(
                     f"planner authenticated root is absent for {table}"
                 )
-            roots.append(
-                {
-                    "table": table,
-                    "rootRevision": row["root_revision"],
-                    "rootDigest": row["root_digest"],
-                    "leafCount": row["leaf_count"],
-                }
-            )
+            if work is not None:
+                if (type(row) is not dict or len(row) != 3
+                        or any(type(name) is not str or len(name) > 32 for name in row)
+                        or set(row) != {"root_revision", "root_digest", "leaf_count"}):
+                    raise AuthorityPlannerError("planner authenticated root row is not closed")
+                authority_revocation_plan.contract._integer(row["root_revision"])
+                authority_revocation_plan.contract._integer(row["leaf_count"])
+                authority_revocation_plan.contract._digest(row["root_digest"])
+            root = {
+                "table": table,
+                "rootRevision": row["root_revision"],
+                "rootDigest": row["root_digest"],
+                "leafCount": row["leaf_count"],
+            }
+            roots.append(authority_query_reads._CopyBudget(work).copy(root)
+                         if work is not None else root)
         return tuple(roots)
 
     business_roots = read_roots(business_tables)
@@ -1829,7 +1867,9 @@ def _read_root_set(
     return (
         business_roots,
         authorization_roots,
-        framed_digest(
+        authority_revocation_plan._json_digest(
+            "serverware.policyAuthorityRootSet/v1", business_roots, ledger,
+        ) if ledger is not None else framed_digest(
             "serverware.policyAuthorityRootSet/v1",
             canonical_bytes(list(business_roots)),
         ),

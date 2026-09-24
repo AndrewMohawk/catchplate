@@ -5,7 +5,7 @@ The frozen `f16da11` source-root run of `scripts/test_control_plane_startup.py`
 failed while importing `authority_transition_registry`, before service startup.
 The diagnostic-only change described here does not make that runtime healthy.
 
-At source `.82`, `authority_contract.OPERATION_REGISTRY` declares six transitions
+At source `.83`, `authority_contract.OPERATION_REGISTRY` declares six transitions
 that have no kernels in the policy, quota, or release registries:
 
 - `webauthn.trust.stage`
@@ -93,6 +93,14 @@ is added. Read callbacks retain the same work allowance on failure as well as
 success. Configured independent owners, real handlers, signed-plan/executor
 integration and all six registered kernels remain outstanding; the source
 integration is unbuilt and unexecuted.
+Source `.83` adds an inert configured evidence read owner with fixed operation,
+database, signer, freshness and RP/origin or installation-target pins. It shares
+the genuine guarded read transaction and manifest/identity admission body with
+the existing revocation producer, and returns only after all read scopes close.
+The current measured configuration cannot derive purpose-authorized evidence
+pins; its mapper and service activation remain missing. V3 can encode the row
+delta but cannot retain/replay the new original-input semantics. No registered
+kernel, callable admission handler, durable write or startup gate is enabled.
 
 The [registry-free request commitment](authority-request-commitment.md) separates
 the actual hash/intent workers needed by the inactive revocation verifier from

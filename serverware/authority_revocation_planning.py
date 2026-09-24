@@ -15,6 +15,7 @@ cannot detect a hostile driver that commits and begins another transaction.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -31,27 +32,36 @@ _IDENTITY_FIELDS = ("sessionIdentityDigest", "measurementDigest", "attestationRe
 _CONFIGURED_CONTEXT = frozenset({"expectedPlannerIdentity", "expectedVerifierIdentity",
     "maximumAssertionAgeNs", "maximumPlanAgeNs", "maximumClockSkewNs"})
 _CALL_CONTEXT = retention.production._CONTEXT_FIELDS - _CONFIGURED_CONTEXT - {"expectedBefore"}
+_READ_OPERATIONS = frozenset({"webauthn.credential.revoke",
+    "webauthn.registration.evidence.admit", "webauthn.trust.installation.admit"})
 
 
 class RevocationPlanningError(ValueError):
     pass
 
 
-def _validate_read_configuration(configuration):
+def _validate_read_scope_configuration(configuration):
     # The shared body preserves the old coordinator's timeout-one admission.
     # Only the new independently configured owner requires libpq's real minimum.
-    if type(configuration) is not tuple or len(configuration) != 4:
-        raise RevocationPlanningError("observed planner read configuration is not an exact four-tuple")
-    dsn, timeout, identity, private_key = configuration
+    if type(configuration) is not tuple or len(configuration) != 3:
+        raise RevocationPlanningError("planner read scope configuration is not an exact three-tuple")
+    dsn, timeout, identity = configuration
     if (type(dsn) is not str or not 1 <= len(dsn) <= 65536
             or type(timeout) is not int or not 1 <= timeout <= 300
             or type(identity) is not tuple or len(identity) != 7
             or any(type(value) is not str or not 1 <= len(value) <= 4096
-                   or "\x00" in value for value in identity[:4])
-            or not isinstance(private_key, Ed25519PrivateKey)):
+                   or "\x00" in value for value in identity[:4])):
         raise RevocationPlanningError("observed planner read configuration is invalid")
     for digest in identity[4:]:
         retention.plan.contract._digest(digest)
+
+
+def _validate_read_configuration(configuration):
+    if type(configuration) is not tuple or len(configuration) != 4:
+        raise RevocationPlanningError("observed planner read configuration is not an exact four-tuple")
+    if not isinstance(configuration[3], Ed25519PrivateKey):
+        raise RevocationPlanningError("observed planner read configuration is invalid")
+    _validate_read_scope_configuration(configuration[:3])
 
 
 def _validate_configuration(configuration):
@@ -186,30 +196,29 @@ class _ProducedObservedPlanBytes:
     expected_context: dict
 
 
-def _produce_on_read_configuration(read_configuration, *, planner_public_key, verifier_public_key,
-                                   owned, actual_context, work, root_inventory=None):
-    """One genuine read body shared by the old coordinator and read-only owner.
+@contextmanager
+def _read_scope(read_configuration, *, operation, work):
+    """Own the genuine read transaction for three fixed source operations.
 
-    All input/configuration ownership precedes this boundary. Lazy imports
-    preserve the real planner registry gate. Role/TLS and manifest admission
-    remain the actual planner checks; no new PG-major/session-role/ACL claim
-    is inferred from setting the transaction's read-only mode.
+    The exact configuration triple has no signing key. Callers must own their
+    invocation graphs before entering; the yielded cursor, manifest and trace
+    are local transaction ingredients, not transferable admission. Lazy imports
+    preserve the actual planner registry gate. Identity and manifest admission
+    are the existing planner checks, not a new PG-major/session-role/ACL claim.
+    Results may escape only after every normal exit and the closed-handle check.
     """
-    _validate_read_configuration(read_configuration)
+    _validate_read_scope_configuration(read_configuration)
     retention.capture._SharedLedger(work)
-    if (not isinstance(planner_public_key, Ed25519PublicKey)
-            or not isinstance(verifier_public_key, Ed25519PublicKey)):
-        raise RevocationPlanningError("observed planner public keys are not Ed25519")
-    read_dsn, timeout, identity, private_key = read_configuration
+    if type(operation) is not str or operation not in _READ_OPERATIONS:
+        raise RevocationPlanningError("planner read scope operation is not source admitted")
+    read_dsn, timeout, identity = read_configuration
     from serverware import authority_planner as planner
     import psycopg
     from psycopg.rows import dict_row
 
     database_identity = planner.PlannerIdentity(*identity)
-    operation = planner.authority_transition_webauthn.OPERATION
-    kernel = planner.authority_transition_webauthn.WebAuthnCredentialRevokeKernel()
-    program = planner.TypedTransitionPlanningProgram(operation=operation, handler=kernel.handler, kernel=kernel)
-    trace = planner.PlannerTrace(operation=operation, _complete_queries=True)
+    trace = planner.PlannerTrace(operation=operation,
+        _complete_queries=operation == planner.authority_transition_webauthn.OPERATION)
     connection = reader._connect(work, lambda: psycopg.connect(read_dsn,
         row_factory=dict_row, connect_timeout=timeout, options="-c search_path=pg_catalog"))
     try:
@@ -232,40 +241,63 @@ def _produce_on_read_configuration(read_configuration, *, planner_public_key, ve
                     planner._validate_database_identity(guarded, database_identity)
                     manifest, _ = planner._load_manifest(guarded, operation=operation, trace=trace)
                     authorization = planner._load_authorization_manifest(guarded, operation=operation, trace=trace)
-                    if root_inventory is None:
-                        produced = program._produce_revocation_plan(guarded,
-                            request=owned["request"], evidence=owned["evidence"], context=actual_context,
-                            manifest=manifest + authorization, verifier_public_key=verifier_public_key,
-                            planner_private_key=private_key, planner_public_key=planner_public_key,
-                            query_work=work, trace=trace)
-                        expected_context = None
-                    else:
-                        produced = program._produce_observed_revocation_plan(guarded,
-                            request=owned["request"], evidence=owned["evidence"],
-                            context=actual_context, root_inventory=root_inventory,
-                            manifest=manifest + authorization, verifier_public_key=verifier_public_key,
-                            planner_private_key=private_key, planner_public_key=planner_public_key,
-                            query_work=work, trace=trace)
-                        expected_context = authority_query_reads._CopyBudget(work).copy(produced.expected_context)
-                        retention.production._validate_context(expected_context, work)
-                        retention.plan.semantics._canonical_equal(
-                            {name: expected_context[name] for name in actual_context}, actual_context,
-                            work=work, label="observed producer changed independent context pins")
-                    envelope_bytes = produced.signed.envelope_bytes
-                    context_bytes = produced.evaluation_context_bytes
-                    database_now = produced.database_now
-                    if type(envelope_bytes) is not bytes or type(context_bytes) is not bytes:
-                        raise ValueError("revocation producer lost original immutable bytes")
-                    retention.plan._verification_types(planner_public_key, verifier_public_key, database_now)
+                    yield guarded, manifest + authorization, trace
                     reader.roots._callback(work, reader._require_connection, connection, raw, 2)
                 reader.roots._callback(work, reader._require_connection, connection, raw, 2)
             reader.roots._callback(work, reader._require_connection, connection, raw, 0)
         if reader.roots._callback(work, lambda: connection.closed) is not True:
             raise reader.roots.RevocationRootReadError("observed planner connection was not closed")
-        return envelope_bytes, context_bytes, database_now, expected_context
     except BaseException:
         reader._close_after_failure(connection)
         raise
+
+
+def _produce_on_read_configuration(read_configuration, *, planner_public_key, verifier_public_key,
+                                   owned, actual_context, work, root_inventory=None):
+    """Genuine signed revocation production in the shared actual read scope.
+
+    Input/configuration ownership precedes this boundary. The old coordinator
+    and configured observed owner retain the same production and independent
+    context checks; no bytes return before the scope's complete normal exit.
+    """
+    _validate_read_configuration(read_configuration)
+    retention.capture._SharedLedger(work)
+    if (not isinstance(planner_public_key, Ed25519PublicKey)
+            or not isinstance(verifier_public_key, Ed25519PublicKey)):
+        raise RevocationPlanningError("observed planner public keys are not Ed25519")
+    private_key = read_configuration[3]
+    from serverware import authority_planner as planner
+
+    operation = planner.authority_transition_webauthn.OPERATION
+    kernel = planner.authority_transition_webauthn.WebAuthnCredentialRevokeKernel()
+    program = planner.TypedTransitionPlanningProgram(operation=operation, handler=kernel.handler, kernel=kernel)
+    with _read_scope(read_configuration[:3], operation=operation, work=work) as (guarded, manifest, trace):
+        if root_inventory is None:
+            produced = program._produce_revocation_plan(guarded,
+                request=owned["request"], evidence=owned["evidence"], context=actual_context,
+                manifest=manifest, verifier_public_key=verifier_public_key,
+                planner_private_key=private_key, planner_public_key=planner_public_key,
+                query_work=work, trace=trace)
+            expected_context = None
+        else:
+            produced = program._produce_observed_revocation_plan(guarded,
+                request=owned["request"], evidence=owned["evidence"],
+                context=actual_context, root_inventory=root_inventory,
+                manifest=manifest, verifier_public_key=verifier_public_key,
+                planner_private_key=private_key, planner_public_key=planner_public_key,
+                query_work=work, trace=trace)
+            expected_context = authority_query_reads._CopyBudget(work).copy(produced.expected_context)
+            retention.production._validate_context(expected_context, work)
+            retention.plan.semantics._canonical_equal(
+                {name: expected_context[name] for name in actual_context}, actual_context,
+                work=work, label="observed producer changed independent context pins")
+        envelope_bytes = produced.signed.envelope_bytes
+        context_bytes = produced.evaluation_context_bytes
+        database_now = produced.database_now
+        if type(envelope_bytes) is not bytes or type(context_bytes) is not bytes:
+            raise ValueError("revocation producer lost original immutable bytes")
+        retention.plan._verification_types(planner_public_key, verifier_public_key, database_now)
+    return envelope_bytes, context_bytes, database_now, expected_context
 
 
 @dataclass(frozen=True, slots=True, init=False, repr=False, eq=False)

@@ -145,15 +145,18 @@ class RevocationPlanningSourceTests(unittest.TestCase):
         self.shape(snapshot.body[-1].value, "configuration")
         configured = definition(self.tree, "_validate_configuration")
         read = definition(self.tree, "_validate_read_configuration")
+        scope_configuration = definition(self.tree, "_validate_read_scope_configuration")
         self.shape(call(configured, "_validate_read_configuration"), "_validate_read_configuration(configuration[:4])")
+        self.shape(call(read, "_validate_read_scope_configuration"), "_validate_read_scope_configuration(configuration[:3])")
         for expression in ("type(configuration) is not tuple", "len(configuration) != 10",
                 "configuration[1] < 2", "configuration[8] > authority.VERIFIER_RESPONSE_MAX_AGE_NS",
                 "configuration[9] != authority.VERIFIER_MAX_CLOCK_SKEW_NS"):
             self.assertIn(expression, ast.unparse(configured))
-        for expression in ("len(configuration) != 4", "type(timeout) is not int",
-                "not 1 <= timeout <= 300", "type(identity) is not tuple", "len(identity) != 7",
-                "not isinstance(private_key, Ed25519PrivateKey)"):
+        for expression in ("len(configuration) != 4", "not isinstance(configuration[3], Ed25519PrivateKey)"):
             self.assertIn(expression, ast.unparse(read))
+        for expression in ("len(configuration) != 3", "type(timeout) is not int",
+                "not 1 <= timeout <= 300", "type(identity) is not tuple", "len(identity) != 7"):
+            self.assertIn(expression, ast.unparse(scope_configuration))
         self.assertIn("not isinstance(key, Ed25519PublicKey)", ast.unparse(configured))
         self.assertIn("len(identity) != 3", ast.unparse(configured))
         body = definition(self.tree, "_produce_on_read_configuration")
@@ -223,43 +226,62 @@ class RevocationPlanningSourceTests(unittest.TestCase):
 
     def test_real_program_and_manifest_trace_stay_inside_three_lazy_read_scopes(self):
         body = definition(self.tree, "_produce_on_read_configuration")
+        read = definition(self.tree, "_read_scope")
         eager = [node for node in self.tree.body if isinstance(node, (ast.Import, ast.ImportFrom))]
         self.assertFalse(any("authority_planner" in ast.unparse(node) or "psycopg" in ast.unparse(node)
             for node in eager))
         lazy = [node for node in body.body if isinstance(node, (ast.Import, ast.ImportFrom))]
+        self.assertEqual([ast.unparse(node) for node in lazy], ["from serverware import authority_planner as planner"])
+        lazy = [node for node in read.body if isinstance(node, (ast.Import, ast.ImportFrom))]
         self.assertEqual([ast.unparse(node) for node in lazy], [
             "from serverware import authority_planner as planner", "import psycopg",
             "from psycopg.rows import dict_row"])
+        self.shape(read.decorator_list[0], "contextmanager")
+        self.shape(assigned(self.tree, "_READ_OPERATIONS"), '''frozenset({"webauthn.credential.revoke",
+            "webauthn.registration.evidence.admit", "webauthn.trust.installation.admit"})''')
+        self.assertIn("type(operation) is not str or operation not in _READ_OPERATIONS", ast.unparse(read))
+        self.shape(assigned(body, "operation"), "planner.authority_transition_webauthn.OPERATION")
         self.shape(call(body, "planner.TypedTransitionPlanningProgram"),
             "planner.TypedTransitionPlanningProgram(operation=operation, handler=kernel.handler, kernel=kernel)")
-        self.shape(call(body, "planner.PlannerTrace"), "planner.PlannerTrace(operation=operation, _complete_queries=True)")
-        self.shape(call(body, "planner.PlannerIdentity"), "planner.PlannerIdentity(*identity)")
-        scopes = [node for node in ast.walk(body) if isinstance(node, ast.With)]
+        self.shape(call(read, "planner.PlannerTrace"), '''planner.PlannerTrace(operation=operation,
+            _complete_queries=operation == planner.authority_transition_webauthn.OPERATION)''')
+        self.shape(call(read, "planner.PlannerIdentity"), "planner.PlannerIdentity(*identity)")
+        scopes = [node for node in ast.walk(read) if isinstance(node, ast.With)]
         self.assertEqual(len(scopes), 3)
         self.assertEqual({ast.unparse(node.items[0].context_expr) for node in scopes}, {
             "reader._context(connection, work)", "reader._context(transaction, work)", "reader._context(cursor, work)"})
-        mode = call(body, "guarded.execute")
+        mode = call(read, "guarded.execute")
         self.shape(mode, 'guarded.execute("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE READ ONLY DEFERRABLE")')
-        ordered = [mode, call(body, "planner._validate_database_identity"),
-            call(body, "planner._load_manifest"), call(body, "planner._load_authorization_manifest"),
-            call(body, "program._produce_observed_revocation_plan")]
+        yielded, = [node for node in ast.walk(read) if isinstance(node, ast.Yield)]
+        self.shape(yielded.value, "(guarded, manifest + authorization, trace)")
+        ordered = [mode, call(read, "planner._validate_database_identity"),
+            call(read, "planner._load_manifest"), call(read, "planner._load_authorization_manifest"), yielded]
         self.assertEqual([node.lineno for node in ordered], sorted(node.lineno for node in ordered))
         for scope in scopes:
             for node in ordered:
                 self.assertIn(node, list(ast.walk(scope)))
         for name in ("planner._load_manifest", "planner._load_authorization_manifest"):
-            self.shape(call(body, name), name + "(guarded, operation=operation, trace=trace)")
+            self.shape(call(read, name), name + "(guarded, operation=operation, trace=trace)")
+        delegated, = [node for node in ast.walk(body) if isinstance(node, ast.With)]
+        self.shape(delegated.items[0].context_expr,
+            "_read_scope(read_configuration[:3], operation=operation, work=work)")
+        self.assertEqual([node.id for node in delegated.items[0].optional_vars.elts], ["guarded", "manifest", "trace"])
+        for name in ("program._produce_revocation_plan", "program._produce_observed_revocation_plan"):
+            self.assertIn(call(body, name), list(ast.walk(delegated)))
         self.shape(call(body, "program._produce_observed_revocation_plan"), '''program._produce_observed_revocation_plan(
             guarded, request=owned["request"], evidence=owned["evidence"], context=actual_context,
-            root_inventory=root_inventory, manifest=manifest + authorization,
+            root_inventory=root_inventory, manifest=manifest,
             verifier_public_key=verifier_public_key, planner_private_key=private_key,
             planner_public_key=planner_public_key, query_work=work, trace=trace)''')
         for forbidden in ("planner.MeasuredPlanner", "planner.validate_planner_request", "planner._read_root_set",
                 "retention._verify_record_on_work"):
             self.assertFalse(calls(body, forbidden))
+            self.assertFalse(calls(read, forbidden))
 
     def test_raw_connection_transaction_and_cursor_are_checked_through_cleanup(self):
-        body = definition(self.tree, "_produce_on_read_configuration")
+        producer = definition(self.tree, "_produce_on_read_configuration")
+        self.shape(call(producer, "_read_scope"), "_read_scope(read_configuration[:3], operation=operation, work=work)")
+        body = definition(self.tree, "_read_scope")
         self.shape(call(body, "reader._connect"), '''reader._connect(work, lambda: psycopg.connect(read_dsn,
             row_factory=dict_row, connect_timeout=timeout, options="-c search_path=pg_catalog"))''')
         self.shape(assigned(body, "raw"), "reader.roots._callback(work, reader._connection_identity, connection, 0)")
@@ -315,10 +337,14 @@ class RevocationPlanningSourceTests(unittest.TestCase):
             self.shape(assigned(body, name), value)
         returned, = [node for node in ast.walk(body) if isinstance(node, ast.Return)]
         self.shape(returned.value, "(envelope_bytes, context_bytes, database_now, expected_context)")
-        for scope in [node for node in ast.walk(body) if isinstance(node, ast.With)]:
+        scopes = [node for node in ast.walk(body) if isinstance(node, ast.With)]
+        self.assertEqual(len(scopes), 1)
+        self.shape(scopes[0].items[0].context_expr, "_read_scope(read_configuration[:3], operation=operation, work=work)")
+        for scope in scopes:
             for node in (copied, validated, compared, *captures):
                 self.assertIn(node, list(ast.walk(scope)))
             self.assertNotIn(returned, list(ast.walk(scope)))
+            self.assertLess(scope.end_lineno, returned.lineno)
         self.shape(call(body, "retention.plan._verification_types"),
             "retention.plan._verification_types(planner_public_key, verifier_public_key, database_now)")
         self.assertIn("type(envelope_bytes) is not bytes or type(context_bytes) is not bytes", ast.unparse(body))

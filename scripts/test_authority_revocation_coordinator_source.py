@@ -378,7 +378,7 @@ class RevocationCoordinatorSourceTests(unittest.TestCase):
             self.assertEqual([ast.unparse(argument) for argument in call.args], ["guarded"])
             keywords = {item.arg: ast.unparse(item.value) for item in call.keywords}
             for name, value in {"request": "owned['request']", "evidence": "owned['evidence']",
-                    "context": "actual_context", "manifest": "manifest + authorization",
+                    "context": "actual_context", "manifest": "manifest",
                     "verifier_public_key": "verifier_public_key", "planner_private_key": "private_key",
                     "planner_public_key": "planner_public_key", "query_work": "work", "trace": "trace"}.items():
                 self.assertEqual(keywords[name], value)
@@ -395,7 +395,20 @@ class RevocationCoordinatorSourceTests(unittest.TestCase):
         self.assertLess(copied.lineno, validated.lineno)
         self.assertLess(validated.lineno, bound.lineno)
         scopes = [node for node in ast.walk(helper) if isinstance(node, ast.With)]
-        self.assertEqual(len(scopes), 3)
+        self.assertEqual(len(scopes), 1)
+        self.assert_shape(scopes[0].items[0].context_expr,
+            "_read_scope(read_configuration[:3], operation=operation, work=work)")
+        self.assertEqual([node.id for node in scopes[0].items[0].optional_vars.elts], ["guarded", "manifest", "trace"])
+        read_scope = definition(tree, "_read_scope")
+        self.assert_shape(read_scope.decorator_list[0], "contextmanager")
+        lifecycle = [node for node in ast.walk(read_scope) if isinstance(node, ast.With)]
+        self.assertEqual(len(lifecycle), 3)
+        self.assertEqual({ast.unparse(node.items[0].context_expr) for node in lifecycle}, {
+            "reader._context(connection, work)", "reader._context(transaction, work)", "reader._context(cursor, work)"})
+        yielded, = [node for node in ast.walk(read_scope) if isinstance(node, ast.Yield)]
+        self.assert_shape(yielded.value, "(guarded, manifest + authorization, trace)")
+        for scope in lifecycle:
+            self.assertIn(yielded, list(ast.walk(scope)))
         captures = [node for node in ast.walk(helper) if isinstance(node, ast.Assign)
             and any(isinstance(target, ast.Name) and target.id in
                 {"envelope_bytes", "context_bytes", "database_now"} for target in node.targets)]
@@ -408,6 +421,7 @@ class RevocationCoordinatorSourceTests(unittest.TestCase):
         self.assert_shape(returned.value, "(envelope_bytes, context_bytes, database_now, expected_context)")
         for scope in scopes:
             self.assertNotIn(returned, list(ast.walk(scope)))
+            self.assertLess(scope.end_lineno, returned.lineno)
         for forbidden in ("_ValidationWork", "QueryReadValidationLimits", "json.loads", "time.time_ns", "time.monotonic_ns"):
             self.assertFalse(calls(helper, forbidden))
 
@@ -471,7 +485,10 @@ class RevocationCoordinatorSourceTests(unittest.TestCase):
         self.assert_shape(cursor_call.body[-1].value, "reader.roots._callback(work, invoke)")
         for body in (fetched, executed, cursor_call, required):
             self.assertFalse(calls(body, "_ValidationWork"))
-        helper = definition(tree, "_produce_on_read_configuration")
+        producer = definition(tree, "_produce_on_read_configuration")
+        delegated, = calls(producer, "_read_scope")
+        self.assert_shape(delegated, "_read_scope(read_configuration[:3], operation=operation, work=work)")
+        helper = definition(tree, "_read_scope")
         callbacks = calls(helper, "reader.roots._callback")
         for expression in ("reader.roots._callback(work, lambda: connection.transaction())",
                 "reader.roots._callback(work, lambda: connection.cursor())"):

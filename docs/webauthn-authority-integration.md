@@ -1,10 +1,13 @@
 # Completing the WebAuthn authority transitions
 
-Status: implementation design, not an enabled protocol or migration. The four
-missing kernels remain startup blockers. Current operation manifests, bounds,
-registry closure, database admission and external authority requirements remain
-unchanged. This document does not authorize registering partial kernels or
-relabeling local verification as signed external evidence.
+Status: original implementation design, not an enabled protocol or migration.
+The current [startup inventory](authority-transition-startup-blocker.md) has
+six missing registered kernels, including the two new evidence-admission
+operations. The revision-specific successor status below is authoritative for
+current manifests and source work. Registry closure, database admission and
+external authority requirements remain enforced. This document does not
+authorize registering partial kernels or relabeling local verification as
+signed external evidence.
 
 This design records the original gaps. The current
 [successor implementation status](webauthn-successor-transitions.md) tracks the

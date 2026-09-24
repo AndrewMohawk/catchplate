@@ -1,6 +1,6 @@
 # Successor WebAuthn transition implementation
 
-Status: source `.82`, implementation only. These helpers do not register the
+Status: source `.83`, implementation only. These helpers do not register the
 missing kernels or repair service startup. They are unbuilt and unexecuted.
 The existing registry, query-proof, configuration and release gates remain.
 
@@ -114,6 +114,33 @@ resource accounting. Returned acquisitions contain observations and real proof
 results, not a signed plan, persistence receipt or current-root authority.
 Request permission, independent root/key/target configuration and the read-only
 MVCC transaction owner still require admission outside these private helpers.
+
+## Configured evidence read owner
+
+`authority_webauthn_evidence_planning.EvidenceAdmissionPlanner` now owns the
+actual read-only transaction for either fixed admission operation. Construction
+is inert. Its held configuration pins the database role/TLS/session identity,
+connection timeout, evidence key/identity/SPKI and age/skew, plus registration
+RP/origin or installation target. Calls cannot replace those settings, supply
+a cursor, manifest or trace, or switch operations.
+
+Both methods own the original bytes, root/time expectations and purpose-specific
+graphs before native/key/connection callbacks. They check request commitments
+and the actual key's SPKI, then enter the real planner registry boundary.
+The shared read scope performs actual role/TLS/no-mutation identity checks,
+loads both source-validated manifests and holds one `SERIALIZABLE READ ONLY
+DEFERRABLE` transaction through genuine acquisition. The existing revocation
+producer now uses the same lifecycle body. Results return only after cursor,
+transaction and connection exits plus the closed-handle check; cleanup failure
+cannot return a successful acquisition. No writer or signer is opened.
+
+These are explicit independently supplied configuration pins, not values
+derived from an admitted measured configuration. The current signed service
+configuration has no purpose-scoped evidence signer/target contract; generic
+verifier or planner keys must not be substituted for it. A coordinated mapper,
+active service launch and operation authorization remain required. Connection
+guards cannot detect a hostile driver's hidden commit-and-BEGIN, and read-only
+mode alone does not prove independent root currentness or physical readback.
 
 ## Retained evidence and consumption
 
@@ -311,10 +338,11 @@ and existing input/resource ceilings are unchanged.
 
 ## Admission and execution still required
 
-No durable evidence INSERT owner or independently configured registration
-acquisition owner is established by these helpers.
-Caller-supplied current roots, signer pins, request authority and transaction
-ownership remain explicit prerequisites, not values authenticated by copying.
+Admission has a configured read-only owner, but no purpose-scoped measured
+configuration mapper or durable evidence INSERT owner. Final registration still
+needs its configured acquisition owner. Caller-supplied current roots, signer
+pins and request authority remain independent prerequisites, not values
+authenticated by copying.
 Trust staging still needs its independently configured request/candidate-key
 owner and signed-plan/execution integration. Completion needs its independently
 admitted committed-stage/physical-installation owner and actual readback wired
@@ -332,8 +360,13 @@ kernel, new ACL or disabled closure check supplies this remaining integration.
 
 The current v9 SQL execution loader accepts its existing v3 plan protocol.
 Successor acquisition outputs cannot enter it by being relabelled as v3.
-Coordinated signed-plan retention, replay and executor admission are required
-before those outputs can authorize a write.
+Although v3 can represent the primary INSERT/no-op delta, its closed payload and
+kernel interface do not retain or reverify the original ceremony/installation
+bytes, historical context and independent purpose pins. Its assertion-evidence
+slot cannot carry these different purposes, and re-signing a stored payload is
+not genuine semantic replay. Coordinated original-input/context retention,
+signed-plan replay and executor admission are required before these outputs can
+authorize a write; the revocation-only v4 protocol is not interchangeable either.
 
 Broad fixtures and full verification remain deferred to the consolidated frozen
 build. Production acceptance additionally requires independently operated

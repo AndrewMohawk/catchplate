@@ -184,10 +184,15 @@ def _policy_candidate_authority_source_contract_digest() -> str:
             "postgresCountedInstallation":
                 counted_installation.counted_installation_contract(),
             "revocationRetention": dict(authority_contract.REVOCATION_RETENTION_CONTRACT),
+            "revocationCapabilityCustody": dict(authority_contract.REVOCATION_CAPABILITY_CUSTODY_CONTRACT),
             "postgresPlannerRetentionGuard":
                 v9_schema_source.planner_retention_guard_sql('"serverware_metadata"'),
             "sqlitePlannerRetentionGuards":
                 v9_schema_source.planner_retention_sqlite_guards_sql(),
+            "postgresCapabilityRetentionGuard":
+                v9_schema_source.capability_retention_guard_sql('"serverware_metadata"'),
+            "sqliteCapabilityRetentionGuards":
+                v9_schema_source.capability_retention_sqlite_guards_sql(),
             "objectOwnershipContract":
                 "serverware.policyAuthorityObjectOwnership/v1",
             "authorityOwnerRole": _METADATA_STORE_AUTHORITY_OWNER_ROLE,
@@ -1247,11 +1252,14 @@ def _policy_candidate_authority_required_guard_names(
         "serverware_policy_authority_verifier_commit_deadline",
         "serverware_policy_authority_writer_commit_deadline",
         "serverware_planner_retention_guard",
+        "serverware_capability_retention_guard",
     }
     function_names: set[str] = set()
     if not postgres:
         trigger_names.update({"serverware_planner_retention_insert_guard",
-                              "serverware_retained_sqlite_insert_guard"})
+                              "serverware_retained_sqlite_insert_guard",
+                              "serverware_capability_retention_insert_guard",
+                              "serverware_capability_sidecar_sqlite_insert_guard"})
     for table in (
         _POLICY_CANDIDATE_AUTHORITY_IMMUTABLE_TABLES
         + _POLICY_CANDIDATE_AUTHORITY_HEAD_TABLES
@@ -1314,6 +1322,7 @@ def _policy_candidate_authority_required_guard_names(
                 "serverware_validate_policy_authority_insert",
                 "serverware_guard_policy_revision_transition",
                 "serverware_guard_planner_retention",
+                "serverware_guard_capability_retention",
                 "serverware_guard_policy_authority_trusted_key_head",
                 "serverware_guard_policy_authority_key_revocation_sequence",
                 "serverware_guard_policy_runtime_role_key_revocation_sequence",

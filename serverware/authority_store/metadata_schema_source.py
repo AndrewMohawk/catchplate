@@ -2523,6 +2523,8 @@ def metadata_base_schema_source() -> str:
             CREATE TABLE IF NOT EXISTS
                 policy_authority_writer_capabilities (
                     capability_id TEXT PRIMARY KEY,
+                    capability_protocol TEXT NOT NULL DEFAULT 'v3',
+                    capability_record_digest TEXT,
                     capability_digest TEXT NOT NULL UNIQUE,
                     envelope_id TEXT NOT NULL UNIQUE,
                     operation TEXT NOT NULL,
@@ -2564,6 +2566,16 @@ def metadata_base_schema_source() -> str:
                     selected_business_rows_digest TEXT NOT NULL,
                     mutation_plan_digest TEXT NOT NULL,
                     deadline_epoch_ns BIGINT NOT NULL,
+                    UNIQUE (capability_id, capability_protocol, capability_record_digest,
+                            planner_transaction_id, envelope_id),
+                    CHECK (capability_protocol IN ('v3', 'revocation-v4')),
+                    CHECK (
+                        (capability_protocol = 'v3' AND capability_record_digest IS NULL)
+                        OR (capability_protocol = 'revocation-v4'
+                            AND operation = 'webauthn.credential.revoke'
+                            AND capability_record_digest IS NOT NULL
+                            AND capability_record_digest ~ '^sha256:[0-9a-f]{64}$')
+                    ),
                     CHECK (
                         status IN (
                             'issued', 'reserved', 'committed',

@@ -10,7 +10,7 @@ from serverware import authority_complete_query
 from serverware.authority_query_read_work import _ValidationWork
 
 
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.44"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.45"
 SCHEMA_VERSION = 9
 CONTRACT_SCHEMA = "serverware.policyAuthorityOperationContract/v3"
 BUSINESS_INTENT_SCHEMA = "serverware.policyAuthorityBusinessIntent/v2"
@@ -338,6 +338,55 @@ REVOCATION_RETENTION_CONTRACT = MappingProxyType({
     "authorityExclusions": ("stored-context", "key-enrollment", "currentness", "execution", "witness"),
 })
 
+REVOCATION_RETAINED_CAPABILITY_TABLE = "policy_authority_revocation_retained_capabilities"
+REVOCATION_RETAINED_CAPABILITY_COLUMNS = (
+    "capability_id", "capability_protocol", "capability_record_digest", "planner_transaction_id",
+    "plan_protocol", "retained_record_digest", "execution_envelope_id", "capability_digest",
+    "root_transition_digest", "authority_snapshot_digest", "exact_request_bytes_digest",
+    "exact_capability_base64url", "exact_capability_bytes_digest", "exact_capability_byte_count",
+    "signer_key_digest", "witness_key_digest", "exact_witness_request_base64url",
+    "exact_witness_request_bytes_digest", "exact_witness_request_byte_count", "source_revision",
+)
+WRITER_CAPABILITY_IMMUTABLE_COLUMNS = (
+    "capability_id", "capability_protocol", "capability_record_digest", "capability_digest",
+    "envelope_id", "operation", "operation_id", "handler_name", "request_digest",
+    "operation_manifest_digest", "query_manifest_digest", "authority_root_set_digest",
+    "authority_snapshot_digest", "approver_policy_digest", "webauthn_receipt_json",
+    "webauthn_receipt_digest", "webauthn_trust_high_water_digest", "witness_reservation_digest",
+    "witness_sequence", "witness_head_digest", "deadline_monotonic_ns", "fence",
+    "issued_monotonic_ns", "issued_at_epoch_ns", "expires_at_epoch_ns",
+    "issuer_session_identity_digest", "issuer_measurement_digest", "issuer_attestation_receipt_digest",
+    "issuer_credential_issuance_digest", "expected_result_digest", "planner_transaction_id",
+    "authorization_projection_digest", "selected_business_rows_digest", "mutation_plan_digest",
+    "deadline_epoch_ns",
+)
+WRITER_CAPABILITY_RESERVATION_COLUMNS = (
+    "writer_token_digest", "reserved_at_epoch_ns", "reserved_transaction_id",
+)
+WRITER_CAPABILITY_TERMINAL_COLUMNS = (
+    "status", *WRITER_CAPABILITY_RESERVATION_COLUMNS, "result_digest", "commit_receipt_digest",
+    "committed_at_epoch_ns", "failure_digest", "failed_at_epoch_ns",
+)
+REVOCATION_CAPABILITY_CUSTODY_CONTRACT = MappingProxyType({
+    "schema": "serverware.policyAuthorityRevocationCapabilityCustody/v1",
+    "operation": "webauthn.credential.revoke", "capabilityProtocol": "revocation-v4",
+    "planProtocol": "revocation-v4", "postgresOnly": True, "sqliteAdmission": False,
+    "installedSuccessorIssuer": False, "publicExecutionEnabled": False,
+    "retainedTable": REVOCATION_RETAINED_CAPABILITY_TABLE,
+    "retainedColumns": REVOCATION_RETAINED_CAPABILITY_COLUMNS,
+    "identityImmutableColumns": WRITER_CAPABILITY_IMMUTABLE_COLUMNS,
+    "reservationImmutableOnceSet": WRITER_CAPABILITY_RESERVATION_COLUMNS,
+    "terminalColumns": WRITER_CAPABILITY_TERMINAL_COLUMNS,
+    "maxSignedCapabilityBytes": 4 * 1024 * 1024, "maxSignedWitnessRequestBytes": 64 * 1024,
+    "parentBinding": "symmetric-deferred-five-column-foreign-keys",
+    "plannerBinding": "retained-plan-composite-foreign-key",
+    "plannerCapabilityBinding": "genuine-verifier-and-future-issuer-comparison",
+    "executionBinding": "primary-key-only-mutable-envelope",
+    "issuerTablePrivileges": (),
+    "existingStoreMigration": "separately-reviewed-no-synthesis-or-cascade",
+    "authorityExclusions": ("signature-verification", "key-enrollment", "currentness", "execution", "witness"),
+})
+
 # PostgreSQL-only derived custody. These are not operation business tables,
 # primary-tracked tables, or additions to SQLite's shared metadata schema.
 POSTGRES_COUNTED_STORE_COLUMNS = MappingProxyType({
@@ -413,6 +462,7 @@ _FRAMEWORK_CUSTODY_TABLES = frozenset(
         "policy_authority_operation_mutation_templates",
         "policy_authority_planner_transactions",
         REVOCATION_RETAINED_TABLE,
+        REVOCATION_RETAINED_CAPABILITY_TABLE,
         "policy_authority_query_dependency_manifests",
         "policy_authority_schema_contracts",
         "policy_authority_verifier_capabilities",
@@ -2469,6 +2519,7 @@ OPERATION_MANIFEST_DIGEST = _digest(
         "plannerQueryBookkeeping": dict(PLANNER_QUERY_BOOKKEEPING_CONTRACT),
         "plannerCompleteAcquisition": dict(PLANNER_COMPLETE_ACQUISITION_CONTRACT),
         "revocationRetention": dict(REVOCATION_RETENTION_CONTRACT),
+        "revocationCapabilityCustody": dict(REVOCATION_CAPABILITY_CUSTODY_CONTRACT),
         "signedRevocationPlanVerification": dict(SIGNED_REVOCATION_PLAN_CONTRACT),
         "signedRevocationPlanProduction": dict(SIGNED_REVOCATION_PRODUCTION_CONTRACT),
         "signedRevocationWireAdmission": dict(SIGNED_REVOCATION_WIRE_CONTRACT),

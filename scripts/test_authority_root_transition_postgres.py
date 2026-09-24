@@ -83,8 +83,10 @@ from serverware.authority_store.revocation_counted_sql import (
 )
 from serverware.authority_store.v9_schema_source import (
     authority_v9_schema_source,
+    capability_retention_guard_sql,
     planner_retention_guard_sql,
 )
+from serverware.authority_store.metadata_schema_source import metadata_base_schema_source
 from test_webauthn_trust_projection_postgres import local_connection_parameters
 import test_authority_revocation_plan as revocation_oracle
 import test_authority_revocation_retention as retained_oracle
@@ -193,6 +195,7 @@ def production_retained_immutable_sql(
     """Extract the real immutable function and attachment, without db imports."""
     if type(table) is not str or table not in {
             "policy_authority_revocation_retained_plans",
+            "policy_authority_revocation_retained_capabilities",
             "policy_authority_webauthn_assertion_evidence",
             "policy_authority_authorization_projections"}:
         raise ValueError("custody fixture immutable target is not source-fixed")
@@ -237,6 +240,20 @@ def production_retained_immutable_sql(
         else:
             raise ValueError("immutable guard attachment interpolation changed")
     return function.args[0].value, "".join(fragments)
+
+
+def production_writer_capability_table_sql() -> str:
+    """Use the exact base-table DDL needed by the v9 custody extension.
+
+    The native component does not install the unrelated application tables or
+    rewrite column definitions. The original base producer remains authoritative.
+    """
+    source = metadata_base_schema_source()
+    marker = "CREATE TABLE IF NOT EXISTS\n                policy_authority_writer_capabilities ("
+    if source.count(marker) != 1:
+        raise ValueError("writer-capability base table is not a unique source declaration")
+    start = source.index(marker)
+    return source[start:source.index(";", start) + 1]
 
 
 def fixture_payload() -> dict:
@@ -356,6 +373,7 @@ class AuthorityRootTransitionPostgresTests(unittest.TestCase):
         with cls.connection() as connection:
             for statement in production_digest_functions(cls.namespace):
                 connection.execute(statement)
+            connection.execute(framed_digest_function_sql(cls.namespace))
             connection.execute(wire_json_function_sql(cls.namespace))
             connection.execute(f"""
                 CREATE TYPE {cls.namespace}.fixture_planner AS ({', '.join(name + ' ' + kind for name, kind in PLANNER_COLUMNS.items())});
@@ -591,6 +609,34 @@ class AuthorityRootTransitionPostgresTests(unittest.TestCase):
             digest("serverware.policyAuthorityAuthorizationRow/v1", b"items", canonical(key), b"present", canonical(row)),
             self.payload["measuredPlan"]["authorizationProjectionDigest"], self.payload["expectedResultDigest"],
         ))
+        # CredentialBinding/v1 is a different, historical length-domain
+        # protocol. Both service and SQL consumers must preserve it; accepting
+        # either recipe would hide a producer/consumer compatibility defect.
+        credential = {"id": "credential-雪", "credential_id": "credential-id", "user_id": "user-é",
+            "public_key_cose": "e30", "sign_count": 7, "aaguid": None,
+            "authenticator_class": "hardware", "attestation_trusted": 1,
+            "attestation_leaf_sha256": None, "attestation_root_sha256": None,
+            "attestation_trust_bundle_digest": token("trust"),
+            "attestation_trust_bundle_sequence": 3, "revoked_at": None}
+        domain = "serverware.policyAuthorityWebAuthnCredentialBinding/v1"
+        encoded_domain, encoded_row = domain.encode("ascii"), canonical(credential)
+        expected = "sha256:" + hashlib.sha256(len(encoded_domain).to_bytes(8, "big") + encoded_domain
+            + len(encoded_row).to_bytes(8, "big") + encoded_row).hexdigest()
+        self.assertNotEqual(expected, digest(domain, encoded_row))
+        with self.connection() as connection:
+            actual = connection.execute(f"SELECT {self.namespace}.serverware_policy_authority_framed_digest("
+                f"%s, {self.namespace}.serverware_policy_authority_wire_json(%s::jsonb))",
+                (domain, Jsonb(credential))).fetchone()
+        self.assertEqual(actual, (expected,))
+        for path, helper in (("serverware/authority_service.py", "_framed_digest"),
+                             ("serverware/authority_store/executor_v9.py", "serverware_policy_authority_framed_digest"),
+                             ("serverware/db.py", "serverware_policy_authority_framed_digest")):
+            source_path = ROOT / path
+            self.assertLessEqual(source_path.stat().st_size, 16 * 1024 * 1024)
+            source = source_path.read_text(encoding="utf-8")
+            self.assertRegex(source, re.escape(helper) + r"\(\s*['\"]" + re.escape(domain) + r"['\"]")
+            self.assertNotRegex(source, r"(?:_domain_digest|serverware_policy_authority_domain_digest)\(\s*['\"]"
+                + re.escape(domain) + r"['\"]")
 
     def test_persisted_tree_utf8_serializer_remains_distinct_and_does_not_normalize(self) -> None:
         composed, decomposed = {"clé": "é-雪😀"}, {"clé": "e\u0301-雪😀"}
@@ -827,6 +873,7 @@ class AuthorityRevocationRetentionPostgresTests(unittest.TestCase):
         self.connection.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(self.schema)))
         self.connection.execute(sql.SQL("SET LOCAL search_path TO {}, pg_catalog").format(
             sql.Identifier(self.schema)))
+        self.connection.execute(production_writer_capability_table_sql())
         self.connection.execute(authority_v9_schema_source())
         self.connection.execute(planner_retention_guard_sql(self.namespace))
         for table in (self.CHILD, self.ASSERTION, self.PROJECTION):
@@ -1345,6 +1392,7 @@ class AuthorityRevocationRetainedBindingPostgresTests(unittest.TestCase):
         self.addCleanup(self.rollback_owned_schema)
         self.connection.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(self.schema)))
         self.connection.execute(sql.SQL("SET LOCAL search_path TO {}, pg_catalog").format(sql.Identifier(self.schema)))
+        self.connection.execute(production_writer_capability_table_sql())
         self.connection.execute(authority_v9_schema_source())
         self.connection.execute(planner_retention_guard_sql(self.namespace))
         for statement in production_digest_functions(self.namespace):
@@ -2146,6 +2194,324 @@ class AuthorityRevocationCountedTransitionPostgresTests(unittest.TestCase):
             # rows, but the originally captured vector must still reject it.
             self.deny_component(parent, "revocation counted after live head changed",
                 phase="rebind-drift", drift=readonly)
+
+
+class AuthorityRevocationCapabilityCustodyPostgresTests(unittest.TestCase):
+    """Actual DDL/guards with opaque transport, not crypto or issuer approval."""
+
+    PARENT = AuthorityRevocationRetentionPostgresTests.PARENT
+    CHILD = AuthorityRevocationRetentionPostgresTests.CHILD
+    ASSERTION = AuthorityRevocationRetentionPostgresTests.ASSERTION
+    PROJECTION = AuthorityRevocationRetentionPostgresTests.PROJECTION
+    CAPABILITY = "policy_authority_writer_capabilities"
+    SIDECAR = "policy_authority_revocation_retained_capabilities"
+    ENVELOPE = "policy_authority_execution_envelopes"
+    IDENTITY = (
+        "capability_id", "capability_protocol", "capability_record_digest", "capability_digest",
+        "envelope_id", "operation", "operation_id", "handler_name", "request_digest",
+        "operation_manifest_digest", "query_manifest_digest", "authority_root_set_digest",
+        "authority_snapshot_digest", "approver_policy_digest", "webauthn_receipt_json",
+        "webauthn_receipt_digest", "webauthn_trust_high_water_digest", "witness_reservation_digest",
+        "witness_sequence", "witness_head_digest", "deadline_monotonic_ns", "fence",
+        "issued_monotonic_ns", "issued_at_epoch_ns", "expires_at_epoch_ns",
+        "issuer_session_identity_digest", "issuer_measurement_digest", "issuer_attestation_receipt_digest",
+        "issuer_credential_issuance_digest", "expected_result_digest", "planner_transaction_id",
+        "authorization_projection_digest", "selected_business_rows_digest", "mutation_plan_digest",
+        "deadline_epoch_ns",
+    )
+    LIFECYCLE = (
+        "status", "writer_token_digest", "reserved_at_epoch_ns", "reserved_transaction_id",
+        "result_digest", "commit_receipt_digest", "committed_at_epoch_ns", "failure_digest", "failed_at_epoch_ns",
+    )
+    rollback_owned_schema = AuthorityRevocationRetentionPostgresTests.rollback_owned_schema
+    insert = AuthorityRevocationRetentionPostgresTests.insert
+    update = AuthorityRevocationRetentionPostgresTests.update
+    changed = staticmethod(AuthorityRevocationRetentionPostgresTests.changed)
+
+    def setUp(self):
+        AuthorityRevocationRetentionPostgresTests.setUp(self)
+        self.connection.execute(capability_retention_guard_sql(self.namespace))
+        for statement in production_retained_immutable_sql(self.SIDECAR):
+            self.connection.execute(statement)
+
+    def rows(self, table):
+        keys = {self.PARENT: "planner_transaction_id", self.CHILD: "planner_transaction_id",
+                self.ENVELOPE: "envelope_id", self.CAPABILITY: "capability_id", self.SIDECAR: "capability_id"}
+        return tuple(row[0] for row in self.connection.execute(sql.SQL(
+            'SELECT pg_catalog.to_jsonb(t) FROM {} AS t ORDER BY {} COLLATE "C"').format(
+                sql.Identifier(self.schema, table), sql.Identifier(keys[table]))).fetchall())
+
+    def snapshot(self):
+        return tuple(self.rows(table) for table in
+                     (self.PARENT, self.CHILD, self.ENVELOPE, self.CAPABILITY, self.SIDECAR))
+
+    def records(self, label="capability"):
+        # Reuse the independently written opaque planner rows, not any runtime
+        # record/descriptor producer. Nothing here represents signed evidence.
+        _, planner, retained = AuthorityRevocationRetentionPostgresTests.records(self, label)
+        transaction_id, capability_id = token("planner-" + label), token("capability-" + label)
+        planner.update(planner_transaction_id=transaction_id, capability_id=capability_id)
+        retained["planner_transaction_id"] = transaction_id
+        envelope_id = token("execution-" + label)
+        raw_digest = lambda value: "sha256:" + hashlib.sha256(value).hexdigest()
+        encoded = lambda value: base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
+        wrapper = b'{"opaque":"execution"}'
+        capability_raw, witness_raw = b'{"opaque":"capability"}', b'{"opaque":"reserve"}'
+        execution = {
+            "envelope_id": envelope_id, "parent_envelope_id": None, "purpose": "execute-v9",
+            "operation": planner["operation"], "operation_id": planner["operation_id"],
+            "request_digest": planner["request_digest"], "capability_id": capability_id,
+            "planner_transaction_id": transaction_id,
+            "authorization_projection_digest": planner["authorization_projection_digest"],
+            "operation_contract_digest": planner["operation_contract_digest"],
+            "exact_request_base64url": encoded(wrapper), "exact_request_bytes_digest": raw_digest(wrapper),
+            "exact_request_byte_count": len(wrapper), "deadline_monotonic_ns": 200,
+            "deadline_epoch_ns": 2000, "fence": 1, "status": "reserved",
+            "exact_response_base64url": None, "exact_response_bytes_digest": None,
+            "exact_response_byte_count": None, "result_digest": None, "terminal_receipt_json": None,
+            "terminal_receipt_digest": None, "failure_code": None, "failure_digest": None,
+            "reserved_at_epoch_ns": 1000, "terminal_at_epoch_ns": None,
+            "source_revision": authority_contract.SOURCE_REVISION,
+        }
+        capability = {
+            "capability_id": capability_id, "capability_protocol": "revocation-v4",
+            "capability_record_digest": token("capability-record-" + label),
+            "capability_digest": token("capability-payload-" + label), "envelope_id": envelope_id,
+            "operation": planner["operation"], "operation_id": planner["operation_id"],
+            "handler_name": "revoke_webauthn_credential", "request_digest": planner["request_digest"],
+            "operation_manifest_digest": token("manifest"), "query_manifest_digest": planner["query_manifest_digest"],
+            "authority_root_set_digest": planner["authority_root_set_before_digest"],
+            "authority_snapshot_digest": planner["authority_snapshot_digest"], "approver_policy_digest": None,
+            "webauthn_receipt_json": "{}", "webauthn_receipt_digest": token("webauthn"),
+            "webauthn_trust_high_water_digest": token("trust"),
+            "witness_reservation_digest": token("witness-" + label), "witness_sequence": 1,
+            "witness_head_digest": token("head"), "deadline_monotonic_ns": 200, "fence": 1,
+            "issued_monotonic_ns": 100, "issued_at_epoch_ns": 1000, "expires_at_epoch_ns": 2000,
+            "issuer_session_identity_digest": token("issuer"), "issuer_measurement_digest": token("measurement"),
+            "issuer_attestation_receipt_digest": token("attestation"), "issuer_credential_issuance_digest": token("issuance"),
+            "status": "issued", "writer_token_digest": None, "reserved_at_epoch_ns": None,
+            "reserved_transaction_id": None, "result_digest": None, "commit_receipt_digest": None,
+            "committed_at_epoch_ns": None, "failure_digest": None, "failed_at_epoch_ns": None,
+            "expected_result_digest": token("result"), "planner_transaction_id": transaction_id,
+            "authorization_projection_digest": planner["authorization_projection_digest"],
+            "selected_business_rows_digest": planner["selected_business_rows_digest"],
+            "mutation_plan_digest": planner["mutation_plan_digest"], "deadline_epoch_ns": 2000,
+        }
+        sidecar = {
+            "capability_id": capability_id, "capability_protocol": "revocation-v4",
+            "capability_record_digest": capability["capability_record_digest"],
+            "planner_transaction_id": transaction_id, "plan_protocol": "revocation-v4",
+            "retained_record_digest": retained["retained_record_digest"], "execution_envelope_id": envelope_id,
+            "capability_digest": capability["capability_digest"], "root_transition_digest": token("transition"),
+            "authority_snapshot_digest": planner["authority_snapshot_digest"],
+            "exact_request_bytes_digest": raw_digest(wrapper), "exact_capability_base64url": encoded(capability_raw),
+            "exact_capability_bytes_digest": raw_digest(capability_raw), "exact_capability_byte_count": len(capability_raw),
+            "signer_key_digest": token("capability-key"), "witness_key_digest": token("witness-key"),
+            "exact_witness_request_base64url": encoded(witness_raw),
+            "exact_witness_request_bytes_digest": raw_digest(witness_raw), "exact_witness_request_byte_count": len(witness_raw),
+            "source_revision": authority_contract.SOURCE_REVISION,
+        }
+        self.assertEqual(tuple(map(len, (planner, retained, execution, capability, sidecar))), (36, 12, 28, 44, 20))
+        self.assertEqual(set(capability), set(self.IDENTITY + self.LIFECYCLE))
+        return planner, retained, execution, capability, sidecar
+
+    def insert_records(self, records):
+        self.connection.execute("SET CONSTRAINTS ALL DEFERRED")
+        for table, row in zip((self.PARENT, self.CHILD, self.ENVELOPE, self.CAPABILITY, self.SIDECAR), records):
+            self.insert(table, row)
+        self.connection.execute("SET CONSTRAINTS ALL IMMEDIATE")
+
+    def changed_lifecycle_value(self, row, field):
+        # Input casts happen before BEFORE UPDATE triggers. Supply a valid
+        # BIGINT even when the old timestamp/transaction column is NULL, so
+        # the denial establishes the real guard rather than a codec failure.
+        if field in {"reserved_at_epoch_ns", "reserved_transaction_id", "committed_at_epoch_ns", "failed_at_epoch_ns"}:
+            return 1 if row[field] is None else row[field] + 1
+        return self.changed(row[field])
+
+    def test_capability_custody_deferred_parent_plan_and_envelope_bindings(self):
+        constraints = self.connection.execute(
+            "SELECT conname, condeferrable, condeferred, confupdtype, confdeltype "
+            "FROM pg_catalog.pg_constraint WHERE conrelid IN (%s::regclass, %s::regclass) "
+            "AND contype = 'f' ORDER BY conname",
+            (self.namespace + "." + self.CAPABILITY, self.namespace + "." + self.SIDECAR)).fetchall()
+        self.assertEqual(constraints, [(name, True, True, "a", "a") for name in (
+            "serverware_revocation_capability_envelope_fk", "serverware_revocation_capability_parent_fk",
+            "serverware_revocation_capability_plan_fk", "serverware_writer_capability_retained_fk")])
+        for case in ("missing-parent", "missing-sidecar", "missing-envelope", "wrong-plan",
+                     "wrong-capability", "wrong-record", "wrong-transaction", "wrong-execution"):
+            rows = self.records(case)
+            with self.subTest(case=case), self.assertRaises(psycopg.errors.ForeignKeyViolation) as caught:
+                with self.connection.transaction():
+                    self.connection.execute("SET CONSTRAINTS ALL DEFERRED")
+                    for table, row in zip((self.PARENT, self.CHILD, self.ENVELOPE, self.CAPABILITY, self.SIDECAR), rows):
+                        if (case, table) in (("missing-parent", self.CAPABILITY),
+                                             ("missing-sidecar", self.SIDECAR), ("missing-envelope", self.ENVELOPE)):
+                            continue
+                        if table == self.SIDECAR:
+                            fields = {"wrong-plan": "retained_record_digest", "wrong-capability": "capability_id",
+                                "wrong-record": "capability_record_digest", "wrong-transaction": "planner_transaction_id",
+                                "wrong-execution": "execution_envelope_id"}
+                            if case in fields:
+                                row = {**row, fields[case]: token("wrong")}
+                        self.insert(table, row)
+                    self.connection.execute("SET CONSTRAINTS ALL IMMEDIATE")
+            self.assertEqual(caught.exception.sqlstate, "23503")
+            self.assertIn(caught.exception.diag.constraint_name, {row[0] for row in constraints})
+            self.assertEqual(self.snapshot(), ((), (), (), (), ()))
+        records = self.records()
+        self.connection.execute("SET CONSTRAINTS ALL DEFERRED")
+        # Both halves may precede their parents, but all deferred references
+        # must close. This savepoint/constraint proof is not a top-level commit.
+        for index in (4, 3, 2, 1, 0):
+            self.insert((self.PARENT, self.CHILD, self.ENVELOPE, self.CAPABILITY, self.SIDECAR)[index], records[index])
+        self.connection.execute("SET CONSTRAINTS ALL IMMEDIATE")
+        self.assertEqual(self.snapshot(), tuple((row,) for row in records))
+
+    def test_capability_protocol_and_original_transport_shapes_are_closed(self):
+        planner, retained, execution, capability, sidecar = self.records()
+        legacy = {**capability, "capability_record_digest": None}
+        del legacy["capability_protocol"]
+        self.insert(self.CAPABILITY, legacy)
+        self.assertEqual(self.rows(self.CAPABILITY), ({**legacy, "capability_protocol": "v3"},))
+        baseline = self.snapshot()
+        for field, value in (("capability_protocol", "future"), ("capability_protocol", "v3"),
+                             ("capability_record_digest", None), ("capability_record_digest", "not-a-digest"),
+                             ("operation", "webauthn.counter.cas")):
+            candidate = {**capability, field: value, "capability_id": token("bad"),
+                "capability_digest": token("bad-digest"), "envelope_id": token("bad-envelope"),
+                "operation_id": "bad-operation", "request_digest": token("bad-request"),
+                "witness_reservation_digest": token("bad-witness"), "planner_transaction_id": token("bad-planner")}
+            with self.subTest(parent=field, value=value), self.assertRaises(psycopg.errors.CheckViolation):
+                with self.connection.transaction():
+                    self.insert(self.CAPABILITY, candidate)
+            self.assertEqual(self.snapshot(), baseline)
+        for field, value in (("capability_protocol", "v3"), ("plan_protocol", "v3"),
+                ("source_revision", "old"), ("capability_record_digest", "sha256:" + "A" * 64),
+                ("exact_capability_byte_count", 4194305), ("exact_witness_request_byte_count", 65537),
+                ("exact_capability_byte_count", 1), ("exact_witness_request_byte_count", 1),
+                ("exact_capability_base64url", sidecar["exact_capability_base64url"] + "="),
+                ("exact_witness_request_base64url", "!" * len(sidecar["exact_witness_request_base64url"])),
+                ("signer_key_digest", "wrong"), ("witness_key_digest", "wrong")):
+            with self.subTest(sidecar=field, value=value), self.assertRaises(psycopg.errors.CheckViolation):
+                with self.connection.transaction():
+                    self.insert(self.SIDECAR, {**sidecar, field: value})
+            self.assertEqual(self.snapshot(), baseline)
+        for stem in ("exact_capability", "exact_witness_request"):
+            for count, transport in ((2, "e31"), (4, "e30KeB")):
+                with self.subTest(padding=stem, count=count), self.assertRaises(psycopg.errors.CheckViolation):
+                    with self.connection.transaction():
+                        self.insert(self.SIDECAR, {**sidecar, stem + "_byte_count": count,
+                            stem + "_base64url": transport})
+                self.assertEqual(self.snapshot(), baseline)
+
+    def test_capability_sidecar_and_initial_parent_identity_are_immutable(self):
+        records = self.records()
+        self.insert_records(records)
+        capability, sidecar = records[3:]
+        baseline = self.snapshot()
+        for table, row, columns in ((self.SIDECAR, sidecar, tuple(sidecar)),
+                                    (self.CAPABILITY, capability, self.IDENTITY)):
+            for field in columns:
+                with self.subTest(table=table, field=field), self.assertRaisesRegex(
+                        psycopg.errors.RaiseException, "immutable"):
+                    with self.connection.transaction():
+                        self.update(table, row["planner_transaction_id"], {field: self.changed(row[field])})
+                self.assertEqual(self.snapshot(), baseline)
+        with self.assertRaisesRegex(psycopg.errors.RaiseException, "immutable"):
+            with self.connection.transaction():
+                self.update(self.SIDECAR, sidecar["planner_transaction_id"], sidecar)
+        with self.assertRaisesRegex(psycopg.errors.RaiseException, "immutable"):
+            with self.connection.transaction():
+                self.connection.execute(sql.SQL("DELETE FROM {}").format(sql.Identifier(self.schema, self.SIDECAR)))
+        self.update(self.CAPABILITY, capability["planner_transaction_id"], capability)
+        self.assertEqual(self.snapshot(), baseline)
+        legacy = {**self.records("legacy")[3], "capability_protocol": "v3", "capability_record_digest": None}
+        self.insert(self.CAPABILITY, legacy)
+        with self.assertRaisesRegex(psycopg.errors.RaiseException, "immutable"):
+            with self.connection.transaction():
+                self.update(self.CAPABILITY, legacy["planner_transaction_id"], {
+                    "capability_protocol": "revocation-v4", "capability_record_digest": token("adoption")})
+        # Legacy identity and lifecycle behavior are not silently rewritten.
+        self.update(self.CAPABILITY, legacy["planner_transaction_id"], {"handler_name": "legacy-handler"})
+
+    def test_capability_lifecycle_reconciliation_and_later_failures_preserve_custody(self):
+        records = self.records()
+        self.insert_records(records)
+        capability = records[3]
+        transaction_id = capability["planner_transaction_id"]
+        reserved = {"status": "reserved", "writer_token_digest": token("writer"),
+                    "reserved_at_epoch_ns": 1200, "reserved_transaction_id": 42}
+        self.update(self.CAPABILITY, transaction_id, reserved)
+        baseline = self.snapshot()
+        for field in ("writer_token_digest", "reserved_at_epoch_ns", "reserved_transaction_id"):
+            with self.subTest(reservation=field), self.assertRaisesRegex(psycopg.errors.RaiseException, "immutable"):
+                with self.connection.transaction():
+                    self.update(self.CAPABILITY, transaction_id, {field: self.changed(reserved[field])})
+            self.assertEqual(self.snapshot(), baseline)
+        with self.assertRaisesRegex(psycopg.errors.RaiseException, "immutable"):
+            with self.connection.transaction():
+                self.update(self.CAPABILITY, transaction_id, {name: capability[name] for name in self.LIFECYCLE})
+        with self.assertRaisesRegex(psycopg.errors.RaiseException, "immutable"):
+            with self.connection.transaction():
+                failed = {name: capability[name] for name in self.LIFECYCLE}
+                failed.update(status="failed", failure_digest=token("failure"), failed_at_epoch_ns=1300)
+                self.update(self.CAPABILITY, transaction_id, failed)
+        self.assertEqual(self.snapshot(), baseline)
+        committed = {**reserved, "status": "committed", "result_digest": capability["expected_result_digest"],
+                     "commit_receipt_digest": token("commit"), "committed_at_epoch_ns": 1300}
+        self.update(self.CAPABILITY, transaction_id, committed)
+        for status in ("committed", "reconciled"):
+            self.update(self.CAPABILITY, transaction_id, {"status": status})
+            baseline = self.snapshot()
+            for field in self.LIFECYCLE:
+                if field == "status":
+                    replacement = "reserved"
+                else:
+                    replacement = self.changed_lifecycle_value(self.rows(self.CAPABILITY)[0], field)
+                with self.subTest(terminal=status, field=field), self.assertRaisesRegex(psycopg.errors.RaiseException, "immutable"):
+                    with self.connection.transaction():
+                        self.update(self.CAPABILITY, transaction_id, {field: replacement})
+                self.assertEqual(self.snapshot(), baseline)
+        for status in ("expired", "failed"):
+            terminal_records = self.records(status)
+            self.insert_records(terminal_records)
+            terminal_id = terminal_records[3]["planner_transaction_id"]
+            values = {"status": status}
+            if status == "failed":
+                values.update(failure_digest=token("failure"), failed_at_epoch_ns=1300)
+            self.update(self.CAPABILITY, terminal_id, values)
+            baseline = self.snapshot()
+            terminal_row = next(row for row in self.rows(self.CAPABILITY) if row["planner_transaction_id"] == terminal_id)
+            for field in self.LIFECYCLE:
+                replacement = "issued" if field == "status" else self.changed_lifecycle_value(terminal_row, field)
+                with self.subTest(terminal=status, field=field), self.assertRaisesRegex(psycopg.errors.RaiseException, "immutable"):
+                    with self.connection.transaction():
+                        self.update(self.CAPABILITY, terminal_id, {field: replacement})
+                self.assertEqual(self.snapshot(), baseline)
+        expired_records = self.records("reserved-expiry")
+        self.insert_records(expired_records)
+        expired_id = expired_records[3]["planner_transaction_id"]
+        expiry_reservation = {**reserved, "writer_token_digest": token("expiry-writer")}
+        self.update(self.CAPABILITY, expired_id, expiry_reservation)
+        self.update(self.CAPABILITY, expired_id, {"status": "expired"})
+        expired_row = next(row for row in self.rows(self.CAPABILITY) if row["planner_transaction_id"] == expired_id)
+        self.assertEqual(expired_row, {**expired_records[3], **expiry_reservation, "status": "expired"})
+        direct_records = self.records("direct-commit")
+        self.insert_records(direct_records)
+        direct_id = direct_records[3]["planner_transaction_id"]
+        direct_commit = {**committed, "writer_token_digest": token("direct-writer"),
+                         "commit_receipt_digest": token("direct-commit")}
+        self.update(self.CAPABILITY, direct_id, direct_commit)
+        direct_row = next(row for row in self.rows(self.CAPABILITY) if row["planner_transaction_id"] == direct_id)
+        self.assertEqual(direct_row, {**direct_records[3], **direct_commit})
+        baseline = self.snapshot()
+        with self.assertRaisesRegex(psycopg.errors.RaiseException, "immutable"):
+            with self.connection.transaction():
+                later = self.records("later")
+                self.insert_records(later)
+                self.update(self.CAPABILITY, later[3]["planner_transaction_id"], {"operation_id": "retargeted"})
+        self.assertEqual(self.snapshot(), baseline)
 
 
 if __name__ == "__main__":

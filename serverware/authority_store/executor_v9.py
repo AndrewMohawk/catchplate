@@ -1701,7 +1701,7 @@ def install_authority_v9_executor(
                                     ->>'attestation_trust_bundle_sequence'
                               )::bigint = trust_publication.sequence
                           AND {namespace}.
-                                serverware_policy_authority_domain_digest(
+                                serverware_policy_authority_framed_digest(
                                     'serverware.policyAuthorityWebAuthnCredentialBinding/v1',
                                     {namespace}.
                                         serverware_policy_authority_wire_json(

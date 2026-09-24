@@ -40,6 +40,7 @@ _V9_NEW_TABLES = frozenset(
         "policy_authority_execution_envelopes",
         "policy_authority_planner_transactions",
         "policy_authority_revocation_retained_plans",
+        "policy_authority_revocation_retained_capabilities",
         "policy_authority_bounded_aggregate_states",
         "policy_authority_exact_pages",
         "policy_authority_work_pages",

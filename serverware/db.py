@@ -1510,6 +1510,7 @@ _POLICY_CANDIDATE_AUTHORITY_IMMUTABLE_TABLES = (
     "policy_authority_webauthn_assertion_evidence",
     "policy_authority_authorization_projections",
     "policy_authority_revocation_retained_plans",
+    "policy_authority_revocation_retained_capabilities",
     "policy_authority_webauthn_assertion_receipts",
     "policy_authority_external_witness_receipts",
     "policy_authority_owner_operations",
@@ -6432,6 +6433,10 @@ def _legacy_migrate_policy_candidate_authority_offline(
                 raise PolicyCandidateAuthorityError(
                     "retained revocation storage requires a separately reviewed migration"
                 )
+            if _metadata_table_exists(conn, authority_contract.REVOCATION_RETAINED_CAPABILITY_TABLE):
+                raise PolicyCandidateAuthorityError(
+                    "retained capability storage requires a separately reviewed migration"
+                )
             for table in _POLICY_CANDIDATE_AUTHORITY_REPLACEABLE_TABLES:
                 if _metadata_table_exists(conn, table):
                     conn.execute(
@@ -6782,6 +6787,10 @@ def _prepare_policy_candidate_authority_schema(
     if _metadata_table_exists(conn, authority_contract.REVOCATION_RETAINED_TABLE):
         raise PolicyCandidateAuthorityError(
             "retained revocation storage requires a separately reviewed migration"
+        )
+    if _metadata_table_exists(conn, authority_contract.REVOCATION_RETAINED_CAPABILITY_TABLE):
+        raise PolicyCandidateAuthorityError(
+            "retained capability storage requires a separately reviewed migration"
         )
     for table in _POLICY_CANDIDATE_AUTHORITY_REPLACEABLE_TABLES:
         if _metadata_table_exists(conn, table):
@@ -7395,6 +7404,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
             str(guard_namespace_row["schema_name"])
         )
         conn.execute(_authority_v9_schema_source.planner_retention_guard_sql(guard_namespace))
+        conn.execute(_authority_v9_schema_source.capability_retention_guard_sql(guard_namespace))
         # Both real bootstrap and pristine expected-schema replay use this
         # same transaction-owned path. Populated legacy sources or partial
         # counted stores cannot be silently initialized with empty heads.
@@ -16795,7 +16805,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
                             'revoked_at', credential.revoked_at
                         );
                     credential_binding_digest := {guard_namespace}.
-                        serverware_policy_authority_domain_digest(
+                        serverware_policy_authority_framed_digest(
                             'serverware.policyAuthorityWebAuthnCredentialBinding/v1',
                             {guard_namespace}.
                                 serverware_policy_authority_wire_json(
@@ -18880,6 +18890,9 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
 
     _execute_metadata_schema_statements(
         conn, _authority_v9_schema_source.planner_retention_sqlite_guards_sql()
+    )
+    _execute_metadata_schema_statements(
+        conn, _authority_v9_schema_source.capability_retention_sqlite_guards_sql()
     )
     digest_pattern = "sha256:" + "[0-9a-f]" * 64
     for table in authority_tables:

@@ -47,6 +47,12 @@ the source-derived complete-read/actual-write index union before and after
 real mutations; they are not installed into an executor and do not turn a
 retained root vector into independent current-root authority.
 
+Source `.45` adds [original signed capability verification and immutable
+custody](authority-revocation-capability.md). The capability binds genuine
+retained replay, the exact execution request and the original preliminary
+witness receipt. It still requires a separate future post-plan witness bind;
+there is no installed successor issuer, executor or public admission.
+
 The existing `exact_plan_*` fields continue to contain canonical **payload**
 bytes. Legacy v3 service replay reconstructs its envelope; private v4 replay
 returns the original envelope and context from the new immutable sidecar.

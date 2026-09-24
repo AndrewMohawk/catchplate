@@ -33,6 +33,7 @@ from serverware.authority_store.metadata_schema_source import (
 )
 from serverware.authority_store.v9_schema_source import (
     authority_v9_schema_source, planner_retention_guard_sql, planner_retention_sqlite_guards_sql,
+    capability_retention_guard_sql, capability_retention_sqlite_guards_sql,
 )
 
 
@@ -705,6 +706,134 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
         literals = {node.value for node in ast.walk(required) if isinstance(node, ast.Constant) and type(node.value) is str}
         self.assertTrue({"serverware_guard_planner_retention", "serverware_planner_retention_guard",
                         "serverware_planner_retention_insert_guard", "serverware_retained_sqlite_insert_guard"}.issubset(literals))
+
+    def test_capability_custody_has_exact_columns_protocols_transport_and_minimal_foreign_keys(self):
+        parent = self.base.split("policy_authority_writer_capabilities (", 1)[1].split(");", 1)[0]
+        sidecar = self.extension.split("policy_authority_revocation_retained_capabilities (", 1)[1].split(");", 1)[0]
+        parent_columns = re.findall(r"^                    ([a-z_]+) (?:TEXT|BIGINT)\b", parent, re.MULTILINE)
+        self.assertEqual(parent_columns, [
+            "capability_id", "capability_protocol", "capability_record_digest", "capability_digest",
+            "envelope_id", "operation", "operation_id", "handler_name", "request_digest",
+            "operation_manifest_digest", "query_manifest_digest", "authority_root_set_digest",
+            "authority_snapshot_digest", "approver_policy_digest", "webauthn_receipt_json",
+            "webauthn_receipt_digest", "webauthn_trust_high_water_digest", "witness_reservation_digest",
+            "witness_sequence", "witness_head_digest", "deadline_monotonic_ns", "fence",
+            "issued_monotonic_ns", "issued_at_epoch_ns", "expires_at_epoch_ns",
+            "issuer_session_identity_digest", "issuer_measurement_digest", "issuer_attestation_receipt_digest",
+            "issuer_credential_issuance_digest", "status", "writer_token_digest", "reserved_at_epoch_ns",
+            "reserved_transaction_id", "result_digest", "commit_receipt_digest", "committed_at_epoch_ns",
+            "failure_digest", "failed_at_epoch_ns", "expected_result_digest", "planner_transaction_id",
+            "authorization_projection_digest", "selected_business_rows_digest", "mutation_plan_digest",
+            "deadline_epoch_ns",
+        ])
+        self.assertEqual(re.findall(r"^                ([a-z_]+) (?:TEXT|BIGINT)\b", sidecar, re.MULTILINE), [
+            "capability_id", "capability_protocol", "capability_record_digest", "planner_transaction_id",
+            "plan_protocol", "retained_record_digest", "execution_envelope_id", "capability_digest",
+            "root_transition_digest", "authority_snapshot_digest", "exact_request_bytes_digest",
+            "exact_capability_base64url", "exact_capability_bytes_digest", "exact_capability_byte_count",
+            "signer_key_digest", "witness_key_digest", "exact_witness_request_base64url",
+            "exact_witness_request_bytes_digest", "exact_witness_request_byte_count", "source_revision",
+        ])
+        for fragment in ("capability_protocol TEXT NOT NULL DEFAULT 'v3'",
+                "capability_protocol IN ('v3', 'revocation-v4')",
+                "capability_protocol = 'v3' AND capability_record_digest IS NULL",
+                "capability_protocol = 'revocation-v4'", "operation = 'webauthn.credential.revoke'",
+                "capability_record_digest IS NOT NULL", "capability_record_digest ~ '^sha256:[0-9a-f]{64}$'"):
+            self.assertIn(fragment, parent)
+        compact_parent, compact_sidecar = " ".join(parent.split()), " ".join(sidecar.split())
+        five = "(capability_id, capability_protocol, capability_record_digest, planner_transaction_id, "
+        self.assertIn("UNIQUE " + five + "envelope_id)", compact_parent)
+        self.assertIn("UNIQUE " + five + "execution_envelope_id)", compact_sidecar)
+        self.assertIn("FOREIGN KEY " + five + "execution_envelope_id) REFERENCES policy_authority_writer_capabilities "
+                      + five + "envelope_id) DEFERRABLE INITIALLY DEFERRED", compact_sidecar)
+        self.assertIn("FOREIGN KEY (planner_transaction_id, plan_protocol, retained_record_digest) "
+                      "REFERENCES policy_authority_revocation_retained_plans "
+                      "(planner_transaction_id, plan_protocol, retained_record_digest) DEFERRABLE INITIALLY DEFERRED", compact_sidecar)
+        self.assertIn("FOREIGN KEY (execution_envelope_id) REFERENCES policy_authority_execution_envelopes "
+                      "(envelope_id) DEFERRABLE INITIALLY DEFERRED", compact_sidecar)
+        self.assertEqual(sidecar.count("FOREIGN KEY"), 3)
+        self.assertNotIn("REFERENCES policy_authority_planner_transactions", sidecar)
+        self.assertNotIn("CASCADE", sidecar)
+        self.assertIn("capability_protocol = 'revocation-v4' AND plan_protocol = 'revocation-v4'", sidecar)
+        for prefix, maximum in (("exact_capability", 4194304), ("exact_witness_request", 65536)):
+            self.assertIn(prefix + "_byte_count BETWEEN 2 AND " + str(maximum), sidecar)
+            self.assertIn("length(" + prefix + "_base64url) = (4 * " + prefix + "_byte_count + 2) / 3", sidecar)
+            self.assertIn(prefix + "_base64url ~ '^[A-Za-z0-9_-]+$'", sidecar)
+            for remainder in (0, 1, 2):
+                self.assertIn(prefix + "_byte_count % 3 = " + str(remainder), sidecar)
+            self.assertIn("substr(" + prefix + "_base64url, length(" + prefix + "_base64url), 1) IN ('A', 'Q', 'g', 'w')", sidecar)
+        self.assertEqual(sidecar.count("('A', 'E', 'I', 'M', 'Q', 'U', 'Y', 'c', 'g', 'k', 'o', 's', 'w', '0', '4', '8')"), 2)
+        self.assertEqual(sidecar.count(authority_contract.SOURCE_REVISION), 1)
+        for predecessor in ("policy_authority_planner_transactions (", "policy_authority_execution_envelopes (",
+                            "policy_authority_revocation_retained_plans ("):
+            self.assertLess(self.extension.index(predecessor), self.extension.index("policy_authority_revocation_retained_capabilities ("))
+
+    def test_capability_guard_binds_deferred_identity_and_successor_only_lifecycle(self):
+        namespace = '"capability_fixture"'
+        sql = capability_retention_guard_sql(namespace)
+        compact = " ".join(sql.split())
+        parent = namespace + ".policy_authority_writer_capabilities"
+        sidecar = namespace + ".policy_authority_revocation_retained_capabilities"
+        for fragment in ("ALTER TABLE " + parent, "ADD CONSTRAINT serverware_writer_capability_retained_fk",
+                "FOREIGN KEY (capability_id, capability_protocol, capability_record_digest, planner_transaction_id, envelope_id)",
+                "REFERENCES " + sidecar + " (capability_id, capability_protocol, capability_record_digest, planner_transaction_id, execution_envelope_id)",
+                "DEFERRABLE INITIALLY DEFERRED", "RETURNS trigger LANGUAGE plpgsql VOLATILE SECURITY INVOKER",
+                "SET search_path = pg_catalog, " + namespace + ", pg_temp", "BEFORE UPDATE ON " + parent,
+                "IF NEW.capability_protocol IS DISTINCT FROM OLD.capability_protocol OR (OLD.capability_protocol = 'revocation-v4' AND (",
+                "OLD.writer_token_digest IS NOT NULL OR OLD.reserved_at_epoch_ns IS NOT NULL OR OLD.reserved_transaction_id IS NOT NULL",
+                "OLD.status IN ('reconciled', 'expired', 'failed')",
+                "OLD.status = 'committed' AND (NEW.status NOT IN ('committed', 'reconciled')",
+                "OLD.status = 'issued' AND NEW.status NOT IN ('issued', 'reserved', 'committed', 'expired', 'failed')",
+                "OLD.status = 'reserved' AND NEW.status NOT IN ('reserved', 'committed', 'expired')"):
+            self.assertIn(fragment, compact)
+        for fields in (authority_contract.WRITER_CAPABILITY_IMMUTABLE_COLUMNS,
+                       authority_contract.WRITER_CAPABILITY_RESERVATION_COLUMNS,
+                       authority_contract.WRITER_CAPABILITY_TERMINAL_COLUMNS,
+                       authority_contract.WRITER_CAPABILITY_TERMINAL_COLUMNS[1:]):
+            self.assertIn("ROW(" + ", ".join("NEW." + field for field in fields) + ") IS DISTINCT FROM ROW(" +
+                          ", ".join("OLD." + field for field in fields) + ")", sql)
+        for forbidden in ("CASCADE", "SECURITY DEFINER", "GRANT ", "UPDATE " + parent + " SET"):
+            self.assertNotIn(forbidden, sql)
+        for bad in (None, "metadata", '""', '"metadata"; DROP TABLE x; --', '"a"b"', '"a\x00b"'):
+            with self.subTest(namespace=bad), self.assertRaises(ValueError):
+                capability_retention_guard_sql(bad)
+        self.assertIn("'\"a''b\".policy_authority_writer_capabilities'::pg_catalog.regclass",
+                      capability_retention_guard_sql('"a\'b"'))
+
+    def test_sqlite_capability_guard_denies_successor_without_freezing_v3_recovery(self):
+        sql = capability_retention_sqlite_guards_sql()
+        self.assertEqual(sql.count("CREATE TRIGGER IF NOT EXISTS"), 3)
+        for name in ("serverware_capability_retention_insert_guard", "serverware_capability_retention_guard",
+                     "serverware_capability_sidecar_sqlite_insert_guard"):
+            self.assertIn(name, sql)
+        self.assertEqual(sql.count("NEW.capability_protocol <> 'v3' OR NEW.capability_record_digest IS NOT NULL"), 2)
+        self.assertIn("NEW.capability_protocol IS NOT OLD.capability_protocol", sql)
+        self.assertIn("BEFORE INSERT ON policy_authority_revocation_retained_capabilities", sql)
+        for forbidden in ("OLD.status", "NEW.writer_token_digest", "ALTER TABLE", "COMMIT"):
+            self.assertNotIn(forbidden, sql)
+
+    def test_capability_guards_reach_actual_installers_and_source_object_admission(self):
+        _, tree = read_source("serverware/db.py", 16 * 1024 * 1024)
+        installer = function(tree, "_install_policy_candidate_authority_guards")
+        pg = calls(installer, "capability_retention_guard_sql")
+        sqlite = calls(installer, "capability_retention_sqlite_guards_sql")
+        self.assertEqual((len(pg), len(sqlite)), (1, 1))
+        self.assert_shape(pg[0], "_authority_v9_schema_source.capability_retention_guard_sql(guard_namespace)")
+        self.assert_shape(sqlite[0], "_authority_v9_schema_source.capability_retention_sqlite_guards_sql()")
+        self.assertLess(assignment(installer, "guard_namespace").lineno, pg[0].lineno)
+        blocks = [node for node in ast.walk(installer) if isinstance(node, ast.If)
+            and pg[0] in tuple(ast.walk(node))
+            and ast.dump(node.test) == ast.dump(ast.parse("isinstance(conn, PostgresMetadataConnection)", mode="eval").body)]
+        self.assertEqual(len(blocks), 1)
+        self.assertNotIn(sqlite[0], tuple(ast.walk(blocks[0])))
+        _, tree = read_source("serverware/authority_store/schema.py")
+        digest = function(tree, "_policy_candidate_authority_source_contract_digest")
+        self.assertEqual(len(calls(digest, "capability_retention_guard_sql")), 1)
+        self.assertEqual(len(calls(digest, "capability_retention_sqlite_guards_sql")), 1)
+        required = function(tree, "_policy_candidate_authority_required_guard_names")
+        literals = {node.value for node in ast.walk(required) if isinstance(node, ast.Constant) and type(node.value) is str}
+        self.assertTrue({"serverware_guard_capability_retention", "serverware_capability_retention_guard",
+                        "serverware_capability_retention_insert_guard", "serverware_capability_sidecar_sqlite_insert_guard"}.issubset(literals))
 
 
 if __name__ == "__main__":

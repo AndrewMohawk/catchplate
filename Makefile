@@ -646,6 +646,7 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_authority_revocation_retention.py \
 	scripts/test_authority_revocation_persistence.py \
 	scripts/test_authority_revocation_reservation.py \
+	scripts/test_authority_revocation_capability.py \
 	scripts/test_authority_revocation_coordinator_source.py \
 	scripts/test_authority_webauthn_trust.py \
 	scripts/test_authority_radix_mutation.py \
@@ -2579,6 +2580,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_revocation_plan_production.py \
 				serverware/authority_revocation_wire.py \
 				serverware/authority_revocation_retention.py \
+				serverware/authority_revocation_capability.py \
 				serverware/authority_revocation_persistence.py \
 				serverware/authority_revocation_coordinator.py \
 				serverware/authority_store/planner_connection.py \

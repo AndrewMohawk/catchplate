@@ -198,6 +198,13 @@ retry must bypass live-head reads. There is no new schema/ACL, installed
 executor, capability or witness activation, Python SQL-work accounting or
 general deadlock/current-root-authority claim.
 
+Source `.45` adds [original signed capability verification and immutable
+custody](authority-revocation-capability.md). The capability binds genuine
+retained replay, the exact execution wrapper and the original preliminary
+witness reservation; a separate future witness step must bind the actual
+capability digest before execution. No successor issuer, executor or public
+operation gate is activated.
+
 Source `.37` implements private original-byte storage and historical replay.
 Public verifier-response admission and service persistence still require
 coordinated v4 admission and consumer changes. They need

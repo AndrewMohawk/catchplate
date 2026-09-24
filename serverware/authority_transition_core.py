@@ -935,10 +935,31 @@ class KernelContext:
         table: str,
         key: Mapping[str, Any],
     ) -> dict[str, Any]:
+        return self._exact(table, key, work=None)
+
+    def _exact(
+        self, table: str, key: Mapping[str, Any], *, work: _ValidationWork | None,
+    ) -> dict[str, Any]:
+        if work is not None:
+            if type(work) is not _ValidationWork:
+                raise TransitionKernelError("authority exact selection requires the shared work meter")
+            work.prepare_copy(self.selected_rows)
+        candidates = self.rows(table)
+        if work is not None:
+            work.prepare_copy(candidates)
+
+        def matches_key(selected: Mapping[str, Any]) -> bool:
+            if work is not None:
+                # dict(key) is genuinely constructed for every candidate,
+                # including nonmatches; do not hoist it or change == dispatch.
+                work.prepare_copy(key)
+                work.prepare_comparison(selected.get("key"), key)
+            return selected.get("key") == dict(key)
+
         matches = tuple(
             selected
-            for selected in self.rows(table)
-            if selected.get("key") == dict(key)
+            for selected in candidates
+            if matches_key(selected)
         )
         if len(matches) != 1:
             raise TransitionKernelError(

@@ -660,6 +660,7 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_webauthn_revoke_authorization.py \
 	scripts/test_webauthn_assertion_work.py \
 	scripts/test_webauthn_revoke_transition.py \
+	scripts/test_webauthn_revocation_work.py \
 	scripts/test_webauthn_trust_core.py \
 	scripts/test_webauthn_trust_installation.py \
 	scripts/test_control_plane_startup.py \
@@ -2488,6 +2489,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_revocation_proof_bundle.py \
 				serverware/authority_revocation_bundle_contract.py \
 				serverware/authority_webauthn_assertion.py \
+				serverware/authority_transition_webauthn.py \
 				scripts/authority_revocation_observation_fixture.py \
 				serverware/authority_index_frontier.py \
 				data-plane/decision-gate-rs/Dockerfile \

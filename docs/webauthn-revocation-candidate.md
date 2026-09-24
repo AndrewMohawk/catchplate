@@ -73,6 +73,11 @@ accounting around those actual checks for a future bounded semantic composer.
 Its separate one-attempt Ed25519 limit is not a SHA-equivalent allowance, and
 it does not make the retained proof or the unregistered kernel authoritative.
 
+The [measured kernel route](authority-revocation-kernel-work.md) likewise charges
+the actual business computation under a supplied remaining budget. It does not
+establish complete selection, currentness or assertion authority, and still
+requires separate capacity finalization and a semantic proof integration.
+
 `webauthn_revocation_admission.py` defines the exact raw-assertion challenge and
 execute client shapes. It does not call the obsolete `transactionResult` /
 `queryMultiproofs` client, and does not remove `_connection` from any old caller.

@@ -10,7 +10,7 @@ from serverware import authority_complete_query
 from serverware.authority_query_read_work import _ValidationWork
 
 
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.76"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.77"
 SCHEMA_VERSION = 9
 CONTRACT_SCHEMA = "serverware.policyAuthorityOperationContract/v3"
 BUSINESS_INTENT_SCHEMA = "serverware.policyAuthorityBusinessIntent/v2"
@@ -260,7 +260,7 @@ _AUDIT_COUNTER_REPLACEMENT_OPERATIONS = frozenset({
     "jit.review-receipt.issue", "jit.decide", "jit.deny",
 })
 _AUDIT_NEW_AGGREGATE_ROOT_OPERATIONS = frozenset({
-    "webauthn.trust.complete", "webauthn.registration.create",
+    "webauthn.trust.stage", "webauthn.trust.complete", "webauthn.registration.create",
     "webauthn.registration.finalize", "webauthn.credential.revoke",
 })
 PROOF_PRIMITIVES = frozenset(
@@ -2276,11 +2276,44 @@ _OPERATIONS = {
         reads=(
             "webauthn_trust_publications",
             "webauthn_trust_publication_high_water",
+            "webauthn_credentials",
+            "webauthn_challenges",
+            "oidc_browser_sessions",
+            "approval_grants",
+            "control_plane_approvals",
+            "rbac_role_bindings",
+            "metadata_audit_outbox",
         ),
-        writes=("webauthn_trust_publications",),
-        maximum_query_rows=4,
-        maximum_mutations=1,
-        maximum_work_units=64,
+        writes=(
+            "webauthn_trust_publications",
+            "webauthn_credentials",
+            "webauthn_challenges",
+            "oidc_browser_sessions",
+            "approval_grants",
+            "control_plane_approvals",
+            "metadata_audit_outbox",
+            "policy_authority_bounded_aggregate_states",
+        ),
+        mutation_kinds={
+            "webauthn_trust_publications": ("INSERT",),
+            "webauthn_credentials": ("UPDATE",),
+            "webauthn_challenges": ("UPDATE",),
+            "oidc_browser_sessions": ("UPDATE",),
+            "approval_grants": ("UPDATE",),
+            "control_plane_approvals": ("UPDATE",),
+            "metadata_audit_outbox": ("INSERT",),
+            "policy_authority_bounded_aggregate_states": ("UPDATE",),
+        },
+        webauthn="bound-verified-assertion-receipt",
+        approver_policy=True,
+        proof_primitives=(
+            "primary-key-row",
+            "aggregate-high-water",
+            authority_complete_query.PROOF_PRIMITIVE,
+        ),
+        maximum_query_rows=192,
+        maximum_mutations=136,
+        maximum_work_units=2048,
     ),
     "webauthn.trust.complete": _spec(
         "complete_webauthn_trust_publication",

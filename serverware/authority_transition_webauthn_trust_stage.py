@@ -6,11 +6,11 @@ union before calling this helper. Neither KernelContext nor candidate_roots is
 a proof or authority token. In particular, enumerating the rows below does not
 prove that an omitted credential, dependent or registration challenge is absent.
 
-The old stage manifest cannot express these effects. This module deliberately
-does not create mutation templates, a KernelTransition, SQL, or a registered
-kernel. It returns ordinary (original selected row, final row) pairs for a future
-explicit successor adapter. That adapter must admit the complete query family
-and finalize the shared audit-capacity CAS before calculating after-roots.
+The private query adapter declares the actual complete populations and proved
+selected-row joins. The mutation adapter renders the aggregate effects through
+the source templates, but neither adapter registers a kernel or authenticates
+its inputs. The owning composer must admit the complete query family and
+finalize the one shared audit-capacity CAS before calculating after-roots.
 
 All phases share the revocation source ceilings: 192 business selections, 136
 FINAL business effects and 2048 semantic work units. There is no per-credential
@@ -23,6 +23,9 @@ import json
 from datetime import datetime, timezone
 
 from serverware import authority_contract as authority
+from serverware import authority_audit_capacity as capacity
+from serverware import authority_complete_query as complete
+from serverware import authority_complete_query_batch as capture
 from serverware import authority_transition_core as core
 from serverware import authority_transition_webauthn as revocation
 from serverware import authority_webauthn_trust as trust
@@ -37,7 +40,7 @@ MAX_WORK_UNITS = 2048
 MAX_JSON_BYTES = 2 * 1024 * 1024
 _ARGUMENT_FIELDS = frozenset({"previous_bundle_digest", "bundle_digest", "sequence",
     "rollback_epoch", "signing_key_id", "bundle", "payload_digest", "actor_id",
-    "reason", "approval_id", "audit_event", "withdrawn_credential_ids", "businessIntent"})
+    "reason", "approval_id", "audit_event", "withdrawn_credential_ids", "query_hints", "businessIntent"})
 _SELECTED_FIELDS = frozenset({"table", "key", "keyDigest", "present", "row", "contractSelector"})
 _TABLE_KEYS = {
     "webauthn_credentials": "id", "webauthn_challenges": "id",
@@ -76,6 +79,152 @@ def _json(value, work):
     encoded = core.canonical_bytes(value)
     work.charge(input_bytes=len(encoded))
     return encoded.decode("ascii")
+
+
+def _ids(values, label, work):
+    if type(values) is not list or len(values) > MAX_SELECTED_ROWS:
+        raise WebAuthnTrustStageError(label + " is not a bounded exact list")
+    for value in values:
+        complete._source_id(value, work=work)
+    work.prepare_copy(values)
+    ordered = sorted(values)
+    _same(values, ordered, work, label + " is not sorted")
+    work.prepare_copy(values)
+    if len(set(values)) != len(values):
+        raise WebAuthnTrustStageError(label + " repeats an identity")
+    return values
+
+
+def _arguments(values, work):
+    if type(values) is not dict or set(values) != _ARGUMENT_FIELDS:
+        raise WebAuthnTrustStageError("stage arguments are not closed")
+    for name in ("bundle_digest", "payload_digest"):
+        core.require_digest(values[name], name)
+    if values["previous_bundle_digest"] is not None:
+        core.require_digest(values["previous_bundle_digest"], "previous bundle digest")
+    for name, minimum in (("sequence", 1), ("rollback_epoch", 0)):
+        _integer(values[name], name, minimum)
+    for name in ("signing_key_id", "actor_id"):
+        _text(values[name], name)
+    if values["approval_id"] is not None:
+        _text(values["approval_id"], "stage approval ID")
+    if values["reason"] is not None:
+        _text(values["reason"], "stage reason", 16_384)
+    if type(values["bundle"]) is not dict or type(values["audit_event"]) is not dict:
+        raise WebAuthnTrustStageError("stage bundle and audit context must be exact objects")
+    withdrawn = _ids(values["withdrawn_credential_ids"], "withdrawal hints", work)
+    hints = values["query_hints"]
+    if type(hints) is not dict or set(hints) != {
+            "live_credential_ids", "registration_challenge_ids", "withdrawals"}:
+        raise WebAuthnTrustStageError("stage complete query hints are not closed")
+    live = _ids(hints["live_credential_ids"], "live trusted credential hints", work)
+    registrations = _ids(hints["registration_challenge_ids"], "global registration hints", work)
+    withdrawals = hints["withdrawals"]
+    if type(withdrawals) is not list or len(withdrawals) != len(withdrawn):
+        raise WebAuthnTrustStageError("stage dependent hints differ from withdrawal inventory")
+    total = len(live) + len(registrations)
+    for identifier, item in zip(withdrawn, withdrawals):
+        if type(item) is not dict or set(item) != {"credential_record_id", "oidc_session_ids",
+                "approval_grant_ids", "control_plane_approval_ids"}:
+            raise WebAuthnTrustStageError("stage withdrawal dependency hints are not closed")
+        _same(item["credential_record_id"], identifier, work, "stage withdrawal hint order changed")
+        work.prepare_scan(live)
+        if identifier not in live:
+            raise WebAuthnTrustStageError("withdrawal is outside the hinted live trusted population")
+        for name in ("oidc_session_ids", "approval_grant_ids", "control_plane_approval_ids"):
+            total += len(_ids(item[name], name, work))
+    if total > MAX_SELECTED_ROWS:
+        raise WebAuthnTrustStageError("stage hinted union exceeds the single business bound")
+    work.prepare_copy(values)
+    semantic = {name: values[name] for name in _ARGUMENT_FIELDS - {"businessIntent"}}
+    _same(values["businessIntent"], authority._synthesize_business_intent(OPERATION, semantic, work=work),
+        work, "stage business intent changed")
+    return values
+
+
+def _assertion_scope(evidence, request_digest, work):
+    """Bind mandatory independently verified evidence; do not authenticate it."""
+    if type(evidence) is not dict:
+        raise WebAuthnTrustStageError("stage requires actual independently verified assertion evidence")
+    core.require_digest(request_digest, "stage request digest")
+    for name in ("credentialRecordId", "challengeId"):
+        _text(evidence.get(name), "stage assertion " + name)
+    work.prepare_utf8(OPERATION)
+    work.prepare_utf8(request_digest)
+    work.charge(hashes=1)
+    operation_id = core.framed_digest("serverware.policyAuthorityOperation/v2",
+        OPERATION.encode("ascii"), request_digest.encode("ascii"))
+    for actual, expected in ((evidence.get("operation"), OPERATION),
+            (evidence.get("requestDigest"), request_digest), (evidence.get("operationId"), operation_id)):
+        _same(actual, expected, work, "stage assertion request identity changed")
+    return evidence
+
+
+def _query_recipe_on_work(*, arguments, database_now, request_digest,
+        verified_webauthn_evidence, work):
+    """Declare actual business queries; common capacity is appended by its owner.
+
+    Evidence, clock and roots must be independently admitted. The supplied
+    hints bound complete populations; they never authorize omission or an SQL
+    page in place of a genuine counted/primary proof.
+    """
+    ledger = capture._SharedLedger(work)
+    if type(database_now) is not datetime or database_now.tzinfo is not timezone.utc:
+        raise WebAuthnTrustStageError("stage query cutoff is not exact UTC")
+    owned = capture._JSONCapture(ledger).visit({"arguments": arguments,
+        "evidence": verified_webauthn_evidence})
+    values = _arguments(owned["arguments"], work)
+    evidence = _assertion_scope(owned["evidence"], request_digest, work)
+    cutoff = complete.cutoff_microseconds(database_now)
+    result = []
+
+    def exact(name, table, column, value, *, absent=False):
+        result.append(core.BoundedQuery(query_id=core.query_program_id(OPERATION, name, table),
+            table=table, predicates=(core.QueryPredicate(column, "eq", value),),
+            order_by=(core.QueryOrder(column),), maximum_rows=1,
+            absent_key={column: value}, require_absence=absent))
+
+    def reference_query(name, table, column, approval_column):
+        key = {"id": values["approval_id"]}
+        work.prepare_encoding(key, shallow_copies=1)
+        reference = core.SelectedRowFieldReference("control_plane_approvals", key, approval_column)
+        # A null bound credential produces zero rows, not an invented PK
+        # absence. The configured approval policy is checked by the kernel.
+        result.append(core.BoundedQuery(query_id=core.query_program_id(OPERATION, name, table),
+            table=table, predicates=(core.QueryPredicate(column, "eq", reference),),
+            order_by=(core.QueryOrder(column),), maximum_rows=1))
+
+    exact("stage_assertion_credential", "webauthn_credentials", "id", evidence["credentialRecordId"])
+    exact("stage_assertion_challenge", "webauthn_challenges", "id", evidence["challengeId"])
+    result.extend(revocation._trust_queries(OPERATION, work=work))
+    exact("stage_actor_role", "rbac_role_bindings", "subject_id", values["actor_id"])
+    candidate = core._deterministic_uuid(operation=OPERATION, request_digest=request_digest,
+        purpose="trust-publication", work=work)
+    exact("stage_new_publication", trust.PUBLICATION_TABLE, "id", candidate, absent=True)
+    if values["approval_id"] is not None:
+        exact("stage_consumed_approval", "control_plane_approvals", "id", values["approval_id"])
+        reference_query("stage_approver_role", "rbac_role_bindings", "subject_id", "approved_by")
+        reference_query("stage_approver_credential", "webauthn_credentials", "id", "approver_webauthn_credential_id")
+        audit = core._deterministic_uuid(operation=OPERATION, request_digest=request_digest,
+            purpose="trust-stage-approval-consumed:" + values["approval_id"], work=work)
+        exact("stage_consumed_approval_audit", "metadata_audit_outbox", "id", audit, absent=True)
+    invalidated = set()
+    for item in values["query_hints"]["withdrawals"]:
+        work.prepare_copy(item["control_plane_approval_ids"])
+        invalidated.update(item["control_plane_approval_ids"])
+    work.prepare_copy(values["query_hints"]["withdrawals"])
+    for ordinal, identifier in enumerate(sorted(invalidated)):
+        audit = core._deterministic_uuid(operation=OPERATION, request_digest=request_digest,
+            purpose="trust-stage-approval-invalidated:" + identifier, work=work)
+        exact("stage_invalidated_approval_audit_" + str(ordinal), "metadata_audit_outbox", "id", audit, absent=True)
+    for role in complete.family_roles(OPERATION, arguments=values):
+        result.append(complete._bind_query(OPERATION, role, arguments=values, cutoff_us=cutoff, work=work))
+    queries = tuple(result)
+    if (len(queries) > MAX_SELECTED_ROWS or sum(query.maximum_rows for query in queries) > MAX_SELECTED_ROWS
+            or sum(query.work_units for query in queries) > MAX_WORK_UNITS):
+        raise WebAuthnTrustStageError("stage query program exceeds its single business allowance")
+    revocation._prepare_complete_copies(queries, work)
+    return core.close_queries(OPERATION, queries)
 
 
 class _Overlay:
@@ -330,6 +479,70 @@ def _publication_baseline(values, overlay):
             raise WebAuthnTrustStageError("candidate is not monotonic against selected publication history")
 
 
+def _population_hints(context, values, overlay):
+    """Join each hint to the observed complete prestate before overlay writes.
+
+    The caller still must prove these exact ranges and their primary joins.
+    An equal list computed from an incomplete caller-supplied union is not
+    completeness authority. The source query program supplies those ranges.
+    """
+    work = overlay.work
+    hints = values["query_hints"]
+    work.prepare_copy(hints["withdrawals"])
+    dependents = {item["credential_record_id"]: {"oidc_session_ids": [],
+        "approval_grant_ids": [], "control_plane_approval_ids": []}
+        for item in hints["withdrawals"]}
+    live, registrations = [], []
+    for (table, identifier), row in overlay.current.items():
+        if row is None:
+            continue
+        overlay.tick(1)
+        work.prepare_scan(row)
+        if table == "webauthn_credentials" and row.get("revoked_at") is None:
+            trusted = row.get("attestation_trusted")
+            if type(trusted) is not int or not -(1 << 31) <= trusted < (1 << 31):
+                raise WebAuthnTrustStageError("stage credential trust flag differs from its source integer")
+            if trusted != 0:
+                live.append(identifier)
+        elif (table == "webauthn_challenges" and row.get("challenge_type") == "registration"
+                and row.get("used_at") is None
+                and revocation._utc(row.get("expires_at"), "registration expiry", work=work) > context.database_now):
+            registrations.append(identifier)
+        elif (table == "oidc_browser_sessions" and row.get("status") in {"pending_webauthn", "active"}
+                and row.get("bound_webauthn_credential_id") in dependents):
+            dependents[row["bound_webauthn_credential_id"]]["oidc_session_ids"].append(identifier)
+        elif (table == "approval_grants" and row.get("state") == "active"
+                and row.get("approver_webauthn_credential_id") in dependents):
+            dependents[row["approver_webauthn_credential_id"]]["approval_grant_ids"].append(identifier)
+        elif (table == "control_plane_approvals" and row.get("status") == "approved"
+                and row.get("approver_webauthn_credential_id") in dependents):
+            dependents[row["approver_webauthn_credential_id"]]["control_plane_approval_ids"].append(identifier)
+    for observed, expected in ((live, hints["live_credential_ids"]),
+            (registrations, hints["registration_challenge_ids"])):
+        work.prepare_copy(observed)
+        _same(sorted(observed), expected, work, "stage global hint differs from observed complete population")
+    for item in hints["withdrawals"]:
+        for name, observed in dependents[item["credential_record_id"]].items():
+            work.prepare_copy(observed)
+            _same(sorted(observed), item[name], work,
+                "stage dependent hint differs from observed complete population")
+
+
+def _business_rows(context, work):
+    if (type(context) is not core.KernelContext or type(context.operation) is not str
+            or context.operation != OPERATION or type(context.selected_rows) is not tuple
+            or len(context.selected_rows) > authority.operation_spec(OPERATION)["maximumQueryRows"]
+            or any(type(item) is not dict for item in context.selected_rows)):
+        raise WebAuthnTrustStageError("stage context is not source bounded")
+    work.prepare_copy(context.selected_rows)
+    rows = tuple(item for item in context.selected_rows
+        if not (item.get("table") == capacity.AGGREGATE_TABLE
+            and item.get("key") == {"aggregate_id": capacity.AGGREGATE_ID}))
+    if len(rows) > MAX_SELECTED_ROWS:
+        raise WebAuthnTrustStageError("stage selected business union exceeds its single allowance")
+    return rows
+
+
 def _plan_stage(context, *, candidate_roots, development_enabled,
         require_approval, require_approver_webauthn, work):
     """Return (ordinary row effects, aggregate result, semantic work units).
@@ -338,24 +551,27 @@ def _plan_stage(context, *, candidate_roots, development_enabled,
     not request fields. Fixed current admin roles are checked for both actors.
     All authorizations use the original state, before the first overlay write.
     """
-    if (type(context) is not core.KernelContext or context.operation != OPERATION
+    if (type(context) is not core.KernelContext or type(context.operation) is not str or context.operation != OPERATION
             or type(context.arguments) is not dict or set(context.arguments) != _ARGUMENT_FIELDS
-            or type(context.selected_rows) is not tuple or len(context.selected_rows) > MAX_SELECTED_ROWS
             or type(context.database_now) is not datetime or context.database_now.tzinfo is not timezone.utc
             or type(work) is not _ValidationWork
             or any(type(value) is not bool for value in (development_enabled, require_approval, require_approver_webauthn))):
         raise WebAuthnTrustStageError("stage invocation is not closed and source bounded")
+    capture._SharedLedger(work)
     core.require_digest(context.request_digest, "stage request digest")
+    business_rows = _business_rows(context, work)
+    database_now, request_digest = context.database_now, context.request_digest
     # One actual JSON normalization owns all variable row/request/evidence data.
-    work.prepare_copy(context.selected_rows)
-    graph = {"arguments": context.arguments, "rows": list(context.selected_rows),
+    work.prepare_copy(business_rows)
+    graph = {"arguments": context.arguments, "rows": list(business_rows),
         "evidence": context.verified_webauthn_evidence}
     work.prepare_normalization(graph)
     owned = json.loads(core.canonical_bytes(graph).decode("ascii"))
     work.prepare_copy(owned["rows"])
     context = core.KernelContext(OPERATION, owned["arguments"], tuple(owned["rows"]),
-        context.database_now, context.request_digest, owned["evidence"])
-    values, overlay = context.arguments, _Overlay(context.selected_rows, work)
+        database_now, request_digest, owned["evidence"])
+    values, overlay = _arguments(context.arguments, work), _Overlay(context.selected_rows, work)
+    _assertion_scope(context.verified_webauthn_evidence, context.request_digest, work)
     if type(candidate_roots) is not tuple or len(candidate_roots) > classifier.MAX_ROOTS:
         raise WebAuthnTrustStageError("candidate root policy is not a bounded exact tuple")
     root_graph = []
@@ -367,29 +583,7 @@ def _plan_stage(context, *, candidate_roots, development_enabled,
             "bundle_digest": root.bundle_digest, "bundle_sequence": root.bundle_sequence})
     work.prepare_copy(root_graph)
     policy = classifier.CredentialTrustContext(candidate_roots, development_enabled)
-    for name in ("bundle_digest", "payload_digest"):
-        core.require_digest(values[name], name)
-    if values["previous_bundle_digest"] is not None:
-        core.require_digest(values["previous_bundle_digest"], "previous bundle digest")
-    for name, minimum in (("sequence", 1), ("rollback_epoch", 0)):
-        _integer(values[name], name, minimum)
-    for name in ("signing_key_id", "actor_id"):
-        _text(values[name], name)
-    if values["approval_id"] is not None:
-        _text(values["approval_id"], "stage approval ID")
-    if values["reason"] is not None:
-        _text(values["reason"], "stage reason", 16_384)
-    if type(values["bundle"]) is not dict or type(values["audit_event"]) is not dict:
-        raise WebAuthnTrustStageError("stage bundle and audit context must be exact objects")
     hints = values["withdrawn_credential_ids"]
-    if type(hints) is not list or len(hints) > MAX_SELECTED_ROWS:
-        raise WebAuthnTrustStageError("stage withdrawal hints exceed the aggregate bound")
-    for identifier in hints:
-        _text(identifier, "withdrawal hint")
-    work.prepare_copy(values)
-    semantic = {name: values[name] for name in _ARGUMENT_FIELDS - {"businessIntent"}}
-    _same(values["businessIntent"], authority._synthesize_business_intent(OPERATION, semantic, work=work),
-        work, "stage business intent changed")
     for root in policy.roots:
         _same(root.bundle_digest, values["bundle_digest"], work, "candidate root bundle changed")
         _same(root.bundle_sequence, values["sequence"], work, "candidate root sequence changed")
@@ -397,6 +591,7 @@ def _plan_stage(context, *, candidate_roots, development_enabled,
     _candidate_content(values, policy, work)
     bundle_json = _json(values["bundle"], work)
     _publication_baseline(values, overlay)
+    _population_hints(context, values, overlay)
     high = overlay.row(trust.HIGH_WATER_TABLE, trust.AUTHORITY_SCOPE)
     _same(high.get("publication_digest"), values["previous_bundle_digest"], work, "stage predecessor changed")
     if (values["rollback_epoch"] < high["rollback_epoch"] or
@@ -535,3 +730,43 @@ def _plan_stage(context, *, candidate_roots, development_enabled,
     result = {"publication_id": publication_id, "withdrawn_credential_ids": affected, **counts}
     work.prepare_copy(result)
     return effects, result, overlay.units
+
+
+def _kernel_transition_on_work(context, *, candidate_roots, development_enabled,
+        require_approval, require_approver_webauthn, work):
+    """Render the single aggregate, not one fresh budget per withdrawal.
+
+    Mandatory assertion evidence remains part of the independently admitted
+    context; candidate roots and approval policy are separately admitted inputs.
+    The common owner must still finalize audit capacity and prove all changed
+    primary/counting roots. This private adapter is not a registered kernel.
+    """
+    if type(context) is not core.KernelContext:
+        raise WebAuthnTrustStageError("stage mutation adapter requires the actual context")
+    capture._SharedLedger(work)
+    effects, result, units = _plan_stage(context, candidate_roots=candidate_roots,
+        development_enabled=development_enabled, require_approval=require_approval,
+        require_approver_webauthn=require_approver_webauthn, work=work)
+    if not 1 <= len(effects) <= MAX_EFFECTS:
+        raise WebAuthnTrustStageError("stage final effect inventory exceeds its business allowance")
+    mutations, addresses = [], set()
+    for selected, updated in effects:
+        core.require_digest(selected["keyDigest"], "stage mutation key digest")
+        address = selected["table"], selected["keyDigest"]
+        if address in addresses:
+            raise WebAuthnTrustStageError("stage produced duplicate final mutation addresses")
+        addresses.add(address)
+        work.prepare_copy(selected["key"])
+        if selected["present"] is True:
+            work.prepare_copy(selected["row"])
+        work.prepare_copy(updated)
+        mutations.append(core.mutation(operation=OPERATION, selected=selected, row=updated))
+    work.prepare_copy(mutations)
+    ordered = sorted(mutations, key=lambda item: (item["table"], item["keyDigest"], item["operation"]))
+    work.prepare_copy(ordered)
+    planned = tuple(ordered)
+    business_units = units + len(planned)
+    if business_units > MAX_WORK_UNITS:
+        raise WebAuthnTrustStageError("stage rendering exceeds its single semantic work allowance")
+    work.prepare_encoding(result)
+    return core.KernelTransition(mutations=planned, result=result, work_units=business_units)

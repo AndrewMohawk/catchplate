@@ -1,4 +1,4 @@
-"""Pinned verifier evidence admission for the standalone revocation planner.
+"""Pinned verifier evidence for revocation and private aggregate trust stage.
 
 This verifies the measured verifier's receipt, not a physical authenticator or
 deployment. Business-row freshness and atomic CAS remain kernel/executor duties.
@@ -20,6 +20,7 @@ from serverware.authority_query_read_work import QueryReadValidationLimits, _Val
 
 
 OPERATION = "webauthn.credential.revoke"
+STAGE_OPERATION = "webauthn.trust.stage"
 RECEIPT_DOMAIN = "serverware.policyAuthorityVerifiedWebAuthnAssertionReceipt/v1"
 IDENTITY_FIELDS = frozenset({"sessionIdentityDigest", "measurementDigest", "attestationReceiptDigest"})
 DIGEST_FIELDS = frozenset({
@@ -136,12 +137,15 @@ def _canonical(value: Any, *, work: _ReceiptWork | None) -> bytes:
     return core.canonical_bytes(value)
 
 
-def _operation_digest(request_digest: str, *, work: _ReceiptWork | None) -> str:
+def _operation_digest(request_digest: str, *, work: _ReceiptWork | None,
+                      operation: str = OPERATION) -> str:
+    if type(operation) is not str or operation not in (OPERATION, STAGE_OPERATION):
+        raise AssertionEvidenceError("assertion operation has no fixed receipt consumer")
     if work is not None:
-        work.shared.prepare_utf8(OPERATION)
+        work.shared.prepare_utf8(operation)
         work.shared.prepare_utf8(request_digest)
         work.shared.charge(hashes=1)
-    return core.framed_digest("serverware.policyAuthorityOperation/v2", OPERATION.encode("ascii"), request_digest.encode("ascii"))
+    return core.framed_digest("serverware.policyAuthorityOperation/v2", operation.encode("ascii"), request_digest.encode("ascii"))
 
 
 def _verify_receipt_signature(
@@ -254,6 +258,53 @@ def _verify_revoke_assertion_evidence(
     maximum_age_ns: int,
     work: _ReceiptWork | None,
 ) -> Mapping[str, Any]:
+    """Preserve the original revocation-only API and accounting."""
+    return _verify_operation_assertion_evidence(
+        evidence, operation=OPERATION, operation_id=operation_id,
+        request_digest=request_digest, capability_id=capability_id,
+        verifier_identity=verifier_identity, verifier_public_key=verifier_public_key,
+        now_epoch_ns=now_epoch_ns, deadline_epoch_ns=deadline_epoch_ns,
+        maximum_age_ns=maximum_age_ns, work=work,
+    )
+
+
+def _verify_stage_assertion_evidence(
+    evidence: Mapping[str, Any],
+    *,
+    operation_id: str,
+    request_digest: str,
+    capability_id: str,
+    verifier_identity: Mapping[str, str],
+    verifier_public_key: Ed25519PublicKey,
+    now_epoch_ns: int,
+    deadline_epoch_ns: int,
+    maximum_age_ns: int,
+    work: _ReceiptWork | None,
+) -> Mapping[str, Any]:
+    """Verify an operation-bound receipt, not stage authorization or a grant."""
+    return _verify_operation_assertion_evidence(
+        evidence, operation=STAGE_OPERATION, operation_id=operation_id,
+        request_digest=request_digest, capability_id=capability_id,
+        verifier_identity=verifier_identity, verifier_public_key=verifier_public_key,
+        now_epoch_ns=now_epoch_ns, deadline_epoch_ns=deadline_epoch_ns,
+        maximum_age_ns=maximum_age_ns, work=work,
+    )
+
+
+def _verify_operation_assertion_evidence(
+    evidence: Mapping[str, Any],
+    *,
+    operation: str,
+    operation_id: str,
+    request_digest: str,
+    capability_id: str,
+    verifier_identity: Mapping[str, str],
+    verifier_public_key: Ed25519PublicKey,
+    now_epoch_ns: int,
+    deadline_epoch_ns: int,
+    maximum_age_ns: int,
+    work: _ReceiptWork | None,
+) -> Mapping[str, Any]:
     """The actual receipt body with optional shared work, not whole-input capture.
 
     A measured caller must already own every evidence/binding graph and provide
@@ -262,6 +313,8 @@ def _verify_revoke_assertion_evidence(
     Representation/budget failures from the shared meter propagate unchanged.
     """
     _require_work(work)
+    if type(operation) is not str or operation not in (OPERATION, STAGE_OPERATION):
+        raise AssertionEvidenceError("assertion operation has no fixed receipt consumer")
     if work is not None and (
         type(evidence) is not dict or len(evidence) != len(EVIDENCE_FIELDS)
         or any(type(key) is not str or len(key) > 128 for key in evidence)
@@ -304,9 +357,9 @@ def _verify_revoke_assertion_evidence(
     except (core.TransitionKernelError, UnicodeError) as exc:
         raise AssertionEvidenceError("assertion evidence fields are invalid") from exc
     if (
-        not _equal(snapshot["operation"], OPERATION, work=work)
+        not _equal(snapshot["operation"], operation, work=work)
         or not _equal(snapshot["operationId"], operation_id, work=work)
-        or not _equal(operation_id, _operation_digest(request_digest, work=work), work=work)
+        or not _equal(operation_id, _operation_digest(request_digest, work=work, operation=operation), work=work)
         or not _equal(snapshot["requestDigest"], request_digest, work=work)
         or not _equal(snapshot["capabilityId"], capability_id, work=work)
         or not _equal(snapshot["verifierSessionIdentityDigest"], verifier_identity["sessionIdentityDigest"], work=work)

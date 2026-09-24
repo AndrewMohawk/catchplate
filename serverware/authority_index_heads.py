@@ -60,15 +60,15 @@ def required_index_ids(operation: str, *, arguments=None, queries=None,
     """Hash-free fixed inventory, never a caller-selected index subset.
 
     Revocation preserves its existing role/potential-write union and no-context
-    API. Registration's read heads follow the actual argument mode and rebound
-    query family; its private transition owner can additionally require every
+    API. Registration/staging read heads follow their rebound argument family;
+    a private transition owner can additionally require every
     potential source-write profile. No arbitrary index subset is accepted.
     """
     if (type(include_write_heads) is not bool
             or type(operation) is not str or not 1 <= len(operation) <= 128
-            or operation not in (complete.OPERATION, complete.REGISTRATION_OPERATION)):
+            or operation not in (complete.OPERATION, complete.REGISTRATION_OPERATION, complete.STAGE_OPERATION)):
         raise IndexHeadReadError("counted head operation has no declared complete roles")
-    if operation == complete.REGISTRATION_OPERATION or arguments is not None or queries is not None:
+    if operation != complete.OPERATION or arguments is not None or queries is not None:
         if type(arguments) is not dict or type(queries) is not tuple:
             raise IndexHeadReadError("counted head acquisition requires actual family arguments and queries")
         names = complete.family_roles(operation, arguments=arguments)
@@ -76,7 +76,7 @@ def required_index_ids(operation: str, *, arguments=None, queries=None,
         if (len(queries) != limits["query_count"] or len(queries) != len(names)
                 or any(type(query) is not complete.CompleteIndexQuery
                        or query.operation != operation for query in queries)
-                or (operation == complete.REGISTRATION_OPERATION
+                or (operation != complete.OPERATION
                     and tuple(query.role for query in queries) != names)
                 or {query.role for query in queries} != set(names)):
             raise IndexHeadReadError("counted head queries differ from the actual argument family")
@@ -87,8 +87,8 @@ def required_index_ids(operation: str, *, arguments=None, queries=None,
     roles = tuple(complete._role(operation, name) for name in names)
     spec = authority_contract.operation_spec(operation)
     identities = {role.index_id for role in roles}
-    if operation == complete.REGISTRATION_OPERATION and len(identities) != limits["head_count"]:
-        raise IndexHeadReadError("registration counted heads differ from the source family bound")
+    if operation != complete.OPERATION and len(identities) != limits["head_count"]:
+        raise IndexHeadReadError("counted heads differ from the source family bound")
     if operation == complete.OPERATION or include_write_heads:
         for table in spec["businessWrites"]:
             identities.update(projection.index_ids_for_table(table))
@@ -103,15 +103,20 @@ def validate_head_trace_key(operation: str, key: Any, *, arguments=None, queries
     """Validate one physical source-owned SELECT marker without hashing."""
     if type(operation) is not str or type(include_write_heads) is not bool:
         raise IndexHeadReadError("counted head operation is not an exact source identity")
-    if operation == complete.REGISTRATION_OPERATION and arguments is None and queries is None:
+    if operation in (complete.REGISTRATION_OPERATION, complete.STAGE_OPERATION) and arguments is None and queries is None:
         # Trace markers carry no mode authority. The actual producer binds one
         # fixed mode/read-or-read-write inventory before SQL. Trace admission
         # alone cannot choose a subset or confer any operation authority.
         write_ids = {index_id for table in authority_contract.operation_spec(operation)["businessWrites"]
                      for index_id in projection.index_ids_for_table(table)}
+        families = ((complete.REGISTRATION_BASE_ROLES, complete.REGISTRATION_ROLES)
+            if operation == complete.REGISTRATION_OPERATION else
+            (complete.STAGE_BASE_ROLES, complete.STAGE_BASE_ROLES + (
+                "withdrawal_000_sessions_pending_webauthn", "withdrawal_000_sessions_active",
+                "withdrawal_000_grants", "withdrawal_000_approvals")))
         inventories = tuple(tuple(sorted({complete._role(operation, name).index_id for name in names}
                                          | (write_ids if with_writes else set())))
-            for names in (complete.REGISTRATION_BASE_ROLES, complete.REGISTRATION_ROLES)
+            for names in families
             for with_writes in (False, True))
     else:
         inventories = (required_index_ids(operation, arguments=arguments, queries=queries,

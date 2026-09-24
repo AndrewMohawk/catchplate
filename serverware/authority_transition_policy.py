@@ -429,6 +429,9 @@ _WEBAUTHN_TRUST_STAGE_FIELDS = frozenset(
         "payload_digest",
         "actor_id",
         "withdrawn_credential_ids",
+        "query_hints",
+        "reason",
+        "approval_id",
         "audit_event",
     }
 )

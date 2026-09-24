@@ -47,6 +47,11 @@ to registration/completion effects. Registration's private acquisition now joins
 actual reads, independently expected primary/counted roots, capacity finalization
 and write proofs. These are source integrations, not durable evidence admission
 or a configured operation owner; the four registry/startup gaps remain.
+Source `.77` supplies aggregate trust staging's actual manifest, complete-query
+family and mutation adapter, plus private pinned-assertion/read/effect/capacity/
+write-proof acquisition. It preserves whole-aggregate limits and fails query
+overflow before business/range SQL. This is not candidate-policy signature admission, a configured
+service owner, signed-plan/executor activation or a startup repair.
 
 The [registry-free request commitment](authority-request-commitment.md) separates
 the actual hash/intent workers needed by the inactive revocation verifier from

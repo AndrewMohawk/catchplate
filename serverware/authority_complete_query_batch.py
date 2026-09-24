@@ -1,8 +1,8 @@
 """Source-bound complete-query verification, not operation authority.
 
-Only the fixed explicit credential-revocation and registration families are
-admitted. Every raw input is detached before any hashing constructor or verifier
-runs. One genuine global primary membership evaluation owns the rows used by
+Only the fixed explicit credential-revocation, registration and aggregate
+trust-stage families are admitted. Every raw input is detached before any
+hashing constructor or verifier runs. One genuine global primary membership evaluation owns the rows used by
 the genuine joins; repeated proof work includes empty queries and shared heads.
 
 The reader-sized frontier profile is intentionally narrower than the generic
@@ -277,9 +277,16 @@ def _raw_document(*, operation, arguments, cutoff_us, queries,
             or type(before_proofs) is not tuple or len(before_proofs) != len(selected_rows)):
         raise CompleteQueryBatchError("complete query batch raw inventory exceeds its source bound")
     raw_queries = []
+    maximum_rows = 0
     for query in queries:
         if type(query) is not complete.CompleteIndexQuery:
             raise CompleteQueryBatchError("complete query batch requires exact source declarations")
+        if (type(query.maximum_rows) is not int
+                or not 1 <= query.maximum_rows <= family["max_frontier_rows"]):
+            raise CompleteQueryBatchError("complete query row ceiling exceeds its actual family")
+        maximum_rows += query.maximum_rows
+        if maximum_rows > spec["maximumBusinessQueryRows"]:
+            raise CompleteQueryBatchError("complete query aggregate row ceilings exceed the business allowance")
         items = query.selector_items
         if (type(items) is not tuple or len(items) > 2
                 or any(type(item) is not tuple or len(item) != 2 for item in items)):
@@ -293,11 +300,21 @@ def _raw_document(*, operation, arguments, cutoff_us, queries,
             raise CompleteQueryBatchError("complete query read head has an unexpected exact type")
         raw_heads.append({"indexId": head.index_id, "indexRevision": head.index_revision,
                           "rootDigest": head.index_root.digest, "leafCount": head.index_root.count})
+    # Stage may have many fixed roles. Reject necessarily excessive whole-
+    # graph normalization before allocating any frontier record dictionaries.
+    # This is not a per-role allowance: every record will still be copied and
+    # verified on the one original ledger below. No successful work is waived.
+    records_total = 0
+    for query, proof in zip(queries, query_frontiers):
+        if (type(proof) is not CompleteQueryFrontier or type(proof.frontier) is not tuple
+                or len(proof.frontier) > MAX_OUTSIDE_PREFIXES + query.maximum_rows):
+            raise CompleteQueryBatchError("complete query frontier exceeds its reader-sized inventory")
+        records_total += len(proof.frontier)
+        # A normalized record has one object plus four keys/four values.
+        if records_total > MAX_TOTAL_JSON_NODES // 9:
+            raise CompleteQueryBatchError("complete query frontier normalization exceeds the global node bound")
     raw_frontiers = []
     for proof in query_frontiers:
-        if (type(proof) is not CompleteQueryFrontier or type(proof.frontier) is not tuple
-                or len(proof.frontier) > MAX_OUTSIDE_PREFIXES + family["max_frontier_rows"]):
-            raise CompleteQueryBatchError("complete query frontier exceeds its reader-sized inventory")
         records = []
         for item in proof.frontier:
             if type(item) is IndexLeaf:
@@ -332,7 +349,7 @@ def _selected_envelopes(owned: dict[str, Any], ledger: _Ledger) -> tuple[int, in
         if (type(item) is not dict or len(item) != len(_SELECTED_FIELDS)
                 or set(item) != _SELECTED_FIELDS or item["contractSelector"] is not None):
             raise CompleteQueryBatchError("complete query global selection wrapper or selector tag is invalid")
-        # Both admitted families have no scalar contract selectors. Their
+        # These admitted families have no scalar contract selectors. Their
         # actual global wrappers and the local joins require None.
         # Do not erase a tag here: any future complete-query family with source
         # selectors needs an explicit global/local metadata admission contract.
@@ -419,7 +436,8 @@ def _verify(owned: dict[str, Any], ledger: _Ledger,
     # Cold primary roots; Q initial declarations and 2Q binding constructors;
     # H profiles and H empty roots; Q anchors; one source manifest. This is
     # still 101 for revocation. Registration uses its exact ordinary/OIDC
-    # family, not six fabricated queries or a reset proof allowance.
+    # family. Stage uses Q=5+4W and its exact 5/8 head union, with no per-child
+    # reset or discount for repeated heads or overlapping primary selections.
     context_hashes = 66 + 4 * family["query_count"] + 2 * family["head_count"] + 1
     ledger.charge(hashes=context_hashes)
     initial_queries = tuple(complete.CompleteIndexQuery(
@@ -548,6 +566,8 @@ def verify_complete_query_batch(
     family query/frontier pairs retain supplied program order; heads are the
     sorted unique source union. Revocation shares a head between session roles.
     Registration's OIDC mode requires both additional user-history/sibling roles.
+    Stage retains its five base roles and four per sorted withdrawal, while
+    every range and its shared unions remain inside the one source allowance.
 
     The optional exact framework-counter address earns only one extra selected
     slot; its initialized/present state is not validated here. Other point rows

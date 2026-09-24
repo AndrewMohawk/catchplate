@@ -1,8 +1,8 @@
 """One source-bound complete-read and counted-write computation.
 
-This composes the fixed revocation or registration query family with genuine
-primary and counted write evaluation under one private ledger. All caller
-evidence is owned before hashing; successful observations are not inputs.
+This composes the fixed revocation, registration or aggregate trust-stage
+query family with genuine primary and counted write evaluation under one
+private ledger. All caller evidence is owned before hashing; successful observations are not inputs.
 Source mutation templates restrict the proposed write shapes, not their intent.
 
 No kernel, audit-capacity admission, SQL, trusted clock, population genesis,
@@ -165,6 +165,18 @@ def _raw_document(*, operation, arguments, cutoff_us, queries,
             or type(queries) is not tuple or len(queries) != family["query_count"]
             or any(type(item) is not complete.CompleteIndexQuery for item in queries)):
         raise CompleteReadWriteError("complete read/write raw inventory exceeds its source bound")
+    # The aggregate family cannot turn repeated per-credential ranges into
+    # independent business allowances. The complete read phase will genuinely
+    # rebind every declaration; this cheap check only rejects impossible raw
+    # programs before constructing their potentially large frontier graph.
+    maximum_rows = 0
+    for query in queries:
+        if (type(query.maximum_rows) is not int
+                or not 1 <= query.maximum_rows <= family["max_frontier_rows"]):
+            raise CompleteReadWriteError("complete read/write query ceiling exceeds its actual family")
+        maximum_rows += query.maximum_rows
+        if maximum_rows > spec["maximumBusinessQueryRows"]:
+            raise CompleteReadWriteError("complete read/write aggregate query ceilings exceed the business allowance")
     _frontier_preflight(query_frontiers, write_frontiers, _source_sizes(spec)[2], family=family)
     raw_heads = []
     for head in counted_before_heads:

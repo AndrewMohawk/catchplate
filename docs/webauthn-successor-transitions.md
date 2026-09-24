@@ -1,6 +1,6 @@
 # Successor WebAuthn transition implementation
 
-Status: source `.76`, implementation only. These helpers do not register the
+Status: source `.77`, implementation only. These helpers do not register the
 missing kernels or repair service startup. They are unbuilt and unexecuted.
 The existing registry, query-proof, configuration and release gates remain.
 
@@ -142,14 +142,54 @@ bounded and native calls guard the meter; JSON/CBOR/X.509/EC/RSA internals and n
 allocations are **not** represented by invented hash/byte/node charges. These
 changes do not establish whole-process CPU, memory or deadline guarantees.
 
+## Aggregate trust-stage integration
+
+The stage manifest now represents the aggregate's real read/write tables and
+narrow INSERT/UPDATE templates, bound assertion receipt and approval policy.
+It replaces the obsolete four-row/one-write declaration with the already
+defined aggregate ceiling: 192 business selections, 136 final mutations and
+2,048 semantic work units, plus the one common capacity row/mutation and two
+framework work units. Global physical/proof limits do not increase.
+
+Five complete base ranges prove the live trusted-credential population, live
+global registration challenges, absence of pending publications, absence of
+candidate-bundle history, and absence of the candidate generation or a newer
+one. Each sorted withdrawal adds four ranges: pending and active bound sessions,
+active grants and approved control-plane approvals. Empty ranges still require
+proofs. The query family has five read heads without withdrawals and eight
+with withdrawals; the acquisition also retains all eleven potential write heads.
+
+The exact `query_hints` object contains `live_credential_ids`,
+`registration_challenge_ids` and `withdrawals`; each withdrawal contains its
+`credential_record_id`, `oidc_session_ids`, `approval_grant_ids` and
+`control_plane_approval_ids`. IDs are sorted and unique. Hints bound overflow
+and enter the request's business intent; actual complete proofs and prestate
+population comparisons prevent them from authorizing omissions. The existing
+conservative sum of every query's maximum rows, including both session statuses
+and exact-row scaffolding, must still fit 192. Distinct-address shared limits
+are additional checks, not fresh per-credential allowances.
+
+The actual query adapter binds signer/challenge, selected high-water/publication
+predecessor, actor and optional approver, candidate publication absence and all
+deterministic audit absences. Its mutation adapter renders the merged aggregate
+through the source templates. A private planner acquisition now verifies the
+pinned, stage-bound assertion receipt before SQL, joins observed primary and
+counted roots to independent expectations, then performs these reads, effects,
+capacity finalization and real write-proof acquisition on shared ledgers. The
+database cutoff is checked against both admitted time and assertion expiry;
+clock callbacks preserve the meter on success and failure. This clock guard
+also covers the existing private registration/revocation reads.
+
 ## Admission and execution still required
 
 No durable evidence producer INSERT/root-admission path or independently
 configured registration acquisition owner is established by these helpers.
 Caller-supplied current roots, signer pins, request authority and transaction
 ownership remain explicit prerequisites, not values authenticated by copying.
-Trust staging still needs its complete successor query/manifest integration;
-completion needs its independently admitted committed-stage/installation owner.
+Trust staging still needs its independently configured request/candidate-policy
+owner and signed-plan/execution integration; its supplied candidate roots are
+not authenticated by copying or classifying them. Completion needs its
+independently admitted committed-stage/installation owner.
 Registry and public operation admission, authorized atomic execution, terminal
 witnessing and recovery remain pending. The generic evidence signer and ordinary
 row/acquisition results cannot fill those gaps or repair service startup.

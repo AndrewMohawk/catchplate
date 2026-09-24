@@ -2,7 +2,9 @@
 
 The explicit-revocation family retains its six roles unchanged. Successor
 registration has two unconditional roles and two additional OIDC-first-
-enrollment roles. Arguments and cutoff are supplied intent/time, not facts.
+enrollment roles. Trust staging has five fixed ranges and four dependent
+ranges per declared withdrawal, all under one unchanged 192-row closure.
+Arguments and cutoff are supplied intent/time, not facts.
 Binding proves neither a complete index population nor a current root, trusted
 clock, SQL result, authorized operation or working kernel. Actual proof and
 operation admission remain mandatory. Legacy QueryProgram/v1 is unchanged.
@@ -25,6 +27,8 @@ ROLE_SCHEMA = "serverware.policyAuthorityCompleteIndexQueryRole/v1"
 PROOF_PRIMITIVE = "authenticated-complete-index-range"
 OPERATION = "webauthn.credential.revoke"
 REGISTRATION_OPERATION = "webauthn.registration.finalize"
+STAGE_OPERATION = "webauthn.trust.stage"
+STAGE_MAX_ROWS = 192
 CASCADE_MAX = 32
 MAX_ARGUMENT_FIELDS = 64
 MAX_SOURCE_ID_BYTES = 1024
@@ -47,9 +51,16 @@ class _Role:
     hint_field: str | None
     shared_group: str
     status: str | None = None
+    row_ceiling: int | None = None
 
     @property
     def selector_names(self) -> tuple[str, ...]:
+        if self.name == "live_trusted_credentials":
+            return ()
+        if self.name == "candidate_bundle_history":
+            return ("bundle_digest",)
+        if self.name == "candidate_or_newer_publications":
+            return ("minimum_rollback_epoch", "minimum_sequence")
         if self.name == "credential_id_history":
             return ("credential_id",)
         if self.name == "user_credential_history":
@@ -65,6 +76,8 @@ class _Role:
 
     @property
     def maximum_rows(self) -> int:
+        if self.row_ceiling is not None:
+            return self.row_ceiling
         if self.name == "user_registration_challenges":
             return 1 + CASCADE_MAX
         return 1 if self.hint_field is None else CASCADE_MAX
@@ -97,6 +110,23 @@ _REGISTRATION_ROLES = (
 )
 REGISTRATION_BASE_ROLES = ("credential_id_history", "pending_trust_publications")
 REGISTRATION_ROLES = REGISTRATION_BASE_ROLES + ("user_credential_history", "user_registration_challenges")
+_STAGE_BASE_ROLES = (
+    _Role("live_trusted_credentials", "webauthn_credentials", "webauthn_credential_live_trust",
+          "live_credential_ids", "stage_live_credentials", row_ceiling=STAGE_MAX_ROWS),
+    _Role("global_registration_challenges", "webauthn_challenges", "webauthn_registration_unused_global",
+          "registration_challenge_ids", "stage_registration_challenges", row_ceiling=STAGE_MAX_ROWS),
+    _Role("pending_trust_publications", "webauthn_trust_publications", "webauthn_publication_status",
+          None, "stage_pending_publications", "pending"),
+    _Role("candidate_bundle_history", "webauthn_trust_publications", "webauthn_publication_bundle_digest",
+          None, "stage_candidate_bundle"),
+    _Role("candidate_or_newer_publications", "webauthn_trust_publications", "webauthn_publication_generation",
+          None, "stage_candidate_generation"),
+)
+STAGE_BASE_ROLES = tuple(role.name for role in _STAGE_BASE_ROLES)
+STAGE_WITHDRAWAL_ROLES = ("sessions_pending_webauthn", "sessions_active", "grants", "approvals")
+_STAGE_HINT_FIELDS = frozenset({"live_credential_ids", "registration_challenge_ids", "withdrawals"})
+_STAGE_WITHDRAWAL_FIELDS = frozenset({"credential_record_id", "oidc_session_ids",
+    "approval_grant_ids", "control_plane_approval_ids"})
 _HINT_FIELDS = ("oidc_session_ids", "approval_grant_ids",
                 "control_plane_approval_ids", "registration_challenge_ids")
 
@@ -108,12 +138,34 @@ def _operation(value: Any) -> None:
 
 def _role(operation: str, role: Any) -> _Role:
     _operation(operation)
-    if operation not in (OPERATION, REGISTRATION_OPERATION) or type(role) is not str or not 1 <= len(role) <= 128:
+    if operation not in (OPERATION, REGISTRATION_OPERATION, STAGE_OPERATION) or type(role) is not str or not 1 <= len(role) <= 128:
         raise CompleteQueryError("complete query role is not declared for its operation")
+    if operation == STAGE_OPERATION:
+        for candidate in _STAGE_BASE_ROLES:
+            if role == candidate.name:
+                return candidate
+        ordinal, suffix = _stage_role_parts(role)
+        source = _ROLES[STAGE_WITHDRAWAL_ROLES.index(suffix)]
+        group = "oidc_sessions" if suffix in STAGE_WITHDRAWAL_ROLES[:2] else source.shared_group
+        return _Role(role, source.table, source.index_id, source.hint_field,
+            f"stage_withdrawal_{ordinal:03d}_{group}", source.status, STAGE_MAX_ROWS)
     for candidate in (_ROLES if operation == OPERATION else _REGISTRATION_ROLES):
         if role == candidate.name:
             return candidate
     raise CompleteQueryError("complete query role is not declared for its operation")
+
+
+def _stage_role_parts(role: str) -> tuple[int, str]:
+    """Closed source ordinal metadata; actual argument membership is rebound."""
+    if (type(role) is not str or not 16 <= len(role) <= 128
+            or role[:11] != "withdrawal_" or role[14:15] != "_"
+            or len(role[11:14]) != 3 or any(char not in "0123456789" for char in role[11:14])
+            or role[15:] not in STAGE_WITHDRAWAL_ROLES):
+        raise CompleteQueryError("trust-stage dependent role is not source declared")
+    ordinal = int(role[11:14])
+    if ordinal >= STAGE_MAX_ROWS:
+        raise CompleteQueryError("trust-stage dependent ordinal exceeds the source bound")
+    return ordinal, role[15:]
 
 
 def _source_id(value: Any, *, work: _ValidationWork | None = None) -> str:
@@ -208,6 +260,11 @@ class CompleteIndexQuery:
             value = item[1]
             if name == "expires_after_us":
                 _cutoff(value)
+            elif self.operation == STAGE_OPERATION and name in ("minimum_rollback_epoch", "minimum_sequence"):
+                _stage_integer(value, minimum=1 if name == "minimum_sequence" else 0)
+            elif self.operation == STAGE_OPERATION and name == "bundle_digest":
+                _source_id(value)
+                _stage_digest(value)
             elif name == "status":
                 if type(value) is not str or value != declared.status:
                     raise CompleteQueryError("complete query status differs from its source role")
@@ -367,10 +424,117 @@ def _registration_binding_inputs(arguments: Any, cutoff_us: Any, *,
     return credential_id, user_id, oidc, len(siblings), _cutoff(cutoff_us)
 
 
-def family_roles(operation: str, *, arguments: Any) -> tuple[str, ...]:
-    """Fixed role names derived from actual mode, not a caller-selected family.
+def _stage_object(value: Any, label: str, *, fields: frozenset[str] | None = None) -> dict:
+    if (type(value) is not dict or len(value) > MAX_ARGUMENT_FIELDS
+            or any(type(name) is not str or len(name) > 64 for name in value)
+            or fields is not None and set(value) != fields):
+        raise CompleteQueryError(f"trust-stage query {label} is not a closed bounded object")
+    return value
 
-    This is bounded mode metadata only: no encoding, hashing, hint sorting or
+
+def _stage_integer(value: Any, *, minimum: int) -> int:
+    if type(value) is not int or not minimum <= value <= _I64_MAX:
+        raise CompleteQueryError("trust-stage generation selector is not source bounded")
+    return value
+
+
+def _stage_digest(value: Any, *, work: _ValidationWork | None = None) -> str:
+    if work is not None and type(value) is str and len(value) == 71:
+        work.prepare_scan(value)
+    if (type(value) is not str or len(value) != 71 or value[:7] != "sha256:"
+            or any(char not in "0123456789abcdef" for char in value[7:])):
+        raise CompleteQueryError("trust-stage candidate bundle digest is not canonical")
+    return value
+
+
+def _stage_withdrawal_count(arguments: Any) -> int:
+    """Hash/encoding-free family metadata, not full hint or scope admission."""
+    arguments = _stage_object(arguments, "arguments")
+    hints = _stage_object(arguments.get("query_hints"), "hints", fields=_STAGE_HINT_FIELDS)
+    withdrawals = hints["withdrawals"]
+    if (type(withdrawals) is not list or len(withdrawals) > STAGE_MAX_ROWS
+            or len(STAGE_BASE_ROLES) + len(STAGE_WITHDRAWAL_ROLES) * len(withdrawals) > STAGE_MAX_ROWS):
+        raise CompleteQueryError("trust-stage query count exceeds the whole-operation bound")
+    return len(withdrawals)
+
+
+def _stage_family_roles(count: int) -> tuple[str, ...]:
+    return STAGE_BASE_ROLES + tuple(f"withdrawal_{ordinal:03d}_{suffix}"
+        for ordinal in range(count) for suffix in STAGE_WITHDRAWAL_ROLES)
+
+
+def _stage_ids(value: Any, *, work: _ValidationWork | None = None) -> tuple[str, ...]:
+    if type(value) is not list or len(value) > STAGE_MAX_ROWS:
+        raise CompleteQueryError("trust-stage query hint list exceeds the shared bound")
+    if work is not None:
+        work.prepare_copy(value)
+    owned = tuple(_source_id(item, work=work) for item in value)
+    if work is not None:
+        for _ in range(3):
+            work.prepare_copy(owned)
+    ordered = tuple(sorted(set(owned)))
+    if work is not None:
+        work.prepare_comparison(owned, ordered)
+    if owned != ordered:
+        raise CompleteQueryError("trust-stage query hints are not sorted unique source IDs")
+    return owned
+
+
+def _stage_binding_inputs(arguments: Any, cutoff_us: Any, *, work: _ValidationWork | None = None):
+    """Own referenced scalar/list inputs; hints never prove any population.
+
+    One aggregate hint bound counts live credentials, challenges and all
+    dependent hints. Withdrawn credentials must already occur in the live
+    hints. The actual complete/scaffold program separately retains its existing
+    conservative sum(maximum_rows) cap, including both session-status maxima.
+    """
+    count = _stage_withdrawal_count(arguments)
+    hints = arguments["query_hints"]
+    bundle = _stage_digest(arguments.get("bundle_digest"), work=work)
+    epoch = _stage_integer(arguments.get("rollback_epoch"), minimum=0)
+    sequence = _stage_integer(arguments.get("sequence"), minimum=1)
+    live = _stage_ids(hints["live_credential_ids"], work=work)
+    challenges = _stage_ids(hints["registration_challenge_ids"], work=work)
+    withdrawn = _stage_ids(arguments.get("withdrawn_credential_ids"), work=work)
+    if len(withdrawn) != count:
+        raise CompleteQueryError("trust-stage withdrawal hints differ from the declared withdrawal count")
+    if work is not None:
+        work.prepare_copy(live)
+    live_set = set(live)
+    if work is not None:
+        work.prepare_scan(withdrawn)
+    if any(identifier not in live_set for identifier in withdrawn):
+        raise CompleteQueryError("trust-stage withdrawals escape the live credential hints")
+    total = len(live) + len(challenges)
+    if total > STAGE_MAX_ROWS:
+        raise CompleteQueryError("trust-stage hints exceed the whole-operation row bound")
+    if work is not None:
+        work.prepare_copy(hints["withdrawals"])
+    withdrawals = []
+    for ordinal, raw in enumerate(hints["withdrawals"]):
+        item = _stage_object(raw, "withdrawal", fields=_STAGE_WITHDRAWAL_FIELDS)
+        identifier = _source_id(item["credential_record_id"], work=work)
+        if work is not None:
+            work.prepare_comparison(identifier, withdrawn[ordinal])
+        if identifier != withdrawn[ordinal]:
+            raise CompleteQueryError("trust-stage withdrawal records are not the exact sorted declared IDs")
+        sizes = {}
+        for name in _HINT_FIELDS[:3]:
+            ids = _stage_ids(item[name], work=work)
+            if len(ids) > STAGE_MAX_ROWS - total:
+                raise CompleteQueryError("trust-stage dependent hints exceed the aggregate row bound")
+            total += len(ids)
+            sizes[name] = len(ids)
+        withdrawals.append((identifier, sizes))
+    if work is not None:
+        work.prepare_copy(withdrawals)
+    return bundle, epoch, sequence, len(live), len(challenges), tuple(withdrawals), _cutoff(cutoff_us)
+
+
+def family_roles(operation: str, *, arguments: Any) -> tuple[str, ...]:
+    """Fixed names from actual mode/count, not a caller-selected role family.
+
+    This is bounded mode/count metadata only: no encoding, hashing, hint sorting or
     full argument admission. Actual scope/user/sibling/credential checks remain
     mandatory in binding and rebinding before SQL or proof verification. The
     unchanged revocation family's existing validator still checks its inputs.
@@ -378,6 +542,8 @@ def family_roles(operation: str, *, arguments: Any) -> tuple[str, ...]:
     _operation(operation)
     if operation == OPERATION:
         return ROLES
+    if operation == STAGE_OPERATION:
+        return _stage_family_roles(_stage_withdrawal_count(arguments))
     if operation == REGISTRATION_OPERATION:
         arguments = _registration_object(arguments, "arguments")
         intent = _registration_object(arguments.get("semantic_intent"), "intent")
@@ -399,6 +565,9 @@ def family_limits(operation: str, *, arguments: Any) -> dict[str, int]:
     roles = family_roles(operation, arguments=arguments)
     if operation == OPERATION:
         return {"query_count": 6, "head_count": 5, "max_frontier_rows": CASCADE_MAX}
+    if operation == STAGE_OPERATION:
+        return {"query_count": len(roles), "head_count": 5 if len(roles) == 5 else 8,
+            "max_frontier_rows": STAGE_MAX_ROWS}
     count = len(roles)
     return {"query_count": count, "head_count": count,
         "max_frontier_rows": 1 + CASCADE_MAX if count == 4 else 1}
@@ -420,6 +589,8 @@ def _prepare_constructor_work(
             if name != "status":
                 work.prepare_utf8(value)
             if index_id == "webauthn_credential_id" and name == "credential_id":
+                work.prepare_scan(value)
+            if index_id == "webauthn_publication_bundle_digest" and name == "bundle_digest":
                 work.prepare_scan(value)
     work.prepare_copy(selector_items)
     work.prepare_copy(selector_items)
@@ -466,9 +637,40 @@ def _bind_registration(declared: _Role, inputs: tuple[str, str, bool, int, int],
     return CompleteIndexQuery(REGISTRATION_OPERATION, declared.name, selector, maximum)
 
 
+def _bind_stage(declared: _Role, inputs, *, work: _ValidationWork | None = None) -> CompleteIndexQuery:
+    bundle, epoch, sequence, live_count, challenge_count, withdrawals, cutoff_us = inputs
+    maximum = 1
+    if declared.name == "live_trusted_credentials":
+        selector = ()
+        maximum = max(1, live_count)
+    elif declared.name == "global_registration_challenges":
+        selector = (("expires_after_us", cutoff_us),)
+        maximum = max(1, challenge_count)
+    elif declared.name == "pending_trust_publications":
+        selector = (("status", "pending"),)
+    elif declared.name == "candidate_bundle_history":
+        selector = (("bundle_digest", bundle),)
+    elif declared.name == "candidate_or_newer_publications":
+        selector = (("minimum_rollback_epoch", epoch), ("minimum_sequence", sequence))
+    else:
+        ordinal, _ = _stage_role_parts(declared.name)
+        if ordinal >= len(withdrawals):
+            raise CompleteQueryError("trust-stage dependent role has no actual withdrawal")
+        identifier, sizes = withdrawals[ordinal]
+        selector = (("credential_record_id", identifier),)
+        if declared.status is not None:
+            selector += (("status", declared.status),)
+        maximum = max(1, sizes[declared.hint_field])
+    if work is not None:
+        _prepare_constructor_work(declared.index_id, selector, work)
+    return CompleteIndexQuery(STAGE_OPERATION, declared.name, selector, maximum)
+
+
 def bind_query(operation: str, role: str, *, arguments: Any, cutoff_us: int) -> CompleteIndexQuery:
     """Derive a fixed role from supplied intent/time, not caller index claims."""
     declared = _role(operation, role)
+    if operation == STAGE_OPERATION:
+        return _bind_stage(declared, _stage_binding_inputs(arguments, cutoff_us))
     if operation == REGISTRATION_OPERATION:
         return _bind_registration(declared, _registration_binding_inputs(arguments, cutoff_us))
     return _bind(operation, declared, _binding_inputs(arguments, cutoff_us))
@@ -480,6 +682,8 @@ def _bind_query(
 ) -> CompleteIndexQuery:
     """Private metered route through the same binding and constructor body."""
     declared = _role(operation, role)
+    if operation == STAGE_OPERATION:
+        return _bind_stage(declared, _stage_binding_inputs(arguments, cutoff_us, work=work), work=work)
     if operation == REGISTRATION_OPERATION:
         return _bind_registration(declared,
             _registration_binding_inputs(arguments, cutoff_us, work=work), work=work)
@@ -495,6 +699,18 @@ def validate_bindings(operation: str, complete_queries: tuple[CompleteIndexQuery
     enforce each shared union ceiling and the existing operation-wide bounds.
     """
     _operation(operation)
+    if operation == STAGE_OPERATION:
+        inputs = _stage_binding_inputs(arguments, cutoff_us)
+        roles = _stage_family_roles(len(inputs[5]))
+        if type(complete_queries) is not tuple or len(complete_queries) != len(roles):
+            raise CompleteQueryError("trust-stage complete query inventory differs from actual withdrawals")
+        owned = tuple(snapshot_query(query) for query in complete_queries)
+        if tuple(query.role for query in owned) != roles:
+            raise CompleteQueryError("trust-stage complete roles are missing, duplicated or out of source order")
+        for query in owned:
+            if query != _bind_stage(_role(operation, query.role), inputs):
+                raise CompleteQueryError("trust-stage complete query differs from its actual intent or cutoff")
+        return owned
     if operation == REGISTRATION_OPERATION:
         inputs = _registration_binding_inputs(arguments, cutoff_us)
         roles = REGISTRATION_ROLES if inputs[2] else REGISTRATION_BASE_ROLES
@@ -522,6 +738,8 @@ def validate_bindings(operation: str, complete_queries: tuple[CompleteIndexQuery
 def role_manifest(operation: str) -> list[dict[str, Any]]:
     """Fresh fixed declarations for source commitment, not runtime activation."""
     _operation(operation)
+    if operation == STAGE_OPERATION:
+        return _stage_role_manifest()
     if operation == REGISTRATION_OPERATION:
         return _registration_role_manifest()
     if operation != OPERATION:
@@ -586,4 +804,79 @@ def _registration_role_manifest() -> list[dict[str, Any]]:
             "proofPrimitive": PROOF_PRIMITIVE, "workUnits": 1,
             "order": "fixed-index-key", "overflowDisposition": "fail-closed",
         })
+    return result
+
+
+def _stage_role_manifest() -> list[dict[str, Any]]:
+    """Five literals plus four closed ordinal templates, not an open DSL.
+
+    Runtime roles are expanded only from actual sorted withdrawal records.
+    Hint admission, exact rebinding, conservative complete/scaffold row sums
+    and actual distinct-address union checks remain independently mandatory.
+    """
+    result = []
+    for declared in _STAGE_BASE_ROLES:
+        if declared.name == "live_trusted_credentials":
+            sources = {}
+        elif declared.name == "global_registration_challenges":
+            sources = {"expires_after_us": "supplied-cutoff-microseconds"}
+        elif declared.name == "pending_trust_publications":
+            sources = {"status": {"constant": "pending"}}
+        elif declared.name == "candidate_bundle_history":
+            sources = {"bundle_digest": "arguments.bundle_digest"}
+        else:
+            sources = {"minimum_rollback_epoch": "arguments.rollback_epoch",
+                "minimum_sequence": "arguments.sequence"}
+        result.append({
+            "schema": ROLE_SCHEMA, "querySchema": QUERY_SCHEMA,
+            "operation": STAGE_OPERATION, "role": declared.name,
+            "queryId": f"serverware.policyAuthorityQuery/{STAGE_OPERATION}/{declared.name}/{declared.table}/v1",
+            "table": declared.table, "indexId": declared.index_id,
+            "projectionDigest": projection.profile_for(declared.index_id).projection_digest,
+            "selectorSources": sources, "requiredSource": {"queryHintsRequired": True},
+            "rowBound": ({"rule": "constant", "maximum": 1} if declared.hint_field is None else
+                {"rule": "max(1,length-of-hint-list)",
+                 "hintField": "arguments.query_hints." + declared.hint_field, "maximum": STAGE_MAX_ROWS}),
+            "sharedBudget": {"group": declared.shared_group, "maximumRows": declared.maximum_rows,
+                "measure": "distinct-primary-address-union"},
+            "proofPrimitive": PROOF_PRIMITIVE, "workUnits": 1,
+            "order": "fixed-index-key", "overflowDisposition": "fail-closed",
+        })
+    for suffix in STAGE_WITHDRAWAL_ROLES:
+        declared = _role(STAGE_OPERATION, "withdrawal_000_" + suffix)
+        pattern = "withdrawal_{ordinal:03d}_" + suffix
+        sources = {"credential_record_id": "arguments.query_hints.withdrawals[ordinal].credential_record_id"}
+        if declared.status is not None:
+            sources["status"] = {"constant": declared.status}
+        result.append({
+            "schema": ROLE_SCHEMA, "querySchema": QUERY_SCHEMA,
+            "operation": STAGE_OPERATION, "rolePattern": pattern,
+            "queryIdPattern": f"serverware.policyAuthorityQuery/{STAGE_OPERATION}/{pattern}/{declared.table}/v1",
+            "ordinal": {"minimum": 0, "maximum": STAGE_MAX_ROWS - 1, "width": 3,
+                "source": "arguments.query_hints.withdrawals", "order": "credential_record_id-ascending-unique"},
+            "table": declared.table, "indexId": declared.index_id,
+            "projectionDigest": projection.profile_for(declared.index_id).projection_digest,
+            "selectorSources": sources,
+            "requiredSource": {"withdrawals": "exact-sorted-match-arguments.withdrawn_credential_ids",
+                "withdrawnCredentials": "subset-of-live_credential_ids"},
+            "rowBound": {"rule": "max(1,length-of-hint-list)", "maximum": STAGE_MAX_ROWS,
+                "hintField": "arguments.query_hints.withdrawals[ordinal]." + declared.hint_field},
+            "sharedBudget": {"groupPattern": declared.shared_group.replace("000", "{ordinal:03d}", 1),
+                "maximumRows": STAGE_MAX_ROWS, "measure": "distinct-primary-address-union"},
+            "proofPrimitive": PROOF_PRIMITIVE, "workUnits": 1,
+            "order": "fixed-index-key", "overflowDisposition": "fail-closed",
+        })
+    # Repeated source metadata is deliberately fixed-size: no argument graph,
+    # input-dependent role expansion or proof work is performed by a manifest.
+    for item in result:
+        item["hintAdmission"] = {"fields": sorted(_STAGE_HINT_FIELDS),
+            "withdrawalFields": sorted(_STAGE_WITHDRAWAL_FIELDS),
+            "ids": "exact-sorted-unique/source-UTF8-1024/no-controls-or-surrounding-whitespace",
+            "withdrawalJoin": "exact-sorted-match-arguments.withdrawn_credential_ids/subset-of-live_credential_ids"}
+        item["operationWideBudget"] = {"maximumRows": STAGE_MAX_ROWS,
+            "maximumQueryCount": STAGE_MAX_ROWS,
+            "hintMeasure": "live+registration+all-dependent-list-lengths",
+            "declarationMeasure": "sum(maximum_rows)-including-both-session-statuses-and-scaffold",
+            "resultMeasure": "distinct-primary-address-union-including-scaffold",
+            "overflowDisposition": "reject-entire-operation"}
     return result

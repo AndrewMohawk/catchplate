@@ -106,6 +106,10 @@ PLANNER_SIGNING_KEY_ENVIRONMENTS = {
     "SERVERWARE_POLICY_AUTHORITY_PLANNER_SIGNING_KEY_FD",
     "SERVERWARE_POLICY_AUTHORITY_PLANNER_SIGNING_KEY_PATH",
 }
+PLANNER_WRITER_SIGNING_KEY_ENVIRONMENTS = {
+    "SERVERWARE_POLICY_AUTHORITY_PLANNER_WRITER_SIGNING_KEY_FD",
+    "SERVERWARE_POLICY_AUTHORITY_PLANNER_WRITER_SIGNING_KEY_PATH",
+}
 WITNESS_REQUEST_SCHEMA_V2 = (
     "serverware.policyAuthorityReplayWitnessRequest/v2"
 )
@@ -1471,6 +1475,13 @@ class MeasuredConfiguration:
         planner_writer = roles["planner-writer"]
         issuer = roles["issuer"]
         executor = roles["executor"]
+        if planner_writer["responseSigningSpkiDigest"] in {
+            roles[name]["responseSigningSpkiDigest"]
+            for name in ("verifier", "planner", "issuer", "executor")
+        }:
+            raise AuthorityServiceError(
+                "planner-writer response signing key is not role-separated"
+            )
         runtime_identity = (
             int(self.payload.get("runtimeUid", -1)),
             int(self.payload.get("runtimeGid", -1)),
@@ -2434,6 +2445,8 @@ class AuthorityRuntimeClient:
             and (
                 name in PRIVILEGED_DSN_ENVIRONMENTS
                 or name in VERIFIER_SIGNING_KEY_ENVIRONMENTS
+                or name in PLANNER_SIGNING_KEY_ENVIRONMENTS
+                or name in PLANNER_WRITER_SIGNING_KEY_ENVIRONMENTS
                 or name in RELEASE_CONSUMER_KEY_ENVIRONMENTS
                 or name in {
                     "SERVERWARE_POLICY_AUTHORITY_CONFIG_FD",
@@ -2945,6 +2958,9 @@ class AuthorityProcess:
                 "authority service OS identity is not exact"
             )
         self.signing_key: Ed25519PrivateKey | None = None
+        # Never make the writer a generic internal-envelope signer. A future
+        # ACK path must bind this separate key to its exact custody protocol.
+        self.writer_response_signing_key: Ed25519PrivateKey | None = None
         launch_descriptors = dict(
             authority_launch_guard.launch_identity_descriptors()
         )
@@ -3059,6 +3075,30 @@ class AuthorityProcess:
                 raise AuthorityServiceError(
                     "planner signing key does not match measured config"
                 )
+        elif role == "planner-writer":
+            from serverware import authority_revocation_writer_signer
+
+            # Hold immutable measured pins before this writer-key load.
+            # No post-read configuration lookup can retarget this signer.
+            response_spki_digest = self.role_config["responseSigningSpkiDigest"]
+            other_response_spki_digests = tuple(
+                configuration.role(name)["responseSigningSpkiDigest"]
+                for name in ("verifier", "planner", "issuer", "executor")
+            )
+            launch_public_key = self.launch_identity_key.public_key()
+            private_value = _read_bounded_descriptor(
+                "SERVERWARE_POLICY_AUTHORITY_PLANNER_WRITER_SIGNING_KEY",
+                maximum=64 * 1024,
+                require_root_owned=True,
+                require_descriptor=True,
+            )
+            self.writer_response_signing_key = (
+                authority_revocation_writer_signer._signer_from_pem(
+                    private_value, response_spki_digest=response_spki_digest,
+                    other_response_spki_digests=other_response_spki_digests,
+                    launch_public_key=launch_public_key,
+                )
+            )
         self._reject_wrong_credentials()
         if authority_launch_guard.launch_assurance().get(
             "trustMode"
@@ -3210,6 +3250,26 @@ class AuthorityProcess:
         ):
             raise AuthorityServiceError(
                 "authority planner signer credential set is not exact"
+            )
+        writer_signing_descriptor = bool(
+            os.environ.get(
+                "SERVERWARE_POLICY_AUTHORITY_PLANNER_WRITER_SIGNING_KEY_FD", ""
+            ).strip()
+        )
+        writer_signing_path = bool(
+            os.environ.get(
+                "SERVERWARE_POLICY_AUTHORITY_PLANNER_WRITER_SIGNING_KEY_PATH", ""
+            ).strip()
+        )
+        if (
+            self.role_name == "planner-writer"
+            and (not writer_signing_descriptor or writer_signing_path)
+        ) or (
+            self.role_name != "planner-writer"
+            and (writer_signing_descriptor or writer_signing_path)
+        ):
+            raise AuthorityServiceError(
+                "authority planner-writer signer credential set is not exact"
             )
 
     def _consume_attestation_release(self) -> dict[str, Any]:
@@ -7426,6 +7486,13 @@ def main(argv: list[str] | None = None) -> int:
     ):
         raise AuthorityServiceError(
             "non-verifier process inherited the verifier signer"
+        )
+    if args.role != "planner-writer" and any(
+        os.environ.get(name, "").strip()
+        for name in PLANNER_WRITER_SIGNING_KEY_ENVIRONMENTS
+    ):
+        raise AuthorityServiceError(
+            "non-writer process inherited the writer response signer"
         )
     configuration = MeasuredConfiguration.load(role=args.role)
     process = AuthorityProcess(role=args.role, configuration=configuration)

@@ -120,8 +120,10 @@ durability, a socket exchange or independently operated production services.
 
 The source now retains original intent, relay and history bytes with their
 retained-plan and reserved-execution links. It does not store signed
-acknowledgment bytes or add response-signing key custody, bounded detached-body
-transport, public dispatch or historical acknowledgment lookup. This private
+acknowledgment bytes or add bounded detached-body transport, public dispatch or
+historical acknowledgment lookup. Source `.66` separately adds a
+[startup response-key binding](authority-revocation-writer-signer.md), not an
+ACK signer invocation or proof of production key custody. This private
 request-custody path is not a complete authenticated RPC retry protocol, and
 its native durability is unverified. The remaining requirements are in the
 [durable integration contract](authority-revocation-writer-commitment.md#durable-integration-still-required).

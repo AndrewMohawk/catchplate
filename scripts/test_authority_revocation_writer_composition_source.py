@@ -354,6 +354,7 @@ class RevocationWriterCompositionSourceTests(unittest.TestCase):
             "SERVERWARE_POLICY_AUTHORITY_ROOT_PUBLIC_KEY_FD",
             "SERVERWARE_POLICY_AUTHORITY_CONFIG_FD",
             "SERVERWARE_POLICY_AUTHORITY_ATTESTATION_FD",
+            "SERVERWARE_POLICY_AUTHORITY_PLANNER_WRITER_SIGNING_KEY_FD",
             "SERVERWARE_POLICY_AUTHORITY_PLANNER_WRITER_POSTGRES_DSN_FD"})''')
         handle = definition(self.process, "handle")
         served = definition(definition(self.service, "AuthorityServer"), "_serve_connection")

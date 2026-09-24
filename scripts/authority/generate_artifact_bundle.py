@@ -205,6 +205,7 @@ ROLE_REQUIREMENTS = {
                 "SERVERWARE_POLICY_AUTHORITY_ROOT_PUBLIC_KEY_FD",
                 "SERVERWARE_POLICY_AUTHORITY_CONFIG_FD",
                 "SERVERWARE_POLICY_AUTHORITY_ATTESTATION_FD",
+                "SERVERWARE_POLICY_AUTHORITY_PLANNER_WRITER_SIGNING_KEY_FD",
                 (
                     "SERVERWARE_POLICY_AUTHORITY_"
                     "PLANNER_WRITER_POSTGRES_DSN_FD"
@@ -768,6 +769,14 @@ def _validate_configuration_document(
                 )
         planner = roles["planner"]
         planner_writer = roles["planner-writer"]
+        if any(
+            planner_writer["responseSigningSpkiDigest"]
+            == roles[other_role]["responseSigningSpkiDigest"]
+            for other_role in ("verifier", "planner", "issuer", "executor")
+        ):
+            raise GeneratorError(
+                "planner-writer response signing key is not distinct"
+            )
         enabled_operations = planner["enabledOperations"]
         if (
             not isinstance(enabled_operations, list)

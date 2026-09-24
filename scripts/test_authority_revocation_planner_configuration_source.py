@@ -128,10 +128,13 @@ class RevocationPlannerConfigurationSourceTests(unittest.TestCase):
             and ast.unparse(node.test) == "role == 'planner'"]
         self.assertEqual(len(branches), 1)
         branch = branches[0]
-        descriptor = call(branch, "_read_bounded_descriptor")
+        # The following writer elif has its own descriptor. Inspect only the
+        # actual planner body while retaining its original parse/SPKI checks.
+        planner_body = ast.Module(body=branch.body, type_ignores=[])
+        descriptor = call(planner_body, "_read_bounded_descriptor")
         self.shape(descriptor, '''_read_bounded_descriptor("SERVERWARE_POLICY_AUTHORITY_PLANNER_SIGNING_KEY",
             maximum=64 * 1024, require_root_owned=True, require_descriptor=True)''')
-        parsed = call(branch, "_load_ed25519_private_key")
+        parsed = call(planner_body, "_load_ed25519_private_key")
         self.shape(parsed, "_load_ed25519_private_key(private_value)")
         checked = [node for node in branch.body if isinstance(node, ast.If)]
         self.assertEqual(len(checked), 1)

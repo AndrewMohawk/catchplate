@@ -124,6 +124,9 @@ and actual atomic retention/reservation. Source `.65` adds immutable
 inside the same common savepoint, including exact retry comparison and both
 real replays. It does not enable dispatch, provide signed acknowledgment
 custody or implement detached-body transport.
+Source `.66` separately loads a [writer-only response key](authority-revocation-writer-signer.md)
+through the exact retained descriptor closure. Its dedicated slot cannot enable
+the generic internal-envelope signer; no ACK creation or release is added.
 Post-plan witness binding, current-root one-use execution and atomic terminal
 publication remain incomplete. The four unfinished WebAuthn authority kernels
 must not be bypassed to make the registry import or tests succeed.

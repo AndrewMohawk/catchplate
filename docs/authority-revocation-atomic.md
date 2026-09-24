@@ -126,6 +126,8 @@ The legacy public atomic API and its retry timestamp behavior above remain
 unchanged; the request suffix additionally requires signed/stored timestamp
 equality. See [request custody](authority-revocation-writer-request-storage.md).
 Serving integration, detached-body transfer, signed acknowledgment custody
-and writer response-key custody remain unfinished. Registry closure and
+and operation-bound response signing remain unfinished. The separate `.66`
+[startup key loader](authority-revocation-writer-signer.md) neither signs an ACK
+nor changes this atomic API. Registry closure and
 the four WebAuthn authority gates remain incomplete. Production Nitro/KMS, signing and independent
 witness services are still unprovisioned.

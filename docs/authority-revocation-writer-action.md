@@ -117,8 +117,10 @@ existing independent-input API and policy-before-mapper order remain unchanged.
 Source `.65` adds [immutable original-request custody](authority-revocation-writer-request-storage.md)
 and exact retry comparison to that separate authenticated path. This action's
 public owner still uses the original two-store atomic API. Serving integration,
-signed acknowledgment bytes, writer response-key custody and detached-body
-transport remain unfinished.
+signed acknowledgment bytes, operation-bound response signing and detached-body
+transport remain unfinished. The separate `.66`
+[startup key binding](authority-revocation-writer-signer.md) does not alter this
+action's inputs, work or output.
 The method does not enable public dispatch, alter
 planner-only peers, issue capabilities or activate execution. Registry closure,
 the four WebAuthn authority gates, independent current-root/witness evidence

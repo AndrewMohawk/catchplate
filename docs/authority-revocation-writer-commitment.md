@@ -154,9 +154,12 @@ uncertainty requires historical reconciliation, not an assumption of rollback.
 Historical acknowledgment lookup needs a separate explicit contract; it cannot
 masquerade as a fresh authorization or skip current action checks.
 
-The writer has no provisioned response signer or signer descriptor. A measured
-response-SPKI digest is only a pin, not key custody. Planner or launch-identity
-keys must not silently become the writer response signer.
+Source `.66` adds a dedicated writer-only descriptor and separate startup key
+slot, with actual Ed25519 parsing, measured response-SPKI binding and rejection
+of other-role or launch-key reuse. See [writer response signer](authority-revocation-writer-signer.md).
+It neither provisions a production key nor signs an ACK. A measured SPKI digest
+alone is still only a pin; descriptor loading is not hardware custody, and the
+future ACK path needs its own operation-bound signer/recovery contract.
 
 Component and source-linkage fixtures are authored but unexecuted. Their
 synthetic clocks, keys and driver observations are not production admission.

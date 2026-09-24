@@ -171,6 +171,10 @@ ROLE_SOURCES = {
             "/run/secrets/serverware-authority-planner-writer-attestation",
         ),
         (
+            "SERVERWARE_POLICY_AUTHORITY_PLANNER_WRITER_SIGNING_KEY_FD",
+            "/run/secrets/serverware-authority-planner-writer-signing-key",
+        ),
+        (
             "SERVERWARE_POLICY_AUTHORITY_PLANNER_WRITER_POSTGRES_DSN_FD",
             "/run/secrets/serverware-authority-planner-writer-dsn",
         ),

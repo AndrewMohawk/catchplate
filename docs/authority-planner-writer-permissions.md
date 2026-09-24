@@ -9,7 +9,8 @@ production readiness.
 The planner writer persists authorized planning records and reserves execution
 envelopes; it is not a general business-data writer. Its source permission
 surface is twelve metadata tables and five invoker functions. Revision `.65`
-adds only SELECT/INSERT for immutable writer request custody. The
+added only SELECT/INSERT for immutable writer request custody; `.66` retains
+that permission set unchanged. The
 immutable inventory in
 [`planner_writer_sql.py`](../serverware/authority_store/planner_writer_sql.py)
 now supplies both schema grants and a fixed catalog-admission query. Existing
@@ -56,7 +57,7 @@ Separate audit/recovery and legacy shared-role sealing keep their own policies.
 This is a metadata-namespace check, not an all-database sandbox or continuous
 monitoring against a privileged administrator.
 
-Source revision `.65`, all twenty v9 DDL revision pins, the schema source
+Source revision `.66`, all twenty v9 DDL revision pins, the schema source
 contract and the owner verification profile bind this change. The latter two
 include the configured writer role, exact grant inventory, function signatures
 and query digest. Older recorded contracts are not silently accepted.

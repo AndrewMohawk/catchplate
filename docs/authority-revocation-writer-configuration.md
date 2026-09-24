@@ -69,9 +69,13 @@ record nor configures them on the seven-item owner.
 Source `.61` adds private [atomic retain-and-reserve](authority-revocation-atomic.md)
 to the configured owner; `.62` connects it to the private measured action but
 does not enable dispatch.
-Authenticated verifier-to-planner-to-writer custody, exact retry/acknowledgment
-bytes, writer response-key custody and the whole-message size contract remain
-unfinished. Legacy writer routes and planner-only peer restrictions are
+Sources `.63` through `.65` add detached signature commitments, private
+authenticated composition and immutable original-request custody with exact
+retry checks. Source `.66` adds a separate startup-only
+[writer response signer](authority-revocation-writer-signer.md); it does not
+change this mapper's four-hash, two-key schedule or seven-item owner. Signed
+acknowledgment custody, serving integration and the whole-message size contract
+remain unfinished. Legacy writer routes and planner-only peer restrictions are
 unchanged. Registry closure and four WebAuthn gates are
 still incomplete. Production Nitro/KMS, signing and independent witness
 services are unprovisioned.

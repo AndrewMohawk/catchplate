@@ -10,7 +10,7 @@ from serverware import authority_complete_query
 from serverware.authority_query_read_work import _ValidationWork
 
 
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.36"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.37"
 SCHEMA_VERSION = 9
 CONTRACT_SCHEMA = "serverware.policyAuthorityOperationContract/v3"
 BUSINESS_INTENT_SCHEMA = "serverware.policyAuthorityBusinessIntent/v2"
@@ -282,6 +282,56 @@ _VERIFIED_ASSERTION_POLICIES = frozenset(
         "policy-bound-verified-assertion-receipt",
     }
 )
+REVOCATION_RETAINED_TABLE = "policy_authority_revocation_retained_plans"
+REVOCATION_RETAINED_COLUMNS = (
+    "planner_transaction_id", "plan_protocol", "exact_envelope_base64url",
+    "exact_envelope_bytes_digest", "exact_envelope_byte_count",
+    "evaluation_context_base64url", "evaluation_context_bytes_digest",
+    "evaluation_context_byte_count", "planner_key_digest", "verifier_key_digest",
+    "retained_record_digest", "source_revision",
+)
+PLANNER_RESERVATION_IMMUTABLE_COLUMNS = (
+    "planner_transaction_id", "plan_protocol", "operation", "operation_id", "request_digest",
+    "capability_id", "operation_contract_digest", "query_manifest_digest",
+    "selected_business_rows_json", "selected_business_rows_digest", "mutation_plan_json",
+    "mutation_plan_digest", "work_units", "authority_root_set_before_digest",
+    "planner_session_identity_digest", "planner_measurement_digest",
+    "planner_attestation_receipt_digest", "deadline_monotonic_ns", "deadline_epoch_ns",
+    "fence", "reserved_at_epoch_ns", "source_revision",
+)
+PLANNER_PAYLOAD_IMMUTABLE_COLUMNS = (
+    "authorization_projection_digest", "authority_snapshot_digest", "exact_plan_base64url",
+    "exact_plan_bytes_digest", "exact_plan_byte_count", "planned_at_epoch_ns", "retained_record_digest",
+)
+PLANNER_TERMINAL_IMMUTABLE_COLUMNS = (
+    "status", "exact_response_base64url", "exact_response_bytes_digest", "exact_response_byte_count",
+    "terminal_receipt_json", "terminal_receipt_digest", "terminal_at_epoch_ns",
+)
+REVOCATION_RETENTION_CONTRACT = MappingProxyType({
+    "schema": "serverware.policyAuthorityRevocationRetention/v1",
+    "operation": "webauthn.credential.revoke",
+    "planProtocol": "revocation-v4",
+    "publicExecutionEnabled": False,
+    "postgresOnly": True,
+    "sqliteAdmission": False,
+    "retainedTable": REVOCATION_RETAINED_TABLE,
+    "retainedColumns": REVOCATION_RETAINED_COLUMNS,
+    "reservationImmutableColumns": PLANNER_RESERVATION_IMMUTABLE_COLUMNS,
+    "payloadImmutableColumns": PLANNER_PAYLOAD_IMMUTABLE_COLUMNS,
+    "terminalImmutableColumns": PLANNER_TERMINAL_IMMUTABLE_COLUMNS,
+    "recordSchema": "serverware.policyAuthorityRevocationRetainedPlan/v1",
+    "contextSchema": "serverware.policyAuthorityRevocationEvaluationContext/v1",
+    "contextFields": 18, "recordHeaderFields": 13,
+    "maxEnvelopeBytes": 64 * 1024 * 1024,
+    "maxContextBytes": 512 * 1024, "maxContextNodes": 4096, "maxContextDepth": 8,
+    "parentBinding": "symmetric-deferred-composite-foreign-keys",
+    "plannerPrivileges": ("SELECT", "INSERT"),
+    "executorPrivileges": ("SELECT",),
+    "legacyReplay": "explicit-v3-null-retained-digest-only",
+    "existingStoreMigration": "separately-reviewed-no-synthesis-or-cascade",
+    "authorityExclusions": ("stored-context", "key-enrollment", "currentness", "execution", "witness"),
+})
+
 # PostgreSQL-only derived custody. These are not operation business tables,
 # primary-tracked tables, or additions to SQLite's shared metadata schema.
 POSTGRES_COUNTED_STORE_COLUMNS = MappingProxyType({
@@ -356,6 +406,7 @@ _FRAMEWORK_CUSTODY_TABLES = frozenset(
         "policy_authority_owner_operations",
         "policy_authority_operation_mutation_templates",
         "policy_authority_planner_transactions",
+        REVOCATION_RETAINED_TABLE,
         "policy_authority_query_dependency_manifests",
         "policy_authority_schema_contracts",
         "policy_authority_verifier_capabilities",
@@ -783,6 +834,7 @@ def _spec(
     )
     declared_framework_preconditions = (
         set(_BASE_FRAMEWORK_PRECONDITIONS)
+        | ({REVOCATION_RETAINED_TABLE} if handler == "revoke_webauthn_credential" else set())
         | (
             {"policy_authority_webauthn_assertion_evidence"}
             if assertion_required
@@ -2410,6 +2462,7 @@ OPERATION_MANIFEST_DIGEST = _digest(
         "maxPlanSelectedBytes": MAX_PLAN_SELECTED_BYTES,
         "plannerQueryBookkeeping": dict(PLANNER_QUERY_BOOKKEEPING_CONTRACT),
         "plannerCompleteAcquisition": dict(PLANNER_COMPLETE_ACQUISITION_CONTRACT),
+        "revocationRetention": dict(REVOCATION_RETENTION_CONTRACT),
         "signedRevocationPlanVerification": dict(SIGNED_REVOCATION_PLAN_CONTRACT),
         "signedRevocationPlanProduction": dict(SIGNED_REVOCATION_PRODUCTION_CONTRACT),
         "signedRevocationWireAdmission": dict(SIGNED_REVOCATION_WIRE_CONTRACT),

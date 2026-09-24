@@ -383,6 +383,7 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
             "policy_authority_fence_heads": {"SELECT"},
             "policy_authority_operation_mutation_templates": {"SELECT"},
             "policy_authority_planner_transactions": {"SELECT", "INSERT", "UPDATE"},
+            "policy_authority_revocation_retained_plans": {"SELECT", "INSERT"},
             "policy_authority_query_dependency_manifests": {"SELECT"},
             "policy_authority_authenticated_table_roots": {"SELECT"},
             "policy_authority_webauthn_assertion_evidence": {"SELECT", "INSERT"},
@@ -392,7 +393,7 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
 
     def test_source_revision_and_all_seventeen_v9_ddl_checks_are_pinned(self):
         self.assertEqual(authority_contract.SOURCE_REVISION,
-            "serverware.policyCandidateAuthoritySource/2026-07-30.36")
+            "serverware.policyCandidateAuthoritySource/2026-07-30.37")
         _, executor = read_source("serverware/authority_store/executor_v9.py", 2 * 1024 * 1024)
         self.assertFalse(any(isinstance(node, ast.FunctionDef)
             and node.name == "authority_v9_schema_source" for node in executor.body))
@@ -405,7 +406,9 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
         function = named_function(tree, "authority_v9_schema_source")
         literals = [node.value for node in ast.walk(function)
             if isinstance(node, ast.Constant) and type(node.value) is str]
-        self.assertEqual(sum(value.count(authority_contract.SOURCE_REVISION) for value in literals), 17)
+        # Preserve this historical method ID: .37 keeps all seventeen earlier
+        # checks and adds the immutable retained-record table's eighteenth.
+        self.assertEqual(sum(value.count(authority_contract.SOURCE_REVISION) for value in literals), 18)
         self.assertFalse(any("serverware.policyCandidateAuthoritySource/2026-07-30.26" in value for value in literals))
 
     def test_planner_query_bookkeeping_contract_binds_narrow_cumulative_limits(self):
@@ -698,6 +701,80 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
                          (limits.max_hashes, limits.max_input_bytes, limits.max_json_nodes))
         self.assertEqual(authority_contract.SCHEMA_VERSION, 9)
         self.assertEqual(authority_contract.CONTRACT_SCHEMA, "serverware.policyAuthorityOperationContract/v3")
+
+    def test_retained_record_contract_binds_private_postgres_storage_and_exact_fields(self):
+        columns = ("planner_transaction_id", "plan_protocol", "exact_envelope_base64url",
+            "exact_envelope_bytes_digest", "exact_envelope_byte_count", "evaluation_context_base64url",
+            "evaluation_context_bytes_digest", "evaluation_context_byte_count", "planner_key_digest",
+            "verifier_key_digest", "retained_record_digest", "source_revision")
+        reservation = ("planner_transaction_id", "plan_protocol", "operation", "operation_id", "request_digest",
+            "capability_id", "operation_contract_digest", "query_manifest_digest", "selected_business_rows_json",
+            "selected_business_rows_digest", "mutation_plan_json", "mutation_plan_digest", "work_units",
+            "authority_root_set_before_digest", "planner_session_identity_digest", "planner_measurement_digest",
+            "planner_attestation_receipt_digest", "deadline_monotonic_ns", "deadline_epoch_ns", "fence",
+            "reserved_at_epoch_ns", "source_revision")
+        payload = ("authorization_projection_digest", "authority_snapshot_digest", "exact_plan_base64url",
+            "exact_plan_bytes_digest", "exact_plan_byte_count", "planned_at_epoch_ns", "retained_record_digest")
+        terminal = ("status", "exact_response_base64url", "exact_response_bytes_digest", "exact_response_byte_count",
+            "terminal_receipt_json", "terminal_receipt_digest", "terminal_at_epoch_ns")
+        self.assertEqual(authority_contract.REVOCATION_RETAINED_COLUMNS, columns)
+        self.assertEqual(authority_contract.PLANNER_RESERVATION_IMMUTABLE_COLUMNS, reservation)
+        self.assertEqual(authority_contract.PLANNER_PAYLOAD_IMMUTABLE_COLUMNS, payload)
+        self.assertEqual(authority_contract.PLANNER_TERMINAL_IMMUTABLE_COLUMNS, terminal)
+        contract = authority_contract.REVOCATION_RETENTION_CONTRACT
+        self.assertIs(type(contract), MappingProxyType)
+        self.assertEqual(dict(contract), {
+            "schema": "serverware.policyAuthorityRevocationRetention/v1",
+            "operation": "webauthn.credential.revoke", "planProtocol": "revocation-v4",
+            "publicExecutionEnabled": False, "postgresOnly": True, "sqliteAdmission": False,
+            "retainedTable": "policy_authority_revocation_retained_plans", "retainedColumns": columns,
+            "reservationImmutableColumns": reservation, "payloadImmutableColumns": payload,
+            "terminalImmutableColumns": terminal,
+            "recordSchema": "serverware.policyAuthorityRevocationRetainedPlan/v1",
+            "contextSchema": "serverware.policyAuthorityRevocationEvaluationContext/v1",
+            "contextFields": 18, "recordHeaderFields": 13, "maxEnvelopeBytes": 67108864,
+            "maxContextBytes": 524288, "maxContextNodes": 4096, "maxContextDepth": 8,
+            "parentBinding": "symmetric-deferred-composite-foreign-keys",
+            "plannerPrivileges": ("SELECT", "INSERT"), "executorPrivileges": ("SELECT",),
+            "legacyReplay": "explicit-v3-null-retained-digest-only",
+            "existingStoreMigration": "separately-reviewed-no-synthesis-or-cascade",
+            "authorityExclusions": ("stored-context", "key-enrollment", "currentness", "execution", "witness"),
+        })
+        with self.assertRaises(TypeError):
+            contract["publicExecutionEnabled"] = True
+        _, tree = read_source("serverware/authority_contract.py", 2 * 1024 * 1024)
+        material = named_assignment(tree, "OPERATION_MANIFEST_DIGEST").value.args[1]
+        fields = {key.value: value for key, value in zip(material.keys, material.values)}
+        self.assert_shape(fields["revocationRetention"], "dict(REVOCATION_RETENTION_CONTRACT)")
+
+    def test_retained_sidecar_is_immutable_planner_insert_only_and_revoke_executor_read_only(self):
+        table = "policy_authority_revocation_retained_plans"
+        immutable = named_assignment(self.db_tree, "_POLICY_CANDIDATE_AUTHORITY_IMMUTABLE_TABLES").value
+        self.assertEqual(sum(node.value == table for node in immutable.elts), 1)
+        for name in ("_POLICY_CANDIDATE_AUTHORITY_HEAD_TABLES", "_POLICY_CANDIDATE_AUTHORITY_REPLACEABLE_TABLES"):
+            self.assertNotIn(table, [node.value for node in named_assignment(self.db_tree, name).value.elts])
+        self.assertIn(table, authority_contract._FRAMEWORK_CUSTODY_TABLES)
+        for operation, spec in authority_contract.OPERATIONS.items():
+            for field in ("businessReads", "businessWrites", "authorizationReads", "frameworkWrites",
+                          "frameworkReadBeforeWrite"):
+                self.assertNotIn(table, spec[field])
+            self.assertEqual(table in spec["frameworkPreconditions"], operation == "webauthn.credential.revoke")
+        for operation, grants in authority_contract.SQL_GRANT_MANIFEST.items():
+            self.assertNotIn(table, grants["frameworkMutate"])
+            self.assertEqual(table in grants["frameworkSelect"], operation == "webauthn.credential.revoke")
+        installer = named_function(self.db_tree, "_install_policy_candidate_authority_guards")
+        text = ast.get_source_segment(self.db_source, installer)
+        self.assertIn("BEFORE UPDATE OR DELETE ON {table}", text)
+        self.assertIn("serverware_reject_policy_authority_mutation()", text)
+        for function in ("_legacy_migrate_policy_candidate_authority_offline", "_prepare_policy_candidate_authority_schema"):
+            source = ast.get_source_segment(self.db_source, named_function(self.db_tree, function))
+            guard = source.index("_metadata_table_exists(conn, authority_contract.REVOCATION_RETAINED_TABLE)")
+            self.assertLess(guard, source.index('"DROP TABLE "', guard))
+            self.assertIn("retained revocation storage requires a separately reviewed migration", source)
+        # Sidecar cannot become a phantom required table in an admitted v8 source.
+        _, migration = read_source("scripts/authority/migrate_v8_to_v9.py", 2 * 1024 * 1024)
+        new_tables = named_assignment(migration, "_V9_NEW_TABLES").value.args[0]
+        self.assertIn(table, [node.value for node in new_tables.elts])
 
     def test_counted_custody_is_exact_postgres_only_and_excluded_from_primary_business(self):
         self.assertEqual(dict(authority_contract.POSTGRES_COUNTED_STORE_COLUMNS), COUNTED_COLUMNS)

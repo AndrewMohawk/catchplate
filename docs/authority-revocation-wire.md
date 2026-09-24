@@ -77,9 +77,10 @@ The graph verifier's public signature, default budget and existing phase
 accounting remain unchanged. V3 field inventories, persistence, public routes,
 registry and SQL consumers remain closed to this successor.
 
-Original-byte verification is a prerequisite for the coordinated
-[retained-record migration](authority-revocation-retention.md), not that
-migration itself. Stored historical expectations cannot establish current
+Source `.37` builds private [retained-record storage and replay](authority-revocation-retention.md)
+on this original-byte verifier. It reuses the real decoder with tighter context
+bounds; the envelope API and default bounds are unchanged. Public protocol
+activation and installed-source migration remain separate. Stored historical expectations cannot establish current
 roots, enrollment, reservation freshness or one-use execution. The source
 controls include independent accounting and producer-to-raw-consumer fixtures;
 none has been executed under the current implementation-phase gate.

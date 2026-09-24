@@ -1,0 +1,103 @@
+"""Configured PostgreSQL coordinator for original revocation retention.
+
+Separate from the closed legacy v3 coordinator and public service routes.
+Configuration pins keys and identities; requests cannot replace those pins.
+Persistence/read still genuinely verify original bytes with independent request,
+historical clock and root expectations. Nothing here activates v4 execution.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+from serverware import authority_revocation_retention as retention
+from serverware.authority_store import revocation_retention as store
+
+
+_CONFIGURED = frozenset({"planner_public_key", "verifier_public_key",
+                        "expected_planner_identity", "expected_verifier_identity"})
+_CALL_INPUTS = retention.wire._EXPECTATIONS - _CONFIGURED
+_IDENTITY_FIELDS = ("sessionIdentityDigest", "measurementDigest", "attestationReceiptDigest")
+
+
+@dataclass(frozen=True, slots=True, init=False, repr=False, eq=False)
+class RevocationPlannerPersistence:
+    """Independently configured keys, not keys enrolled by a retained record.
+
+    Fixed bounded configuration is admitted once, outside per-invocation work.
+    Each call owns its fifteen external inputs before any connection callback.
+    Driver/transaction work is excluded from H/B/N but cannot alter the meter.
+    This opens its own SERIALIZABLE writer transaction and commits only after
+    the real store has completed; nested store rollback uses a real savepoint.
+    """
+
+    persistence_dsn: str
+    connect_timeout_seconds: int
+    planner_public_key: Ed25519PublicKey
+    verifier_public_key: Ed25519PublicKey
+    _planner_identity: tuple[str, str, str]
+    _verifier_identity: tuple[str, str, str]
+
+    def __init__(self, *, persistence_dsn, connect_timeout_seconds,
+                 planner_public_key, verifier_public_key,
+                 expected_planner_identity, expected_verifier_identity):
+        if (type(persistence_dsn) is not str or not 1 <= len(persistence_dsn) <= 65536
+                or type(connect_timeout_seconds) is not int or not 1 <= connect_timeout_seconds <= 300
+                or not isinstance(planner_public_key, Ed25519PublicKey)
+                or not isinstance(verifier_public_key, Ed25519PublicKey)):
+            raise ValueError("revocation persistence configuration is invalid")
+        retention.plan.contract.validate_identity_shape(expected_planner_identity)
+        retention.plan.contract.validate_identity_shape(expected_verifier_identity)
+        for name, value in (
+            ("persistence_dsn", persistence_dsn), ("connect_timeout_seconds", connect_timeout_seconds),
+            ("planner_public_key", planner_public_key), ("verifier_public_key", verifier_public_key),
+            ("_planner_identity", tuple(expected_planner_identity[name] for name in _IDENTITY_FIELDS)),
+            ("_verifier_identity", tuple(expected_verifier_identity[name] for name in _IDENTITY_FIELDS)),
+        ):
+            object.__setattr__(self, name, value)
+
+    def _inputs(self, expectations, work):
+        if len(expectations) != len(_CALL_INPUTS) or set(expectations) != _CALL_INPUTS:
+            raise ValueError("revocation persistence requires exactly fifteen external expectations")
+        # Snapshot immutable configuration before the first external callback.
+        pins = {"planner_public_key": self.planner_public_key,
+            "verifier_public_key": self.verifier_public_key,
+            "expected_planner_identity": dict(zip(_IDENTITY_FIELDS, self._planner_identity)),
+            "expected_verifier_identity": dict(zip(_IDENTITY_FIELDS, self._verifier_identity))}
+        return store._owned_expectations({**expectations, **pins}, work)
+
+    def _run(self, operation, arguments, expectations, work):
+        dsn, timeout = self.persistence_dsn, self.connect_timeout_seconds
+        owned = self._inputs(expectations, work)
+        import psycopg
+        from psycopg.rows import dict_row
+        from serverware import db
+
+        connection = store._callback(work, lambda: psycopg.connect(dsn,
+            row_factory=dict_row, connect_timeout=timeout, options="-c search_path=pg_catalog"))
+        with store._context(connection, work):
+            transaction = store._callback(work, connection.transaction)
+            with store._context(transaction, work):
+                cursor = store._callback(work, connection.cursor)
+                with store._context(cursor, work) as active:
+                    store._callback(work, active.execute,
+                        "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE READ WRITE NOT DEFERRABLE")
+                result = operation(connection=db.PostgresMetadataConnection(connection),
+                    work=work, **arguments, **owned)
+        return result
+
+    def persist(self, *, envelope_bytes, evaluation_context_bytes, planned_at_epoch_ns,
+                work, **expectations):
+        if type(envelope_bytes) is not bytes or type(evaluation_context_bytes) is not bytes:
+            raise ValueError("revocation persistence accepts only original immutable bytes")
+        if type(planned_at_epoch_ns) is not int or not 1 <= planned_at_epoch_ns <= 2**63 - 1:
+            raise ValueError("revocation planned timestamp is not a positive int64")
+        return self._run(store.persist_revocation_planner_record,
+            {"envelope_bytes": envelope_bytes, "evaluation_context_bytes": evaluation_context_bytes,
+             "planned_at_epoch_ns": planned_at_epoch_ns}, expectations, work)
+
+    def read(self, *, planner_transaction_id, work, **expectations):
+        retention.plan.contract._digest(planner_transaction_id)
+        return self._run(store.read_revocation_planner_record,
+            {"planner_transaction_id": planner_transaction_id}, expectations, work)

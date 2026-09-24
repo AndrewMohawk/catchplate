@@ -182,7 +182,8 @@ class GlobalAuditCapacitySqlSourceTests(unittest.TestCase):
                          and node.name == "authority_v9_schema_source"]
         self.assertEqual(len(ddl_functions), 1)
         ddl = ast.get_source_segment(ddl_source, ddl_functions[0])
-        self.assertEqual(ddl.count(authority_contract.SOURCE_REVISION), 17)
+        # The original seventeen tables plus the explicit retained-v4 sidecar.
+        self.assertEqual(ddl.count(authority_contract.SOURCE_REVISION), 18)
         self.assertNotIn("2026-07-30.24", ddl)
         self.assertIn("length(selected_business_rows_json)\n                    BETWEEN 2 AND __MAX_PLAN_SELECTED_BYTES__", ddl)
         self.assertIn("CHECK (work_units BETWEEN 1 AND __MAX_PLAN_WORK_UNITS__)", ddl)
@@ -195,6 +196,38 @@ class GlobalAuditCapacitySqlSourceTests(unittest.TestCase):
         replay = installed.index("IF capability.status = 'committed' THEN")
         self.assertLess(loaded, guarded)
         self.assertLess(guarded, replay)
+        root_sql = (ROOT / "serverware/authority_store/root_transition_sql.py").read_text(encoding="utf-8")
+        protocol_guard = root_sql.index("IF planner.plan_protocol IS DISTINCT FROM 'v3'")
+        self.assertIn("OR planner.retained_record_digest IS NOT NULL", root_sql)
+        self.assertLess(protocol_guard, root_sql.index("IF planner.exact_plan_base64url IS NULL"))
+        self.assertLess(protocol_guard, root_sql.index("rt_plan_bytes := pg_catalog.decode("))
+        self.assertLess(protocol_guard, root_sql.index("rt_payload_json := rt_plan_text::pg_catalog.json"))
+        legacy_read = ast.get_source_segment(source, functions["read_authority_planner_payload"])
+        self.assertIn('"plan_protocol, retained_record_digest "', legacy_read)
+        self.assertIn('"WHERE planner_transaction_id = %s"', legacy_read)
+        self.assertNotIn("AND plan_protocol", legacy_read)
+        self.assertLess(legacy_read.index("if row is None:"),
+                        legacy_read.index("_require_v3_planner_row(row)"))
+        self.assertLess(legacy_read.index("_require_v3_planner_row(row)"),
+                        legacy_read.index("exact_plan_bytes = _decode_b64url("))
+        legacy_guard = ast.get_source_segment(source, functions["_require_v3_planner_row"])
+        self.assertIn('row.get("plan_protocol") != "v3"', legacy_guard)
+        self.assertIn('row.get("retained_record_digest") is not None', legacy_guard)
+        self.assertIn('raise _db_value("MetadataStoreError")', legacy_guard)
+        # The unchanged v1 service receipt stays on that denying legacy
+        # reader. This is source linkage, not a service/runtime assertion.
+        service = (ROOT / "serverware/authority_service.py").read_text(encoding="utf-8")
+        service_methods = {node.name: node for node in ast.walk(ast.parse(service))
+                           if isinstance(node, ast.FunctionDef)}
+        replay_source = ast.get_source_segment(service, service_methods["_handle_read_persisted_plan"])
+        self.assertIn("db.read_authority_planner_payload(", replay_source)
+        self.assertNotIn("read_revocation", replay_source)
+        self.assertIn("authority_planner.PLANNER_REPLAY_RECEIPT_SCHEMA", replay_source)
+        handle = ast.get_source_segment(service, service_methods["_handle_plan"])
+        self.assertLess(handle.index("planner durable replay receipt is not closed"),
+                        handle.index("replay_bytes = authority_planner.decode_base64url("))
+        self.assertLess(handle.index("authority_planner.validate_measured_plan_payload("),
+                        handle.index("self.signing_key.sign("))
         self.assertIn("planner.selected_business_rows_json::pg_catalog.jsonb", installed[guarded:replay])
         self.assertIn("planner.mutation_plan_json::pg_catalog.jsonb", installed[guarded:replay])
         self.assertIn("planner.work_units", installed[guarded:replay])

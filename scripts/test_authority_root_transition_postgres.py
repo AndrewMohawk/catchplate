@@ -64,6 +64,7 @@ PLANNER_COLUMNS = {
     "planner_session_identity_digest": "text", "planner_measurement_digest": "text",
     "planner_attestation_receipt_digest": "text", "exact_plan_base64url": "text",
     "exact_plan_bytes_digest": "text", "exact_plan_byte_count": "bigint",
+    "plan_protocol": "text", "retained_record_digest": "text",
 }
 CAPABILITY_COLUMNS = {
     "capability_id": "text", "planner_transaction_id": "text", "operation": "text",
@@ -222,7 +223,8 @@ def seal(payload: dict) -> tuple[dict, dict, dict]:
                     "mutation_plan_json": canonical(payload["mutationPlan"]).decode(),
                     "planner_session_identity_digest": payload["plannerIdentity"]["sessionIdentityDigest"],
                     "planner_measurement_digest": payload["plannerIdentity"]["measurementDigest"],
-                    "planner_attestation_receipt_digest": payload["plannerIdentity"]["attestationReceiptDigest"]})
+                    "planner_attestation_receipt_digest": payload["plannerIdentity"]["attestationReceiptDigest"],
+                    "plan_protocol": "v3", "retained_record_digest": None})
     set_plan_bytes(planner, canonical(payload))
     capability = {column: planner[column] for column in CAPABILITY_COLUMNS
                   if column in planner}
@@ -508,6 +510,20 @@ class AuthorityRootTransitionPostgresTests(unittest.TestCase):
         self.assertNotEqual(canonical(composed), canonical(decomposed))
 
     def test_exact_plan_hash_length_and_base64_are_mandatory(self) -> None:
+        # The real legacy SQL must reject the lifecycle protocol before even
+        # attempting its byte decoder; these records deliberately bypass the
+        # separate table constraints to exercise the consumer guard itself.
+        original_planner = copy.deepcopy(self.planner)
+        for protocol, retained in (("revocation-v4", token("retained")),
+                                   ("revocation-v4", None), ("unknown", None),
+                                   (None, None), ("v3", token("retained"))):
+            with self.subTest(protocol=protocol, retained=retained):
+                self.planner = {**original_planner, "plan_protocol": protocol,
+                                "retained_record_digest": retained,
+                                "exact_plan_base64url": "not/base64"}
+                self.store()
+                self.reject("requires legacy v3 protocol")
+        self.planner = original_planner
         for column, value in (("exact_plan_byte_count", self.planner["exact_plan_byte_count"] + 1),
                               ("exact_plan_bytes_digest", token("wrong")),
                               ("exact_plan_base64url", self.planner["exact_plan_base64url"] + "=")):
@@ -623,6 +639,17 @@ class AuthorityRootTransitionPostgresTests(unittest.TestCase):
         before = self.state()
         self.assertEqual(self.run_component(replay=True), "historical")
         self.assertEqual(self.state(), before)
+        original_planner = copy.deepcopy(self.planner)
+        for protocol, retained in (("revocation-v4", token("retained")),
+                                   ("revocation-v4", None), (None, None),
+                                   ("v3", token("retained"))):
+            with self.subTest(protocol=protocol, retained=retained):
+                self.planner = {**original_planner, "plan_protocol": protocol,
+                                "retained_record_digest": retained,
+                                "exact_plan_base64url": "not/base64"}
+                self.store(receipt)
+                self.reject("requires legacy v3 protocol", replay=True)
+        self.planner = original_planner
         for field in receipt:
             self.store({**receipt, field: token("wrong-terminal")})
             self.reject("historical receipt changed", replay=True)
@@ -658,6 +685,12 @@ class AuthorityRootTransitionPostgresTests(unittest.TestCase):
         self.assertNotIn("serverware_policy_authority_canonical_json", source)
         self.assertIn("serverware_policy_authority_wire_json", source)
         self.assertNotIn("canonical_json(rt_payload)", body)
+        loaded = load_root_transition_sql('"fixture"')
+        protocol_guard = loaded.index("IF planner.plan_protocol IS DISTINCT FROM 'v3'")
+        self.assertIn("OR planner.retained_record_digest IS NOT NULL", loaded)
+        self.assertLess(protocol_guard, loaded.index("IF planner.exact_plan_base64url IS NULL"))
+        self.assertLess(protocol_guard, loaded.index("rt_plan_bytes := pg_catalog.decode("))
+        self.assertLess(protocol_guard, loaded.index("rt_payload_json := rt_plan_text::pg_catalog.json"))
 
 
 if __name__ == "__main__":

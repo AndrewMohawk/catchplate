@@ -43,6 +43,7 @@ from serverware.authority_store import (
     metadata_schema as _metadata_schema,
 )
 from serverware.authority_store import schema as _authority_schema
+from serverware.authority_store import v9_schema_source as _authority_v9_schema_source
 from serverware.authority_store import verifier_read_sql as _authority_verifier_read_sql
 from serverware.authority_store.authority_dispatch import (
     _POLICY_AUTHORITY_CONTROLLED_WRITER_HANDLERS,
@@ -62,8 +63,10 @@ from serverware.authority_store.executor_v9 import (
     fail_authority_v9_transaction,
     persist_authorization_projection,
     persist_webauthn_assertion_evidence,
+    persist_revocation_planner_record,
     read_authority_execution_response,
     read_authority_planner_payload,
+    read_revocation_planner_record,
     reserve_authority_execution_envelope,
     reserve_authority_planner_transaction,
     terminalize_authority_execution_envelope,
@@ -1506,6 +1509,7 @@ _POLICY_CANDIDATE_AUTHORITY_IMMUTABLE_TABLES = (
     "policy_authority_writer_receipts",
     "policy_authority_webauthn_assertion_evidence",
     "policy_authority_authorization_projections",
+    "policy_authority_revocation_retained_plans",
     "policy_authority_webauthn_assertion_receipts",
     "policy_authority_external_witness_receipts",
     "policy_authority_owner_operations",
@@ -1890,6 +1894,8 @@ _POLICY_AUTHORITY_PLANNER_WRITER_TABLE_PRIVILEGES = MappingProxyType(
             frozenset({"SELECT"}),
         "policy_authority_planner_transactions":
             frozenset({"SELECT", "INSERT", "UPDATE"}),
+        "policy_authority_revocation_retained_plans":
+            frozenset({"SELECT", "INSERT"}),
         "policy_authority_query_dependency_manifests":
             frozenset({"SELECT"}),
         "policy_authority_authenticated_table_roots":
@@ -6422,6 +6428,10 @@ def _legacy_migrate_policy_candidate_authority_offline(
                 raise PolicyCandidateAuthorityError(
                     "candidate-authority archive row count is incomplete"
                 )
+            if _metadata_table_exists(conn, authority_contract.REVOCATION_RETAINED_TABLE):
+                raise PolicyCandidateAuthorityError(
+                    "retained revocation storage requires a separately reviewed migration"
+                )
             for table in _POLICY_CANDIDATE_AUTHORITY_REPLACEABLE_TABLES:
                 if _metadata_table_exists(conn, table):
                     conn.execute(
@@ -6769,6 +6779,10 @@ def _prepare_policy_candidate_authority_schema(
                         "requires verified offline swap"
                     ),
                 )
+    if _metadata_table_exists(conn, authority_contract.REVOCATION_RETAINED_TABLE):
+        raise PolicyCandidateAuthorityError(
+            "retained revocation storage requires a separately reviewed migration"
+        )
     for table in _POLICY_CANDIDATE_AUTHORITY_REPLACEABLE_TABLES:
         if _metadata_table_exists(conn, table):
             conn.execute(
@@ -7380,6 +7394,7 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
         guard_namespace = _policy_candidate_authority_identifier(
             str(guard_namespace_row["schema_name"])
         )
+        conn.execute(_authority_v9_schema_source.planner_retention_guard_sql(guard_namespace))
         # Both real bootstrap and pristine expected-schema replay use this
         # same transaction-owned path. Populated legacy sources or partial
         # counted stores cannot be silently initialized with empty heads.
@@ -18863,6 +18878,9 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
         )
         return
 
+    _execute_metadata_schema_statements(
+        conn, _authority_v9_schema_source.planner_retention_sqlite_guards_sql()
+    )
     digest_pattern = "sha256:" + "[0-9a-f]" * 64
     for table in authority_tables:
         columns = conn.execute(f"PRAGMA table_info({table})").fetchall()

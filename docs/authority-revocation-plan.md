@@ -127,20 +127,19 @@ the genuine mixed proof computation on the same remaining work, and returns the
 original signed v4 bytes. This implements the private producer in source, not
 public protocol admission or durable replay.
 
-The actual verifier-response admission, durable planner replay and persistence
-paths still require coordinated v4 admission and consumer changes. They need
+Source `.37` implements private original-byte storage and historical replay.
+Public verifier-response admission and service persistence still require
+coordinated v4 admission and consumer changes. They need
 independently admitted roots and the original evaluation cutoff; replay cannot
 derive those expectations from its retained envelope or sample a new cutoff.
 Database Snapshot/persistence, one-use consumption, executor and terminal
 witness semantics must move together before activation. Registry admission and
 the other three missing WebAuthn kernels remain outstanding.
 
-The [retention migration design](authority-revocation-retention.md) identifies
-the required storage constraints and coordinated consumer changes.
-Current `exact_plan` storage retains a closed v3 payload, not the original v4
-signed envelope or independent evaluation context. The successor needs explicit
-versioned storage binding those original bytes and their digests, identical
-retry semantics, and rejection of conflicting envelopes or context. Stored
+The [retention implementation](authority-revocation-retention.md) adds versioned
+storage for original v4 envelope/context bytes alongside canonical payloads,
+identical retry semantics and conflicting-record denial. It leaves legacy v3
+consumers closed and does not silently upgrade installed data. Stored
 context is historical data, not independent root/key/time authority. Replaying
 the original cutoff must not authorize execution against stale current state.
 

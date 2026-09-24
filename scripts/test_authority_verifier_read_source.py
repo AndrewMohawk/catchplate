@@ -105,7 +105,7 @@ class AuthorityVerifierReadSourceTests(unittest.TestCase):
         self.assertIs(type(authority_contract.VERIFIER_READ_TABLES), frozenset)
         self.assertEqual(authority_contract.VERIFIER_READ_TABLES, TABLES)
         self.assertEqual(authority_contract.SOURCE_REVISION,
-                         "serverware.policyCandidateAuthoritySource/2026-07-30.36")
+                         "serverware.policyCandidateAuthoritySource/2026-07-30.37")
         self.assertTrue(all(type(table) is str for table in authority_contract.VERIFIER_READ_TABLES))
 
     def test_real_helper_returns_fixed_sql_and_exact_separate_parameters(self):
@@ -295,7 +295,7 @@ class AuthorityVerifierReadSourceTests(unittest.TestCase):
         self.assert_shape(dict_value(digest.args[1], "verifierReadTables"), "sorted(VERIFIER_READ_TABLES)")
 
     def test_all_four_metadata_sealers_supply_dedicated_role_and_closed_set(self):
-        _, migration = read_source("scripts/authority/migrate_v8_to_v9.py")
+        migration_source, migration = read_source("scripts/authority/migrate_v8_to_v9.py")
         owners = (
             (self.db, "init_db", ""),
             (self.schema, "_policy_candidate_authority_expected_structure_manifest", ""),
@@ -325,6 +325,43 @@ class AuthorityVerifierReadSourceTests(unittest.TestCase):
             ast.dump(ast.parse("_AUDIT_POSTGRES_SCHEMA", mode="eval").body),
             ast.dump(ast.parse("_RECOVERY_WITNESS_POSTGRES_SCHEMA", mode="eval").body),
         })
+        # Source-only migration closure: no existing retained sidecar is
+        # adopted as a v8 input or through the historical receipt repair.
+        sidecar = "policy_authority_revocation_retained_plans"
+        new_tables = assignment(migration, "_V9_NEW_TABLES").value
+        self.assertIsInstance(new_tables, ast.Call)
+        self.assertEqual(sum(item.value == sidecar for item in new_tables.args[0].elts), 1)
+        source_tables = ast.get_source_segment(migration_source,
+            assignment(migration, "_MIGRATION_TABLES"))
+        self.assertIn("- _V9_NEW_TABLES", source_tables)
+        migrate = function(migration, "migrate")
+        premature = assignment(migrate, "premature_v9_tables")
+        self.assertIn("sorted(_V9_NEW_TABLES)", ast.get_source_segment(migration_source, premature))
+        # That error includes the discovered names, so locate the guard by
+        # its exact closed condition rather than evaluating any source.
+        denied = next(node for node in ast.walk(migrate) if isinstance(node, ast.If)
+                      and isinstance(node.test, ast.Name) and node.test.id == "premature_v9_tables")
+        self.assert_shape(denied.test, "premature_v9_tables")
+        self.assertIn('raise MigrationError(', ast.get_source_segment(migration_source, denied))
+        extension = calls(migrate, "authority_v9_schema_source")
+        self.assertEqual(len(extension), 1)
+        self.assertLess(premature.lineno, denied.lineno)
+        self.assertLess(denied.lineno, extension[0].lineno)
+        repair = function(migration, "_completed_v9_repair_receipt")
+        repair_source = ast.get_source_segment(migration_source, repair)
+        guard = repair_source.index("retained revocation storage requires a separately reviewed migration")
+        self.assertLess(repair_source.index("_TARGET_COMPLETED_V9_RECEIPT_COLUMNS"), guard)
+        self.assertLess(repair_source.index("return None"), guard)
+        self.assertLess(guard, repair_source.index("legacy_columns = tuple("))
+        self.assertIn('retained is None or retained["present"] is not False', repair_source)
+        retry = next(node for node in ast.walk(migrate) if isinstance(node, ast.If)
+                     and isinstance(node.test, ast.Compare)
+                     and isinstance(node.test.left, ast.Name) and node.test.left.id == "retry")
+        validators = calls(retry, "_validate_policy_candidate_authority_structure")
+        self.assertEqual(len(validators), 1)
+        self.assert_shape(keyword(validators[0], "require_recorded_contract"), "True")
+        self.assertEqual(calls(retry, "authority_v9_schema_source"), [])
+        self.assertLess(retry.lineno, extension[0].lineno)
 
     def test_pre_sql_guard_covers_canonical_and_scratch_scopes_without_runtime_fallback(self):
         original, guard = self.seal.body[:2]

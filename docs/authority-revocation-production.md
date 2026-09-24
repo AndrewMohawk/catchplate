@@ -107,11 +107,11 @@ public v3 and production v4 admission disabled. Public planner, service,
 persistence and registry consumers are not switched to v4 by this component.
 All four missing registered WebAuthn kernels remain production gates.
 
-The next required step is coordinated [original-envelope and independent-context
+Source `.37` adds private [original-envelope and independent-context
 retention](authority-revocation-retention.md): versioned storage, digest binding,
-identical retries, conflict denial,
-independent replay expectations, current-state admission, one-use consumption,
-SQL/executor checks and terminal witness binding. Historical evaluation context
+identical retries, conflict denial and independent replay expectations.
+Current-state admission, public service activation, one-use consumption,
+mixed-root SQL/executor checks and terminal witness binding remain required. Historical evaluation context
 must remain separate from current execution authority and deadline enforcement.
 
 Authored controls use independent synthetic roots and identities, genuine

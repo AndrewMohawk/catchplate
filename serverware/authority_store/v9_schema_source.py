@@ -4,6 +4,86 @@ from __future__ import annotations
 from serverware import authority_contract
 
 
+def planner_retention_guard_sql(namespace: str) -> str:
+    """Post-table PostgreSQL enforcement; never migrate or repair old rows."""
+    if (type(namespace) is not str or len(namespace) < 3 or "\x00" in namespace
+            or not namespace.startswith('"') or not namespace.endswith('"')
+            or '"' in namespace[1:-1].replace('""', '')):
+        raise ValueError("retention guard namespace is not one quoted identifier")
+    def changed(columns):
+        return "ROW(" + ", ".join("NEW." + column for column in columns) + ") IS DISTINCT FROM ROW(" + ", ".join("OLD." + column for column in columns) + ")"
+    reservation = changed(authority_contract.PLANNER_RESERVATION_IMMUTABLE_COLUMNS)
+    payload = changed(authority_contract.PLANNER_PAYLOAD_IMMUTABLE_COLUMNS)
+    terminal = changed(authority_contract.PLANNER_TERMINAL_IMMUTABLE_COLUMNS)
+    parent = namespace + ".policy_authority_planner_transactions"
+    child = namespace + ".policy_authority_revocation_retained_plans"
+    parent_literal = parent.replace("'", "''")
+    return f"""
+        DO $serverware_retained_fk$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_catalog.pg_constraint
+                WHERE conrelid = '{parent_literal}'::pg_catalog.regclass
+                  AND conname = 'serverware_planner_retained_record_fk'
+            ) THEN
+                ALTER TABLE {parent}
+                    ADD CONSTRAINT serverware_planner_retained_record_fk
+                    FOREIGN KEY (planner_transaction_id, plan_protocol, retained_record_digest)
+                    REFERENCES {child} (planner_transaction_id, plan_protocol, retained_record_digest)
+                    DEFERRABLE INITIALLY DEFERRED;
+            END IF;
+        END;
+        $serverware_retained_fk$;
+        CREATE OR REPLACE FUNCTION {namespace}.serverware_guard_planner_retention()
+        RETURNS trigger LANGUAGE plpgsql VOLATILE SECURITY INVOKER
+        SET search_path = pg_catalog, {namespace}, pg_temp
+        AS $serverware_retention$
+        BEGIN
+            IF {reservation}
+                OR (OLD.exact_plan_base64url IS NOT NULL AND ({payload}))
+                OR (OLD.status IN ('consumed', 'failed') AND ({payload} OR {terminal}))
+                OR (OLD.status = 'reserved' AND NEW.status NOT IN ('reserved', 'planned', 'failed'))
+                OR (OLD.status = 'planned' AND NEW.status = 'reserved')
+            THEN
+                RAISE EXCEPTION 'planner reservation and retained evidence are immutable';
+            END IF;
+            RETURN NEW;
+        END;
+        $serverware_retention$;
+        DROP TRIGGER IF EXISTS serverware_planner_retention_guard ON {parent};
+        CREATE TRIGGER serverware_planner_retention_guard
+            BEFORE UPDATE ON {parent} FOR EACH ROW
+            EXECUTE FUNCTION {namespace}.serverware_guard_planner_retention();
+    """
+
+
+def planner_retention_sqlite_guards_sql() -> str:
+    """Keep SQLite v3-only while enforcing its actual reservation immutability."""
+    def changed(columns):
+        return " OR ".join("NEW." + column + " IS NOT OLD." + column for column in columns)
+    reservation = changed(authority_contract.PLANNER_RESERVATION_IMMUTABLE_COLUMNS)
+    payload = changed(authority_contract.PLANNER_PAYLOAD_IMMUTABLE_COLUMNS)
+    terminal = changed(authority_contract.PLANNER_TERMINAL_IMMUTABLE_COLUMNS)
+    return f"""
+        CREATE TRIGGER IF NOT EXISTS serverware_planner_retention_insert_guard
+        BEFORE INSERT ON policy_authority_planner_transactions
+        WHEN NEW.plan_protocol <> 'v3' OR NEW.retained_record_digest IS NOT NULL
+        BEGIN SELECT RAISE(ABORT, 'SQLite retained revocation admission is disabled'); END;
+        CREATE TRIGGER IF NOT EXISTS serverware_planner_retention_guard
+        BEFORE UPDATE ON policy_authority_planner_transactions
+        WHEN NEW.plan_protocol <> 'v3' OR NEW.retained_record_digest IS NOT NULL
+            OR {reservation}
+            OR (OLD.exact_plan_base64url IS NOT NULL AND ({payload}))
+            OR (OLD.status IN ('consumed', 'failed') AND ({payload} OR {terminal}))
+            OR (OLD.status = 'reserved' AND NEW.status NOT IN ('reserved', 'planned', 'failed'))
+            OR (OLD.status = 'planned' AND NEW.status = 'reserved')
+        BEGIN SELECT RAISE(ABORT, 'planner reservation and retained evidence are immutable'); END;
+        CREATE TRIGGER IF NOT EXISTS serverware_retained_sqlite_insert_guard
+        BEFORE INSERT ON policy_authority_revocation_retained_plans
+        BEGIN SELECT RAISE(ABORT, 'SQLite retained revocation admission is disabled'); END;
+    """
+
+
 def authority_v9_schema_source() -> str:
     return """
         CREATE TABLE IF NOT EXISTS
@@ -47,7 +127,7 @@ def authority_v9_schema_source() -> str:
                 ),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.36'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.37'
                 ),
                 CHECK (status = 'completed'),
                 CHECK (length(before_manifest_json) BETWEEN 2 AND 67108864),
@@ -80,7 +160,7 @@ def authority_v9_schema_source() -> str:
                 CHECK (length(key_columns_json) BETWEEN 2 AND 4194304),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.36'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.37'
                 )
             );
 
@@ -123,7 +203,7 @@ def authority_v9_schema_source() -> str:
                 CHECK (length(template_json) BETWEEN 2 AND 4194304),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.36'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.37'
                 )
             );
 
@@ -176,7 +256,7 @@ def authority_v9_schema_source() -> str:
                 CHECK (length(evidence_json) BETWEEN 2 AND 4194304),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.36'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.37'
                 )
             );
 
@@ -214,7 +294,7 @@ def authority_v9_schema_source() -> str:
                 CHECK (expires_at_epoch_ns > created_at_epoch_ns),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.36'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.37'
                 )
             );
 
@@ -293,13 +373,15 @@ def authority_v9_schema_source() -> str:
                 ),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.36'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.37'
                 )
             );
 
         CREATE TABLE IF NOT EXISTS
             policy_authority_planner_transactions (
                 planner_transaction_id TEXT PRIMARY KEY,
+                plan_protocol TEXT NOT NULL DEFAULT 'v3',
+                retained_record_digest TEXT,
                 operation TEXT NOT NULL,
                 operation_id TEXT NOT NULL,
                 request_digest TEXT NOT NULL,
@@ -333,6 +415,36 @@ def authority_v9_schema_source() -> str:
                 planned_at_epoch_ns BIGINT,
                 terminal_at_epoch_ns BIGINT,
                 source_revision TEXT NOT NULL,
+                UNIQUE (planner_transaction_id, plan_protocol, retained_record_digest),
+                CHECK (plan_protocol IN ('v3', 'revocation-v4')),
+                CHECK (
+                    retained_record_digest IS NULL
+                    OR retained_record_digest ~ '^sha256:[0-9a-f]{64}$'
+                ),
+                CHECK (
+                    (plan_protocol = 'v3' AND retained_record_digest IS NULL)
+                    OR (plan_protocol = 'revocation-v4'
+                        AND operation = 'webauthn.credential.revoke'
+                        AND (
+                            (retained_record_digest IS NULL
+                                AND status IN ('reserved', 'failed')
+                                AND authorization_projection_digest IS NULL
+                                AND authority_snapshot_digest IS NULL
+                                AND exact_plan_base64url IS NULL
+                                AND exact_plan_bytes_digest IS NULL
+                                AND exact_plan_byte_count IS NULL
+                                AND planned_at_epoch_ns IS NULL)
+                            OR (retained_record_digest IS NOT NULL
+                                AND status IN ('planned', 'consumed', 'failed')
+                                AND authorization_projection_digest IS NOT NULL
+                                AND authority_snapshot_digest IS NOT NULL
+                                AND exact_plan_base64url IS NOT NULL
+                                AND exact_plan_bytes_digest IS NOT NULL
+                                AND exact_plan_byte_count IS NOT NULL
+                                AND exact_plan_byte_count BETWEEN 2 AND 67108864
+                                AND planned_at_epoch_ns IS NOT NULL)
+                        ))
+                ),
                 CHECK (
                     status IN ('reserved', 'planned', 'consumed', 'failed')
                 ),
@@ -402,7 +514,66 @@ def authority_v9_schema_source() -> str:
                 ),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.36'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.37'
+                )
+            );
+
+        CREATE TABLE IF NOT EXISTS
+            policy_authority_revocation_retained_plans (
+                planner_transaction_id TEXT PRIMARY KEY,
+                plan_protocol TEXT NOT NULL,
+                exact_envelope_base64url TEXT NOT NULL,
+                exact_envelope_bytes_digest TEXT NOT NULL,
+                exact_envelope_byte_count BIGINT NOT NULL,
+                evaluation_context_base64url TEXT NOT NULL,
+                evaluation_context_bytes_digest TEXT NOT NULL,
+                evaluation_context_byte_count BIGINT NOT NULL,
+                planner_key_digest TEXT NOT NULL,
+                verifier_key_digest TEXT NOT NULL,
+                retained_record_digest TEXT NOT NULL,
+                source_revision TEXT NOT NULL,
+                UNIQUE (planner_transaction_id, plan_protocol, retained_record_digest),
+                CONSTRAINT serverware_revocation_retained_parent_fk
+                    FOREIGN KEY (planner_transaction_id, plan_protocol, retained_record_digest)
+                    REFERENCES policy_authority_planner_transactions
+                        (planner_transaction_id, plan_protocol, retained_record_digest)
+                    DEFERRABLE INITIALLY DEFERRED,
+                CHECK (plan_protocol = 'revocation-v4'),
+                CHECK (length(planner_transaction_id) BETWEEN 1 AND 256),
+                CHECK (exact_envelope_byte_count BETWEEN 2 AND 67108864),
+                CHECK (evaluation_context_byte_count BETWEEN 2 AND 524288),
+                CHECK (
+                    length(exact_envelope_base64url) = (4 * exact_envelope_byte_count + 2) / 3
+                    AND exact_envelope_base64url ~ '^[A-Za-z0-9_-]+$'
+                    AND length(evaluation_context_base64url) = (4 * evaluation_context_byte_count + 2) / 3
+                    AND evaluation_context_base64url ~ '^[A-Za-z0-9_-]+$'
+                ),
+                CHECK (
+                    exact_envelope_byte_count % 3 = 0
+                    OR (exact_envelope_byte_count % 3 = 1
+                        AND substr(exact_envelope_base64url, length(exact_envelope_base64url), 1) IN ('A', 'Q', 'g', 'w'))
+                    OR (exact_envelope_byte_count % 3 = 2
+                        AND substr(exact_envelope_base64url, length(exact_envelope_base64url), 1) IN
+                            ('A', 'E', 'I', 'M', 'Q', 'U', 'Y', 'c', 'g', 'k', 'o', 's', 'w', '0', '4', '8'))
+                ),
+                CHECK (
+                    evaluation_context_byte_count % 3 = 0
+                    OR (evaluation_context_byte_count % 3 = 1
+                        AND substr(evaluation_context_base64url, length(evaluation_context_base64url), 1) IN ('A', 'Q', 'g', 'w'))
+                    OR (evaluation_context_byte_count % 3 = 2
+                        AND substr(evaluation_context_base64url, length(evaluation_context_base64url), 1) IN
+                            ('A', 'E', 'I', 'M', 'Q', 'U', 'Y', 'c', 'g', 'k', 'o', 's', 'w', '0', '4', '8'))
+                ),
+                CHECK (
+                    exact_envelope_bytes_digest ~ '^sha256:[0-9a-f]{64}$'
+                    AND evaluation_context_bytes_digest ~ '^sha256:[0-9a-f]{64}$'
+                    AND planner_key_digest ~ '^sha256:[0-9a-f]{64}$'
+                    AND verifier_key_digest ~ '^sha256:[0-9a-f]{64}$'
+                    AND retained_record_digest ~ '^sha256:[0-9a-f]{64}$'
+                ),
+                CHECK (
+                    source_revision =
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.37'
                 )
             );
 
@@ -453,7 +624,7 @@ def authority_v9_schema_source() -> str:
                 CHECK (length(state_json) BETWEEN 2 AND 4194304),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.36'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.37'
                 )
             );
 
@@ -515,7 +686,7 @@ def authority_v9_schema_source() -> str:
                 CHECK (expires_at_epoch_ns > created_at_epoch_ns),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.36'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.37'
                 )
             );
 
@@ -552,7 +723,7 @@ def authority_v9_schema_source() -> str:
                 ),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.36'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.37'
                 )
             );
 
@@ -583,7 +754,7 @@ def authority_v9_schema_source() -> str:
                 CHECK (deleted_at_epoch_ns >= 0),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.36'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.37'
                 )
             );
 
@@ -628,7 +799,7 @@ def authority_v9_schema_source() -> str:
                 ),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.36'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.37'
                 )
             );
 
@@ -682,7 +853,7 @@ def authority_v9_schema_source() -> str:
                 ),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.36'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.37'
                 )
             );
 
@@ -726,7 +897,7 @@ def authority_v9_schema_source() -> str:
                 CHECK (updated_at_epoch_ns >= 0),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.36'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.37'
                 )
             );
 
@@ -774,7 +945,7 @@ def authority_v9_schema_source() -> str:
             ),
             CHECK (
                 source_revision =
-                'serverware.policyCandidateAuthoritySource/2026-07-30.36'
+                'serverware.policyCandidateAuthoritySource/2026-07-30.37'
             )
         );
 
@@ -841,7 +1012,7 @@ def authority_v9_schema_source() -> str:
             ),
             CHECK (
                 source_revision =
-                'serverware.policyCandidateAuthoritySource/2026-07-30.36'
+                'serverware.policyCandidateAuthoritySource/2026-07-30.37'
             )
         );
 
@@ -901,7 +1072,7 @@ def authority_v9_schema_source() -> str:
                 ),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.36'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.37'
                 )
             );
     """.replace(

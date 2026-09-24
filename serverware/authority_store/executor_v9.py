@@ -10,6 +10,18 @@ from typing import Any
 from serverware import authority_contract
 from serverware import authority_audit_capacity
 from serverware import authority_transition_registry
+from serverware.authority_store import planner_connection
+from serverware.authority_store.planner_connection import (
+    _require_database_role,
+    _require_fresh_deadline,
+    _require_planner_writer,
+    _require_postgres_connection,
+    _require_serializable,
+)
+from serverware.authority_store.revocation_retention import (
+    persist_revocation_planner_record,
+    read_revocation_planner_record,
+)
 from serverware.authority_store.v9_schema_source import authority_v9_schema_source
 from serverware.authority_root_transition import (
     primary_root_transition_digest,
@@ -42,6 +54,7 @@ _DIGEST_PATTERN = "sha256:" + "0" * 64
 def bind_db_globals(namespace: Mapping[str, Any]) -> None:
     global _DB_GLOBALS
     _DB_GLOBALS = namespace
+    planner_connection.bind_db_globals(namespace)
 
 
 def _db_value(name: str) -> Any:
@@ -2164,54 +2177,6 @@ def install_authority_v9_executor(
     )
 
 
-def _require_postgres_connection(connection: Any) -> Any:
-    postgres_connection = _db_value("PostgresMetadataConnection")
-    if not isinstance(connection, postgres_connection):
-        raise _db_value("MetadataStoreError")(
-            "authority v9 APIs require the measured PostgreSQL facade"
-        )
-    return connection.raw_connection
-
-
-def _require_serializable(raw: Any) -> None:
-    with raw.cursor() as cursor:
-        row = cursor.execute("SHOW transaction_isolation").fetchone()
-    if row is None or row["transaction_isolation"] != "serializable":
-        raise _db_value("MetadataStoreError")(
-            "authority v9 write APIs require SERIALIZABLE"
-        )
-
-
-def _require_database_role(raw: Any, expected_role: str) -> None:
-    with raw.cursor() as cursor:
-        row = cursor.execute(
-            "SELECT current_user AS current_role, "
-            "session_user AS session_role, "
-            "current_setting('transaction_read_only') AS read_only, "
-            "current_setting('transaction_deferrable') AS deferrable"
-        ).fetchone()
-    if (
-        row is None
-        or row["current_role"] != expected_role
-        or row["session_role"] != expected_role
-        or row["read_only"] != "off"
-        or row["deferrable"] != "off"
-    ):
-        raise _db_value("MetadataStoreError")(
-            "authority database role or writer transaction mode is not exact"
-        )
-
-
-def _require_planner_writer(connection: Any) -> Any:
-    raw = _require_postgres_connection(connection)
-    _require_serializable(raw)
-    _require_database_role(
-        raw,
-        _db_value("_METADATA_STORE_AUTHORITY_PLANNER_WRITER_ROLE"),
-    )
-    return raw
-
-
 def _require_executor(connection: Any) -> Any:
     raw = _require_postgres_connection(connection)
     _require_serializable(raw)
@@ -2222,44 +2187,11 @@ def _require_executor(connection: Any) -> Any:
     return raw
 
 
-def _require_fresh_deadline(
-    *,
-    deadline_monotonic_ns: int,
-    deadline_epoch_ns: int,
-    reserved_at_epoch_ns: int,
-) -> None:
-    if (
-        any(
-            not isinstance(value, int) or isinstance(value, bool)
-            for value in (
-                deadline_monotonic_ns,
-                deadline_epoch_ns,
-                reserved_at_epoch_ns,
-            )
-        )
-    ):
-        raise ValueError("authority v9 deadline is not integral")
-    now_monotonic_ns = time.monotonic_ns()
-    now_epoch_ns = time.time_ns()
-    maximum_age_ns = int(
-        _db_value("_POLICY_AUTHORITY_VERIFIER_RESPONSE_MAX_AGE_NS")
-    )
-    maximum_skew_ns = int(
-        _db_value("_POLICY_AUTHORITY_VERIFIER_MAX_CLOCK_SKEW_NS")
-    )
-    monotonic_remaining = deadline_monotonic_ns - now_monotonic_ns
-    epoch_remaining = deadline_epoch_ns - now_epoch_ns
-    if (
-        reserved_at_epoch_ns > now_epoch_ns + maximum_skew_ns
-        or now_epoch_ns - reserved_at_epoch_ns > maximum_age_ns
-        or monotonic_remaining <= 0
-        or epoch_remaining <= 0
-        or monotonic_remaining > maximum_age_ns
-        or epoch_remaining > maximum_age_ns + maximum_skew_ns
-        or abs(monotonic_remaining - epoch_remaining) > maximum_skew_ns
-    ):
-        raise ValueError(
-            "authority v9 deadline binding is stale or inconsistent"
+def _require_v3_planner_row(row: Mapping[str, Any] | None) -> None:
+    if (row is None or row.get("plan_protocol") != "v3"
+            or row.get("retained_record_digest") is not None):
+        raise _db_value("MetadataStoreError")(
+            "authority legacy planner API requires v3 protocol"
         )
 
 
@@ -2416,6 +2348,24 @@ def reserve_authority_execution_envelope(
         exact_request_bytes
     ).hexdigest()
     with raw.cursor() as cursor:
+        planner = cursor.execute(
+            "SELECT * FROM serverware_metadata."
+            "policy_authority_planner_transactions "
+            "WHERE planner_transaction_id = %s FOR UPDATE",
+            (planner_transaction_id,),
+        ).fetchone()
+        _require_v3_planner_row(planner)
+        if any(planner[name] != value for name, value in (
+            ("operation", operation), ("operation_id", operation_id),
+            ("request_digest", request_digest), ("capability_id", capability_id),
+            ("authorization_projection_digest", authorization_projection_digest),
+            ("deadline_monotonic_ns", deadline_monotonic_ns),
+            ("deadline_epoch_ns", deadline_epoch_ns), ("fence", fence),
+            ("reserved_at_epoch_ns", reserved_at_epoch_ns),
+        )) or planner["status"] not in {"planned", "consumed"}:
+            raise _db_value("MetadataStoreError")(
+                "authority v9 execution envelope parent binding changed"
+            )
         cursor.execute(
             "INSERT INTO serverware_metadata."
             "policy_authority_execution_envelopes ("
@@ -2576,14 +2526,23 @@ def read_authority_execution_response(
     raw = _require_postgres_connection(connection)
     with raw.cursor() as cursor:
         row = cursor.execute(
-            "SELECT status, exact_response_base64url, "
-            "exact_response_bytes_digest, exact_response_byte_count "
+            "SELECT envelope.status, envelope.exact_response_base64url, "
+            "envelope.exact_response_bytes_digest, envelope.exact_response_byte_count, "
+            "planner.plan_protocol, planner.retained_record_digest "
             "FROM serverware_metadata."
-            "policy_authority_execution_envelopes "
-            "WHERE envelope_id = %s",
+            "policy_authority_execution_envelopes AS envelope "
+            "LEFT JOIN serverware_metadata.policy_authority_planner_transactions AS planner "
+            "ON planner.planner_transaction_id = envelope.planner_transaction_id "
+            "AND planner.operation_id = envelope.operation_id "
+            "AND planner.request_digest = envelope.request_digest "
+            "AND planner.capability_id = envelope.capability_id "
+            "WHERE envelope.envelope_id = %s",
             (envelope_id,),
         ).fetchone()
-    if row is None or row["status"] == "reserved":
+    if row is None:
+        return None
+    _require_v3_planner_row(row)
+    if row["status"] == "reserved":
         return None
     encoded = str(row["exact_response_base64url"])
     payload = base64.urlsafe_b64decode(
@@ -2869,9 +2828,9 @@ def reserve_authority_planner_transaction(
             "planner_measurement_digest, "
             "planner_attestation_receipt_digest, "
             "deadline_monotonic_ns, deadline_epoch_ns, fence, status, "
-            "reserved_at_epoch_ns, source_revision"
+            "reserved_at_epoch_ns, source_revision, plan_protocol, retained_record_digest"
             ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
-            "%s, %s, %s, %s, %s, %s, %s, %s, 'reserved', %s, %s) "
+            "%s, %s, %s, %s, %s, %s, %s, %s, 'reserved', %s, %s, 'v3', NULL) "
             "ON CONFLICT (planner_transaction_id) DO NOTHING",
             values,
         )
@@ -2881,6 +2840,7 @@ def reserve_authority_planner_transaction(
             "WHERE planner_transaction_id = %s FOR UPDATE",
             (planner_transaction_id,),
         ).fetchone()
+    _require_v3_planner_row(row)
     if row is None or tuple(row[key] for key in (
         "planner_transaction_id",
         "operation",
@@ -3587,6 +3547,12 @@ def complete_authority_planner_transaction(
     plan_base64url = _b64url(exact_plan_bytes)
     plan_digest = "sha256:" + hashlib.sha256(exact_plan_bytes).hexdigest()
     with raw.cursor() as cursor:
+        reserved = cursor.execute(
+            "SELECT * FROM serverware_metadata.policy_authority_planner_transactions "
+            "WHERE planner_transaction_id = %s FOR UPDATE",
+            (planner_transaction_id,),
+        ).fetchone()
+        _require_v3_planner_row(reserved)
         cursor.execute(
             f"SELECT serverware_metadata.{AUDIT_CAPACITY_FUNCTION_NAME}(%s,%s::jsonb,%s::jsonb,%s)",
             (plan["operation"], selected_json, mutation_json, plan["workUnits"]),
@@ -3598,7 +3564,8 @@ def complete_authority_planner_transaction(
             "authority_snapshot_digest = %s, "
             "exact_plan_base64url = %s, exact_plan_bytes_digest = %s, "
             "exact_plan_byte_count = %s, planned_at_epoch_ns = %s "
-            "WHERE planner_transaction_id = %s AND status = 'reserved'",
+            "WHERE planner_transaction_id = %s AND status = 'reserved' "
+            "AND plan_protocol = 'v3' AND retained_record_digest IS NULL",
             (
                 authorization_projection_digest,
                 plan["authoritySnapshotDigest"],
@@ -3615,6 +3582,7 @@ def complete_authority_planner_transaction(
             "WHERE planner_transaction_id = %s",
             (planner_transaction_id,),
         ).fetchone()
+    _require_v3_planner_row(row)
     if updated.rowcount not in (0, 1) or row is None:
         raise _db_value("MetadataStoreError")(
             "authority planner completion CAS failed"
@@ -3695,7 +3663,8 @@ def read_authority_planner_payload(
         row = cursor.execute(
             "SELECT planner_transaction_id, operation_id, request_digest, "
             "capability_id, status, exact_plan_base64url, "
-            "exact_plan_bytes_digest, exact_plan_byte_count "
+            "exact_plan_bytes_digest, exact_plan_byte_count, "
+            "plan_protocol, retained_record_digest "
             "FROM serverware_metadata."
             "policy_authority_planner_transactions "
             "WHERE planner_transaction_id = %s",
@@ -3703,6 +3672,7 @@ def read_authority_planner_payload(
         ).fetchone()
     if row is None:
         return None
+    _require_v3_planner_row(row)
     if (
         row["planner_transaction_id"] != planner_transaction_id
         or row["operation_id"] != operation_id
@@ -3819,6 +3789,7 @@ def fail_authority_v9_transaction(
             raise _db_value("MetadataStoreError")(
                 "authority v9 failure binding is absent"
             )
+        _require_v3_planner_row(planner)
         exact_binding = (
             capability["envelope_id"] == envelope_id
             and capability["planner_transaction_id"]
@@ -3908,7 +3879,8 @@ def fail_authority_v9_transaction(
             "exact_response_bytes_digest = %s, "
             "exact_response_byte_count = %s, terminal_at_epoch_ns = %s "
             "WHERE planner_transaction_id = %s "
-            "AND status IN ('reserved', 'planned')",
+            "AND status IN ('reserved', 'planned') "
+            "AND plan_protocol = 'v3' AND retained_record_digest IS NULL",
             (
                 response_base64url,
                 response_digest,

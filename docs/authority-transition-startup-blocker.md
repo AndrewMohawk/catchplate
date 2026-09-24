@@ -93,9 +93,10 @@ replay, one-use execution or a terminal witness.
 
 Source `.36` adds [private original-byte admission](authority-revocation-wire.md)
 on the same remaining verification work, including strict decoding and comparison
-with the actual canonical encoder before signature checks. The
-[retention migration](authority-revocation-retention.md) remains a design, not an
-installed schema or service. None of the four missing registered kernels is
+with the actual canonical encoder before signature checks. Source `.37` adds
+private [retention storage and replay](authority-revocation-retention.md),
+versioned schema/ACL guards and a configured coordinator. These are source
+implementations, not installed schema or public service activation. None of the four missing registered kernels is
 enabled by these private producer/verification components.
 
 The [explicit-context credential classifier](webauthn-credential-trust.md) now

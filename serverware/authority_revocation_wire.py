@@ -112,7 +112,8 @@ def _string_end(raw, position):
     raise RevocationWireError("revocation JSON string is unterminated")
 
 
-def _preflight(raw, work):
+def _preflight(raw, work, *, maximum_nodes=contract.MAX_JSON_NODES,
+               maximum_depth=contract.MAX_JSON_DEPTH):
     """Count valid JSON nodes exactly; malformed grammar still goes to loads.
 
     No token list or input-sized graph is allocated. The delimiter stack is
@@ -127,7 +128,7 @@ def _preflight(raw, work):
     stack = []
 
     def check():
-        if nodes > contract.MAX_JSON_NODES or nodes + objects + 2 * pairs > remaining_nodes:
+        if nodes > maximum_nodes or nodes + objects + 2 * pairs > remaining_nodes:
             raise QueryReadWorkError("revocation JSON parser exceeds remaining node work")
 
     while position < len(raw):
@@ -145,7 +146,7 @@ def _preflight(raw, work):
                 raise RevocationWireError("revocation JSON delimiters do not match")
             position += 1
             continue
-        if len(stack) > contract.MAX_JSON_DEPTH:
+        if len(stack) > maximum_depth:
             raise RevocationWireError("revocation JSON exceeds its source depth")
         nodes += 1
         objects += int(point == 123)
@@ -190,7 +191,10 @@ def _unique_object(pairs):
     return value
 
 
-def _decode_envelope(raw: bytes, *, work: _ValidationWork) -> dict:
+def _decode_object(raw: bytes, *, work: _ValidationWork,
+                   maximum_bytes=contract.MAX_PAYLOAD_BYTES,
+                   maximum_nodes=contract.MAX_JSON_NODES,
+                   maximum_depth=contract.MAX_JSON_DEPTH) -> dict:
     """Decode once on existing work, without making any trust/canonical claim.
 
     For B raw bytes, N JSON nodes (including keys), O objects and P members:
@@ -201,9 +205,15 @@ def _decode_envelope(raw: bytes, *, work: _ValidationWork) -> dict:
     are separately charged by the genuine verifier on the same work object.
     """
     batch._SharedLedger(work)
-    if type(raw) is not bytes or not 2 <= len(raw) <= contract.MAX_PAYLOAD_BYTES:
+    for value, ceiling in ((maximum_bytes, contract.MAX_PAYLOAD_BYTES),
+                           (maximum_nodes, contract.MAX_JSON_NODES),
+                           (maximum_depth, contract.MAX_JSON_DEPTH)):
+        if type(value) is not int or not 1 <= value <= ceiling:
+            raise RevocationWireError("revocation JSON bound exceeds its source ceiling")
+    if type(raw) is not bytes or not 2 <= len(raw) <= maximum_bytes:
         raise RevocationWireError("revocation envelope bytes are not exact and source-bounded")
-    nodes, hook_nodes = _preflight(raw, work)
+    nodes, hook_nodes = _preflight(raw, work, maximum_nodes=maximum_nodes,
+                                    maximum_depth=maximum_depth)
     work.charge(input_bytes=3 * len(raw), json_nodes=nodes + hook_nodes)
     try:
         value = json.loads(raw.decode("ascii"), object_pairs_hook=_unique_object,
@@ -213,6 +223,11 @@ def _decode_envelope(raw: bytes, *, work: _ValidationWork) -> dict:
     if type(value) is not dict:
         raise RevocationWireError("revocation envelope root is not an object")
     return value
+
+
+def _decode_envelope(raw: bytes, *, work: _ValidationWork) -> dict:
+    """Preserve the signed-envelope decoder's exact source bounds and units."""
+    return _decode_object(raw, work=work)
 
 
 def _verify_signed_envelope_on_work(raw: bytes, *, work: _ValidationWork, **expectations):

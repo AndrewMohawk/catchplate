@@ -31,7 +31,9 @@ from serverware.authority_store.metadata_schema_source import (
     metadata_base_schema_source,
     metadata_schema_source,
 )
-from serverware.authority_store.v9_schema_source import authority_v9_schema_source
+from serverware.authority_store.v9_schema_source import (
+    authority_v9_schema_source, planner_retention_guard_sql, planner_retention_sqlite_guards_sql,
+)
 
 
 RECEIPT = "policy_authority_v9_offline_migration_receipts"
@@ -592,6 +594,117 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
                 acl = assignment(loops[0], acl_name)
                 self.assertLess(guard.lineno, acl.lineno)
                 self.assertTrue(calls(acl, "execute"))
+
+    def test_retained_parent_and_sidecar_have_exact_columns_and_closed_protocol_lifecycle(self):
+        parent = self.extension.split("policy_authority_planner_transactions (", 1)[1].split(");", 1)[0]
+        sidecar = self.extension.split("policy_authority_revocation_retained_plans (", 1)[1].split(");", 1)[0]
+        columns = lambda value: re.findall(r"^                ([a-z_]+) (?:TEXT|BIGINT)\b", value, re.MULTILINE)
+        self.assertEqual(len(columns(parent)), 36)
+        self.assertEqual(columns(parent)[:3], ["planner_transaction_id", "plan_protocol", "retained_record_digest"])
+        self.assertEqual(columns(sidecar), [
+            "planner_transaction_id", "plan_protocol", "exact_envelope_base64url",
+            "exact_envelope_bytes_digest", "exact_envelope_byte_count", "evaluation_context_base64url",
+            "evaluation_context_bytes_digest", "evaluation_context_byte_count", "planner_key_digest",
+            "verifier_key_digest", "retained_record_digest", "source_revision",
+        ])
+        for fragment in ("plan_protocol TEXT NOT NULL DEFAULT 'v3'",
+                "plan_protocol IN ('v3', 'revocation-v4')",
+                "plan_protocol = 'v3' AND retained_record_digest IS NULL",
+                "operation = 'webauthn.credential.revoke'",
+                "retained_record_digest IS NULL\n                                AND status IN ('reserved', 'failed')",
+                "retained_record_digest IS NOT NULL\n                                AND status IN ('planned', 'consumed', 'failed')",
+                "exact_plan_byte_count IS NOT NULL", "planned_at_epoch_ns IS NOT NULL"):
+            self.assertIn(fragment, parent)
+        identity = "(planner_transaction_id, plan_protocol, retained_record_digest)"
+        self.assertIn("UNIQUE " + identity, parent)
+        self.assertIn("UNIQUE " + identity, sidecar)
+        self.assertIn("CONSTRAINT serverware_revocation_retained_parent_fk", sidecar)
+        self.assertIn("FOREIGN KEY " + identity, sidecar)
+        self.assertIn("REFERENCES policy_authority_planner_transactions", sidecar)
+        self.assertIn("DEFERRABLE INITIALLY DEFERRED", sidecar)
+        self.assertNotIn("CASCADE", sidecar)
+        for fragment in ("exact_envelope_byte_count BETWEEN 2 AND 67108864",
+                "evaluation_context_byte_count BETWEEN 2 AND 524288",
+                "length(exact_envelope_base64url) = (4 * exact_envelope_byte_count + 2) / 3",
+                "length(evaluation_context_base64url) = (4 * evaluation_context_byte_count + 2) / 3",
+                "exact_envelope_base64url ~ '^[A-Za-z0-9_-]+$'",
+                "evaluation_context_base64url ~ '^[A-Za-z0-9_-]+$'"):
+            self.assertIn(fragment, sidecar)
+        for prefix in ("exact_envelope", "evaluation_context"):
+            self.assertIn(prefix + "_byte_count % 3 = 0", sidecar)
+            self.assertIn(prefix + "_byte_count % 3 = 1", sidecar)
+            self.assertIn(prefix + "_byte_count % 3 = 2", sidecar)
+            self.assertIn("substr(" + prefix + "_base64url, length(" + prefix + "_base64url), 1)", sidecar)
+        self.assertEqual(sidecar.count(authority_contract.SOURCE_REVISION), 1)
+
+    def test_actual_post_table_guard_renders_deferred_reverse_fk_and_immutable_update_checks(self):
+        namespace = '"retention_fixture"'
+        sql = planner_retention_guard_sql(namespace)
+        parent = namespace + ".policy_authority_planner_transactions"
+        sidecar = namespace + ".policy_authority_revocation_retained_plans"
+        for fragment in ("ALTER TABLE " + parent,
+                "ADD CONSTRAINT serverware_planner_retained_record_fk",
+                "REFERENCES " + sidecar + " (planner_transaction_id, plan_protocol, retained_record_digest)",
+                "DEFERRABLE INITIALLY DEFERRED", "RETURNS trigger LANGUAGE plpgsql",
+                "SET search_path = pg_catalog, " + namespace + ", pg_temp",
+                "BEFORE UPDATE ON " + parent, "serverware_guard_planner_retention()",
+                "OLD.exact_plan_base64url IS NOT NULL", "OLD.status IN ('consumed', 'failed')",
+                "OLD.status = 'reserved' AND NEW.status NOT IN ('reserved', 'planned', 'failed')",
+                "OLD.status = 'planned' AND NEW.status = 'reserved'"):
+            self.assertIn(fragment, sql)
+        self.assertNotIn("CASCADE", sql)
+        self.assertNotIn("SECURITY DEFINER", sql)
+        self.assertIn("VOLATILE SECURITY INVOKER", sql)
+        self.assertNotIn("UPDATE " + parent + " SET", sql)
+        for fields in (authority_contract.PLANNER_RESERVATION_IMMUTABLE_COLUMNS,
+                       authority_contract.PLANNER_PAYLOAD_IMMUTABLE_COLUMNS,
+                       authority_contract.PLANNER_TERMINAL_IMMUTABLE_COLUMNS):
+            expected = "ROW(" + ", ".join("NEW." + field for field in fields) + ") IS DISTINCT FROM ROW(" + ", ".join("OLD." + field for field in fields) + ")"
+            self.assertIn(expected, sql)
+        for bad in (None, "metadata", '""', '"metadata"; DROP TABLE x; --', '"a"b"', '"a\x00b"'):
+            with self.subTest(namespace=bad), self.assertRaises(ValueError):
+                planner_retention_guard_sql(bad)
+        quoted = planner_retention_guard_sql('"a\'b"')
+        self.assertIn("'\"a''b\".policy_authority_planner_transactions'::pg_catalog.regclass", quoted)
+
+    def test_sqlite_retained_protocol_is_denied_while_v3_identity_stays_immutable(self):
+        sql = planner_retention_sqlite_guards_sql()
+        self.assertEqual(sql.count("CREATE TRIGGER IF NOT EXISTS"), 3)
+        for name in ("serverware_planner_retention_insert_guard", "serverware_planner_retention_guard",
+                     "serverware_retained_sqlite_insert_guard"):
+            self.assertIn(name, sql)
+        self.assertIn("NEW.plan_protocol <> 'v3' OR NEW.retained_record_digest IS NOT NULL", sql)
+        self.assertIn("BEFORE INSERT ON policy_authority_revocation_retained_plans", sql)
+        for field in (*authority_contract.PLANNER_RESERVATION_IMMUTABLE_COLUMNS,
+                      *authority_contract.PLANNER_PAYLOAD_IMMUTABLE_COLUMNS,
+                      *authority_contract.PLANNER_TERMINAL_IMMUTABLE_COLUMNS):
+            self.assertIn("NEW." + field + " IS NOT OLD." + field, sql)
+        self.assertNotIn("ALTER TABLE", sql)
+        self.assertNotIn("COMMIT", sql)
+
+    def test_retention_guards_are_installed_by_actual_shared_bootstrap_and_bound_into_schema_contract(self):
+        source, tree = read_source("serverware/db.py", 16 * 1024 * 1024)
+        installer = function(tree, "_install_policy_candidate_authority_guards")
+        pg = calls(installer, "planner_retention_guard_sql")
+        sqlite = calls(installer, "planner_retention_sqlite_guards_sql")
+        self.assertEqual((len(pg), len(sqlite)), (1, 1))
+        self.assert_shape(pg[0], "_authority_v9_schema_source.planner_retention_guard_sql(guard_namespace)")
+        self.assert_shape(sqlite[0], "_authority_v9_schema_source.planner_retention_sqlite_guards_sql()")
+        namespace = assignment(installer, "guard_namespace")
+        self.assertLess(namespace.lineno, pg[0].lineno)
+        blocks = [node for node in ast.walk(installer) if isinstance(node, ast.If)
+            and pg[0] in tuple(ast.walk(node))
+            and ast.dump(node.test) == ast.dump(ast.parse("isinstance(conn, PostgresMetadataConnection)", mode="eval").body)]
+        self.assertEqual(len(blocks), 1)
+        self.assertNotIn(sqlite[0], tuple(ast.walk(blocks[0])))
+        _, schema = read_source("serverware/authority_store/schema.py")
+        digest = function(schema, "_policy_candidate_authority_source_contract_digest")
+        self.assertTrue(calls(digest, "planner_retention_guard_sql"))
+        self.assertTrue(calls(digest, "planner_retention_sqlite_guards_sql"))
+        required = function(schema, "_policy_candidate_authority_required_guard_names")
+        literals = {node.value for node in ast.walk(required) if isinstance(node, ast.Constant) and type(node.value) is str}
+        self.assertTrue({"serverware_guard_planner_retention", "serverware_planner_retention_guard",
+                        "serverware_planner_retention_insert_guard", "serverware_retained_sqlite_insert_guard"}.issubset(literals))
 
 
 if __name__ == "__main__":

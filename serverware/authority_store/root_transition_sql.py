@@ -83,7 +83,8 @@ def load_root_transition_sql(namespace: str) -> str:
     """Validate stored exact plan and expose its snapshot-bound root vectors.
 
 Requires locked ``planner`` and ``capability`` records plus the declarations
-above. It runs before the committed-retry branch, without reading current root
+above. It admits only the legacy v3 lifecycle tag, before decoding any plan
+bytes or entering the committed-retry branch, without reading current root
 heads. The complete plan is ASCII transport, possibly containing escaped Unicode.
 It is byte/hash/base64-bound, NOT reserialized with PostgreSQL's UTF-8 JSON
 canonicalizer. Only the closed ASCII root transition is canonicalized here.
@@ -113,6 +114,9 @@ canonicalizer. Only the closed ASCII root transition is canonicalized here.
         for field, column in row_joins.items()
     )
     return textwrap.dedent(f"""
+        IF planner.plan_protocol IS DISTINCT FROM 'v3'
+            OR planner.retained_record_digest IS NOT NULL
+        THEN RAISE EXCEPTION 'authority root transition requires legacy v3 protocol'; END IF;
         IF planner.exact_plan_base64url IS NULL
             OR planner.exact_plan_base64url !~ '^[A-Za-z0-9_-]+$'
             OR planner.exact_plan_byte_count IS NULL

@@ -39,6 +39,7 @@ _V9_NEW_TABLES = frozenset(
         "policy_authority_authorization_projections",
         "policy_authority_execution_envelopes",
         "policy_authority_planner_transactions",
+        "policy_authority_revocation_retained_plans",
         "policy_authority_bounded_aggregate_states",
         "policy_authority_exact_pages",
         "policy_authority_work_pages",
@@ -1022,6 +1023,17 @@ def _completed_v9_repair_receipt(
     if len(version_rows) != 1 or int(version_rows[0]["version"]) != 9:
         raise MigrationError(
             "legacy completed-v9 receipt exists without exact schema v9"
+        )
+    # This narrow historical receipt repair cannot adopt newer retained
+    # evidence. Current completed retries return above and undergo the full
+    # recorded-contract validation in migrate(), without reinstalling tables.
+    retained = cursor.execute(
+        "SELECT pg_catalog.to_regclass(%s) IS NOT NULL AS present",
+        ("serverware_metadata." + authority_contract.REVOCATION_RETAINED_TABLE,),
+    ).fetchone()
+    if retained is None or retained["present"] is not False:
+        raise MigrationError(
+            "retained revocation storage requires a separately reviewed migration"
         )
     legacy_columns = tuple(
         column_name

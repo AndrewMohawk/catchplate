@@ -1,7 +1,7 @@
 """Bind the actual mixed revocation observations to genuine read/write proofs.
 
 One privately owned raw graph and one cumulative work budget cover source
-generation, retained observations, primary membership, all five complete joins
+generation, retained observations, primary membership, all six complete joins
 and indexed mutations. No successful component result is accepted as input.
 Caller query JSON is never parsed into executable declarations.
 
@@ -30,9 +30,9 @@ from serverware.authority_query_read_work import (
 )
 
 
-# Target + five complete roles + at most 32 approval audits + credential audit
-# + optional separate assertion credential + challenge + framework counter.
-MAX_QUERY_READS = 1 + query_batch.QUERY_COUNT + complete.CASCADE_MAX + 1 + 2 + 1
+# Target + six complete roles + at most 32 approval audits + credential audit
+# + optional signer/challenge + two trust reads + the genuine framework counter.
+MAX_QUERY_READS = 1 + query_batch.QUERY_COUNT + complete.CASCADE_MAX + 1 + 2 + 2 + 1
 _ASSERTION_FIELDS = frozenset({"credentialRecordId", "challengeId"})
 
 
@@ -230,9 +230,63 @@ def _bind_complete_declarations(raw, program, work: _ValidationWork) -> None:
         raise RevocationReadWriteError("revocation proof declarations differ from the ordered source recipe")
 
 
-def _bind_point_keys(program, records, work: _ValidationWork) -> None:
-    for query, record in zip(program, records):
+def _bind_publication(query, record, *, prior_reads, selected_rows, work: _ValidationWork) -> None:
+    """Bind the one source-declared mandatory-present publication join.
+
+    This grants neither arbitrary predicate completeness nor absence: genuine
+    primary membership will subsequently prove the exact matched full row.
+    The real resolver consumes only earlier retained high-water observations.
+    """
+    if (record.returned_row_count != 1 or len(record.addresses) != 1
+            or record.addresses[0].present is not True):
+        raise RevocationReadWriteError("revocation trust publication must be an exact present observation")
+    resolved = reads._resolve_query(complete.OPERATION, query,
+        prior_reads=prior_reads, selected_rows=tuple(selected_rows), work=work)
+    columns = ("scope", "status", "bundle_digest", "payload_digest", "rollback_epoch", "sequence")
+    if (type(resolved) is not core.BoundedQuery or resolved.table != candidate.trust.PUBLICATION_TABLE
+            or resolved.maximum_rows != 1
+            or resolved.absent_key is not None or resolved.proof_primitive != "primary-key-row"
+            or tuple(predicate.column for predicate in resolved.predicates) != columns
+            or any(predicate.operator != "eq" or type(predicate.value) not in (str, int)
+                   for predicate in resolved.predicates)
+            or tuple((item.column, item.descending) for item in resolved.order_by) != (("id", False),)):
+        raise RevocationReadWriteError("revocation publication join differs from its exact source role")
+    address = record.addresses[0]
+    work.prepare_copy(selected_rows)
+    matching = tuple(item for item in selected_rows
+        if item["table"] == query.table and item["keyDigest"] == address.key_digest)
+    if (address.table != query.table or len(matching) != 1
+            or matching[0]["present"] is not True or type(matching[0]["row"]) is not dict):
+        raise RevocationReadWriteError("revocation publication join lost its selected primary row")
+    row = matching[0]["row"]
+    # Conservatively prepare full-row projection before allocating the actual
+    # key and predicate dictionaries. Their encodings are separate real work.
+    work.prepare_copy(row)
+    row_key = {column: row.get(column) for column in PRIMARY_KEY_COLUMNS[query.table]}
+    key_wire = work.wire(row_key)
+    work.charge(input_bytes=len(key_wire) + len(address.key_json))
+    if key_wire != address.key_json:
+        raise RevocationReadWriteError("revocation publication primary key differs from its actual row")
+    work.prepare_copy(row)
+    actual = {column: row.get(column) for column in columns}
+    expected = {predicate.column: predicate.value for predicate in resolved.predicates}
+    actual_wire, expected_wire = work.wire(actual), work.wire(expected)
+    work.charge(input_bytes=len(actual_wire) + len(expected_wire))
+    if actual_wire != expected_wire:
+        raise RevocationReadWriteError("revocation publication row differs from its resolved high-water join")
+
+
+def _bind_point_keys(program, records, selected_rows, work: _ValidationWork) -> None:
+    publication_id = core.query_program_id(complete.OPERATION, "webauthn_trust_publication",
+                                           candidate.trust.PUBLICATION_TABLE)
+    high_water_id = core.query_program_id(complete.OPERATION, "webauthn_trust_high_water",
+                                          candidate.trust.HIGH_WATER_TABLE)
+    for ordinal, (query, record) in enumerate(zip(program, records)):
         if type(query) is complete.CompleteIndexQuery:
+            continue
+        if query.query_id == publication_id:
+            _bind_publication(query, record, prior_reads=records[:ordinal],
+                selected_rows=selected_rows, work=work)
             continue
         columns = PRIMARY_KEY_COLUMNS[query.table]
         if (type(query) is not core.BoundedQuery or query.maximum_rows != 1
@@ -255,6 +309,8 @@ def _bind_point_keys(program, records, work: _ValidationWork) -> None:
         if (address.table != query.table or address.key_json != expected
                 or record.returned_row_count != int(address.present)):
             raise RevocationReadWriteError("revocation point observation differs from its exact source key")
+        if query.query_id == high_water_id and address.present is not True:
+            raise RevocationReadWriteError("revocation trust high-water must be present")
 
 
 def _bind_complete_order(proved, records, work: _ValidationWork) -> None:
@@ -297,7 +353,7 @@ def _verify(owned, ledger, raw_decode_bytes, capture) -> RevocationReadWriteInpu
         selected_rows=tuple(owned["selectedRows"]), work=work)
     observation_validation = _delta(before, work.metrics)
     before = work.metrics
-    _bind_point_keys(program, records, work)
+    _bind_point_keys(program, records, owned["selectedRows"], work)
     point_binding = _delta(before, work.metrics)
     # Exactly one debit of this remaining-clamped work phase, before proof
     # workers request their limits. Failed phases abort; no retry or refund.

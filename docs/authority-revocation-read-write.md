@@ -22,7 +22,7 @@ flowchart TD
     A[Raw context, observations, rows, roots, proofs and mutations] --> B[Combined preflight and one ownership capture]
     B --> C[Actual source query generation]
     C --> D[Retained observation validation and exact point keys]
-    D --> E[Global primary membership, five complete joins and indexed writes]
+    D --> E[Global primary membership, six complete joins and indexed writes]
     E --> F[Compare complete observation order with genuine joined leaves]
     F --> G[Owned observations and cumulative work metrics]
 ```
@@ -40,7 +40,7 @@ this internal graph. They are **never parsed into caller-supplied declarations**
 Actual business-intent normalization still performs its own separately metered
 JSON round trip.
 
-Preflight bounds exact types, lengths, 42 source declarations and 193 aggregate
+Preflight bounds exact types, lengths, 45 source declarations and 193 aggregate
 address occurrences. It combines query-read records, addresses and *all*
 read/write frontier terminals in one necessary node lower bound:
 
@@ -59,7 +59,7 @@ these subsequent traversals.
 ## Exact source and observation linkage
 
 The composer calls the [genuine metered generator](authority-revocation-query-work.md),
-including its actual framework-capacity query. It compares the five generated
+including its actual framework-capacity query. It compares the six generated
 complete declarations with the proof declarations in **source order**, using
 their raw operation, role, selector and maximum-row fields. No additional
 profile serializer or parallel query recipe supplies that comparison.
@@ -72,9 +72,12 @@ called to reset the budget or recapture a partial input graph.
 Two additional bindings close gaps that generic observational bookkeeping
 intentionally does not prove:
 
-- Every ordinary query must be a source-generated full-primary-key equality
+- Each ordinary point query must be a source-generated full-primary-key equality
   lookup. Its sole address must have that exact key whether the row is present
   or absent. A genuine proof for a different present key is insufficient.
+- The single source-declared publication lookup is instead a mandatory present
+  row matching all predicates resolved from the proved high-water row. It
+  cannot establish arbitrary predicate absence or authorize another query shape.
 - Every complete observation must match the genuine join's ordered primary-key
   digests and row count, with all addresses present. Empty complete queries
   still require their explicit zero-address, zero-count record.

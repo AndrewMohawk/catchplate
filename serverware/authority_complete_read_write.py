@@ -1,6 +1,6 @@
 """One source-bound complete-read and counted-write computation.
 
-This composes the five explicit revocation query roles with genuine primary
+This composes the six explicit revocation query roles with genuine primary
 and counted write evaluation under one private ledger. All caller evidence is
 owned before hashing; successful observations are never accepted as inputs.
 Source mutation templates restrict the proposed write shapes, not their intent.
@@ -337,7 +337,7 @@ def _verify(owned, ledger, ownership_bytes, ownership_nodes) -> CompleteReadWrit
     contracts = primary_table_contracts(operation)
     write_ids = _admit_mutations(owned, contracts)
     # This private source-role lookup is hash-free. Actual declaration binding
-    # and exact five-role closure still run inside the genuine read phase.
+    # and exact six-role closure still run inside the genuine read phase.
     read_ids = tuple(sorted({complete._role(operation, item["role"]).index_id
                              for item in owned["queries"]}))
     expected_union = tuple(sorted(set(read_ids) | set(write_ids)))

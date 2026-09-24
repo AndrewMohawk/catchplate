@@ -34,7 +34,7 @@ BUNDLE_SCHEMA = "serverware.policyAuthorityRevocationProofBundle/v1"
 BUNDLE_PROFILE = "serverware.policyAuthorityRevocationProofBundleProfile/v1"
 TRANSITION_SCHEMA = "serverware.policyAuthorityRevocationReadWriteTransition/v1"
 TRANSITION_PROFILE = "serverware.policyAuthorityRevocationReadWriteTransitionProfile/v1"
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.31"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.32"
 COUNTED_PROFILE = "serverware.policyAuthorityCountedIndex/v1"
 PHASES = (("generation", "generation"), ("declarationBinding", "declaration_binding"),
     ("observationValidation", "observation_validation"), ("pointBinding", "point_binding"),
@@ -220,8 +220,8 @@ class RevocationProofBundleTests(unittest.TestCase):
         fixture = fixture_oracle.RevocationObservationFixture()
         result = self.derive(fixture)
         bundle, transition = self.assert_documents(fixture, result)
-        self.assertEqual(len(bundle["inputs"]["queryReads"]), 9)
-        self.assertEqual(len(transition["indexBeforeHeads"]), 7)
+        self.assertEqual(len(bundle["inputs"]["queryReads"]), 12)
+        self.assertEqual(len(transition["indexBeforeHeads"]), 8)
         self.assertEqual(transition["primaryTransition"]["metrics"]["mutations"], 3)
         # Encoding/capture are invocation costs, not retained proof semantics.
         self.assertNotIn("ownershipBytes", transition["metrics"])
@@ -319,7 +319,7 @@ class RevocationProofBundleTests(unittest.TestCase):
                 selected["row"]["after_capture"] = True
                 inputs["before_proofs"][-1]["rootRevision"] += 1
                 inputs["mutations"][-1]["row"]["after_capture"] = True
-                terminal = inputs["query_frontiers"][-1].frontier[0]
+                terminal = inputs["query_frontiers"][-2].frontier[0]
                 attribute = "primary_row_digest" if hasattr(terminal, "primary_row_digest") else "digest"
                 object.__setattr__(terminal, attribute, "sha256:" + "f" * 64)
                 object.__setattr__(inputs["query_reads"][-1], "resolved_query_json", b"{}")
@@ -737,7 +737,7 @@ class RevocationProofBundleTests(unittest.TestCase):
         extra_sibling = copy.deepcopy(bundle)
         extra_sibling["inputs"]["beforeProofs"][0]["siblings"][0]["unadmitted"] = True
         too_many_reads = copy.deepcopy(bundle)
-        too_many_reads["inputs"]["queryReads"] = [too_many_reads["inputs"]["queryReads"][0]] * 43
+        too_many_reads["inputs"]["queryReads"] = [too_many_reads["inputs"]["queryReads"][0]] * 46
         too_many_addresses = copy.deepcopy(bundle)
         first = too_many_addresses["inputs"]["queryReads"][0]
         first["addresses"] = first["addresses"] * 193

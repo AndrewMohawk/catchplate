@@ -30,6 +30,7 @@ from serverware import authority_transition_webauthn as candidate
 import test_authority_audit_capacity_work as capacity_oracle
 import test_authority_revocation_query_program as recipe_oracle
 import test_webauthn_revoke_transition as context_oracle
+import authority_revocation_trust_fixture as trust_oracle
 
 
 OPERATION = "webauthn.credential.revoke"
@@ -98,8 +99,19 @@ class KernelFixture:
                                    OPERATION.encode("ascii"), self.request_digest.encode("ascii"))
         self.signer_id = "credential-signer" if separate_signer else self.values["record_id"]
         rows = [selected(item["table"], item["key"], item["row"]) for item in original.selected_rows
-                if item["table"] != "metadata_audit_outbox"
+                if item["table"] not in ("metadata_audit_outbox", "webauthn_trust_publications",
+                    "webauthn_trust_publication_high_water")
                 and (approval or item["table"] != "control_plane_approvals")]
+        trust = trust_oracle.trust_rows()
+        high_water = trust["webauthn_trust_publication_high_water"][0]
+        publication = trust["webauthn_trust_publications"][0]
+        for item in rows:
+            if item["table"] == "webauthn_credentials":
+                row = item["row"]
+                row.update(trust_oracle.credential_fields())
+        rows.extend((selected("webauthn_trust_publication_high_water",
+            {"authority_scope": "webauthn-metadata"}, high_water),
+            selected("webauthn_trust_publications", {"id": publication["id"]}, publication)))
         challenge = next(item["row"] for item in rows if item["table"] == "webauthn_challenges"
                          and item["key"] == {"id": "assertion-challenge"})
         self.raw_challenge = b"pure local candidate challenge"
@@ -115,7 +127,12 @@ class KernelFixture:
             "requestDigest": self.request_digest, "credentialRecordId": self.signer_id,
             "credentialId": signer["credential_id"], "challengeId": challenge["id"],
             "challengeDigest": digest(wire(public)), "clientChallengeDigest": digest(self.raw_challenge),
-            "rpId": "unit.example", "origin": "https://unit.example", "priorCounter": 2, "counter": 3}
+            "rpId": "unit.example", "origin": "https://unit.example", "priorCounter": 2, "counter": 3,
+            "trustHighWaterDigest": framed("serverware.webauthnTrustHighWater/v1",
+                wire(trust_oracle.trust_high_water_document(high_water))),
+            "metadataPublicationSequence": high_water["publication_sequence"],
+            "credentialPolicyDigest": framed("serverware.policyAuthorityCredentialPolicy/v1",
+                wire(trust_oracle.credential_policy_document(signer, high_water)))}
         for subject in self.subjects:
             rows.append(selected("metadata_audit_outbox",
                 {"id": recipe_oracle.audit_identity(self.request_digest, subject)}, None))
@@ -398,6 +415,52 @@ def cascade_work(work, fixture, expected):
     work.canonical(expected["cascade_result"])
 
 
+def trust_work(work, fixture, credential, evidence):
+    """Actual proved trust lookup/policy/withdrawal passes, independently sized."""
+    high = next(item for item in fixture.context.selected_rows
+        if item["table"] == "webauthn_trust_publication_high_water")
+    publication = next(item["row"] for item in fixture.context.selected_rows
+        if item["table"] == "webauthn_trust_publications" and item["present"])
+    high_water = high["row"]
+    exact_work(work, fixture.context, high["table"], {"authority_scope": "webauthn-metadata"})
+    work.graph(high_water)
+    work.graph(fixture.context.selected_rows, 4, 4)
+    work.compare(publication["status"], "pending")
+    work.graph(publication)
+    document = trust_oracle.trust_high_water_document(high_water)
+    high_digest = framed("serverware.webauthnTrustHighWater/v1", wire(document))
+    policy = trust_oracle.credential_policy_document(credential, high_water)
+    policy_digest = framed("serverware.policyAuthorityCredentialPolicy/v1", wire(policy))
+    for domain, value in (("serverware.webauthnTrustHighWater/v1", document),
+                          ("serverware.policyAuthorityCredentialPolicy/v1", policy)):
+        work.canonical(value)
+        work.utf8(domain)
+        work.input_bytes += 9 + len(wire(value))
+        work.hashes += 1
+    work.utf8(credential["public_key_cose"])
+    work.input_bytes += len(credential["public_key_cose"].encode("utf-8"))
+    work.hashes += 1
+    for left, right in (
+        (high_water["authority_scope"], "webauthn-metadata"),
+        (publication["scope"], "global"), (publication["status"], "published"),
+        (publication["bundle_digest"], high_water["publication_digest"]),
+        (publication["payload_digest"], high_water["metadata_blob_digest"]),
+        (publication["rollback_epoch"], high_water["rollback_epoch"]),
+        (publication["sequence"], high_water["publication_sequence"]),
+        (evidence["trustHighWaterDigest"], high_digest),
+        (evidence["metadataPublicationSequence"], high_water["publication_sequence"]),
+        (evidence["credentialPolicyDigest"], policy_digest),
+        (credential["attestation_trust_bundle_digest"], publication["bundle_digest"]),
+        (credential["attestation_trust_bundle_sequence"], publication["sequence"]),
+    ):
+        work.compare(left, right)
+    work.stored(publication["withdrawn_credential_ids_json"])
+    withdrawn = json.loads(publication["withdrawn_credential_ids_json"])
+    for identifier in (credential["credential_id"], credential["id"]):
+        work.graph(withdrawn)
+        work.graph(identifier)
+
+
 def assertion_work(work, fixture, expected):
     evidence = fixture.context.verified_webauthn_evidence
     credential = fixture.lookup("webauthn_credentials", fixture.signer_id)
@@ -434,6 +497,7 @@ def assertion_work(work, fixture, expected):
     work.graph(challenge_row["expires_at"])
     work.canonical(public)
     work.hashes += 2
+    trust_work(work, fixture, row, evidence)
     work.graph(row)
     mutation_work(work, expected["assertion"][0])
     work.graph(challenge_row)
@@ -522,7 +586,7 @@ class WebAuthnRevocationWorkTests(unittest.TestCase):
                 patch.object(core.KernelTransition, "__post_init__", observe_constructor):
             actual = self.transition(fixture, work=shared)
         self.assert_expected(actual, expected)
-        self.assertEqual(hashes.call_count, 4 + 3 * len(fixture.subjects))
+        self.assertEqual(hashes.call_count, 7 + 3 * len(fixture.subjects))
         self.assertEqual(shared.hash_work, hashes.call_count)
         self.assertEqual(mutations.call_count, len(expected["cascade"]) + 2)
         self.assertEqual(len(constructed), 2)
@@ -557,7 +621,7 @@ class WebAuthnRevocationWorkTests(unittest.TestCase):
                     patch.object(hashlib, "sha256", wraps=real_hash) as hashes:
                 actual = self.transition(fixture, work=shared)
             self.assert_expected(actual, expected)
-            self.assertEqual(hashes.call_count, 4 + 3 * (int(approval) + int(optional)))
+            self.assertEqual(hashes.call_count, 7 + 3 * (int(approval) + int(optional)))
             self.assertEqual(shared.hash_work, hashes.call_count)
             self.assertEqual(sum(item["table"] == "metadata_audit_outbox" for item in actual.mutations),
                              int(approval) + int(optional))
@@ -752,7 +816,7 @@ class WebAuthnRevocationWorkTests(unittest.TestCase):
                 patch.object(candidate, "_arguments", wraps=real_arguments) as arguments:
             actual = self.transition(fixture, work=shared)
         self.assert_expected(actual, expected)
-        self.assertEqual(len(lookups), 4 + len(fixture.subjects))
+        self.assertEqual(len(lookups), 5 + len(fixture.subjects))
         self.assertTrue(all(work is shared for work in lookups))
         self.assertEqual(cascades, [shared])
         self.assertEqual(public.call_count, 0)
@@ -842,7 +906,7 @@ class WebAuthnRevocationWorkTests(unittest.TestCase):
             with self.subTest(index=index):
                 self.assert_expected(self.transition(fixture, work=shared), expected)
                 self.assertEqual(metric_tuple(shared), work.total)
-                self.assertEqual(work.hashes, 4 + 3 * len(fixture.subjects))
+                self.assertEqual(work.hashes, 7 + 3 * len(fixture.subjects))
 
     def test_actual_encoder_and_four_parser_calls_match_independent_pass_oracle(self):
         fixture = KernelFixture()
@@ -858,7 +922,7 @@ class WebAuthnRevocationWorkTests(unittest.TestCase):
         self.assertEqual(metric_tuple(shared), work.total)
         self.assertEqual((hashes.call_count, encodings.call_count, parses.call_count),
                          (work.hashes, work.encodings, work.parses))
-        self.assertEqual(parses.call_count, 4)  # intent + payload + two stored credential fields
+        self.assertEqual(parses.call_count, 5)  # intent + payload + withdrawal list + two credential fields
 
     def test_exact_whole_budget_and_each_one_less_bound_genuine_work(self):
         fixture = KernelFixture()

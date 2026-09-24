@@ -24,6 +24,7 @@ from serverware import authority_contract
 from serverware import authority_audit_capacity
 from serverware import authority_complete_query
 from serverware import authority_transition_core as core
+from serverware import authority_webauthn_trust as trust
 from serverware.authority_query_read_work import _ValidationWork, QueryReadWorkError
 
 
@@ -160,6 +161,37 @@ def _exact_query(operation: str, name: str, table: str, item_id: str) -> core.Bo
         predicates=(core.QueryPredicate("id", "eq", item_id),),
         order_by=(core.QueryOrder("id"),), maximum_rows=1, absent_key={"id": item_id},
     )
+
+
+def _trust_queries(operation: str, *, work: _ValidationWork | None) -> tuple[core.BoundedQuery, ...]:
+    """Select the fixed high-water, then its mandatory matching publication.
+
+    Publication IDs are stored random UUIDs, not receipt-derived primary keys.
+    The second query is a present-row join only: its zero-row result is never
+    promoted to an authenticated absence or generic predicate-completeness.
+    """
+    key = {"authority_scope": trust.AUTHORITY_SCOPE}
+    high_water = core.BoundedQuery(
+        query_id=core.query_program_id(operation, "webauthn_trust_high_water", trust.HIGH_WATER_TABLE),
+        table=trust.HIGH_WATER_TABLE,
+        predicates=(core.QueryPredicate("authority_scope", "eq", trust.AUTHORITY_SCOPE),),
+        order_by=(core.QueryOrder("authority_scope"),), maximum_rows=1, absent_key=key,
+    )
+    predicates = [core.QueryPredicate("scope", "eq", "global"), core.QueryPredicate("status", "eq", "published")]
+    for column, source in (("bundle_digest", "publication_digest"), ("payload_digest", "metadata_blob_digest"),
+                           ("rollback_epoch", "rollback_epoch"), ("sequence", "publication_sequence")):
+        if work is not None:
+            # The actual reference constructor copies the fixed key then
+            # canonicalizes it. Preserve both hidden passes, not just a DTO.
+            work.prepare_encoding(key, shallow_copies=1)
+        reference = core.SelectedRowFieldReference(trust.HIGH_WATER_TABLE, key, source)
+        predicates.append(core.QueryPredicate(column, "eq", reference))
+    publication = core.BoundedQuery(
+        query_id=core.query_program_id(operation, "webauthn_trust_publication", trust.PUBLICATION_TABLE),
+        table=trust.PUBLICATION_TABLE, predicates=tuple(predicates), order_by=(core.QueryOrder("id"),),
+        maximum_rows=1,
+    )
+    return high_water, publication
 
 
 def audit_id(operation: str, request_digest: str, approval_id: str | None) -> str:
@@ -667,6 +699,7 @@ def _assertion_mutations(
         or _different(evidence.get("clientChallengeDigest"), _sha256_bytes(challenge_bytes, work=work), work=work)
     ):
         raise core.TransitionKernelError("revocation assertion row binding changed")
+    _assertion_trust(context, credential_row, evidence, work=work)
     prior = core.require_integer(evidence.get("priorCounter"), "assertion prior counter", minimum=0, maximum=2_147_483_647)
     counter = core.require_integer(evidence.get("counter"), "assertion next counter", minimum=1, maximum=2_147_483_647)
     if counter <= prior:
@@ -680,6 +713,75 @@ def _assertion_mutations(
         work.prepare_copy(challenge_row)
     challenge_mutation = _mutation(context, challenge, {**challenge_row, "used_at": now_s}, work=work)
     return credential_mutation, challenge_mutation
+
+
+def _assertion_trust(context, credential, evidence, *, work: _ValidationWork | None) -> None:
+    """Bind the signed verifier policy to the actual proved trust rows.
+
+    The genuine complete join and retained observation closure place every
+    pending member in this selected union. The proof worker may validly report
+    a pending member; this business kernel must then deny the revocation.
+    A bare kernel context does not itself prove predicate absence.
+    """
+    high_water = _row(_exact(context, trust.HIGH_WATER_TABLE,
+        {"authority_scope": trust.AUTHORITY_SCOPE}, work=work), work=work)
+    if work is not None:
+        # Actual rows() and present_rows() each allocate a filtered tuple.
+        work.prepare_copy(context.selected_rows)
+        work.prepare_copy(context.selected_rows)
+    publications = context.present_rows(trust.PUBLICATION_TABLE)
+    for selected in publications:
+        row = selected.get("row")
+        if type(row) is not dict:
+            raise core.TransitionKernelError("revocation trust publication row is invalid")
+        if _same(row.get("status"), "pending", work=work):
+            raise core.TransitionKernelError("revocation is blocked by a pending trust publication")
+    if len(publications) != 1:
+        raise core.TransitionKernelError("revocation trust publication is absent or ambiguous")
+    publication = _row(publications[0], work=work)
+    try:
+        document = trust.high_water_document(
+            rollback_epoch=high_water.get("rollback_epoch"), sequence=high_water.get("publication_sequence"),
+            publication_digest=high_water.get("publication_digest"), metadata_blob_digest=high_water.get("metadata_blob_digest"),
+            revocation_set_digest=high_water.get("revocation_set_digest"), witness_receipt_digest=high_water.get("witness_receipt_digest"),
+            witness_sequence=high_water.get("witness_sequence"))
+        high_water_digest = trust.high_water_digest(document, work=work)
+        policy = trust.credential_policy_document(credential=credential, high_water=document,
+            trust_high_water_digest=high_water_digest, work=work)
+        policy_digest = trust.credential_policy_digest(policy, work=work)
+    except QueryReadWorkError:
+        raise
+    except (KeyError, TypeError, ValueError, UnicodeError) as exc:
+        raise core.TransitionKernelError("revocation trust or credential policy is invalid") from exc
+    for actual, expected in (
+        (high_water.get("authority_scope"), trust.AUTHORITY_SCOPE),
+        (publication.get("scope"), "global"), (publication.get("status"), "published"),
+        (publication.get("bundle_digest"), high_water["publication_digest"]),
+        (publication.get("payload_digest"), high_water["metadata_blob_digest"]),
+        (publication.get("rollback_epoch"), high_water["rollback_epoch"]),
+        (publication.get("sequence"), high_water["publication_sequence"]),
+        (evidence.get("trustHighWaterDigest"), high_water_digest),
+        (evidence.get("metadataPublicationSequence"), high_water["publication_sequence"]),
+        (evidence.get("credentialPolicyDigest"), policy_digest),
+        (credential.get("attestation_trust_bundle_digest"), publication.get("bundle_digest")),
+        (credential.get("attestation_trust_bundle_sequence"), publication.get("sequence")),
+    ):
+        if type(actual) is not type(expected) or _different(actual, expected, work=work):
+            raise core.TransitionKernelError("revocation assertion trust binding changed")
+    try:
+        withdrawn = _stored_json(publication.get("withdrawn_credential_ids_json"), work=work)
+    except QueryReadWorkError:
+        raise
+    except (TypeError, ValueError) as exc:
+        raise core.TransitionKernelError("revocation withdrawn credential inventory is invalid") from exc
+    if type(withdrawn) is not list:
+        raise core.TransitionKernelError("revocation withdrawn credential inventory is not a list")
+    for identifier in (credential["credential_id"], credential["id"]):
+        if work is not None:
+            work.prepare_scan(withdrawn)
+            work.prepare_scan(identifier)
+        if identifier in withdrawn:
+            raise core.TransitionKernelError("revocation assertion credential is withdrawn")
 
 
 class WebAuthnCredentialRevokeKernel:
@@ -736,6 +838,13 @@ class WebAuthnCredentialRevokeKernel:
         if signer != values["record_id"]:
             queries.append(_exact_query(self.operation, "assertion_credential", "webauthn_credentials", signer))
         queries.append(_exact_query(self.operation, "assertion_challenge", "webauthn_challenges", challenge))
+        queries.extend(_trust_queries(self.operation, work=work))
+        queries.append(
+            authority_complete_query.bind_query(self.operation, "pending_trust_publications",
+                arguments=values, cutoff_us=cutoff_us) if work is None else
+            authority_complete_query._bind_query(self.operation, "pending_trust_publications",
+                arguments=values, cutoff_us=cutoff_us, work=work)
+        )
         spec = authority_contract.operation_spec(self.operation)
         if (sum(query.maximum_rows for query in queries) > spec["maximumBusinessQueryRows"]
                 or sum(query.work_units for query in queries) > spec["maximumBusinessWorkUnits"]):

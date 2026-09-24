@@ -13,6 +13,12 @@ It does not enable an endpoint, repair startup, acquire SQL proofs, execute
 writes or establish independently current roots. Its returned observation is
 not a capability, signed authorization or commit receipt.
 
+The [inactive signed-plan v4 verifier](authority-revocation-plan.md) now invokes
+the same private semantic worker after one larger joint capture and real
+planner-signature verification. Its guarded handoff preserves the existing
+packaging ledger, compact-output hold and prior spending. It performs no second
+capture or proof pass and accepts no successful observation as authority.
+
 ## One raw-input computation
 
 `verify_revocation_semantics` accepts raw bundle, compact transition, typed
@@ -121,7 +127,7 @@ observations, not deeply immutable or privileged objects.
 The [semantic fixture](../scripts/authority_revocation_semantics_fixture.py)
 independently constructs full kernel/counter effects, before/after trees,
 request commitments and a genuinely signed synthetic Ed25519 receipt.
-The [20 semantic tests](../scripts/test_authority_revocation_semantics.py) include
+The [semantic tests](../scripts/test_authority_revocation_semantics.py) include
 valid proofs for deliberately wrong effects, canonical boolean/integer
 distinctions, binding failures, one-pass/shared-ledger observations and independent
 phase/peak-budget arithmetic. The [nine request-work tests](../scripts/test_authority_typed_request_work.py)

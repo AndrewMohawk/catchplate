@@ -47,8 +47,8 @@ _READ_FIELDS = frozenset({"queryId", "declaredQueryJson", "resolvedQueryJson", "
 _ADDRESS_FIELDS = frozenset({"table", "keyJson", "keyDigest", "present"})
 _ASSERTION_FIELDS = frozenset({"credentialRecordId", "challengeId"})
 _MAX_HEADS = 11
-_QUERY_COUNT = 5
-_MAX_READS = 42
+_QUERY_COUNT = 6
+_MAX_READS = 45
 _MAX_OUTSIDE_PREFIXES = 4800
 _SPEC = authority_contract.operation_spec(complete.OPERATION)
 _MAX_SELECTED = _SPEC["maximumQueryRows"]
@@ -148,7 +148,7 @@ def _root_pair(business, authorization):
 
 
 def _heads(value):
-    _array(value, _MAX_HEADS, "counted heads", minimum=4)
+    _array(value, _MAX_HEADS, "counted heads", minimum=5)
     for head in value:
         _object(head, HEAD_FIELDS, "counted head")
         _text(head["indexId"])

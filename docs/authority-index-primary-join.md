@@ -217,7 +217,7 @@ The outer 64 MiB plan ceiling still applies across all queries; the larger
 combined component byte allowance does not raise it.
 
 The [source-bound complete-query contract](authority-complete-query-contract.md)
-now fixes the explicit-revocation candidate's five index roles under a distinct
+now fixes the explicit-revocation candidate's six index roles under a distinct
 query kind. Public v3 deliberately retains its pre-SQL rejection despite the
 private producer. The [storage integration contract](authority-index-storage-integration.md)
 records the source producer and all-writer/head-effect requirements; neither

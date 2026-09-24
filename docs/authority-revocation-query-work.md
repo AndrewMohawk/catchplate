@@ -64,11 +64,11 @@ subject and canonical document, as are the source input's actual text guards.
 
 ## Complete-profile work
 
-The full program performs five binding-constructor profile hashes, five
-business-closure profile hashes, and ten more across capacity composition's
+The full program performs six binding-constructor profile hashes, six
+business-closure profile hashes, and twelve more across capacity composition's
 snapshot and closure. With `J` actual audit subjects:
 
-`successful_generation_hashes = 20 + 2J`
+`successful_generation_hashes = 24 + 2J`
 
 Each profile call also performs its real fixed-descriptor UTF-8 JSON encoding.
 Known hidden constructor work is reserved before calling the genuine binder,
@@ -80,7 +80,7 @@ authorizes an unreserved hash or returns a successful generation result.
 Any inspectable counters after failure describe partial or reserved work only.
 
 The input preparer spends five `2L/2N` passes per hint list: set and sorted-list
-copies, both equality operands and the final list copy. Each of the five actual
+copies, both equality operands and the final list copy. Each of the six actual
 binders repeats its own validation, spending six such passes per hint list for
 the owned tuple, set, sorted list, final tuple and two comparison operands.
 Their actual record/hint text encodings are additional raw UTF-8 work. No

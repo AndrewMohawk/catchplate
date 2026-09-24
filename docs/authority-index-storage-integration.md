@@ -16,8 +16,8 @@ public v3 planner still rejects complete-index queries before business/proof SQL
 startup and verification gates remain closed.
 
 The [operation-bound complete-query batch](authority-complete-query-batch.md)
-now owns the raw inputs before hashing and genuinely verifies all five declared
-explicit-revocation roles against four shared read heads and the complete
+now owns the raw inputs before hashing and genuinely verifies all six declared
+explicit-revocation roles against five shared read heads and the complete
 operation-declared primary-root inventory. The
 [private complete-acquisition path](authority-complete-acquisition.md) now invokes
 that genuine body after same-cursor head/range/exact-row reads on one shared

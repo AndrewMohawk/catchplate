@@ -4,7 +4,7 @@
 The bounded SQL responder is not PostgreSQL or current-root authority. It
 delegates the fixed head/range SQL checks and supplies full exact-key rows from
 one independent population. Actual acquisition, global primary membership,
-five joins and the shared work meter run without successful-verifier stubs.
+six joins and the shared work meter run without successful-verifier stubs.
 The public planner registry and v3 complete-query admission remain untouched.
 """
 from __future__ import annotations
@@ -148,7 +148,7 @@ class Fixture:
                 intent[field] = []
         self.batch = batch_oracle.BatchFixture(rows, arguments=intent)
         self.rows, self.queries, self.intent = self.batch.rows, self.batch.queries, self.batch.intent
-        self.stores = {query.role: range_oracle.IndependentStoredIndex(self.rows[query.table],
+        self.stores = {query.role: range_oracle.IndependentStoredIndex(self.rows.get(query.table, []),
             query=query, expiry_us=EXPIRIES if query.table == "webauthn_challenges" else None,
             revision=29) for query in self.queries}
         indexes = {store.tree.profile.index_id: store.tree for store in self.stores.values()}
@@ -177,7 +177,7 @@ class Fixture:
                 "business_before_roots", "authorization_before_roots")}
 
     def expected_rows(self, query):
-        mapping = {row["id"]: row for row in self.rows[query.table]}
+        mapping = {row["id"]: row for row in self.rows.get(query.table, [])}
         return tuple(copy.deepcopy(mapping[identifier])
                      for _, identifier in self.stores[query.role].primary_ids())
 
@@ -372,7 +372,7 @@ class CompleteAcquisitionTests(unittest.TestCase):
         self.assertEqual(shared.call_count, 1)
         self.assertIs(shared.call_args.kwargs["work"], work)
         self.assertEqual(public.call_count, 0)
-        self.assertEqual((memberships.call_count, joins.call_count), (6, 5))
+        self.assertEqual((memberships.call_count, joins.call_count), (7, 6))
         self.assertEqual(observed, tuple(fixture.expected_rows(query) for query in fixture.queries))
         self.assertEqual(tuple(item.index_id for item in evidence.heads), head_oracle.IDS)
         self.assertEqual(tuple(item.query_id for item in evidence.frontiers), tuple(query.query_id for query in fixture.queries))
@@ -406,8 +406,8 @@ class CompleteAcquisitionTests(unittest.TestCase):
             self.assertIsNone(evidence)
             result = self.verify(state, observed)
             evidence = state[4].retained_evidence()
-        self.assertEqual(observed, ((), (), (), (), ()))
-        self.assertEqual((len(evidence.frontiers), joins.call_count), (5, 5))
+        self.assertEqual(observed, ((), (), (), (), (), ()))
+        self.assertEqual((len(evidence.frontiers), joins.call_count), (6, 6))
         self.assertFalse(any("AS target" in sql for sql, _ in state[1].calls))
         self.assertTrue(all(not value.leaves for _, value in result.joined_reads))
         self.assert_totals(state[3], expected["total"])

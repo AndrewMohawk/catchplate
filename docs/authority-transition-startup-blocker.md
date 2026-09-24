@@ -66,6 +66,13 @@ program before its kernel until the successor retained-evidence protocol exists.
 No independent current-root/time producer, new wire protocol or registry
 activation is supplied by this source-only integration.
 
+Source `.32` adds the inactive [signed revocation-plan v4 verifier](authority-revocation-plan.md)
+and closes the source program's trust-authorization reads, including a sixth
+complete role for pending-publication absence. It recomputes both signatures,
+retained proofs and semantic effects on one budget. Production producer,
+persistence, executor and witness activation are still missing; the four
+startup gaps and verification prerequisites remain in force.
+
 The [explicit-context credential classifier](webauthn-credential-trust.md) now
 shares the actual enrollment/root/AAGUID/class/development decision with the
 live wrapper and both trust-withdrawal passes. Its immutable context does not

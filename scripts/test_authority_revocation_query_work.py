@@ -95,7 +95,7 @@ def expected_work(fixture):
 
     This oracle invokes no production preparation, constructor, profile or
     meter. Fixed bounded query-object scaffolding is not a JSON work unit.
-    Success pays all twenty constructors; a denied reservation gets no refund.
+    Success pays all twenty-four constructors; a denied reservation gets no refund.
     """
     expected = ExpectedWork()
     values = fixture.values
@@ -122,7 +122,7 @@ def expected_work(fixture):
     expected.graph(intent, bytes_passes=4, node_passes=4)
 
     # Every bind really traverses every hint list, including unrelated roles.
-    for _ in range(5):
+    for _ in range(6):
         expected.utf8(values["record_id"])
         for name in recipe_oracle.HINTS:
             for item in values[name]:
@@ -159,6 +159,10 @@ def expected_work(fixture):
         expected.hash_work += 2
     expected.utf8(fixture.signer)
     expected.utf8(fixture.challenge)
+    # Four actual SelectedRowFieldReference constructors, each performing
+    # one hidden dict(key) copy and its real canonical encoding. Ordinary
+    # query objects are retained unchanged by business/capacity closure.
+    expected.graph({"authority_scope": "webauthn-metadata"}, bytes_passes=12, node_passes=12)
     return expected
 
 
@@ -195,15 +199,15 @@ class RevocationQueryWorkTests(unittest.TestCase):
         self.assertEqual(program, public)
         self.assert_program(program, fixture)
         self.assertEqual(fixture.inputs, before)
-        self.assertEqual(work.metrics.hash_work, 20 + 2 * fixture.audit_count)
+        self.assertEqual(work.metrics.hash_work, 24 + 2 * fixture.audit_count)
 
     def test_no_audits_and_same_signer_keep_all_roles_and_the_actual_framework_query(self):
         values = recipe_oracle.source_values(**{field: [] for field in recipe_oracle.HINTS}, audit_event=None)
         fixture = GenerationFixture(values, same_signer=True)
         program, work = self.generate(fixture)
         self.assert_program(program, fixture)
-        self.assertEqual(len(program), 8)
-        self.assertEqual(work.metrics.hash_work, 20)
+        self.assertEqual(len(program), 11)
+        self.assertEqual(work.metrics.hash_work, 24)
         self.assertEqual(program[-1].absent_key, {"aggregate_id": recipe_oracle.counter_identity()})
         self.assertFalse(any(query.table == "metadata_audit_outbox" for query in program))
 
@@ -213,7 +217,7 @@ class RevocationQueryWorkTests(unittest.TestCase):
         fixture = GenerationFixture(values)
         program, work = self.generate(fixture)
         self.assert_program(program, fixture)
-        self.assertEqual((fixture.audit_count, len(program), work.metrics.hash_work), (33, 42, 86))
+        self.assertEqual((fixture.audit_count, len(program), work.metrics.hash_work), (33, 45, 90))
 
     def test_unicode_audit_payload_remains_lossless_under_actual_intent_normalization(self):
         values = recipe_oracle.source_values(audit_event={"雪-key": [True, None, -7,
@@ -236,7 +240,7 @@ class RevocationQueryWorkTests(unittest.TestCase):
                 with patch.object(hashlib, "sha256", wraps=actual_sha) as hashes:
                     program, work = self.generate(fixture)
                 self.assertEqual((hashes.call_count, work.metrics.hash_work),
-                                 (20 + 2 * fixture.audit_count,) * 2)
+                                 (24 + 2 * fixture.audit_count,) * 2)
                 self.assert_program(program, fixture)
 
     def test_real_generation_and_capacity_workers_are_called_without_result_substitution(self):
@@ -279,7 +283,7 @@ class RevocationQueryWorkTests(unittest.TestCase):
                 program, work = self.generate(fixture)
                 self.assert_work(work, expected)
                 self.assert_program(program, fixture)
-                self.assertEqual(expected.hash_work, 20 + 2 * fixture.audit_count)
+                self.assertEqual(expected.hash_work, 24 + 2 * fixture.audit_count)
 
     def test_independently_exact_quotas_succeed_and_each_minus_one_denies(self):
         fixture = GenerationFixture()

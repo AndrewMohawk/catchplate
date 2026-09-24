@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Operation-bound read batches over independent primary and counted trees.
 
-The real global membership engine and all five real range/primary joins run
+The real global membership engine and all six real range/primary joins run
 against independent tree encodings. No prior observation token, successful
 verifier, SQL connection, registry or current-root authority is substituted.
 These authored, unrun controls do not establish an admitted clock, maintained
@@ -42,10 +42,10 @@ import test_authority_radix_mutation as primary_oracle
 OPERATION = "webauthn.credential.revoke"
 CUTOFF_US = 1_000_007
 ROLES = ("sessions_pending_webauthn", "sessions_active", "grants", "approvals",
-         "global_registration_challenges")
+         "global_registration_challenges", "pending_trust_publications")
 READ_INDEX_IDS = tuple(sorted(("webauthn_session_credential_status",
     "webauthn_grant_approver_active", "webauthn_control_approval_approved",
-    "webauthn_registration_unused_global")))
+    "webauthn_registration_unused_global", "webauthn_publication_status")))
 ALL_INDEX_IDS = ("webauthn_credential_id", "webauthn_credential_user_history", "webauthn_credential_live_trust",
     "webauthn_registration_unused_global", "webauthn_registration_unused_user",
     "webauthn_session_credential_status", "webauthn_grant_approver_active", "webauthn_control_approval_approved",
@@ -178,7 +178,7 @@ class BatchFixture:
             "queries": [{"operation": OPERATION, "role": role,
                 "selectorItems": [list(pair) for pair in sorted(declaration_oracle.selector_for(
                     role, record_id=self.intent["record_id"], cutoff_us=self.cutoff_us).items())],
-                "maximumRows": max(1, len(self.intent[hint]))}
+                "maximumRows": 1 if hint is None else max(1, len(self.intent[hint]))}
                 for role, _, _, hint in declaration_oracle.ROLE_SPECS],
             "businessBeforeRoots": inputs["business_before_roots"],
             "authorizationBeforeRoots": inputs["authorization_before_roots"],
@@ -220,8 +220,8 @@ def independent_batch_metrics(fixture):
     return {
         "ownership_bytes": ownership_bytes, "ownership_nodes": ownership_nodes,
         "selected_envelope_bytes": envelope_bytes, "selected_envelope_nodes": envelope_nodes,
-        "context_hashes": 95, "primary": primary_values, "queries": queries,
-        "total_hashes": 95 + primary_values["hash_work"]
+        "context_hashes": 101, "primary": primary_values, "queries": queries,
+        "total_hashes": 101 + primary_values["hash_work"]
             + sum(item["total_hashes"] for _, item in queries),
         "total_input_bytes": ownership_bytes + envelope_bytes + primary_values["input_bytes"]
             + sum(item["total_input_bytes"] for _, item in queries),
@@ -261,7 +261,7 @@ class CompleteQueryBatchTests(unittest.TestCase):
         self.assertIs(result.metrics.primary, result.primary.metrics)
         self.assertEqual(result.primary.business_after_roots, result.business_before_roots)
         self.assertEqual(result.primary.authorization_after_roots, result.authorization_before_roots)
-        self.assertEqual(result.metrics.context_hashes, 95)
+        self.assertEqual(result.metrics.context_hashes, 101)
         for query, (query_id, observation), (metric_id, metrics) in zip(
                 fixture.queries, result.joined_reads, result.metrics.queries):
             with self.subTest(role=query.role):
@@ -279,8 +279,8 @@ class CompleteQueryBatchTests(unittest.TestCase):
     def test_actual_five_joins_preserve_four_read_heads_and_independent_phase_metrics(self):
         result = self.verify()
         self.assert_observation(self.fixture, result)
-        self.assertEqual(len(result.queries), 5)
-        self.assertEqual(len(result.read_heads), 4)
+        self.assertEqual(len(result.queries), 6)
+        self.assertEqual(len(result.read_heads), 5)
         pending, active = (observation for _, observation in result.joined_reads[:2])
         self.assertEqual(pending.anchor, active.anchor)
         self.assertNotEqual(pending.interval, active.interval)
@@ -301,8 +301,8 @@ class CompleteQueryBatchTests(unittest.TestCase):
         with mock.patch.object(primary, "evaluate_primary_radix_memberships", side_effect=membership), \
                 mock.patch.object(joined, "join_index_range", side_effect=join):
             result = self.verify()
-        self.assertEqual(len(memberships), 6)
-        self.assertEqual(len(joins), 5)
+        self.assertEqual(len(memberships), 7)
+        self.assertEqual(len(joins), 6)
         self.assertGreater(len(memberships[0][0]["table_contracts"]), 1)
         self.assertIs(result.primary, memberships[0][1].result)
         # Observe the actual phase inputs under ordinary fixture pressure.
@@ -312,7 +312,7 @@ class CompleteQueryBatchTests(unittest.TestCase):
         business = [item for item in self.fixture.selected if not (
             item["table"] == capacity.AGGREGATE_TABLE and item["key"] == {"aggregate_id": capacity.AGGREGATE_ID})]
         envelopes = (business, list(self.fixture.selected))
-        consumed_hashes = 95
+        consumed_hashes = 101
         consumed_bytes = len(primary_oracle.wire_json(ownership)) + sum(
             len(primary_oracle.wire_json(value)) for value in envelopes)
         consumed_nodes = join_oracle.graph_nodes(ownership) + sum(
@@ -377,7 +377,7 @@ class CompleteQueryBatchTests(unittest.TestCase):
         fixture = BatchFixture(rows={})
         result = self.verify(fixture)
         self.assert_observation(fixture, result)
-        self.assertEqual(len(result.joined_reads), 5)
+        self.assertEqual(len(result.joined_reads), 6)
         self.assertTrue(all(observation.leaves == () for _, observation in result.joined_reads))
         self.assertTrue(all(head.index_root.count == 0 for head in result.read_heads))
         self.assertTrue(all(metrics.index.hashes > 0 and metrics.primary.hash_work == 66
@@ -573,7 +573,7 @@ class CompleteQueryBatchTests(unittest.TestCase):
                 object.__setattr__(inputs["queries"][-1], "maximum_rows", 32)
                 object.__setattr__(inputs["read_heads"][-1], "index_revision", 500)
                 object.__setattr__(inputs["read_heads"][-1].index_root, "digest", "sha256:" + "f" * 64)
-                later = next(item for item in inputs["query_frontiers"][-1].frontier
+                later = next(item for item in inputs["query_frontiers"][-2].frontier
                              if type(item) is counted.IndexLeaf)
                 object.__setattr__(later, "primary_row_digest", "sha256:" + "d" * 64)
                 inputs["selected_rows"][0]["row"]["changed_after_snapshot"] = True
@@ -619,14 +619,14 @@ class CompleteQueryBatchTests(unittest.TestCase):
         self.assertEqual((metrics.selected_envelope_bytes, metrics.selected_envelope_nodes),
                          (envelope_bytes, envelope_nodes))
         self.assertEqual(metrics.total_hashes,
-            95 + primary_values["hash_work"] + sum(item["total_hashes"] for item in query_values))
+            101 + primary_values["hash_work"] + sum(item["total_hashes"] for item in query_values))
         self.assertEqual(metrics.total_input_bytes,
             ownership_bytes + envelope_bytes + primary_values["input_bytes"]
             + sum(item["total_input_bytes"] for item in query_values))
         self.assertEqual(metrics.total_json_nodes,
             ownership_nodes + envelope_nodes + primary_values["json_nodes"]
             + sum(item["primary"]["json_nodes"] for item in query_values))
-        self.assertGreater(sum(item["primary"]["hash_work"] for item in query_values), 5 * 66)
+        self.assertGreater(sum(item["primary"]["hash_work"] for item in query_values), 6 * 66)
         manifest = join_oracle.framed("serverware.policyAuthorityIndexProjectionManifest/v1",
             join_oracle.utf8_json([join_oracle.descriptor(name) for name in ALL_INDEX_IDS]))
         self.assertEqual(result.projection_manifest_digest, manifest)
@@ -693,7 +693,7 @@ class CompleteQueryBatchTests(unittest.TestCase):
                           batch.MAX_TOTAL_JSON_NODES, batch.MAX_JSON_DEPTH),
                          (8_000_000, 64 * 1024 * 1024, 1_000_000, 128))
         # Private accounting boundaries only, not a claim that a whole valid
-        # five-query proof graph can attain all three exact maxima together.
+        # six-query proof graph can attain all three exact maxima together.
         for dimension, limit in (("hashes", 8_000_000), ("input_bytes", 64 * 1024 * 1024),
                                  ("json_nodes", 1_000_000)):
             ledger = batch._Ledger()
@@ -730,7 +730,7 @@ class CompleteQueryBatchTests(unittest.TestCase):
         self.assertIs(verifications[0][0], captures[0][1])
         self.assertIs(verifications[0][1], captures[0][0])
         self.assertIs(verifications[0][2], result)
-        self.assertEqual((memberships.call_count, joins.call_count), (6, 5))
+        self.assertEqual((memberships.call_count, joins.call_count), (7, 6))
         self.assertEqual(result, expected)
         self.assertEqual(work_totals(work), (result.metrics.total_hashes,
             result.metrics.total_input_bytes, result.metrics.total_json_nodes))
@@ -763,7 +763,7 @@ class CompleteQueryBatchTests(unittest.TestCase):
         self.assertEqual(work_totals(work), tuple(a + b for a, b in zip(prefix, totals)))
         self.assertEqual((result.metrics.ownership_bytes, result.metrics.ownership_nodes),
                          (expected["ownership_bytes"], expected["ownership_nodes"]))
-        consumed = [95, expected["ownership_bytes"] + expected["selected_envelope_bytes"],
+        consumed = [101, expected["ownership_bytes"] + expected["selected_envelope_bytes"],
                     expected["ownership_nodes"] + expected["selected_envelope_nodes"]]
         global_limits = memberships[0][0]["limits"]
         self.assertEqual((global_limits.max_hashes, global_limits.max_input_bytes,
@@ -829,7 +829,7 @@ class CompleteQueryBatchTests(unittest.TestCase):
         cases = (
             QueryReadValidationLimits(max_json_nodes=20),  # Root plus twenty immediate children needs 21.
             QueryReadValidationLimits(max_input_bytes=oracle["ownership_bytes"] - 1),
-            QueryReadValidationLimits(max_hashes=94),  # All 95 outer source hashes are reserved together.
+            QueryReadValidationLimits(max_hashes=100),  # All 101 outer source hashes are reserved together.
         )
         for limits in cases:
             work = _ValidationWork(limits)
@@ -894,7 +894,7 @@ class CompleteQueryBatchTests(unittest.TestCase):
                 inputs["before_proofs"][-1]["rowDigest"] = "sha256:" + "f" * 64
                 inputs["business_before_roots"][-1]["rootRevision"] += 100
                 object.__setattr__(inputs["read_heads"][-1], "index_revision", 1000)
-                later = next(item for item in inputs["query_frontiers"][-1].frontier
+                later = next(item for item in inputs["query_frontiers"][-2].frontier
                              if type(item) is counted.IndexLeaf)
                 object.__setattr__(later, "primary_row_digest", "sha256:" + "e" * 64)
             return original_hash(*arguments)
@@ -903,7 +903,7 @@ class CompleteQueryBatchTests(unittest.TestCase):
             result = batch._verify_complete_query_batch(**inputs, work=work)
         self.assertEqual(len(captures), 1)
         self.assertIs(captures[0][0], work)
-        self.assertEqual(hash_entries, [(98,
+        self.assertEqual(hash_entries, [(104,
             71 + expected["ownership_bytes"] + expected["selected_envelope_bytes"],
             5 + expected["ownership_nodes"] + expected["selected_envelope_nodes"])])
         self.assert_observation(self.fixture, result)
@@ -926,7 +926,7 @@ class CompleteQueryBatchTests(unittest.TestCase):
         with mock.patch.object(primary, "evaluate_primary_radix_memberships", side_effect=membership):
             result = batch._verify_complete_query_batch(**self.fixture.arguments(),
                 work=_ValidationWork(QueryReadValidationLimits()))
-        self.assertEqual(len(observed), 6)
+        self.assertEqual(len(observed), 7)
         self.assertEqual(result.selected_rows, self.fixture.selected)
         self.assertTrue(all(item["contractSelector"] is None
             for inputs, _ in observed for item in inputs["selected_rows"]))
@@ -953,11 +953,13 @@ class CompleteQueryBatchTests(unittest.TestCase):
         vector["childDigests"][sibling] = "sha256:" + "e" * 64
         primary_oracle.refresh_proof_digest(primary_bad["before_proofs"][0])
         range_bad = self.fixture.arguments()
-        last = range_bad["query_frontiers"][-1]
+        # Registration is this fixture's final populated role; its pending
+        # trust population is empty, so do not invent a leaf for this control.
+        last = range_bad["query_frontiers"][-2]
         member = next(item for item in last.frontier if type(item) is counted.IndexLeaf)
-        range_bad["query_frontiers"] = (*range_bad["query_frontiers"][:-1],
+        range_bad["query_frontiers"] = (*range_bad["query_frontiers"][:-2],
             replace(last, frontier=tuple(replace(item, primary_row_digest="sha256:" + "d" * 64)
-                if item is member else item for item in last.frontier)))
+                if item is member else item for item in last.frontier)), range_bad["query_frontiers"][-1])
         for label, inputs, counts in (("primary", primary_bad, (1, 0)),
                                       ("last-range", range_bad, (5, 5))):
             work = _ValidationWork(QueryReadValidationLimits())
@@ -969,7 +971,7 @@ class CompleteQueryBatchTests(unittest.TestCase):
                 with self.assertRaises(batch.CompleteQueryBatchError):
                     batch._verify_complete_query_batch(**inputs, work=work)
             self.assertEqual((memberships.call_count, joins.call_count), counts)
-            self.assertGreaterEqual(work.hash_work, 7 + 95)
+            self.assertGreaterEqual(work.hash_work, 7 + 101)
             self.assertGreater(work.input_bytes, 101)
             self.assertGreater(work.json_nodes, 13)
             # A failed child phase aborts this invocation; it is not retried

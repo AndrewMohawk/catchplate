@@ -9,7 +9,7 @@ operation-authority decision. The existing
 [indexed mutation evaluator](authority-index-mutation.md) provide its genuine
 verification phases; neither accepts a prior successful result as authority.
 
-The scope remains the five complete-query roles for explicit
+The scope comprises the six complete-query roles for explicit
 `webauthn.credential.revoke`. The purpose of the combined entry point is to
 verify their read evidence and proposed writes against one identical set of
 before descriptors, with one input ownership boundary and one work budget.
@@ -29,7 +29,7 @@ cutoff, declarations, full primary before-root vectors, global selected rows,
 primary proofs, mutations, counted head union and both kinds of raw frontier.
 The retained counted union must be exactly:
 
-`four complete-query read profiles UNION every fixed profile of each written table`
+`five complete-query read profiles UNION every fixed profile of each written table`
 
 One sorted head entry supplies every use of a profile. A profile shared by a
 query and a write cannot carry different revision, digest or count descriptors.
@@ -38,9 +38,10 @@ rows are both nonmembers of a particular profile. Empty query roles also remain
 required.
 
 This operation can write at most eight fixed profiles: three credential, two
-challenge and one each for sessions, grants and approvals. Its four read
-profiles are already within that set. The generic eleven-profile input ceiling
-does not permit adding the three publication profiles from another operation.
+challenge and one each for sessions, grants and approvals. Four read profiles
+are already within that set; the fifth is the read-only publication-status
+profile, giving a maximum union of nine. The generic eleven-profile ceiling
+does not permit adding the unrelated bundle-digest or generation profiles.
 
 The genuine global membership evaluator owns the selected rows and proofs used
 by each real range/primary join. The genuine indexed writer then verifies the
@@ -73,7 +74,7 @@ limit. Ownership, all real proof phases and additional defined measurement work
 share 8,000,000 hashes, 64 MiB of input work and 1,000,000 charged JSON nodes;
 remaining phase limits must be clamped before invoking an evaluator.
 
-The query wrapper retains its conservative 95-hash context allowance. Each
+The query wrapper retains its conservative 101-hash context allowance. Each
 union head that is not a read head adds one source-profile hash and one
 canonical empty-root hash; read heads reuse the query phase's already checked
 context. At most four extra heads are source-admitted here, so that additional
@@ -103,11 +104,11 @@ process memory.
 
 [`test_authority_complete_read_write.py`](../scripts/test_authority_complete_read_write.py)
 contains 20 authored, unexecuted methods. Independent before/after populations
-and accounting oracles cover actual seven/eight-profile unions, empty queries,
+and accounting oracles cover actual eight/nine-profile unions, empty queries,
 unchanged read-only heads, required nonmember profiles, exact source templates,
 corrupted raw proofs and mutation images, input ownership before the first
 hash, early frontier-normalization rejection and aggregate work accounting.
-Delegated call observations retain the real global membership, five joins and
+Delegated call observations retain the real global membership, six joins and
 one indexed writer, including its genuine repeated primary verification.
 Their actual phase limits are compared with independently advanced remainders.
 

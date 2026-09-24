@@ -88,11 +88,40 @@ def point_document(name, table, identifier, *, column="id"):
         "secondaryIndexName": None}
 
 
+def trust_query_documents():
+    high_water = point_document("webauthn_trust_high_water", "webauthn_trust_publication_high_water",
+        "webauthn-metadata", column="authority_scope")
+    publication = point_document("webauthn_trust_publication", "webauthn_trust_publications", "unused")
+    publication["absentKey"] = None
+    publication["predicates"] = [{"column": "scope", "operator": "eq", "value": "global"},
+        {"column": "status", "operator": "eq", "value": "published"}]
+    publication["predicates"].extend({"column": column, "operator": "eq", "value": {
+        "schema": "serverware.policyAuthoritySelectedRowField/v1",
+        "table": "webauthn_trust_publication_high_water", "key": {"authority_scope": "webauthn-metadata"},
+        "column": source}} for column, source in (
+            ("bundle_digest", "publication_digest"), ("payload_digest", "metadata_blob_digest"),
+            ("rollback_epoch", "rollback_epoch"), ("sequence", "publication_sequence")))
+    return high_water, publication
+
+
+def resolved_trust_document(document, high_water):
+    """Independent four-field source reference resolution, never JSON parsing."""
+    result = copy.deepcopy(document)
+    for predicate in result.get("predicates", ()):
+        value = predicate["value"]
+        if type(value) is dict and value.get("schema") == "serverware.policyAuthoritySelectedRowField/v1":
+            if (value["table"] != "webauthn_trust_publication_high_water"
+                    or value["key"] != {"authority_scope": "webauthn-metadata"}):
+                raise AssertionError("fixture reference left its fixed proved high-water row")
+            predicate["value"] = high_water[value["column"]]
+    return result
+
+
 def expected_program(values, *, cutoff_us=CUTOFF_US, request_digest=REQUEST_DIGEST,
                      signer=None, challenge="assertion-challenge", evidence=False, framework=False):
     result = [point_document("revoked_credential", "webauthn_credentials", values["record_id"])]
     result.extend(complete_oracle.complete_document(role, values=values, cutoff_us=cutoff_us)
-                  for role in complete_oracle.ROLES)
+                  for role in complete_oracle.ROLES if role != "pending_trust_publications")
     subjects = [*values["control_plane_approval_ids"]]
     if values["audit_event"] is not None:
         subjects.append(None)
@@ -103,6 +132,9 @@ def expected_program(values, *, cutoff_us=CUTOFF_US, request_digest=REQUEST_DIGE
         if signer != values["record_id"]:
             result.append(point_document("assertion_credential", "webauthn_credentials", signer))
         result.append(point_document("assertion_challenge", "webauthn_challenges", challenge))
+        result.extend(trust_query_documents())
+        result.append(complete_oracle.complete_document("pending_trust_publications", values=values,
+            cutoff_us=cutoff_us))
     if framework:
         result.append(point_document("global_audit_capacity_before_v1",
             "policy_authority_bounded_aggregate_states", counter_identity(), column="aggregate_id"))
@@ -141,18 +173,20 @@ class RevocationQueryProgramTests(unittest.TestCase):
             cutoff_us=CUTOFF_US, request_digest=REQUEST_DIGEST)
         self.assert_program(actual, expected_program(self.values))
         self.assertEqual(len(actual), 8)
-        self.assertEqual(tuple(query.role for query in actual[1:6]), complete_oracle.ROLES)
+        self.assertEqual(tuple(query.role for query in actual[1:6]), complete_oracle.ROLES[:-1])
 
     def test_full_recipe_appends_separate_signer_and_challenge_after_all_audits(self):
         actual = self.full()
         self.assert_program(actual, expected_program(self.values, evidence=True, signer="separate-signer"))
-        self.assertEqual(len(actual), 10)
-        self.assertEqual([query.table for query in actual[-2:]], ["webauthn_credentials", "webauthn_challenges"])
+        self.assertEqual(len(actual), 13)
+        self.assertEqual([query.table for query in actual[-5:-3]], ["webauthn_credentials", "webauthn_challenges"])
+        self.assertEqual([query.table for query in actual[-3:]],
+            ["webauthn_trust_publication_high_water", "webauthn_trust_publications", "webauthn_trust_publications"])
 
     def test_same_signer_reuses_target_query_without_a_duplicate_credential_declaration(self):
         actual = self.full(signer=self.values["record_id"])
         self.assert_program(actual, expected_program(self.values, evidence=True))
-        self.assertEqual(len(actual), 9)
+        self.assertEqual(len(actual), 12)
         self.assertEqual(sum(query.table == "webauthn_credentials" for query in actual), 1)
 
     def test_real_capacity_composition_appends_one_exact_framework_query_last(self):
@@ -202,8 +236,9 @@ class RevocationQueryProgramTests(unittest.TestCase):
         values = source_values(**{name: [] for name in HINTS}, audit_event=None)
         actual = self.full(values, signer=values["record_id"])
         self.assert_program(actual, expected_program(values, evidence=True))
-        self.assertEqual(len(actual), 7)
-        self.assertEqual(tuple(query.maximum_rows for query in actual[1:6]), (1, 1, 1, 1, 1))
+        self.assertEqual(len(actual), 10)
+        self.assertEqual(tuple(query.maximum_rows for query in actual
+            if type(query) is complete.CompleteIndexQuery), (1, 1, 1, 1, 1, 1))
         self.assertFalse(any(query.table == "metadata_audit_outbox" for query in actual))
 
     def test_each_hint_accepts_exactly_32_entries_without_truncation_or_profile_changes(self):
@@ -213,7 +248,9 @@ class RevocationQueryProgramTests(unittest.TestCase):
             with self.subTest(name=name):
                 actual = self.full(values)
                 self.assert_program(actual, expected_program(values, evidence=True, signer="separate-signer"))
-                for query, (_, _, _, hint) in zip(actual[1:6], complete_oracle.ROLE_SPECS):
+                for query, (_, _, _, hint) in zip(
+                        (query for query in actual if type(query) is complete.CompleteIndexQuery),
+                        complete_oracle.ROLE_SPECS):
                     self.assertEqual(query.maximum_rows, 32 if hint == name else 1)
                 values[name].append("item-32")
                 with self.assertRaises(core.TransitionKernelError):
@@ -224,7 +261,7 @@ class RevocationQueryProgramTests(unittest.TestCase):
         values = source_values(**{field: [] for field in HINTS})
         values["control_plane_approval_ids"] = [f"approval-{ordinal:02d}" for ordinal in range(32)]
         maximum = capacity.add_capacity_query(OPERATION, self.full(values))
-        self.assertEqual(len(maximum), 42)
+        self.assertEqual(len(maximum), 45)
         self.assert_program(maximum, expected_program(values, evidence=True,
             signer="separate-signer", framework=True))
 
@@ -345,10 +382,10 @@ class RevocationQueryProgramTests(unittest.TestCase):
                 self.assertEqual(hashes.call_count, 5 + 2 * audits)
                 with patch.object(hashlib, "sha256", wraps=actual_sha) as hashes:
                     business = self.full(values)
-                self.assertEqual(hashes.call_count, 10 + 2 * audits)
+                self.assertEqual(hashes.call_count, 12 + 2 * audits)
                 with patch.object(hashlib, "sha256", wraps=actual_sha) as hashes:
                     composed = capacity.add_capacity_query(OPERATION, self.full(values))
-                self.assertEqual(hashes.call_count, 20 + 2 * audits)
+                self.assertEqual(hashes.call_count, 24 + 2 * audits)
                 # Contract projections themselves compute profile hashes, so
                 # comparisons are intentionally outside the observed windows.
                 self.assert_program(cascade, expected_program(values))

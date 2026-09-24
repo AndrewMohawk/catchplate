@@ -640,6 +640,9 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_authority_revocation_proof_bundle.py \
 	scripts/test_authority_typed_request_work.py \
 	scripts/test_authority_revocation_semantics.py \
+	scripts/test_authority_revocation_plan_contract.py \
+	scripts/test_authority_revocation_plan.py \
+	scripts/test_authority_webauthn_trust.py \
 	scripts/test_authority_radix_mutation.py \
 	scripts/test_authority_root_transition.py \
 	scripts/test_authority_counted_root_transition.py \
@@ -2509,12 +2512,16 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_revocation_proof_bundle.py \
 				serverware/authority_revocation_bundle_contract.py \
 				serverware/authority_revocation_semantics.py \
+				serverware/authority_revocation_plan_contract.py \
+				serverware/authority_revocation_plan.py \
+				serverware/authority_webauthn_trust.py \
 				serverware/authority_request_commitment.py \
 				serverware/authority_planner.py \
 				serverware/authority_webauthn_assertion.py \
 				serverware/authority_transition_webauthn.py \
 				scripts/authority_revocation_observation_fixture.py \
 				scripts/authority_revocation_semantics_fixture.py \
+				scripts/authority_revocation_trust_fixture.py \
 				serverware/authority_index_frontier.py \
 				data-plane/decision-gate-rs/Dockerfile \
 				data-plane/decision-gate-rs/Dockerfile.production \

@@ -42,11 +42,13 @@ ROLE_SPECS = (
     ("grants", "approval_grants", "webauthn_grant_approver_active", "approval_grant_ids"),
     ("approvals", "control_plane_approvals", "webauthn_control_approval_approved", "control_plane_approval_ids"),
     ("global_registration_challenges", "webauthn_challenges", "webauthn_registration_unused_global", "registration_challenge_ids"),
+    ("pending_trust_publications", "webauthn_trust_publications", "webauthn_publication_status", None),
 )
 ROLES = tuple(row[0] for row in ROLE_SPECS)
 GROUPS = {"sessions_pending_webauthn": "oidc_sessions", "sessions_active": "oidc_sessions",
           "grants": "approval_grants", "approvals": "control_plane_approvals",
-          "global_registration_challenges": "registration_challenges"}
+          "global_registration_challenges": "registration_challenges",
+          "pending_trust_publications": "pending_trust_publications"}
 
 
 def canonical(value):
@@ -74,6 +76,8 @@ def arguments():
 
 
 def selector_for(role, *, record_id="credential-雪", cutoff_us=CUTOFF_US):
+    if role == "pending_trust_publications":
+        return {"status": "pending"}
     if role == "global_registration_challenges":
         return {"expires_after_us": cutoff_us}
     result = {"credential_record_id": record_id}
@@ -83,7 +87,8 @@ def selector_for(role, *, record_id="credential-雪", cutoff_us=CUTOFF_US):
 
 
 def expected_shared_budget(role):
-    return {"group": GROUPS[role], "maximumRows": 32, "measure": "distinct-primary-address-union"}
+    return {"group": GROUPS[role], "maximumRows": 1 if role == "pending_trust_publications" else 32,
+            "measure": "distinct-primary-address-union"}
 
 
 def complete_document(role, *, values=None, cutoff_us=CUTOFF_US):
@@ -95,7 +100,8 @@ def complete_document(role, *, values=None, cutoff_us=CUTOFF_US):
         "table": table, "indexId": index_id,
         "projectionDigest": index_oracle.expected_profile(index_id).projection_digest,
         "selector": selector_for(role, record_id=values["record_id"], cutoff_us=cutoff_us),
-        "maximumRows": max(1, len(values[hint])), "proofPrimitive": "authenticated-complete-index-range",
+        "maximumRows": 1 if hint is None else max(1, len(values[hint])),
+        "proofPrimitive": "authenticated-complete-index-range",
         "workUnits": 1, "overflowDisposition": "fail-closed", "order": "fixed-index-key",
         "sharedBudget": expected_shared_budget(role),
     }
@@ -109,6 +115,8 @@ def expected_role_manifest():
                    {"credential_record_id": "arguments.record_id"})
         if role.startswith("sessions_"):
             sources["status"] = {"constant": role.removeprefix("sessions_")}
+        if role == "pending_trust_publications":
+            sources = {"status": {"constant": "pending"}}
         documents.append({
             "schema": "serverware.policyAuthorityCompleteIndexQueryRole/v1",
             "querySchema": "serverware.policyAuthorityCompleteIndexQuery/v1", "operation": OPERATION,
@@ -116,7 +124,8 @@ def expected_role_manifest():
             "table": table, "indexId": index_id,
             "projectionDigest": index_oracle.expected_profile(index_id).projection_digest,
             "selectorSources": sources, "requiredSource": {"arguments.source": "explicit"},
-            "rowBound": {"rule": "max(1,length-of-hint-list)", "hintField": hint, "maximum": 32},
+            "rowBound": ({"rule": "constant", "maximum": 1} if hint is None else
+                {"rule": "max(1,length-of-hint-list)", "hintField": hint, "maximum": 32}),
             "sharedBudget": expected_shared_budget(role),
             "proofPrimitive": "authenticated-complete-index-range", "workUnits": 1,
             "order": "fixed-index-key", "overflowDisposition": "fail-closed",
@@ -185,11 +194,12 @@ class CompleteQueryTests(unittest.TestCase):
                     f"serverware.policyAuthorityQuery/{OPERATION}/{role}/{table}/v1")
                 self.assertEqual(query.selector(), selector_for(role))
                 self.assertEqual(query.selector_items, tuple(sorted(selector_for(role).items())))
-                self.assertEqual(query.maximum_rows, max(1, len(self.arguments[hint])))
+                self.assertEqual(query.maximum_rows, 1 if hint is None else max(1, len(self.arguments[hint])))
                 self.assertEqual(query.projection_digest, index_oracle.expected_profile(index_id).projection_digest)
                 self.assertEqual(query.proof_primitive, complete.PROOF_PRIMITIVE)
                 self.assertEqual(query.work_units, 1)
-                self.assertEqual((query.shared_group, query.shared_maximum_rows), (GROUPS[role], 32))
+                self.assertEqual((query.shared_group, query.shared_maximum_rows),
+                                 (GROUPS[role], 1 if hint is None else 32))
                 self.assertNotIsInstance(query, core.BoundedQuery)
                 for attribute in ("predicates", "order_by", "absent_key", "exact_page",
                                   "page_size", "continuation_token_digest", "secondary_index_name"):
@@ -262,11 +272,13 @@ class CompleteQueryTests(unittest.TestCase):
         before = self.program()
         changed = copy.deepcopy(self.arguments)
         for _, _, _, hint in ROLE_SPECS:
-            changed[hint] = ["different-" + item for item in changed[hint]]
+            if hint is not None:
+                changed[hint] = ["different-" + item for item in changed[hint]]
         after = self.program(arguments=changed)
         self.assertEqual(before, after)
         for _, _, _, hint in ROLE_SPECS:
-            changed[hint] = []
+            if hint is not None:
+                changed[hint] = []
         empty_hints = self.program(arguments=changed)
         self.assertTrue(all(query.maximum_rows == 1 for query in empty_hints))
         self.assertEqual([query.selector_items for query in empty_hints],
@@ -327,14 +339,24 @@ class CompleteQueryTests(unittest.TestCase):
             with self.subTest(count=count), self.assertRaises(complete.CompleteQueryError):
                 replace(query, maximum_rows=count)
         for _, _, _, hint in ROLE_SPECS:
+            if hint is None:
+                continue
             for invalid in ((), ["b", "a"], ["same", "same"], [None], [1], ["bad\0"],
                             [f"item-{index:02d}" for index in range(33)]):
                 changed = {**self.arguments, hint: invalid}
                 with self.subTest(hint=hint, value=invalid), self.assertRaises(complete.CompleteQueryError):
                     self.bind(arguments=changed)
         full = {**self.arguments, **{hint: [f"item-{index:02d}" for index in range(32)]
-                                   for _, _, _, hint in ROLE_SPECS}}
-        self.assertTrue(all(query.maximum_rows == 32 for query in self.program(arguments=full)))
+                                   for _, _, _, hint in ROLE_SPECS if hint is not None}}
+        self.assertEqual(tuple(query.maximum_rows for query in self.program(arguments=full)),
+                         (32, 32, 32, 32, 32, 1))
+        pending = self.bind("pending_trust_publications")
+        self.assertEqual(pending.selector(), {"status": "pending"})
+        for count in (2, 32):
+            with self.subTest(pending_count=count), self.assertRaises(complete.CompleteQueryError):
+                replace(pending, maximum_rows=count)
+        with self.assertRaises(complete.CompleteQueryError):
+            replace(pending, selector_items=(("status", "published"),))
         # These are individual declaration ceilings. The business kernel still
         # rejects a full request whose combined mutation obligations overflow.
 

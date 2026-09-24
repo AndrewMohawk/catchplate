@@ -597,6 +597,150 @@ class RevocationSemanticsTests(unittest.TestCase):
         # This private worker accepts an already-owned graph, not a success
         # token. Public calls always capture raw inputs and abort on failures.
 
+    def test_joint_owned_handoff_keeps_real_outer_signature_and_semantics_on_one_ledger(self):
+        fixture = SemanticFixture()
+        expected = independent_metrics(fixture)
+        # This is a component transport frame, not a v4 protocol or a new pin.
+        # Its real signature is separate from the genuine verifier receipt.
+        metadata = {"schema": "component.semantic-handoff/v1", "sequence": 7}
+        expected_transport_wire = wire(metadata)
+        outer_digest = framed("component.semantic-handoff/v1", expected_transport_wire)
+        message = outer_digest.encode("ascii")
+        signature = fixture.receipt.key.sign(message)
+        raw = {"semantic": capture_document(fixture), "transport": metadata}
+        joint_capture = graph_cost(raw, 1, 1)
+        outer_work = add(graph_cost(metadata), (1, 2 * len(message) + len(signature), 2))
+        extra = tuple(joint_capture[index] - expected["capture"][index] + outer_work[index]
+            for index in range(3))
+        quotas = add(expected["admission"], extra)
+        ledger = retained._PackagingLedger(accounting.QueryReadValidationLimits(*quotas), comparing=True)
+        shared = ledger.work
+        outer_receipt = assertion._ReceiptWork(shared)
+        real_visit = semantics.query_batch._JSONCapture.visit
+        captures = []
+
+        def visit(copier, value, depth=0, ancestors=frozenset()):
+            if copier.retain and not ancestors:
+                captures.append((copier.ledger, depth))
+            return real_visit(copier, value, depth, ancestors)
+
+        with patch.object(semantics.query_batch._JSONCapture, "visit", visit), \
+                patch.object(semantics, "_capture", side_effect=AssertionError("second outer capture")), \
+                patch.object(retained._PackagingLedger, "__init__", side_effect=AssertionError("fresh ledger")), \
+                patch.object(mixed, "_verify", wraps=mixed._verify) as proof, \
+                patch.object(assertion, "_verify_receipt_signature", wraps=assertion._verify_receipt_signature) as verify_signature:
+            before = shared.metrics
+            # Two synthetic carriers preserve each original wire root at zero.
+            owned = semantics.query_batch._JSONCapture(ledger).visit(raw, depth=-2)
+            capture = mixed._delta(before, shared.metrics)
+            shared.prepare_encoding(owned["transport"])
+            transport_wire = commitment.canonical_bytes(owned["transport"])
+            shared.charge(hashes=1)
+            actual_digest = commitment.framed_digest("component.semantic-handoff/v1", transport_wire)
+            shared.prepare_utf8(actual_digest)
+            shared.charge(input_bytes=len(signature))
+            assertion._verify_receipt_signature(fixture.receipt.key.public_key(), signature,
+                actual_digest.encode("ascii"), work=outer_receipt)
+            # Caller mutation cannot change either already-owned operand.
+            raw["transport"]["sequence"] = 99
+            raw["semantic"]["request"]["operation"] = "caller-mutated"
+            actual = semantics._verify(owned["semantic"], ledger, capture, fixture.receipt.key.public_key())
+        self.assert_complete(fixture, actual)
+        self.assertEqual((transport_wire, actual_digest), (expected_transport_wire, outer_digest))
+        self.assertEqual(captures, [(ledger, -2)])
+        self.assertEqual((proof.call_count, verify_signature.call_count), (1, 2))
+        self.assertEqual((outer_receipt.signature_attempts, actual.metrics.signature_attempts), (1, 1))
+        self.assertIs(outer_receipt.shared, shared)
+        self.assertIs(ledger.work, shared)
+        self.assertEqual(units(shared.metrics), add(expected["total"], extra))
+        self.assertEqual(units(actual.metrics.capture), joint_capture)
+        self.assertEqual(units(actual.proof.packaging.capture), joint_capture)
+        self.assertEqual(units(actual.proof.packaging.peak_reserved_work), add(expected["retained_peak"], extra))
+        self.assertEqual((actual.proof.packaging.total_hashes, actual.proof.packaging.total_input_bytes,
+                          actual.proof.packaging.total_json_nodes), add(expected["proof_snapshot"], extra))
+        for phase in PHASES[1:]:
+            self.assertEqual(units(getattr(actual.metrics, phase)), expected[phase], phase)
+        self.assertEqual((shared.limits.max_hashes, shared.limits.max_input_bytes, shared.limits.max_json_nodes), quotas)
+        # A wrapper's one-attempt cap remains spent after semantic finalization.
+        with self.assertRaises(assertion.AssertionEvidenceError):
+            assertion._verify_receipt_signature(fixture.receipt.key.public_key(), signature, message,
+                work=outer_receipt)
+
+    def test_private_handoff_rejects_wrong_carriers_holds_and_capture_before_real_work(self):
+        fixture = SemanticFixture()
+        for case in ("extra", "missing", "not-graph", "not-ledger", "plain-ledger", "missing-ledger",
+                     "derive-hold", "released-hold", "changed-ceiling", "wrong-work", "missing-work",
+                     "wrong-capture", "missing-capture", "boolean-capture", "negative-capture", "unspent-capture"):
+            ledger = retained._PackagingLedger(accounting.QueryReadValidationLimits(), comparing=True)
+            supplied = fixture.inputs()
+            key = supplied.pop("verifier_public_key")
+            owned, capture = semantics._capture(ledger=ledger, **supplied)
+            if case == "extra":
+                owned["extra"] = None
+            elif case == "missing":
+                del owned["expectedBefore"]
+            elif case == "not-graph":
+                owned = object()
+            elif case == "not-ledger":
+                ledger = None
+            elif case == "plain-ledger":
+                ledger = mixed._Ledger(accounting.QueryReadValidationLimits())
+            elif case == "missing-ledger":
+                ledger = object.__new__(retained._PackagingLedger)
+            elif case == "derive-hold":
+                ledger = retained._PackagingLedger(accounting.QueryReadValidationLimits(), comparing=False)
+            elif case == "released-hold":
+                ledger.release_compact_hold()
+            elif case == "changed-ceiling":
+                ledger.work.limits = forged(ledger.work.limits, max_input_bytes=ledger.work.limits.max_input_bytes - 1)
+            elif case == "wrong-work":
+                ledger.work = {}
+            elif case == "missing-work":
+                ledger.work = object.__new__(accounting._ValidationWork)
+            elif case == "wrong-capture":
+                capture = (0, 0, 0)
+            elif case == "missing-capture":
+                capture = object.__new__(accounting.QueryReadValidationMetrics)
+            elif case == "boolean-capture":
+                capture = forged(capture, hash_work=False)
+            elif case == "negative-capture":
+                capture = forged(capture, input_bytes=-1)
+            elif case == "unspent-capture":
+                capture = forged(capture, json_nodes=ledger.json_nodes + 1)
+            with self.subTest(case=case), patch.object(hashlib, "sha256", wraps=hashlib.sha256) as hashes, \
+                    patch.object(assertion, "_verify_receipt_signature", wraps=assertion._verify_receipt_signature) as signature, \
+                    patch.object(mixed, "_verify", wraps=mixed._verify) as proof, \
+                    self.assertRaises(semantics.RevocationSemanticsError):
+                semantics._verify(owned, ledger, capture, key)
+            self.assertEqual((hashes.call_count, signature.call_count, proof.call_count), (0, 0, 0))
+
+    def test_private_preconsumed_handoff_denies_one_less_at_final_semantic_comparison(self):
+        fixture = SemanticFixture()
+        expected = independent_metrics(fixture)
+        prior = (2, 37, 11)
+        quotas = list(add(expected["admission"], prior))
+        self.assertGreater(expected["total"][2], expected["retained_peak"][2])
+        quotas[2] = expected["total"][2] + prior[2] - 1
+        ledger = retained._PackagingLedger(accounting.QueryReadValidationLimits(*quotas), comparing=True)
+        shared = ledger.work
+        shared.charge(hashes=prior[0], input_bytes=prior[1], json_nodes=prior[2])
+        supplied = fixture.inputs()
+        key = supplied.pop("verifier_public_key")
+        owned, capture = semantics._capture(ledger=ledger, **supplied)
+        with patch.object(mixed, "_verify", wraps=mixed._verify) as proof, \
+                patch.object(capacity, "_finalize_capacity", wraps=capacity._finalize_capacity) as finalizer, \
+                self.assertRaises(accounting.QueryReadWorkError):
+            semantics._verify(owned, ledger, capture, key)
+        self.assertEqual((proof.call_count, finalizer.call_count), (1, 1))
+        self.assertIs(ledger.work, shared)
+        self.assertEqual(shared.hash_work, expected["total"][0] + prior[0])
+        self.assertEqual(shared.limits.max_json_nodes, quotas[2])
+        # The caller aborts this failed invocation; no retry/refund is allowed.
+        with patch.object(hashlib, "sha256", wraps=hashlib.sha256) as hashes, \
+                self.assertRaises(semantics.RevocationSemanticsError):
+            semantics._verify(owned, ledger, capture, key)
+        self.assertEqual(hashes.call_count, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

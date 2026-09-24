@@ -1,8 +1,8 @@
 """Source-bound complete-query verification, not operation authority.
 
-Only the five explicit credential-revocation roles are admitted. Every raw
+Only the six explicit credential-revocation roles are admitted. Every raw
 input is detached before any hashing constructor or verifier runs. One genuine
-global primary membership evaluation owns the rows used by five genuine joins;
+global primary membership evaluation owns the rows used by six genuine joins;
 their repeated proof work is charged, including empty queries and shared heads.
 
 The reader-sized frontier profile is intentionally narrower than the generic
@@ -36,12 +36,12 @@ MAX_TOTAL_HASHES = 8_000_000
 MAX_TOTAL_INPUT_BYTES = 64 * 1024 * 1024
 MAX_TOTAL_JSON_NODES = 1_000_000
 MAX_JSON_DEPTH = 128
-QUERY_COUNT = 5
-READ_HEAD_COUNT = 4
-# Cold primary roots; five initial declarations and ten binding constructors;
-# four profiles and four empty roots; five outer anchors; one source manifest.
+QUERY_COUNT = 6
+READ_HEAD_COUNT = 5
+# Cold primary roots; six initial declarations and twelve binding constructors;
+# five profiles and five empty roots; six outer anchors; one source manifest.
 # Each join separately charges its own complete conservative context allowance.
-CONTEXT_HASH_ALLOWANCE = 66 + 5 + 10 + 4 + 4 + 5 + 1
+CONTEXT_HASH_ALLOWANCE = 66 + 6 + 12 + 5 + 5 + 6 + 1
 _ROOT_FIELDS = frozenset({"table", "rootRevision", "rootDigest", "leafCount"})
 _SELECTED_FIELDS = frozenset({"table", "key", "keyDigest", "present", "row", "contractSelector"})
 
@@ -539,8 +539,8 @@ def verify_complete_query_batch(
     """Reverify raw evidence under source limits, returning actual owned inputs.
 
     Root vectors are closed primary wire dictionaries in lists or tuples. All
-    other inventories require the exact declared tuple/DTO types. The five
-    query/frontier pairs retain supplied program order, while four heads are
+    other inventories require the exact declared tuple/DTO types. The six
+    query/frontier pairs retain supplied program order, while five heads are
     the sorted unique source union. One head is shared by both session roles.
 
     The optional exact framework-counter address earns only one extra selected
@@ -576,7 +576,7 @@ def _verify_complete_query_batch(
     """Capture and reverify raw proof inputs on the caller's existing meter.
 
     This private planner seam runs the same ownership, global membership and
-    five genuine joins as the public entry. No successful proof/result input
+    six genuine joins as the public entry. No successful proof/result input
     or replacement work allowance is accepted. Returned batch totals are this
     call's deltas; ``work`` retains every prior and newly charged unit. As with
     the existing proof composers, any phase failure aborts the enclosing call:

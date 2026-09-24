@@ -30,7 +30,7 @@ Fresh snapshots revalidate exact types and source constraints; even a frozen
 object is not a verification token. Returned selector/contract dictionaries are
 detached copies.
 
-## Five explicit-revocation roles
+## Six explicit-revocation roles
 
 | Role | Fixed index | Selector source | Row-bound hint |
 | --- | --- | --- | --- |
@@ -39,12 +39,13 @@ detached copies.
 | `grants` | `webauthn_grant_approver_active` | `record_id` | `approval_grant_ids` |
 | `approvals` | `webauthn_control_approval_approved` | `record_id` | `control_plane_approval_ids` |
 | `global_registration_challenges` | `webauthn_registration_unused_global` | Supplied cutoff microseconds | `registration_challenge_ids` |
+| `pending_trust_publications` | `webauthn_publication_status` | Constant status `pending` | None; fixed bound one, must be empty for semantic admission |
 
 The binder requires explicit revocation, a bounded exact argument dictionary,
 the source record ID and all four sorted unique hint lists. Source IDs retain
 the candidate's 1,024-byte, nonempty, trimmed, control-free UTF-8 admission.
 Hint lists have at most 32 entries each; their addresses never become index
-selectors. Each role's fail-closed allowance is `max(1, len(hint))`. Empty hints
+selectors. Each cascade role's fail-closed allowance is `max(1, len(hint))`. Empty hints
 therefore still require a complete query and cannot assert an empty result.
 
 The two session partitions share one distinct-primary-address union ceiling of
@@ -74,11 +75,13 @@ pinned v9 schema-source revision checks move together to `.28`; no installed
 database, recorded contract or accepted root is automatically upgraded.
 The exact schema/migration admission still has to succeed before use.
 
-The candidate emits all five new declarations alongside unchanged exact-primary
-credential, assertion and audit queries. Query closure and shared audit-capacity
+Source `.32` adds the sixth, constant pending-trust role; all seventeen pinned
+DDL revision checks now match `.32`. The full evidence-bound candidate emits
+those declarations alongside exact-primary credential, assertion, high-water
+and audit queries, plus a staged published-bundle lookup. Query closure and shared audit-capacity
 composition accept only the two explicit query kinds, retain the original
 business/framework ceilings, and reject duplicate identities. The planner
-rebinds all five roles to its actual arguments and supplied database time, then
+rebinds all six roles to its actual arguments and supplied database time, then
 uses the returned owned snapshots. Cheap tuple/count checks precede processing.
 
 Without the exact private collector, the reader rejects a complete declaration
@@ -89,7 +92,7 @@ not a `LIMIT + 1` completeness substitute. There is no constructed successful
 receipt or registry activation.
 
 Query-read bookkeeping can snapshot, retain and compare the distinct closed
-declaration without synthesizing legacy primary-key ordering. These first five
+declaration without synthesizing legacy primary-key ordering. These six
 roles have no deferred selected-row references. Empty observations remain empty,
 not invented absent primary addresses. Retained records still do not establish
 predicate satisfaction, index membership, completeness, currentness or intent
@@ -110,9 +113,12 @@ assertion-query, business-row/work and source-closure checks. In order it emits
 the target credential, all five complete roles, one exact audit query per
 control-plane approval hint and optional credential audit, an assertion
 credential query only when the signer differs from the target, and the
-assertion challenge. The common framework still separately calls the genuine
+assertion challenge, the fixed trust high-water lookup, the publication lookup
+resolved from that proved row, and the constant pending-publication range.
+The lower cascade-only helper still emits five cascade roles. The full
+evidence-bound recipe requires all six. The common framework separately calls the genuine
 `add_capacity_query` to append its exact global counter query last. This is at
-most 42 declarations including the framework query; the original operation
+most 45 declarations including the framework query; the original operation
 bounds still decide whether a concrete program is admitted.
 
 The native-cutoff entry point uses the same signed-int64 selector domain as the
@@ -129,7 +135,7 @@ The public cutoff-native APIs remain unmetered. A separate private
 [measured generator](authority-revocation-query-work.md) now charges the genuine
 source workers and is called by the unexecuted
 [mixed proof composer](authority-revocation-read-write.md). A full recipe
-followed by the actual capacity composition performs 20 profile hashes plus two hashes per
+followed by the actual capacity composition performs 24 profile hashes plus two hashes per
 audit subject. Argument canonicalization, business-intent normalization and
 JSON decoding, copies, comparisons, profile descriptor encodings and audit-ID
 encodings are additional real work. A composer must charge those
@@ -139,7 +145,8 @@ successful generation supplies that composition.
 
 Every consumer must own all inputs before generating this program, compare
 every ordered observation with the generated declaration, enforce full-key
-binding for present and absent point reads, and compare complete observations
+binding for present and absent point reads, require the single published-bundle
+selection to satisfy its genuinely resolved predicates, and compare complete observations
 with the genuine joined-leaf order. Empty roles cannot be omitted and an extra
 source-shaped ordinary query cannot substitute for an actual source query.
 This shared recipe does not activate that consumer, the planner or a kernel.

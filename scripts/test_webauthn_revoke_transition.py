@@ -30,6 +30,7 @@ from serverware import authority_complete_query as complete
 from serverware import authority_transition_core as core
 from serverware import authority_transition_policy as policy
 from serverware import authority_transition_webauthn as candidate
+import authority_revocation_trust_fixture as trust_oracle
 
 
 def digest(value: bytes) -> str:
@@ -140,6 +141,7 @@ class RevokeTransitionTests(unittest.TestCase):
             "updated_at": (self.now - timedelta(days=1)).isoformat(),
             "transports": '["usb"]', "attestation_trusted": 1,
             "attestation_trust_path": '["fixture-root"]',
+            **trust_oracle.credential_fields(),
         }
 
     def context(self, *, separate_signer: bool = False) -> core.KernelContext:
@@ -176,6 +178,12 @@ class RevokeTransitionTests(unittest.TestCase):
             "rpId": "unit.example", "origin": "https://unit.example",
             "priorCounter": 2, "counter": 3,
         }
+        high_water = trust_oracle.trust_rows()["webauthn_trust_publication_high_water"][0]
+        evidence.update(trustHighWaterDigest=framed("serverware.webauthnTrustHighWater/v1",
+                canonical(trust_oracle.trust_high_water_document(high_water))),
+            metadataPublicationSequence=high_water["publication_sequence"],
+            credentialPolicyDigest=framed("serverware.policyAuthorityCredentialPolicy/v1",
+                canonical(trust_oracle.credential_policy_document(signer, high_water))))
         target = self.credential(self.values["record_id"])
         rows = [selected("webauthn_credentials", target["id"], target)]
         if separate_signer:
@@ -206,6 +214,7 @@ class RevokeTransitionTests(unittest.TestCase):
         for subject in ("approval-one", None):
             item_id = candidate.audit_id(candidate.OPERATION, self.request_digest, subject)
             rows.append(selected("metadata_audit_outbox", item_id, None))
+        rows.extend(trust_oracle.selected_rows())
         return core.KernelContext(
             operation=candidate.OPERATION, arguments=self.arguments(), selected_rows=tuple(rows),
             database_now=self.now, request_digest=self.request_digest,
@@ -306,7 +315,7 @@ class RevokeTransitionTests(unittest.TestCase):
         complete_queries = tuple(query for query in queries if type(query) is complete.CompleteIndexQuery)
         self.assertEqual(tuple(query.role for query in complete_queries), (
             "sessions_pending_webauthn", "sessions_active", "grants", "approvals",
-            "global_registration_challenges",
+            "global_registration_challenges", "pending_trust_publications",
         ))
         elapsed = self.now - datetime(1970, 1, 1, tzinfo=timezone.utc)
         cutoff_us = (elapsed.days * 86400 + elapsed.seconds) * 1_000_000 + elapsed.microseconds
@@ -319,6 +328,7 @@ class RevokeTransitionTests(unittest.TestCase):
             "approvals": ("webauthn_control_approval_approved", {"credential_record_id": "credential-target"}, 1),
             "global_registration_challenges": ("webauthn_registration_unused_global",
                 {"expires_after_us": cutoff_us}, 1),
+            "pending_trust_publications": ("webauthn_publication_status", {"status": "pending"}, 1),
         }
         for query in complete_queries:
             self.assertEqual((query.index_id, query.selector(), query.maximum_rows), expected[query.role])
@@ -330,14 +340,21 @@ class RevokeTransitionTests(unittest.TestCase):
         self.assertEqual(complete.validate_bindings(candidate.OPERATION, complete_queries,
             arguments=context.arguments, cutoff_us=cutoff_us), complete_queries)
         exact_queries = [query for query in queries if type(query) is core.BoundedQuery]
-        self.assertEqual(len(exact_queries), 4)
+        self.assertEqual(len(exact_queries), 6)
         for query in exact_queries:
             self.assertEqual(query.proof_primitive, "primary-key-row")
             self.assertFalse(query.exact_page)
             self.assertEqual(query.maximum_rows, 1)
-            self.assertEqual(query.predicates,
-                tuple(core.QueryPredicate(column, "eq", value) for column, value in query.absent_key.items()))
-            self.assertEqual(query.order_by, (core.QueryOrder("id"),))
+            if query.absent_key is not None:
+                self.assertEqual(query.predicates,
+                    tuple(core.QueryPredicate(column, "eq", value) for column, value in query.absent_key.items()))
+                self.assertEqual(query.order_by, tuple(core.QueryOrder(column) for column in query.absent_key))
+            else:
+                self.assertEqual(query.table, "webauthn_trust_publications")
+                self.assertEqual(query.order_by, (core.QueryOrder("id"),))
+                self.assertEqual(tuple(item.column for item in query.predicates),
+                    ("scope", "status", "bundle_digest", "payload_digest", "rollback_epoch", "sequence"))
+                self.assertTrue(all(type(item.value) is core.SelectedRowFieldReference for item in query.predicates[2:]))
             self.assertEqual(query.contract_value()["schema"], "serverware.policyAuthorityQueryProgram/v1")
         audit_queries = [query for query in queries if query.table == "metadata_audit_outbox"]
         self.assertEqual(len(audit_queries), 2)
@@ -437,7 +454,7 @@ class RevokeTransitionTests(unittest.TestCase):
         context = self.with_capacity(self.context(), live_count=99_998, active_count=99_998)
         before = copy.deepcopy((context.arguments, context.selected_rows, context.verified_webauthn_evidence))
         queries, business, mutations, work = self.composed(context)
-        self.assertEqual((len(business.mutations), len(mutations), len(queries), work), (9, 10, 10, 68))
+        self.assertEqual((len(business.mutations), len(mutations), len(queries), work), (9, 10, 13, 73))
         self.assertTrue(all(item["table"] != COUNTER_TABLE for item in business.mutations))
         counter = mutations[-1]
         self.assertEqual((counter["table"], counter["key"], counter["operation"]),
@@ -488,7 +505,7 @@ class RevokeTransitionTests(unittest.TestCase):
             if item["table"] not in {"control_plane_approvals", "metadata_audit_outbox"}))
         complete = self.with_capacity(context, live_count=100_000, active_count=100_000)
         queries, business, mutations, work = self.composed(complete)
-        self.assertEqual((len(business.mutations), len(mutations), work), (6, 6, 50))
+        self.assertEqual((len(business.mutations), len(mutations), work), (6, 6, 55))
         self.assertEqual(mutations, business.mutations)
         self.assertEqual(sum(query.table == COUNTER_TABLE for query in queries), 1)
         self.assertFalse(any(item["table"] in {COUNTER_TABLE, "metadata_audit_outbox"} for item in mutations))
@@ -547,8 +564,8 @@ class RevokeTransitionTests(unittest.TestCase):
         evidence = self.context(separate_signer=True).verified_webauthn_evidence
         queries = self.kernel.queries_with_evidence(arguments=self.arguments(values), database_now=self.now,
             request_digest=self.request_digest, evidence=evidence)
-        self.assertEqual(sum(query.maximum_rows for query in queries), 168)
-        self.assertEqual(sum(query.maximum_rows for query in capacity.add_capacity_query(candidate.OPERATION, queries)), 169)
+        self.assertEqual(sum(query.maximum_rows for query in queries), 171)
+        self.assertEqual(sum(query.maximum_rows for query in capacity.add_capacity_query(candidate.OPERATION, queries)), 172)
         values["registration_challenge_ids"].append("registration_challenge_ids-28")
         with self.assertRaisesRegex(core.TransitionKernelError, "aggregate mutation bound"):
             candidate.prepare_revocation_input(values)

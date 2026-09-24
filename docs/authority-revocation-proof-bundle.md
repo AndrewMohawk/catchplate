@@ -95,7 +95,7 @@ before allocation and owns all raw evidence before the first hash.
 graphs. It captures both bundle and claim together before any hash, closes
 their shapes and encodes the claim, then runs the same genuine private worker
 once. It never accepts a previous mixed result, primary result or retained
-result as evidence. Replay includes real membership verification, all five
+result as evidence. Replay includes real membership verification, all six
 complete joins, indexed writes, exact point-key binding and complete read order.
 The returned primary object is the actual writer result, not a reconstruction.
 Depth is measured from each actual document root. The synthetic pair used for
@@ -141,7 +141,7 @@ roots per state, 128-byte source identities, 19-digit nonnegative root values,
 a 20-character signed cutoff, eight-digit work values and two 1,024-byte
 validated IDs (at most 3,074 ASCII JSON bytes each). With keys conservatively
 bounded by 64 ASCII bytes, this totals at most 32,178 bytes / 477 nodes. The
-actual eight-head revoke closure gives 29,088 bytes / 423 nodes. Malformed
+current nine-head revoke closure remains below that eleven-head bound. Malformed
 claims do not inherit that valid-source argument; the actual encoder ceiling
 still applies.
 

@@ -142,7 +142,7 @@ class MixedFixture:
         self.queries = (self.source, self.dependent, self.empty, self.missing,
                         *self.complete_queries, self.overlap)
         self.ordered = ((self.first,), (self.second,), (), (self.absent,),
-                        (self.session,), (), (), (), (), (self.second, self.first))
+                        (self.session,), (), (), (), (), (), (self.second, self.first))
         self.resolved = tuple(self.resolve(query) for query in self.queries)
         self.records = tuple(self.record(query, resolved, ordered)
             for query, resolved, ordered in zip(self.queries, self.resolved, self.ordered))
@@ -444,9 +444,9 @@ class AuthorityQueryReadMeasuredTests(unittest.TestCase):
         self.assertEqual(observed.query_reads, expected)
         self.assertEqual(tuple(wire(fixture.document(query)) for query in observed.queries),
                          tuple(wire(fixture.document(query)) for query in fixture.queries))
-        self.assertEqual(len(observed.query_reads), 10)
+        self.assertEqual(len(observed.query_reads), 11)
         self.assertEqual(tuple(record.returned_row_count for record in observed.query_reads),
-                         (1, 1, 0, 0, 1, 0, 0, 0, 0, 2))
+                         (1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 2))
 
     def test_empty_complete_roles_absence_and_observed_overlap_remain_distinct(self):
         fixture = MixedFixture()
@@ -454,18 +454,18 @@ class AuthorityQueryReadMeasuredTests(unittest.TestCase):
         self.assertEqual(observed.query_reads[2].addresses, ())
         self.assertEqual(observed.query_reads[3].addresses,
             (reads.QueryReadAddress(CREDENTIALS, b'{"id":"missing"}', fixture.absent["keyDigest"], False),))
-        self.assertEqual(tuple(record.addresses for record in observed.query_reads[5:9]), ((), (), (), ()))
+        self.assertEqual(tuple(record.addresses for record in observed.query_reads[5:10]), ((), (), (), (), ()))
         self.assertEqual(observed.query_reads[-1].addresses,
             (observed.query_reads[1].addresses[0], observed.query_reads[0].addresses[0]))
-        self.assertEqual(observed.metrics.hash_work, 8 * 5 + 4 + 6)
+        self.assertEqual(observed.metrics.hash_work, 8 * 6 + 4 + 6)
 
     def test_genuine_hash_calls_match_complete_snapshots_and_all_address_occurrences(self):
         fixture = MixedFixture()
         actual_sha = hashlib.sha256
         with patch.object(hashlib, "sha256", wraps=actual_sha) as observed_hashes:
             result = self.measured(fixture)
-        self.assertEqual(result.metrics.hash_work, 50)
-        self.assertEqual(observed_hashes.call_count, 50)
+        self.assertEqual(result.metrics.hash_work, 58)
+        self.assertEqual(observed_hashes.call_count, 58)
 
     def test_observation_result_is_not_primary_predicate_or_complete_range_authority(self):
         fixture = MixedFixture()
@@ -702,7 +702,7 @@ class AuthorityQueryReadMeasuredTests(unittest.TestCase):
         fixture = MixedFixture()
         expected = expected_work(fixture)
         actual = self.measured(fixture)
-        self.assertEqual(actual.metrics.hash_work, 50)
+        self.assertEqual(actual.metrics.hash_work, 58)
         self.assertEqual((actual.metrics.hash_work, actual.metrics.input_bytes, actual.metrics.json_nodes),
                          (expected.hashes, expected.bytes, expected.nodes))
         self.assertGreater(expected.bytes, sum(record_bytes(record) for record in fixture.records))
@@ -714,8 +714,8 @@ class AuthorityQueryReadMeasuredTests(unittest.TestCase):
         actual_sha = hashlib.sha256
         with patch.object(hashlib, "sha256", wraps=actual_sha) as hashes, \
                 self.assertRaises(reads.QueryReadError):
-            self.measured(fixture, limits=reads.QueryReadValidationLimits(max_hashes=49))
-        self.assertEqual(hashes.call_count, 49)
+            self.measured(fixture, limits=reads.QueryReadValidationLimits(max_hashes=57))
+        self.assertEqual(hashes.call_count, 57)
 
     def test_incremental_pipeline_matches_independent_records_work_and_real_hashes(self):
         fixture = IncrementalFixture()

@@ -107,7 +107,7 @@ def validate_complete_read_trace(operation: str, table: str, key: Any) -> None:
         return
 
     _closed(key, _LEAF_FIELDS if table == reader.LEAF_TABLE else _NODE_FIELDS)
-    _source_role(operation, key)
+    role = _source_role(operation, key)
     if (type(key["profile"]) is not str or key["profile"] != reader.READ_PROFILE
             or not _digest(key["projectionDigest"]) or not _digest(key["rootDigest"])
             or not _integer(key["indexRevision"], 0, I64_MAX)
@@ -118,7 +118,7 @@ def validate_complete_read_trace(operation: str, table: str, key: Any) -> None:
         if (not _hex(key["lower"], KEY_NIBBLES)
                 or key["upper"] is not None and (
                     not _hex(key["upper"], KEY_NIBBLES) or key["upper"] < key["lower"])
-                or not _integer(key["limit"], 2, complete.CASCADE_MAX + 1)):
+                or not _integer(key["limit"], 2, role.maximum_rows + 1)):
             raise IndexTraceError("complete leaf read bounds are not exact source-sized values")
         return
 

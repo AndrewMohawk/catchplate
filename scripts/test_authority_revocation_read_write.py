@@ -29,6 +29,7 @@ from serverware import authority_query_read_work as accounting
 from serverware import authority_query_reads as reads
 from serverware import authority_radix_mutation as primary
 from serverware import authority_revocation_read_write as admission
+from serverware import authority_transition_core as core
 from serverware import authority_transition_webauthn as candidate
 import authority_revocation_observation_fixture as fixture_oracle
 import test_authority_query_reads_measured as observation_oracle
@@ -63,7 +64,7 @@ def unit_metrics(hashes=0, input_bytes=0, json_nodes=0):
 
 
 def independent_observation_work(fixture):
-    """Real validator schedule specialized to this no-reference source family.
+    """Real validator schedule including the four proved high-water references.
 
     Primitive framing/copy arithmetic is reused from the independent measured
     fixture, not its id-only population adapter. Actual source primary columns
@@ -71,8 +72,18 @@ def independent_observation_work(fixture):
     """
     expected = observation_oracle.ExpectedWork()
     documents = {document["queryId"]: document for document in fixture.documents}
+    resolved_documents = {document["queryId"]: document for document in fixture.resolved_documents}
     queries = fixture.query_program
     records = fixture.query_reads
+
+    def values(query):
+        return (tuple(predicate.value for predicate in query.predicates)
+                + (() if query.absent_key is None else tuple(query.absent_key.values())))
+
+    def reference_key_copies(query):
+        for value in values(query):
+            if type(value) is core.SelectedRowFieldReference:
+                expected.encoding(value.key)
 
     def key_work(key):
         expected.copy(key)
@@ -93,11 +104,16 @@ def independent_observation_work(fixture):
             for _ in range(8):
                 expected.profile(query)
         else:
-            for value in (*[predicate["value"] for predicate in document["predicates"]],
-                          *document["absentKey"].values()):
-                expected.copy(value)
-            for name in document["absentKey"]:
-                expected.copy(name)
+            for value in values(query):
+                if type(value) is core.SelectedRowFieldReference:
+                    expected.copy(value.key)
+                    expected.encoding(value.key, copies=1)
+                else:
+                    expected.copy(value)
+            if query.absent_key is not None:
+                for name in query.absent_key:
+                    expected.copy(name)
+            reference_key_copies(query)
         expected.encoding(document)
         expected.bytes += len(fixture_oracle.wire(document))
     for ordinal, record in enumerate(records):
@@ -108,20 +124,27 @@ def independent_observation_work(fixture):
         expected.bytes += header
     for selected in fixture.selected_rows:
         selected_address(selected)
-    for query, record, ordered in zip(queries, records, fixture.ordered_rows):
+    for query, resolved, record, ordered in zip(queries, fixture.resolved_program, records, fixture.ordered_rows):
         document = documents[query.query_id]
+        resolved_document = resolved_documents[query.query_id]
         ordinary = document["schema"] == "serverware.policyAuthorityQueryProgram/v1"
         if ordinary:
-            for value in (*[predicate["value"] for predicate in document["predicates"]],
-                          *document["absentKey"].values()):
-                expected.copy(value)
-        for _ in range(4):
-            expected.encoding(document)
-        expected.bytes += 2 * len(fixture_oracle.wire(document))
+            for before, after in zip(values(query), values(resolved)):
+                if type(before) is core.SelectedRowFieldReference:
+                    key_work(before.key)
+                expected.copy(after)
+            reference_key_copies(query)  # resolution-shape projection
+        expected.encoding(resolved_document)
+        expected.encoding(resolved_document)
+        if ordinary:
+            reference_key_copies(query)  # retained declared projection
+        expected.encoding(document)
+        expected.encoding(resolved_document)
+        expected.bytes += len(fixture_oracle.wire(document)) + len(fixture_oracle.wire(resolved_document))
         for selected in ordered:
             selected_address(selected)
-        if ordinary and record.returned_row_count == 0:
-            key_work(document["absentKey"])
+        if ordinary and record.returned_row_count == 0 and resolved.absent_key is not None:
+            key_work(resolved.absent_key)
     return unit_metrics(expected.hashes, expected.bytes, expected.nodes)
 
 
@@ -158,9 +181,58 @@ def independent_metrics(fixture):
                                                    for record in fixture.query_reads)
     point = unit_metrics()
     complete = unit_metrics()
-    for source, ordered in zip(fixture.documents, fixture.ordered_rows):
+    for ordinal, (source, resolved, ordered) in enumerate(zip(
+            fixture.documents, fixture.resolved_documents, fixture.ordered_rows)):
         if source["schema"] == "serverware.policyAuthorityQueryProgram/v1":
             key = source["absentKey"]
+            if key is None:
+                # The only admitted non-PK query is the actual publication
+                # join. Its real resolver repeats snapshot/prefix/selection
+                # work under the SAME ledger, not a result-token shortcut.
+                lookup = observation_oracle.ExpectedWork()
+
+                def key_work(value):
+                    lookup.copy(value)
+                    lookup.encoding(value)
+
+                for predicate in source["predicates"]:
+                    value = predicate["value"]
+                    if type(value) is dict:
+                        lookup.copy(value["key"])
+                        lookup.encoding(value["key"], copies=1)
+                        lookup.encoding(value["key"])  # declared contract's hidden copy
+                    else:
+                        lookup.copy(value)
+                lookup.encoding(source)
+                lookup.bytes += len(fixture_oracle.wire(source))
+                for record in fixture.query_reads[:ordinal]:
+                    address_bytes = sum(observation_oracle.address_bytes(item) for item in record.addresses)
+                    header_bytes = observation_oracle.record_bytes(record) - address_bytes
+                    lookup.bytes += 6 * header_bytes + 4 * address_bytes
+                for selected in fixture.selected_rows:
+                    key_work(selected["key"])
+                    if selected["present"]:
+                        columns = fixture.read_write.read.trees[selected["table"]].columns
+                        key_work({column: selected["row"][column] for column in columns})
+                    lookup.hashes += 1
+                    lookup.address(reads.QueryReadAddress(selected["table"], fixture_oracle.wire(selected["key"]),
+                        selected["keyDigest"], selected["present"]))
+                for before, after in zip(source["predicates"], resolved["predicates"]):
+                    if type(before["value"]) is dict:
+                        key_work(before["value"]["key"])
+                    lookup.copy(after["value"])
+                row = ordered[0]["row"]
+                predicate_values = {predicate["column"]: predicate["value"]
+                                    for predicate in resolved["predicates"]}
+                key = ordered[0]["key"]
+                point["hash_work"] += lookup.hashes
+                point["input_bytes"] += (lookup.bytes + 2 * len(fixture_oracle.wire(fixture.selected_rows))
+                    + 4 * len(fixture_oracle.wire(row)) + 4 * len(fixture_oracle.wire(key))
+                    + 6 * len(fixture_oracle.wire(predicate_values)))
+                point["json_nodes"] += (lookup.nodes + 2 * observation_oracle.graph_nodes(fixture.selected_rows)
+                    + 4 * observation_oracle.graph_nodes(row) + 2 * observation_oracle.graph_nodes(key)
+                    + 4 * observation_oracle.graph_nodes(predicate_values))
+                continue
             point["input_bytes"] += 8 * len(fixture_oracle.wire(key))
             point["json_nodes"] += 6 * observation_oracle.graph_nodes(key)
         else:
@@ -181,7 +253,7 @@ def independent_metrics(fixture):
     writer = fixture.read_write.writer_metrics()
     read_ids = {info.profile.index_id for info in reader.joins.values()}
     proof = unit_metrics(
-        95 + 2 * len(set(fixture.read_write.heads) - read_ids) + global_work["hash_work"]
+        101 + 2 * len(set(fixture.read_write.heads) - read_ids) + global_work["hash_work"]
             + sum(item["total_hashes"] for item in joins) + writer["hashes"],
         sum(len(fixture_oracle.wire(value)) for value in envelopes) + global_work["input_bytes"]
             + sum(item["total_input_bytes"] for item in joins) + writer["input_bytes"],
@@ -241,8 +313,8 @@ class RevocationReadWriteTests(unittest.TestCase):
         fixture = fixture_oracle.RevocationObservationFixture()
         result = self.verify(fixture)
         self.assert_observation(fixture, result)
-        self.assertEqual((len(result.query_program), len(result.selected_rows), len(result.before_heads)), (9, 8, 7))
-        self.assertEqual(sum(row["present"] for row in result.selected_rows), 7)
+        self.assertEqual((len(result.query_program), len(result.selected_rows), len(result.before_heads)), (12, 10, 8))
+        self.assertEqual(sum(row["present"] for row in result.selected_rows), 9)
         self.assertEqual(record_named(result.query_reads, "approvals").addresses, ())
         audit = record_named(result.query_reads, "audit_0")
         self.assertEqual((len(audit.addresses), audit.addresses[0].present, audit.returned_row_count), (1, False, 0))
@@ -259,8 +331,8 @@ class RevocationReadWriteTests(unittest.TestCase):
                     pending_count=pending, include_audit=audit)
                 result = self.verify(fixture)
                 self.assert_observation(fixture, result)
-                self.assertEqual(len(result.query_program), 8 + int(separate) + int(audit))
-                self.assertEqual(len(result.selected_rows), 6 + pending + int(separate) + int(audit))
+                self.assertEqual(len(result.query_program), 11 + int(separate) + int(audit))
+                self.assertEqual(len(result.selected_rows), 8 + pending + int(separate) + int(audit))
                 self.assertEqual(len(record_named(result.query_reads, "sessions_pending_webauthn").addresses), pending)
                 self.assertEqual(record_named(result.query_reads, "approvals").addresses, ())
 
@@ -399,7 +471,7 @@ class RevocationReadWriteTests(unittest.TestCase):
         inputs["queries"] = (inputs["queries"][1], inputs["queries"][0], *inputs["queries"][2:])
         inputs["query_frontiers"] = (inputs["query_frontiers"][1], inputs["query_frontiers"][0],
                                      *inputs["query_frontiers"][2:])
-        # All five valid role declarations and their corresponding real
+        # All six valid role declarations and their corresponding real
         # frontiers remain present; only their source-program order changed.
         self.assertEqual({query.role for query in inputs["queries"]},
                          {query.role for query in fixture.read_write.read.queries})
@@ -472,7 +544,7 @@ class RevocationReadWriteTests(unittest.TestCase):
             (forged(first, declared_query_json=b"\xff\xff"), *fixture.query_reads[1:]),
             (forged(first, addresses=(wrong_address,)), *fixture.query_reads[1:]),
             list(fixture.query_reads),
-            (first,) * 43,
+            (first,) * 46,
             (forged(first, addresses=first.addresses * 194), *fixture.query_reads[1:]),
             (incomplete_record,),
             (forged(first, addresses=(incomplete_address,)), *fixture.query_reads[1:]),
@@ -566,9 +638,9 @@ class RevocationReadWriteTests(unittest.TestCase):
                     actual[field] = metrics_value(actual[field])
                 self.assertEqual(actual, expected)
                 self.assertEqual(result.metrics.generation.hash_work,
-                                 20 + 2 * int(options.get("include_audit", True)))
+                                 24 + 2 * int(options.get("include_audit", True)))
                 self.assertEqual(result.metrics.observation_validation.hash_work,
-                    8 * 5 + len(fixture.selected_rows) + sum(len(record.addresses) for record in fixture.query_reads))
+                    8 * 6 + len(fixture.selected_rows) + sum(len(record.addresses) for record in fixture.query_reads))
                 self.assert_observation(fixture, result)
 
     def test_independently_exact_whole_budgets_succeed_and_each_minus_one_denies(self):

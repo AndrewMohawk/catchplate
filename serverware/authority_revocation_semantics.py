@@ -29,12 +29,17 @@ from serverware import authority_revocation_read_write as mixed
 from serverware import authority_transition_core as core
 from serverware import authority_transition_webauthn as candidate
 from serverware import authority_webauthn_assertion as assertion
-from serverware.authority_query_read_work import QueryReadValidationLimits, QueryReadValidationMetrics
+from serverware.authority_query_read_work import (
+    MAX_HASHES, MAX_INPUT_BYTES, MAX_JSON_NODES, QueryReadValidationLimits,
+    QueryReadValidationMetrics, _ValidationWork,
+)
 
 
 _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 _BEFORE_FIELDS = frozenset({"businessBeforeRoots", "authorizationBeforeRoots", "indexBeforeHeads"})
 _MUTATION_FIELDS = frozenset({"templateId", "operation", "table", "key", "keyDigest", "expectedRow", "row"})
+_OWNED_FIELDS = frozenset({"bundle", "transition", "request", "evidence", "verifierIdentity",
+    "capabilityId", "databaseCutoffUs", "nowEpochNs", "deadlineEpochNs", "maximumAgeNs", "expectedBefore"})
 
 
 class RevocationSemanticsError(ValueError):
@@ -120,7 +125,60 @@ def _capture(*, ledger, bundle, transition, request, evidence, verifier_identity
     return owned, mixed._delta(before, ledger.work.metrics)
 
 
+def _require_owned_handoff(owned, ledger, capture) -> None:
+    """Check the private carrier, not ownership or independent authority.
+
+    The caller must already have captured every referenced graph together and
+    must discard the invocation on any failure. The one existing comparing
+    compact hold must remain unchanged until the genuine proof worker releases
+    it; lowering its work limits after construction is not another safe hold.
+    """
+    if (type(owned) is not dict or len(owned) != len(_OWNED_FIELDS)
+            or any(type(key) is not str for key in owned) or set(owned) != _OWNED_FIELDS):
+        raise RevocationSemanticsError("owned semantic input fields are not closed")
+    if (type(ledger) is not retained._PackagingLedger
+            or type(getattr(ledger, "work", None)) is not _ValidationWork
+            or getattr(ledger, "_held", None) is not True):
+        raise RevocationSemanticsError("semantic handoff requires the existing held packaging ledger")
+    work = ledger.work
+    original = getattr(ledger, "original_limits", None)
+    effective_limits = getattr(work, "limits", None)
+    reserved = getattr(ledger, "reserved", None)
+    if (type(original) is not QueryReadValidationLimits
+            or type(effective_limits) is not QueryReadValidationLimits
+            or type(reserved) is not QueryReadValidationMetrics
+            or type(capture) is not QueryReadValidationMetrics):
+        raise RevocationSemanticsError("semantic handoff work metadata has an unexpected exact type")
+    for limit_name, metric_name, counter_name, maximum, hold in (
+            ("max_hashes", "hash_work", "hash_work", MAX_HASHES, 1),
+            ("max_input_bytes", "input_bytes", "input_bytes", MAX_INPUT_BYTES, 4 * contract.MAX_COMPACT_BYTES),
+            ("max_json_nodes", "json_nodes", "json_nodes", MAX_JSON_NODES, 2 * contract.MAX_COMPACT_NODES)):
+        ceiling = getattr(original, limit_name, None)
+        effective = getattr(effective_limits, limit_name, None)
+        retained_hold = getattr(reserved, metric_name, None)
+        spent = getattr(work, counter_name, None)
+        captured = getattr(capture, metric_name, None)
+        if (type(ceiling) is not int or not 1 <= ceiling <= maximum
+                or type(effective) is not int or effective != ceiling - hold or effective < 1
+                or type(retained_hold) is not int or retained_hold != hold
+                or type(spent) is not int or not 0 <= spent <= effective
+                or type(captured) is not int or not 0 <= captured <= spent):
+            raise RevocationSemanticsError("semantic handoff work or compact reservation changed")
+
+
 def _verify(owned, ledger, capture, verifier_public_key):
+    """Recompute on the caller's already-owned graph and sole live ledger.
+
+    Outer transport code may pass this exact eleven-field mapping of references
+    into a larger joint capture. ``capture`` then describes that actual larger
+    capture, not a reconstructed semantic-only copy. Earlier transport work
+    remains in cumulative totals and the proof packaging snapshot; each named
+    semantic phase is still its own delta. This entry makes no fresh capture,
+    work object, successful-result admission or independent trust assertion.
+    Encode any outer output before entry: the compact hold is the only hold.
+    On failure the caller must abort, not retry this partially spent invocation.
+    """
+    _require_owned_handoff(owned, ledger, capture)
     work = ledger.work
     contract.validate_bundle_shape(owned["bundle"])
     contract.validate_transition_shape(owned["transition"])

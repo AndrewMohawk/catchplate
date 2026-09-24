@@ -5,6 +5,7 @@
 Source `.31` connects the real typed reader to a private complete-query collector
 for `webauthn.credential.revoke`. This is unbuilt, unexecuted source wiring, not
 an enabled operation or independently authoritative database snapshot.
+Source `.32` extends the same path to the sixth, pending-trust role.
 
 The public v3 planner does not construct or accept this collector. Its whole
 query inventory still rejects complete declarations before business/proof SQL,
@@ -18,15 +19,15 @@ protocol is missing. Neither gate is replaced by a successful component result.
 
 [`_CompleteQueryAcquisition`](../serverware/authority_complete_acquisition.py)
 requires the actual cursor, trace and caller-owned `_ValidationWork`, source
-arguments, cutoff, five declarations and primary before-root vectors. The caller
+arguments, cutoff, six declarations and primary before-root vectors. The caller
 must own the read-only transaction and root capture. The collector copies its
 context, rebinds every declaration to the genuine source role/arguments/cutoff,
 and checks the full argument bytes and ordered roles when the mixed reader begins.
 
 1. The [head reader](../serverware/authority_index_heads.py) captures the exact
-   eight-head union of complete-read and potential-write profiles in one bounded
+   nine-head union of complete-read and potential-write profiles in one bounded
    SQL read. It checks source profile/manifest commitments, revisions, counts and
-   empty-root conventions. Four heads serve the five read roles; both session
+   empty-root conventions. Five heads serve the six read roles; both session
    partitions share one head. Capturing potential-write heads is not write-proof
    reconstruction.
 2. The genuine [range reader](../serverware/authority_index_reader.py) acquires
@@ -41,10 +42,10 @@ and checks the full argument bytes and ordered roles when the mixed reader begin
    row union, including ordinary point reads and overlaps. Existing staged
    reference proofs are merged with genuinely acquired remaining primary proofs.
 5. The private [complete batch worker](authority-complete-query-batch.md) captures
-   raw inputs and runs the genuine global primary evaluator and all five
+   raw inputs and runs the genuine global primary evaluator and all six
    range/full-row joins on the same remaining work allowance. The reader then
    revalidates observations against the engine's owned rows. Only after this
-   succeeds can the collector expose its cutoff, eight heads and five frontiers.
+   succeeds can the collector expose its cutoff, nine heads and six frontiers.
 
 There is no caller-provided successful proof token or substitute verifier.
 Current revocation has no scalar contract selectors: global and query-local

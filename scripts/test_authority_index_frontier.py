@@ -520,6 +520,13 @@ class IndexReaderTests(unittest.TestCase):
                                        expiry_us={"before": -1000000, "equal": 0, "after": 1})
         result, _, _ = self.assert_acquired(store)
         self.assertEqual([identifier for _, identifier in result.primary_ids], ["after"])
+        publications = [{"id": "pending-publication", "scope": "global", "status": "pending"},
+                        {"id": "published-publication", "scope": "global", "status": "published"}]
+        result, _, _ = self.assert_acquired(IndependentStoredIndex(publications,
+            query=bound_query("pending_trust_publications")))
+        self.assertEqual([identifier for _, identifier in result.primary_ids], ["pending-publication"])
+        # The range producer proves the member; the operation consumer, not
+        # this component, must reject a nonempty pending-publication role.
 
     def test_empty_revision_zero_and_populated_empty_interval_still_reconstruct_root(self):
         empty = IndependentStoredIndex([], revision=0)
@@ -1014,7 +1021,7 @@ class IndexReaderTests(unittest.TestCase):
                          tuple(sum(value[0][index] for value in expected) for index in range(3)))
         self.assertEqual((acquisition.sql_reads, acquisition.parameter_bytes, acquisition.transport_bytes),
                          tuple(sum(value[1][index] for value in expected) for index in range(3)))
-        self.assertEqual(work.hash_work, 25)
+        self.assertEqual(work.hash_work, 30)
 
     def test_cumulative_physical_parameter_and_transport_caps_reject_without_fresh_role_budget(self):
         _, expected = reader_work_oracle(self.store)

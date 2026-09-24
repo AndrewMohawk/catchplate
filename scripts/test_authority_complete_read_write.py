@@ -2,7 +2,7 @@
 """Real complete-read/indexed-write composition over independent populations.
 
 All primary/count trees, profile leaves and expected transitions are independent
-test oracles. The actual global membership, five joins and indexed writer run;
+test oracles. The actual global membership, six joins and indexed writer run;
 no successful verifier, authority token, SQL connection or kernel is replaced.
 These authored controls are unrun. They do not establish business-kernel intent,
 ordinary-query closure, audit capacity, maintained/current roots, atomic SQL,
@@ -234,7 +234,7 @@ class CompleteReadWriteTests(unittest.TestCase):
             self.assertEqual(getattr(result.write.metrics, name), expected[name])
         self.assertIs(result.metrics.read_primary, result.read_primary.metrics)
         self.assertIs(result.metrics.write, result.write.metrics)
-        self.assertEqual(result.metrics.read_context_hashes, 95)
+        self.assertEqual(result.metrics.read_context_hashes, 101)
         self.assertEqual(result.metrics.write_context_hashes, 2 * len(set(fixture.heads) - set(read_oracle.READ_INDEX_IDS)))
         self.assertEqual(tuple(query_id for query_id, _ in result.joined_reads),
                          tuple(query.query_id for query in fixture.read.queries))
@@ -247,9 +247,9 @@ class CompleteReadWriteTests(unittest.TestCase):
     def test_true_seven_head_union_and_both_root_transitions_match_independent_populations(self):
         result = self.verify()
         self.assert_exact(self.fixture, result)
-        self.assertEqual(len(result.before_heads), 7)
+        self.assertEqual(len(result.before_heads), 8)
         self.assertEqual(len(result.write.before_heads), 5)
-        self.assertEqual(len(result.joined_reads), 5)
+        self.assertEqual(len(result.joined_reads), 6)
         self.assertEqual(result.metrics.write_context_hashes, 6)
 
     def test_actual_global_five_joins_and_one_indexed_writer_retain_real_result_identity(self):
@@ -279,7 +279,7 @@ class CompleteReadWriteTests(unittest.TestCase):
                 mock.patch.object(indexed, "evaluate_indexed_primary_batch", side_effect=write), \
                 mock.patch.object(joined, "join_index_range", side_effect=join):
             result = self.verify()
-        self.assertEqual((len(memberships), len(primary_writes), len(writes), len(joins)), (6, 1, 1, 5))
+        self.assertEqual((len(memberships), len(primary_writes), len(writes), len(joins)), (7, 1, 1, 6))
         self.assertIs(result.read_primary, memberships[0][1].result)
         self.assertIs(result.write, writes[0][1])
         self.assertIs(result.write.primary, primary_writes[0][1].result)
@@ -294,7 +294,7 @@ class CompleteReadWriteTests(unittest.TestCase):
         ordinary = [item for item in self.fixture.read.selected if not (
             item["table"] == capacity.AGGREGATE_TABLE and item["key"] == {"aggregate_id": capacity.AGGREGATE_ID})]
         envelopes = (ordinary, list(self.fixture.read.selected))
-        used_hashes = 95
+        used_hashes = 101
         used_bytes = len(primary_oracle.wire_json(ownership)) + sum(
             len(primary_oracle.wire_json(value)) for value in envelopes)
         used_nodes = join_oracle.graph_nodes(ownership) + sum(
@@ -382,7 +382,7 @@ class CompleteReadWriteTests(unittest.TestCase):
         fixture = ReadWriteFixture({}, ())
         result = self.verify(fixture)
         self.assert_exact(fixture, result)
-        self.assertEqual(len(result.before_heads), 4)
+        self.assertEqual(len(result.before_heads), 5)
         self.assertEqual(result.before_heads, result.after_heads)
         self.assertEqual(result.write.before_heads, ())
         self.assertEqual(result.write.after_heads, ())
@@ -435,18 +435,21 @@ class CompleteReadWriteTests(unittest.TestCase):
         fixture = ReadWriteFixture(rows, actions)
         result = self.verify(fixture)
         self.assert_exact(fixture, result)
-        self.assertEqual(len(result.before_heads), 8)
+        self.assertEqual(len(result.before_heads), 9)
         self.assertEqual(result.metrics.write_context_hashes, 8)
         self.assertIn("webauthn_registration_unused_user", {head.index_id for head in result.before_heads})
         inputs = fixture.arguments()
-        bad = forged(inputs["counted_before_heads"][0], index_id="webauthn_publication_status")
+        self.assertIn("webauthn_publication_status", {head.index_id for head in result.before_heads})
+        # The historical method ID is retained; publication is now required
+        # for proved pending absence, while unrelated profiles remain denied.
+        bad = forged(inputs["counted_before_heads"][0], index_id="webauthn_publication_generation")
         with self.assertRaises(composer.CompleteReadWriteError):
             self.verify(fixture, counted_before_heads=(bad, *inputs["counted_before_heads"][1:]))
-        publication_id = "webauthn_publication_status"
+        publication_id = "webauthn_publication_generation"
         publication = range_oracle.IndependentIndex([], join_oracle.expected_profile(publication_id))
         extra = composer.CompleteReadWriteHead(publication_id, 0, publication.root)
         complete_plus_extra = tuple(sorted((*inputs["counted_before_heads"], extra), key=lambda item: item.index_id))
-        self.assertEqual(len(complete_plus_extra), 9)
+        self.assertEqual(len(complete_plus_extra), 10)
         self.assertTrue(set(fixture.heads) < {item.index_id for item in complete_plus_extra})
         with self.assertRaisesRegex(composer.CompleteReadWriteError, "union"):
             self.verify(fixture, counted_before_heads=complete_plus_extra)
@@ -580,7 +583,7 @@ class CompleteReadWriteTests(unittest.TestCase):
                 later = next(item for item in inputs["write_frontiers"][-1].frontier
                              if type(item) is counted.IndexLeaf)
                 object.__setattr__(later, "primary_row_digest", "sha256:" + "d" * 64)
-                read_leaf = next(item for item in inputs["query_frontiers"][-1].frontier
+                read_leaf = next(item for item in inputs["query_frontiers"][-2].frontier
                                  if type(item) is counted.IndexLeaf)
                 object.__setattr__(read_leaf, "primary_row_digest", "sha256:" + "c" * 64)
                 inputs["selected_rows"][0]["row"]["changed"] = True
@@ -746,9 +749,9 @@ class CompleteReadWriteTests(unittest.TestCase):
         self.assertEqual((metrics.ownership_bytes, metrics.ownership_nodes), (ownership_bytes, ownership_nodes))
         self.assertEqual((metrics.selected_envelope_bytes, metrics.selected_envelope_nodes),
                          (envelope_bytes, envelope_nodes))
-        self.assertEqual((metrics.read_context_hashes, metrics.write_context_hashes), (95, write_context))
+        self.assertEqual((metrics.read_context_hashes, metrics.write_context_hashes), (101, write_context))
         self.assertEqual(metrics.total_hashes,
-            95 + write_context + read["hash_work"] + sum(item["total_hashes"] for item in queries) + write["hashes"])
+            101 + write_context + read["hash_work"] + sum(item["total_hashes"] for item in queries) + write["hashes"])
         self.assertEqual(metrics.total_input_bytes,
             ownership_bytes + envelope_bytes + read["input_bytes"]
             + sum(item["total_input_bytes"] for item in queries) + write["input_bytes"])

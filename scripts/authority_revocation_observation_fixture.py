@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import base64
 import copy
+from dataclasses import replace
 import hashlib
 from pathlib import Path
 import sys
@@ -26,9 +27,13 @@ sys.path.insert(0, str(ROOT))
 from serverware import authority_audit_capacity as capacity
 from serverware import authority_query_reads as reads
 from serverware import authority_transition_webauthn as candidate
+from serverware import authority_transition_core as core
 import test_authority_complete_read_write as composition_oracle
 import test_authority_revocation_query_program as recipe_oracle
 import test_webauthn_revoke_transition as counter_oracle
+from authority_revocation_trust_fixture import (
+    credential_fields, credential_policy_document, trust_high_water_document, trust_rows,
+)
 
 
 OPERATION = "webauthn.credential.revoke"
@@ -57,13 +62,13 @@ def business_key_digest(table, key):
     return framed("serverware.policyAuthorityBusinessKey/v1", table.encode("ascii"), wire(key))
 
 
-def observation_record(document, ordered_rows):
+def observation_record(document, ordered_rows, *, resolved=None):
     """Literal declared/resolved bytes and independent exact address framing.
 
-    This source family has no deferred references and every ordinary query
-    already declares its primary-key order. Resolution therefore preserves the
-    literal document. Empty complete observations retain a zero-address record;
-    exact absence keeps its one address with returned_row_count == 0.
+    The source publication lookup resolves four fields from the preceding
+    proved fixed-key high-water row. Other literal declarations are unchanged.
+    Empty complete observations retain a zero-address record; exact absence
+    keeps its one address with returned_row_count == 0.
     """
     encoded = wire(document)
     addresses = []
@@ -73,8 +78,36 @@ def observation_record(document, ordered_rows):
             raise AssertionError("independent selected key and QueryRead address disagree")
         addresses.append(reads.QueryReadAddress(selected["table"], wire(selected["key"]),
             digest, selected["present"]))
-    return reads.QueryRead(document["queryId"], encoded, encoded, tuple(addresses),
+    return reads.QueryRead(document["queryId"], encoded, wire(document if resolved is None else resolved), tuple(addresses),
         sum(selected["present"] for selected in ordered_rows))
+
+
+def source_selection(document, read):
+    """Independent complete order, point key, or sole resolved publication row."""
+    table = document["table"]
+    if document["schema"] == "serverware.policyAuthorityCompleteIndexQuery/v1":
+        info = read.joins[document["role"]]
+        selected = {item["keyDigest"]: item for item in info.selected}
+        return document, [selected[leaf.primary_key_digest]["key"] for leaf in info.index.matches(info.interval)]
+    high_water = read.rows["webauthn_trust_publication_high_water"][0]
+    resolved = recipe_oracle.resolved_trust_document(document, high_water)
+    if document["absentKey"] is not None:
+        return resolved, [copy.deepcopy(document["absentKey"])]
+    if table != "webauthn_trust_publications":
+        raise AssertionError("fixture has an unsupported non-key source lookup")
+    matching = [row for row in read.rows[table]
+        if all(predicate["operator"] == "eq" and row[predicate["column"]] == predicate["value"]
+               for predicate in resolved["predicates"])]
+    if len(matching) != 1:
+        raise AssertionError("fixture needs one genuine source-matched published row")
+    return resolved, [{"id": matching[0]["id"]}]
+
+
+def resolved_program(program, documents):
+    return tuple(query if document["schema"] == "serverware.policyAuthorityCompleteIndexQuery/v1" else
+        replace(query, predicates=tuple(core.QueryPredicate(item["column"], item["operator"],
+            copy.deepcopy(item["value"])) for item in document["predicates"]))
+        for query, document in zip(program, documents))
 
 
 def credential(identifier):
@@ -83,7 +116,8 @@ def credential(identifier):
         credential_id="public-" + identifier, user_id=ACTOR_ID,
         revoked_by=None, revocation_reason=None, revocation_source=None,
         last_used_at=None, updated_at="1970-01-01T00:00:01+00:00",
-        transports='["usb"]', attestation_trust_path='["synthetic-fixture-root"]')
+        transports='["usb"]', attestation_trust_path='["synthetic-fixture-root"]',
+        **credential_fields())
 
 
 def assertion_challenge(signer):
@@ -104,8 +138,8 @@ def assertion_challenge(signer):
 class RevocationObservationFixture:
     """Source-generated declarations over one independent read/write graph.
 
-    Default: nine full declarations, eight distinct global rows (seven present
-    and one absent audit address), four read heads and seven read/write heads.
+    Default adds two genuine trust rows and an empty pending-publication role
+    to the original business selections. Full readonly roots are retained too.
     A separate signer adds one declaration/row. pending_count=2 produces a real
     two-member complete observation for order controls. Disabling the audit
     removes its query/address, but keeps every empty complete role and counter.
@@ -125,6 +159,7 @@ class RevocationObservationFixture:
                                   "challengeId": ASSERTION_CHALLENGE_ID}
 
         rows = composition_oracle.default_rows()
+        rows.update(trust_rows())
         target = credential(TARGET_ID)
         signer = credential(self.signer_id)
         rows["webauthn_credentials"] = [target] + ([signer] if separate_signer else [])
@@ -179,21 +214,16 @@ class RevocationObservationFixture:
 
         selected_by_address = {}
         ordered_addresses = []
+        resolved_documents = []
         point_bindings = []
         for document in self.documents:
             table = document["table"]
-            if document["schema"] == "serverware.policyAuthorityCompleteIndexQuery/v1":
-                info = read.joins[document["role"]]
-                by_digest = {selected["keyDigest"]: selected for selected in info.selected}
-                # The independently rebuilt counted tree defines member order,
-                # never the global primary-key order or a production join result.
-                keys = [by_digest[leaf.primary_key_digest]["key"]
-                        for leaf in info.index.matches(info.interval)]
-            else:
-                key = copy.deepcopy(document["absentKey"])
+            resolved, keys = source_selection(document, read)
+            resolved_documents.append(resolved)
+            if document["schema"] != "serverware.policyAuthorityCompleteIndexQuery/v1" and document["absentKey"] is not None:
+                key = keys[0]
                 if tuple(sorted(key)) != read.trees[table].columns:
                     raise AssertionError("point declaration does not bind the full source primary key")
-                keys = [key]
                 point_bindings.append((document["queryId"], table, wire(key)))
             addresses = []
             for key in keys:
@@ -215,8 +245,10 @@ class RevocationObservationFixture:
         self.ordered_rows = tuple(tuple(selected_by_address[address] for address in addresses)
                                   for addresses in ordered_addresses)
         self.point_bindings = tuple(point_bindings)
-        self.query_reads = tuple(observation_record(document, ordered)
-                                for document, ordered in zip(self.documents, self.ordered_rows))
+        self.query_reads = tuple(observation_record(document, ordered, resolved=resolved)
+            for document, ordered, resolved in zip(self.documents, self.ordered_rows, resolved_documents))
+        self.resolved_documents = tuple(resolved_documents)
+        self.resolved_program = resolved_program(self.query_program, self.resolved_documents)
 
         # Selection/proof repair must not remove a real writer dependency or
         # silently retain the old unrelated point query's invented address.

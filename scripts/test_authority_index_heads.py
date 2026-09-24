@@ -37,6 +37,7 @@ IDS = tuple(sorted((
     "webauthn_registration_unused_global", "webauthn_registration_unused_user",
     "webauthn_session_credential_status", "webauthn_grant_approver_active",
     "webauthn_control_approval_approved",
+    "webauthn_publication_status",
 )))
 FIELDS = ("index_id", "table_name", "counted_profile", "projection_digest",
           "projection_manifest_digest", "index_revision", "root_digest", "leaf_count")
@@ -67,7 +68,7 @@ def source_rows(*, populated=False):
 
 
 def marker():
-    return {"profile": PROFILE, "indexIds": list(IDS), "rowLimit": 9}
+    return {"profile": PROFILE, "indexIds": list(IDS), "rowLimit": 10}
 
 
 def expected_work(rows):
@@ -86,7 +87,7 @@ def expected_work(rows):
     manifest = [profile_oracle.descriptor(identity) for identity in installation_oracle.INDEX_IDS]
     byte_count += 2 * len(wire(manifest))
     node_count += 2 * nodes(manifest)
-    parameters = (*IDS, 9)
+    parameters = (*IDS, 10)
     parameter_bytes = sum(8 + len(str(value).encode("utf-8")) for value in parameters)
     byte_count += sum(8 + 2 * len(str(value).encode("utf-8")) for value in parameters)
     node_count += 2 * len(parameters)
@@ -98,7 +99,7 @@ def expected_work(rows):
         node_count += 2 * len(scalars)
         byte_count += 2 * len(wire(row))
         node_count += 2 * nodes(row)
-    return 17, byte_count, node_count, parameter_bytes, transport_bytes
+    return 19, byte_count, node_count, parameter_bytes, transport_bytes
 
 
 class Trace:
@@ -125,7 +126,7 @@ class Cursor:
         if (not sql.startswith("SELECT CASE WHEN pg_catalog.pg_typeof(head.index_id)")
                 or f"FROM serverware_metadata.{TABLE} AS head " not in sql
                 or sql.split("WHERE ", 1)[1] != expected_where[6:] + 'ORDER BY head.index_id COLLATE "C" LIMIT %s'
-                or parameters != (*IDS, 9)):
+                or parameters != (*IDS, 10)):
             raise AssertionError("head SQL is not the one bounded source-ID-only SELECT")
         for name in FIELDS:
             if f" AS {name}" not in sql:
@@ -166,7 +167,7 @@ class AuthorityIndexHeadTests(unittest.TestCase):
             self.assertEqual(heads.required_index_ids(OPERATION), IDS)
             heads.validate_head_trace_key(OPERATION, marker())
         self.assertEqual(hashes.call_count, 0)
-        self.assertTrue(all("publication" not in identity for identity in IDS))
+        self.assertIn("webauthn_publication_status", IDS)  # complete pending-publication absence
         self.assertIn("webauthn_registration_unused_user", IDS)  # potential write, not a read role
 
     def test_actual_empty_heads_one_sql_immutable_scalars_and_independent_work(self):
@@ -177,11 +178,11 @@ class AuthorityIndexHeadTests(unittest.TestCase):
         with mock.patch.object(projection.hashlib, "sha256", wraps=actual) as hashes:
             result = self.acquire(fixture)
         cursor, trace, work, acquisition = fixture
-        self.assertEqual(hashes.call_count, 17)
+        self.assertEqual(hashes.call_count, 19)
         self.assertEqual((work.hash_work, work.input_bytes, work.json_nodes), expected[:3])
         self.assertEqual((acquisition.sql_reads, acquisition.returned_rows,
-                          acquisition.parameter_bytes, acquisition.transport_bytes), (1, 8, *expected[3:]))
-        self.assertEqual((len(cursor.calls), cursor.fetch_bounds, trace.entries), (1, [9], [(TABLE, marker())]))
+                          acquisition.parameter_bytes, acquisition.transport_bytes), (1, 9, *expected[3:]))
+        self.assertEqual((len(cursor.calls), cursor.fetch_bounds, trace.entries), (1, [10], [(TABLE, marker())]))
         for observed, row in zip(result, rows):
             self.assertEqual((observed.index_id, observed.table, observed.counted_profile,
                               observed.projection_digest, observed.projection_manifest_digest,
@@ -201,7 +202,7 @@ class AuthorityIndexHeadTests(unittest.TestCase):
         fixture = self.fixture(rows)
         result = self.acquire(fixture)
         self.assertEqual(tuple((item.index_revision, item.index_root.count) for item in result),
-                         ((7, 1),) * 7 + ((19, 0),))
+                         ((7, 1),) * 8 + ((19, 0),))
         self.assertEqual(tuple(item.index_root.digest for item in result), tuple(row["root_digest"] for row in rows))
         self.assertEqual((fixture[2].hash_work, fixture[2].input_bytes, fixture[2].json_nodes), expected_work(rows)[:3])
 
@@ -217,9 +218,9 @@ class AuthorityIndexHeadTests(unittest.TestCase):
     def test_trace_marker_exact_fields_order_types_and_full_union(self):
         cases = [None, {}, {**marker(), "extra": 1}, {**marker(), "profile": "other"},
             {**marker(), "indexIds": tuple(IDS)}, {**marker(), "indexIds": list(reversed(IDS))},
-            {**marker(), "indexIds": list(IDS[:-1])}, {**marker(), "indexIds": [IDS[0]] * 8},
+            {**marker(), "indexIds": list(IDS[:-1])}, {**marker(), "indexIds": [IDS[0]] * 9},
             {**marker(), "indexIds": ["x" * 129, *IDS[1:]]}, {**marker(), "rowLimit": True},
-            {**marker(), "rowLimit": 8}, {**marker(), "rowLimit": 10}]
+            {**marker(), "rowLimit": 9}, {**marker(), "rowLimit": 11}]
         for value in cases:
             with self.subTest(value=value), self.assertRaises(heads.IndexHeadReadError):
                 heads.validate_head_trace_key(OPERATION, value)
@@ -227,12 +228,12 @@ class AuthorityIndexHeadTests(unittest.TestCase):
     def test_missing_duplicate_reordered_unknown_and_overbound_heads_deny(self):
         rows = source_rows()
         unknown = copy.deepcopy(rows)
-        unknown[0]["index_id"] = "webauthn_publication_status"
+        unknown[0]["index_id"] = "webauthn_live_trust_global"
         for values in ([], rows[:-1], [rows[0], *rows[:-1]], list(reversed(rows)), unknown, rows + [rows[0]]):
             fixture = self.fixture(values)
             with self.subTest(length=len(values)), self.assertRaises(reader.IndexReadError):
                 self.acquire(fixture)
-            self.assertEqual((len(fixture[0].calls), fixture[0].fetch_bounds), (1, [9]))
+            self.assertEqual((len(fixture[0].calls), fixture[0].fetch_bounds), (1, [10]))
 
     def test_each_source_commitment_rejects_a_canonical_but_wrong_value(self):
         for field, value in (("table_name", "webauthn_trust_publications"),
@@ -354,7 +355,7 @@ class AuthorityIndexHeadTests(unittest.TestCase):
                 self.acquire(fixture)
             self.assertEqual(len(caught), 1)
             self.assertEqual(len(fixture[0].calls), 0 if boundary == "trace" else 1)
-            self.assertEqual(fixture[2].hash_work, 17)
+            self.assertEqual(fixture[2].hash_work, 19)
             spent = fixture[2].metrics
             with self.assertRaises(reader.IndexReadError):
                 self.acquire(fixture)

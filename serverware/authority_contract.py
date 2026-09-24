@@ -10,7 +10,7 @@ from serverware import authority_complete_query
 from serverware.authority_query_read_work import _ValidationWork
 
 
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.31"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.32"
 SCHEMA_VERSION = 9
 CONTRACT_SCHEMA = "serverware.policyAuthorityOperationContract/v3"
 BUSINESS_INTENT_SCHEMA = "serverware.policyAuthorityBusinessIntent/v2"
@@ -113,6 +113,36 @@ PLANNER_COMPLETE_ACQUISITION_CONTRACT = MappingProxyType({
         "staged-proof-work", "primary-proof-acquisition", "trace-serialization",
         "fixed-metadata-scaffolding", "kernel", "write-mutations",
         "retained-protocol", "whole-plan",
+    ),
+})
+# This successor verifier is source-bound but not a production transport or
+# persistence admission. Literal schemas keep this module below its consumers.
+SIGNED_REVOCATION_PLAN_CONTRACT = MappingProxyType({
+    "schema": "serverware.policyAuthoritySignedRevocationPlanVerification/v1",
+    "admission": "private-verifier-only",
+    "operation": "webauthn.credential.revoke",
+    "publicV3Enabled": False,
+    "productionV4Enabled": False,
+    "responseSchema": "serverware.policyAuthorityPlannerResponse/v4",
+    "measuredPlanSchema": "serverware.policyAuthorityMeasuredPlan/v4",
+    "signedPlanSchema": "serverware.signedPolicyAuthorityMeasuredPlan/v4",
+    "snapshotDomain": "serverware.policyAuthoritySnapshot/v4",
+    "maxPayloadBytes": 64 * 1024 * 1024,
+    "maxSharedHashes": 8_000_000,
+    "maxSharedInputBytes": 64 * 1024 * 1024,
+    "maxSharedJsonNodes": 1_000_000,
+    "maxJsonDepth": 128,
+    "includedPhases": (
+        "joint-envelope-and-expectation-capture", "full-transport-encoding",
+        "planner-signature", "assertion-receipt-signature", "source-query-closure",
+        "primary-and-complete-range-proofs", "actual-kernel-and-capacity-effects",
+        "authorization-source-binding", "snapshot-and-result-commitments",
+        "source-bound-trace-consistency",
+    ),
+    "excludedAuthority": (
+        "key-and-identity-enrollment", "before-root-and-cutoff-currentness",
+        "capability-reservation", "one-use-persistence", "sql-commit",
+        "registry-admission", "terminal-witness",
     ),
 })
 # Current measured verifier evidence reads, not planner/business query closure
@@ -2294,6 +2324,7 @@ OPERATION_MANIFEST_DIGEST = _digest(
         "maxPlanSelectedBytes": MAX_PLAN_SELECTED_BYTES,
         "plannerQueryBookkeeping": dict(PLANNER_QUERY_BOOKKEEPING_CONTRACT),
         "plannerCompleteAcquisition": dict(PLANNER_COMPLETE_ACQUISITION_CONTRACT),
+        "signedRevocationPlanVerification": dict(SIGNED_REVOCATION_PLAN_CONTRACT),
         "auditCapacityQueryWorkUnits": AUDIT_CAPACITY_QUERY_WORK_UNITS,
         "auditCapacityMutationWorkUnits": AUDIT_CAPACITY_MUTATION_WORK_UNITS,
         "phase2StoreTables": list(PHASE2_STORE_TABLES),

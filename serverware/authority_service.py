@@ -50,6 +50,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 from serverware import authority_contract
 from serverware import authority_planner
 from serverware import authority_transition_registry
+from serverware import authority_webauthn_trust
 from serverware.authority_store.verifier_read_sql import (
     verifier_read_privilege_check,
 )
@@ -4608,66 +4609,27 @@ class AuthorityProcess:
             raise AuthorityServiceError(
                 "WebAuthn revocation publication is invalid"
             ) from exc
-        trust_high_water = {
-            "schema": "serverware.webauthnTrustHighWater/v1",
-            "rollbackEpoch": int(trust_binding["rollback_epoch"]),
-            "sequence": int(trust_binding["sequence"]),
-            "publicationDigest": trust_binding["publication_digest"],
-            "metadataBlobDigest":
-                trust_binding["metadata_blob_digest"],
-            "revocationSetDigest":
-                trust_binding["revocation_set_digest"],
-            "witnessReceiptDigest":
-                trust_binding["witness_receipt_digest"],
-            "witnessSequence": int(trust_binding["witness_sequence"]),
-        }
-        trust_high_water_digest = _domain_digest(
-            "serverware.webauthnTrustHighWater/v1",
-            _canonical(trust_high_water),
-        )
-        credential_policy = {
-            "schema": "serverware.policyAuthorityCredentialPolicy/v1",
-            "credentialRecordId": credential_binding["id"],
-            "credentialId": credential_binding["credential_id"],
-            "userId": credential_binding["user_id"],
-            "authenticatorClass":
-                credential_binding["authenticator_class"],
-            "aaguid": credential_binding["aaguid"],
-            "attestationTrusted":
-                bool(credential_binding["attestation_trusted"]),
-            "trustBundleDigest":
-                credential_binding[
-                    "attestation_trust_bundle_digest"
-                ],
-            "trustBundleSequence": int(
-                credential_binding[
-                    "attestation_trust_bundle_sequence"
-                ]
-            ),
-            "attestationLeafDigest":
-                credential_binding["attestation_leaf_sha256"],
-            "attestationRootDigest":
-                credential_binding["attestation_root_sha256"],
-            "trustBundleDigest":
-                credential_binding["attestation_trust_bundle_digest"],
-            "trustBundleSequence":
-                credential_binding[
-                    "attestation_trust_bundle_sequence"
-                ],
-            "trustRollbackEpoch": int(trust_binding["rollback_epoch"]),
-            "trustHighWaterDigest": trust_high_water_digest,
-            "revocationSetDigest":
-                trust_binding["revocation_set_digest"],
-            "trustWitnessReceiptDigest":
-                trust_binding["witness_receipt_digest"],
-            "publicKeyDigest": _sha256(
-                str(credential_binding["public_key_cose"]).encode("utf-8")
-            ),
-        }
-        credential_policy_digest = _domain_digest(
-            "serverware.policyAuthorityCredentialPolicy/v1",
-            _canonical(credential_policy),
-        )
+        try:
+            trust_high_water = authority_webauthn_trust.high_water_document(
+                rollback_epoch=int(trust_binding["rollback_epoch"]),
+                sequence=int(trust_binding["sequence"]),
+                publication_digest=trust_binding["publication_digest"],
+                metadata_blob_digest=trust_binding["metadata_blob_digest"],
+                revocation_set_digest=trust_binding["revocation_set_digest"],
+                witness_receipt_digest=trust_binding["witness_receipt_digest"],
+                witness_sequence=int(trust_binding["witness_sequence"]),
+            )
+            trust_high_water_digest = authority_webauthn_trust.high_water_digest(trust_high_water)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise AuthorityServiceError("WebAuthn trust high-water is invalid") from exc
+        try:
+            credential_policy = authority_webauthn_trust.credential_policy_document(
+                credential=credential_binding, high_water=trust_high_water,
+                trust_high_water_digest=trust_high_water_digest,
+            )
+            credential_policy_digest = authority_webauthn_trust.credential_policy_digest(credential_policy)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise AuthorityServiceError("WebAuthn credential policy is invalid") from exc
         if (
             not isinstance(webauthn, dict)
             or not isinstance(payload, dict)

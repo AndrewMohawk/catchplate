@@ -42,17 +42,19 @@ ROLES = (
     ("grants", "approval_grants", "webauthn_grant_approver_active"),
     ("approvals", "control_plane_approvals", "webauthn_control_approval_approved"),
     ("global_registration_challenges", "webauthn_challenges", "webauthn_registration_unused_global"),
+    ("pending_trust_publications", "webauthn_trust_publications", "webauthn_publication_status"),
 )
 HEAD_IDS = tuple(sorted((
     "webauthn_credential_id", "webauthn_credential_user_history", "webauthn_credential_live_trust",
     "webauthn_registration_unused_global", "webauthn_registration_unused_user",
     "webauthn_session_credential_status", "webauthn_grant_approver_active",
     "webauthn_control_approval_approved",
+    "webauthn_publication_status",
 )))
 
 
 def head_marker():
-    return {"profile": HEAD_PROFILE, "indexIds": list(HEAD_IDS), "rowLimit": 9}
+    return {"profile": HEAD_PROFILE, "indexIds": list(HEAD_IDS), "rowLimit": 10}
 
 
 def context(role=ROLES[2]):
@@ -64,7 +66,8 @@ def context(role=ROLES[2]):
 
 
 def leaf_marker(role=ROLES[2]):
-    return {**context(role), "lower": "1" * 160, "upper": "2" * 160, "limit": 3}
+    return {**context(role), "lower": "1" * 160, "upper": "2" * 160,
+        "limit": 2 if role[0] == "pending_trust_publications" else 3}
 
 
 def node_marker(role=ROLES[2]):
@@ -177,7 +180,7 @@ class AuthorityIndexTraceTests(unittest.TestCase):
                     [HEAD_IDS[0], *HEAD_IDS[:-1]], tuple(HEAD_IDS),
                     [*HEAD_IDS[:-1], "webauthn_publication_status"]):
             self.reject(HEAD_TABLE, {**head_marker(), "indexIds": ids})
-        for limit in (True, 8, 10, "9"):
+        for limit in (True, 8, 9, 11, "10"):
             self.reject(HEAD_TABLE, {**head_marker(), "rowLimit": limit})
 
     def test_query_and_index_identities_cannot_cross_source_roles_or_tables(self):
@@ -222,6 +225,10 @@ class AuthorityIndexTraceTests(unittest.TestCase):
         self.reject(LEAF_TABLE, {**leaf_marker(), "upper": "0" * 160})
         for limit in (True, 1, 34, 2.0, "2"):
             self.reject(LEAF_TABLE, {**leaf_marker(), "limit": limit})
+        pending = next(role for role in ROLES if role[0] == "pending_trust_publications")
+        self.check(LEAF_TABLE, leaf_marker(pending))
+        for limit in (3, 33):
+            self.reject(LEAF_TABLE, {**leaf_marker(pending), "limit": limit})
 
     def test_node_batch_inventory_uses_exact_256_maximum_and_n_plus_one_sentinel(self):
         prefixes = [{"depth": 2, "pathPrefix": f"{value:02x}"} for value in range(256)]

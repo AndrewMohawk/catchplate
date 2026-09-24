@@ -156,7 +156,7 @@ closed.
 [`test_authority_query_reads_measured.py`](../scripts/test_authority_query_reads_measured.py)
 retains its original 18 authored methods using independently encoded mixed observations:
 present point reads, deferred
-values and absence keys, ordinary empty results, all five complete roles and
+values and absence keys, ordinary empty results, all six complete roles and
 ordered overlap. It observes the real resolution/capture/closure and SHA calls,
 checks independently calculated byte/node/hash totals, tightened exact budgets
 and one-unit denials, and exercises cumulative

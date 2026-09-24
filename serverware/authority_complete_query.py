@@ -40,16 +40,22 @@ class _Role:
     name: str
     table: str
     index_id: str
-    hint_field: str
+    hint_field: str | None
     shared_group: str
     status: str | None = None
 
     @property
     def selector_names(self) -> tuple[str, ...]:
+        if self.name == "pending_trust_publications":
+            return ("status",)
         if self.name == "global_registration_challenges":
             return ("expires_after_us",)
         return (("credential_record_id", "status") if self.status is not None
                 else ("credential_record_id",))
+
+    @property
+    def maximum_rows(self) -> int:
+        return 1 if self.hint_field is None else CASCADE_MAX
 
 
 _ROLES = (
@@ -63,6 +69,8 @@ _ROLES = (
           "control_plane_approval_ids", "control_plane_approvals"),
     _Role("global_registration_challenges", "webauthn_challenges", "webauthn_registration_unused_global",
           "registration_challenge_ids", "registration_challenges"),
+    _Role("pending_trust_publications", "webauthn_trust_publications", "webauthn_publication_status",
+          None, "pending_trust_publications", "pending"),
 )
 ROLES = tuple(role.name for role in _ROLES)
 _HINT_FIELDS = ("oidc_session_ids", "approval_grant_ids",
@@ -138,7 +146,7 @@ class CompleteIndexQuery:
     def __post_init__(self) -> None:
         declared = _role(self.operation, self.role)
         if (type(self.selector_items) is not tuple or len(self.selector_items) != len(declared.selector_names)
-                or type(self.maximum_rows) is not int or not 1 <= self.maximum_rows <= CASCADE_MAX):
+                or type(self.maximum_rows) is not int or not 1 <= self.maximum_rows <= declared.maximum_rows):
             raise CompleteQueryError("complete query selector inventory or row bound is invalid")
         for item, name in zip(self.selector_items, declared.selector_names):
             if type(item) is not tuple or len(item) != 2 or type(item[0]) is not str or item[0] != name:
@@ -189,7 +197,7 @@ class CompleteIndexQuery:
 
     @property
     def shared_maximum_rows(self) -> int:
-        return CASCADE_MAX
+        return _role(self.operation, self.role).maximum_rows
 
     def selector(self) -> dict[str, str | int]:
         return dict(self.selector_items)
@@ -202,7 +210,7 @@ class CompleteIndexQuery:
             "maximumRows": self.maximum_rows, "proofPrimitive": PROOF_PRIMITIVE,
             "workUnits": 1, "overflowDisposition": "fail-closed",
             "order": "fixed-index-key", "sharedBudget": {
-                "group": self.shared_group, "maximumRows": CASCADE_MAX,
+                "group": self.shared_group, "maximumRows": self.shared_maximum_rows,
                 "measure": "distinct-primary-address-union",
             },
         }
@@ -278,7 +286,9 @@ def _bind(
     *, work: _ValidationWork | None = None,
 ) -> CompleteIndexQuery:
     record_id, sizes, cutoff_us = inputs
-    if declared.name == "global_registration_challenges":
+    if declared.name == "pending_trust_publications":
+        selector = (("status", "pending"),)
+    elif declared.name == "global_registration_challenges":
         selector = (("expires_after_us", cutoff_us),)
     elif declared.status is not None:
         selector = (("credential_record_id", record_id), ("status", declared.status))
@@ -286,7 +296,8 @@ def _bind(
         selector = (("credential_record_id", record_id),)
     if work is not None:
         _prepare_constructor_work(declared.index_id, selector, work)
-    return CompleteIndexQuery(operation, declared.name, selector, max(1, sizes[declared.hint_field]))
+    maximum = 1 if declared.hint_field is None else max(1, sizes[declared.hint_field])
+    return CompleteIndexQuery(operation, declared.name, selector, maximum)
 
 
 def bind_query(operation: str, role: str, *, arguments: Any, cutoff_us: int) -> CompleteIndexQuery:
@@ -306,7 +317,7 @@ def _bind_query(
 
 def validate_bindings(operation: str, complete_queries: tuple[CompleteIndexQuery, ...], *,
                       arguments: Any, cutoff_us: int) -> tuple[CompleteIndexQuery, ...]:
-    """Require all five exact roles and rederive bindings from actual inputs.
+    """Require all six exact roles and rederive bindings from actual inputs.
 
     Hint lengths are only fail-closed overflow allowances. They do not prove a
     result count or authorize omission. Future evidence admission must also
@@ -333,7 +344,8 @@ def role_manifest(operation: str) -> list[dict[str, Any]]:
     result = []
     for declared in _ROLES:
         profile = projection.profile_for(declared.index_id)
-        sources = ({"expires_after_us": "supplied-cutoff-microseconds"}
+        sources = ({} if declared.hint_field is None else
+                   {"expires_after_us": "supplied-cutoff-microseconds"}
                    if declared.name == "global_registration_challenges" else
                    {"credential_record_id": "arguments.record_id"})
         if declared.status is not None:
@@ -345,9 +357,10 @@ def role_manifest(operation: str) -> list[dict[str, Any]]:
             "table": declared.table, "indexId": declared.index_id,
             "projectionDigest": profile.projection_digest, "selectorSources": sources,
             "requiredSource": {"arguments.source": "explicit"},
-            "rowBound": {"rule": "max(1,length-of-hint-list)", "hintField": declared.hint_field,
-                         "maximum": CASCADE_MAX},
-            "sharedBudget": {"group": declared.shared_group, "maximumRows": CASCADE_MAX,
+            "rowBound": ({"rule": "constant", "maximum": 1} if declared.hint_field is None else
+                         {"rule": "max(1,length-of-hint-list)", "hintField": declared.hint_field,
+                          "maximum": CASCADE_MAX}),
+            "sharedBudget": {"group": declared.shared_group, "maximumRows": declared.maximum_rows,
                              "measure": "distinct-primary-address-union"},
             "proofPrimitive": PROOF_PRIMITIVE, "workUnits": 1,
             "order": "fixed-index-key", "overflowDisposition": "fail-closed",

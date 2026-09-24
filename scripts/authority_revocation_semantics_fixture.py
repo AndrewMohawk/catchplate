@@ -107,7 +107,12 @@ class SemanticFixture:
         self.receipt.evidence = self.receipt.sign({**self.receipt.evidence,
             "operationId": self.operation_id, "requestDigest": self.request_digest,
             "credentialRecordId": self.signer_id, "credentialId": signer["credential_id"],
-            "challengeId": "used", "challengeDigest": kernel_oracle.digest(wire(public))})
+            "challengeId": "used", "challengeDigest": kernel_oracle.digest(wire(public)),
+            "trustHighWaterDigest": framed("serverware.webauthnTrustHighWater/v1", wire(
+                observation.trust_high_water_document(self.rows["webauthn_trust_publication_high_water"][0]))),
+            "metadataPublicationSequence": self.rows["webauthn_trust_publication_high_water"][0]["publication_sequence"],
+            "credentialPolicyDigest": framed("serverware.policyAuthorityCredentialPolicy/v1", wire(
+                observation.credential_policy_document(signer, self.rows["webauthn_trust_publication_high_water"][0])))})
         self.documents = tuple(recipe_oracle.expected_program(self.values,
             cutoff_us=self.cutoff_us, request_digest=self.request_digest, signer=self.signer_id,
             challenge="used", evidence=True, framework=True))
@@ -142,14 +147,11 @@ class SemanticFixture:
         read = self.read_write.read
         selected = {}
         ordered = []
+        resolved_documents = []
         for document in self.documents:
             table = document["table"]
-            if document["schema"] == "serverware.policyAuthorityCompleteIndexQuery/v1":
-                info = read.joins[document["role"]]
-                by_digest = {item["keyDigest"]: item for item in info.selected}
-                keys = [by_digest[leaf.primary_key_digest]["key"] for leaf in info.index.matches(info.interval)]
-            else:
-                keys = [document["absentKey"]]
+            resolved, keys = observation.source_selection(document, read)
+            resolved_documents.append(resolved)
             addresses = []
             for key in keys:
                 item = read.trees[table].selected(key)
@@ -161,8 +163,10 @@ class SemanticFixture:
         read.proofs = tuple(read.trees[item["table"]].proof(item) for item in read.selected)
         self.selected_rows, self.before_proofs = read.selected, read.proofs
         self.ordered_rows = tuple(tuple(selected[address] for address in addresses) for addresses in ordered)
-        self.query_reads = tuple(observation.observation_record(document, members)
-            for document, members in zip(self.documents, self.ordered_rows))
+        self.query_reads = tuple(observation.observation_record(document, members, resolved=resolved)
+            for document, members, resolved in zip(self.documents, self.ordered_rows, resolved_documents))
+        self.resolved_documents = tuple(resolved_documents)
+        self.resolved_program = observation.resolved_program(self.query_program, self.resolved_documents)
         if any((item["table"], item["keyDigest"]) not in selected for item in self.read_write.mutations):
             raise AssertionError("a full mutation is absent from the genuine source query union")
 

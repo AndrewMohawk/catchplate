@@ -256,6 +256,26 @@ def production_writer_capability_table_sql() -> str:
     return source[start:source.index(";", start) + 1]
 
 
+def production_issuer_transaction_sql() -> str:
+    """Extract the real connector's first explicit statement without import."""
+    source_path = ROOT / "serverware/db.py"
+    if source_path.stat().st_size > 16 * 1024 * 1024:
+        raise ValueError("issuer connector source exceeds the fixed fixture bound")
+    tree = ast.parse(source_path.read_text(encoding="utf-8"))
+    matches = [node for node in tree.body if isinstance(node, ast.FunctionDef)
+               and node.name == "_policy_authority_capability_issuer_pg_connect_raw"]
+    if len(matches) != 1:
+        raise ValueError("issuer connector is not a unique source function")
+    calls = sorted((node for node in ast.walk(matches[0]) if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute) and node.func.attr == "execute"
+        and isinstance(node.func.value, ast.Name) and node.func.value.id == "cur"), key=lambda node: node.lineno)
+    expected = "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE READ WRITE NOT DEFERRABLE"
+    if (not calls or len(calls[0].args) != 1 or calls[0].keywords
+            or not isinstance(calls[0].args[0], ast.Constant) or calls[0].args[0].value != expected):
+        raise ValueError("issuer connector first transaction statement differs from source contract")
+    return calls[0].args[0].value
+
+
 def fixture_payload() -> dict:
     before = {"table": "items", "rootRevision": 7, "rootDigest": token("before"), "leafCount": 3}
     after = {**before, "rootRevision": 8, "rootDigest": token("after")}
@@ -2194,6 +2214,80 @@ class AuthorityRevocationCountedTransitionPostgresTests(unittest.TestCase):
             # rows, but the originally captured vector must still reject it.
             self.deny_component(parent, "revocation counted after live head changed",
                 phase="rebind-drift", drift=readonly)
+
+
+class AuthorityIssuerTransactionPostgresTests(unittest.TestCase):
+    """Actual transaction component; not the issuer's TLS/role/ACL admission."""
+
+    def setUp(self):
+        self.connection = AuthorityRootTransitionPostgresTests.connection()
+        self.addCleanup(self.connection.close)
+        self.addCleanup(self.connection.rollback)
+        # Deliberately start with different connection defaults. No SQL has
+        # run; the production statement, not test configuration, sets the mode.
+        self.connection.autocommit = False
+        self.connection.isolation_level = psycopg.IsolationLevel.READ_COMMITTED
+        self.connection.read_only = True
+        self.connection.deferrable = True
+        self.assertEqual(self.connection.info.transaction_status, psycopg.pq.TransactionStatus.IDLE)
+        self.statement = production_issuer_transaction_sql()
+
+    def assert_writer_mode(self):
+        self.assertEqual(self.connection.execute(
+            "SELECT current_setting('transaction_isolation'), "
+            "current_setting('transaction_read_only'), current_setting('transaction_deferrable'), "
+            "inet_server_addr()").fetchone(), ("serializable", "off", "off", None))
+        self.assertEqual(self.connection.info.transaction_status, psycopg.pq.TransactionStatus.INTRANS)
+
+    def create_owned_table(self):
+        self.schema = "serverware_issuer_transaction_" + uuid.uuid4().hex
+        self.connection.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(self.schema)))
+        self.connection.execute(sql.SQL("CREATE TABLE {} (id bigint PRIMARY KEY)").format(
+            sql.Identifier(self.schema, "fixture")))
+
+    def test_first_issuer_statement_sets_exact_writer_mode_and_allows_rollback_owned_writes(self):
+        self.connection.execute(self.statement)
+        self.assert_writer_mode()
+        self.create_owned_table()
+        table = sql.Identifier(self.schema, "fixture")
+        self.connection.execute(sql.SQL("INSERT INTO {} VALUES (1)").format(table))
+        self.assertEqual(self.connection.execute(sql.SQL("SELECT id FROM {}").format(table)).fetchall(), [(1,)])
+        self.connection.rollback()
+        self.assertEqual(self.connection.info.transaction_status, psycopg.pq.TransactionStatus.IDLE)
+        self.assertIsNone(self.connection.execute("SELECT pg_catalog.to_regnamespace(%s)", (self.schema,)).fetchone()[0])
+
+    def test_issuer_mode_cannot_be_adopted_after_an_admission_read(self):
+        self.assertEqual(self.connection.execute("SELECT inet_server_addr()").fetchone(), (None,))
+        with self.assertRaises(psycopg.Error) as caught:
+            self.connection.execute(self.statement)
+        self.assertEqual(caught.exception.sqlstate, "25001")
+        self.assertEqual(self.connection.info.transaction_status, psycopg.pq.TransactionStatus.INERROR)
+        # Recovery requires abandoning the entire failed transaction. This is
+        # a negative component control, not a production automatic retry.
+        self.connection.rollback()
+        self.connection.execute(self.statement)
+        self.assert_writer_mode()
+
+    def test_nested_result_denial_rolls_back_savepoint_without_committing_owned_transaction(self):
+        self.connection.execute(self.statement)
+        self.assert_writer_mode()
+        self.create_owned_table()
+        table = sql.Identifier(self.schema, "fixture")
+        self.connection.execute(sql.SQL("INSERT INTO {} VALUES (1)").format(table))
+        with self.assertRaisesRegex(ValueError, "component returned identity changed"):
+            with self.connection.transaction():
+                self.connection.execute(sql.SQL("INSERT INTO {} VALUES (2)").format(table))
+                returned = self.connection.execute(sql.SQL("SELECT id FROM {} WHERE id = 2").format(table)).fetchone()
+                if returned != (3,):
+                    raise ValueError("component returned identity changed")
+        self.assert_writer_mode()
+        self.assertEqual(self.connection.execute(sql.SQL("SELECT id FROM {} ORDER BY id").format(table)).fetchall(), [(1,)])
+        with self.connection.transaction():
+            self.connection.execute(sql.SQL("INSERT INTO {} VALUES (3)").format(table))
+        self.assert_writer_mode()
+        self.assertEqual(self.connection.execute(sql.SQL("SELECT id FROM {} ORDER BY id").format(table)).fetchall(), [(1,), (3,)])
+        self.connection.rollback()
+        self.assertIsNone(self.connection.execute("SELECT pg_catalog.to_regnamespace(%s)", (self.schema,)).fetchone()[0])
 
 
 class AuthorityRevocationCapabilityCustodyPostgresTests(unittest.TestCase):

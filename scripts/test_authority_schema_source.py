@@ -464,7 +464,7 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
             "runtime_read_only_tables": "db._POLICY_AUTHORITY_RUNTIME_READ_ONLY_TABLES",
             "authority_verifier_read_tables": "db._POLICY_AUTHORITY_VERIFIER_READ_TABLES",
             "authority_executor_function_signatures": "db._POLICY_AUTHORITY_EXECUTOR_FUNCTION_SIGNATURES",
-            "authority_capability_issuer_functions": "db._POLICY_AUTHORITY_CAPABILITY_ISSUER_FUNCTIONS",
+            "authority_capability_issuer_function_signatures": "db._POLICY_AUTHORITY_CAPABILITY_ISSUER_FUNCTION_SIGNATURES",
             "authority_planner_writer_table_privileges": "db._POLICY_AUTHORITY_PLANNER_WRITER_TABLE_PRIVILEGES",
             "authority_planner_writer_function_signatures": "db.AUDIT_CAPACITY_PLANNER_FUNCTION_SIGNATURES",
         }

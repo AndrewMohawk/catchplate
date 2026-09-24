@@ -1531,8 +1531,8 @@ def migrate(
                     authority_executor_function_signatures=(
                         db._POLICY_AUTHORITY_EXECUTOR_FUNCTION_SIGNATURES
                     ),
-                    authority_capability_issuer_functions=(
-                        db._POLICY_AUTHORITY_CAPABILITY_ISSUER_FUNCTIONS
+                    authority_capability_issuer_function_signatures=(
+                        db._POLICY_AUTHORITY_CAPABILITY_ISSUER_FUNCTION_SIGNATURES
                     ),
                     authority_planner_writer_table_privileges=(
                         db._POLICY_AUTHORITY_PLANNER_WRITER_TABLE_PRIVILEGES

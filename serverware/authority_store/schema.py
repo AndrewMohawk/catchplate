@@ -134,7 +134,10 @@ def _policy_candidate_authority_decode_base64url(
 def _policy_candidate_authority_source_contract_digest() -> str:
     issuer_functions = set(_POLICY_AUTHORITY_CAPABILITY_ISSUER_FUNCTIONS)
     if (
-        set(authority_contract.CAPABILITY_ISSUER_FUNCTION_SIGNATURES)
+        _POLICY_AUTHORITY_CAPABILITY_ISSUER_FUNCTION_SIGNATURES != tuple(sorted(
+            authority_contract.CAPABILITY_ISSUER_FUNCTION_SIGNATURES.items()
+        ))
+        or set(authority_contract.CAPABILITY_ISSUER_FUNCTION_SIGNATURES)
         != issuer_functions
         or set(authority_contract.CAPABILITY_ISSUER_FUNCTION_ARGUMENTS)
         != issuer_functions
@@ -306,10 +309,8 @@ def _policy_candidate_authority_source_contract_digest() -> str:
                 sorted(_POLICY_AUTHORITY_CAPABILITY_ISSUER_FUNCTIONS),
             "authorityCapabilityIssuerFunctionSignatures": {
                 function_name: list(argument_types)
-                for function_name, argument_types in sorted(
-                    authority_contract
-                    .CAPABILITY_ISSUER_FUNCTION_SIGNATURES.items()
-                )
+                for function_name, argument_types
+                in _POLICY_AUTHORITY_CAPABILITY_ISSUER_FUNCTION_SIGNATURES
             },
             "authorityCapabilityIssuerFunctionArguments": {
                 function_name: list(argument_names)
@@ -1439,8 +1440,8 @@ def _policy_candidate_authority_expected_structure_manifest(
                 authority_planner_writer_role=(
                     _METADATA_STORE_AUTHORITY_PLANNER_WRITER_ROLE
                 ),
-                authority_capability_issuer_functions=(
-                    _POLICY_AUTHORITY_CAPABILITY_ISSUER_FUNCTIONS
+                authority_capability_issuer_function_signatures=(
+                    _POLICY_AUTHORITY_CAPABILITY_ISSUER_FUNCTION_SIGNATURES
                 ),
                 authority_planner_writer_table_privileges=(
                     _POLICY_AUTHORITY_PLANNER_WRITER_TABLE_PRIVILEGES
@@ -2553,8 +2554,8 @@ def repair_policy_candidate_authority_completed_v9_receipt(
             authority_executor_function_signatures=(
                 _POLICY_AUTHORITY_EXECUTOR_FUNCTION_SIGNATURES
             ),
-            authority_capability_issuer_functions=(
-                _POLICY_AUTHORITY_CAPABILITY_ISSUER_FUNCTIONS
+            authority_capability_issuer_function_signatures=(
+                _POLICY_AUTHORITY_CAPABILITY_ISSUER_FUNCTION_SIGNATURES
             ),
             authority_planner_writer_table_privileges=(
                 _POLICY_AUTHORITY_PLANNER_WRITER_TABLE_PRIVILEGES

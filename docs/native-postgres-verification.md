@@ -25,19 +25,19 @@ supply independent approval, installed controller identity or cleanup proof.
 
 [native_postgres_inventory.py](../serverware/native_postgres_inventory.py)
 defines `serverware.nativePostgresInventory/v1`, fourteen ordered frozen
-`NativePostgresSuite` records and `TOTAL_TESTS = 286`. Each record contains an
+`NativePostgresSuite` records and `TOTAL_TESTS = 289`. Each record contains an
 exact script path, an explicit sorted tuple of `Class.test_method` IDs, its
 disposable-cluster CLI acknowledgement requirement and its timeout in seconds.
 The IDs are authored source declarations, not dynamically discovered or
 executed results. The total includes the pure representation and source-linkage
-methods contained in these fixtures; it is not a count of 286 native SQL tests.
+methods contained in these fixtures; it is not a count of 289 native SQL tests.
 
 | Order | Script under `scripts/` | Methods | Timeout | Extra disposable CLI flag |
 | --- | --- | ---: | ---: | --- |
 | 00 | `test_webauthn_trust_projection_postgres.py` | 12 | 300 s | No |
 | 01 | `test_postgres_trigger_manifest.py` | 5 | 300 s | No |
 | 02 | `test_authority_mutation_postgres.py` | 14 | 300 s | No |
-| 03 | `test_authority_root_transition_postgres.py` | 51 | 300 s | No |
+| 03 | `test_authority_root_transition_postgres.py` | 54 | 300 s | No |
 | 04 | `test_authority_primary_tree_postgres.py` | 9 | 300 s | No |
 | 05 | `test_authority_audit_initialization_postgres.py` | 31 | 300 s | No |
 | 06 | `test_authority_audit_initialization_store_postgres.py` | 36 | 900 s | Yes |
@@ -48,6 +48,17 @@ methods contained in these fixtures; it is not a count of 286 native SQL tests.
 | 11 | `test_authority_counted_projection_postgres.py` | 16 | 300 s | No |
 | 12 | `test_authority_counted_store_postgres.py` | 10 | 300 s | No |
 | 13 | `test_authority_counted_maintenance_postgres.py` | 32 | 300 s | No |
+
+Three issuer transaction components extract the real connector's first
+application SQL statement without importing its facade. Different initial
+connection defaults must become SERIALIZABLE READ WRITE NOT DEFERRABLE before
+reads/writes; a late change after a read must fail. The third control exercises
+nested savepoint denial and outer rollback, not the actual service handler or
+a top-level commit. Random fixture schema/data disappear on rollback. There is
+no full-connector, mTLS, role/ACL, issuance or deployment proof. All 286 earlier
+IDs, fourteen suites, sixteen children and deadlines remain; root suite54 and
+total289 are authored inventory counts, not executed results. No new native
+import/source dependency is added.
 
 Four capability-custody methods use the exact base writer table, v9 extension,
 post-table guards and actual immutable attachment in a rollback-owned schema.

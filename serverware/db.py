@@ -1731,12 +1731,16 @@ _POLICY_AUTHORITY_EXECUTOR_FUNCTIONS = frozenset(
     for function_name, _argument_types
     in _POLICY_AUTHORITY_EXECUTOR_FUNCTION_SIGNATURES
 )
+_POLICY_AUTHORITY_CAPABILITY_ISSUER_FUNCTION_SIGNATURES = tuple(
+    (function_name, tuple(argument_types))
+    for function_name, argument_types in sorted(
+        authority_contract.CAPABILITY_ISSUER_FUNCTION_SIGNATURES.items()
+    )
+)
 _POLICY_AUTHORITY_CAPABILITY_ISSUER_FUNCTIONS = frozenset(
-    {
-        "serverware_policy_authority_issue_capability",
-        "serverware_policy_authority_issue_writer_capability",
-        "serverware_policy_authority_record_witness_receipt",
-    }
+    function_name
+    for function_name, _argument_types
+    in _POLICY_AUTHORITY_CAPABILITY_ISSUER_FUNCTION_SIGNATURES
 )
 _POLICY_AUTHORITY_OPERATION_BUSINESS_READ_TABLES = MappingProxyType(
     {
@@ -3530,7 +3534,9 @@ def _seal_postgres_schema_acl(
         tuple[str, tuple[str, ...]], ...
     ] = (),
     authority_controlled_writer_tables: frozenset[str] = frozenset(),
-    authority_capability_issuer_functions: frozenset[str] = frozenset(),
+    authority_capability_issuer_function_signatures: tuple[
+        tuple[str, tuple[str, ...]], ...
+    ] = (),
     authority_planner_writer_table_privileges: Mapping[
         str, frozenset[str]
     ] = MappingProxyType({}),
@@ -3562,6 +3568,39 @@ def _seal_postgres_schema_acl(
         or authority_verifier_read_tables != _POLICY_AUTHORITY_VERIFIER_READ_TABLES
     ):
         raise error_type("metadata verifier role/read closure is not source exact")
+    if (
+        type(authority_capability_issuer_function_signatures) is not tuple
+        or len(authority_capability_issuer_function_signatures) not in {
+            0, len(_POLICY_AUTHORITY_CAPABILITY_ISSUER_FUNCTION_SIGNATURES)
+        }
+        or any(
+            type(entry) is not tuple or len(entry) != 2
+            or type(entry[0]) is not str or len(entry[0]) > 63
+            or type(entry[1]) is not tuple or len(entry[1]) not in {4, 5}
+            or any(type(argument) is not str or argument != "text" for argument in entry[1])
+            for entry in authority_capability_issuer_function_signatures
+        )
+        or (
+            (
+                authority_capability_issuer_function_signatures
+                or schema in {
+                    _POLICY_CANDIDATE_AUTHORITY_SCHEMA_NAME,
+                    "serverware_candidate_authority_expected_v9",
+                }
+            )
+            and authority_capability_issuer_function_signatures
+                != _POLICY_AUTHORITY_CAPABILITY_ISSUER_FUNCTION_SIGNATURES
+        )
+    ):
+        raise error_type("capability issuer function closure is not source exact")
+    issuer_function_types = {
+        name: ", ".join(types)
+        for name, types in authority_capability_issuer_function_signatures
+    }
+    issuer_function_identities = sorted(
+        name + "(" + types + ")"
+        for name, types in issuer_function_types.items()
+    )
     if (
         authority_planner_writer_function_signatures
         and authority_planner_writer_function_signatures
@@ -4024,9 +4063,7 @@ def _seal_postgres_schema_acl(
                 + " TO "
                 + capability_issuer_role_name
             )
-            for function in sorted(
-                authority_capability_issuer_functions
-            ):
+            for function, argument_types in authority_capability_issuer_function_signatures:
                 function_name = _policy_candidate_authority_identifier(
                     function
                 )
@@ -4035,7 +4072,7 @@ def _seal_postgres_schema_acl(
                     + schema_name
                     + "."
                     + function_name
-                    + "(text, text, text, text) TO "
+                    + "(" + ", ".join(argument_types) + ") TO "
                     + capability_issuer_role_name
                 )
         if planner_writer_role not in {
@@ -4192,10 +4229,16 @@ def _seal_postgres_schema_acl(
             "AND NOT COALESCE(("
             "(grantee.rolname = %s "
             "AND function_record.proname || '(' || "
-            "pg_catalog.pg_get_function_identity_arguments("
-            "function_record.oid) || ')' = ANY(%s)) "
+            "pg_catalog.oidvectortypes(function_record.proargtypes) "
+            "|| ')' = ANY(%s) "
+            "AND grant_entry.privilege_type = 'EXECUTE' "
+            "AND NOT grant_entry.is_grantable) "
             "OR (grantee.rolname = %s "
-            "AND function_record.proname = ANY(%s)) "
+            "AND function_record.proname || '(' || "
+            "pg_catalog.oidvectortypes(function_record.proargtypes) "
+            "|| ')' = ANY(%s) "
+            "AND grant_entry.privilege_type = 'EXECUTE' "
+            "AND NOT grant_entry.is_grantable) "
             "OR (grantee.rolname = %s "
             "AND function_record.proname || '(' || "
             "pg_catalog.oidvectortypes(function_record.proargtypes) "
@@ -4208,7 +4251,7 @@ def _seal_postgres_schema_acl(
                 executor_role,
                 sorted(authority_executor_function_identities),
                 capability_issuer_role,
-                sorted(authority_capability_issuer_functions),
+                issuer_function_identities,
                 planner_writer_role,
                 planner_function_identities,
             ),
@@ -4276,7 +4319,7 @@ def _seal_postgres_schema_acl(
             "pg_catalog.pg_get_function_identity_arguments("
             "function_record.oid) AS identity_arguments, "
             "function_record.prosecdef, function_record.proconfig, "
-            "grant_entry.privilege_type "
+            "grant_entry.privilege_type, grant_entry.is_grantable "
             "FROM pg_catalog.pg_proc AS function_record "
             "JOIN pg_catalog.pg_namespace AS namespace "
             "ON namespace.oid = function_record.pronamespace "
@@ -4295,7 +4338,8 @@ def _seal_postgres_schema_acl(
             "pg_catalog.oidvectortypes(function_record.proargtypes) "
             "AS argument_types, "
             "function_record.prosecdef, function_record.proconfig, "
-            "grant_entry.privilege_type "
+            "function_record.proisstrict, function_record.provolatile, "
+            "grant_entry.privilege_type, grant_entry.is_grantable "
             "FROM pg_catalog.pg_proc AS function_record "
             "JOIN pg_catalog.pg_namespace AS namespace "
             "ON namespace.oid = function_record.pronamespace "
@@ -4783,13 +4827,14 @@ def _seal_postgres_schema_acl(
             and {
                 str(grant["proname"])
                 + "("
-                + str(grant["identity_arguments"])
+                + str(grant["argument_types"])
                 + ")"
                 for grant in executor_function_grants
             }
             == set(authority_executor_function_identities)
             and all(
                 str(grant["privilege_type"]) == "EXECUTE"
+                and grant["is_grantable"] is False
                 and str(grant["argument_types"])
                 == ", ".join(
                     authority_contract.EXECUTOR_ARGUMENT_TYPES
@@ -4802,17 +4847,21 @@ def _seal_postgres_schema_acl(
         )
         exact_capability_issuer_functions = (
             len(capability_issuer_function_grants)
-            == len(authority_capability_issuer_functions)
+            == len(authority_capability_issuer_function_signatures)
             and {
                 str(grant["proname"])
+                + "(" + str(grant["argument_types"]) + ")"
                 for grant in capability_issuer_function_grants
             }
-            == set(authority_capability_issuer_functions)
+            == set(issuer_function_identities)
             and all(
                 str(grant["privilege_type"]) == "EXECUTE"
+                and grant["is_grantable"] is False
                 and str(grant["argument_types"])
-                == "text, text, text, text"
-                and bool(grant["prosecdef"])
+                == issuer_function_types[str(grant["proname"])]
+                and grant["prosecdef"] is True
+                and grant["proisstrict"] is False
+                and str(grant["provolatile"]) == "v"
                 and list(grant["proconfig"] or ())
                 == [expected_function_search_path]
                 for grant in capability_issuer_function_grants
@@ -20357,17 +20406,21 @@ def _validate_policy_authority_owner_apply_function(
         "'f', function_record.proowner))) AS grant_entry "
         "WHERE function_record.oid = ANY(%s) "
         "AND grant_entry.grantee <> function_record.proowner "
-        "AND NOT ("
+        "AND NOT COALESCE(("
         "(function_record.proname || '(' || "
-        "pg_catalog.pg_get_function_identity_arguments("
-        "function_record.oid) || ')' = ANY(%s) "
+        "pg_catalog.oidvectortypes(function_record.proargtypes) "
+        "|| ')' = ANY(%s) "
         "AND grant_entry.grantee = "
         "pg_catalog.to_regrole(%s)::pg_catalog.oid "
-        "AND grant_entry.privilege_type = 'EXECUTE') "
-        "OR (function_record.proname = ANY(%s) "
+        "AND grant_entry.privilege_type = 'EXECUTE' "
+        "AND NOT grant_entry.is_grantable) "
+        "OR (function_record.proname || '(' || "
+        "pg_catalog.oidvectortypes(function_record.proargtypes) "
+        "|| ')' = ANY(%s) "
         "AND grant_entry.grantee = "
         "pg_catalog.to_regrole(%s)::pg_catalog.oid "
-        "AND grant_entry.privilege_type = 'EXECUTE') "
+        "AND grant_entry.privilege_type = 'EXECUTE' "
+        "AND NOT grant_entry.is_grantable) "
         "OR (function_record.proname || '(' || "
         "pg_catalog.oidvectortypes(function_record.proargtypes) "
         "|| ')' = ANY(%s) "
@@ -20375,7 +20428,7 @@ def _validate_policy_authority_owner_apply_function(
         "pg_catalog.to_regrole(%s)::pg_catalog.oid "
         "AND grant_entry.privilege_type = 'EXECUTE' "
         "AND NOT grant_entry.is_grantable)"
-        ") "
+        "), FALSE) "
         "LIMIT 1",
         (
             [row["oid"] for row in function_rows],
@@ -20388,7 +20441,10 @@ def _validate_policy_authority_owner_apply_function(
                 in _POLICY_AUTHORITY_EXECUTOR_FUNCTION_SIGNATURES
             ),
             _METADATA_STORE_AUTHORITY_EXECUTOR_ROLE,
-            sorted(_POLICY_AUTHORITY_CAPABILITY_ISSUER_FUNCTIONS),
+            sorted(
+                name + "(" + ", ".join(types) + ")"
+                for name, types in _POLICY_AUTHORITY_CAPABILITY_ISSUER_FUNCTION_SIGNATURES
+            ),
             _METADATA_STORE_AUTHORITY_CAPABILITY_ISSUER_ROLE,
             sorted(
                 name + "(" + ", ".join(types) + ")"
@@ -20591,6 +20647,10 @@ def _validate_policy_authority_owner_apply_function(
         name: ", ".join(types)
         for name, types in AUDIT_CAPACITY_PLANNER_FUNCTION_SIGNATURES
     }
+    issuer_function_types = {
+        name: ", ".join(types)
+        for name, types in _POLICY_AUTHORITY_CAPABILITY_ISSUER_FUNCTION_SIGNATURES
+    }
     counted_functions = authority_contract.POSTGRES_COUNTED_FUNCTION_CONTRACTS
     if (
         server_version_num // 10000
@@ -20626,6 +20686,15 @@ def _validate_policy_authority_owner_apply_function(
             ]
             for row in function_rows
             if row["proname"] in planner_function_types
+        )
+        or any(
+            str(row["argument_types"]) != issuer_function_types[row["proname"]]
+            or row["prosecdef"] is not True
+            or row["proisstrict"] is not False
+            or str(row["provolatile"]) != "v"
+            or list(row["proconfig"] or ()) != [expected_search_path]
+            for row in function_rows
+            if row["proname"] in issuer_function_types
         )
         or any(
             str(row["argument_types"])
@@ -20906,6 +20975,14 @@ def _policy_authority_executor_pg_connect_raw():
 
 
 def _policy_authority_capability_issuer_pg_connect_raw():
+    """Return an admitted issuer connection with its writer transaction open.
+
+    Transaction mode is set before the first admission read. The caller owns
+    the returned connection context and therefore its commit/rollback/close;
+    a later connection.transaction() is only a nested savepoint. Until return,
+    every failure closes the connection instead of leaving an unowned read
+    transaction behind.
+    """
     if (
         os.environ.get("SERVERWARE_PROCESS_MODE", "").strip()
         != _POLICY_AUTHORITY_ISSUER_PROCESS_MODE
@@ -20923,9 +21000,13 @@ def _policy_authority_capability_issuer_pg_connect_raw():
         connect_timeout=METADATA_STORE_CONNECT_TIMEOUT_SECONDS,
         row_factory=dict_row,
         options="-c search_path=pg_catalog",
+        autocommit=False,
     )
     try:
         with conn.cursor() as cur:
+            cur.execute(
+                "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE READ WRITE NOT DEFERRABLE"
+            )
             cur.execute(
                 "SET search_path TO "
                 "serverware_metadata, pg_catalog, pg_temp"
@@ -20933,6 +21014,9 @@ def _policy_authority_capability_issuer_pg_connect_raw():
             identity = cur.execute(
                 "SELECT current_user AS current_role, "
                 "current_user = session_user AS exact_session, "
+                "current_setting('transaction_isolation') AS transaction_isolation, "
+                "current_setting('transaction_read_only') AS read_only, "
+                "current_setting('transaction_deferrable') AS deferrable, "
                 "role_record.rolsuper, role_record.rolcreaterole, "
                 "role_record.rolcreatedb, role_record.rolreplication, "
                 "role_record.rolbypassrls, "
@@ -20979,6 +21063,9 @@ def _policy_authority_capability_issuer_pg_connect_raw():
                 or identity["current_role"]
                 != _METADATA_STORE_AUTHORITY_CAPABILITY_ISSUER_ROLE
                 or not bool(identity["exact_session"])
+                or identity["transaction_isolation"] != "serializable"
+                or identity["read_only"] != "off"
+                or identity["deferrable"] != "off"
                 or any(
                     bool(identity[field])
                     for field in (
@@ -21014,8 +21101,13 @@ def _policy_authority_capability_issuer_pg_connect_raw():
                 raise MetadataStoreError(
                     "policy-authority capability issuer session is not exact"
                 )
-    except Exception:
-        conn.close()
+    except BaseException:
+        # Keep the original admission/cursor failure even if cleanup itself
+        # fails. No commit is attempted on this pre-return failure path.
+        try:
+            conn.close()
+        except BaseException:
+            pass
         raise
     return conn
 
@@ -26821,8 +26913,8 @@ def init_db(
                 authority_executor_function_signatures=(
                     _POLICY_AUTHORITY_EXECUTOR_FUNCTION_SIGNATURES
                 ),
-                authority_capability_issuer_functions=(
-                    _POLICY_AUTHORITY_CAPABILITY_ISSUER_FUNCTIONS
+                authority_capability_issuer_function_signatures=(
+                    _POLICY_AUTHORITY_CAPABILITY_ISSUER_FUNCTION_SIGNATURES
                 ),
                 authority_planner_writer_table_privileges=(
                     _POLICY_AUTHORITY_PLANNER_WRITER_TABLE_PRIVILEGES

@@ -137,13 +137,13 @@ against the real SQL helper. All controls remain authored and unexecuted.
 
 The next private issuer boundary must preserve original signed transport and
 establish its serializable writer transaction before the first database read.
-The existing issuer connector performs admission reads before returning and
-forbids direct table authority; the planner-writer-only retained reader is not
-an issuer API. Narrow source-fixed definer load/store functions therefore need
-coordinated signature/owner/search-path/EXECUTE admission, without table grants.
-The existing installed five-text-argument writer issuer and the generic
-four-text-argument issuer grant recipe also disagree in source; that separate
-integration defect is not repaired by this checkpoint. Successor lock order
+Source `.46` corrects the existing connector's pre-read transaction setup and
+the installed-five-argument versus granted-four-argument mismatch; see the
+[issuer database boundary](authority-issuer-database-boundary.md). The connector
+still forbids direct table authority, and the planner-writer-only retained
+reader is not an issuer API. Narrow source-fixed definer load/store functions
+still need coordinated signature/owner/search-path/EXECUTE admission, without
+table grants. Successor lock order
 must reconcile the current executor's fence/capability/execution/planner order
 with the private reservation's planner/execution order before activation.
 

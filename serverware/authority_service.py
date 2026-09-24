@@ -6598,6 +6598,9 @@ class AuthorityProcess:
         from serverware import db
 
         with db._policy_authority_capability_issuer_pg_connect_raw() as connection:
+            # Admission already owns the outer SERIALIZABLE writer
+            # transaction. This savepoint and the connection context both
+            # remain open until the returned identity has been checked.
             with connection.transaction():
                 with connection.cursor() as cursor:
                     row = cursor.execute(
@@ -6615,10 +6618,10 @@ class AuthorityProcess:
                             ],
                         ),
                     ).fetchone()
-        if row is None or row["capability_id"] != capability["capabilityId"]:
-            raise AuthorityServiceError(
-                "database capability issuance failed"
-            )
+                if row is None or row["capability_id"] != capability["capabilityId"]:
+                    raise AuthorityServiceError(
+                        "database capability issuance failed"
+                    )
         return {"capabilityId": row["capability_id"]}
 
     def _handle_record_witness_receipt(
@@ -6657,6 +6660,8 @@ class AuthorityProcess:
         from serverware import db
 
         with db._policy_authority_capability_issuer_pg_connect_raw() as connection:
+            # Keep the original admitted transaction through result checking;
+            # a mismatched receipt must not be discovered after its commit.
             with connection.transaction():
                 with connection.cursor() as cursor:
                     row = cursor.execute(
@@ -6671,13 +6676,13 @@ class AuthorityProcess:
                             self.role_config["attestationReceiptDigest"],
                         ),
                     ).fetchone()
-        if (
-            row is None
-            or row["witness_receipt_digest"] != supplied_digest
-        ):
-            raise AuthorityServiceError(
-                "database witness receipt persistence failed"
-            )
+                if (
+                    row is None
+                    or row["witness_receipt_digest"] != supplied_digest
+                ):
+                    raise AuthorityServiceError(
+                        "database witness receipt persistence failed"
+                    )
         return {"witnessReceiptDigest": supplied_digest}
 
     def _handle_execute(

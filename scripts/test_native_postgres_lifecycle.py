@@ -273,7 +273,7 @@ class NativePostgresLifecycleTests(unittest.TestCase):
         self.assertEqual(harness.phases(), ["init", "server", *range(14)])
         self.assertEqual(result["runtimeStatus"], "COMPLETE")
         self.assertEqual((result["tests"]["tests_status"], result["tests"]["expected_tests"],
-                          result["tests"]["stopped_tests"]), ("PASS", 286, 286))
+                          result["tests"]["stopped_tests"]), ("PASS", 289, 289))
         self.assertEqual(result["fixtureProcesses"], [
             {"script": suite.script, "termination": "exited", "exitCode": 0} for suite in SUITES])
         self.assertEqual([item["path"] for item in result["processLogs"]],

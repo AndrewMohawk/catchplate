@@ -7,8 +7,10 @@ and unexecuted under [goal.md](../goal.md).
 
 Source `.68` adds [fixed detached transport](authority-revocation-writer-transport.md)
 and a writer-only server branch that sends these exact stored bytes after normal
-owner exits. The raw client returns opaque bytes, not authenticated success;
-configured planner-side verification and historical recovery are still absent.
+owner exits. The raw transport returns opaque bytes, not authenticated success.
+Source `.69` adds a separate [configured planner client](authority-revocation-writer-client.md)
+that derives independent request fields through genuine replay and verifies
+the original ACK with the measured writer key. Historical recovery is absent.
 
 ## What is signed
 
@@ -120,5 +122,5 @@ Component fixtures use genuine synthetic keys/signatures and independent work
 oracles; startup fixtures keep real proof workers and the actual registry gate
 with synthetic driver observations. Native schema fixtures cover constraints,
 not cryptographic admission. None has been executed for this snapshot. Public
-end-to-end serving and client authentication, all remaining WebAuthn kernels, release verification and the
+end-to-end serving, historical recovery, all remaining WebAuthn kernels, release verification and the
 independently provisioned production trust services remain required.

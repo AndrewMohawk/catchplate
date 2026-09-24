@@ -1331,6 +1331,7 @@ class MeasuredConfiguration:
                         "plannerSessionIdentityDigest",
                         "plannerSigningSpkiDigest",
                         "plannerSigningPublicKeyBase64Url",
+                        "responseSigningPublicKeyBase64Url",
                     }
                 )
             if (
@@ -1450,6 +1451,21 @@ class MeasuredConfiguration:
                         "planner program or signing topology is invalid"
                     )
             elif role == "planner-writer":
+                response_encoded = role_value["responseSigningPublicKeyBase64Url"]
+                if type(response_encoded) is not str or len(response_encoded) != 43:
+                    raise AuthorityServiceError(
+                        "planner-writer response public key is not canonical raw32"
+                    )
+                response_raw = _b64url_decode(response_encoded, size=32)
+                if _b64url_encode(response_raw) != response_encoded:
+                    raise AuthorityServiceError(
+                        "planner-writer response public key is not canonical raw32"
+                    )
+                response_key = Ed25519PublicKey.from_public_bytes(response_raw)
+                if _public_spki_digest(response_key) != role_value["responseSigningSpkiDigest"]:
+                    raise AuthorityServiceError(
+                        "planner-writer response public key differs from its measured pin"
+                    )
                 planner_key = Ed25519PublicKey.from_public_bytes(
                     _b64url_decode(
                         role_value[
@@ -3869,6 +3885,50 @@ class AuthorityProcess:
             planner_private_key=planner_private_key, work=work)
         return planner.produce_observed(request=owned["request"], evidence=owned["evidence"],
             context=owned["context"], root_inventory=inventory, work=work)
+
+    def _send_revocation_writer_commitments(self, *, intent_bytes,
+            relay_bytes, envelope_bytes, evaluation_context_bytes,
+            historical_expectations_bytes, work):
+        """Private planner client, not a configured producer or public purpose.
+
+        Main's signed configuration load and real active planner launch remain
+        prerequisites. Own all configuration before callbacks; the generation
+        snapshot is last before the client captures its bindings. No incoming
+        key, expected ACK fields, DSN, callback, clock or allowance is accepted.
+        The client derives expectations by genuine replay before transport and
+        verifies the exact reply using the independently measured writer key.
+        """
+        if (self.role_name != "planner"
+                or self.process_mode != "policy-authority-planner"
+                or type(self.configuration) is not MeasuredConfiguration):
+            raise AuthorityServiceError("revocation writer client process is not configured")
+        configuration = self.configuration
+        payload, configuration_digest = configuration.payload, configuration.digest
+        from serverware import authority_revocation_configuration
+        from serverware import authority_revocation_writer_client
+        from serverware import authority_revocation_writer_commitment
+
+        authority_revocation_writer_commitment._raw(intent_bytes, authority_contract.MAX_REQUEST_BYTES)
+        authority_revocation_writer_commitment._raw(relay_bytes, authority_contract.MAX_REQUEST_BYTES)
+        authority_revocation_writer_commitment._body_bounds(
+            envelope_bytes, evaluation_context_bytes, historical_expectations_bytes)
+        writer_transport._validate_lengths((len(intent_bytes), len(relay_bytes), len(envelope_bytes),
+            len(evaluation_context_bytes), len(historical_expectations_bytes)))
+        ledger = authority_revocation_configuration.capability.capture._SharedLedger(work)
+        authority_revocation_configuration.capability.shape._digest(configuration_digest)
+        if type(payload) is not dict:
+            raise AuthorityServiceError("revocation writer client configuration is not closed data")
+        owned_payload = authority_revocation_configuration._ConfigurationCapture(
+            ledger, maximum_bytes=authority_contract.MAX_REQUEST_BYTES).visit(payload)
+        authority_revocation_configuration.production._callback(
+            work, lambda: authority_launch_guard.require_active("planner"))
+        generation = authority_revocation_configuration.production._callback(
+            work, lambda: dict(authority_launch_guard.generation()))
+        return authority_revocation_writer_client._send_on_configuration(
+            payload=owned_payload, configuration_digest=configuration_digest,
+            generation=generation, intent_bytes=intent_bytes, relay_bytes=relay_bytes,
+            envelope_bytes=envelope_bytes, evaluation_context_bytes=evaluation_context_bytes,
+            historical_expectations_bytes=historical_expectations_bytes, work=work)
 
     def _revocation_planner_persistence(self, *, work):
         """Construct the private writer owner from admitted measured settings.

@@ -9,6 +9,9 @@ import sys
 from pathlib import PurePosixPath
 from typing import Any, Mapping, Sequence
 
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
 from serverware import authority_contract
 from serverware import authority_transition_registry
 from serverware.authority_artifact_spec import (
@@ -143,6 +146,7 @@ SERVICE_ROLE_EXTRA_FIELDS = {
             "plannerSessionIdentityDigest",
             "plannerSigningSpkiDigest",
             "plannerSigningPublicKeyBase64Url",
+            "responseSigningPublicKeyBase64Url",
         }
     ),
     "issuer": frozenset(),
@@ -769,6 +773,22 @@ def _validate_configuration_document(
                 )
         planner = roles["planner"]
         planner_writer = roles["planner-writer"]
+        response_encoded = planner_writer["responseSigningPublicKeyBase64Url"]
+        if type(response_encoded) is not str or len(response_encoded) != 43:
+            raise GeneratorError(
+                "planner-writer response public key is not canonical raw32"
+            )
+        response_raw = strict_base64url_decode(
+            response_encoded, name="planner-writer response public key", decoded_size=32,
+        )
+        response_key = Ed25519PublicKey.from_public_bytes(response_raw)
+        response_der = response_key.public_bytes(
+            serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        if "sha256:" + hashlib.sha256(response_der).hexdigest() != planner_writer["responseSigningSpkiDigest"]:
+            raise GeneratorError(
+                "planner-writer response public key differs from its measured pin"
+            )
         if any(
             planner_writer["responseSigningSpkiDigest"]
             == roles[other_role]["responseSigningSpkiDigest"]

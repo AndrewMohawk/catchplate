@@ -19,7 +19,14 @@ handler or generic signer consumes it.
 ## Measured identity and original key bytes
 
 The existing measured writer field `responseSigningSpkiDigest` supplies the
-response-key identity; no service-configuration field or schema is added.
+response-key identity; `.66` adds no service-configuration field or schema.
+Source `.69` adds the writer-only public field `responseSigningPublicKeyBase64Url`
+for the [configured client](authority-revocation-writer-client.md), bound to
+this same SPKI. It adds no private key or credential descriptor. The actual
+service and artifact generator require canonical raw32 bytes; new-revision
+configuration without them is rejected and must be reprovisioned with its
+dependent signed configuration/artifact/generation bindings. No key has been
+generated or provisioned by this source change.
 Both measured topology validation and artifact configuration validation reject
 equality with the response pins of verifier, planner, issuer and executor.
 The writer's planner-key aliases still identify the planner key used to verify
@@ -109,8 +116,9 @@ historical key/configuration resolution contract. A public key supplied by an
 ACK cannot enroll itself, and a rotated key must not re-sign stored custody.
 Historical lookup must not masquerade as fresh authorization or bypass the
 current action's checks. Source `.68` adds [fixed framing](authority-revocation-writer-transport.md)
-and a writer-only server branch, but configured remote ACK authentication and
-public end-to-end routes remain unimplemented; the startup helper itself still never signs.
+and a writer-only server branch; `.69` adds independently configured remote
+ACK authentication. Historical key resolution and public end-to-end routes
+remain unimplemented; the startup helper itself still never signs.
 
 Authored component fixtures use genuine local PEM parsing, key derivation and
 serialization with synthetic keys. Bounded source fixtures inspect the actual

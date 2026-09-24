@@ -158,8 +158,9 @@ retained-plan and reserved-execution links and the signed ACK child. The
 [startup response-key binding](authority-revocation-writer-signer.md) does not
 prove production key custody. The `.68` fixed transfer supplies bounded original
 byte ingress and raw ACK egress, not a configured end-to-end planner flow.
-Public execution, historical acknowledgment lookup and independently pinned
-remote verification remain separate work. A rotated key cannot silently re-sign an old child or
+Source `.69` adds a separate [configured client](authority-revocation-writer-client.md)
+with independently pinned remote verification. Public execution and historical
+acknowledgment lookup remain separate work. A rotated key cannot silently re-sign an old child or
 enroll itself through an ACK. This private path is not a complete authenticated
 RPC retry protocol, and its native durability is unverified. The remaining requirements are in the
 [durable integration contract](authority-revocation-writer-commitment.md#durable-integration-and-remaining-recovery).

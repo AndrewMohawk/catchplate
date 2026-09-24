@@ -103,9 +103,11 @@ limit. Existing native-suite identities and resource allowances remain fixed.
 ## Remaining work
 
 The configured planner/verifier intent and relay producers still need their
-full serving composition. A planner-side reply verifier needs independently
-held request bindings and the measured writer response key, rather than
-trusting a key or pin supplied by the ACK. Historical key resolution and
+full serving composition. Source `.69` adds a separate
+[configured planner client](authority-revocation-writer-client.md) using
+independently derived request bindings and the measured writer response key;
+the raw transport still authenticates nothing and carries no key candidate.
+Historical key resolution and
 authenticated recovery after uncertain delivery remain separate contracts.
 Current-action freshness and both replays cannot be bypassed to retrieve old
 evidence. Public end-to-end execution, current-root/witness authority and the

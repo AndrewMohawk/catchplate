@@ -35,8 +35,10 @@ Source `.65` adds [immutable request storage](authority-revocation-writer-reques
 to that fixed composition; `.67` adds the separate
 [signed ACK child](authority-revocation-writer-acknowledgment.md). Source `.68`
 adds [fixed detached transfer](authority-revocation-writer-transport.md) to the
-writer-only server path. Configured intent/relay production, client ACK
-authentication and authenticated historical recovery remain open.
+writer-only server path. Source `.69` adds a private
+[configured client](authority-revocation-writer-client.md) that derives
+independent expectations and authenticates the original ACK. Configured
+intent/relay production and authenticated historical recovery remain open.
 No API accepts a previously authenticated result in place of original bytes.
 
 ## Two signed controls, three detached bodies

@@ -140,7 +140,12 @@ through the exact retained descriptor closure. Its dedicated slot cannot enable
 the generic internal-envelope signer. The `.67` composition binds and uses it
 only for the custody ACK; `.68` sends stored bytes after normal owner exits.
 Configured intent/relay producers, planner-side independently pinned ACK
-authentication and authenticated historical recovery are still required.
+authentication and authenticated historical recovery were not supplied by
+`.68`. Source `.69` adds the private
+[configured planner client](authority-revocation-writer-client.md): genuine
+original-control/plan replay derives independent ACK expectations before one
+transfer, and the exact reply is verified against the measured writer public
+key. Configured producers and historical recovery remain unfinished.
 Socket or deadline failure after commit does not imply rollback or safe retry.
 Post-plan witness binding, current-root one-use execution and atomic terminal
 publication remain incomplete. The four unfinished WebAuthn authority kernels

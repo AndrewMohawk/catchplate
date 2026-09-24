@@ -21,6 +21,14 @@ planner role before either key callback. The writer's own response-signing
 SPKI is a separate pin: it is not equated with the planner key and no response
 signer is loaded by this factory.
 
+Source `.69` separately requires the writer-only measured field
+`responseSigningPublicKeyBase64Url`: canonical raw32 public bytes bound to that
+same response SPKI by both the service loader and artifact configuration
+validator. This supplies the [configured planner client](authority-revocation-writer-client.md),
+not another key on this seven-item persistence owner. The mapper's two-key,
+four-hash schedule remains unchanged; its complete payload capture includes
+the added field and charges its actual bytes/nodes.
+
 The seven-item owner configuration retains the writer DSN, bounded timeout,
 the two actual public keys, planner/verifier identity triples and independent
 writer role/TLS pins. The verifier session uses the existing configuration,
@@ -77,8 +85,10 @@ change this mapper's four-hash, two-key schedule or seven-item owner. Source
 `.67` adds [signed ACK custody](authority-revocation-writer-acknowledgment.md)
 to the separate authenticated composition. Source `.68` supplies a
 [fixed detached transfer](authority-revocation-writer-transport.md) and writer-only
-server branch. Configured producer/client authentication, complete serving
-integration and authenticated historical recovery remain unfinished.
+server branch. Source `.69` adds a private [configured client](authority-revocation-writer-client.md)
+with independently derived ACK expectations and measured response-key
+verification. Configured producers, complete serving integration and
+authenticated historical recovery remain unfinished.
 Legacy writer routes and planner-only peer restrictions are
 unchanged. Registry closure and four WebAuthn gates are
 still incomplete. Production Nitro/KMS, signing and independent witness

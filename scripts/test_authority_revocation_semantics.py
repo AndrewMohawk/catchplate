@@ -23,12 +23,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from serverware import authority_audit_capacity as capacity
-from serverware import authority_planner as planner
+from serverware import authority_request_commitment as commitment
 from serverware import authority_query_read_work as accounting
 from serverware import authority_revocation_proof_bundle as retained
 from serverware import authority_revocation_read_write as mixed
 from serverware import authority_revocation_semantics as semantics
-from serverware import authority_transition_registry as registry
 from serverware import authority_transition_webauthn as candidate
 from serverware import authority_webauthn_assertion as assertion
 from authority_revocation_semantics_fixture import SemanticFixture, OPERATION, wire, framed
@@ -198,7 +197,7 @@ class RevocationSemanticsTests(unittest.TestCase):
         fixture = SemanticFixture()
         seen = {name: [] for name in ("capture", "request", "receipt", "proof", "mixed", "kernel", "capacity", "validator")}
         real_visit = semantics.query_batch._JSONCapture.visit
-        real_request, real_receipt = planner._typed_request_digest, assertion._verify_revoke_assertion_evidence
+        real_request, real_receipt = commitment._typed_request_digest, assertion._verify_revoke_assertion_evidence
         real_proof, real_mixed = retained._compute_and_package, mixed._verify
         real_kernel, real_capacity = candidate.WebAuthnCredentialRevokeKernel._transition, capacity._finalize_capacity
         real_validator = capacity._validate_capacity_transition
@@ -242,7 +241,7 @@ class RevocationSemanticsTests(unittest.TestCase):
             return real_validator(**kwargs)
 
         with patch.object(semantics.query_batch._JSONCapture, "visit", visit), \
-                patch.object(planner, "_typed_request_digest", request), \
+                patch.object(commitment, "_typed_request_digest", request), \
                 patch.object(assertion, "_verify_revoke_assertion_evidence", receipt), \
                 patch.object(retained, "_compute_and_package", proof), patch.object(mixed, "_verify", verify_mixed), \
                 patch.object(candidate.WebAuthnCredentialRevokeKernel, "_transition", kernel), \
@@ -550,10 +549,9 @@ class RevocationSemanticsTests(unittest.TestCase):
             actual.work_units = 0
         with self.assertRaises(semantics.RevocationSemanticsError):
             self.verify(fixture, bundle=actual.proof)
-        self.assertNotIn(OPERATION, registry.PLANNABLE_OPERATIONS)
-        self.assertNotIn(OPERATION, registry.KERNELS)
-        with self.assertRaises(planner.AuthorityPlannerError):
-            planner.typed_request_digest(fixture.request)
+        # Real import-boundary denial replaces the previously unreachable
+        # registry-export/public-call combination; it is not facade evidence.
+        request_oracle.assert_registry_import_denial(self)
         # This entrypoint checks supplied before vectors; it neither discovers
         # their provenance/currentness nor initializes the synthetic counter.
 

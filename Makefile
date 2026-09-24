@@ -2495,6 +2495,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_revocation_proof_bundle.py \
 				serverware/authority_revocation_bundle_contract.py \
 				serverware/authority_revocation_semantics.py \
+				serverware/authority_request_commitment.py \
 				serverware/authority_planner.py \
 				serverware/authority_webauthn_assertion.py \
 				serverware/authority_transition_webauthn.py \

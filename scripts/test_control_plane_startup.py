@@ -842,5 +842,62 @@ class RecoveryWitnessIndependenceTests(unittest.TestCase):
         witness_postgres.assert_not_called()
 
 
+class TypedRequestPlannerIntegrationTests(unittest.TestCase):
+    """Real public facade checks; no substitute for registry/startup closure.
+
+    These assertions were split from component arithmetic under the reviewed
+    authority-request-commitment coverage transition. Imports must succeed
+    genuinely: there is no registry patch, skip or expected-failure fallback.
+    """
+
+    def setUp(self) -> None:
+        from serverware import authority_planner
+        from serverware import authority_request_commitment
+        import test_authority_typed_request_work
+
+        self.planner = authority_planner
+        self.commitment = authority_request_commitment
+        self.oracle = test_authority_typed_request_work
+
+    def test_registered_public_commitments_preserve_independent_request_and_operation_ids(self) -> None:
+        for operation in ("webauthn.counter.cas", "webauthn.challenge.create"):
+            request = self.oracle.request_fixture(operation=operation)
+            expected = self.oracle.expected_digest(request)
+            with self.subTest(operation=operation):
+                self.assertEqual(self.planner.typed_request_digest(request), expected)
+                self.assertEqual(self.planner.operation_id(operation, expected), request["operationId"])
+                self.assertEqual(self.commitment.operation_id(operation, expected), request["operationId"])
+
+    def test_public_mapping_compatibility_remains_a_real_planner_call(self) -> None:
+        request = self.oracle.request_fixture(operation="webauthn.counter.cas")
+        self.assertEqual(self.planner.typed_request_digest(types.MappingProxyType(request)),
+                         self.oracle.expected_digest(request))
+
+    def test_intentionally_disabled_public_operation_denies_before_shared_computation(self) -> None:
+        request = self.oracle.request_fixture(operation="jit.consume")
+        with patch.object(self.planner, "_typed_request_digest",
+                          wraps=self.planner._typed_request_digest) as actual_worker:
+            with self.assertRaisesRegex(self.planner.AuthorityPlannerError,
+                                        "typed planner request is not closed"):
+                self.planner.typed_request_digest(request)
+        self.assertEqual(actual_worker.call_count, 0)
+
+    def test_planner_reexports_actual_shared_bodies_and_exception_identity(self) -> None:
+        for name in ("AuthorityPlannerError", "canonical_bytes", "framed_digest", "operation_id",
+                     "_typed_request_digest", "_business_intent", "_authorization_arguments",
+                     "_request_different"):
+            with self.subTest(name=name):
+                self.assertIs(getattr(self.planner, name), getattr(self.commitment, name))
+        for encoder in (self.planner.canonical_bytes, self.commitment.canonical_bytes):
+            with self.assertRaises(TypeError):
+                encoder({"unencodable": object()})
+        malformed = self.oracle.request_fixture(operation="webauthn.counter.cas")
+        malformed["schema"] = "not-the-request-schema"
+        with self.assertRaises(self.commitment.AuthorityPlannerError):
+            self.planner.typed_request_digest(malformed)
+        with self.assertRaises(self.planner.AuthorityPlannerError):
+            self.commitment._typed_request_digest(malformed, work=None)
+
+
 if __name__ == "__main__":
     unittest.main()

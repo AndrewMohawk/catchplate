@@ -22,7 +22,7 @@ from serverware import authority_audit_capacity as capacity
 from serverware import authority_complete_query as complete
 from serverware import authority_complete_query_batch as query_batch
 from serverware import authority_contract
-from serverware import authority_planner as planner
+from serverware import authority_request_commitment as request_commitment
 from serverware import authority_revocation_bundle_contract as contract
 from serverware import authority_revocation_proof_bundle as retained
 from serverware import authority_revocation_read_write as mixed
@@ -131,7 +131,7 @@ def _verify(owned, ledger, capture, verifier_public_key):
         raise RevocationSemanticsError("semantic request is outside explicit revocation")
 
     before = work.metrics
-    request_digest = planner._typed_request_digest(request, work=work)
+    request_digest = request_commitment._typed_request_digest(request, work=work)
     core.require_digest(request["requestDigest"], "semantic request digest")
     core.require_digest(request["operationId"], "semantic operation identifier")
     _equal(request_digest, request["requestDigest"], work=work,
@@ -141,7 +141,7 @@ def _verify(owned, ledger, capture, verifier_public_key):
     work.prepare_utf8(candidate.OPERATION)
     work.prepare_utf8(request_digest)
     work.charge(hashes=1)
-    operation_id = planner.operation_id(candidate.OPERATION, request_digest)
+    operation_id = request_commitment.operation_id(candidate.OPERATION, request_digest)
     _equal(operation_id, request["operationId"], work=work,
            label="semantic operation identifier differs from actual derivation")
     _canonical_equal(request["arguments"], inputs["arguments"], work=work,
@@ -263,7 +263,7 @@ def verify_revocation_semantics(
             expected_before=expected_before)
         return _verify(owned, ledger, capture, verifier_public_key)
     except (AttributeError, KeyError, TypeError, ValueError, OverflowError, RecursionError,
-            core.TransitionKernelError, planner.AuthorityPlannerError) as exc:
+            core.TransitionKernelError, request_commitment.AuthorityPlannerError) as exc:
         if isinstance(exc, RevocationSemanticsError):
             raise
         raise RevocationSemanticsError("revocation semantic recomputation failed") from exc

@@ -37,10 +37,11 @@ before the first SHA operation. Each graph retains its ordinary root-depth
 bound; the enclosing synthetic ownership object does not consume that level.
 The pinned native public key is a separate trusted input, not a JSON graph.
 
-The private planner worker computes the existing request digest, including its
-actual business-intent checks and authorization-argument exclusions. There is
-no second commitment format. The public `typed_request_digest` registration
-gate remains closed for this candidate. The request's top-level `requestDigest`
+The [shared registry-free worker](authority-request-commitment.md) computes the
+existing request digest, including its actual business-intent checks and
+authorization-argument exclusions. The planner re-exports the same body; there
+is no second commitment format. Its public `typed_request_digest` registration
+gate and startup closure remain closed for this candidate. The request's top-level `requestDigest`
 and `operationId` are required fields, not inputs to their own hashes: this
 composer separately checks both against genuine derivations and binds the
 request digest and complete argument bytes to the retained proof inputs.
@@ -124,7 +125,11 @@ The [20 semantic tests](../scripts/test_authority_revocation_semantics.py) inclu
 valid proofs for deliberately wrong effects, canonical boolean/integer
 distinctions, binding failures, one-pass/shared-ledger observations and independent
 phase/peak-budget arithmetic. The [nine request-work tests](../scripts/test_authority_typed_request_work.py)
-separately cover the genuine commitment worker and its unchanged public gate.
+separately cover the genuine commitment worker and actual blocked-registry
+imports. Callable public planner assertions remain in the startup-dependent
+suite; import denial is not equivalent to callable-facade evidence. The
+[coverage transition](authority-request-commitment.md#reviewed-coverage-transition)
+records the preserved method IDs, assertion relocation and source-era diagnostic.
 These are authored controls, not passing runtime evidence or provisioned trust.
 
 Production integration still requires authenticated proof acquisition and

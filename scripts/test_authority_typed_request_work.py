@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import importlib
 import json
 from pathlib import Path
 import sys
@@ -21,14 +22,26 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from serverware import authority_contract as contract
-from serverware import authority_planner as planner
+from serverware import authority_request_commitment as commitment
 from serverware import authority_query_read_work as accounting
-from serverware import authority_transition_registry as registry
 import test_authority_revocation_query_program as recipe
 
 
 OPERATION = "webauthn.credential.revoke"
 EXCLUDED = {"authn", "authn_evidence", "webauthn_authorization", "challenge_id"}
+REGISTRY_IMPORT_DIAGNOSTIC = (
+    "authority transition registry is not closed: missing transition kernels=["
+    "webauthn.credential.revoke, webauthn.registration.finalize, "
+    "webauthn.trust.complete, webauthn.trust.stage]"
+)
+
+
+def assert_registry_import_denial(case):
+    """Real source-era import denial, not a callable planner-facade result."""
+    for name in ("serverware.authority_transition_registry", "serverware.authority_planner"):
+        with case.subTest(module=name), case.assertRaises(RuntimeError) as caught:
+            importlib.import_module(name)
+        case.assertEqual(str(caught.exception), REGISTRY_IMPORT_DIAGNOSTIC)
 
 
 def wire(value):
@@ -137,20 +150,20 @@ class TypedRequestWorkTests(unittest.TestCase):
                            max_json_nodes=expected.json_nodes)
             before = copy.deepcopy(request)
             with self.subTest(operation=operation):
-                self.assertEqual(planner._typed_request_digest(request, work=shared), expected_digest(request))
+                self.assertEqual(commitment._typed_request_digest(request, work=shared), expected_digest(request))
                 self.assertEqual(metrics(shared), expected.total)
-                self.assertEqual(planner._typed_request_digest(request, work=None), expected_digest(request))
+                self.assertEqual(commitment._typed_request_digest(request, work=None), expected_digest(request))
                 self.assertEqual(request, before)
-                if operation != OPERATION:
-                    self.assertEqual(planner.typed_request_digest(request), expected_digest(request))
+                self.assertEqual(commitment.operation_id(operation, expected_digest(request)), request["operationId"])
+                # Actual registered-operation public calls are retained in
+                # TypedRequestPlannerIntegrationTests, behind real startup.
 
     def test_public_registry_gate_is_not_removed_by_private_candidate_commitment(self):
         request = request_fixture()
-        self.assertNotIn(OPERATION, registry.PLANNABLE_OPERATIONS)
-        self.assertNotIn(OPERATION, registry.KERNELS)
-        self.assertEqual(planner._typed_request_digest(request, work=meter()), expected_digest(request))
-        with self.assertRaises(planner.AuthorityPlannerError):
-            planner.typed_request_digest(request)
+        self.assertEqual(commitment._typed_request_digest(request, work=meter()), expected_digest(request))
+        # The current real registry raises before a public planner can be
+        # imported. This proves that boundary, not callable-facade rejection.
+        assert_registry_import_denial(self)
 
     def test_genuine_one_hash_two_encoders_and_one_parser(self):
         request = request_fixture()
@@ -160,7 +173,7 @@ class TypedRequestWorkTests(unittest.TestCase):
         with patch.object(hashlib, "sha256", wraps=real_hash) as hashes, \
                 patch.object(json, "dumps", wraps=real_dumps) as encoders, \
                 patch.object(json, "loads", wraps=real_loads) as parsers:
-            self.assertEqual(planner._typed_request_digest(request, work=shared), expected)
+            self.assertEqual(commitment._typed_request_digest(request, work=shared), expected)
         self.assertEqual((hashes.call_count, encoders.call_count, parsers.call_count), (1, 2, 1))
         self.assertEqual(shared.hash_work, 1)
 
@@ -170,21 +183,21 @@ class TypedRequestWorkTests(unittest.TestCase):
         request = request_fixture(values=values)
         self.assertEqual(expected_digest(request), expected_digest(baseline))
         shared = meter()
-        self.assertEqual(planner._typed_request_digest(request, work=shared), expected_digest(baseline))
+        self.assertEqual(commitment._typed_request_digest(request, work=shared), expected_digest(baseline))
         self.assertEqual(metrics(shared), expected_work(request).total)
         # Challenge create/consume intentionally preserve challenge_id inside
         # businessIntent even though the outer authorization filter excludes it.
         first = request_fixture(operation="webauthn.challenge.create", values={"challenge_id": "first"})
         second = request_fixture(operation="webauthn.challenge.create", values={"challenge_id": "second"})
         self.assertNotEqual(expected_digest(first), expected_digest(second))
-        self.assertEqual(planner._typed_request_digest(first, work=meter()), expected_digest(first))
+        self.assertEqual(commitment._typed_request_digest(first, work=meter()), expected_digest(first))
 
     def test_unicode_semantics_and_nested_values_have_independent_sizes(self):
         values = recipe.source_values(reason="reason 雪😀", audit_event={"note": "audit 雪😀", "nested": [None, True, 7]})
         request = request_fixture(values=values)
         expected = expected_work(request)
         shared = meter(max_input_bytes=expected.input_bytes, max_json_nodes=expected.json_nodes)
-        self.assertEqual(planner._typed_request_digest(request, work=shared), expected_digest(request))
+        self.assertEqual(commitment._typed_request_digest(request, work=shared), expected_digest(request))
         self.assertEqual(metrics(shared), expected.total)
 
     def test_exact_one_less_preconsumed_and_repeated_work_never_reset(self):
@@ -193,20 +206,20 @@ class TypedRequestWorkTests(unittest.TestCase):
         for field, value in (("max_input_bytes", expected.input_bytes - 1),
                              ("max_json_nodes", expected.json_nodes - 1)):
             with self.subTest(field=field), self.assertRaises(accounting.QueryReadWorkError):
-                planner._typed_request_digest(request, work=meter(**{field: value}))
+                commitment._typed_request_digest(request, work=meter(**{field: value}))
         shared = meter(max_hashes=2, max_input_bytes=2 * expected.input_bytes,
                        max_json_nodes=2 * expected.json_nodes)
         for _ in range(2):
-            self.assertEqual(planner._typed_request_digest(request, work=shared), expected_digest(request))
+            self.assertEqual(commitment._typed_request_digest(request, work=shared), expected_digest(request))
         self.assertEqual(metrics(shared), tuple(2 * value for value in expected.total))
         with self.assertRaises(accounting.QueryReadWorkError):
-            planner._typed_request_digest(request, work=shared)
+            commitment._typed_request_digest(request, work=shared)
         blocked = meter(max_hashes=1)
         blocked.charge(hashes=1)
         real_hash = hashlib.sha256
         with patch.object(hashlib, "sha256", wraps=real_hash) as hashes:
             with self.assertRaises(accounting.QueryReadWorkError):
-                planner._typed_request_digest(request, work=blocked)
+                commitment._typed_request_digest(request, work=blocked)
         self.assertEqual(hashes.call_count, 0)
 
     def test_closed_fields_source_identity_and_business_intent_are_not_bypassed(self):
@@ -214,21 +227,21 @@ class TypedRequestWorkTests(unittest.TestCase):
                              ("operation", "unknown.operation"), ("operationManifestDigest", "sha256:" + "1" * 64)):
             request = request_fixture()
             request[field] = value
-            with self.subTest(field=field), self.assertRaises(planner.AuthorityPlannerError):
-                planner._typed_request_digest(request, work=meter())
+            with self.subTest(field=field), self.assertRaises(commitment.AuthorityPlannerError):
+                commitment._typed_request_digest(request, work=meter())
         for extra in (True, False):
             request = request_fixture()
             if extra:
                 request["extra"] = None
             else:
                 del request["requestDigest"]
-            with self.assertRaises(planner.AuthorityPlannerError):
-                planner._typed_request_digest(request, work=meter())
+            with self.assertRaises(commitment.AuthorityPlannerError):
+                commitment._typed_request_digest(request, work=meter())
         for field in ("schema", "operation", "planningAdapterId", "arguments"):
             request = request_fixture()
             request["arguments"]["businessIntent"][field] = {} if field == "arguments" else "other"
-            with self.subTest(field=field), self.assertRaises(planner.AuthorityPlannerError):
-                planner._typed_request_digest(request, work=meter())
+            with self.subTest(field=field), self.assertRaises(commitment.AuthorityPlannerError):
+                commitment._typed_request_digest(request, work=meter())
 
     def test_digest_fields_require_separate_composer_binding(self):
         request = request_fixture()
@@ -237,23 +250,25 @@ class TypedRequestWorkTests(unittest.TestCase):
         request["requestDigest"] = "not a request commitment"
         # These two fields were never hash inputs. The semantic composer must
         # compare both to recomputation; digest return alone cannot admit them.
-        self.assertEqual(planner._typed_request_digest(request, work=meter()), expected)
+        self.assertEqual(commitment._typed_request_digest(request, work=meter()), expected)
 
     def test_public_mapping_compatibility_and_private_exact_meter_boundary(self):
         request = request_fixture(operation="webauthn.counter.cas")
-        self.assertEqual(planner.typed_request_digest(MappingProxyType(request)), expected_digest(request))
-        with self.assertRaises(planner.AuthorityPlannerError):
-            planner._typed_request_digest(MappingProxyType(request), work=meter())
+        # Retain the legacy method ID; public facade mapping compatibility is
+        # additionally exercised in the real startup-dependent suite.
+        self.assertEqual(commitment._typed_request_digest(MappingProxyType(request), work=None), expected_digest(request))
+        with self.assertRaises(commitment.AuthorityPlannerError):
+            commitment._typed_request_digest(MappingProxyType(request), work=meter())
         for invalid in (object(), accounting.QueryReadValidationLimits()):
             with self.assertRaises(accounting.QueryReadWorkError):
-                planner._typed_request_digest(request, work=invalid)
+                commitment._typed_request_digest(request, work=invalid)
         for limits in ({"max_input_bytes": 1}, {"max_json_nodes": 1}):
             real_hash, real_dumps, real_loads = hashlib.sha256, json.dumps, json.loads
             with patch.object(hashlib, "sha256", wraps=real_hash) as hashes, \
                     patch.object(json, "dumps", wraps=real_dumps) as encoders, \
                     patch.object(json, "loads", wraps=real_loads) as parsers:
                 with self.assertRaises(accounting.QueryReadWorkError):
-                    planner._typed_request_digest(request, work=meter(**limits))
+                    commitment._typed_request_digest(request, work=meter(**limits))
             self.assertEqual((hashes.call_count, encoders.call_count, parsers.call_count), (0, 0, 0))
 
 

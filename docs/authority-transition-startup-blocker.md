@@ -33,6 +33,14 @@ aggregate staging, authenticated predicate/capacity proofs, independent roots
 and time, and non-circular evidence production. It does not change the current
 contract or waive any startup gate.
 
+The [registry-free request commitment](authority-request-commitment.md) separates
+the actual hash/intent workers needed by the inactive revocation verifier from
+the planner's eager registry import. Its standalone fixtures can describe that
+component without a fake registry. Public planner admission and this startup
+closure remain unchanged; real import-denial controls do not replace callable
+planner or full-startup evidence. The linked coverage transition retains those
+integration assertions in the startup-dependent suite.
+
 The [explicit-context attestation core](webauthn-attestation-core.md) prepares
 shared registration cryptography for an eventual measured evidence producer.
 It does not itself produce signed authority evidence or fill a missing kernel.

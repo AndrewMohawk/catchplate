@@ -102,6 +102,30 @@ def _run_on_configuration(configuration, operation, arguments, expectations, wor
         arguments=arguments, expectations=owned)
 
 
+def _retain_and_reserve_in_common(*, envelope_bytes, evaluation_context_bytes,
+        planned_at_epoch_ns, envelope_id, planner_transaction_id, connection, raw, work,
+        **expectations):
+    """Two genuine replays inside the fixed caller's existing common scope.
+
+    This helper opens no transaction and accepts no replacement operation.
+    The first receipt never supplies reservation authority. Only after both
+    calls may their ordinary outputs supply immutable custody linkage data.
+    """
+    from serverware.authority_store import revocation_execution
+
+    store._callback(work, revocation_execution._same_connection, connection, raw)
+    retained_receipt = store.persist_revocation_planner_record(
+        envelope_bytes=envelope_bytes, evaluation_context_bytes=evaluation_context_bytes,
+        planned_at_epoch_ns=planned_at_epoch_ns, connection=connection, work=work,
+        **expectations)
+    store._callback(work, revocation_execution._same_connection, connection, raw)
+    execution_reservation = revocation_execution.reserve_revocation_execution_envelope(
+        envelope_id=envelope_id, planner_transaction_id=planner_transaction_id,
+        connection=connection, work=work, **expectations)
+    store._callback(work, revocation_execution._same_connection, connection, raw)
+    return retained_receipt, execution_reservation
+
+
 def _persist_and_reserve_on_connection(*, envelope_bytes, evaluation_context_bytes,
         planned_at_epoch_ns, envelope_id, planner_transaction_id, connection, work,
         **expectations):
@@ -121,33 +145,24 @@ def _persist_and_reserve_on_connection(*, envelope_bytes, evaluation_context_byt
     store._callback(work, store._transaction_connection, connection)
     raw = store._callback(work, store._require_planner_writer, connection)
     with store._context(store._callback(work, raw.transaction), work):
-        store._callback(work, revocation_execution._same_connection, connection, raw)
-        retained_receipt = store.persist_revocation_planner_record(
+        result = _retain_and_reserve_in_common(
             envelope_bytes=envelope_bytes, evaluation_context_bytes=evaluation_context_bytes,
-            planned_at_epoch_ns=planned_at_epoch_ns, connection=connection, work=work,
-            **expectations)
-        store._callback(work, revocation_execution._same_connection, connection, raw)
-        execution_reservation = revocation_execution.reserve_revocation_execution_envelope(
-            envelope_id=envelope_id, planner_transaction_id=planner_transaction_id,
-            connection=connection, work=work, **expectations)
-        store._callback(work, revocation_execution._same_connection, connection, raw)
+            planned_at_epoch_ns=planned_at_epoch_ns, envelope_id=envelope_id,
+            planner_transaction_id=planner_transaction_id, connection=connection, raw=raw,
+            work=work, **expectations)
     store._callback(work, revocation_execution._same_connection, connection, raw)
-    return retained_receipt, execution_reservation
+    return result
 
 
-def _persist_and_reserve_on_configuration(configuration, *, envelope_bytes,
+def _atomic_arguments_on_work(*, envelope_bytes,
         evaluation_context_bytes, planned_at_epoch_ns, envelope_id,
         planner_transaction_id, work, **expectations):
-    """Use one held configuration through preflight and genuine atomic custody.
+    """Shared original-byte bounds and charged independent-ID comparison.
 
-    This fixed private continuation accepts no operation or opener override.
-    The public owner and authenticated writer composition supply their one
-    captured seven-tuple; later callbacks cannot make this path resnapshot a
-    mutable owner. Configuration validation is bounded local metadata work.
-    Original-byte admission, the charged ID join, capture and both replays
-    retain the public atomic method's existing order and accounting.
+    Return only fixed argument scaffolding, never admission or proof success.
+    Both configured entries validate their held tuple before this preflight;
+    their one real runner still owns the full external expectations afterward.
     """
-    _validate_configuration(configuration)
     for raw, maximum in ((envelope_bytes, retention.plan.contract.MAX_PAYLOAD_BYTES),
                          (evaluation_context_bytes, retention.MAX_CONTEXT_BYTES)):
         if type(raw) is not bytes or not 2 <= len(raw) <= maximum:
@@ -165,12 +180,98 @@ def _persist_and_reserve_on_configuration(configuration, *, envelope_bytes,
     retention.capture._SharedLedger(work)
     retention.plan._same(planner_transaction_id, expected_planner_transaction_id, work,
         "atomic revocation planner transaction differs from its independent expectation")
-    # No callback intervenes between the fixed immutable argument scaffold
-    # and the existing runner's full ownership capture before connection.
+    return {"envelope_bytes": envelope_bytes, "evaluation_context_bytes": evaluation_context_bytes,
+        "planned_at_epoch_ns": planned_at_epoch_ns, "envelope_id": envelope_id,
+        "planner_transaction_id": planner_transaction_id}
+
+
+def _persist_and_reserve_on_configuration(configuration, *, envelope_bytes,
+        evaluation_context_bytes, planned_at_epoch_ns, envelope_id,
+        planner_transaction_id, work, **expectations):
+    """Use one held configuration for the unchanged original atomic API."""
+    _validate_configuration(configuration)
+    arguments = _atomic_arguments_on_work(envelope_bytes=envelope_bytes,
+        evaluation_context_bytes=evaluation_context_bytes, planned_at_epoch_ns=planned_at_epoch_ns,
+        envelope_id=envelope_id, planner_transaction_id=planner_transaction_id,
+        work=work, **expectations)
     return _run_on_configuration(configuration, _persist_and_reserve_on_connection,
-        {"envelope_bytes": envelope_bytes, "evaluation_context_bytes": evaluation_context_bytes,
-         "planned_at_epoch_ns": planned_at_epoch_ns, "envelope_id": envelope_id,
-         "planner_transaction_id": planner_transaction_id}, expectations, work)
+        arguments, expectations, work)
+
+
+def _persist_and_reserve_request_on_connection(*, intent_bytes, relay_bytes,
+        historical_expectations_bytes, configuration_digest, generation_sequence,
+        generation_digest, envelope_bytes, evaluation_context_bytes, planned_at_epoch_ns,
+        envelope_id, planner_transaction_id, connection, work, **expectations):
+    """Exact request custody and both real replays share one common scope.
+
+    Upstream fixed composition supplies genuinely authenticated originals and
+    measured policy; this operation does not accept a successful-receiver DTO
+    or claim to authenticate its ordinary local inputs independently. Existing
+    rows are byte-compared before replay but never replace either replay. Only
+    actual replay outputs supply final record/key links, not operation authority.
+    """
+    from serverware.authority_store import revocation_execution
+    from serverware.authority_store import revocation_writer_request as request_store
+
+    store._callback(work, store._transaction_connection, connection)
+    raw = store._callback(work, store._require_planner_writer, connection)
+    prefix = request_store._prefix_on_work(intent_bytes=intent_bytes, relay_bytes=relay_bytes,
+        historical_expectations_bytes=historical_expectations_bytes,
+        configuration_digest=configuration_digest, generation_sequence=generation_sequence,
+        generation_digest=generation_digest, planned_at_epoch_ns=planned_at_epoch_ns,
+        envelope_id=envelope_id, planner_transaction_id=planner_transaction_id, work=work)
+    with store._context(store._callback(work, raw.transaction), work):
+        store._callback(work, revocation_execution._same_connection, connection, raw)
+        with store._context(store._callback(work, raw.cursor), work) as cursor:
+            store._callback(work, revocation_execution._same_connection, connection, raw)
+            existing = request_store._lookup(cursor, prefix, work)
+            store._callback(work, revocation_execution._same_connection, connection, raw)
+        store._callback(work, revocation_execution._same_connection, connection, raw)
+        retained_receipt, execution_reservation = _retain_and_reserve_in_common(
+            envelope_bytes=envelope_bytes, evaluation_context_bytes=evaluation_context_bytes,
+            planned_at_epoch_ns=planned_at_epoch_ns, envelope_id=envelope_id,
+            planner_transaction_id=planner_transaction_id, connection=connection, raw=raw,
+            work=work, **expectations)
+        with store._context(store._callback(work, raw.cursor), work) as cursor:
+            store._callback(work, revocation_execution._same_connection, connection, raw)
+            request_store._persist(cursor, prefix, retained_receipt, execution_reservation,
+                work, insert=existing is None)
+            store._callback(work, revocation_execution._same_connection, connection, raw)
+        store._callback(work, revocation_execution._same_connection, connection, raw)
+    store._callback(work, revocation_execution._same_connection, connection, raw)
+    return retained_receipt, execution_reservation
+
+
+def _persist_and_reserve_request_on_configuration(configuration, *, intent_bytes,
+        relay_bytes, historical_expectations_bytes, configuration_digest,
+        generation_sequence, generation_digest, envelope_bytes, evaluation_context_bytes,
+        planned_at_epoch_ns, envelope_id, planner_transaction_id, work, **expectations):
+    """Fixed authenticated composition suffix; no caller operation or opener.
+
+    Original raw controls and independently held scalar pins are mandatory.
+    These checks own no mutable control graph and manufacture no authentication.
+    The actual service receiver and measured-policy check must precede this
+    private call, and the real runner preserves registry/database admission.
+    """
+    from serverware import authority_revocation_writer_commitment as commitment
+
+    _validate_configuration(configuration)
+    arguments = _atomic_arguments_on_work(envelope_bytes=envelope_bytes,
+        evaluation_context_bytes=evaluation_context_bytes, planned_at_epoch_ns=planned_at_epoch_ns,
+        envelope_id=envelope_id, planner_transaction_id=planner_transaction_id,
+        work=work, **expectations)
+    commitment._raw(intent_bytes, commitment.MAX_CONTROL_BYTES)
+    commitment._raw(relay_bytes, commitment.MAX_CONTROL_BYTES)
+    commitment._raw(historical_expectations_bytes, commitment.MAX_HISTORY_BYTES)
+    commitment._pins(configuration_digest, generation_sequence, generation_digest)
+    # Fixed immutable argument scaffold; the runner captures all mutable
+    # external expectations before its first database callback, as before.
+    arguments.update(intent_bytes=intent_bytes, relay_bytes=relay_bytes,
+        historical_expectations_bytes=historical_expectations_bytes,
+        configuration_digest=configuration_digest, generation_sequence=generation_sequence,
+        generation_digest=generation_digest)
+    return _run_on_configuration(configuration, _persist_and_reserve_request_on_connection,
+        arguments, expectations, work)
 
 
 @dataclass(frozen=True, slots=True, init=False, repr=False, eq=False)

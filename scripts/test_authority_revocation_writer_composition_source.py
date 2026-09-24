@@ -228,8 +228,12 @@ class RevocationWriterCompositionSourceTests(unittest.TestCase):
         self.assertIs(assigned(worker, "received"), receiver)
         policy = call(worker, "action._assert_policy_on_work")
         self.shape(policy, "action._assert_policy_on_work(payload, received.expectations, work)")
-        atomic = call(worker, "persistence._persist_and_reserve_on_configuration")
-        self.shape(atomic, '''persistence._persist_and_reserve_on_configuration(configuration,
+        atomic = call(worker, "persistence._persist_and_reserve_request_on_configuration")
+        self.shape(atomic, '''persistence._persist_and_reserve_request_on_configuration(configuration,
+            intent_bytes=intent_bytes, relay_bytes=relay_bytes,
+            historical_expectations_bytes=historical_expectations_bytes,
+            configuration_digest=configuration_digest, generation_sequence=generation_sequence,
+            generation_digest=generation_digest,
             **received.arguments, work=work, **received.expectations)''')
         self.assertIs(worker.body[-1].value, atomic)
         ordered = (assigned(worker, "payload"), *callbacks, receiver, policy, atomic)
@@ -255,17 +259,24 @@ class RevocationWriterCompositionSourceTests(unittest.TestCase):
             "revocation writer action policy differs from its measured configuration")''')
 
     def test_fixed_atomic_path_keeps_original_input_capture_real_admission_two_replays_and_separate_live_deadline_checks(self):
-        fixed = definition(self.persistence, "_persist_and_reserve_on_configuration")
-        self.shape(fixed.body[1].value, "_validate_configuration(configuration)")
-        joined = call(fixed, "retention.plan._same")
+        fixed = definition(self.persistence, "_persist_and_reserve_request_on_configuration")
+        self.shape(call(fixed, "_validate_configuration"), "_validate_configuration(configuration)")
+        arguments = call(fixed, "_atomic_arguments_on_work")
+        self.shape(arguments, '''_atomic_arguments_on_work(envelope_bytes=envelope_bytes,
+            evaluation_context_bytes=evaluation_context_bytes, planned_at_epoch_ns=planned_at_epoch_ns,
+            envelope_id=envelope_id, planner_transaction_id=planner_transaction_id,
+            work=work, **expectations)''')
+        preflight = definition(self.persistence, "_atomic_arguments_on_work")
+        joined = call(preflight, "retention.plan._same")
         self.shape(joined, '''retention.plan._same(planner_transaction_id, expected_planner_transaction_id, work,
             "atomic revocation planner transaction differs from its independent expectation")''')
         runner_call = call(fixed, "_run_on_configuration")
         self.shape(runner_call.args[0], "configuration")
-        self.shape(runner_call.args[1], "_persist_and_reserve_on_connection")
+        self.shape(runner_call.args[1], "_persist_and_reserve_request_on_connection")
         self.shape(runner_call.args[-2], "expectations")
         self.shape(runner_call.args[-1], "work")
-        self.assertLess(joined.lineno, runner_call.lineno)
+        self.assertLess(arguments.lineno, runner_call.lineno)
+        self.assertLess(joined.lineno, preflight.body[-1].lineno)
         runner = definition(self.persistence, "_run_on_configuration")
         inputs = call(runner, "_inputs_from_configuration")
         db_import, = [node for node in runner.body if isinstance(node, ast.ImportFrom)
@@ -276,10 +287,17 @@ class RevocationWriterCompositionSourceTests(unittest.TestCase):
                          sorted(node.lineno for node in (inputs, db_import, opened, actual_connection)))
         self.shape(call(definition(self.persistence, "_inputs_from_configuration"), "store._owned_expectations"),
                    "store._owned_expectations({**expectations, **pins}, work)")
-        operation = definition(self.persistence, "_persist_and_reserve_on_connection")
-        common, = [node for node in ast.walk(operation) if isinstance(node, ast.With)]
-        retain = call(common, "store.persist_revocation_planner_record")
-        reserve = call(common, "revocation_execution.reserve_revocation_execution_envelope")
+        operation = definition(self.persistence, "_persist_and_reserve_request_on_connection")
+        common, = [node for node in operation.body if isinstance(node, ast.With)]
+        self.shape(common.items[0].context_expr, "store._context(store._callback(work, raw.transaction), work)")
+        self.shape(call(common, "_retain_and_reserve_in_common"), '''_retain_and_reserve_in_common(
+            envelope_bytes=envelope_bytes, evaluation_context_bytes=evaluation_context_bytes,
+            planned_at_epoch_ns=planned_at_epoch_ns, envelope_id=envelope_id,
+            planner_transaction_id=planner_transaction_id, connection=connection, raw=raw,
+            work=work, **expectations)''')
+        inner = definition(self.persistence, "_retain_and_reserve_in_common")
+        retain = call(inner, "store.persist_revocation_planner_record")
+        reserve = call(inner, "revocation_execution.reserve_revocation_execution_envelope")
         self.assertLess(retain.lineno, reserve.lineno)
         self.shape(operation.body[-1].value, "(retained_receipt, execution_reservation)")
         _, store = source("serverware/authority_store/revocation_retention.py", 64 * 1024)

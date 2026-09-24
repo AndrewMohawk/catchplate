@@ -114,8 +114,11 @@ Source `.64` adds a separate private [authenticated writer composition](authorit
 that maps keys, verifies original controls, compares authenticated history and
 invokes atomic custody using one held writer-configuration tuple. This action's
 existing independent-input API and policy-before-mapper order remain unchanged.
-Authenticated end-to-end custody, durable exact retry and acknowledgment bytes,
-writer response-key custody and detached-body transport remain unfinished.
+Source `.65` adds [immutable original-request custody](authority-revocation-writer-request-storage.md)
+and exact retry comparison to that separate authenticated path. This action's
+public owner still uses the original two-store atomic API. Serving integration,
+signed acknowledgment bytes, writer response-key custody and detached-body
+transport remain unfinished.
 The method does not enable public dispatch, alter
 planner-only peers, issue capabilities or activate execution. Registry closure,
 the four WebAuthn authority gates, independent current-root/witness evidence

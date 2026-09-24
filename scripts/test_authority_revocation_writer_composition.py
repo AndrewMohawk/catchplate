@@ -106,11 +106,15 @@ class RevocationWriterCompositionTests(unittest.TestCase):
     def stop_before_database(self, fixed, arguments, meter, *, fixture, clock=None):
         """Observe the actual preflight then raise; never forge a success."""
         failure, observed = RuntimeError("explicit pre-database fixture stop"), []
+        custody = {name: arguments[name] for name in ("intent_bytes", "relay_bytes",
+            "historical_expectations_bytes", "configuration_digest", "generation_sequence", "generation_digest")}
 
         def stop(configuration, operation, inputs, expectations, work):
             self.assertIs(configuration, fixed)
-            self.assertIs(operation, persistence._persist_and_reserve_on_connection)
+            self.assertIs(operation, persistence._persist_and_reserve_request_on_connection)
             self.assertIs(work, meter)
+            self.assertEqual({name: inputs[name] for name in custody}, custody)
+            self.assertEqual(set(inputs), set(fixture.action.arguments) | set(custody))
             observed.append((inputs, expectations))
             raise failure
 
@@ -144,7 +148,8 @@ class RevocationWriterCompositionTests(unittest.TestCase):
         self.assertIs(called["work"], meter)
         self.assertEqual((called["maximum_age_ns"], called["maximum_clock_skew_ns"]), (60_000_000_000, 5_000_000_000))
         self.assertEqual(historical["maximum_plan_age_ns"], 30_000_000_000)
-        self.assertEqual((inputs, historical), (fixture.action.arguments, fixture.action.expectations))
+        self.assertEqual({name: inputs[name] for name in fixture.action.arguments}, fixture.action.arguments)
+        self.assertEqual(historical, fixture.action.expectations)
         self.assertEqual(fixed, owner._snapshot_configuration())
         self.assertEqual(oracle.units(meter.metrics), expected["total"])
         self.assertEqual((expected["factory"][0], expected["receiver"][0], expected["total"][0]), (4, 8, 12))

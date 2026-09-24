@@ -31,6 +31,8 @@ Source `.64` supplies that last arrow through the private
 [authenticated writer composition](authority-revocation-writer-composition.md),
 with one held key/configuration tuple, current clocks and genuine atomic replay.
 It remains unexecuted and is not an enabled service path.
+Source `.65` adds [immutable request storage](authority-revocation-writer-request-storage.md)
+to that fixed composition; signed acknowledgment custody and transport remain open.
 No API accepts a previously authenticated result in place of original bytes.
 
 ## Two signed controls, three detached bodies
@@ -97,11 +99,12 @@ ID. The relay ID uses
 `serverware.policyAuthorityRevocationWriterRelayEnvelope/v1` with the intent ID;
 its parent is that intent ID.
 
-IDs deliberately exclude timestamps and body hashes. A changed or re-signed
-request must encounter the same future custody identity and fail exact-original
+IDs deliberately exclude timestamps and body hashes. A byte-changed request,
+even with valid new signatures, encounters the same `.65` custody identity and fails exact-original
 comparison, rather than obtaining a new action by changing its timestamp.
-There is no durable replay journal in this source increment. Configuration or
-key rotation must not silently provide a second action namespace later.
+That identity is global in the request table: configuration, generation and key
+rotation do not provide another namespace. This pure commitment module alone
+does not perform the durable lookup or insertion.
 
 Current envelope freshness uses independently supplied current epoch and
 monotonic clocks plus the measured **writer** internal-age limit and the
@@ -130,20 +133,24 @@ work metric; the explicit signature transport and message work remain charged.
 
 ## Durable integration still required
 
-A future immutable custody record must preserve original intent, relay,
-history and signed acknowledgment bytes, linked exactly to the existing
-retained-plan and reserved-execution commitments. Planned-parent and reserved-
-execution terminal fields must remain null; they are not a request journal.
-The consumed-execution ledger is not one either.
+The `.65` immutable request record preserves original intent, relay and history
+bytes, linked exactly to the existing retained-plan and reserved-execution
+commitments. The original plan/context remain in their existing sidecar. New
+requests, identical retries and conflicting originals are handled inside the
+same common writer savepoint as both genuine replays. A retry preserves the
+original signatures and exactly matches stored `plannedAtEpochNs`; the same
+timestamp requirement applies to first attachment to an older retained plan.
+Planned-parent and reserved-execution terminal fields remain null; neither
+they nor the consumed-execution ledger is used as a request journal.
 
-New, exact-retry and conflicting-request handling must live inside the same
-owning transaction as genuine retention and reservation. Constructing or
-storing an acknowledgment after today's public atomic owner returns would be
-too late: that owner has already committed. Exact stored acknowledgment bytes
+Signed acknowledgment custody is still missing. A separately specified immutable
+acknowledgment must bind the retained request and the genuine writer response
+signer. Its transaction and recovery protocol must be explicit; simply storing
+an acknowledgment after today's atomic owner returns cannot claim to share its
+transaction, because that owner has already committed. Exact stored acknowledgment bytes
 may be released only after normal transaction and connection exit. Exit
 uncertainty requires historical reconciliation, not an assumption of rollback.
 
-Exact retry preserves original signatures and stored `plannedAtEpochNs`.
 Historical acknowledgment lookup needs a separate explicit contract; it cannot
 masquerade as a fresh authorization or skip current action checks.
 

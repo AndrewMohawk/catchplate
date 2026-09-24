@@ -251,13 +251,20 @@ class RevocationWriterActionSourceTests(unittest.TestCase):
         operation = definition(persistence, "_persist_and_reserve_on_connection")
         common, = [node for node in ast.walk(operation) if isinstance(node, ast.With)]
         self.shape(common.items[0].context_expr, "store._context(store._callback(work, raw.transaction), work)")
-        retained = call(common, "store.persist_revocation_planner_record")
-        reserved = call(common, "revocation_execution.reserve_revocation_execution_envelope")
+        self.shape(call(common, "_retain_and_reserve_in_common"), '''_retain_and_reserve_in_common(
+            envelope_bytes=envelope_bytes, evaluation_context_bytes=evaluation_context_bytes,
+            planned_at_epoch_ns=planned_at_epoch_ns, envelope_id=envelope_id,
+            planner_transaction_id=planner_transaction_id, connection=connection, raw=raw,
+            work=work, **expectations)''')
+        inner = definition(persistence, "_retain_and_reserve_in_common")
+        retained = call(inner, "store.persist_revocation_planner_record")
+        reserved = call(inner, "revocation_execution.reserve_revocation_execution_envelope")
         self.assertLess(retained.lineno, reserved.lineno)
         self.shape(reserved, '''revocation_execution.reserve_revocation_execution_envelope(
             envelope_id=envelope_id, planner_transaction_id=planner_transaction_id,
             connection=connection, work=work, **expectations)''')
-        self.shape(operation.body[-1].value, "(retained_receipt, execution_reservation)")
+        self.shape(operation.body[-1].value, "result")
+        self.shape(inner.body[-1].value, "(retained_receipt, execution_reservation)")
         _, store = source("serverware/authority_store/revocation_retention.py", 64 * 1024)
         initial = definition(store, "persist_revocation_planner_record")
         replay = definition(store, "_read_revocation_record_on_work")

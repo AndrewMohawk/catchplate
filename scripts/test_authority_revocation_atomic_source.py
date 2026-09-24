@@ -21,7 +21,9 @@ class RevocationAtomicSourceTests(unittest.TestCase):
         cls.owner = definition(cls.persistence, "RevocationPlannerPersistence")
         cls.method = definition(cls.owner, "persist_and_reserve_execution")
         cls.fixed = definition(cls.persistence, "_persist_and_reserve_on_configuration")
+        cls.arguments = definition(cls.persistence, "_atomic_arguments_on_work")
         cls.operation = definition(cls.persistence, "_persist_and_reserve_on_connection")
+        cls.inner = definition(cls.persistence, "_retain_and_reserve_in_common")
         _, cls.store = source("serverware/authority_store/revocation_retention.py", 64 * 1024)
         _, cls.execution = source("serverware/authority_store/revocation_execution.py", 64 * 1024)
 
@@ -61,19 +63,37 @@ class RevocationAtomicSourceTests(unittest.TestCase):
         self.assertEqual(method.args.kwarg.arg, "expectations")
         self.assertIsNone(method.args.vararg)
         self.shape(method.body[1].value, "_validate_configuration(configuration)")
-        originals = method.body[2]
+        arguments = call(method, "_atomic_arguments_on_work")
+        self.shape(arguments, '''_atomic_arguments_on_work(envelope_bytes=envelope_bytes,
+            evaluation_context_bytes=evaluation_context_bytes, planned_at_epoch_ns=planned_at_epoch_ns,
+            envelope_id=envelope_id, planner_transaction_id=planner_transaction_id,
+            work=work, **expectations)''')
+        runner = call(method, "_run_on_configuration")
+        self.shape(runner, '''_run_on_configuration(configuration, _persist_and_reserve_on_connection,
+            arguments, expectations, work)''')
+        self.assertIs(method.body[-1].value, runner)
+        self.assertEqual(len(method.body), 4)
+        self.assertLess(method.body[1].lineno, arguments.lineno)
+        self.assertLess(arguments.lineno, runner.lineno)
+        method = self.arguments
+        self.assertEqual(method.args.args, [])
+        self.assertEqual([item.arg for item in method.args.kwonlyargs], [
+            "envelope_bytes", "evaluation_context_bytes", "planned_at_epoch_ns",
+            "envelope_id", "planner_transaction_id", "work"])
+        self.assertEqual(method.args.kwarg.arg, "expectations")
+        originals = method.body[1]
         self.assertIsInstance(originals, ast.For)
         self.assertEqual([item.id for item in originals.target.elts], ["raw", "maximum"])
         self.shape(originals.iter, '''((envelope_bytes, retention.plan.contract.MAX_PAYLOAD_BYTES),
             (evaluation_context_bytes, retention.MAX_CONTEXT_BYTES))''')
         self.shape(originals.body[0].test, "type(raw) is not bytes or not 2 <= len(raw) <= maximum")
         self.assertIsInstance(originals.body[0].body[0], ast.Raise)
-        self.shape(method.body[3].test,
+        self.shape(method.body[2].test,
                    "type(planned_at_epoch_ns) is not int or not 1 <= planned_at_epoch_ns <= 2**63 - 1")
         digests = calls(method, "retention.plan.contract._digest")
         self.assertEqual([ast.unparse(node.args[0]) for node in digests],
                          ["envelope_id", "planner_transaction_id", "expected_planner_transaction_id"])
-        closed = method.body[6]
+        closed = method.body[5]
         self.shape(closed.test, '''len(expectations) != len(_CALL_INPUTS)
             or any(type(name) is not str for name in expectations) or set(expectations) != _CALL_INPUTS''')
         self.shape(assigned(method, "expected_planner_transaction_id"), 'expectations["expected_planner_transaction_id"]')
@@ -82,14 +102,12 @@ class RevocationAtomicSourceTests(unittest.TestCase):
         joined = call(method, "retention.plan._same")
         self.shape(joined, '''retention.plan._same(planner_transaction_id, expected_planner_transaction_id, work,
             "atomic revocation planner transaction differs from its independent expectation")''')
-        runner = call(method, "_run_on_configuration")
-        self.shape(runner, '''_run_on_configuration(configuration, _persist_and_reserve_on_connection,
-            {"envelope_bytes": envelope_bytes, "evaluation_context_bytes": evaluation_context_bytes,
+        self.shape(method.body[-1].value, '''{"envelope_bytes": envelope_bytes, "evaluation_context_bytes": evaluation_context_bytes,
              "planned_at_epoch_ns": planned_at_epoch_ns, "envelope_id": envelope_id,
-             "planner_transaction_id": planner_transaction_id}, expectations, work)''')
-        self.assertIs(method.body[-1].value, runner)
-        order = (method.body[1], originals, method.body[3], *digests[:2], closed,
-                 assigned(method, "expected_planner_transaction_id"), digests[2], ledger, joined, runner)
+             "planner_transaction_id": planner_transaction_id}''')
+        self.assertFalse(calls(method, "_run_on_configuration"))
+        order = (originals, method.body[2], *digests[:2], closed,
+                 assigned(method, "expected_planner_transaction_id"), digests[2], ledger, joined, method.body[-1])
         self.assertEqual([node.lineno for node in order], sorted(node.lineno for node in order))
         self.assertEqual([ast.unparse(node) for node in ast.walk(method)
             if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)
@@ -127,14 +145,27 @@ class RevocationAtomicSourceTests(unittest.TestCase):
         self.assertEqual(len(common.items), 1)
         self.shape(common.items[0].context_expr, "store._context(store._callback(work, raw.transaction), work)")
         self.assertIsNone(common.items[0].optional_vars)
-        self.assertEqual(len(common.body), 5)
+        self.assertEqual(len(common.body), 1)
+        delegated = call(common, "_retain_and_reserve_in_common")
+        self.shape(delegated, '''_retain_and_reserve_in_common(
+            envelope_bytes=envelope_bytes, evaluation_context_bytes=evaluation_context_bytes,
+            planned_at_epoch_ns=planned_at_epoch_ns, envelope_id=envelope_id,
+            planner_transaction_id=planner_transaction_id, connection=connection, raw=raw,
+            work=work, **expectations)''')
+        self.assertIs(assigned(operation, "result"), delegated)
+        inner = self.inner
+        self.assertEqual([item.arg for item in inner.args.kwonlyargs], [
+            "envelope_bytes", "evaluation_context_bytes", "planned_at_epoch_ns", "envelope_id",
+            "planner_transaction_id", "connection", "raw", "work"])
+        self.assertFalse(any(isinstance(node, ast.With) for node in ast.walk(inner)))
+        self.assertEqual(len(inner.body), 8)
         continuity = "store._callback(work, revocation_execution._same_connection, connection, raw)"
-        for index in (0, 2, 4):
-            self.shape(common.body[index].value, continuity)
-        persist = call(operation, "store.persist_revocation_planner_record")
-        reserve = call(operation, "revocation_execution.reserve_revocation_execution_envelope")
-        self.assertIs(common.body[1].value, persist)
-        self.assertIs(common.body[3].value, reserve)
+        for index in (2, 4, 6):
+            self.shape(inner.body[index].value, continuity)
+        persist = call(inner, "store.persist_revocation_planner_record")
+        reserve = call(inner, "revocation_execution.reserve_revocation_execution_envelope")
+        self.assertIs(inner.body[3].value, persist)
+        self.assertIs(inner.body[5].value, reserve)
         self.shape(persist, '''store.persist_revocation_planner_record(
             envelope_bytes=envelope_bytes, evaluation_context_bytes=evaluation_context_bytes,
             planned_at_epoch_ns=planned_at_epoch_ns, connection=connection, work=work, **expectations)''')
@@ -142,12 +173,14 @@ class RevocationAtomicSourceTests(unittest.TestCase):
             envelope_id=envelope_id, planner_transaction_id=planner_transaction_id,
             connection=connection, work=work, **expectations)''')
         self.shape(operation.body[-2].value, continuity)
-        self.shape(operation.body[-1].value, "(retained_receipt, execution_reservation)")
+        self.shape(operation.body[-1].value, "result")
+        self.shape(inner.body[-1].value, "(retained_receipt, execution_reservation)")
         self.assertLess(common.end_lineno, operation.body[-2].lineno)
-        self.assertEqual([node.id for node in ast.walk(operation)
+        self.assertEqual([node.id for node in ast.walk(inner)
             if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
             and node.id == "retained_receipt"], ["retained_receipt"])
-        self.assertFalse(any(isinstance(node, (ast.Try, ast.ExceptHandler)) for node in ast.walk(operation)))
+        for function in (operation, inner):
+            self.assertFalse(any(isinstance(node, (ast.Try, ast.ExceptHandler)) for node in ast.walk(function)))
         same = definition(self.execution, "_same_connection")
         self.shape(same.body[0].value, "store._transaction_connection(connection)")
         self.shape(same.body[1].test, "store._require_postgres_connection(connection) is not raw")
@@ -204,7 +237,7 @@ class RevocationAtomicSourceTests(unittest.TestCase):
                     == prefix + "_context(" + prefix + "_callback(work, raw.transaction), work)"]
             self.assertEqual(len(transactions), 1)
             self.assertLess(transactions[0].end_lineno, function.body[-1].lineno)
-        for function in (self.method, self.fixed, self.operation, runner):
+        for function in (self.method, self.fixed, self.arguments, self.operation, self.inner, runner):
             self.assertFalse(any(isinstance(node, ast.Attribute) and node.attr in {
                 "commit", "rollback", "sign", "verify", "time_ns", "monotonic_ns"} for node in ast.walk(function)))
             for spelling in ("_ValidationWork", "QueryReadValidationLimits", "retention.capture._PackagingLedger"):

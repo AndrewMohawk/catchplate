@@ -119,8 +119,11 @@ an acknowledgment signer or permission to bypass the actual writer action.
 Source `.64` adds the private [authenticated writer composition](authority-revocation-writer-composition.md):
 five original byte strings, one held measured configuration and key tuple,
 guarded current clocks, genuine authentication, historical-policy comparison
-and actual atomic retention/reservation. It does not enable dispatch or provide
-durable original-control/acknowledgment custody and detached-body transport.
+and actual atomic retention/reservation. Source `.65` adds immutable
+[original-request custody](authority-revocation-writer-request-storage.md)
+inside the same common savepoint, including exact retry comparison and both
+real replays. It does not enable dispatch, provide signed acknowledgment
+custody or implement detached-body transport.
 Post-plan witness binding, current-root one-use execution and atomic terminal
 publication remain incomplete. The four unfinished WebAuthn authority kernels
 must not be bypassed to make the registry import or tests succeed.

@@ -7,7 +7,7 @@ not proof of isolation. This fixture starts no engine and imports no DB facade
 or active registry. Every test is one transaction that ALWAYS rolls back,
 including setup failures; each catalog variant restores an admitted baseline.
 
-The eleven tables and five trivial PL/pgSQL functions are minimal catalog
+The twelve tables and five trivial PL/pgSQL functions are minimal catalog
 fixtures, not production DDL or function implementations. Only the production
 query's returned violation is a denial oracle, never a SQL exception. This is
 not execution, migration, function-body, TLS, session or service admission
@@ -49,6 +49,7 @@ REQUIRED_PRIVILEGES = {
     "policy_authority_operation_mutation_templates": ("SELECT",),
     "policy_authority_planner_transactions": ("SELECT", "INSERT", "UPDATE"),
     "policy_authority_revocation_retained_plans": ("SELECT", "INSERT"),
+    "policy_authority_revocation_writer_requests": ("SELECT", "INSERT"),
     "policy_authority_query_dependency_manifests": ("SELECT",),
     "policy_authority_authenticated_table_roots": ("SELECT",),
     "policy_authority_webauthn_assertion_evidence": ("SELECT", "INSERT"),
@@ -174,7 +175,8 @@ class AuthorityPlannerWriterPostgresTests(unittest.TestCase):
             self.assert_denied()
 
     def test_exact_eleven_tables_and_five_invoker_functions_admit(self) -> None:
-        self.assertEqual(len(REQUIRED_PRIVILEGES), 11)
+        # Historical test ID retained; immutable request custody adds table 12.
+        self.assertEqual(len(REQUIRED_PRIVILEGES), 12)
         self.assertEqual({name: frozenset(grants) for name, grants in REQUIRED_PRIVILEGES.items()},
                          PLANNER_WRITER_TABLE_PRIVILEGES)
         self.assertEqual(REQUIRED_FUNCTIONS, AUDIT_CAPACITY_PLANNER_FUNCTION_SIGNATURES)

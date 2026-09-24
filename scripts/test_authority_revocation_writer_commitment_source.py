@@ -355,11 +355,15 @@ class RevocationWriterCommitmentSourceTests(unittest.TestCase):
             and isinstance(node.ctx, ast.Store) for node in ast.walk(check)))
         _, persistence = source("serverware/authority_revocation_persistence.py", 64 * 1024)
         operation = definition(persistence, "_persist_and_reserve_on_connection")
-        retained = call(operation, "store.persist_revocation_planner_record")
-        reserved = call(operation, "revocation_execution.reserve_revocation_execution_envelope")
         common, = [node for node in ast.walk(operation) if isinstance(node, ast.With)]
-        self.assertIn(retained, list(ast.walk(common)))
-        self.assertIn(reserved, list(ast.walk(common)))
+        self.shape(call(common, "_retain_and_reserve_in_common"), """_retain_and_reserve_in_common(
+            envelope_bytes=envelope_bytes, evaluation_context_bytes=evaluation_context_bytes,
+            planned_at_epoch_ns=planned_at_epoch_ns, envelope_id=envelope_id,
+            planner_transaction_id=planner_transaction_id, connection=connection, raw=raw,
+            work=work, **expectations)""")
+        inner = definition(persistence, "_retain_and_reserve_in_common")
+        retained = call(inner, "store.persist_revocation_planner_record")
+        reserved = call(inner, "revocation_execution.reserve_revocation_execution_envelope")
         self.assertLess(retained.lineno, reserved.lineno)
         self.shape(reserved, """revocation_execution.reserve_revocation_execution_envelope(
             envelope_id=envelope_id, planner_transaction_id=planner_transaction_id,

@@ -11,7 +11,8 @@ Original controls and all three bodies are mandatory on every call. Actual
 current clocks, both role signatures, detached commitments and measured
 historical policy precede the existing atomic owner path, whose two genuine
 replays and database/registry admission remain unchanged. No transport, public
-purpose, durable control custody, replay journal or signed ACK is introduced.
+purpose or signed ACK is introduced. The fixed suffix retains exact original
+controls/history with both replayed custody records in one owning transaction.
 Post-commit failures retain the owner's existing uncertainty boundary.
 """
 from __future__ import annotations
@@ -79,5 +80,9 @@ def _persist_commitments_on_configuration(configuration, *, intent_bytes,
         maximum_age_ns=maximum_age_ns, maximum_clock_skew_ns=authority.VERIFIER_MAX_CLOCK_SKEW_NS,
         work=work)
     action._assert_policy_on_work(payload, received.expectations, work)
-    return persistence._persist_and_reserve_on_configuration(configuration,
+    return persistence._persist_and_reserve_request_on_configuration(configuration,
+        intent_bytes=intent_bytes, relay_bytes=relay_bytes,
+        historical_expectations_bytes=historical_expectations_bytes,
+        configuration_digest=configuration_digest, generation_sequence=generation_sequence,
+        generation_digest=generation_digest,
         **received.arguments, work=work, **received.expectations)

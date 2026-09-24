@@ -21,6 +21,7 @@ PLANNER_WRITER_TABLE_PRIVILEGES = MappingProxyType({
     "policy_authority_operation_mutation_templates": frozenset({"SELECT"}),
     "policy_authority_planner_transactions": frozenset({"SELECT", "INSERT", "UPDATE"}),
     "policy_authority_revocation_retained_plans": frozenset({"SELECT", "INSERT"}),
+    "policy_authority_revocation_writer_requests": frozenset({"SELECT", "INSERT"}),
     "policy_authority_query_dependency_manifests": frozenset({"SELECT"}),
     "policy_authority_authenticated_table_roots": frozenset({"SELECT"}),
     "policy_authority_webauthn_assertion_evidence": frozenset({"SELECT", "INSERT"}),

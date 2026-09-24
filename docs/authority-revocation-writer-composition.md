@@ -4,6 +4,8 @@
 
 Source `.64` connects the original-byte [detached commitments](authority-revocation-writer-commitment.md)
 to measured historical-policy checks and [atomic retention and reservation](authority-revocation-atomic.md).
+Source `.65` adds [immutable original-request custody](authority-revocation-writer-request-storage.md)
+inside that same transaction, with exact retry comparison and no acknowledgment signer.
 The private service adapter accepts five original immutable byte strings and
 the existing work object. It accepts no caller keys, clocks, configuration,
 database credentials, alternate operation or prior successful result.
@@ -25,8 +27,11 @@ flowchart TD
     F --> G[Own worker policy graph; sample guarded current clocks]
     G --> H[Verify original planner relay and verifier intent]
     H --> I[Compare authenticated history with measured policy]
-    I --> J[Same held configuration: atomic retention and reservation]
-    J --> K[Ordinary result pair after transaction and connection exit]
+    I --> J[Same held configuration: common writer savepoint]
+    J --> L[Compare existing original request, if any]
+    L --> M[Both genuine retention and reservation replays]
+    M --> N[Insert or exactly reread complete immutable request]
+    N --> K[Ordinary result pair after transaction and connection exit]
 ```
 
 The service owns the full measured payload before launch, descriptor or key
@@ -80,16 +85,26 @@ this authenticated path needs mapped keys first to authenticate the history.
 The fixed-configuration atomic helper preserves the public owner's original-byte
 bounds, independent planner-ID comparison, expectation capture and actual database
 admission. Both retained-plan proof replays still run. The first receipt is
-output only, never authority for reservation. Shared rollback and uncertain
-post-commit exit semantics remain those of the actual atomic owner.
+output only, never authority for reservation. The fixed request suffix compares
+existing original controls/history and configuration pins before those replays,
+then derives the retained-record and key links from their actual results. It
+requires the signed proposed planned time to equal the original stored time,
+including when first attaching to an older retained plan. An accepted identical
+request never skips a replay. New insertion and every complete readback share
+the same common savepoint, preserving the four existing transaction scopes.
+Shared rollback and uncertain post-commit exit semantics remain those of the
+actual atomic owner. The returned pair is not a signed acknowledgment.
 
 ## Work and verification
 
 One existing cumulative work object pays for service ownership, genuine mapping,
 worker ownership, detached authentication, policy comparison and both atomic
 replays. Each full-payload ownership pass is charged separately. Mapping retains
-four hashes; the commitment receiver retains eight. The atomic ID comparison
-and both replay peaks are not waived by successful authentication. Fixed scalar
+four hashes; the commitment receiver retains eight. Request custody adds five
+actual hashes (two stable-ID frames and three original-body hashes), three
+base64 codecs, and separately charged row copies and scalar comparisons.
+The atomic ID comparison and both replay peaks include prior work and are not
+waived by successful authentication. Fixed scalar
 checks and native clocks remain outside H/B/N but their callbacks cannot alter
 the work state or allowances.
 
@@ -103,11 +118,13 @@ durability, a socket exchange or independently operated production services.
 
 ## Still required before serving
 
-This composition does not store original intent, relay, history or acknowledgment
-bytes in a durable request journal. It does not add response-signing key custody,
-bounded detached-body transport, public dispatch or historical acknowledgment
-lookup. Ordinary atomic-store retries are not a complete authenticated RPC retry
-protocol. Those requirements remain in the [durable integration contract](authority-revocation-writer-commitment.md#durable-integration-still-required).
+The source now retains original intent, relay and history bytes with their
+retained-plan and reserved-execution links. It does not store signed
+acknowledgment bytes or add response-signing key custody, bounded detached-body
+transport, public dispatch or historical acknowledgment lookup. This private
+request-custody path is not a complete authenticated RPC retry protocol, and
+its native durability is unverified. The remaining requirements are in the
+[durable integration contract](authority-revocation-writer-commitment.md#durable-integration-still-required).
 
 Immutable dependency and coverage approvals, sealed preparation, sequential
 no-build verification, current-root/witness evidence, unfinished authority gates

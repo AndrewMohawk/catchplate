@@ -119,7 +119,13 @@ Source `.64` adds a private [authenticated writer composition](authority-revocat
 and factors this owner's existing body into a fixed-configuration helper. The
 public API still snapshots once; the authenticated path holds the same tuple
 through signature checks and the atomic suffix, without a post-callback resnapshot.
-Serving integration, detached-body transfer, durable original retry/acknowledgment
-bytes and writer response-key custody remain unfinished. Registry closure and
+Source `.65` adds a separate fixed request suffix sharing the actual two-replay
+inner helper. It retains original controls/history and links in an immutable
+request row, with exact comparison and insertion inside the common savepoint.
+The legacy public atomic API and its retry timestamp behavior above remain
+unchanged; the request suffix additionally requires signed/stored timestamp
+equality. See [request custody](authority-revocation-writer-request-storage.md).
+Serving integration, detached-body transfer, signed acknowledgment custody
+and writer response-key custody remain unfinished. Registry closure and
 the four WebAuthn authority gates remain incomplete. Production Nitro/KMS, signing and independent
 witness services are still unprovisioned.

@@ -195,6 +195,7 @@ def production_retained_immutable_sql(
     """Extract the real immutable function and attachment, without db imports."""
     if type(table) is not str or table not in {
             "policy_authority_revocation_retained_plans",
+            "policy_authority_revocation_writer_requests",
             "policy_authority_revocation_retained_capabilities",
             "policy_authority_webauthn_assertion_evidence",
             "policy_authority_authorization_projections"}:
@@ -862,6 +863,8 @@ class AuthorityRevocationRetentionPostgresTests(unittest.TestCase):
     CHILD = "policy_authority_revocation_retained_plans"
     ASSERTION = "policy_authority_webauthn_assertion_evidence"
     PROJECTION = "policy_authority_authorization_projections"
+    REQUEST = "policy_authority_revocation_writer_requests"
+    EXECUTION = "policy_authority_execution_envelopes"
     RESERVATION = (
         "planner_transaction_id", "plan_protocol", "operation", "operation_id", "request_digest",
         "capability_id", "operation_contract_digest", "query_manifest_digest",
@@ -896,7 +899,10 @@ class AuthorityRevocationRetentionPostgresTests(unittest.TestCase):
         self.connection.execute(production_writer_capability_table_sql())
         self.connection.execute(authority_v9_schema_source())
         self.connection.execute(planner_retention_guard_sql(self.namespace))
-        for table in (self.CHILD, self.ASSERTION, self.PROJECTION):
+        # The capability fixture also calls this concrete setup without
+        # inheriting this class; do not require it to grow a request API.
+        for table in (self.CHILD, self.ASSERTION, self.PROJECTION,
+                      AuthorityRevocationRetentionPostgresTests.REQUEST):
             for statement in production_retained_immutable_sql(table):
                 self.connection.execute(statement)
 
@@ -1045,6 +1051,148 @@ class AuthorityRevocationRetentionPostgresTests(unittest.TestCase):
         self.connection.execute("SET CONSTRAINTS ALL IMMEDIATE")
         return planned, child
 
+    def request_records(self, label):
+        """Opaque DDL rows only: these controls do not authenticate a request."""
+        _, parent, retained = AuthorityRevocationRetentionPostgresTests.records(self, label)
+        planner_id = token("request-planner-" + label)
+        parent["planner_transaction_id"] = retained["planner_transaction_id"] = planner_id
+        execution = {
+            "envelope_id": token("execution-" + label), "parent_envelope_id": None,
+            "purpose": "execute-v9", "operation": parent["operation"],
+            "operation_id": parent["operation_id"], "request_digest": parent["request_digest"],
+            "capability_id": parent["capability_id"], "planner_transaction_id": planner_id,
+            "authorization_projection_digest": parent["authorization_projection_digest"],
+            "operation_contract_digest": parent["operation_contract_digest"],
+            "exact_request_base64url": "e30", "exact_request_bytes_digest": token("request-bytes"),
+            "exact_request_byte_count": 2, "deadline_monotonic_ns": 200,
+            "deadline_epoch_ns": 2000, "fence": 1, "status": "reserved",
+            "exact_response_base64url": None, "exact_response_bytes_digest": None,
+            "exact_response_byte_count": None, "result_digest": None, "terminal_receipt_json": None,
+            "terminal_receipt_digest": None, "failure_code": None, "failure_digest": None,
+            "reserved_at_epoch_ns": 1000, "terminal_at_epoch_ns": None,
+            "source_revision": authority_contract.SOURCE_REVISION,
+        }
+        request = {
+            "intent_envelope_id": token("intent-" + label), "relay_envelope_id": token("relay-" + label),
+            "execution_envelope_id": execution["envelope_id"], "planner_transaction_id": planner_id,
+            "plan_protocol": "revocation-v4", "retained_record_digest": retained["retained_record_digest"],
+            "configuration_digest": token("configuration"), "generation_sequence": 1,
+            "generation_digest": token("generation"), "exact_intent_base64url": "e30",
+            "exact_intent_bytes_digest": token("intent-bytes"), "exact_intent_byte_count": 2,
+            "exact_relay_base64url": "e30", "exact_relay_bytes_digest": token("relay-bytes"),
+            "exact_relay_byte_count": 2, "historical_expectations_base64url": "e30",
+            "historical_expectations_bytes_digest": token("history-bytes"),
+            "historical_expectations_byte_count": 2, "planner_key_digest": retained["planner_key_digest"],
+            "verifier_key_digest": retained["verifier_key_digest"],
+            "planned_at_epoch_ns": parent["planned_at_epoch_ns"],
+            "source_revision": authority_contract.SOURCE_REVISION,
+        }
+        self.assertEqual(tuple(request), authority_contract.REVOCATION_WRITER_REQUEST_COLUMNS)
+        return parent, retained, execution, request
+
+    def request_rows(self):
+        return tuple(row[0] for row in self.connection.execute(sql.SQL(
+            "SELECT pg_catalog.to_jsonb(t) FROM {} AS t ORDER BY intent_envelope_id COLLATE \"C\""
+        ).format(sql.Identifier(self.schema, self.REQUEST))).fetchall())
+
+    def insert_request_parents(self, records):
+        self.connection.execute("SET CONSTRAINTS ALL DEFERRED")
+        for table, row in zip((self.PARENT, self.CHILD, self.EXECUTION), records[:3]):
+            self.insert(table, row)
+
+    def assert_request_deferred_contract(self):
+        constraints = self.connection.execute(
+            "SELECT conname, condeferrable, condeferred, confupdtype, confdeltype "
+            "FROM pg_catalog.pg_constraint WHERE conrelid = %s::regclass "
+            "AND contype = 'f' ORDER BY conname", (self.namespace + "." + self.REQUEST,)).fetchall()
+        self.assertEqual(constraints, [
+            ("serverware_writer_request_execution_fk", True, True, "a", "a"),
+            ("serverware_writer_request_plan_fk", True, True, "a", "a"),
+        ])
+        for columns in (("intent_envelope_id",), ("relay_envelope_id",), ("execution_envelope_id",)):
+            self.unique_constraint(self.REQUEST, columns)
+        self.unique_constraint(self.EXECUTION, ("envelope_id", "planner_transaction_id"))
+        records = self.request_records("request-deferred")
+        self.connection.execute("SET CONSTRAINTS ALL DEFERRED")
+        self.insert(self.REQUEST, records[3])
+        self.insert_request_parents(records)
+        self.connection.execute("SET CONSTRAINTS ALL IMMEDIATE")
+        self.assertEqual(self.request_rows(), (records[3],))
+
+    def assert_request_foreign_keys(self):
+        records = self.request_records("request-fk")
+        self.insert_request_parents(records)
+        self.connection.execute("SET CONSTRAINTS ALL IMMEDIATE")
+        # A second genuine parent pair isolates the execution/planner mismatch
+        # from the retained-plan FK: every referenced single ID exists.
+        other = self.request_records("request-other-fk")
+        self.insert_request_parents(other)
+        self.connection.execute("SET CONSTRAINTS ALL IMMEDIATE")
+        for field, value, constraint in (
+                ("retained_record_digest", token("missing-record"), "serverware_writer_request_plan_fk"),
+                ("execution_envelope_id", token("missing-execution"), "serverware_writer_request_execution_fk"),
+                ("execution_envelope_id", other[2]["envelope_id"], "serverware_writer_request_execution_fk")):
+            with self.subTest(request_fk=field, value=value), self.assertRaises(psycopg.errors.ForeignKeyViolation) as caught:
+                with self.connection.transaction():
+                    self.connection.execute("SET CONSTRAINTS ALL DEFERRED")
+                    self.insert(self.REQUEST, {**records[3], field: value})
+                    self.connection.execute("SET CONSTRAINTS ALL IMMEDIATE")
+            self.assertEqual(caught.exception.diag.constraint_name, constraint)
+            self.assertEqual(self.request_rows(), ())
+
+    def assert_request_shapes(self):
+        records = self.request_records("request-shapes")
+        self.insert_request_parents(records)
+        self.connection.execute("SET CONSTRAINTS ALL IMMEDIATE")
+        row = records[3]
+        for name in row:
+            with self.subTest(request_null=name), self.assertRaises(psycopg.errors.NotNullViolation) as caught:
+                with self.connection.transaction():
+                    self.insert(self.REQUEST, {**row, name: None})
+            self.assertEqual(caught.exception.diag.column_name, name)
+        invalid = [("generation_sequence", 0), ("planned_at_epoch_ns", 0),
+                   ("plan_protocol", "v3"), ("source_revision", "old")]
+        invalid.extend((name, "not-a-digest") for name in row
+                       if name.endswith("_digest") or name.endswith("_id"))
+        for prefix, maximum in (("exact_intent", 4194304), ("exact_relay", 4194304),
+                                ("historical_expectations", 67108864)):
+            invalid.extend(((prefix + "_byte_count", 1), (prefix + "_byte_count", maximum + 1),
+                            (prefix + "_base64url", "e30="), (prefix + "_base64url", "e3!"),
+                            (prefix + "_base64url", "e31")))
+        for name, value in invalid:
+            with self.subTest(request_shape=name, value=value), self.assertRaises(psycopg.errors.CheckViolation):
+                with self.connection.transaction():
+                    self.insert(self.REQUEST, {**row, name: value})
+            self.assertEqual(self.request_rows(), ())
+
+    def assert_request_immutable(self):
+        records = self.request_records("request-immutable")
+        self.connection.execute("SET CONSTRAINTS ALL DEFERRED")
+        self.insert_request_parents(records)
+        self.insert(self.REQUEST, records[3])
+        self.connection.execute("SET CONSTRAINTS ALL IMMEDIATE")
+        row = records[3]
+        for name in row:
+            with self.subTest(request_update=name), self.assertRaisesRegex(psycopg.errors.RaiseException, "immutable"):
+                with self.connection.transaction():
+                    self.update(self.REQUEST, row["planner_transaction_id"], {name: self.changed(row[name])})
+            self.assertEqual(self.request_rows(), (row,))
+        with self.assertRaisesRegex(psycopg.errors.RaiseException, "immutable"):
+            with self.connection.transaction():
+                self.connection.execute(sql.SQL("DELETE FROM {}").format(sql.Identifier(self.schema, self.REQUEST)))
+        for unique in ("intent_envelope_id", "relay_envelope_id", "execution_envelope_id"):
+            candidate = {**row, "intent_envelope_id": token("new-intent"),
+                         "relay_envelope_id": token("new-relay"), "execution_envelope_id": token("new-execution"),
+                         "configuration_digest": token("rotated-config"), "generation_sequence": 2,
+                         "generation_digest": token("rotated-generation"), "planner_key_digest": token("rotated-key")}
+            candidate[unique] = row[unique]
+            with self.subTest(request_unique=unique), self.assertRaises(psycopg.errors.UniqueViolation) as caught:
+                with self.connection.transaction():
+                    self.connection.execute("SET CONSTRAINTS ALL DEFERRED")
+                    self.insert(self.REQUEST, candidate)
+            self.assertEqual(caught.exception.diag.constraint_name, self.unique_constraint(self.REQUEST, (unique,)))
+            self.assertEqual(self.request_rows(), (row,))
+
     @staticmethod
     def changed(value):
         if type(value) is int:
@@ -1087,6 +1235,7 @@ class AuthorityRevocationRetentionPostgresTests(unittest.TestCase):
         self.insert(self.CHILD, second_child)
         self.connection.execute("SET CONSTRAINTS ALL IMMEDIATE")
         self.assertEqual(self.snapshot(), ((planned, second), (child, second_child)))
+        self.assert_request_deferred_contract()
 
     def test_incomplete_or_mismatched_pairs_roll_back_at_deferred_boundary(self):
         all_names = {"serverware_planner_retained_record_fk", "serverware_revocation_retained_parent_fk"}
@@ -1118,6 +1267,8 @@ class AuthorityRevocationRetentionPostgresTests(unittest.TestCase):
                 self.assertEqual(caught.exception.sqlstate, "23503")
                 self.assertIn(caught.exception.diag.constraint_name, names)
                 self.assertEqual(self.snapshot(), ((), ()))
+
+        self.assert_request_foreign_keys()
 
     def test_parent_protocol_status_and_sidecar_shapes_are_closed(self):
         reserved, planned, child = self.records()
@@ -1160,6 +1311,8 @@ class AuthorityRevocationRetentionPostgresTests(unittest.TestCase):
             self.assertEqual(caught.exception.sqlstate, "23514")
             self.assertEqual(self.snapshot(), baseline)
 
+        self.assert_request_shapes()
+
     def test_sidecar_update_delete_and_duplicate_insert_preserve_original(self):
         planned, child = self.complete_pair()
         baseline = self.snapshot()
@@ -1189,6 +1342,7 @@ class AuthorityRevocationRetentionPostgresTests(unittest.TestCase):
                     sql.Identifier(self.schema, self.PARENT)), (planned["planner_transaction_id"],))
         self.assertEqual(caught.exception.diag.constraint_name, "serverware_revocation_retained_parent_fk")
         self.assertEqual(self.snapshot(), baseline)
+        self.assert_request_immutable()
 
     def test_planned_parent_reservation_and_payload_fields_are_immutable(self):
         planned, _ = self.complete_pair()

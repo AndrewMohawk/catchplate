@@ -3877,8 +3877,9 @@ class AuthorityProcess:
         The worker authenticates both original controls with this same owner's
         keys, checks historical policy against captured configuration and uses
         the same fixed owner tuple for genuine atomic custody. Neither returned
-        claims nor constructed owners are admission tokens. Control/history
-        custody, transport, ACKs and public dispatch remain unimplemented.
+        claims nor constructed owners are admission tokens. Exact original
+        control/history custody shares its atomic scope; transport, ACKs and
+        public dispatch remain unimplemented.
         """
         if (self.role_name != "planner-writer"
                 or self.process_mode != "policy-authority-planner-writer"

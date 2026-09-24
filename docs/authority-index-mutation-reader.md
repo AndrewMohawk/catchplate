@@ -14,6 +14,8 @@ supplied before roots and revisions. It neither discovers nor authenticates a
 current checkpoint, installs storage, maintains SQL indexes, attaches triggers
 or enables an operation. The production planner still rejects complete-index
 queries and does not admit these counted-table trace entries.
+The source `.34` private revocation producer can use them under its private
+complete-query trace permission; that is not public or registry admission.
 
 ## Raw inputs and genuine computation
 
@@ -95,26 +97,53 @@ the existing evaluator's reservation credit. SQL transport is neither that
 framing nor refundable proof work. Failed invocations must be discarded, not
 retried using a partially charged ledger.
 
-`result.metrics.input_bytes` and `metrics.input_bytes` are this invocation's
-shared-ledger delta, including head capture, SQL parameters and returned scalar
-framing as well as genuine proof work. The acquisition metrics separately expose
-those components; `cumulative_*` includes prior private-composition spending.
+`result.metrics.input_bytes` and `metrics.input_bytes` retain this invocation's
+historical indexed-framing delta, including head capture, SQL parameters and
+returned scalar framing as well as genuine proof work. The acquisition metrics
+separately expose those components; `cumulative_*` includes prior spending.
 The persistent private budget rejects changed engine limits and any reuse after
 failure. The public entrypoint always creates its own bounded invocation.
+
+Private shared mode instead binds the existing read acquisition and work
+objects together. Real physical calls and scalar transport debit the original
+head/range/member ledger; they are not charged to shared work a second time by
+the indexed adapter. For `C` scalar parameters with historical framed size
+`P = sum(8 + UTF8-length)`, actual shared encoding work is `2P - 8C` bytes and
+`2C` nodes. Returned records additionally spend the reader's defined validation
+and copy work. The primary engine is clamped to remaining shared hashes, bytes
+and nodes, and its genuine node count is debited once.
+
+Temporary shared holds reserve pending parameter encoding and conservative
+sparse-proof work. Each executed batch releases its own parameter hold; all
+proof holds release only before genuine sparse evaluation. Success and failure
+restore the exact entering work ceiling, including any outer compact hold,
+without refunding spent counters. Shared cumulative hash/byte metrics are the
+actual original work totals, not the smaller local framed-input delta. JSON
+node totals remain on that same work object. Projection/NEW-row canonical
+allocation, low-level hash-material encodings and fixed plan scaffolding are
+outside this historical indexed work profile; it is not all-allocation metering.
 
 This is a component budget, **not production whole-plan trace admission**.
 The planner's 4096 business entries must also cover head acquisition, primary
 reads/proofs and writes. Its separate 69-entry global-audit allowance is not
-available for counted-index work. Future integration must preserve that actual
-shared accounting and version the new closed trace identities; this component
-does not bypass the current trace or registry guards.
+available for counted-index work. The private producer uses those unchanged
+trace limits and validates writer-marker shapes; the inactive signed-v4 replay
+additionally rederives and requires the entire exact writer batch block. Neither
+path bypasses public planning or registry guards. Clock, ordinary and
+primary-proof SQL retain their separate bounds and are not counted as physical
+head/range/member/write-frontier acquisition.
 
 ## Evidence and remaining integration
 
-The [20 authored component cases](../scripts/test_authority_index_mutation_reader.py)
+The [29 authored component cases](../scripts/test_authority_index_mutation_reader.py)
 use independently built primary/counted trees and a deterministic stored-row
 responder. Primary verification, projection and sparse folds are genuine;
 the responder is **not PostgreSQL**, and SQL execution/parity remain unproved.
+Nine additions cover genuine read-to-write sharing, independently calculated
+work and physical totals, conservative peak boundaries, node exhaustion,
+identity/reentry failures and exact hold restoration without refunds. Three
+additional indexed-engine cases preserve its standalone accounting and check
+remaining shared primary-node admission.
 Six additional authored cases in the existing
 [native counted suite](../scripts/test_authority_counted_maintenance_postgres.py)
 exercise unchanged SQL through a real cursor after independently seeding a
@@ -125,7 +154,7 @@ fixture's synthetic population.
 
 Remaining work includes actual prepared PostgreSQL execution, admitted storage
 and all-writer maintenance, independent before-vector/time/capability authority,
-head and primary-proof acquisition, shared planner trace integration and
+production admission of the private head/proof acquisition and trace path, and
 coordinated versioned persistence/replay/executor transport. The original
 verification prerequisites and complete frozen source/artifact closure remain
 mandatory before any build or test execution. No production-readiness or

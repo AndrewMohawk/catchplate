@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 import subprocess
@@ -890,6 +891,7 @@ class _RevocationReadCursor:
             self.ordinary.append((sql, parameters, rows))
         self.calls, self.clock_reads, self.ordinary_position = [], 0, 0
         self.target, self.kind, self.rows = None, None, []
+        self.write_mode, self.write_cursor = False, None
 
     def execute(self, sql, parameters=None):
         self.calls.append((sql, copy.deepcopy(parameters)))
@@ -905,6 +907,11 @@ class _RevocationReadCursor:
         elif any(f'FROM "serverware_metadata".{name} ' in sql for name in (
                 "policy_authority_authenticated_leaves", "policy_authority_authenticated_tree_nodes")):
             self.kind, self.target = "proof", self.primary
+            self.target.execute(sql, parameters)
+        elif self.write_mode:
+            if self.write_cursor is None:
+                raise AssertionError("write acquisition has no independent stored population")
+            self.kind, self.target = "write", self.write_cursor
             self.target.execute(sql, parameters)
         elif sql.startswith("SELECT pg_catalog.to_jsonb(target) AS row_value "):
             if self.ordinary_position >= len(self.ordinary):
@@ -932,7 +939,7 @@ class _RevocationReadCursor:
         return copy.deepcopy(self.rows)
 
     def fetchmany(self, maximum):
-        if self.kind not in {"proof", "complete"}:
+        if self.kind not in {"proof", "complete", "write"}:
             raise AssertionError("unexpected bounded fetch")
         return self.target.fetchmany(maximum)
 
@@ -1539,6 +1546,207 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
                 if name not in {"business_before_roots", "authorization_before_roots"}}, query_sources=sources)
         self.assertEqual(cursor.calls, [("SELECT pg_catalog.clock_timestamp() AS database_now", None)])
         self.assertEqual((cursor.primary.calls, cursor.complete.calls), ([], []))
+
+    def revocation_producer_fixture(self, **options):
+        from serverware import authority_index_mutation_reader as writer
+        import test_authority_index_mutation_reader as write_oracle
+
+        fixture, cursor, program, read_arguments = self.revocation_reader_fixture(**options)
+        cursor.write_cursor = write_oracle.Cursor(write_oracle.StoredRows(types.SimpleNamespace(
+            indexes=fixture.read_write.indexes, tables=fixture.rows,
+            expiry_before=fixture.read_write.expiry_before)))
+        inputs = fixture.inputs()
+        arguments = {name: read_arguments[name] for name in (
+            "request", "manifest", "business_before_roots", "authorization_before_roots", "query_work")}
+        arguments.update({name: inputs[name] for name in (
+            "evidence", "verifier_identity", "verifier_public_key", "capability_id",
+            "now_epoch_ns", "deadline_epoch_ns", "maximum_age_ns")})
+        actual = writer._acquire_indexed_primary_batch
+
+        def acquire(*args, **kwargs):
+            # Observe the genuine phase boundary to route identical metadata
+            # table names into independently rebuilt write-population stores.
+            # This wrapper always calls the actual writer, never a success stub.
+            cursor.write_mode = True
+            return actual(*args, **kwargs)
+
+        return fixture, cursor, program, arguments, patch.object(
+            writer, "_acquire_indexed_primary_batch", side_effect=acquire)
+
+    def test_private_revocation_producer_runs_real_receipt_reads_effects_and_write_proofs_on_one_ledger(self):
+        from serverware import authority_webauthn_assertion as assertion
+        from serverware import authority_revocation_semantics as semantics
+        from serverware import authority_index_trace as markers
+        from serverware import authority_index_reader as reader
+
+        for separate, audit in ((False, True), (True, False)):
+            with self.subTest(separate_signer=separate, include_audit=audit):
+                fixture, cursor, program, arguments, writer_scope = self.revocation_producer_fixture(
+                    separate_signer=separate, include_audit=audit)
+                contexts = []
+                original = reader._ReadAcquisitionBudget.__init__
+
+                def initialize(instance, *args, **kwargs):
+                    contexts.append(instance)
+                    return original(instance, *args, **kwargs)
+
+                with writer_scope as write, \
+                        patch.object(reader._ReadAcquisitionBudget, "__init__", new=initialize), \
+                        patch.object(assertion, "_verify_revoke_assertion_evidence",
+                                     wraps=assertion._verify_revoke_assertion_evidence) as receipt, \
+                        patch.object(semantics, "_derive_revocation_effects",
+                                     wraps=semantics._derive_revocation_effects) as effects:
+                    result = program._acquire_revocation_transition(cursor, **arguments)
+                self.assertEqual((len(contexts), cursor.clock_reads, receipt.call_count,
+                                  effects.call_count, write.call_count), (1, 1, 1, 1, 1))
+                self.assert_revocation_read(fixture, result.selected_rows, result.state)
+                self.assertEqual(result.request, fixture.request)
+                self.assertEqual(result.mutations, fixture.final_mutations)
+                self.assertEqual(result.work_units, fixture.work_units)
+                self.assertEqual(result.kernel.result, fixture.kernel_expected["result"])
+                physical = contexts[0]
+                self.assertIs(physical.work, arguments["query_work"])
+                self.assertIs(effects.call_args.kwargs["work"], physical.work)
+                self.assertIs(write.call_args.kwargs["trace"], physical.trace)
+                self.assertIs(write.call_args.kwargs["acquisition_budget"].shared_acquisition, physical)
+                self.assertEqual(physical.sql_reads, len(cursor.complete.calls) + len(cursor.write_cursor.calls))
+                self.assertEqual(result.write_evidence.metrics.cumulative_sql_reads, physical.sql_reads)
+                self.assertFalse(physical.failed or physical.active)
+                before = tuple((name, info["revision_before"], info["before"].root)
+                    for name, info in sorted(fixture.read_write.indexes.items()))
+                after = tuple((name, info["revision_before"] + info["revision_delta"], info["after"].root)
+                    for name, info in sorted(fixture.read_write.indexes.items()))
+                self.assertEqual(tuple((head.index_id, head.index_revision, head.index_root)
+                    for head in result.write_evidence.result.before_heads), before)
+                self.assertEqual(tuple((head.index_id, head.index_revision, head.index_root)
+                    for head in result.write_evidence.result.after_heads), after)
+                self.assertEqual(result.write_evidence.result.primary.business_after_roots,
+                    tuple(fixture.read_write.after_trees[item.table].root
+                          for item in fixture.read_write.read.contracts if item.root_class == "business"))
+                writer_markers = [entry for entry in result.trace if type(entry["key"]) is dict
+                    and entry["key"].get("profile") == markers.MUTATION_READ_PROFILE]
+                self.assertEqual(len(writer_markers), len(cursor.write_cursor.calls))
+                suffix = result.trace[-len(result.mutations):]
+                self.assertTrue(all(entry["access"] == "write" for entry in suffix))
+                self.assertEqual([(entry["table"], entry["key"]) for entry in suffix],
+                                 [(item["table"], item["key"]) for item in result.mutations])
+
+    def test_private_revocation_producer_denies_bad_request_or_receipt_before_database_callbacks(self):
+        from serverware import authority_webauthn_assertion as assertion
+        for changed in ("request", "operation", "signature", "capability"):
+            with self.subTest(changed=changed):
+                _, cursor, program, arguments, writer_scope = self.revocation_producer_fixture()
+                if changed == "request":
+                    arguments["request"]["requestDigest"] = "sha256:" + "0" * 64
+                elif changed == "operation":
+                    arguments["request"]["operationId"] = "sha256:" + "0" * 64
+                elif changed == "signature":
+                    arguments["evidence"]["verifierSignatureBase64url"] = "A" * 86
+                    arguments["evidence"]["verifierSignatureDigest"] = "sha256:" + hashlib.sha256(bytes(64)).hexdigest()
+                else:
+                    arguments["capability_id"] = "sha256:" + "0" * 64
+                with writer_scope as write, \
+                        patch.object(assertion, "_verify_revoke_assertion_evidence",
+                                     wraps=assertion._verify_revoke_assertion_evidence) as receipt:
+                    with self.assertRaises((self.planner.AuthorityPlannerError, ValueError)):
+                        program._acquire_revocation_transition(cursor, **arguments)
+                self.assertEqual(cursor.calls, [])
+                self.assertEqual(write.call_count, 0)
+                self.assertEqual(receipt.call_count, int(changed not in {"request", "operation"}))
+
+    def test_private_revocation_producer_keeps_owned_request_through_reads_and_effects(self):
+        fixture, cursor, program, arguments, writer_scope = self.revocation_producer_fixture()
+
+        def change_caller():
+            arguments["request"]["arguments"]["record_id"] = "changed-after-admission"
+            arguments["evidence"]["credentialRecordId"] = "wrong"
+            arguments["verifier_identity"].clear()
+            arguments["business_before_roots"][0]["rootDigest"] = "sha256:" + "0" * 64
+
+        cursor.on_clock = change_caller
+        with writer_scope:
+            result = program._acquire_revocation_transition(cursor, **arguments)
+        self.assertEqual(result.request, fixture.request)
+        self.assertEqual(result.mutations, fixture.final_mutations)
+        self.assert_revocation_read(fixture, result.selected_rows, result.state)
+
+    def test_caught_nested_shared_read_during_clock_poisons_outer_before_generation_or_sql(self):
+        from serverware import authority_index_reader as reader
+        from serverware import authority_transition_webauthn as candidate
+
+        _, cursor, program, arguments = self.revocation_reader_fixture()
+        physical = reader._ReadAcquisitionBudget(cursor, arguments["trace"], work=arguments["query_work"])
+        caught = []
+
+        def nested():
+            try:
+                program._read_revocation_inputs_with_acquisition(cursor,
+                    **arguments, acquisition=physical)
+            except self.planner.AuthorityPlannerError as exc:
+                caught.append(exc)
+            else:
+                self.fail("nested same-ledger read unexpectedly completed")
+
+        cursor.on_clock = nested
+        with patch.object(candidate, "_revocation_query_program",
+                          wraps=candidate._revocation_query_program) as generation:
+            with self.assertRaises(self.planner.AuthorityPlannerError):
+                program._read_revocation_inputs_with_acquisition(cursor,
+                    **arguments, acquisition=physical)
+        self.assertEqual((len(caught), cursor.clock_reads, generation.call_count), (1, 1, 0))
+        self.assertEqual(cursor.calls, [("SELECT pg_catalog.clock_timestamp() AS database_now", None)])
+        self.assertTrue(physical.failed)
+        self.assertFalse(physical.active or physical._read_phase_active)
+        spent = arguments["query_work"].metrics
+        self.assertGreater(spent.input_bytes, 0)
+        with self.assertRaises(self.planner.AuthorityPlannerError):
+            program._read_revocation_inputs_with_acquisition(cursor,
+                **arguments, acquisition=physical)
+        self.assertEqual(arguments["query_work"].metrics, spent)
+        self.assertEqual(cursor.clock_reads, 1)
+
+    def test_genuine_write_leaf_failure_poisons_same_read_ledger_without_refund_or_output(self):
+        from serverware import authority_index_mutation_reader as writer
+        from serverware import authority_index_reader as reader
+        from serverware import authority_revocation_semantics as semantics
+
+        _, cursor, program, arguments, writer_scope = self.revocation_producer_fixture()
+        contexts, corrupted = [], []
+        original = reader._ReadAcquisitionBudget.__init__
+        original_limits = arguments["query_work"].limits
+
+        def initialize(instance, *args, **kwargs):
+            contexts.append(instance)
+            return original(instance, *args, **kwargs)
+
+        def corrupt(kind, index_id, identities, rows):
+            if kind == "leaf" and rows and not corrupted:
+                rows[0]["primary_row_digest"] = "sha256:" + "0" * 64
+                corrupted.append(index_id)
+            return rows
+
+        cursor.write_cursor.alter = corrupt
+        with writer_scope as write, \
+                patch.object(reader._ReadAcquisitionBudget, "__init__", new=initialize), \
+                patch.object(semantics, "_derive_revocation_effects",
+                             wraps=semantics._derive_revocation_effects) as effects:
+            with self.assertRaises(writer.IndexMutationReadError):
+                program._acquire_revocation_transition(cursor, **arguments)
+        self.assertEqual((len(contexts), len(corrupted), cursor.clock_reads,
+                          effects.call_count, write.call_count), (1, 1, 1, 1, 1))
+        physical = contexts[0]
+        self.assertTrue(physical.failed)
+        self.assertFalse(physical.active or physical._read_phase_active)
+        self.assertGreater(physical.sql_reads, len(cursor.complete.calls))
+        self.assertIs(write.call_args.kwargs["acquisition_budget"].shared_acquisition, physical)
+        self.assertTrue(write.call_args.kwargs["acquisition_budget"].failed)
+        self.assertEqual(arguments["query_work"].limits, original_limits)
+        spent = arguments["query_work"].metrics
+        self.assertGreater(spent.hash_work, 0)
+        self.assertGreater(spent.input_bytes, 0)
+        with self.assertRaises(reader.IndexReadError):
+            physical.require_idle(cursor, physical.trace, arguments["query_work"])
+        self.assertEqual(arguments["query_work"].metrics, spent)
 
 
 if __name__ == "__main__":

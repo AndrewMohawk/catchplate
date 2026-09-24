@@ -11,6 +11,7 @@ production planner. Component preflight is not whole-plan trace admission.
 """
 from __future__ import annotations
 
+from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any
 
@@ -19,6 +20,7 @@ from serverware import authority_index_projection as projection
 from serverware import authority_index_reader as transport
 from serverware import authority_indexed_mutation as indexed
 from serverware import authority_radix_mutation as primary
+from serverware.authority_query_read_work import _ValidationWork, QueryReadValidationLimits
 from serverware.authority_index_contract import (
     I64_MAX, KEY_NIBBLES, PROFILE, IndexLeaf, IndexProfile, IndexRangeError,
     OpaqueSubtree, validate_counted_node,
@@ -53,7 +55,8 @@ class IndexMutationReadMetrics:
     acquisition_hashes: int
     hash_work: int
     input_bytes: int
-    # The private composition budget retains both acquisition and engine work.
+    # Shared mode exposes the real whole-invocation physical/work counters
+    # here; invocation input_bytes above keeps historical writer frame units.
     cumulative_sql_reads: int
     cumulative_parameter_bytes: int
     cumulative_transport_bytes: int
@@ -92,10 +95,35 @@ def _frames(*values: str | int) -> int:
                for value in values)
 
 
-class _AcquisitionBudget:
-    """Private persistent work, never a public authority or success token."""
+def _parameter_units(parameters: tuple[Any, ...]) -> tuple[int, int, int]:
+    """Exact sizing of source-generated ASCII parameters, without encoding.
 
-    def __init__(self, limits: _AcquisitionLimits = _AcquisitionLimits()) -> None:
+    The later real physical reader performs and charges both UTF-8 passes.
+    This bounded plan arithmetic is metadata scaffolding, not another codec.
+    """
+    size = 0
+    for value in parameters:
+        if type(value) is int and 0 <= value <= I64_MAX:
+            value = str(value)
+        elif type(value) is not str or not value.isascii() or len(value) > KEY_NIBBLES:
+            raise IndexMutationReadError("mutation parameter is not source-generated bounded ASCII")
+        size += len(value)
+    return 8 * len(parameters) + size, 8 * len(parameters) + 2 * size, 2 * len(parameters)
+
+
+class _AcquisitionBudget:
+    """Private persistent work, never a public authority or success token.
+
+    Shared mode reuses the exact counted-read physical ledger and work object.
+    Its work includes existing indexed framing/hash units, actual primary JSON
+    ownership nodes, and the real transport copy/UTF-8 preparations. SQL/driver,
+    projection/NEW-row canonical allocation, low hash-material encodings and
+    fixed plan/DTO scaffolding are not whole-plan/process accounting.
+    """
+
+    def __init__(self, limits: _AcquisitionLimits = _AcquisitionLimits(), *,
+                 shared_acquisition: transport._ReadAcquisitionBudget | None = None,
+                 work: _ValidationWork | None = None) -> None:
         if type(limits) is not _AcquisitionLimits:
             raise IndexMutationReadError("mutation acquisition limits have an unexpected exact type")
         try:
@@ -103,56 +131,150 @@ class _AcquisitionBudget:
                                              limits.max_transport_bytes)
         except AttributeError as exc:
             raise IndexMutationReadError("mutation acquisition limits are incomplete") from exc
+        if ((shared_acquisition is None) != (work is None)
+                or shared_acquisition is not None and (
+                    type(shared_acquisition) is not transport._ReadAcquisitionBudget
+                    or type(work) is not _ValidationWork or shared_acquisition.work is not work)):
+            raise IndexMutationReadError("mutation shared acquisition and work must be the exact paired objects")
+        self.shared_acquisition, self.work = shared_acquisition, work
+        self._shared_identity = shared_acquisition, work
         self.engine: indexed._Budget | None = None
-        self.sql_reads = self.leaf_reads = self.node_reads = self.returned_rows = 0
-        self.parameter_bytes = self.transport_bytes = 0
+        self._sql_reads = self.leaf_reads = self.node_reads = self.returned_rows = 0
+        self._parameter_bytes = self._transport_bytes = 0
         self.failed = self.active = False
         self._pending_parameters = self._proof_bytes = 0
+        self._pending_work_bytes = self._pending_nodes = self._proof_hashes = 0
+        self._entering_limits = self._installed_limits = None
+
+    @property
+    def sql_reads(self):
+        return self._sql_reads if self.shared_acquisition is None else self.shared_acquisition.sql_reads
+
+    @property
+    def parameter_bytes(self):
+        return self._parameter_bytes if self.shared_acquisition is None else self.shared_acquisition.parameter_bytes
+
+    @property
+    def transport_bytes(self):
+        return self._transport_bytes if self.shared_acquisition is None else self.shared_acquisition.transport_bytes
+
+    def remaining_reads(self):
+        maximum = self.limits.max_sql_reads
+        if self.shared_acquisition is not None:
+            maximum = min(maximum, self.shared_acquisition.limits.max_sql_reads)
+        return maximum - self.sql_reads
+
+    def remaining_parameters(self):
+        maximum = self.limits.max_parameter_bytes
+        if self.shared_acquisition is not None:
+            maximum = min(maximum, self.shared_acquisition.limits.max_parameter_bytes)
+        return maximum - self.parameter_bytes
 
     def begin(self, limits: indexed.IndexedMutationLimits) -> indexed._Budget:
         if self.failed or self.active:
             raise IndexMutationReadError("mutation acquisition budget is failed or already active")
+        if (self.shared_acquisition is not self._shared_identity[0]
+                or self.work is not self._shared_identity[1]):
+            raise IndexMutationReadError("mutation acquisition shared identity was replaced")
+        if self.shared_acquisition is not None:
+            self.shared_acquisition.require_active()
+            self._entering_limits = self.work.limits
+            self._installed_limits = self._entering_limits
         owned = indexed._copy(limits, indexed.IndexedMutationLimits)
         if self.engine is None:
-            self.engine = indexed._Budget(owned)
+            self.engine = indexed._Budget(owned, self.work)
         elif self.engine.limits != owned:
             raise IndexMutationReadError("mutation acquisition cannot replace its shared engine limits")
+        if self.engine.work is not self.work:
+            raise IndexMutationReadError("mutation engine work identity was replaced")
         self.active = True
         return self.engine
 
     def require_active(self) -> None:
-        if self.failed or not self.active:
+        if (self.failed or not self.active
+                or self.shared_acquisition is not self._shared_identity[0]
+                or self.work is not self._shared_identity[1]
+                or self.engine is None or self.engine.work is not self.work):
             raise IndexMutationReadError("mutation acquisition was poisoned or left its active invocation")
+        if self.shared_acquisition is not None:
+            self.shared_acquisition.require_active()
+            if self.work.limits is not self._installed_limits:
+                raise IndexMutationReadError("mutation shared reservation limits were replaced")
 
-    def preflight(self, reads: int, parameters: int, proof_bytes: int, proof_hashes: int) -> None:
+    def _install_hold(self) -> None:
+        if self.work is None:
+            return
+        self.require_active()
+        original = self._entering_limits
+        if type(original) is not QueryReadValidationLimits:
+            raise IndexMutationReadError("mutation shared reservation is incomplete")
+        held = QueryReadValidationLimits(
+            original.max_hashes - self._proof_hashes,
+            original.max_input_bytes - self._pending_work_bytes - self._proof_bytes,
+            original.max_json_nodes - self._pending_nodes)
+        if (held.max_hashes < self.work.hash_work or held.max_input_bytes < self.work.input_bytes
+                or held.max_json_nodes < self.work.json_nodes):
+            raise IndexMutationReadError("mutation reservation exceeds actual remaining shared work")
+        self.work.limits = self._installed_limits = held
+
+    def restore_limits(self) -> None:
+        # Restore only the exact entering ceiling, which may itself have an
+        # outer compact-proof hold. Actual work counters are never refunded.
+        original_work = self._shared_identity[1]
+        if original_work is not None and self._entering_limits is not None:
+            original_work.limits = self._entering_limits
+            self._entering_limits = self._installed_limits = None
+
+    def preflight(self, reads: int, parameters: int, proof_bytes: int, proof_hashes: int,
+                  *, parameter_work_bytes: int = 0, parameter_nodes: int = 0) -> None:
         self.require_active()
         assert self.engine is not None
-        if reads > self.limits.max_sql_reads - self.sql_reads:
+        if reads > self.remaining_reads():
             raise IndexMutationReadError("mutation acquisition exceeds its cumulative physical read bound")
-        if parameters > self.limits.max_parameter_bytes - self.parameter_bytes:
+        if parameters > self.remaining_parameters():
             raise IndexMutationReadError("mutation acquisition exceeds its cumulative parameter byte bound")
         if parameters + proof_bytes > self.engine.limits.max_total_input_bytes - self.engine.input_bytes:
             raise IndexMutationReadError("mutation acquisition has no room for parameters and retained proof work")
-        if proof_hashes > self.engine.limits.max_total_hashes - self.engine.hashes:
+        if proof_hashes > self.engine.remaining_hashes():
             raise IndexMutationReadError("mutation acquisition has no room for both genuine sparse folds")
         self._pending_parameters, self._proof_bytes = parameters, proof_bytes
+        if self.work is not None:
+            if (parameter_work_bytes + proof_bytes > self.engine.remaining_input_bytes()
+                    or parameter_nodes > self.engine.remaining_json_nodes()):
+                raise IndexMutationReadError("mutation parameters and proof exceed shared work before SQL")
+            self._pending_work_bytes, self._pending_nodes = parameter_work_bytes, parameter_nodes
+            self._proof_hashes = proof_hashes
+            self._install_hold()
 
     def read(self, cursor: Any, trace: Any, table: str, key: dict[str, Any],
              sql: str, parameters: tuple[Any, ...], maximum: int) -> list[dict[str, Any]]:
         self.require_active()
         assert self.engine is not None
-        amount = _frames(*parameters)
+        amount, work_bytes, work_nodes = _parameter_units(parameters)
         if (amount > self._pending_parameters
                 or self.sql_reads >= self.limits.max_sql_reads):
             raise IndexMutationReadError("mutation SQL escaped its preflighted acquisition plan")
         self._pending_parameters -= amount
+        if self.shared_acquisition is not None:
+            if work_bytes > self._pending_work_bytes or work_nodes > self._pending_nodes:
+                raise IndexMutationReadError("mutation SQL escaped its pending shared work reservation")
+            self._pending_work_bytes -= work_bytes
+            self._pending_nodes -= work_nodes
+            self._install_hold()
+            self.engine.input_work(amount, shared_already_charged=True)
+            rows = self.shared_acquisition.read(table, key, sql, parameters, maximum)
+            self.require_active()
+            self.leaf_reads += int(table == transport.LEAF_TABLE)
+            self.node_reads += int(table == transport.NODE_TABLE)
+            self.returned_rows += len(rows)
+            return rows
         self.engine.input_work(amount)
-        self.parameter_bytes += amount
-        # One trace record per physical SELECT. Current PlannerTrace rejects
-        # this table/profile; this standalone producer does not bypass it.
+        self._parameter_bytes += amount
+        # One trace record per physical SELECT. Public PlannerTrace rejects
+        # this profile; only the private complete trace admits its source shape.
         trace.read(table, key)
         self.require_active()
-        self.sql_reads += 1
+        self._sql_reads += 1
         self.leaf_reads += int(table == transport.LEAF_TABLE)
         self.node_reads += int(table == transport.NODE_TABLE)
         rows = cursor.execute(sql, parameters).fetchmany(maximum + 1)
@@ -165,6 +287,16 @@ class _AcquisitionBudget:
     def charge_row(self, kind: str, row: dict[str, Any], fields: tuple[str, ...]) -> None:
         self.require_active()
         assert self.engine is not None
+        if self.shared_acquisition is not None:
+            maximum = self.limits.max_transport_bytes - self.transport_bytes
+            amount = self.shared_acquisition.charge(kind, row, fields, maximum=maximum)
+            self.require_active()
+            remaining = (self.engine.limits.max_total_input_bytes - self.engine.input_bytes
+                         - self._pending_parameters - self._proof_bytes)
+            if amount > remaining:
+                raise IndexMutationReadError("mutation returned scalars would consume reserved local proof work")
+            self.engine.input_work(amount, shared_already_charged=True)
+            return
         amount = _frames(kind, *(row[name] for name in fields))
         if amount > self.limits.max_transport_bytes - self.transport_bytes:
             raise IndexMutationReadError("mutation returned scalar bytes exceed their cumulative bound")
@@ -176,13 +308,15 @@ class _AcquisitionBudget:
         if amount > remaining:
             raise IndexMutationReadError("mutation returned scalars would consume reserved proof work")
         self.engine.input_work(amount)
-        self.transport_bytes += amount
+        self._transport_bytes += amount
 
     def release_proof_hold(self) -> None:
         self.require_active()
-        if self._pending_parameters:
+        if self._pending_parameters or self._pending_work_bytes or self._pending_nodes:
             raise IndexMutationReadError("mutation acquisition did not execute its whole preflighted plan")
         self._proof_bytes = 0
+        self._proof_hashes = 0
+        self._install_hold()
 
 
 @dataclass(frozen=True, slots=True)
@@ -198,8 +332,21 @@ class _Plan:
     opened_nodes: int
     sql_reads: int
     parameter_bytes: int
+    parameter_work_bytes: int
+    parameter_nodes: int
     proof_bytes: int
     proof_hashes: int
+
+
+@dataclass(frozen=True, slots=True)
+class _TargetGeometry:
+    targets: tuple[str, ...]
+    siblings: tuple[str, ...]
+    opened_nodes: int
+    sql_reads: int
+    parameter_bytes: int
+    parameter_work_bytes: int
+    parameter_nodes: int
 
 
 def _heads_snapshot(raw: Any, budget: indexed._Budget) -> tuple[indexed.IndexedMutationInput, ...]:
@@ -234,10 +381,14 @@ def _parameters(index_id: str, batch: tuple[str, ...], *, nodes: bool) -> tuple[
     return (*identities, index_id, len(batch) + 1)
 
 
-def _plan(item, profile, changes, delta, allowance, prepared, acquisition,
-          *, earlier_reads: int, earlier_parameters: int) -> _Plan:
-    assert acquisition.engine is not None
-    limits = acquisition.engine.limits.index
+def _target_geometry(index_id, changes, *, limits, remaining_reads: int,
+                     remaining_parameter_bytes: int, earlier_reads: int = 0,
+                     earlier_parameters: int = 0) -> _TargetGeometry:
+    """The actual bounded target/opened/immediate-sibling recipe.
+
+    Internal callers first own and derive changes from genuine source images.
+    This ordinary geometry is not proof authority or a caller target override.
+    """
     if len(changes) > limits.max_changes:
         raise IndexMutationReadError("mutation targets exceed the source sparse change bound")
     targets = tuple(change.key for change in changes)
@@ -253,12 +404,12 @@ def _plan(item, profile, changes, delta, allowance, prepared, acquisition,
     sibling_count = 15 * len(opened) + 1 - len(targets)
     calls = ((len(targets) + MAX_IDENTITIES - 1) // MAX_IDENTITIES
              + (sibling_count + MAX_IDENTITIES - 1) // MAX_IDENTITIES)
-    if calls + earlier_reads > acquisition.limits.max_sql_reads - acquisition.sql_reads:
+    if calls + earlier_reads > remaining_reads:
         raise IndexMutationReadError("mutation shape exceeds remaining physical reads before sibling allocation")
     # At least a one-digit depth and one-byte prefix, each scalar framed.
     # Reject oversized shape before building its sibling tuple or SQL values.
     minimum_parameters = 168 * len(targets) + 18 * sibling_count
-    if minimum_parameters + earlier_parameters > acquisition.limits.max_parameter_bytes - acquisition.parameter_bytes:
+    if minimum_parameters + earlier_parameters > remaining_parameter_bytes:
         raise IndexMutationReadError("mutation shape exceeds parameter bytes before sibling allocation")
     siblings = []
     identity_bytes = 168 * len(targets)
@@ -267,18 +418,35 @@ def _plan(item, profile, changes, delta, allowance, prepared, acquisition,
             child = prefix + digit
             if child in opened or child in target_set:
                 continue
-            identity_bytes += _frames(len(child), child)
-            if identity_bytes + earlier_parameters > acquisition.limits.max_parameter_bytes - acquisition.parameter_bytes:
+            identity_bytes += _parameter_units((len(child), child))[0]
+            if identity_bytes + earlier_parameters > remaining_parameter_bytes:
                 raise IndexMutationReadError("mutation sibling identities exceed remaining parameter bytes")
             siblings.append(child)
     siblings = tuple(sorted(siblings))
     if len(siblings) != sibling_count:
         raise IndexMutationReadError("mutation sibling shape is not closed")
-    parameter_bytes = sum(_frames(*_parameters(item.index_id, batch, nodes=nodes))
-                          for nodes, identities in ((False, targets), (True, siblings))
-                          for batch in _batches(identities))
-    if parameter_bytes + earlier_parameters > acquisition.limits.max_parameter_bytes - acquisition.parameter_bytes:
+    parameter_bytes = parameter_work_bytes = parameter_nodes = 0
+    for nodes, identities in ((False, targets), (True, siblings)):
+        for batch in _batches(identities):
+            size, work_bytes, work_nodes = _parameter_units(_parameters(index_id, batch, nodes=nodes))
+            parameter_bytes += size
+            parameter_work_bytes += work_bytes
+            parameter_nodes += work_nodes
+    if parameter_bytes + earlier_parameters > remaining_parameter_bytes:
         raise IndexMutationReadError("mutation batch parameters exceed remaining bytes")
+    return _TargetGeometry(targets, siblings, len(opened), calls, parameter_bytes,
+                           parameter_work_bytes, parameter_nodes)
+
+
+def _plan(item, profile, changes, delta, allowance, prepared, acquisition,
+          *, earlier_reads: int, earlier_parameters: int) -> _Plan:
+    assert acquisition.engine is not None
+    limits = acquisition.engine.limits.index
+    geometry = _target_geometry(item.index_id, changes, limits=limits,
+        remaining_reads=acquisition.remaining_reads(),
+        remaining_parameter_bytes=acquisition.remaining_parameters(),
+        earlier_reads=earlier_reads, earlier_parameters=earlier_parameters)
+    targets, siblings = geometry.targets, geometry.siblings
     before = tuple(change.before for change in changes if change.before is not None)
     frontier_count = len(before) + len(siblings)
     if frontier_count > limits.max_frontier_entries:
@@ -299,7 +467,7 @@ def _plan(item, profile, changes, delta, allowance, prepared, acquisition,
             sparse_bytes += (_frames(name + "-absent") if leaf is None else
                              _frames(name + "-leaf", leaf.key, leaf.primary_key_digest, leaf.primary_row_digest))
     sparse_bytes += frontier_bytes
-    proof_hashes = 2 * (16 * len(opened) + len(targets))
+    proof_hashes = 2 * (16 * geometry.opened_nodes + len(targets))
     if sparse_bytes > limits.max_input_bytes or proof_hashes > limits.max_hashes:
         raise IndexMutationReadError("mutation conservative sparse work exceeds its component budget")
     # _inputs_snapshot's descriptors plus the actual sparse frame budget;
@@ -310,7 +478,8 @@ def _plan(item, profile, changes, delta, allowance, prepared, acquisition,
                for mutation in prepared.by_table[profile.table]
                if mutation["expectedRow"] is not None}
     return _Plan(item, profile, changes, delta, allowance, targets, siblings,
-                 old_ids, len(opened), calls, parameter_bytes, proof_bytes, proof_hashes)
+                 old_ids, geometry.opened_nodes, geometry.sql_reads, geometry.parameter_bytes,
+                 geometry.parameter_work_bytes, geometry.parameter_nodes, proof_bytes, proof_hashes)
 
 
 def _acquire_frontier(cursor: Any, trace: Any, plan: _Plan,
@@ -336,10 +505,11 @@ def _acquire_frontier(cursor: Any, trace: Any, plan: _Plan,
             _parameters(item.index_id, batch, nodes=False), len(batch))
         seen: set[str] = set()
         for raw in rows:
-            row = transport._record(raw, transport._LEAF_FIELDS)
-            transport._context(row, item.index_id, profile.projection_digest, item.index_revision)
+            row = transport._record(raw, transport._LEAF_FIELDS, acquisition.work)
+            transport._context(row, item.index_id, profile.projection_digest, item.index_revision, acquisition.work)
             leaf = IndexLeaf(row["index_key"], row["primary_key_digest"], row["primary_row_digest"])
-            primary_id = transport._text(row["primary_id"], projection.MAX_TEXT_BYTES, minimum=0)
+            primary_id = transport._text(row["primary_id"], projection.MAX_TEXT_BYTES, minimum=0,
+                                         work=acquisition.work)
             if leaf.key not in requested or leaf.key in seen:
                 raise IndexMutationReadError("mutation leaf identity is unrequested or duplicated")
             acquisition.charge_row("leaf", row, transport._LEAF_FIELDS)
@@ -368,10 +538,10 @@ def _acquire_frontier(cursor: Any, trace: Any, plan: _Plan,
             _parameters(item.index_id, batch, nodes=True), len(batch))
         seen: set[tuple[int, str]] = set()
         for raw in rows:
-            row = transport._record(raw, transport._NODE_FIELDS)
-            transport._context(row, item.index_id, profile.projection_digest, item.index_revision)
+            row = transport._record(raw, transport._NODE_FIELDS, acquisition.work)
+            transport._context(row, item.index_id, profile.projection_digest, item.index_revision, acquisition.work)
             depth = transport._integer(row["depth"], 1, KEY_NIBBLES)
-            prefix = transport._text(row["path_prefix"], KEY_NIBBLES)
+            prefix = transport._text(row["path_prefix"], KEY_NIBBLES, work=acquisition.work)
             identity = (depth, prefix)
             if len(prefix) != depth or identity not in requested or identity in seen:
                 raise IndexMutationReadError("mutation sibling identity is unrequested or duplicated")
@@ -383,7 +553,7 @@ def _acquire_frontier(cursor: Any, trace: Any, plan: _Plan,
         tuple(sorted(frontier, key=lambda record: record.key if type(record) is IndexLeaf else record.prefix)))
 
 
-def _acquire_indexed_primary_batch(
+def _acquire_indexed_primary_batch_body(
     cursor: Any, *, table_contracts: tuple[primary.PrimaryTableContract, ...],
     business_before_roots: tuple[primary.PrimaryRoot, ...],
     authorization_before_roots: tuple[primary.PrimaryRoot, ...],
@@ -414,7 +584,7 @@ def _acquire_indexed_primary_batch(
         # standalone public pure evaluator retains its original interleaving.
         projected = tuple((item, *indexed._prepare_index_changes(item, prepared, budget)) for item in heads)
         plans = []
-        reads = parameters = hashes = 0
+        reads = parameters = hashes = parameter_work_bytes = parameter_nodes = 0
         proof_bytes = _frames(indexed._INPUT_DOMAIN, len(heads))
         for item, profile, changes, delta, allowance in projected:
             plan = _plan(item, profile, changes, delta, allowance, prepared, acquisition,
@@ -422,9 +592,12 @@ def _acquire_indexed_primary_batch(
             plans.append(plan)
             reads += plan.sql_reads
             parameters += plan.parameter_bytes
+            parameter_work_bytes += plan.parameter_work_bytes
+            parameter_nodes += plan.parameter_nodes
             proof_bytes += plan.proof_bytes
             hashes += plan.proof_hashes
-        acquisition.preflight(reads, parameters, proof_bytes, hashes)
+        acquisition.preflight(reads, parameters, proof_bytes, hashes,
+            parameter_work_bytes=parameter_work_bytes, parameter_nodes=parameter_nodes)
         acquired = tuple(_acquire_frontier(cursor, trace, plan, acquisition) for plan in plans)
         if acquisition.sql_reads - start[0] != reads:
             raise IndexMutationReadError("mutation acquisition physical reads differ from preflight")
@@ -458,7 +631,8 @@ def _acquire_indexed_primary_batch(
             acquisition.returned_rows - start[3], acquisition.parameter_bytes - start[4],
             acquisition.transport_bytes - start[5], head_bytes, 0, invocation_hashes, invocation_bytes,
             acquisition.sql_reads, acquisition.parameter_bytes, acquisition.transport_bytes,
-            budget.hashes, budget.input_bytes))
+            budget.hashes if acquisition.work is None else acquisition.work.hash_work,
+            budget.input_bytes if acquisition.work is None else acquisition.work.input_bytes))
         acquisition.active = False
         return observation
     except BaseException as exc:
@@ -471,6 +645,47 @@ def _acquire_indexed_primary_batch(
         # SQL/trace/driver failures abort the same collector, never a partial
         # result. Their original exception type is intentionally preserved.
         raise
+
+
+def _acquire_indexed_primary_batch(
+    cursor: Any, *, table_contracts: tuple[primary.PrimaryTableContract, ...],
+    business_before_roots: tuple[primary.PrimaryRoot, ...],
+    authorization_before_roots: tuple[primary.PrimaryRoot, ...],
+    selected_rows: tuple[dict[str, Any], ...], before_proofs: tuple[dict[str, Any], ...],
+    mutations: tuple[dict[str, Any], ...],
+    index_before_heads: tuple[indexed.IndexedMutationHead, ...],
+    limits: indexed.IndexedMutationLimits, trace: Any,
+    acquisition_budget: _AcquisitionBudget,
+) -> AcquiredIndexedMutation:
+    """Run the genuine body within the optional existing physical scope."""
+    if type(acquisition_budget) is not _AcquisitionBudget:
+        raise IndexMutationReadError("mutation acquisition budget has an unexpected exact type")
+    acquisition = acquisition_budget
+    shared = acquisition._shared_identity[0]
+    if acquisition.failed or acquisition.active:
+        acquisition.failed = True
+        if shared is not None:
+            shared.failed = True
+        raise IndexMutationReadError("mutation acquisition budget is failed or already active")
+    try:
+        scope = (nullcontext() if shared is None else
+                 shared.scope(cursor, trace, acquisition._shared_identity[1]))
+        with scope:
+            return _acquire_indexed_primary_batch_body(cursor,
+                table_contracts=table_contracts, business_before_roots=business_before_roots,
+                authorization_before_roots=authorization_before_roots, selected_rows=selected_rows,
+                before_proofs=before_proofs, mutations=mutations, index_before_heads=index_before_heads,
+                limits=limits, trace=trace, acquisition_budget=acquisition)
+    except BaseException as exc:
+        acquisition.failed = True
+        acquisition.active = False
+        if shared is not None:
+            shared.failed = True
+        if isinstance(exc, IndexRangeError) and type(exc) is not IndexMutationReadError:
+            raise IndexMutationReadError(str(exc)) from exc
+        raise
+    finally:
+        acquisition.restore_limits()
 
 
 def acquire_indexed_primary_batch(

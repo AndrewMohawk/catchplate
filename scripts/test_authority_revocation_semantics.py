@@ -126,6 +126,30 @@ def independent_metrics(fixture):
     return result
 
 
+def effect_inputs(fixture):
+    """Owned component inputs with an actual independently pinned receipt.
+
+    These raw row/query fixtures are not a proof-success token. Full replay and
+    the proof-positive semantic negatives below exercise genuine authentication
+    separately; this helper never replaces a proof engine or derives effects.
+    """
+    supplied = fixture.inputs()
+    verified = assertion.verify_revoke_assertion_evidence(supplied["evidence"],
+        operation_id=fixture.operation_id, request_digest=fixture.request_digest,
+        **{name: supplied[name] for name in ("capability_id", "verifier_identity",
+            "verifier_public_key", "now_epoch_ns", "deadline_epoch_ns", "maximum_age_ns")})
+    return {"arguments": copy.deepcopy(fixture.arguments), "selected_rows": copy.deepcopy(fixture.selected_rows),
+        "query_program": copy.deepcopy(fixture.query_program), "query_reads": copy.deepcopy(fixture.query_reads),
+        "database_now": fixture.database_now, "request_digest": fixture.request_digest,
+        "verified_webauthn_evidence": verified}
+
+
+def expected_finalized(fixture):
+    """The genuine finalizer appends its independently constructed counter."""
+    counter = tuple(item for item in fixture.final_mutations if item["table"] == capacity.AGGREGATE_TABLE)
+    return (*copy.deepcopy(fixture.kernel_expected["mutations"]), *copy.deepcopy(counter))
+
+
 class RevocationSemanticsTests(unittest.TestCase):
     def verify(self, fixture, **changes):
         inputs = fixture.inputs()
@@ -247,6 +271,8 @@ class RevocationSemanticsTests(unittest.TestCase):
                 patch.object(candidate.WebAuthnCredentialRevokeKernel, "_transition", kernel), \
                 patch.object(capacity, "_finalize_capacity", finalize), \
                 patch.object(capacity, "_validate_capacity_transition", validate), \
+                patch.object(semantics, "_derive_revocation_effects", wraps=semantics._derive_revocation_effects) as effects, \
+                patch.object(semantics, "_ordered_mutations", wraps=semantics._ordered_mutations) as ordering, \
                 patch.object(retained, "verify_revocation_proof_bundle", side_effect=AssertionError("public budget reset")), \
                 patch.object(mixed, "verify_revocation_read_write_inputs", side_effect=AssertionError("second ownership")), \
                 patch.object(candidate.WebAuthnCredentialRevokeKernel, "transition", side_effect=AssertionError("unmetered kernel")):
@@ -270,6 +296,11 @@ class RevocationSemanticsTests(unittest.TestCase):
         self.assertIs(seen["capacity"][0][2], ledger.work)
         self.assertIs(seen["validator"][0], ledger.work)
         self.assertIs(actual.proof.primary, seen["mixed"][0].write.primary)
+        self.assertEqual((effects.call_count, ordering.call_count), (1, 2))
+        self.assertIs(effects.call_args.kwargs["work"], ledger.work)
+        self.assertIs(effects.call_args.kwargs["selected_rows"], seen["mixed"][0].selected_rows)
+        self.assertIs(effects.call_args.kwargs["verified_webauthn_evidence"], seen["receipt"][0][1])
+        self.assertTrue(all(item.kwargs["work"] is ledger.work for item in ordering.call_args_list))
 
     def test_every_raw_graph_is_owned_before_the_first_real_request_hash(self):
         fixture = SemanticFixture(pending_count=2)
@@ -494,7 +525,7 @@ class RevocationSemanticsTests(unittest.TestCase):
                 self.assertEqual(units(packaging.capture), expected["capture"])
                 self.assertEqual(actual.metrics.request_binding.hash_work, 2)
                 self.assertEqual(actual.metrics.receipt.hash_work, 8)
-                self.assertEqual(actual.metrics.kernel.hash_work, 4 + 3 * len(fixture.kernel_fixture.subjects))
+                self.assertEqual(actual.metrics.kernel.hash_work, 7 + 3 * len(fixture.kernel_fixture.subjects))
 
     def test_independent_cumulative_admission_peak_and_each_one_less_deny(self):
         fixture = SemanticFixture()
@@ -740,6 +771,154 @@ class RevocationSemanticsTests(unittest.TestCase):
                 self.assertRaises(semantics.RevocationSemanticsError):
             semantics._verify(owned, ledger, capture, key)
         self.assertEqual(hashes.call_count, 0)
+
+    def test_actual_effect_worker_preserves_unsorted_finalizer_output_and_exclusive_work(self):
+        for options in ({}, {"separate_signer": True}, {"approval": False, "include_audit": False}):
+            with self.subTest(options=options):
+                fixture = SemanticFixture(**options)
+                supplied = effect_inputs(fixture)
+                expected_kernel = kernel_oracle.expected_work(fixture.kernel_fixture, fixture.kernel_expected).total
+                expected_capacity = capacity_oracle.expected_work(
+                    fixture.context, fixture.kernel_expected["mutations"]).tuple()
+                work = accounting._ValidationWork(accounting.QueryReadValidationLimits())
+                actual_init = semantics.core.KernelTransition.__post_init__
+                result_encodes = []
+
+                def initialize(instance):
+                    result_encodes.append(copy.deepcopy(instance.result))
+                    return actual_init(instance)
+
+                with patch.object(semantics.core.KernelTransition, "__post_init__", new=initialize), \
+                        patch.object(capacity, "_finalize_capacity", wraps=capacity._finalize_capacity) as finalizer, \
+                        patch.object(capacity, "_validate_capacity_transition", wraps=capacity._validate_capacity_transition) as validator, \
+                        patch.object(candidate, "_revocation_query_program", wraps=candidate._revocation_query_program) as generation, \
+                        patch.object(assertion, "_verify_receipt_signature", wraps=assertion._verify_receipt_signature) as signature, \
+                        patch.object(mixed, "_verify", wraps=mixed._verify) as proof, \
+                        patch.object(hashlib, "sha256", wraps=hashlib.sha256) as hashes:
+                    kernel, finalized, signed_units, kernel_work, capacity_work = semantics._derive_revocation_effects(
+                        **supplied, work=work)
+                self.assertEqual((kernel.mutations, kernel.result, kernel.work_units),
+                    (fixture.kernel_expected["mutations"], fixture.kernel_expected["result"],
+                     fixture.kernel_expected["work_units"]))
+                self.assertEqual(finalized, expected_finalized(fixture))
+                self.assertEqual(signed_units, fixture.work_units)
+                self.assertEqual((units(kernel_work), units(capacity_work)), (expected_kernel, expected_capacity))
+                self.assertEqual(units(work.metrics), add(expected_kernel, expected_capacity))
+                self.assertEqual(hashes.call_count, expected_kernel[0] + expected_capacity[0])
+                self.assertEqual((len(result_encodes), finalizer.call_count), (2, 1))
+                self.assertEqual(result_encodes[-1], fixture.kernel_expected["result"])
+                self.assertEqual(validator.call_count,
+                    int(any(item["table"] == capacity.OUTBOX_TABLE for item in fixture.kernel_expected["mutations"])))
+                self.assertIs(finalizer.call_args.kwargs["work"], work)
+                self.assertIs(finalizer.call_args.args[1], kernel.mutations)
+                self.assertEqual((generation.call_count, signature.call_count, proof.call_count), (0, 0, 0))
+                if validator.call_count:
+                    self.assertEqual(finalized[-1]["table"], capacity.AGGREGATE_TABLE)
+                    self.assertNotEqual(finalized, fixture.final_mutations)
+
+    def test_effect_worker_exact_remaining_limits_each_one_less_and_no_meter_replacement(self):
+        fixture = SemanticFixture()
+        supplied = effect_inputs(fixture)
+        kernel_units = kernel_oracle.expected_work(fixture.kernel_fixture, fixture.kernel_expected).total
+        capacity_units = capacity_oracle.expected_work(fixture.context, fixture.kernel_expected["mutations"]).tuple()
+        expected, prior = add(kernel_units, capacity_units), (3, 29, 17)
+        names = ("max_hashes", "max_input_bytes", "max_json_nodes")
+        limits = dict(zip(names, add(expected, prior)))
+        shared = accounting._ValidationWork(accounting.QueryReadValidationLimits(**limits))
+        shared.charge(hashes=prior[0], input_bytes=prior[1], json_nodes=prior[2])
+        with patch.object(accounting._ValidationWork, "__init__",
+                          side_effect=AssertionError("effects created a new work allowance")):
+            _, finalized, _, kernel_work, capacity_work = semantics._derive_revocation_effects(**supplied, work=shared)
+        self.assertEqual(finalized, expected_finalized(fixture))
+        self.assertEqual((units(kernel_work), units(capacity_work)), (kernel_units, capacity_units))
+        self.assertEqual(units(shared.metrics), add(expected, prior))
+        for field in names:
+            with self.subTest(field=field):
+                limited = accounting._ValidationWork(accounting.QueryReadValidationLimits(
+                    **{**limits, field: limits[field] - 1}))
+                limited.charge(hashes=prior[0], input_bytes=prior[1], json_nodes=prior[2])
+                with patch.object(accounting._ValidationWork, "__init__",
+                                  side_effect=AssertionError("failed effects reset work")), \
+                        self.assertRaises(accounting.QueryReadWorkError):
+                    semantics._derive_revocation_effects(**supplied, work=limited)
+                self.assertTrue(all(after >= before for after, before in zip(units(limited.metrics), prior)))
+                self.assertTrue(all(getattr(limited, counter) <= getattr(limited.limits, limit)
+                    for counter, limit in zip(("hash_work", "input_bytes", "json_nodes"), names)))
+
+    def test_ordering_worker_uses_only_existing_two_copy_passes_with_current_remaining_work(self):
+        fixture = SemanticFixture()
+        supplied = tuple(reversed(copy.deepcopy(fixture.final_mutations)))
+        expected = graph_cost(supplied, 4, 4)
+        prior = (5, 23, 19)
+        limits = accounting.QueryReadValidationLimits(*add(expected, prior))
+        work = accounting._ValidationWork(limits)
+        work.charge(hashes=prior[0], input_bytes=prior[1], json_nodes=prior[2])
+        with patch.object(hashlib, "sha256", wraps=hashlib.sha256) as hashes:
+            ordered = semantics._ordered_mutations(supplied, work=work)
+        self.assertEqual(ordered, fixture.final_mutations)
+        self.assertEqual(units(work.metrics), add(expected, prior))
+        self.assertEqual(hashes.call_count, 0)
+        # Sorting creates the sequence, not a second deep ownership boundary.
+        self.assertTrue(all(any(item is source for source in supplied) for item in ordered))
+        for field in ("max_input_bytes", "max_json_nodes"):
+            with self.subTest(field=field):
+                lower = {item.name: getattr(limits, item.name) for item in fields(limits)}
+                lower[field] -= 1
+                limited = accounting._ValidationWork(accounting.QueryReadValidationLimits(**lower))
+                limited.charge(hashes=prior[0], input_bytes=prior[1], json_nodes=prior[2])
+                with self.assertRaises(accounting.QueryReadWorkError):
+                    semantics._ordered_mutations(supplied, work=limited)
+
+    def test_effect_worker_shape_guards_do_not_accept_result_carriers_or_create_authority(self):
+        fixture = SemanticFixture()
+        supplied = effect_inputs(fixture)
+        work = accounting._ValidationWork(accounting.QueryReadValidationLimits())
+
+        class DerivedWork(accounting._ValidationWork):
+            pass
+
+        cases = ({"work": None}, {"work": DerivedWork(accounting.QueryReadValidationLimits())},
+            {"arguments": []}, {"selected_rows": list(supplied["selected_rows"])},
+            {"query_program": ()}, {"query_program": supplied["query_program"] * 4},
+            {"query_reads": ()}, {"query_reads": list(supplied["query_reads"])},
+            {"database_now": supplied["database_now"].replace(tzinfo=None)},
+            {"database_now": supplied["database_now"].astimezone(timezone(timedelta(hours=1)))},
+            {"verified_webauthn_evidence": object()})
+        for changes in cases:
+            with self.subTest(fields=tuple(changes)), patch.object(hashlib, "sha256", wraps=hashlib.sha256) as hashes, \
+                    self.assertRaises(semantics.RevocationSemanticsError):
+                semantics._derive_revocation_effects(**{**supplied, "work": work, **changes})
+            self.assertEqual(hashes.call_count, 0)
+            self.assertEqual(units(work.metrics), (0, 0, 0))
+        # No observer, precomputed transition or proof-success parameter exists.
+        for field in ("kernel", "finalized", "verified_result"):
+            with self.subTest(field=field), self.assertRaises(TypeError):
+                semantics._derive_revocation_effects(**supplied, work=work, **{field: object()})
+
+    def test_genuine_pending_and_invalid_counter_proofs_do_not_bypass_effect_workers(self):
+        for pending in (True, False):
+            with self.subTest(pending=pending):
+                fixture = SemanticFixture()
+                if pending:
+                    row = copy.deepcopy(fixture.rows["webauthn_trust_publications"][0])
+                    row.update(id="pending-effect-publication", status="pending", sequence=2,
+                               bundle_digest="sha256:" + "e" * 64, published_at=None)
+                    fixture.rows["webauthn_trust_publications"].append(row)
+                else:
+                    fixture.rows[capacity.AGGREGATE_TABLE][0]["state_json"] = "{}"
+                fixture.rebuild_claim(fixture.final_mutations)
+                # Membership/range/write proofs genuinely succeed against the
+                # rebuilt synthetic roots. Their success is NOT passed to the
+                # helper as authority and cannot waive business semantics.
+                retained.verify_revocation_proof_bundle(bundle=copy.deepcopy(fixture.bundle),
+                                                       transition=copy.deepcopy(fixture.transition))
+                supplied = effect_inputs(fixture)
+                work = accounting._ValidationWork(accounting.QueryReadValidationLimits())
+                with patch.object(capacity, "_finalize_capacity", wraps=capacity._finalize_capacity) as finalizer:
+                    with self.assertRaises(semantics.core.TransitionKernelError if pending else capacity.AuditCapacityError):
+                        semantics._derive_revocation_effects(**supplied, work=work)
+                self.assertEqual(finalizer.call_count, 0 if pending else 1)
+                self.assertGreater(work.hash_work, 0)
 
 
 if __name__ == "__main__":

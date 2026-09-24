@@ -517,10 +517,32 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
             self.assertFalse(calls(public_path, "authority_complete_acquisition._CompleteQueryAcquisition"))
             self.assertFalse(calls(public_path, "program._read_revocation_inputs"))
             self.assertFalse(calls(public_path, "self._read_revocation_inputs"))
-        private = self.method("_read_revocation_inputs")
+            self.assertFalse(calls(public_path, "self._read_revocation_inputs_with_acquisition"))
+            self.assertFalse(calls(public_path, "program._acquire_revocation_transition"))
+            self.assertFalse(calls(public_path, "self._acquire_revocation_transition"))
+        private = self.method("_read_revocation_inputs_with_acquisition")
         self.assertEqual(calls(self.tree, "authority_complete_acquisition._CompleteQueryAcquisition"),
                          calls(private, "authority_complete_acquisition._CompleteQueryAcquisition"))
         self.assertEqual(len(calls(private, "authority_complete_acquisition._CompleteQueryAcquisition")), 1)
+        facade = self.method("_read_revocation_inputs")
+        coordinator = self.method("_acquire_revocation_transition")
+        # Distinct private entrypoints each create one owner. The coordinator
+        # uses the shared body directly, never the standalone facade/reset.
+        constructors = calls(self.tree, "authority_index_reader._ReadAcquisitionBudget")
+        self.assertEqual(constructors,
+            calls(facade, "authority_index_reader._ReadAcquisitionBudget")
+            + calls(coordinator, "authority_index_reader._ReadAcquisitionBudget"))
+        self.assertEqual(len(constructors), 2)
+        self.assertFalse(calls(coordinator, "self._read_revocation_inputs"))
+        shared_read = call(coordinator, "self._read_revocation_inputs_with_acquisition")
+        self.assertEqual(keywords(shared_read)["query_work"], "query_work")
+        self.assertEqual(keywords(shared_read)["acquisition"], "acquisition")
+        self.assertEqual(keywords(call(coordinator, "authority_index_mutation_reader._AcquisitionBudget")),
+                         {"shared_acquisition": "acquisition", "work": "query_work"})
+        self.assertLess(call(coordinator, "_typed_request_digest").lineno, shared_read.lineno)
+        self.assertLess(call(coordinator, "authority_webauthn_assertion._verify_revoke_assertion_evidence").lineno,
+                        shared_read.lineno)
+        self.assertFalse(calls(coordinator, "_ValidationWork"))
         defaults = dict(zip((arg.arg for arg in method.args.kwonlyargs), method.args.kw_defaults))
         self.assertEqual(ast.unparse(defaults["complete_acquisition"]), "None")
         self.assertEqual(keywords(call(method, "_read_bounded_transition_rows"))["complete_acquisition"],
@@ -540,10 +562,26 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
         self.assertLess(denial.lineno, call(kernel, "self.kernel.transition").lineno)
 
     def test_private_revocation_factory_captures_exact_context_before_one_clock_and_one_generation(self):
-        method = self.method("_read_revocation_inputs")
+        facade = self.method("_read_revocation_inputs")
+        allocated = call(facade, "authority_index_reader._ReadAcquisitionBudget")
+        delegated = call(facade, "self._read_revocation_inputs_with_acquisition")
+        self.assertEqual([ast.unparse(item) for item in allocated.args], ["cursor", "trace"])
+        self.assertEqual(keywords(allocated), {"work": "query_work"})
+        self.assertEqual([ast.unparse(item) for item in delegated.args], ["cursor"])
+        self.assertEqual(keywords(delegated), {
+            "request": "request", "manifest": "manifest", "trace": "trace", "query_work": "query_work",
+            "business_before_roots": "business_before_roots",
+            "authorization_before_roots": "authorization_before_roots",
+            "verified_webauthn_evidence": "verified_webauthn_evidence", "acquisition": "acquisition"})
+        self.assertLess(allocated.lineno, delegated.lineno)
+        for forbidden in ("_read_database_now", "authority_transition_webauthn._revocation_query_program",
+                          "authority_complete_acquisition._CompleteQueryAcquisition", "_ValidationWork"):
+            self.assertFalse(calls(facade, forbidden))
+        method = self.method("_read_revocation_inputs_with_acquisition")
         parameters = {argument.arg for argument in method.args.kwonlyargs}
         self.assertEqual(parameters, {"request", "manifest", "trace", "query_work",
-            "business_before_roots", "authorization_before_roots", "verified_webauthn_evidence"})
+            "business_before_roots", "authorization_before_roots", "verified_webauthn_evidence", "acquisition"})
+        self.assertEqual({argument.arg for argument in facade.args.kwonlyargs}, parameters - {"acquisition"})
         identity, = [node for node in method.body if isinstance(node, ast.FunctionDef)
                      and node.name == "require_identity"]
         rendered = ast.unparse(identity)
@@ -581,12 +619,13 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
         self.assertLess(clock.lineno, identities[1].lineno)
         self.assertLess(identities[1].lineno, generated.lineno)
         self.assertFalse(calls(method, "_ValidationWork"))
+        self.assertFalse(calls(method, "authority_index_reader._ReadAcquisitionBudget"))
         self.assertFalse(calls(method, "self.kernel.queries"))
         self.assertFalse(calls(method, "authority_audit_capacity.add_capacity_query"))
         self.assertFalse(calls(method, "authority_webauthn_assertion.verify_revoke_assertion_evidence"))
 
     def test_private_revocation_factory_threads_original_roots_cursor_trace_and_meter_to_real_reader(self):
-        method = self.method("_read_revocation_inputs")
+        method = self.method("_read_revocation_inputs_with_acquisition")
         generated = call(method, "authority_transition_webauthn._revocation_query_program")
         collector = call(method, "authority_complete_acquisition._CompleteQueryAcquisition")
         staging = call(method, "authority_query_staging.StagedQueryProofs")
@@ -602,7 +641,8 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
             "operation": "operation", "arguments": "actual_request['arguments']", "cutoff_us": "cutoff_us",
             "queries": "tuple((query for query in queries if type(query) is authority_complete_query.CompleteIndexQuery))",
             "business_before_roots": "owned['businessBeforeRoots']",
-            "authorization_before_roots": "owned['authorizationBeforeRoots']", "trace": "trace", "work": "query_work"})
+            "authorization_before_roots": "owned['authorizationBeforeRoots']", "trace": "trace", "work": "query_work",
+            "acquisition": "acquisition"})
         self.assertEqual(keywords(staging), {
             "operation": "operation", "business_before_roots": "owned['businessBeforeRoots']",
             "authorization_before_roots": "owned['authorizationBeforeRoots']", "query_work": "query_work"})
@@ -615,13 +655,76 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
             "verified_webauthn_evidence": "owned['evidence']", "query_program": "queries",
             "query_reads": "query_reads", "complete_query_evidence": "evidence"})
         self.assertFalse(calls(method, "_derive_multiproofs"))
+        idle = sorted(calls(method, "acquisition.require_idle"), key=lambda node: node.lineno)
+        self.assertEqual(len(idle), 3)
+        for checked in idle:
+            self.assertEqual([ast.unparse(item) for item in checked.args], ["cursor", "trace", "query_work"])
+        clock = call(method, "_read_database_now")
+        self.assertLess(idle[0].lineno, clock.lineno)
+        self.assertLess(clock.lineno, idle[1].lineno)
+        self.assertLess(idle[1].lineno, generated.lineno)
+        final_identity = max(calls(method, "require_identity"), key=lambda node: node.lineno)
+        self.assertLess(retained.lineno, idle[2].lineno)
+        self.assertLess(idle[2].lineno, final_identity.lineno)
+        self.assertLess(final_identity.lineno, state.lineno)
+        phase = call(method, "acquisition.read_phase")
+        self.assertEqual([ast.unparse(item) for item in phase.args], ["cursor", "trace", "query_work"])
+        owner, = [node for node in ast.walk(method) if isinstance(node, ast.With)
+                  and any(item.context_expr is phase for item in node.items)]
+        for contained in (clock, generated, collector, read, retained, state):
+            self.assertIn(contained, list(ast.walk(owner)))
+        self.assertIn("type(acquisition) is not authority_index_reader._ReadAcquisitionBudget", ast.unparse(method))
         handlers = [node for node in ast.walk(method) if isinstance(node, ast.ExceptHandler)]
-        self.assertEqual(len(handlers), 1)
+        self.assertEqual(len(handlers), 2)
         for error in ("QueryReadWorkError", "authority_query_staging.QueryStagingError",
                       "authority_complete_acquisition.CompleteAcquisitionError"):
             self.assertIn(error, ast.unparse(handlers[0].type))
         self.assertIn("raise AuthorityPlannerError('private revocation read phase denied the request') from exc",
                       ast.unparse(handlers[0]))
+        self.assertEqual(ast.unparse(handlers[1].type), "BaseException")
+        for handler in handlers:
+            self.assertEqual(ast.unparse(handler.body[0]), "acquisition.failed = True")
+            self.assertIsInstance(handler.body[-1], ast.Raise)
+
+    def test_private_complete_collector_reuses_exact_idle_ledger_and_poisons_original_identity(self):
+        _, tree = source("serverware/authority_complete_acquisition.py")
+        init = definition(tree, "__init__", "_CompleteQueryAcquisition")
+        defaults = dict(zip((arg.arg for arg in init.args.kwonlyargs), init.args.kw_defaults))
+        self.assertEqual(ast.unparse(defaults["acquisition"]), "None")
+        fresh, = [node for node in ast.walk(init) if isinstance(node, ast.If)
+                  and ast.unparse(node.test) == "acquisition is None"]
+        allocated = call(init, "reader._ReadAcquisitionBudget")
+        self.assertIn(allocated, list(ast.walk(fresh.body[0])))
+        self.assertEqual([ast.unparse(item) for item in allocated.args], ["cursor", "trace"])
+        self.assertEqual(keywords(allocated), {"work": "work"})
+        self.assertIn("type(acquisition) is not reader._ReadAcquisitionBudget", ast.unparse(fresh))
+        idle = call(init, "acquisition.require_idle")
+        self.assertEqual([ast.unparse(item) for item in idle.args], ["cursor", "trace", "work"])
+        self.assertIn("self._physical_identity = acquisition", ast.unparse(init))
+        self.assertIn("acquisition.failed = True", ast.unparse(init))
+        for name in ("_guard", "_require_running"):
+            method = definition(tree, name, "_CompleteQueryAcquisition")
+            rendered = ast.unparse(method)
+            self.assertIn("self._acquisition is not self._physical_identity", rendered)
+            self.assertIn("self._acquisition.cursor, self._acquisition.trace, self._acquisition.work", rendered)
+            self.assertIn("self._physical_identity.failed = True", rendered)
+        _, reader_tree = source("serverware/authority_index_reader.py")
+        checked = definition(reader_tree, "require_idle", "_ReadAcquisitionBudget")
+        self.assertIn("self.failed or self.active", ast.unparse(checked))
+        self.assertIn("self.failed = True", ast.unparse(checked))
+        scoped = definition(reader_tree, "scope", "_ReadAcquisitionBudget")
+        checked_call = call(scoped, "self.require_idle")
+        activated, = [node for node in scoped.body if isinstance(node, ast.Assign)
+                      and ast.unparse(node) == "self.active = True"]
+        self.assertLess(checked_call.lineno, activated.lineno)
+        phase = definition(reader_tree, "read_phase", "_ReadAcquisitionBudget")
+        self.assertIn("if self._read_phase_active:", ast.unparse(phase))
+        self.assertIn("self.failed = True", ast.unparse(phase))
+        self.assertEqual(len(calls(phase, "self.require_idle")), 2)
+        guarded, = [node for node in phase.body if isinstance(node, ast.Try)]
+        self.assertEqual([ast.unparse(node) for node in guarded.finalbody], ["self._read_phase_active = False"])
+        record = definition(tree, "CompleteAcquisitionEvidence")
+        self.assertNotIn("acquisition", [node.target.id for node in record.body if isinstance(node, ast.AnnAssign)])
 
     def test_private_complete_export_retains_actual_merged_proofs_and_never_reacquires_sql(self):
         _, tree = source("serverware/authority_complete_acquisition.py")

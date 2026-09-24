@@ -370,6 +370,32 @@ class CompleteAcquisitionTests(unittest.TestCase):
         worker = acquisition._CompleteQueryAcquisition(cursor, **fixture.constructor(), trace=trace, work=work)
         return fixture, cursor, trace, work, worker
 
+    def prior_head_read(self, fixture=None, *, limits=None, physical_limits=None):
+        """Spend a real source-head read, not synthetic prior counters."""
+        fixture = Fixture() if fixture is None else fixture
+        cursor, trace = Cursor(fixture), Trace()
+        work = _ValidationWork(limits or QueryReadValidationLimits())
+        physical = reader._ReadAcquisitionBudget(cursor, trace, work=work,
+            limits=physical_limits or reader._ReadAcquisitionLimits())
+        actual = heads.read_operation_index_heads(cursor, operation=OPERATION,
+            trace=trace, work=work, acquisition=physical)
+        expected = head_oracle.expected_work(fixture.head_rows)
+        self.assertEqual(tuple(head.index_id for head in actual), head_oracle.IDS)
+        self.assert_totals(work, expected[:3])
+        self.assertEqual((physical.sql_reads, physical.parameter_bytes, physical.transport_bytes),
+                         (1, expected[3], expected[4]))
+        self.assertFalse(physical.active)
+        self.assertFalse(physical.failed)
+        return fixture, cursor, trace, work, physical
+
+    def supplied_state(self, prior, **changes):
+        fixture, cursor, trace, work, physical = prior
+        arguments = {**fixture.constructor(), "trace": trace, "work": work, "acquisition": physical}
+        arguments.update(changes)
+        actual_cursor = arguments.pop("cursor", cursor)
+        worker = acquisition._CompleteQueryAcquisition(actual_cursor, **arguments)
+        return fixture, cursor, trace, work, worker
+
     def begin(self, state, **changes):
         fixture, cursor, trace, work, worker = state
         inputs = {"operation": OPERATION, "arguments": copy.deepcopy(fixture.intent),
@@ -799,6 +825,162 @@ class CompleteAcquisitionTests(unittest.TestCase):
         self.verify(state, observed)
         physical = state[4]._acquisition
         self.assertEqual((physical.sql_reads, physical.parameter_bytes, physical.transport_bytes), expected)
+
+    def test_supplied_ledger_retains_real_prior_head_work_through_proof_and_export(self):
+        fixture = Fixture(approval=True)
+        expected = expected_work(fixture)
+        head_work = head_oracle.expected_work(fixture.head_rows)
+        total = tuple(left + right for left, right in zip(head_work[:3], expected["total"]))
+        physical_total = tuple(left + right for left, right in
+                               zip((1, head_work[3], head_work[4]), expected["physical"]))
+        prior = self.prior_head_read(fixture, limits=QueryReadValidationLimits(*total),
+            physical_limits=reader._ReadAcquisitionLimits(*physical_total))
+        physical = prior[4]
+        with mock.patch.object(reader._ReadAcquisitionBudget, "__init__",
+                side_effect=AssertionError("replacement physical allowance")), \
+                mock.patch.object(batch, "_verify_complete_query_batch", wraps=batch._verify_complete_query_batch) as proof:
+            state = self.supplied_state(prior)
+            observed, _ = self.collect(state)
+            self.verify(state, observed)
+            evidence = state[4].retained_evidence()
+            physical.require_idle(state[1], state[2], state[3])
+        self.assertIs(state[4]._acquisition, physical)
+        self.assertIs(state[4]._physical_identity, physical)
+        self.assertEqual(proof.call_count, 1)
+        self.assertIs(proof.call_args.kwargs["work"], state[3])
+        self.assertEqual(evidence.before_proofs, fixture.batch.proofs)
+        self.assertEqual(observed, tuple(fixture.expected_rows(query) for query in fixture.queries))
+        self.assert_totals(state[3], total)
+        self.assertEqual((physical.sql_reads, physical.parameter_bytes, physical.transport_bytes), physical_total)
+        self.assertEqual(len(state[1].calls), physical_total[0])
+        self.assertEqual(sum(" AS head " in sql for sql, _ in state[1].calls), 2)
+        self.assertEqual(len(state[2].entries), physical_total[0])
+        self.assertNotIn("acquisition", {field.name for field in fields(evidence)})
+        self.assertFalse(physical.failed)
+
+    def test_prior_real_head_spending_leaves_each_physical_dimension_one_short(self):
+        fixture = Fixture()
+        expected = expected_work(fixture)
+        head_work = head_oracle.expected_work(fixture.head_rows)
+        total = tuple(left + right for left, right in
+                      zip((1, head_work[3], head_work[4]), expected["physical"]))
+        for dimension in range(3):
+            with self.subTest(dimension=dimension):
+                limits = list(total)
+                limits[dimension] -= 1
+                prior = self.prior_head_read(fixture, physical_limits=reader._ReadAcquisitionLimits(*limits))
+                state = self.supplied_state(prior)
+                with mock.patch.object(batch, "_verify_complete_query_batch", wraps=batch._verify_complete_query_batch) as proof:
+                    with self.assertRaises(reader.IndexReadError):
+                        self.collect(state)
+                self.assertEqual(proof.call_count, 0)
+                self.assertTrue(prior[4].failed)
+                self.assertFalse(prior[4].active)
+                sql_count = len(state[1].calls)
+                with self.assertRaises(reader.IndexReadError):
+                    heads.read_operation_index_heads(state[1], operation=OPERATION,
+                        trace=state[2], work=state[3], acquisition=prior[4])
+                self.assertEqual(len(state[1].calls), sql_count)
+                self.assert_sticky(state[4])
+
+    def test_supplied_ledger_constructor_requires_exact_idle_identity_and_poison_is_terminal(self):
+        for change in ("cursor", "trace", "work", "active", "queries", "work_type"):
+            with self.subTest(change=change):
+                prior = self.prior_head_read()
+                fixture, cursor, trace, work, physical = prior
+                if change == "active":
+                    with self.assertRaises(reader.IndexReadError):
+                        with physical.scope(cursor, trace, work):
+                            self.supplied_state(prior)
+                else:
+                    changed = ({"cursor": Cursor(fixture)} if change == "cursor" else
+                               {"trace": Trace()} if change == "trace" else
+                               {"work": _ValidationWork(QueryReadValidationLimits())} if change == "work" else
+                               {"queries": fixture.queries[:-1]} if change == "queries" else {"work": None})
+                    error = (acquisition.CompleteAcquisitionError if change in ("queries", "work_type")
+                             else reader.IndexReadError)
+                    with self.assertRaises(error):
+                        self.supplied_state(prior, **changed)
+                self.assertTrue(physical.failed)
+                self.assertFalse(physical.active)
+                self.assertEqual(len(cursor.calls), 1)
+                with self.assertRaises(reader.IndexReadError):
+                    self.supplied_state(prior)
+                self.assertEqual(len(cursor.calls), 1)
+        prior = self.prior_head_read()
+        class ForeignBudget(reader._ReadAcquisitionBudget):
+            pass
+        foreign = ForeignBudget(prior[1], prior[2], work=prior[3])
+        for value in (object(), foreign):
+            with self.subTest(type=type(value).__name__):
+                with self.assertRaises(acquisition.CompleteAcquisitionError):
+                    self.supplied_state(prior, acquisition=value)
+                self.assertEqual(len(prior[1].calls), 1)
+        # An unrelated rejected object is not the original source ledger.
+        self.assertFalse(prior[4].failed)
+
+    def test_supplied_ledger_and_its_cursor_trace_work_cannot_be_replaced_between_phases(self):
+        for phase in ("begin", "proof"):
+            for attribute in ("ledger", "cursor", "trace", "work"):
+                with self.subTest(phase=phase, attribute=attribute):
+                    prior = self.prior_head_read()
+                    state = self.supplied_state(prior)
+                    physical, worker = prior[4], state[4]
+                    observed = self.collect(state)[0] if phase == "proof" else None
+                    if attribute == "ledger":
+                        worker._acquisition = reader._ReadAcquisitionBudget(state[1], state[2], work=state[3])
+                    else:
+                        replacement = (Cursor(state[0]) if attribute == "cursor" else Trace()
+                                       if attribute == "trace" else _ValidationWork(QueryReadValidationLimits()))
+                        setattr(physical, attribute, replacement)
+                    previous = len(state[1].calls)
+                    with mock.patch.object(batch, "_verify_complete_query_batch", wraps=batch._verify_complete_query_batch) as proof:
+                        with self.assertRaises(acquisition.CompleteAcquisitionError):
+                            if phase == "begin":
+                                self.begin(state)
+                            else:
+                                self.verify(state, observed)
+                    self.assertEqual(proof.call_count, 0)
+                    self.assertEqual(len(state[1].calls), previous)
+                    self.assertTrue(physical.failed)
+                    with self.assertRaises(reader.IndexReadError):
+                        physical.require_idle(state[1], state[2], state[3])
+                    self.assert_sticky(worker)
+
+    def test_failed_actual_proof_or_incomplete_roles_poison_the_supplied_source_ledger(self):
+        for failure in ("proof", "roles"):
+            with self.subTest(failure=failure):
+                prior = self.prior_head_read()
+                state = self.supplied_state(prior)
+                worker, physical = state[4], prior[4]
+                with mock.patch.object(batch, "_verify_complete_query_batch", wraps=batch._verify_complete_query_batch) as proof:
+                    if failure == "proof":
+                        observed, _ = self.collect(state)
+                        selected = state[0].selected(observed)
+                        target = next(item for item in selected if item["table"] == "webauthn_credentials"
+                                      and item["present"])
+                        target["row"]["attestation_trusted"] = 0
+                        with self.assertRaises(batch.CompleteQueryBatchError):
+                            worker.verify(selected_rows=selected, before_proofs=copy.deepcopy(state[0].batch.proofs))
+                    else:
+                        self.begin(state)
+                        with self.assertRaises(acquisition.CompleteAcquisitionError):
+                            worker.finish_reads()
+                self.assertEqual(proof.call_count, int(failure == "proof"))
+                self.assertTrue(physical.failed)
+                self.assertFalse(physical.active)
+                previous = len(state[1].calls)
+                with self.assertRaises(reader.IndexReadError):
+                    heads.read_operation_index_heads(state[1], operation=OPERATION,
+                        trace=state[2], work=state[3], acquisition=physical)
+                with self.assertRaises(acquisition.CompleteAcquisitionError):
+                    worker.retained_evidence()
+                self.assertEqual(len(state[1].calls), previous)
+        # The same independent input remains valid with an actual fresh owner.
+        control = self.supplied_state(self.prior_head_read())
+        observed, _ = self.collect(control)
+        self.verify(control, observed)
+        self.assertEqual(control[4].retained_evidence().before_proofs, control[0].batch.proofs)
 
     def test_retained_raw_proofs_are_the_actual_merged_before_proofs_without_more_sql(self):
         state = self.start(Fixture(approval=True))

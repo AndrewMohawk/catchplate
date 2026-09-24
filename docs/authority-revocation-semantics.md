@@ -124,6 +124,17 @@ observations, not deeply immutable or privileged objects.
 
 ## Authored evidence and remaining work
 
+Source `.34` factors the genuine kernel/capacity body into the private
+`_derive_revocation_effects` helper, also used by the raw acquisition producer.
+It accepts owned raw observations only after request, receipt and proof
+admission; its shape checks do not establish those prerequisites. It does no
+new clock, signature, query-generation or proof pass. `_ordered_mutations`
+retains the two charged copies around the actual planner sort. Existing replay
+phase accounting is unchanged, and all work uses the caller's current meter.
+Five appended controls bring the semantic suite to 28 methods, including
+genuine effects, independent work arithmetic, malformed context and failure
+boundaries. They have not been executed.
+
 The [semantic fixture](../scripts/authority_revocation_semantics_fixture.py)
 independently constructs full kernel/counter effects, before/after trees,
 request commitments and a genuinely signed synthetic Ed25519 receipt.

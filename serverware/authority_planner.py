@@ -22,10 +22,14 @@ from serverware import authority_contract
 from serverware import authority_complete_query
 from serverware import authority_complete_acquisition
 from serverware import authority_complete_query_batch
+from serverware import authority_complete_read_write
 from serverware.authority_index_contract import IndexRangeError
 from serverware import authority_index_trace
 from serverware import authority_index_heads
 from serverware import authority_index_reader
+from serverware import authority_index_mutation_reader
+from serverware import authority_indexed_mutation
+from serverware import authority_index_projection
 from serverware import authority_primary_contract
 from serverware import authority_query_reads
 from serverware.authority_query_read_work import (
@@ -46,6 +50,7 @@ from serverware.authority_request_commitment import (
 from serverware import authority_query_staging
 from serverware import authority_radix_proof
 from serverware import authority_root_transition
+from serverware import authority_revocation_semantics
 from serverware import authority_transition_core
 from serverware import authority_transition_registry
 from serverware import authority_transition_webauthn
@@ -440,6 +445,20 @@ class PlanningState:
     complete_query_evidence: authority_complete_acquisition.CompleteAcquisitionEvidence | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class _RevocationAcquisition:
+    """Invocation-owned raw observations, not a signed plan or commit token."""
+
+    request: dict[str, Any]
+    selected_rows: tuple[dict[str, Any], ...]
+    state: PlanningState
+    kernel: authority_transition_core.KernelTransition
+    mutations: tuple[dict[str, Any], ...]
+    work_units: int
+    write_evidence: authority_index_mutation_reader.AcquiredIndexedMutation
+    trace: tuple[dict[str, Any], ...]
+
+
 class PlanningProgram(Protocol):
     def __call__(
         self,
@@ -518,7 +537,11 @@ class PlannerTrace:
             if not self._complete_queries:
                 raise AuthorityPlannerError("complete trace profile has no current planner admission")
             try:
-                authority_index_trace.validate_complete_read_trace(self.operation, table, key)
+                if (type(key) is dict
+                        and key.get("profile") == authority_index_trace.MUTATION_READ_PROFILE):
+                    authority_index_trace.validate_mutation_read_trace(self.operation, table, key)
+                else:
+                    authority_index_trace.validate_complete_read_trace(self.operation, table, key)
             except authority_index_trace.IndexTraceError as exc:
                 raise AuthorityPlannerError("complete trace read is not source closed") from exc
         self._append("read", table, key)
@@ -704,6 +727,30 @@ class TypedTransitionPlanningProgram:
         authorization_before_roots: Any,
         verified_webauthn_evidence: Mapping[str, Any],
     ) -> tuple[tuple[dict[str, Any], ...], PlanningState]:
+        """Standalone private read facade; no physical ledger is exported."""
+        if type(query_work) is not _ValidationWork:
+            raise AuthorityPlannerError("private revocation read identity changed")
+        acquisition = authority_index_reader._ReadAcquisitionBudget(cursor, trace, work=query_work)
+        return self._read_revocation_inputs_with_acquisition(
+            cursor, request=request, manifest=manifest, trace=trace, query_work=query_work,
+            business_before_roots=business_before_roots,
+            authorization_before_roots=authorization_before_roots,
+            verified_webauthn_evidence=verified_webauthn_evidence, acquisition=acquisition,
+        )
+
+    def _read_revocation_inputs_with_acquisition(
+        self,
+        cursor: Any,
+        *,
+        request: dict[str, Any],
+        manifest: tuple[dict[str, Any], ...],
+        trace: PlannerTrace,
+        query_work: _ValidationWork,
+        business_before_roots: Any,
+        authorization_before_roots: Any,
+        verified_webauthn_evidence: Mapping[str, Any],
+        acquisition: authority_index_reader._ReadAcquisitionBudget,
+    ) -> tuple[tuple[dict[str, Any], ...], PlanningState]:
         """Acquire the real private revocation read phase in one transaction.
 
         The transaction owner supplies observed primary roots and independently
@@ -735,75 +782,81 @@ class TypedTransitionPlanningProgram:
                     or trace._complete_queries is not True):
                 raise AuthorityPlannerError("private revocation read identity changed")
 
-        require_identity()
-        if (type(request) is not dict or type(manifest) is not tuple
-                or type(verified_webauthn_evidence) not in (dict, MappingProxyType)):
-            raise AuthorityPlannerError("private revocation read inputs are not exact owned-value types")
-        fields = authority_webauthn_assertion.EVIDENCE_FIELDS
-        if (len(verified_webauthn_evidence) != len(fields)
-                or any(type(name) is not str or len(name) > 128
-                       for name in verified_webauthn_evidence)
-                or set(verified_webauthn_evidence) != fields):
-            raise AuthorityPlannerError("private revocation assertion fields changed")
+        if type(acquisition) is not authority_index_reader._ReadAcquisitionBudget:
+            raise AuthorityPlannerError("private revocation read physical ledger type changed")
         try:
-            # The real verifier returns an exact MappingProxyType. Accept its
-            # raw fixed-field data without a general Mapping coercion or any
-            # inference that a freely constructible proxy proves a signature.
-            # Pair scaffolding is source-fixed; reserve the full pair graph
-            # before the actual shallow dictionary projection, then own it in
-            # the same context copy as every other input before callbacks.
-            evidence_items = tuple((name, verified_webauthn_evidence[name])
-                                   for name in sorted(fields))
-            query_work.prepare_copy(evidence_items)
-            evidence_projection = dict(evidence_items)
-            owned = authority_query_reads._CopyBudget(query_work).copy({
-                "request": request, "manifest": manifest,
-                "evidence": evidence_projection,
-                "businessBeforeRoots": business_before_roots,
-                "authorizationBeforeRoots": authorization_before_roots,
-            })
-            actual_request = owned["request"]
-            if (actual_request.get("operation") != operation
-                    or actual_request.get("handler") != kernel.handler
-                    or type(actual_request.get("arguments")) is not dict):
-                raise AuthorityPlannerError("private revocation request identity changed")
-            request_digest = _require_digest(actual_request.get("requestDigest"),
-                                             "private revocation request digest")
-            database_now = _read_database_now(cursor)
-            require_identity()
-            cutoff_us = authority_complete_query.cutoff_microseconds(database_now)
-            queries = authority_transition_webauthn._revocation_query_program(
-                arguments=actual_request["arguments"], cutoff_us=cutoff_us,
-                request_digest=request_digest, evidence=owned["evidence"], work=query_work,
-            )
-            collector = authority_complete_acquisition._CompleteQueryAcquisition(
-                cursor, operation=operation, arguments=actual_request["arguments"],
-                cutoff_us=cutoff_us,
-                queries=tuple(query for query in queries
-                              if type(query) is authority_complete_query.CompleteIndexQuery),
-                business_before_roots=owned["businessBeforeRoots"],
-                authorization_before_roots=owned["authorizationBeforeRoots"],
-                trace=trace, work=query_work,
-            )
-            staging = authority_query_staging.StagedQueryProofs(
-                operation=operation, business_before_roots=owned["businessBeforeRoots"],
-                authorization_before_roots=owned["authorizationBeforeRoots"],
-                query_work=query_work,
-            )
-            selected, queries, query_reads = _read_bounded_transition_rows(
-                cursor, operation=operation, request=actual_request, queries=queries,
-                manifest=owned["manifest"], trace=trace, query_sources=staging,
-                query_work=query_work, complete_acquisition=collector,
-            )
-            evidence = collector.retained_evidence()
-            require_identity()
-            return selected, PlanningState(
-                database_now=database_now,
-                query_work_units=sum(query.work_units for query in queries),
-                verified_webauthn_evidence=owned["evidence"],
-                query_program=queries, query_reads=query_reads,
-                complete_query_evidence=evidence,
-            )
+            with acquisition.read_phase(cursor, trace, query_work):
+                require_identity()
+                acquisition.require_idle(cursor, trace, query_work)
+                if (type(request) is not dict or type(manifest) is not tuple
+                        or type(verified_webauthn_evidence) not in (dict, MappingProxyType)):
+                    raise AuthorityPlannerError("private revocation read inputs are not exact owned-value types")
+                fields = authority_webauthn_assertion.EVIDENCE_FIELDS
+                if (len(verified_webauthn_evidence) != len(fields)
+                        or any(type(name) is not str or len(name) > 128
+                               for name in verified_webauthn_evidence)
+                        or set(verified_webauthn_evidence) != fields):
+                    raise AuthorityPlannerError("private revocation assertion fields changed")
+                # The real verifier returns an exact MappingProxyType. Accept its
+                # raw fixed-field data without a general Mapping coercion or any
+                # inference that a freely constructible proxy proves a signature.
+                # Pair scaffolding is source-fixed; reserve the full pair graph
+                # before the actual shallow dictionary projection, then own it in
+                # the same context copy as every other input before callbacks.
+                evidence_items = tuple((name, verified_webauthn_evidence[name])
+                                       for name in sorted(fields))
+                query_work.prepare_copy(evidence_items)
+                evidence_projection = dict(evidence_items)
+                owned = authority_query_reads._CopyBudget(query_work).copy({
+                    "request": request, "manifest": manifest,
+                    "evidence": evidence_projection,
+                    "businessBeforeRoots": business_before_roots,
+                    "authorizationBeforeRoots": authorization_before_roots,
+                })
+                actual_request = owned["request"]
+                if (actual_request.get("operation") != operation
+                        or actual_request.get("handler") != kernel.handler
+                        or type(actual_request.get("arguments")) is not dict):
+                    raise AuthorityPlannerError("private revocation request identity changed")
+                request_digest = _require_digest(actual_request.get("requestDigest"),
+                                                 "private revocation request digest")
+                database_now = _read_database_now(cursor)
+                acquisition.require_idle(cursor, trace, query_work)
+                require_identity()
+                cutoff_us = authority_complete_query.cutoff_microseconds(database_now)
+                queries = authority_transition_webauthn._revocation_query_program(
+                    arguments=actual_request["arguments"], cutoff_us=cutoff_us,
+                    request_digest=request_digest, evidence=owned["evidence"], work=query_work,
+                )
+                collector = authority_complete_acquisition._CompleteQueryAcquisition(
+                    cursor, operation=operation, arguments=actual_request["arguments"],
+                    cutoff_us=cutoff_us,
+                    queries=tuple(query for query in queries
+                                  if type(query) is authority_complete_query.CompleteIndexQuery),
+                    business_before_roots=owned["businessBeforeRoots"],
+                    authorization_before_roots=owned["authorizationBeforeRoots"],
+                    trace=trace, work=query_work, acquisition=acquisition,
+                )
+                staging = authority_query_staging.StagedQueryProofs(
+                    operation=operation, business_before_roots=owned["businessBeforeRoots"],
+                    authorization_before_roots=owned["authorizationBeforeRoots"],
+                    query_work=query_work,
+                )
+                selected, queries, query_reads = _read_bounded_transition_rows(
+                    cursor, operation=operation, request=actual_request, queries=queries,
+                    manifest=owned["manifest"], trace=trace, query_sources=staging,
+                    query_work=query_work, complete_acquisition=collector,
+                )
+                evidence = collector.retained_evidence()
+                acquisition.require_idle(cursor, trace, query_work)
+                require_identity()
+                return selected, PlanningState(
+                    database_now=database_now,
+                    query_work_units=sum(query.work_units for query in queries),
+                    verified_webauthn_evidence=owned["evidence"],
+                    query_program=queries, query_reads=query_reads,
+                    complete_query_evidence=evidence,
+                )
         except (authority_transition_core.TransitionKernelError,
                 authority_complete_query.CompleteQueryError,
                 authority_query_reads.QueryReadError,
@@ -811,7 +864,120 @@ class TypedTransitionPlanningProgram:
                 authority_complete_query_batch.CompleteQueryBatchError,
                 IndexRangeError, QueryReadWorkError,
                 authority_query_staging.QueryStagingError) as exc:
+            acquisition.failed = True
             raise AuthorityPlannerError("private revocation read phase denied the request") from exc
+        except BaseException:
+            acquisition.failed = True
+            raise
+
+    def _acquire_revocation_transition(
+        self, cursor: Any, *, request: dict[str, Any], manifest: tuple[dict[str, Any], ...],
+        business_before_roots: Any, authorization_before_roots: Any,
+        evidence: dict[str, Any], verifier_identity: dict[str, Any],
+        verifier_public_key: Ed25519PublicKey, capability_id: str,
+        now_epoch_ns: int, deadline_epoch_ns: int, maximum_age_ns: int,
+        query_work: _ValidationWork,
+    ) -> _RevocationAcquisition:
+        """Acquire genuine read/effect/write observations on one transaction.
+
+        This private producer genuinely binds the owned request and pinned
+        assertion before SQL, then uses the original database cutoff for the
+        real kernel/capacity effects and write-proof acquisition. Independent
+        key/capability/current-root/time authority and ownership of a read-only
+        MVCC transaction are caller prerequisites, not established here.
+
+        One live physical ledger covers counted heads, ranges, exact member
+        fetches and write frontiers. Clock, ordinary and primary-proof SQL keep
+        their separate existing bounds. Work shares the supplied meter with
+        explicit staged-proof/stamp, trace and allocation exclusions; this is
+        neither whole-plan resource accounting nor signed-v4 activation.
+        No successful effects/proof object is accepted as an input.
+        """
+        if type(query_work) is not _ValidationWork:
+            raise AuthorityPlannerError("private revocation producer requires an exact shared meter")
+        operation = authority_transition_webauthn.OPERATION
+        trace = PlannerTrace(operation=operation, _complete_queries=True)
+        acquisition = authority_index_reader._ReadAcquisitionBudget(cursor, trace, work=query_work)
+        try:
+            if (type(request) is not dict or type(manifest) is not tuple
+                    or type(evidence) is not dict or type(verifier_identity) is not dict):
+                raise AuthorityPlannerError("private revocation producer context is not exact raw data")
+            # Retain this joint capture across both cryptographic and driver
+            # callbacks; never return to mutable caller arguments after reads.
+            owned = authority_query_reads._CopyBudget(query_work).copy({
+                "request": request, "manifest": manifest, "evidence": evidence,
+                "verifierIdentity": verifier_identity, "capabilityId": capability_id,
+                "nowEpochNs": now_epoch_ns, "deadlineEpochNs": deadline_epoch_ns,
+                "maximumAgeNs": maximum_age_ns,
+                "businessBeforeRoots": business_before_roots,
+                "authorizationBeforeRoots": authorization_before_roots,
+            })
+            actual_request = owned["request"]
+            if actual_request.get("operation") != operation:
+                raise AuthorityPlannerError("private revocation producer request operation changed")
+            request_digest = _typed_request_digest(actual_request, work=query_work)
+            claimed_request = _require_digest(actual_request["requestDigest"], "producer request digest")
+            if _request_different(request_digest, claimed_request, work=query_work):
+                raise AuthorityPlannerError("private revocation producer request digest changed")
+            query_work.prepare_utf8(operation)
+            query_work.prepare_utf8(request_digest)
+            query_work.charge(hashes=1)
+            actual_operation_id = operation_id(operation, request_digest)
+            claimed_operation = _require_digest(actual_request["operationId"], "producer operation id")
+            if _request_different(actual_operation_id, claimed_operation, work=query_work):
+                raise AuthorityPlannerError("private revocation producer operation id changed")
+            verified = authority_webauthn_assertion._verify_revoke_assertion_evidence(
+                owned["evidence"], operation_id=actual_operation_id, request_digest=request_digest,
+                capability_id=owned["capabilityId"], verifier_identity=owned["verifierIdentity"],
+                verifier_public_key=verifier_public_key, now_epoch_ns=owned["nowEpochNs"],
+                deadline_epoch_ns=owned["deadlineEpochNs"], maximum_age_ns=owned["maximumAgeNs"],
+                work=authority_webauthn_assertion._ReceiptWork(query_work),
+            )
+            selected, state = self._read_revocation_inputs_with_acquisition(
+                cursor, request=actual_request, manifest=owned["manifest"], trace=trace,
+                query_work=query_work, business_before_roots=owned["businessBeforeRoots"],
+                authorization_before_roots=owned["authorizationBeforeRoots"],
+                verified_webauthn_evidence=verified, acquisition=acquisition,
+            )
+            kernel, finalized, work_units, _, _ = authority_revocation_semantics._derive_revocation_effects(
+                arguments=actual_request["arguments"], selected_rows=selected,
+                query_program=state.query_program, query_reads=state.query_reads,
+                database_now=state.database_now, request_digest=request_digest,
+                verified_webauthn_evidence=state.verified_webauthn_evidence, work=query_work,
+            )
+            mutations = authority_revocation_semantics._ordered_mutations(finalized, work=query_work)
+            retained = state.complete_query_evidence
+            if retained is None:
+                raise AuthorityPlannerError("private revocation producer lost original read evidence")
+            # Fixed source metadata only. The write engine independently
+            # requires every profile of every genuinely changed source table.
+            write_ids = {name for item in mutations
+                         for name in authority_index_projection.index_ids_for_table(item["table"])}
+            heads = tuple(authority_indexed_mutation.IndexedMutationHead(
+                item.index_id, item.index_revision, item.index_root)
+                for item in retained.heads if item.index_id in write_ids)
+            limits = authority_complete_read_write._write_limits(
+                authority_contract.operation_spec(operation),
+                authority_complete_query_batch._SharedLedger(query_work),
+            )
+            writer = authority_index_mutation_reader._AcquisitionBudget(
+                shared_acquisition=acquisition, work=query_work)
+            write_evidence = authority_index_mutation_reader._acquire_indexed_primary_batch(
+                cursor, table_contracts=authority_primary_contract.primary_table_contracts(operation),
+                business_before_roots=authority_complete_query_batch._roots(retained.business_before_roots),
+                authorization_before_roots=authority_complete_query_batch._roots(retained.authorization_before_roots),
+                selected_rows=selected, before_proofs=retained.before_proofs, mutations=mutations,
+                index_before_heads=heads, limits=limits, trace=trace, acquisition_budget=writer,
+            )
+            acquisition.require_idle(cursor, trace, query_work)
+            for mutation in mutations:
+                trace.write(mutation["table"], mutation["key"])
+            closed_trace = trace.close(selected_rows=selected, mutation_plan=mutations)
+            return _RevocationAcquisition(actual_request, selected, state, kernel,
+                mutations, work_units, write_evidence, closed_trace)
+        except BaseException:
+            acquisition.failed = True
+            raise
 
     def __call__(
         self,

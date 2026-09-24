@@ -17,6 +17,7 @@ from serverware import authority_index_projection as projection
 from serverware import authority_index_mutation as counted
 from serverware import authority_radix_mutation as primary
 from serverware import authority_radix_proof as radix
+from serverware.authority_query_read_work import _ValidationWork, QueryReadValidationLimits
 from serverware.authority_index_contract import (
     I64_MAX, CountedNode, IndexLeaf, IndexRangeError, OpaqueSubtree,
     validate_counted_node, validate_leaf, validate_opaque_subtree,
@@ -96,19 +97,57 @@ class IndexedMutationResult:
 
 
 class _Budget:
-    def __init__(self, limits: IndexedMutationLimits) -> None:
+    """Local engine units, optionally debited to an existing invocation meter.
+
+    Shared units retain the historical framed-input/hash scope and add the
+    genuine primary ownership node count. Projection/hash implementation
+    allocation and fixed metadata scaffolding are not a whole-process meter.
+    """
+
+    def __init__(self, limits: IndexedMutationLimits, work: _ValidationWork | None = None) -> None:
+        if work is not None:
+            if type(work) is not _ValidationWork or type(work.limits) is not QueryReadValidationLimits:
+                raise IndexedMutationError("indexed mutation work has an unexpected exact type")
+            QueryReadValidationLimits(work.limits.max_hashes, work.limits.max_input_bytes,
+                                      work.limits.max_json_nodes)
         self.limits = limits
-        self.hashes = self.input_bytes = 0
+        self.work = work
+        self.hashes = self.input_bytes = self.json_nodes = 0
+
+    def remaining_hashes(self) -> int:
+        remaining = self.limits.max_total_hashes - self.hashes
+        return remaining if self.work is None else min(remaining,
+            self.work.limits.max_hashes - self.work.hash_work)
+
+    def remaining_input_bytes(self) -> int:
+        remaining = self.limits.max_total_input_bytes - self.input_bytes
+        return remaining if self.work is None else min(remaining,
+            self.work.limits.max_input_bytes - self.work.input_bytes)
+
+    def remaining_json_nodes(self) -> int:
+        return (self.limits.primary.max_json_nodes if self.work is None else
+                self.work.limits.max_json_nodes - self.work.json_nodes)
 
     def hash_work(self, amount: int) -> None:
-        if amount > self.limits.max_total_hashes - self.hashes:
+        if amount < 0 or amount > self.remaining_hashes():
             raise IndexedMutationError("indexed mutation exceeds its aggregate hash budget")
+        if self.work is not None:
+            self.work.charge(hashes=amount)
         self.hashes += amount
 
-    def input_work(self, amount: int) -> None:
+    def input_work(self, amount: int, *, shared_already_charged: bool = False) -> None:
         if amount < 0 or amount > self.limits.max_total_input_bytes - self.input_bytes:
             raise IndexedMutationError("indexed mutation exceeds its aggregate input budget")
+        if self.work is not None and not shared_already_charged:
+            self.work.charge(input_bytes=amount)
         self.input_bytes += amount
+
+    def node_work(self, amount: int) -> None:
+        if self.work is not None:
+            if amount < 0 or amount > self.remaining_json_nodes():
+                raise IndexedMutationError("indexed mutation exceeds its aggregate primary node budget")
+            self.work.charge(json_nodes=amount)
+            self.json_nodes += amount
 
     def fields(self, *values: str) -> int:
         amount = sum(8 + len(value) for value in values)
@@ -199,15 +238,19 @@ def _verify_primary(*, table_contracts, business_before_roots, authorization_bef
     limits = budget.limits
     primary_limits = replace(limits.primary,
         max_hashes=min(limits.primary.max_hashes, _positive_remaining(
-            limits.max_total_hashes - budget.hashes, "hash")),
+            budget.remaining_hashes(), "hash")),
         max_input_bytes=min(limits.primary.max_input_bytes, _positive_remaining(
-            limits.max_total_input_bytes - budget.input_bytes, "input")))
+            budget.remaining_input_bytes(), "input")),
+        max_json_nodes=(limits.primary.max_json_nodes if budget.work is None else
+            min(limits.primary.max_json_nodes, _positive_remaining(
+                budget.remaining_json_nodes(), "primary node"))))
     verified = primary.evaluate_primary_radix_inputs(
         table_contracts=table_contracts, business_before_roots=business_before_roots,
         authorization_before_roots=authorization_before_roots, selected_rows=selected_rows,
         before_proofs=before_proofs, mutations=mutations, limits=primary_limits)
     budget.hash_work(verified.result.metrics.hash_work)
     budget.input_work(verified.result.metrics.input_bytes)
+    budget.node_work(verified.result.metrics.json_nodes)
     return verified
 
 
@@ -215,7 +258,7 @@ def _verify_primary(*, table_contracts, business_before_roots, authorization_bef
 class _PreparedPrimaryChanges:
     """Private references to this invocation's genuine owned primary inputs."""
 
-    verified: primary.PrimaryRadixMutationInputs
+    verified: primary.PrimaryRadixMutationInputs | None
     by_table: dict[str, list[dict[str, Any]]]
     primary_after_counts: dict[str, int]
     primary_before_counts: dict[str, int]
@@ -225,11 +268,25 @@ class _PreparedPrimaryChanges:
 
 
 def _prepare_primary_changes(verified, index_ids, budget):
+    prepared = _prepare_owned_primary_changes(mutations=verified.mutations,
+        before_proofs=verified.before_proofs,
+        business_after_roots=verified.result.business_after_roots,
+        index_ids=index_ids, budget=budget)
+    return replace(prepared, verified=verified)
+
+
+def _prepare_owned_primary_changes(*, mutations, before_proofs, business_after_roots,
+                                   index_ids, budget):
+    """Actual source recipe over privately owned, already proved raw values.
+
+    Internal composition only. This helper neither validates proof ownership
+    nor makes its ordinary descriptor a public successful-verifier token.
+    """
     # All fixed profiles are required before NEW-row hashing, including those
     # for which both source images will be nonmembers. Preserve row order and
     # hash each real NEW row once, not once per affected profile.
     by_table: dict[str, list[dict[str, Any]]] = {}
-    for mutation in verified.mutations:
+    for mutation in mutations:
         table = mutation["table"]
         if projection.index_ids_for_table(table):
             if len(mutation["key"]) != 1 or "id" not in mutation["key"]:
@@ -238,11 +295,11 @@ def _prepare_primary_changes(verified, index_ids, budget):
     expected_ids = tuple(sorted(index_id for table in by_table for index_id in projection.index_ids_for_table(table)))
     if index_ids != expected_ids:
         raise IndexedMutationError("indexed mutation does not include exactly every affected source profile")
-    primary_after_counts = {root.table: root.leaf_count for root in verified.result.business_after_roots}
+    primary_after_counts = {root.table: root.leaf_count for root in business_after_roots}
     primary_before_counts = {table: primary_after_counts[table] - sum(
         int(change["operation"] == "INSERT") - int(change["operation"] == "DELETE")
         for change in changes) for table, changes in by_table.items()}
-    old_digests = {(proof["table"], proof["keyDigest"]): proof["rowDigest"] for proof in verified.before_proofs}
+    old_digests = {(proof["table"], proof["keyDigest"]): proof["rowDigest"] for proof in before_proofs}
     new_digests = {}
     new_row_hashes = 0
     for table, changes in by_table.items():
@@ -253,7 +310,7 @@ def _prepare_primary_changes(verified, index_ids, budget):
                 new_digests[(table, mutation["keyDigest"])] = radix._tree_digest(
                     "serverware.policyAuthorityAuthenticatedRow/v1", table.encode("ascii"),
                     radix.tree_json_bytes(mutation["row"]))
-    return _PreparedPrimaryChanges(verified, by_table, primary_after_counts,
+    return _PreparedPrimaryChanges(None, by_table, primary_after_counts,
         primary_before_counts, old_digests, new_digests, new_row_hashes)
 
 
@@ -282,9 +339,9 @@ def _evaluate_one_index(item, prepared, profile, changes, budget, reserved):
     limits = budget.limits
     index_limits = replace(limits.index,
         max_hashes=min(limits.index.max_hashes, _positive_remaining(
-            limits.max_total_hashes - budget.hashes, "hash")),
+            budget.remaining_hashes(), "hash")),
         max_input_bytes=min(limits.index.max_input_bytes, _positive_remaining(
-            limits.max_total_input_bytes - budget.input_bytes + reserved, "input")))
+            budget.remaining_input_bytes() + reserved, "input")))
     calculated = counted.evaluate_index_mutations(profile=profile, before_root=item.index_root,
         changes=changes, frontier=item.frontier, limits=index_limits)
     budget.hash_work(calculated.metrics.hashes)

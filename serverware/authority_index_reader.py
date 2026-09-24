@@ -193,9 +193,10 @@ class _ReadAcquisitionBudget:
         self.sql_reads = self.returned_rows = self.parameter_bytes = self.transport_bytes = 0
         self.active = self.failed = False
         self._reading = False
+        self._read_phase_active = False
 
-    @contextmanager
-    def scope(self, cursor: Any, trace: Any, work: _ValidationWork):
+    def require_idle(self, cursor: Any, trace: Any, work: _ValidationWork) -> None:
+        """Bind an existing ledger between phases without exporting counters."""
         if (self.failed or self.active
                 or any(actual is not expected for actual, expected in
                        zip((cursor, trace, work), self._identity))
@@ -203,6 +204,32 @@ class _ReadAcquisitionBudget:
                        zip((self.cursor, self.trace, self.work), self._identity))):
             self.failed = True
             raise IndexReadError("index acquisition context is failed, active or replaced")
+
+    @contextmanager
+    def read_phase(self, cursor: Any, trace: Any, work: _ValidationWork):
+        """Own the read phase across clock and between physical callbacks.
+
+        Physical child scopes still enter normally. A second phase entry on
+        this same ledger, even while no SQL scope is active, poisons the first
+        invocation and cannot be hidden by a callback catching the exception.
+        """
+        self.require_idle(cursor, trace, work)
+        if self._read_phase_active:
+            self.failed = True
+            raise IndexReadError("index acquisition read phase is already active")
+        self._read_phase_active = True
+        try:
+            yield self
+            self.require_idle(cursor, trace, work)
+        except BaseException:
+            self.failed = True
+            raise
+        finally:
+            self._read_phase_active = False
+
+    @contextmanager
+    def scope(self, cursor: Any, trace: Any, work: _ValidationWork):
+        self.require_idle(cursor, trace, work)
         self.active = True
         try:
             yield self

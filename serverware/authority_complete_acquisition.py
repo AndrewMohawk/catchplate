@@ -59,7 +59,8 @@ class _CompleteQueryAcquisition:
     def __init__(self, cursor: Any, *, operation: str, arguments: dict[str, Any],
                  cutoff_us: int, queries: tuple[complete.CompleteIndexQuery, ...],
                  business_before_roots: Any, authorization_before_roots: Any,
-                 trace: Any, work: _ValidationWork) -> None:
+                 trace: Any, work: _ValidationWork,
+                 acquisition: reader._ReadAcquisitionBudget | None = None) -> None:
         self._failed = self._busy = False
         self._phase = "new"
         self._cursor, self._trace, self._work = cursor, trace, work
@@ -92,19 +93,32 @@ class _CompleteQueryAcquisition:
                 work.prepare_comparison(_query_value(query), _query_value(expected))
                 if query != expected:
                     raise CompleteAcquisitionError("complete acquisition query differs from actual intent/time")
-            self._acquisition = reader._ReadAcquisitionBudget(cursor, trace, work=work)
+            if acquisition is None:
+                acquisition = reader._ReadAcquisitionBudget(cursor, trace, work=work)
+            elif type(acquisition) is not reader._ReadAcquisitionBudget:
+                raise CompleteAcquisitionError("complete acquisition physical ledger type changed")
+            acquisition.require_idle(cursor, trace, work)
+            self._acquisition = acquisition
+            self._physical_identity = acquisition
         except BaseException:
             self._failed = True
             self._phase = "failed"
+            if type(acquisition) is reader._ReadAcquisitionBudget:
+                acquisition.failed = True
             raise
 
     @contextmanager
     def _guard(self, phase: str):
         if (self._failed or self._busy or self._phase != phase
+                or self._acquisition is not self._physical_identity
+                or any(actual is not expected for actual, expected in
+                       zip((self._acquisition.cursor, self._acquisition.trace,
+                            self._acquisition.work), self._identity))
                 or any(actual is not expected for actual, expected in
                        zip((self._cursor, self._trace, self._work), self._identity))):
             self._failed = True
             self._phase = "failed"
+            self._physical_identity.failed = True
             raise CompleteAcquisitionError("complete acquisition lifecycle is not ready")
         self._busy = True
         try:
@@ -113,16 +127,22 @@ class _CompleteQueryAcquisition:
         except BaseException:
             self._failed = True
             self._phase = "failed"
+            self._physical_identity.failed = True
             raise
         finally:
             self._busy = False
 
     def _require_running(self):
-        if (self._failed or self._acquisition.failed
+        if (self._failed or self._acquisition is not self._physical_identity
+                or self._acquisition.failed
+                or any(actual is not expected for actual, expected in
+                       zip((self._acquisition.cursor, self._acquisition.trace,
+                            self._acquisition.work), self._identity))
                 or any(actual is not expected for actual, expected in
                        zip((self._cursor, self._trace, self._work), self._identity))):
             self._failed = True
             self._phase = "failed"
+            self._physical_identity.failed = True
             raise CompleteAcquisitionError("complete acquisition was poisoned by a nested failure")
 
     def begin(self, cursor, *, operation, arguments, queries, trace, work) -> None:

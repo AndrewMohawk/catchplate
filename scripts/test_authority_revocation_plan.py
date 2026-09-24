@@ -115,9 +115,37 @@ def independent_trace(fixture):
     entries.extend(trace_oracle.entry(item["table"], item["key"])
                    for item in fixture.selected_rows if item["table"] != trace_oracle.TABLE)
     entries.extend(trace_oracle.capacity_entries(root=True))
+    entries.extend(independent_write_trace(fixture))
     entries.extend(trace_oracle.entry(item["table"], item["key"], "write")
                    for item in fixture.final_mutations)
     return {"schema": TRACE_SCHEMA, "operation": OPERATION, "entries": trace_oracle.renumber(entries)}
+
+
+def independent_write_batches(fixture):
+    """Literal OLD/NEW union and radix child complement, not reader helpers."""
+    for index_id, info in sorted(fixture.read_write.indexes.items()):
+        targets = tuple(sorted(info["targets"]))
+        opened = {""} | {key[:depth] for key in targets for depth in range(160)}
+        siblings = tuple(sorted(prefix + digit for prefix in opened for digit in "0123456789abcdef"
+                                if prefix + digit not in opened and prefix + digit not in targets))
+        root = info["before"].root
+        context = {"profile": marker_oracle.MUTATION_PROFILE, "indexId": index_id,
+            "projectionDigest": info["profile"].projection_digest,
+            "indexRevision": info["revision_before"], "rootDigest": root.digest, "rootCount": root.count}
+        for kind, values in (("targets", targets), ("prefixes", siblings)):
+            for offset in range(0, len(values), 256):
+                yield kind, values[offset:offset + 256], context
+
+
+def independent_write_trace(fixture):
+    entries = []
+    for kind, batch, context in independent_write_batches(fixture):
+        values = (list(batch) if kind == "targets" else
+                  [{"depth": len(prefix), "pathPrefix": prefix} for prefix in batch])
+        entries.append(trace_oracle.entry(
+            marker_oracle.LEAF_TABLE if kind == "targets" else marker_oracle.NODE_TABLE,
+            {**context, kind: values, "limit": len(batch) + 1}))
+    return entries
 
 
 class PlanFixture:
@@ -306,12 +334,29 @@ def independent_trace_work(fixture):
         trace_oracle.entry(trace_oracle.TABLE, key, "write")]
     identity = lambda item: {name: item[name] for name in ("access", "table", "key")}
     values.extend(graph_cost(identity(item)) for item in constructor)
+    indexed_tables = {info["profile"].table for info in fixture.semantic.read_write.indexes.values()}
+    indexed_mutations = [item for item in fixture.semantic.final_mutations if item["table"] in indexed_tables]
+    preparation_hashes = sum(item["row"] is not None for item in indexed_mutations)
+    for info in fixture.semantic.read_write.indexes.values():
+        preparation_hashes += 1 + 2 * sum(item[field] is not None
+            for item in indexed_mutations if item["table"] == info["profile"].table
+            for field in ("expectedRow", "row"))
+    values.append((preparation_hashes, 0, 0))
+    for kind, batch, _ in independent_write_batches(fixture.semantic):
+        values.append(graph_cost(batch))
+        if kind == "prefixes":
+            values.append((0, 64 * len(batch), 8 * len(batch)))
+    expected_writer = iter(independent_write_trace(fixture.semantic))
     writes = iter(fixture.payload["mutationPlan"])
     queries = {query.query_id: query for query in fixture.semantic.read_write.read.queries}
     opened = set()
     for item in fixture.payload["plannerTrace"]["entries"]:
         if item["access"] == "read":
-            if item["table"] == marker_oracle.LEAF_TABLE:
+            if item["key"].get("profile") == marker_oracle.MUTATION_PROFILE:
+                expected = next(expected_writer)
+                values.append(canonical_comparison((item["table"], item["key"]),
+                    (expected["table"], expected["key"])))
+            elif item["table"] == marker_oracle.LEAF_TABLE:
                 query = queries[item["key"]["queryId"]]
                 if query.role not in opened:
                     values.append(independent_interval_work(fixture, query))
@@ -844,6 +889,126 @@ class RevocationPlanTests(unittest.TestCase):
         self.assertEqual(actual.kernel.result, fixture.semantic.kernel_expected["result"])
         self.assertEqual(ledger.hashes, expected["total"][0])
         self.assertEqual(ledger.work.limits.max_json_nodes, limits[2])
+
+    def test_writer_block_uses_genuine_preparation_geometry_and_same_spent_ledger(self):
+        fixture = PlanFixture()
+        seen = []
+        real = plan.write_trace._prepare
+        def prepare(**kwargs):
+            ledger = kwargs["ledger"]
+            before = units(ledger.work.metrics)
+            result = real(**kwargs)
+            seen.append((ledger, before, units(ledger.work.metrics), result))
+            return result
+        with patch.object(plan.write_trace, "_prepare", side_effect=prepare), \
+                patch.object(plan.write_trace.indexed, "_verify_primary",
+                    wraps=plan.write_trace.indexed._verify_primary) as primary, \
+                patch.object(plan.write_trace.indexed.counted, "evaluate_index_mutations",
+                    wraps=plan.write_trace.indexed.counted.evaluate_index_mutations) as sparse, \
+                patch.object(plan.mixed, "_verify", wraps=plan.mixed._verify) as proof:
+            actual = self.verify(fixture)
+        self.assertEqual((len(seen), primary.call_count, sparse.call_count, proof.call_count),
+            (1, 1, len(fixture.semantic.read_write.indexes), 1))
+        ledger, before, after, (prepared, count) = seen[0]
+        self.assertGreater(before[0], 0)
+        self.assertGreater(after[0], before[0])
+        self.assertEqual(after[1:], before[1:])  # historical preparation is hash scope
+        self.assertEqual(tuple(item.index_id for item, _, _ in prepared),
+            tuple(sorted(fixture.semantic.read_write.indexes)))
+        self.assertEqual(count, len(independent_write_trace(fixture.semantic)))
+        self.assertEqual(units(ledger.work.metrics), independent_metrics(fixture)["total"])
+        self.assertEqual(actual.semantics.mutations, fixture.semantic.final_mutations)
+
+    def test_resigned_missing_extra_reordered_or_displaced_writer_batches_deny_after_semantics(self):
+        for change in ("missing", "duplicate", "order", "outside", "ordinary_inside", "all_missing"):
+            fixture = PlanFixture()
+            entries = fixture.payload["plannerTrace"]["entries"]
+            positions = [index for index, item in enumerate(entries)
+                if item["key"].get("profile") == marker_oracle.MUTATION_PROFILE]
+            if change == "missing":
+                entries.pop(positions[0])
+            elif change == "duplicate":
+                entries.insert(positions[0], copy.deepcopy(entries[positions[0]]))
+            elif change == "order":
+                entries[positions[0]], entries[positions[1]] = entries[positions[1]], entries[positions[0]]
+            elif change == "outside":
+                entries.insert(1, entries.pop(positions[0]))
+            elif change == "ordinary_inside":
+                entries.insert(positions[1], trace_oracle.entry("webauthn_credentials", {"id": "credential"}))
+            else:
+                entries[:] = [item for item in entries if item["key"].get("profile") != marker_oracle.MUTATION_PROFILE]
+            fixture.payload["plannerTrace"]["entries"] = trace_oracle.renumber(entries)
+            fixture.rehash()
+            with self.subTest(change=change), patch.object(plan, "_trace", wraps=plan._trace) as reached:
+                self.reject(fixture)
+            self.assertEqual(reached.call_count, 1)
+
+    def test_resigned_shape_valid_writer_targets_prefixes_and_before_context_are_exact(self):
+        for change in ("target", "prefix", "head", "revision", "profile", "readonly"):
+            fixture = PlanFixture()
+            entries = fixture.payload["plannerTrace"]["entries"]
+            wanted = "prefixes" if change == "prefix" else "targets"
+            marker = next(item["key"] for item in entries
+                if item["key"].get("profile") == marker_oracle.MUTATION_PROFILE and wanted in item["key"])
+            if change == "target":
+                marker["targets"] = ["f" * 160]
+                marker["limit"] = 2
+            elif change == "prefix":
+                marker["prefixes"] = [{"depth": 1, "pathPrefix": "f"}]
+                marker["limit"] = 2
+            elif change == "head":
+                marker["rootDigest"] = sha(b"after or unrelated root is not before")
+            elif change == "revision":
+                marker["indexRevision"] += 1
+            elif change == "profile":
+                marker["projectionDigest"] = sha(b"different source projection")
+            else:
+                # This final control is source-shape denial; the preceding
+                # substitutions remain well-shaped but semantically false.
+                marker["indexId"] = "webauthn_publication_status"
+            fixture.rehash()
+            with self.subTest(change=change), patch.object(plan, "_trace", wraps=plan._trace) as reached:
+                self.reject(fixture)
+            self.assertEqual(reached.call_count, 1)
+
+    def test_complete_writer_identity_coverage_with_wrong_batch_boundaries_still_denies(self):
+        fixture = PlanFixture()
+        entries = fixture.payload["plannerTrace"]["entries"]
+        position = next(index for index, item in enumerate(entries)
+            if item["key"].get("profile") == marker_oracle.MUTATION_PROFILE
+            and len(item["key"].get("prefixes", ())) == 256)
+        original = entries[position]
+        left, right = copy.deepcopy(original), copy.deepcopy(original)
+        left["key"]["prefixes"], right["key"]["prefixes"] = (
+            left["key"]["prefixes"][:128], right["key"]["prefixes"][128:])
+        left["key"]["limit"] = right["key"]["limit"] = 129
+        entries[position:position + 1] = [left, right]
+        self.assertEqual(left["key"]["prefixes"] + right["key"]["prefixes"], original["key"]["prefixes"])
+        for entry in (left, right):
+            plan.index_trace.validate_mutation_read_trace(OPERATION, entry["table"], entry["key"])
+        fixture.payload["plannerTrace"]["entries"] = trace_oracle.renumber(entries)
+        fixture.rehash()
+        with patch.object(plan, "_trace", wraps=plan._trace) as reached:
+            self.reject(fixture)
+        self.assertEqual(reached.call_count, 1)
+
+    def test_writer_marker_copy_budget_is_consumed_before_dynamic_batch_publication(self):
+        fixture = PlanFixture()
+        real = plan.write_trace._markers
+        seen = []
+        def markers(plans, work):
+            for expected in real(plans, work):
+                seen.append((work, units(work.metrics), copy.deepcopy(expected)))
+                yield expected
+        with patch.object(plan.write_trace, "_markers", side_effect=markers):
+            actual = self.verify(fixture)
+        expected = independent_write_trace(fixture.semantic)
+        self.assertEqual([value for _, _, value in seen], [(item["table"], item["key"]) for item in expected])
+        self.assertTrue(all(work is seen[0][0] for work, _, _ in seen))
+        self.assertTrue(all(left[1][1] < right[1][1] and left[1][2] < right[1][2]
+            for left, right in zip(seen, seen[1:])))
+        self.assertEqual((actual.metrics.total_hashes, actual.metrics.total_input_bytes,
+            actual.metrics.total_json_nodes), independent_metrics(fixture)["total"])
 
 
 if __name__ == "__main__":

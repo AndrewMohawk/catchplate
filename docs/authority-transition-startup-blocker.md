@@ -77,11 +77,13 @@ Source `.33` adds a private single-cutoff revocation read-phase factory and
 detached retention of the original roots and genuinely merged primary proofs.
 It derives the actual metered source program and internally creates staging
 and acquisition, eliminating a separately configured cutoff and discarded proof
-inventory. The public v3 and pre-kernel successor gates remain closed. Shared
-write acquisition/accounting, write-trace binding, durable original-envelope
-and independent-context persistence, and coordinated v4 activation remain
-required; this read-phase implementation is not a registered kernel or startup
-repair.
+inventory. Source `.34` connects genuine request/receipt verification,
+single-cutoff reads, actual kernel/capacity effects and write acquisition on
+one work and physical ledger, and binds the exact writer trace in signed
+replay. The public v3 and pre-kernel successor gates remain closed. Signed-v4
+production, durable original-envelope and independent-context persistence,
+and coordinated v4 activation remain required; the private raw producer is
+not a registered kernel or startup repair.
 
 The [explicit-context credential classifier](webauthn-credential-trust.md) now
 shares the actual enrollment/root/AAGUID/class/development decision with the
@@ -319,14 +321,17 @@ These are separate from provisioning the production services:
   No existing exact-page metadata is newly trusted by this work.
   [Query retention and pre-kernel verification](authority-query-read-retention.md)
   now preserve per-query observations and verify primary membership before the
-  transition. They do not yet provide range evidence, maintained indexes or a
+  transition. These public v3 paths do not provide range evidence, maintained indexes or a
   closed signed snapshot protocol for those observations.
   The typed reader also [stages referenced-row proofs](authority-query-proof-staging.md)
   before their fields drive dependent SQL. This relative membership check does
   not add independent currentness, completeness or a missing WebAuthn kernel.
   Source `.28` adds [distinct complete-index query declarations](authority-complete-query-contract.md)
   for explicit revocation, committed by the operation/handler manifests. The
-  planner reader rejects them before business/proof SQL. A standalone bounded
+  public v3 planner reader rejects them before business/proof SQL. The
+  [.34 private acquisition path](authority-complete-acquisition.md) now composes
+  genuine range/member and write proofs without changing that public gate.
+  A standalone bounded
   SQL reader now acquires inside leaves and canonical outside-prefix nodes,
   checks primary lookup commitments and performs real range reconstruction
   relative to a supplied root. It does not admit current heads, perform the

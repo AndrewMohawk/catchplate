@@ -35,6 +35,7 @@ NODE_TABLE = "policy_authority_counted_index_nodes"
 HEAD_PROFILE = "serverware.policyAuthorityCountedHeadRead/v1"
 RANGE_PROFILE = "serverware.policyAuthorityCountedIndexRead/v1"
 PRIMARY_PROFILE = "serverware.policyAuthorityCompletePrimaryRead/v1"
+MUTATION_PROFILE = "serverware.policyAuthorityCountedIndexMutationRead/v1"
 DIGEST = "sha256:" + "a" * 64
 ROLES = (
     ("sessions_pending_webauthn", "oidc_browser_sessions", "webauthn_session_credential_status"),
@@ -79,6 +80,16 @@ def primary_marker(role=ROLES[2]):
     value = context(role)
     return {"profile": PRIMARY_PROFILE, "queryId": value["queryId"], "indexId": value["indexId"],
             "primaryId": "member-雪", "primaryKeyDigest": DIGEST, "limit": 2}
+
+
+def mutation_marker(*, nodes=False, index_id="webauthn_credential_id"):
+    value = {"profile": MUTATION_PROFILE, "indexId": index_id,
+        "projectionDigest": DIGEST, "indexRevision": 17,
+        "rootDigest": "sha256:" + "b" * 64, "rootCount": 2, "limit": 3}
+    value["prefixes" if nodes else "targets"] = (
+        [{"depth": 1, "pathPrefix": "0"}, {"depth": 2, "pathPrefix": "af"}]
+        if nodes else ["1" * 160, "2" * 160])
+    return value
 
 
 class ValidationTrace:
@@ -284,6 +295,119 @@ class AuthorityIndexTraceTests(unittest.TestCase):
         self.assertEqual(markers, expected)
         with self.assertRaises(TypeError):
             trace_contract.validate_complete_read_trace(OPERATION, LEAF_TABLE, leaf_marker(), verified=True)
+
+    def test_mutation_shapes_admit_only_eight_source_write_profiles_without_hashing(self):
+        allowed = tuple(name for name in HEAD_IDS if name != "webauthn_publication_status")
+        self.assertEqual(len(allowed), 8)
+        with mock.patch.object(hashlib, "sha256", side_effect=AssertionError("trace hashed")):
+            for name in allowed:
+                for nodes in (False, True):
+                    self.assertIsNone(trace_contract.validate_mutation_read_trace(OPERATION,
+                        NODE_TABLE if nodes else LEAF_TABLE, mutation_marker(nodes=nodes, index_id=name)))
+            for operation in ("counter.cas", "jit.consume", "policy.activation.prepare", None):
+                with self.assertRaises(trace_contract.IndexTraceError):
+                    trace_contract.validate_mutation_read_trace(operation, LEAF_TABLE, mutation_marker())
+            with self.assertRaises(trace_contract.IndexTraceError):
+                trace_contract.validate_mutation_read_trace(OPERATION, LEAF_TABLE,
+                    mutation_marker(index_id="webauthn_publication_status"))
+        self.assertEqual(trace_contract.MUTATION_READ_PROFILE, MUTATION_PROFILE)
+
+    def test_mutation_markers_are_closed_and_do_not_broaden_complete_read_admission(self):
+        for nodes in (False, True):
+            table, marker = (NODE_TABLE if nodes else LEAF_TABLE), mutation_marker(nodes=nodes)
+            self.reject(table, marker)
+            variants = [MappingProxyType(marker), {**marker, "queryId": context()["queryId"]},
+                {**marker, "verified": True}, {name: value for name, value in marker.items() if name != "limit"}]
+            for changed in variants:
+                with self.assertRaises(trace_contract.IndexTraceError):
+                    trace_contract.validate_mutation_read_trace(OPERATION, table, changed)
+            for wrong_table in (HEAD_TABLE, "webauthn_credentials", "unrelated"):
+                with self.assertRaises(trace_contract.IndexTraceError):
+                    trace_contract.validate_mutation_read_trace(OPERATION, wrong_table, marker)
+        with self.assertRaises(TypeError):
+            trace_contract.validate_mutation_read_trace(OPERATION, LEAF_TABLE, mutation_marker(), verified=True)
+
+    def test_mutation_targets_require_sorted_exact_160_hex_and_n_plus_one_bound(self):
+        targets = [f"{number:0160x}" for number in range(256)]
+        marker = {**mutation_marker(), "targets": targets, "limit": 257}
+        trace_contract.validate_mutation_read_trace(OPERATION, LEAF_TABLE, marker)
+        for targets in ([], tuple(targets), targets + ["f" * 160], ["a" * 159], ["a" * 161],
+                        ["A" * 160], ["g" * 160], [True], ["b" * 160, "a" * 160], ["a" * 160] * 2):
+            with self.assertRaises(trace_contract.IndexTraceError):
+                trace_contract.validate_mutation_read_trace(OPERATION, LEAF_TABLE,
+                    {**mutation_marker(), "targets": targets, "limit": len(targets) + 1})
+        for limit in (True, 2, 4, 3.0, "3"):
+            with self.assertRaises(trace_contract.IndexTraceError):
+                trace_contract.validate_mutation_read_trace(OPERATION, LEAF_TABLE,
+                    {**mutation_marker(), "limit": limit})
+
+    def test_mutation_prefixes_are_closed_depth_matched_and_batch_bounded(self):
+        prefixes = [{"depth": 2, "pathPrefix": f"{number:02x}"} for number in range(256)]
+        trace_contract.validate_mutation_read_trace(OPERATION, NODE_TABLE,
+            {**mutation_marker(nodes=True), "prefixes": prefixes, "limit": 257})
+        for values in ([], tuple(prefixes), prefixes + [{"depth": 3, "pathPrefix": "fff"}],
+                       [{"depth": 0, "pathPrefix": ""}], [{"depth": True, "pathPrefix": "0"}],
+                       [{"depth": 2, "pathPrefix": "a"}], [{"depth": 1, "pathPrefix": "A"}],
+                       [{"depth": 1, "pathPrefix": "0", "row": {}}],
+                       [{"depth": 1, "pathPrefix": "0"}] * 2,
+                       [{"depth": 1, "pathPrefix": "f"}, {"depth": 1, "pathPrefix": "0"}]):
+            with self.assertRaises(trace_contract.IndexTraceError):
+                trace_contract.validate_mutation_read_trace(OPERATION, NODE_TABLE,
+                    {**mutation_marker(nodes=True), "prefixes": values, "limit": len(values) + 1})
+
+    def test_mutation_context_checks_exact_scalar_bounds_without_claiming_roots(self):
+        for field, value in (("indexRevision", True), ("indexRevision", -1), ("rootCount", 1 << 63),
+                             ("rootCount", "2"), ("rootDigest", "sha256:" + "F" * 64),
+                             ("projectionDigest", None), ("profile", RANGE_PROFILE), ("indexRevision", 0)):
+            with self.assertRaises(trace_contract.IndexTraceError):
+                trace_contract.validate_mutation_read_trace(OPERATION, LEAF_TABLE,
+                    {**mutation_marker(), field: value})
+        # Zero revision/empty count is only shape admission, not genesis proof.
+        trace_contract.validate_mutation_read_trace(OPERATION, LEAF_TABLE,
+            {**mutation_marker(), "indexRevision": 0, "rootCount": 0})
+
+    def test_actual_mutation_reader_markers_pass_without_replacing_primary_or_sparse_proofs(self):
+        import test_authority_index_mutation_reader as writer_oracle
+        before = writer_oracle.oracle.credential()
+        move = writer_oracle.oracle.MutationFixture({"webauthn_credentials": [before]},
+            (("webauthn_credentials", before["id"], "UPDATE", {**before, "credential_id": "moved"}),))
+        challenge = {"id": "nonmember", "challenge_type": "authentication", "used_at": None,
+            "expires_at": "1970-01-01T00:00:00+00:00", "user_id": "user"}
+        empty = writer_oracle.oracle.MutationFixture({"webauthn_challenges": [challenge]},
+            (("webauthn_challenges", "nonmember", "UPDATE", {**challenge, "used_at": "changed"}),),
+            expiry_before={"nonmember": 0})
+        for fixture in (writer_oracle.default_fixture(), move, empty):
+            cursor = writer_oracle.Cursor(writer_oracle.StoredRows(fixture))
+            seen = []
+            class Trace:
+                def read(self, table, key):
+                    with mock.patch.object(hashlib, "sha256", side_effect=AssertionError("trace hashed")):
+                        trace_contract.validate_mutation_read_trace(OPERATION, table, key)
+                    seen.append((table, copy.deepcopy(key)))
+            with mock.patch.object(writer_oracle.primary, "evaluate_primary_radix_inputs",
+                    wraps=writer_oracle.primary.evaluate_primary_radix_inputs) as primary, \
+                    mock.patch.object(writer_oracle.sparse, "evaluate_index_mutations",
+                        wraps=writer_oracle.sparse.evaluate_index_mutations) as sparse:
+                actual = writer_oracle.reader.acquire_indexed_primary_batch(cursor, trace=Trace(),
+                    **writer_oracle.raw_arguments(fixture))
+            self.assertEqual((primary.call_count, sparse.call_count), (1, len(fixture.indexes)))
+            self.assertEqual(len(seen), len(cursor.calls))
+            self.assertEqual(tuple((head.index_id, head.index_root) for head in actual.result.after_heads),
+                tuple((name, info["after"].root) for name, info in sorted(fixture.indexes.items())))
+            if fixture is empty:
+                self.assertEqual(len(seen), 2)
+                for table, marker in seen:
+                    self.assertEqual(table, NODE_TABLE)
+                    self.assertEqual(marker["prefixes"], [{"depth": 1, "pathPrefix": digit}
+                        for digit in "0123456789abcdef"])
+                    self.assertEqual(marker["limit"], 17)
+            if fixture is move:
+                info = fixture.indexes["webauthn_credential_id"]
+                new_only = {key for key, (old, new) in info["targets"].items() if old is None and new is not None}
+                requested = {key for table, marker in seen if table == LEAF_TABLE
+                    and marker["indexId"] == "webauthn_credential_id" for key in marker["targets"]}
+                self.assertTrue(new_only)
+                self.assertTrue(new_only <= requested)
 
 
 if __name__ == "__main__":

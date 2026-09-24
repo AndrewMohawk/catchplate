@@ -392,7 +392,7 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
 
     def test_source_revision_and_all_seventeen_v9_ddl_checks_are_pinned(self):
         self.assertEqual(authority_contract.SOURCE_REVISION,
-            "serverware.policyCandidateAuthoritySource/2026-07-30.33")
+            "serverware.policyCandidateAuthoritySource/2026-07-30.34")
         _, executor = read_source("serverware/authority_store/executor_v9.py", 2 * 1024 * 1024)
         self.assertFalse(any(isinstance(node, ast.FunctionDef)
             and node.name == "authority_v9_schema_source" for node in executor.body))
@@ -453,10 +453,12 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
             "admission": "private-worker-only", "publicV3Enabled": False,
             "operation": "webauthn.credential.revoke",
             "producerReadPhase": "single-cutoff-source-program/v1",
+            "producerAcquisitionPhase": "single-ledger-read-effects-write/v1",
             "retainedPrimaryEvidence": "detached-original-roots-and-proofs/v1",
             "headTraceProfile": "serverware.policyAuthorityCountedHeadRead/v1",
             "rangeTraceProfile": "serverware.policyAuthorityCountedIndexRead/v1",
             "primaryTraceProfile": "serverware.policyAuthorityCompletePrimaryRead/v1",
+            "mutationTraceProfile": "serverware.policyAuthorityCountedIndexMutationRead/v1",
             "maxSqlReads": 4096, "maxParameterBytes": 4 * 1024 * 1024,
             "maxReturnedFrameBytes": 4 * 1024 * 1024,
             "maxPrimaryRowBytes": 1024 * 1024, "maxRangeSqlReads": 20,
@@ -464,16 +466,21 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
             "maxSharedJsonNodes": 1_000_000,
             "maxBusinessTraceEntries": 4096, "maxFrameworkTraceEntries": 69,
             "includedPhases": (
+                "owned-producer-context", "request-and-operation-binding",
+                "assertion-receipt-verification",
                 "owned-read-phase-context", "single-cutoff-source-query-generation",
                 "source-role-and-cutoff-binding", "counted-head-capture",
                 "range-acquisition-and-reconstruction", "exact-primary-row-fetch",
                 "raw-evidence-retention", "global-primary-and-range-row-reverification",
                 "shared-query-bookkeeping", "detached-root-and-primary-proof-retention",
+                "actual-kernel-and-capacity-effects", "ordered-mutation-copy",
+                "write-frontier-acquisition", "indexed-primary-and-sparse-write-proofs",
+                "shared-physical-acquisition",
             ),
             "excludedWork": (
                 "sql-execution", "driver-allocation", "process-allocation",
-                "staged-proof-work", "primary-proof-acquisition", "trace-serialization",
-                "fixed-metadata-scaffolding", "kernel", "write-mutations",
+                "staged-proof-work", "staging-cache-stamps", "primary-proof-acquisition",
+                "trace-serialization", "fixed-metadata-scaffolding", "indexed-projection-allocation",
                 "retained-protocol", "whole-plan",
             ),
         })
@@ -493,12 +500,14 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
                          "authority_complete_acquisition"}.isdisjoint(imports))
         sources = {}
         for name in ("authority_index_heads", "authority_index_reader", "authority_index_trace",
-                     "authority_complete_query", "authority_audit_trace", "authority_complete_acquisition"):
+                     "authority_complete_query", "authority_audit_trace", "authority_complete_acquisition",
+                     "authority_index_mutation_reader"):
             _, sources[name] = read_source(f"serverware/{name}.py", 256 * 1024)
         for module, constant, field in (
             ("authority_index_heads", "READ_PROFILE", "headTraceProfile"),
             ("authority_index_reader", "READ_PROFILE", "rangeTraceProfile"),
             ("authority_index_trace", "PRIMARY_READ_PROFILE", "primaryTraceProfile"),
+            ("authority_index_mutation_reader", "READ_PROFILE", "mutationTraceProfile"),
             ("authority_complete_query", "OPERATION", "operation"),
             ("authority_audit_trace", "MAX_TRACE_ENTRIES", "maxBusinessTraceEntries"),
             ("authority_audit_trace", "MAX_AUDIT_CAPACITY_TRACE_ENTRIES", "maxFrameworkTraceEntries"),
@@ -543,6 +552,7 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
             "measuredPlanSchema": "serverware.policyAuthorityMeasuredPlan/v4",
             "signedPlanSchema": "serverware.signedPolicyAuthorityMeasuredPlan/v4",
             "snapshotDomain": "serverware.policyAuthoritySnapshot/v4",
+            "writerTraceBinding": "exact-contiguous-source-batches-before-writes/v1",
             "maxPayloadBytes": 64 * 1024 * 1024, "maxSharedHashes": 8_000_000,
             "maxSharedInputBytes": 64 * 1024 * 1024, "maxSharedJsonNodes": 1_000_000,
             "maxJsonDepth": 128,
@@ -552,6 +562,10 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
                 "primary-and-complete-range-proofs", "actual-kernel-and-capacity-effects",
                 "authorization-source-binding", "snapshot-and-result-commitments",
                 "source-bound-trace-consistency",
+                "mutation-writer-target-geometry", "exact-mutation-writer-trace",
+            ),
+            "excludedWork": (
+                "indexed-projection-allocation", "fixed-metadata-scaffolding", "whole-plan",
             ),
             "excludedAuthority": (
                 "key-and-identity-enrollment", "before-root-and-cutoff-currentness",

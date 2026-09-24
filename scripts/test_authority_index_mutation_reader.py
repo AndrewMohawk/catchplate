@@ -13,6 +13,7 @@ from __future__ import annotations
 import copy
 from dataclasses import FrozenInstanceError, fields, replace
 import hashlib
+import json
 from pathlib import Path
 import sys
 import unittest
@@ -28,7 +29,9 @@ from serverware import authority_index_mutation_reader as reader
 from serverware import authority_index_projection as projection
 from serverware import authority_indexed_mutation as indexed
 from serverware import authority_radix_mutation as primary
+from serverware.authority_query_read_work import _ValidationWork, QueryReadValidationLimits, QueryReadWorkError
 import test_authority_indexed_mutation as oracle
+import test_authority_index_frontier as range_oracle
 
 
 LEAF_TABLE = "policy_authority_counted_index_leaves"
@@ -245,6 +248,94 @@ def preflight_peak(fixture, store):
         "input_bytes": actual["primary"]["input_bytes"] + actual["head_bytes"]
             + actual["parameter_bytes"] + actual["transport_bytes"] + proof_bytes,
         "proof_bytes": proof_bytes, "components": components}
+
+
+def shared_work_oracle(fixture, store):
+    """Historical engine units plus independently enumerated real transport work."""
+    actual, peak = expected_metrics(fixture, store), preflight_peak(fixture, store)
+    parameter_b = parameter_n = returned_b = returned_n = 0
+
+    def nodes(value):
+        if type(value) is dict:
+            return 1 + len(value) + sum(nodes(child) for child in value.values())
+        if type(value) in (list, tuple):
+            return 1 + sum(nodes(child) for child in value)
+        return 1
+
+    def framed(values):
+        sizes = [len(str(value).encode("utf-8")) for value in values]
+        return sum(8 + 2 * size for size in sizes), 2 * len(sizes)
+
+    for name, _, _, _, _, batches in plans(fixture):
+        for kind, batch, parameters in batches:
+            size, count = framed(parameters)
+            parameter_b += size
+            parameter_n += count
+            records = ([store.leaves[name, key] for key in batch if (name, key) in store.leaves]
+                if kind == "leaf" else [store.nodes[name, len(prefix), prefix] for prefix in batch
+                    if (name, len(prefix), prefix) in store.nodes])
+            names = LEAF_FIELDS if kind == "leaf" else NODE_FIELDS
+            for row in records:
+                encoded = json.dumps(row, ensure_ascii=True, sort_keys=True,
+                    allow_nan=False, separators=(",", ":")).encode("ascii")
+                returned_b += 2 * len(encoded)
+                returned_n += 2 * nodes(row)
+                for field in ("index_id", "projection_digest", "primary_id" if kind == "leaf" else "path_prefix"):
+                    returned_b += 2 * len(row[field].encode("utf-8"))
+                    returned_n += 2
+                size, count = framed((kind, *(row[field] for field in names)))
+                returned_b += size
+                returned_n += count
+    base_bytes = actual["input_bytes"] - actual["parameter_bytes"] - actual["transport_bytes"]
+    total = (actual["hashes"], base_bytes + parameter_b + returned_b,
+             actual["primary"]["json_nodes"] + parameter_n + returned_n)
+    before_sql = (actual["hashes"] - sum(value["before_hashes"] + value["after_hashes"]
+                    for value in actual["indexes"].values()),
+                  actual["primary"]["input_bytes"] + actual["head_bytes"],
+                  actual["primary"]["json_nodes"])
+    return {"total": total, "before_sql": before_sql,
+        "peak": (peak["hashes"], before_sql[1] + parameter_b + returned_b + peak["proof_bytes"], total[2]),
+        "parameters": (0, parameter_b, parameter_n), "returned": (0, returned_b, returned_n)}
+
+
+def shared_values(work):
+    return work.hash_work, work.input_bytes, work.json_nodes
+
+
+class ReadWriteCursor:
+    """Same responder identity for real range and sparse-mutation SQL bodies."""
+    def __init__(self, read_store, write_store, alter=None):
+        self.range = range_oracle.StoredIndexCursor(read_store)
+        self.writer = Cursor(write_store, alter)
+        self.calls = []
+        self.target = None
+        self.writing = False
+
+    def execute(self, sql, parameters):
+        # Node SELECT text is genuinely shared by both producer bodies. This
+        # fixture's first write batch is a real target-leaf SELECT; retain its
+        # phase for later sibling batches rather than misclassifying range nodes.
+        if "AS requested(index_key)" in sql:
+            self.writing = True
+        self.target = self.writer if self.writing else self.range
+        self.calls.append((sql, copy.deepcopy(parameters)))
+        self.target.execute(sql, parameters)
+        return self
+
+    def fetchmany(self, maximum):
+        return self.target.fetchmany(maximum)
+
+
+def shared_range_fixture():
+    before = {"id": "session", "bound_webauthn_credential_id": "credential", "status": "active"}
+    other = {"id": "opaque-session", "bound_webauthn_credential_id": "other", "status": "active"}
+    fixture = oracle.MutationFixture({"oidc_browser_sessions": [before, other]},
+        (("oidc_browser_sessions", "session", "UPDATE", {**before, "note": "new full row"}),))
+    query = range_oracle.bound_query("sessions_active", record_id="credential", maximum_rows=2)
+    read_store = range_oracle.IndependentStoredIndex(fixture.tables[query.table], query=query, revision=29)
+    if read_store.tree.root != fixture.indexes[query.index_id]["before"].root:
+        raise AssertionError("independent read/write stores have different before roots")
+    return fixture, read_store, StoredRows(fixture)
 
 
 class IndexMutationReaderTests(unittest.TestCase):
@@ -791,6 +882,228 @@ class IndexMutationReaderTests(unittest.TestCase):
             reader.acquire_indexed_primary_batch(Cursor(StoredRows(fixture)), trace=Trace(),
                 **raw_arguments(fixture), verified=actual.result.primary)
         self.deny_before_sql(fixture, mutations=actual.result)
+
+    def shared_start(self, *, limits=None, physical_limits=None, alter=None):
+        fixture, read_store, store = shared_range_fixture()
+        cursor, trace = ReadWriteCursor(read_store, store, alter), Trace()
+        work = _ValidationWork(QueryReadValidationLimits() if limits is None else limits)
+        physical = reader.transport._ReadAcquisitionBudget(cursor, trace, work=work,
+            limits=reader.transport._ReadAcquisitionLimits() if physical_limits is None else physical_limits)
+        budget = reader._AcquisitionBudget(shared_acquisition=physical, work=work)
+        return fixture, read_store, store, cursor, trace, work, physical, budget
+
+    def read_shared(self, state):
+        _, store, _, cursor, trace, work, physical, _ = state
+        return reader.transport._read_complete_frontier(cursor, query=store.query,
+            expected_root=store.tree.root, index_revision=29,
+            trace=trace, work=work, acquisition=physical)
+
+    def write_shared(self, state, **changes):
+        fixture, _, _, cursor, trace, _, _, budget = state
+        arguments = raw_arguments(fixture)
+        arguments.update(changes)
+        return reader._acquire_indexed_primary_batch(cursor, trace=trace,
+            acquisition_budget=budget, **arguments)
+
+    def test_real_range_then_write_share_cursor_trace_physical_totals_and_independent_work(self):
+        state = self.shared_start()
+        fixture, read_store, store, cursor, trace, work, physical, budget = state
+        read_units, read_physical = range_oracle.reader_work_oracle(read_store)
+        expected, measured = expected_metrics(fixture, store), shared_work_oracle(fixture, store)
+        source_limits = work.limits
+        acquired = self.read_shared(state)
+        self.assertEqual(acquired.frontier, read_store.fixture.frontier)
+        self.assertEqual(shared_values(work), read_units)
+        with patch.object(primary, "evaluate_primary_radix_inputs", wraps=primary.evaluate_primary_radix_inputs) as actual, \
+                patch.object(indexed, "evaluate_indexed_primary_batch", side_effect=AssertionError("public engine reset")), \
+                patch.object(_ValidationWork, "__init__", side_effect=AssertionError("replacement work")):
+            result = self.write_shared(state)
+        self.assertEqual(actual.call_count, 1)
+        self.assert_exact(fixture, result, store)
+        self.assertEqual(shared_values(work), tuple(left + right for left, right in zip(read_units, measured["total"])))
+        cumulative = tuple(left + expected[name] for left, name in zip(read_physical,
+            ("sql_reads", "parameter_bytes", "transport_bytes")))
+        self.assertEqual((physical.sql_reads, physical.parameter_bytes, physical.transport_bytes), cumulative)
+        self.assertEqual((result.metrics.cumulative_sql_reads, result.metrics.cumulative_parameter_bytes,
+                          result.metrics.cumulative_transport_bytes), cumulative)
+        self.assertEqual((result.metrics.cumulative_hash_work, result.metrics.cumulative_input_bytes),
+                         shared_values(work)[:2])
+        self.assertEqual(len(cursor.calls), len(trace.calls))
+        self.assertIs(work.limits, source_limits)
+        self.assertIs(budget.engine.work, work)
+        self.assertFalse(physical.active or physical.failed or budget.failed)
+
+    def test_combined_real_range_and_write_physical_minus_one_never_resets_allowance(self):
+        fixture, read_store, store = shared_range_fixture()
+        _, before = range_oracle.reader_work_oracle(read_store)
+        expected = expected_metrics(fixture, store)
+        maxima = tuple(left + expected[name] for left, name in zip(before,
+            ("sql_reads", "parameter_bytes", "transport_bytes")))
+        for dimension in range(3):
+            with self.subTest(dimension=dimension):
+                limits = list(maxima)
+                limits[dimension] -= 1
+                state = self.shared_start(physical_limits=reader.transport._ReadAcquisitionLimits(*limits))
+                self.read_shared(state)
+                prior = len(state[3].calls)
+                with self.assertRaises((reader.IndexMutationReadError, QueryReadWorkError)):
+                    self.write_shared(state)
+                if dimension < 2:
+                    self.assertEqual(len(state[3].calls), prior)
+                self.assertTrue(state[6].failed and state[7].failed)
+                with self.assertRaises(reader.IndexMutationReadError):
+                    self.write_shared(state)
+
+    def test_shared_conservative_peak_exact_and_minus_one_use_actual_entering_limits(self):
+        fixture, read_store, store = shared_range_fixture()
+        prior, _ = range_oracle.reader_work_oracle(read_store)
+        expected = shared_work_oracle(fixture, store)
+        maxima = tuple(left + right for left, right in zip(prior, expected["peak"]))
+        state = self.shared_start(limits=QueryReadValidationLimits(*maxima))
+        entering = state[5].limits
+        self.read_shared(state)
+        self.write_shared(state)
+        self.assertEqual(shared_values(state[5]), tuple(left + right for left, right in zip(prior, expected["total"])))
+        self.assertIs(state[5].limits, entering)
+        for dimension in range(3):
+            with self.subTest(dimension=dimension):
+                limits = list(maxima)
+                limits[dimension] -= 1
+                state = self.shared_start(limits=QueryReadValidationLimits(*limits))
+                entering = state[5].limits
+                self.read_shared(state)
+                with self.assertRaises((reader.IndexMutationReadError, QueryReadWorkError)):
+                    self.write_shared(state)
+                self.assertIs(state[5].limits, entering)
+                self.assertTrue(state[6].failed and state[7].failed)
+                self.assertLessEqual(state[5].input_bytes, limits[1])
+                self.assertLessEqual(state[5].json_nodes, limits[2])
+
+    def test_shared_primary_node_limit_is_clamped_before_genuine_ownership_and_sql(self):
+        fixture, read_store, store = shared_range_fixture()
+        prior, _ = range_oracle.reader_work_oracle(read_store)
+        nodes = expected_metrics(fixture, store)["primary"]["json_nodes"]
+        state = self.shared_start(limits=QueryReadValidationLimits(max_json_nodes=prior[2] + nodes - 1))
+        self.read_shared(state)
+        previous = len(state[3].calls)
+        with patch.object(primary, "evaluate_primary_radix_inputs", wraps=primary.evaluate_primary_radix_inputs) as actual:
+            with self.assertRaises(reader.IndexMutationReadError):
+                self.write_shared(state)
+        self.assertEqual(actual.call_count, 1)
+        self.assertEqual(actual.call_args.kwargs["limits"].max_json_nodes, nodes - 1)
+        self.assertEqual(len(state[3].calls), previous)
+        self.assertTrue(state[6].failed and state[7].failed)
+
+    def test_shared_pending_holds_constrain_real_callback_work_and_never_refund_spending(self):
+        state = self.shared_start()
+        self.read_shared(state)
+        work, budget = state[5], state[7]
+        entering = work.limits
+        seen = []
+        def consume(kind, name, identities, rows):
+            if not seen:
+                seen.append((work.limits, work.input_bytes, budget._pending_work_bytes,
+                             budget._proof_bytes, budget._proof_hashes))
+                work.charge(input_bytes=work.limits.max_input_bytes - work.input_bytes)
+            return rows
+        state[3].writer.alter = consume
+        with patch.object(sparse, "evaluate_index_mutations", wraps=sparse.evaluate_index_mutations) as folds:
+            with self.assertRaises((reader.IndexMutationReadError, QueryReadWorkError)):
+                self.write_shared(state)
+        self.assertEqual(folds.call_count, 0)
+        self.assertEqual(len(seen), 1)
+        held, _, pending, proofs, hashes = seen[0]
+        self.assertEqual(held.max_input_bytes, entering.max_input_bytes - pending - proofs)
+        self.assertEqual(held.max_hashes, entering.max_hashes - hashes)
+        self.assertGreater(proofs, 0)
+        self.assertEqual(work.input_bytes, held.max_input_bytes)
+        self.assertIs(work.limits, entering)
+        self.assertTrue(state[6].failed and budget.failed)
+
+    def test_shared_foreign_cursor_trace_or_work_denies_before_primary_and_poisons_owner(self):
+        for changed in ("cursor", "trace", "work"):
+            with self.subTest(changed=changed):
+                state = self.shared_start()
+                self.read_shared(state)
+                fixture, _, store, cursor, trace, work, physical, budget = state
+                if changed == "cursor":
+                    cursor = Cursor(store)
+                elif changed == "trace":
+                    trace = Trace()
+                else:
+                    budget.work = _ValidationWork(QueryReadValidationLimits())
+                entering = work.limits
+                with patch.object(primary, "evaluate_primary_radix_inputs", wraps=primary.evaluate_primary_radix_inputs) as actual:
+                    with self.assertRaises(reader.IndexMutationReadError):
+                        reader._acquire_indexed_primary_batch(cursor, trace=trace,
+                            acquisition_budget=budget, **raw_arguments(fixture))
+                self.assertEqual(actual.call_count, 0)
+                self.assertTrue(physical.failed and budget.failed)
+                self.assertIs(work.limits, entering)
+        state = self.shared_start()
+        for parameters in ({"work": state[5]}, {"shared_acquisition": state[6]},
+            {"work": _ValidationWork(QueryReadValidationLimits()), "shared_acquisition": state[6]}):
+            with self.assertRaises(reader.IndexMutationReadError):
+                reader._AcquisitionBudget(**parameters)
+
+    def test_caught_nested_shared_writer_failure_poisoning_restores_only_original_ceiling(self):
+        state = self.shared_start()
+        self.read_shared(state)
+        work, physical, budget = state[5], state[6], state[7]
+        entering = work.limits
+        caught = []
+        def reenter(kind, name, identities, rows):
+            if not caught:
+                try:
+                    self.write_shared(state)
+                except reader.IndexMutationReadError:
+                    caught.append(True)
+            return rows
+        state[3].writer.alter = reenter
+        with patch.object(sparse, "evaluate_index_mutations", wraps=sparse.evaluate_index_mutations) as folds:
+            with self.assertRaises(reader.IndexMutationReadError):
+                self.write_shared(state)
+        self.assertEqual(caught, [True])
+        self.assertEqual(folds.call_count, 0)
+        self.assertTrue(physical.failed and budget.failed)
+        self.assertIs(work.limits, entering)
+        self.assertFalse(physical.active or budget.active)
+
+    def test_two_genuine_shared_writer_invocations_preserve_actual_cumulative_work(self):
+        state = self.shared_start()
+        fixture, read_store, store, _, _, work, physical, _ = state
+        prior, read_physical = range_oracle.reader_work_oracle(read_store)
+        expected, measured = expected_metrics(fixture, store), shared_work_oracle(fixture, store)
+        self.read_shared(state)
+        for count in (1, 2):
+            actual = self.write_shared(state)
+            self.assert_exact(fixture, actual, store)
+            self.assertEqual(shared_values(work), tuple(left + count * right for left, right in zip(prior, measured["total"])))
+            self.assertEqual((physical.sql_reads, physical.parameter_bytes, physical.transport_bytes),
+                tuple(left + count * expected[name] for left, name in zip(read_physical,
+                    ("sql_reads", "parameter_bytes", "transport_bytes"))))
+
+    def test_reusable_target_geometry_matches_independent_batches_without_hash_or_sql(self):
+        fixture = default_fixture()
+        source_limits = fixture.arguments()["limits"].index
+        remaining_reads, remaining_parameters = 4096, 4 * 1024 * 1024
+        earlier_reads = earlier_parameters = 0
+        for name, info, targets, opened, siblings, batches in plans(fixture):
+            changes = tuple(sparse.IndexLeafChange(key, *images) for key, images in sorted(info["targets"].items()))
+            with patch.object(hashlib, "sha256", side_effect=AssertionError("geometry hashed")):
+                actual = reader._target_geometry(name, changes,
+                    limits=source_limits,
+                    remaining_reads=remaining_reads, remaining_parameter_bytes=remaining_parameters,
+                    earlier_reads=earlier_reads, earlier_parameters=earlier_parameters)
+            self.assertEqual((actual.targets, actual.siblings, actual.opened_nodes), (targets, siblings, len(opened)))
+            self.assertEqual(actual.sql_reads, len(batches))
+            self.assertEqual(actual.parameter_bytes, sum(frames(*parameters) for _, _, parameters in batches))
+            scalars = [value for _, _, parameters in batches for value in parameters]
+            self.assertEqual(actual.parameter_nodes, 2 * len(scalars))
+            self.assertEqual(actual.parameter_work_bytes,
+                sum(8 + 2 * len(str(value).encode("ascii")) for value in scalars))
+            earlier_reads += actual.sql_reads
+            earlier_parameters += actual.parameter_bytes
 
 
 if __name__ == "__main__":

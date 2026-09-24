@@ -23,6 +23,7 @@ from serverware import authority_index_contract as contract
 from serverware import authority_index_mutation as sparse
 from serverware import authority_indexed_mutation as indexed
 from serverware import authority_radix_mutation as primary
+from serverware.authority_query_read_work import _ValidationWork, QueryReadValidationLimits
 import test_authority_radix_mutation as primary_oracle
 import test_authority_index_join as join_oracle
 import test_authority_index_range as counted_oracle
@@ -663,6 +664,108 @@ class IndexedMutationTests(unittest.TestCase):
                          (extra.root, self.fixture.after_trees["webauthn_credentials"].root))
         self.assertEqual(result.primary.authorization_after_roots, (auth.root,))
         self.assertEqual(result.after_heads, self.assert_exact(self.fixture).after_heads)
+
+    def test_shared_primary_uses_real_remaining_hash_byte_and_node_limits(self):
+        arguments = self.fixture.arguments()
+        expected = primary_metrics(arguments)
+        units = tuple(expected[name] for name in ("hash_work", "input_bytes", "json_nodes"))
+        prior = (7, 101, 13)
+        raw = {name: arguments[name] for name in ("table_contracts", "business_before_roots",
+            "authorization_before_roots", "selected_rows", "before_proofs", "mutations")}
+        for dimension in (None, 0, 1, 2):
+            maxima = [left + right for left, right in zip(prior, units)]
+            if dimension is not None:
+                maxima[dimension] -= 1
+            work = _ValidationWork(QueryReadValidationLimits(*maxima))
+            work.charge(hashes=prior[0], input_bytes=prior[1], json_nodes=prior[2])
+            budget = indexed._Budget(arguments["limits"], work=work)
+            with self.subTest(dimension=dimension), mock.patch.object(primary,
+                    "evaluate_primary_radix_inputs", wraps=primary.evaluate_primary_radix_inputs) as actual:
+                if dimension is None:
+                    verified = indexed._verify_primary(**raw, budget=budget)
+                    self.assertEqual(values(verified.result.metrics), expected)
+                    self.assertEqual((work.hash_work, work.input_bytes, work.json_nodes), tuple(maxima))
+                    self.assertEqual((budget.hashes, budget.input_bytes, budget.json_nodes), units)
+                    self.assertIs(budget.work, work)
+                else:
+                    with self.assertRaises(primary.PrimaryRadixMutationError):
+                        indexed._verify_primary(**raw, budget=budget)
+                self.assertEqual(actual.call_count, 1)
+                limits = actual.call_args.kwargs["limits"]
+                self.assertEqual((limits.max_hashes, limits.max_input_bytes, limits.max_json_nodes),
+                    tuple(total - spent for total, spent in zip(maxima, prior)))
+
+    def test_raw_owned_preparation_is_same_recipe_with_real_repeated_shared_hash_work(self):
+        arguments = self.fixture.arguments()
+        raw = {name: arguments[name] for name in ("table_contracts", "business_before_roots",
+            "authorization_before_roots", "selected_rows", "before_proofs", "mutations")}
+        verified = primary.evaluate_primary_radix_inputs(**raw, limits=arguments["limits"].primary)
+        names = tuple(sorted(self.fixture.indexes))
+        expected_hashes = sum(mutation["row"] is not None for mutation in self.fixture.mutations)
+        expected_hashes += len(names) + sum(2 * (int(mutation["expectedRow"] is not None)
+            + int(mutation["row"] is not None)) * len(PROFILE_TABLES[mutation["table"]])
+            for mutation in self.fixture.mutations)
+        prior = (5, 71, 11)
+        work = _ValidationWork(QueryReadValidationLimits(max_hashes=prior[0] + 2 * expected_hashes))
+        work.charge(hashes=prior[0], input_bytes=prior[1], json_nodes=prior[2])
+        budget = indexed._Budget(arguments["limits"], work=work)
+        with mock.patch.object(primary, "evaluate_primary_radix_inputs",
+                side_effect=AssertionError("preparation repeated the primary proof")):
+            for invocation in (1, 2):
+                prepared = indexed._prepare_owned_primary_changes(mutations=verified.mutations,
+                    before_proofs=verified.before_proofs,
+                    business_after_roots=verified.result.business_after_roots,
+                    index_ids=names, budget=budget)
+                self.assertIsNone(prepared.verified)
+                for item in arguments["index_inputs"]:
+                    profile, changes, delta, allowance = indexed._prepare_index_changes(item, prepared, budget)
+                    info = self.fixture.indexes[item.index_id]
+                    self.assertEqual(profile, info["profile"])
+                    self.assertEqual(changes, tuple(sparse.IndexLeafChange(key, *images)
+                        for key, images in sorted(info["targets"].items())))
+                    self.assertEqual(delta, info["revision_delta"])
+                    self.assertEqual(allowance, 4)
+                self.assertEqual((work.hash_work, work.input_bytes, work.json_nodes),
+                    (prior[0] + invocation * expected_hashes, prior[1], prior[2]))
+        legacy = indexed._Budget(arguments["limits"])
+        with mock.patch.object(indexed, "_prepare_owned_primary_changes",
+                wraps=indexed._prepare_owned_primary_changes) as inner:
+            wrapped = indexed._prepare_primary_changes(verified, names, legacy)
+        self.assertEqual(inner.call_count, 1)
+        self.assertIs(wrapped.verified, verified)
+        self.assertEqual(replace(wrapped, verified=None), prepared)
+        # Raw descriptors are reusable internal values, not proof tokens. The
+        # public evaluator still accepts only its original raw-input API.
+        with self.assertRaises(TypeError):
+            indexed.evaluate_indexed_primary_batch(**arguments, prepared=prepared)
+
+    def test_owned_preparation_source_closure_precedes_hash_and_shared_exhaustion(self):
+        arguments = self.fixture.arguments()
+        raw = {name: arguments[name] for name in ("table_contracts", "business_before_roots",
+            "authorization_before_roots", "selected_rows", "before_proofs", "mutations")}
+        verified = primary.evaluate_primary_radix_inputs(**raw, limits=arguments["limits"].primary)
+        names = tuple(sorted(self.fixture.indexes))
+        for bad in ((), names[:-1], tuple(reversed(names))):
+            work = _ValidationWork(QueryReadValidationLimits())
+            with self.subTest(index_ids=bad), mock.patch.object(indexed.radix, "_tree_digest",
+                    wraps=indexed.radix._tree_digest) as actual:
+                with self.assertRaisesRegex(indexed.IndexedMutationError, "every affected source profile"):
+                    indexed._prepare_owned_primary_changes(mutations=verified.mutations,
+                        before_proofs=verified.before_proofs,
+                        business_after_roots=verified.result.business_after_roots,
+                        index_ids=bad, budget=indexed._Budget(arguments["limits"], work=work))
+                self.assertEqual(actual.call_count, 0)
+                self.assertEqual((work.hash_work, work.input_bytes, work.json_nodes), (0, 0, 0))
+        work = _ValidationWork(QueryReadValidationLimits(max_hashes=1))
+        work.charge(hashes=1)
+        with mock.patch.object(indexed.radix, "_tree_digest", wraps=indexed.radix._tree_digest) as actual:
+            with self.assertRaisesRegex(indexed.IndexedMutationError, "aggregate hash budget"):
+                indexed._prepare_owned_primary_changes(mutations=verified.mutations,
+                    before_proofs=verified.before_proofs,
+                    business_after_roots=verified.result.business_after_roots,
+                    index_ids=names, budget=indexed._Budget(arguments["limits"], work=work))
+        self.assertEqual(actual.call_count, 0)
+        self.assertEqual(work.hash_work, 1)
 
 
 if __name__ == "__main__":

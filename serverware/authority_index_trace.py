@@ -11,12 +11,16 @@ from __future__ import annotations
 from typing import Any
 
 from serverware import authority_complete_query as complete
+from serverware import authority_contract
 from serverware import authority_index_heads as heads
+from serverware import authority_index_mutation_reader as mutation_reader
+from serverware import authority_index_projection as projection
 from serverware import authority_index_reader as reader
 from serverware.authority_index_contract import I64_MAX, KEY_NIBBLES
 
 
 PRIMARY_READ_PROFILE = "serverware.policyAuthorityCompletePrimaryRead/v1"
+MUTATION_READ_PROFILE = mutation_reader.READ_PROFILE
 _CONTEXT_FIELDS = frozenset({"profile", "queryId", "indexId", "projectionDigest",
                              "indexRevision", "rootDigest", "rootCount"})
 _LEAF_FIELDS = _CONTEXT_FIELDS | {"lower", "upper", "limit"}
@@ -24,6 +28,10 @@ _NODE_FIELDS = _CONTEXT_FIELDS | {"prefixes", "limit"}
 _PRIMARY_FIELDS = frozenset({"profile", "queryId", "indexId", "primaryId",
                              "primaryKeyDigest", "limit"})
 _PREFIX_FIELDS = frozenset({"depth", "pathPrefix"})
+_MUTATION_CONTEXT_FIELDS = frozenset({"profile", "indexId", "projectionDigest",
+                                     "indexRevision", "rootDigest", "rootCount"})
+_MUTATION_LEAF_FIELDS = _MUTATION_CONTEXT_FIELDS | {"targets", "limit"}
+_MUTATION_NODE_FIELDS = _MUTATION_CONTEXT_FIELDS | {"prefixes", "limit"}
 _HEX = frozenset("0123456789abcdef")
 
 
@@ -134,3 +142,45 @@ def validate_complete_read_trace(operation: str, table: str, key: Any) -> None:
                 or prefix["pathPrefix"] <= previous):
             raise IndexTraceError("complete node prefixes are not depth-matched sorted unique identities")
         previous = prefix["pathPrefix"]
+
+
+def validate_mutation_read_trace(operation: str, table: str, key: Any) -> None:
+    """Check the private revoke writer's bounded physical marker shape only.
+
+    This does not derive targets, prove OLD/NEW, or authenticate before heads.
+    The real producer computes the request from genuine primary projections;
+    signed replay separately requires its exact complete source-derived block.
+    Ordinary complete-read permission is not public v3 writer admission.
+    """
+    if (type(operation) is not str or operation != complete.OPERATION
+            or type(table) is not str or table not in (reader.LEAF_TABLE, reader.NODE_TABLE)):
+        raise IndexTraceError("mutation read operation or table is not source admitted")
+    _closed(key, _MUTATION_LEAF_FIELDS if table == reader.LEAF_TABLE else _MUTATION_NODE_FIELDS)
+    allowed = frozenset(index_id
+        for source_table in authority_contract.operation_spec(operation)["businessWrites"]
+        for index_id in projection.index_ids_for_table(source_table))
+    if (type(key["indexId"]) is not str or not 1 <= len(key["indexId"]) <= 128
+            or key["indexId"] not in allowed
+            or type(key["profile"]) is not str or key["profile"] != mutation_reader.READ_PROFILE
+            or not _digest(key["projectionDigest"]) or not _digest(key["rootDigest"])
+            or not _integer(key["indexRevision"], 0, I64_MAX)
+            or not _integer(key["rootCount"], 0, I64_MAX)
+            or key["indexRevision"] == 0 and key["rootCount"] != 0):
+        raise IndexTraceError("mutation read marker has invalid bounded source context")
+    values = key["targets"] if table == reader.LEAF_TABLE else key["prefixes"]
+    if (type(values) is not list or not 1 <= len(values) <= mutation_reader.MAX_IDENTITIES
+            or not _integer(key["limit"], len(values) + 1, len(values) + 1)):
+        raise IndexTraceError("mutation read batch exceeds its exact identity/sentinel bound")
+    previous = ""
+    for value in values:
+        if table == reader.LEAF_TABLE:
+            if not _hex(value, KEY_NIBBLES) or value <= previous:
+                raise IndexTraceError("mutation targets are not sorted unique exact keys")
+            previous = value
+        else:
+            _closed(value, _PREFIX_FIELDS)
+            if (not _integer(value["depth"], 1, KEY_NIBBLES)
+                    or not _hex(value["pathPrefix"], value["depth"])
+                    or value["pathPrefix"] <= previous):
+                raise IndexTraceError("mutation prefixes are not depth-matched sorted unique identities")
+            previous = value["pathPrefix"]

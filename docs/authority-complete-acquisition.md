@@ -7,8 +7,10 @@ for `webauthn.credential.revoke`. This is unbuilt, unexecuted source wiring, not
 an enabled operation or independently authoritative database snapshot.
 Source `.32` extends the same path to the sixth, pending-trust role.
 Source `.33` adds a private single-cutoff read-phase entry and retains the
-original primary roots and actual merged primary proofs. It does not enable
-the production v4 producer or change either public planning gate.
+original primary roots and actual merged primary proofs. Source `.34` connects
+genuine request/receipt binding, those reads, actual kernel/capacity effects and
+write-proof acquisition on one work and physical ledger. This returns raw
+observations, not a signed v4 plan, and changes neither public planning gate.
 
 The public v3 planner does not construct or accept this collector. Its whole
 query inventory still rejects complete declarations before business/proof SQL,
@@ -35,6 +37,30 @@ the same cursor, roots, trace and meter. The program includes the real capacity
 query and both existing complete-declaration copy passes. Callers cannot supply
 a replacement query recipe, collector or successful proof result. The existing
 public `read_inputs` path remains separate and unchanged.
+
+The broader private `_acquire_revocation_transition` entry first owns the full
+request, receipt and independent evaluation context together. It recomputes the
+request and operation commitments and verifies the real assertion signature
+against the caller's pinned key before any SQL callback. It then invokes the
+same read body with its original physical ledger. After authenticated reads,
+the shared semantic helper runs the genuine revocation kernel and capacity
+finalizer at that same cutoff; the actual finalized mutations determine the
+write profiles and targets. The writer reuses the original roots, merged
+primary proofs and head observations, runs its real primary and sparse proof
+engines, and appends the exact mutation-write trace suffix. No caller-provided
+successful effect or proof object replaces any phase.
+
+```mermaid
+flowchart LR
+    A[Own context and verify receipt] --> B[One cutoff and authenticated reads]
+    B --> C[Kernel and capacity effects]
+    C --> D[Acquire and verify write frontiers]
+    D --> E[Raw transition and closed trace]
+```
+
+The caller still owns the read-only MVCC transaction and must independently
+admit keys, capability, roots and time. Request/receipt verification does not
+establish those authorities or permit persistence and execution.
 
 [`_CompleteQueryAcquisition`](../serverware/authority_complete_acquisition.py)
 requires the actual cursor, trace and caller-owned `_ValidationWork`, source
@@ -82,7 +108,12 @@ Current revocation has no scalar contract selectors: global and query-local
 `contractSelector` values must remain null, preserving the existing batch guard.
 A future query family cannot silently discard legitimate global selector tags.
 
-Cursor, trace and meter identities remain fixed. The collector progresses from
+Cursor, trace, physical ledger and meter identities remain fixed. A supplied
+ledger retains all earlier spending; the standalone read facade creates one
+only when no broader producer owns it. A separate read-phase guard covers the
+clock callback and gaps between physical scopes. Caught nested entry poisons
+the original ledger; ordinary child acquisition scopes remain supported.
+The collector progresses from
 beginning through reads to proof completion; failure, out-of-order use or caught
 reentrancy poisons it. There is no retry with a fresh allowance or publication
 of partially verified evidence.
@@ -104,7 +135,7 @@ manifest and schema-source digest. It declares private-worker-only admission and
 | Node-identity batch | 256 |
 | Business trace / separate framework trace | 4096 / 69 |
 
-Head, range and exact-row acquisition share one private acquisition budget,
+Head, range, exact-row and write-frontier acquisition share one private budget,
 cursor, trace and work object. Parameter and returned scalar frames are charged;
 full-row retention additionally charges its eight-byte length frame and actual
 canonical bytes. Defined UTF-8 scans, copies, encodings, source hashes, range
@@ -120,17 +151,30 @@ retention and every detached export are charged separately; exports do not
 hash profiles or reset the allowance. Fixed source-bounded DTO/tuple scaffolding
 remains outside the defined work profile, as declared by the source contract.
 
+The `.34` coordinator also charges the owned producer context, real request
+and receipt verification, kernel/capacity effects, mutation ordering and writer
+proof work. The writer clamps its primary node allowance to remaining shared
+work and debits the genuine primary ownership count once. Its temporary holds
+reserve pending parameter encoding and conservative sparse-proof work against
+the entering ceiling; releasing holds restores only that ceiling, never spent
+counters. The entering ceiling may itself already reserve compact output.
+Historical indexed scalar framing is distinct from physical UTF-8 scans and
+encodings; the adapter charges both defined components without charging
+transport twice. See [writer accounting](authority-index-mutation-reader.md).
+
 The hash-free [trace validator](../serverware/authority_index_trace.py) admits
-only the exact source head, range and primary-fetch markers under the private
+only the exact source head, range, primary-fetch and writer markers under the private
 trace permission. It adds no trace allowance, mutation permission or generic
 metadata access. Shape validation does not replace genuine profile, interval,
 root, key and row association checks.
 
 These are defined source-work limits, not whole-plan CPU, memory or deadline
-accounting. SQL execution, driver/process allocation, staged proof work, primary
-proof acquisition, trace serialization, fixed metadata scaffolding, kernel,
-write mutations and retained-protocol work are excluded. Existing separate
-bounds still apply; signed business `workUnits` is not redefined.
+accounting. Clock, ordinary and primary-proof SQL are outside the shared
+physical-read totals. SQL execution, driver/process allocation, staged proof
+and cache-stamp work, primary-proof acquisition, trace serialization, fixed
+metadata scaffolding, indexed-projection allocation and retained-protocol work
+are excluded from this work profile. Existing separate bounds still apply;
+signed business `workUnits` is not redefined.
 
 ## Authority and retained-evidence work still missing
 
@@ -147,11 +191,10 @@ persisted replay, service, SQL snapshot/commit and receipt consumers. The
 consumer contract, not that end-to-end integration. Existing closed v3 readers,
 the nine-frame Snapshot/v3 and their digests are unchanged.
 
-The next producer work must compute the genuine kernel/capacity mutations before
-acquiring their write frontiers, integrate read/write work and physical-read
-accounting, and bind the write-acquisition trace profile in both planner and
-signed-plan replay. The write reader's separate ledger and trace grammar do not
-yet satisfy those requirements. Durable replay also needs a versioned original
+The private producer now computes genuine kernel/capacity mutations before
+acquiring their write frontiers, shares read/write accounting, and emits the
+writer markers required by signed replay. It still needs actual signed-v4
+packaging and coordinated consumer admission. Durable replay needs a versioned original
 signed envelope and independent evaluation-context record; the closed v3
 `exact_plan` payload cannot be silently repurposed. Historical evaluation time
 must remain distinct from current freshness and execution authority.
@@ -165,20 +208,23 @@ remain distinct production gates.
 
 The new [collector](../scripts/test_authority_complete_acquisition.py),
 [head](../scripts/test_authority_index_heads.py) and
-[trace](../scripts/test_authority_index_trace.py) suites contain 27, 18 and 15
+[trace](../scripts/test_authority_index_trace.py) suites contain 32, 18 and 21
 authored methods respectively. They use independent trees/records and genuine proof
 engines, covering ordered and empty roles, full-row corruption, context and
 ownership changes, cumulative limits and poisoned lifecycles. The batch, range
 and frontier suites preserve their old methods and add shared-work controls.
 The seven additional collector methods cover actual merged-proof retention,
 no additional SQL or proof replay, nested alias isolation, repeated exports,
-independently calculated copy limits and terminal failures. Startup-dependent
+independently calculated copy limits and terminal failures. Five further cases
+cover a genuine prior head read, exact shared totals, one-unit physical denials,
+identity changes and terminal owner poisoning. Startup-dependent
 cases retain the real registry import and both planner gates.
 
 The batch, range, frontier and ACL/source-contract suites retain their 28, 30,
-33 and 21 methods. The planner/capacity source-linkage suite grows from 20 to 23
-methods; the startup-dependent suite grows from 38 to 47 with actual read-phase
-controls. All prior IDs remain. Static linkage is not runtime evidence. The
+33 and 21 methods. The planner/capacity source-linkage suite now contains 24
+methods; the startup-dependent suite contains 52, including genuine producer,
+caught read-phase reentry and write-proof failure controls. All prior IDs
+remain. Static linkage is not runtime evidence. The
 separate [native inventory](native-postgres-verification.md)
 now contains 256 methods across fourteen suites, including later policy-parity controls.
 

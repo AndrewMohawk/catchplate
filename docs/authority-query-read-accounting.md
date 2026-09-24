@@ -148,9 +148,13 @@ its actual head/range/exact-row and global/join workers share this same work
 object, with explicitly broader component charges and unchanged source ceilings.
 Source `.33` extends that private acquisition descriptor to cover the genuine
 single-cutoff program factory, context ownership and detached original-root and
-merged-proof retention. It keeps staged primary proof/stamp work separate and
-does not integrate the write reader's ledger or physical-read counters.
-It does not redefine the bookkeeping descriptor or provide whole-plan accounting.
+merged-proof retention. Source `.34` adds genuine request/receipt binding,
+kernel/capacity effects and write-proof acquisition on the same remaining work
+and physical ledger. Physical totals cover heads, ranges, exact member fetches
+and write-frontier reads, not clock, ordinary or primary-proof SQL. Staged
+primary proof/stamp work remains separate; indexed-projection allocation is
+also excluded. Neither revision redefines the bookkeeping descriptor or
+provides whole-plan accounting.
 Query records remain observations, not complete or current authority; public v3
 complete queries still reject before business/proof SQL and the registry remains
 closed.

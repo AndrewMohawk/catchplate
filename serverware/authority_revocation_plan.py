@@ -29,6 +29,7 @@ from serverware import authority_revocation_plan_contract as contract
 from serverware import authority_revocation_proof_bundle as retained
 from serverware import authority_revocation_read_write as mixed
 from serverware import authority_revocation_semantics as semantics
+from serverware import authority_revocation_write_trace as write_trace
 from serverware import authority_root_transition as roots
 from serverware import authority_transition_core as core
 from serverware.authority_query_read_work import QueryReadValidationLimits, QueryReadValidationMetrics
@@ -147,7 +148,7 @@ def _trace_interval(declaration, role, work):
     return projection.query_interval(role.index_id, selector)
 
 
-def _trace(payload, ledger):
+def _trace(payload, ledger, business_after_roots):
     work = ledger.work
     entries, mutations = payload["plannerTrace"]["entries"], payload["mutationPlan"]
     allowed_reads = (set(_SPEC["businessReads"]) | set(_SPEC["businessWrites"])
@@ -167,13 +168,28 @@ def _trace(payload, ledger):
     write_start = len(entries) - len(mutations)
     if write_start < 0:
         raise RevocationPlanError("revocation trace has no complete write suffix")
+    writer_plans, writer_count = write_trace._prepare(mutations=mutations,
+        before_proofs=payload["revocationProofBundle"]["inputs"]["beforeProofs"],
+        business_after_roots=business_after_roots,
+        before_heads=payload["rootTransition"]["indexBeforeHeads"], ledger=ledger)
+    writer_start = write_start - writer_count
+    if writer_start < 0:
+        raise RevocationPlanError("revocation trace omits its complete writer acquisition block")
+    writer_markers = iter(write_trace._markers(writer_plans, work))
     read_identities = set()
     for ordinal, entry in enumerate(entries):
         table, key, access = entry["table"], entry["key"], entry["access"]
         if access == "read":
             if ordinal >= write_start or table not in allowed_reads:
                 raise RevocationPlanError("revocation trace read is outside its source or suffix")
-            if (table in {heads.HEAD_TABLE, reader.LEAF_TABLE, reader.NODE_TABLE}
+            mutation_marker = type(key) is dict and key.get("profile") == index_trace.MUTATION_READ_PROFILE
+            if writer_start <= ordinal < write_start:
+                index_trace.validate_mutation_read_trace(contract.OPERATION, table, key)
+                _same((table, key), next(writer_markers), work,
+                      "revocation writer acquisition differs from genuine source effects")
+            elif mutation_marker:
+                raise RevocationPlanError("revocation writer acquisition is outside its exact source block")
+            elif (table in {heads.HEAD_TABLE, reader.LEAF_TABLE, reader.NODE_TABLE}
                     or type(key) is dict and key.get("profile") == index_trace.PRIMARY_READ_PROFILE):
                 index_trace.validate_complete_read_trace(contract.OPERATION, table, key)
                 if table in (reader.LEAF_TABLE, reader.NODE_TABLE):
@@ -317,7 +333,7 @@ def _bindings(payload, owned, actual, ledger):
     snapshot = _frame(contract.SNAPSHOT_DOMAIN,
         tuple(_ascii(plan[name], work) for name in contract.SNAPSHOT_FRAME_FIELDS), work)
     _same(plan["authoritySnapshotDigest"], snapshot, work, "revocation v4 snapshot commitment changed")
-    _trace(payload, ledger)
+    _trace(payload, ledger, actual.proof.primary.business_after_roots)
 
 
 def verify_signed_revocation_plan(

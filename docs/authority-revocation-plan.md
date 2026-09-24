@@ -8,6 +8,8 @@ It verifies a complete signed envelope and recomputes its retained proofs,
 assertion, business effects, authorization projection and commitments.
 The source is **unbuilt and unexecuted**. This is not production protocol
 activation, a startup repair, SQL persistence or a successful deployment.
+Source `.34` additionally binds the complete writer acquisition marker block
+to the actual proved OLD/NEW mutations.
 
 The existing v3 schemas and consumers stay closed to complete-query plans.
 The new verifier cannot be substituted for admission of current roots,
@@ -89,21 +91,33 @@ Source-only digest pins computed at import are explicitly outside invocation
 work. Returned phase metrics are exclusive deltas; retained packaging metrics
 are cumulative snapshots and must not be added again.
 
-Present trace markers must match source query identities, proved heads,
+Present read-phase trace markers must match source query identities, proved heads,
 derived intervals/limits and canonical outside-cover batches. Exact selected
 keys must appear in reads; writes must be the exact mutation suffix. This
 checks consistency of signed metadata, not whether physical SQL was executed.
 
+The writer block has a stronger exact-inventory requirement: every target-leaf
+and sibling-node batch, in source-sorted profile order, must appear contiguously
+immediately before the writes. The verifier derives these identities from the
+actual OLD/NEW row images and genuine primary after roots after semantic
+verification. NEW-only targets and nonmember profiles with sixteen depth-one
+siblings are included; the before frontier alone cannot establish the required
+query schedule. The same indexed preparation and geometry body is reused,
+without another primary or sparse proof evaluation. NEW-row, profile and
+projection hash preparation, marker copies and canonical comparisons spend
+the same ledger. Pure target/sibling geometry and other fixed scaffolding,
+along with existing indexed-projection allocation internals, remain outside
+the defined allocation accounting. This does not upgrade the preceding
+read-marker consistency check into proof of a complete physical read transcript.
+
 ## Remaining production integration
 
-Source `.33` adds the [private producer read phase](authority-complete-acquisition.md):
-one owned input context, one database cutoff, the genuine source query program,
-and retained original roots plus actual merged primary proofs. It does not yet
-produce a signed v4 plan. The write reader still uses a separate work/physical
-ledger, and its mutation-read trace markers require coordinated admission and
-association checks. Genuine kernel/capacity derivation must precede acquisition
-of the resulting write frontiers; a caller-supplied mutation recipe is not a
-substitute.
+Source `.34` extends the [private producer](authority-complete-acquisition.md)
+through genuine request/receipt verification, a single-cutoff source read
+program, actual kernel/capacity effects and write-frontier acquisition. It
+retains original roots and merged primary proofs, shares read/write work and
+physical acquisition spending, and emits the exact writer block. It returns
+raw observations and does not yet package or sign a v4 plan.
 
 The actual verifier-response admission, durable planner replay and persistence
 paths still require coordinated v4 producer/consumer changes. They need

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from types import MappingProxyType
 from typing import Any
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
@@ -166,6 +167,76 @@ def _require_owned_handoff(owned, ledger, capture) -> None:
             raise RevocationSemanticsError("semantic handoff work or compact reservation changed")
 
 
+def _derive_revocation_effects(
+    *, arguments, selected_rows, query_program, query_reads, database_now,
+    request_digest, verified_webauthn_evidence, work: _ValidationWork,
+):
+    """Run the genuine kernel and capacity body on already-owned raw inputs.
+
+    The private caller must first derive/bind the request, verify the pinned
+    receipt, and authenticate these exact rows and complete observations at
+    the original database cutoff. Neither these shape checks nor a freely
+    constructible receipt mapping establishes those prerequisites. This helper
+    does no capture, clock read, signature, query generation, SQL or proof pass.
+    Failure aborts the caller's invocation; no new work allowance is created.
+
+    Return the actual kernel, UNSORTED finalized mutations, signed work units,
+    and exclusive kernel/capacity deltas. These are ordinary observations, not
+    a successful-result input token for any proof or authorization consumer.
+    """
+    spec = authority_contract.operation_spec(candidate.OPERATION)
+    if (type(work) is not _ValidationWork or type(arguments) is not dict
+            or type(selected_rows) is not tuple or len(selected_rows) > spec["maximumQueryRows"]
+            or any(type(item) is not dict for item in selected_rows)
+            or type(query_program) is not tuple or not 1 <= len(query_program) <= mixed.MAX_QUERY_READS
+            or any(type(query) not in (core.BoundedQuery, complete.CompleteIndexQuery)
+                   for query in query_program)
+            or type(query_reads) is not tuple or len(query_reads) != len(query_program)
+            or any(type(record) is not mixed.reads.QueryRead for record in query_reads)
+            or type(database_now) is not datetime or database_now.tzinfo is not timezone.utc
+            or type(verified_webauthn_evidence) not in (dict, MappingProxyType)):
+        raise RevocationSemanticsError("revocation effect inputs or shared work have unexpected exact types")
+    core.require_digest(request_digest, "revocation effect request digest")
+    before = work.metrics
+    context = core.KernelContext(
+        operation=candidate.OPERATION, arguments=arguments,
+        selected_rows=selected_rows, database_now=database_now,
+        request_digest=request_digest, verified_webauthn_evidence=verified_webauthn_evidence,
+        query_reads=query_reads,
+    )
+    kernel = candidate.WebAuthnCredentialRevokeKernel()._transition(context, work=work)
+    kernel_work = mixed._delta(before, work.metrics)
+
+    before = work.metrics
+    finalized = capacity._finalize_capacity(context, kernel.mutations, work=work)
+    # At most 45 declarations and 137 mutations: fixed metadata scaffolding,
+    # not row-payload traversal. Signed units are not hash/byte/node work.
+    total_work_units = capacity.transition_work_units(
+        operation=candidate.OPERATION,
+        query_work_units=sum(query.work_units for query in query_program),
+        kernel_work_units=kernel.work_units, mutations=finalized,
+    )
+    capacity.validate_transition_work_units(candidate.OPERATION, total_work_units, finalized)
+    if (not finalized or len(finalized) > spec["maximumMutations"]
+            or not 1 <= total_work_units <= spec["maximumWorkUnits"]
+            or any(type(item) is not dict or len(item) != len(_MUTATION_FIELDS)
+                   or set(item) != _MUTATION_FIELDS for item in finalized)):
+        raise RevocationSemanticsError("semantic finalized transition exceeds its source contract")
+    capacity_work = mixed._delta(before, work.metrics)
+    return kernel, finalized, total_work_units, kernel_work, capacity_work
+
+
+def _ordered_mutations(mutations, *, work: _ValidationWork):
+    """Meter the actual planner ordering of an already-owned closed inventory."""
+    if (type(work) is not _ValidationWork or type(mutations) is not tuple
+            or len(mutations) > authority_contract.operation_spec(candidate.OPERATION)["maximumMutations"]):
+        raise RevocationSemanticsError("revocation ordering requires owned mutations and exact shared work")
+    work.prepare_copy(mutations)
+    ordered = sorted(mutations, key=lambda item: (item["table"], item["keyDigest"], item["operation"]))
+    work.prepare_copy(ordered)
+    return tuple(ordered)
+
+
 def _verify(owned, ledger, capture, verifier_public_key):
     """Recompute on the caller's already-owned graph and sole live ledger.
 
@@ -244,49 +315,20 @@ def _verify(owned, ledger, capture, verifier_public_key):
     # The private proof worker returned its actual owned rows and declarations.
     # KernelContext stores these references without another graph copy or proof
     # pass. The receipt's fresh scalar MappingProxy is passed without recopying.
-    before = work.metrics
-    context = core.KernelContext(
-        operation=candidate.OPERATION, arguments=actual.arguments,
+    kernel, finalized, total_work_units, kernel_work, capacity_work = _derive_revocation_effects(
+        arguments=actual.arguments,
         selected_rows=actual.selected_rows, database_now=database_now,
         request_digest=request_digest, verified_webauthn_evidence=verified_evidence,
-        query_reads=actual.query_reads,
+        query_program=actual.query_program, query_reads=actual.query_reads, work=work,
     )
-    kernel = candidate.WebAuthnCredentialRevokeKernel()._transition(context, work=work)
-    kernel_work = mixed._delta(before, work.metrics)
-
-    before = work.metrics
-    finalized = capacity._finalize_capacity(context, kernel.mutations, work=work)
-    # These source-bounded metadata-only inventories (<=42 declarations and
-    # <=137 mutations) are fixed scaffolding, not traversal of row payloads.
-    # Signed operation work is distinct from cumulative hash/byte/node work.
-    total_work_units = capacity.transition_work_units(
-        operation=candidate.OPERATION,
-        query_work_units=sum(query.work_units for query in actual.query_program),
-        kernel_work_units=kernel.work_units, mutations=finalized,
-    )
-    capacity.validate_transition_work_units(candidate.OPERATION, total_work_units, finalized)
-    spec = authority_contract.operation_spec(candidate.OPERATION)
-    if (not finalized or len(finalized) > spec["maximumMutations"]
-            or not 1 <= total_work_units <= spec["maximumWorkUnits"]
-            or any(type(item) is not dict or len(item) != len(_MUTATION_FIELDS)
-                   or set(item) != _MUTATION_FIELDS for item in finalized)):
-        raise RevocationSemanticsError("semantic finalized transition exceeds its source contract")
-    capacity_work = mixed._delta(before, work.metrics)
 
     before = work.metrics
     # The framework appends its counter. Restore the actual planner ordering
     # before comparing every seven-field mutation, including full OLD/NEW rows.
-    work.prepare_copy(finalized)
-    ordered = sorted(finalized, key=lambda item: (item["table"], item["keyDigest"], item["operation"]))
-    work.prepare_copy(ordered)
-    mutations = tuple(ordered)
+    mutations = _ordered_mutations(finalized, work=work)
     # Proof evaluation admits a duplicate-free inventory without imposing its
     # transport order. Compare effects in the same source order on both sides.
-    work.prepare_copy(actual.mutations)
-    ordered_claim = sorted(actual.mutations,
-        key=lambda item: (item["table"], item["keyDigest"], item["operation"]))
-    work.prepare_copy(ordered_claim)
-    claimed_mutations = tuple(ordered_claim)
+    claimed_mutations = _ordered_mutations(actual.mutations, work=work)
     _canonical_equal(mutations, claimed_mutations, work=work,
                      label="proved mutations differ from genuine kernel and capacity semantics")
     mutation_binding = mixed._delta(before, work.metrics)

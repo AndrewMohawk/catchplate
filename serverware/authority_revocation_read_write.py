@@ -196,7 +196,8 @@ def _capture(*, ledger, request_digest, assertion_binding, query_reads, **inputs
 
 
 def _ascii_bytes(value: str, work: _ValidationWork) -> bytes:
-    # The only source is our strict-ASCII decoded, privately captured string.
+    # A privately captured string comes from typed inputs or retained replay.
+    # The real strict encoder rejects non-ASCII replay text under this charge.
     work.charge(input_bytes=len(value))
     return value.encode("ascii")
 
@@ -273,6 +274,59 @@ def _bind_complete_order(proved, records, work: _ValidationWork) -> None:
             raise RevocationReadWriteError("revocation complete observation differs from genuine joined order")
 
 
+def _verify(owned, ledger, raw_decode_bytes, capture) -> RevocationReadWriteInputs:
+    """Run the genuine mixed phases on one already-owned private raw graph.
+
+    An enclosing private composer supplies the same cumulative ledger. This
+    worker neither captures caller inputs nor accepts a prior proof result.
+    """
+    operation = owned["operation"]
+    # The no-audit recipe itself does not consume this field. Enforce its
+    # canonical syntax unconditionally after complete raw ownership.
+    core.require_digest(owned["requestDigest"], "revocation request digest")
+    work = _ValidationWork(QueryReadValidationLimits(*ledger.remaining()))
+    program = candidate._revocation_query_program(arguments=owned["arguments"],
+        cutoff_us=owned["cutoffUs"], request_digest=owned["requestDigest"],
+        evidence=owned["assertionBinding"], work=work)
+    generation = before = work.metrics
+    _bind_complete_declarations(owned["queries"], program, work)
+    declaration_binding = _delta(before, work.metrics)
+    before = work.metrics
+    records = _restore_reads(owned["queryReads"], work)
+    program, records = reads._validate_query_reads(operation, queries=program, query_reads=records,
+        selected_rows=tuple(owned["selectedRows"]), work=work)
+    observation_validation = _delta(before, work.metrics)
+    before = work.metrics
+    _bind_point_keys(program, records, work)
+    point_binding = _delta(before, work.metrics)
+    # Exactly one debit of this remaining-clamped work phase, before proof
+    # workers request their limits. Failed phases abort; no retry or refund.
+    ledger.charge(hashes=work.hash_work, input_bytes=work.input_bytes, json_nodes=work.json_nodes)
+    before = ledger.work.metrics
+    proved = read_write._verify(owned, ledger, capture.input_bytes, capture.json_nodes)
+    proof_work = _delta(before, ledger.work.metrics)
+    before = ledger.work.metrics
+    # Charge the CURRENT outer ledger, not the now-stale pre-proof phase.
+    _bind_complete_order(proved, records, ledger.work)
+    complete_binding = _delta(before, ledger.work.metrics)
+    return RevocationReadWriteInputs(
+        operation=proved.operation, arguments=proved.arguments, cutoff_us=proved.cutoff_us,
+        request_digest=owned["requestDigest"], assertion_binding=owned["assertionBinding"],
+        query_program=program, query_reads=records,
+        business_before_roots=proved.business_before_roots,
+        authorization_before_roots=proved.authorization_before_roots,
+        selected_rows=proved.selected_rows, before_proofs=proved.before_proofs,
+        mutations=proved.mutations, queries=proved.queries,
+        before_heads=proved.before_heads, after_heads=proved.after_heads,
+        query_frontiers=proved.query_frontiers, write_frontiers=proved.write_frontiers,
+        joined_reads=proved.joined_reads, read_primary=proved.read_primary, write=proved.write,
+        projection_manifest_digest=proved.projection_manifest_digest,
+        metrics=RevocationReadWriteMetrics(raw_decode_bytes, capture.input_bytes, capture.json_nodes,
+            generation, declaration_binding, observation_validation, point_binding, proof_work,
+            complete_binding, ledger.hashes, ledger.input_bytes, ledger.json_nodes),
+    )
+
+
 def verify_revocation_read_write_inputs(
     *, operation: str, arguments: dict[str, Any], cutoff_us: int,
     request_digest: str, assertion_binding: dict[str, str], query_reads: tuple[reads.QueryRead, ...],
@@ -302,50 +356,7 @@ def verify_revocation_read_write_inputs(
             before_proofs=before_proofs, mutations=mutations, counted_before_heads=counted_before_heads,
             query_frontiers=query_frontiers, write_frontiers=write_frontiers,
         )
-        # The no-audit recipe itself does not consume this field. Enforce its
-        # canonical syntax unconditionally after complete raw ownership.
-        core.require_digest(owned["requestDigest"], "revocation request digest")
-        work = _ValidationWork(QueryReadValidationLimits(*ledger.remaining()))
-        program = candidate._revocation_query_program(arguments=owned["arguments"],
-            cutoff_us=owned["cutoffUs"], request_digest=owned["requestDigest"],
-            evidence=owned["assertionBinding"], work=work)
-        generation = before = work.metrics
-        _bind_complete_declarations(owned["queries"], program, work)
-        declaration_binding = _delta(before, work.metrics)
-        before = work.metrics
-        records = _restore_reads(owned["queryReads"], work)
-        program, records = reads._validate_query_reads(operation, queries=program, query_reads=records,
-            selected_rows=tuple(owned["selectedRows"]), work=work)
-        observation_validation = _delta(before, work.metrics)
-        before = work.metrics
-        _bind_point_keys(program, records, work)
-        point_binding = _delta(before, work.metrics)
-        # Exactly one debit of this remaining-clamped work phase, before proof
-        # workers request their limits. Failed phases abort; no retry or refund.
-        ledger.charge(hashes=work.hash_work, input_bytes=work.input_bytes, json_nodes=work.json_nodes)
-        before = ledger.work.metrics
-        proved = read_write._verify(owned, ledger, capture.input_bytes, capture.json_nodes)
-        proof_work = _delta(before, ledger.work.metrics)
-        before = ledger.work.metrics
-        # Charge the CURRENT outer ledger, not the now-stale pre-proof phase.
-        _bind_complete_order(proved, records, ledger.work)
-        complete_binding = _delta(before, ledger.work.metrics)
-        return RevocationReadWriteInputs(
-            operation=proved.operation, arguments=proved.arguments, cutoff_us=proved.cutoff_us,
-            request_digest=owned["requestDigest"], assertion_binding=owned["assertionBinding"],
-            query_program=program, query_reads=records,
-            business_before_roots=proved.business_before_roots,
-            authorization_before_roots=proved.authorization_before_roots,
-            selected_rows=proved.selected_rows, before_proofs=proved.before_proofs,
-            mutations=proved.mutations, queries=proved.queries,
-            before_heads=proved.before_heads, after_heads=proved.after_heads,
-            query_frontiers=proved.query_frontiers, write_frontiers=proved.write_frontiers,
-            joined_reads=proved.joined_reads, read_primary=proved.read_primary, write=proved.write,
-            projection_manifest_digest=proved.projection_manifest_digest,
-            metrics=RevocationReadWriteMetrics(raw_decode_bytes, capture.input_bytes, capture.json_nodes,
-                generation, declaration_binding, observation_validation, point_binding, proof_work,
-                complete_binding, ledger.hashes, ledger.input_bytes, ledger.json_nodes),
-        )
+        return _verify(owned, ledger, raw_decode_bytes, capture)
     except (AttributeError, KeyError, TypeError, ValueError, OverflowError, RecursionError,
             core.TransitionKernelError) as exc:
         if isinstance(exc, RevocationReadWriteError):

@@ -120,8 +120,11 @@ The [regression suite](../scripts/test_authority_revocation_read_write.py) has
 20 authored methods, including an independent all-phase work oracle, exact and
 one-unit-short whole budgets, prehash ownership controls, wrong present keys,
 changed complete order and observational counter/audit presence boundaries.
-These are source only: no build or test has run for this component. Kernel and
-audit-capacity admission, raw retained transport, coordinated SQL/executor
+These are source only: no build or test has run for this component. A separate
+[retained proof bundle](authority-revocation-proof-bundle.md) now stores the raw
+graph and genuinely replays this private worker under one enclosing budget; it
+does not change this standalone API. Kernel and audit-capacity admission,
+persisted planner transport, coordinated SQL/executor
 protocol, trusted current-root witness and independently provisioned release
 and verification services remain incomplete. Snapshot/v3 is unchanged; no
 startup blocker or planner gate is bypassed.

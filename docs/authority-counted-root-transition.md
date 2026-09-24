@@ -121,7 +121,10 @@ now computes the union of write heads and every source complete-query head,
 including empty-query and read-only dependencies. It uses one shared before
 descriptor per profile, preserves read-only after heads and invokes the actual
 query joins and indexed writer under a shared operation budget. It does not
-produce retained proof transport or expand this write-effects-only document.
+itself produce retained proof transport or expand this write-effects-only document.
+The separate [revocation proof bundle](authority-revocation-proof-bundle.md)
+retains the complete raw mixed evidence and genuinely recomputes a new closed
+read/write transition; it does not reinterpret this write-only schema.
 Production still needs an explicitly versioned protocol binding that full
 vector through planning, SQL before/after checks, receipts and independent current-root
 authority. The existing nine-frame Snapshot/v3 is not widened by this component.

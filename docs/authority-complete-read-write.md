@@ -121,13 +121,12 @@ unchanged.
 
 ## Still required before planner activation
 
-The combined observation is data, not a signed retained proof transport or
-permission to mutate storage. The next integration must retain raw frontiers
-and primary evidence and bind the full before/after union into a closed
-versioned transition.
-Hashing a compact result does not eliminate the raw evidence needed to
-independently recompute it; encoding and hashing that transport must also be
-bounded and charged.
+The combined observation is data, not signed authority or permission to mutate
+storage. The separate [retained revocation bundle](authority-revocation-proof-bundle.md)
+now preserves raw frontiers, primary evidence and full observations, and binds
+the complete before/after union into a closed versioned transition. Its replay
+genuinely recomputes that evidence; encoding and hashing share the whole budget.
+This pure component does not persist or admit planner transport.
 
 [Measured query-observation validation](authority-query-read-accounting.md)
 provides genuine shared-body accounting. The separate, unexecuted

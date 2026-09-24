@@ -73,7 +73,11 @@ The current counted write-effects document is not this complete vector: it
 intentionally omits query-only heads and complete-query evidence. All primary
 and counted roots must refer to the same admitted checkpoint. Necessary count
 relationships or a matching same-database pair do not establish population,
-currentness or independent enrollment.
+currentness or independent enrollment. The separate
+[retained revocation bundle](authority-revocation-proof-bundle.md) now commits
+the full operation-local read/write union and raw evidence, but supplies no
+independent currentness or complete enrolled database vector. Its secret-bearing
+raw contents remain inside the semantic boundary, not in a witness request.
 
 ## Minimum requests, durable state and receipts
 

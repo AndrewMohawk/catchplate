@@ -109,9 +109,11 @@ driver observations; source-linkage assertions do not establish real PG16,
 TLS/ACL admission or transaction durability. No fixture has been executed for
 this source. The [source-freeze workflow](../goal.md) still applies.
 
-There is no new service action, peer permission, public transport or capability
-issuance path. Authenticated verifier-to-planner-to-writer custody, measured
-history-policy binding, durable original retry/acknowledgment bytes and writer
-response-key custody remain unfinished. Registry closure and the four WebAuthn
-authority gates remain incomplete. Production Nitro/KMS, signing and independent
+Source `.62` adds a private [measured writer action](authority-revocation-writer-action.md)
+that owns caller inputs and joins historical age/skew policy to the same held
+configuration before invoking this owner. It adds no serving purpose, peer
+permission, public transport or capability issuance path. Authenticated
+verifier-to-planner-to-writer custody, durable original retry/acknowledgment
+bytes and writer response-key custody remain unfinished. Registry closure and
+the four WebAuthn authority gates remain incomplete. Production Nitro/KMS, signing and independent
 witness services are still unprovisioned.

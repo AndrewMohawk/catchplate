@@ -55,7 +55,7 @@ Separate audit/recovery and legacy shared-role sealing keep their own policies.
 This is a metadata-namespace check, not an all-database sandbox or continuous
 monitoring against a privileged administrator.
 
-Source revision `.61`, all nineteen v9 DDL revision pins, the schema source
+Source revision `.62`, all nineteen v9 DDL revision pins, the schema source
 contract and the owner verification profile bind this change. The latter two
 include the configured writer role, exact grant inventory, function signatures
 and query digest. Older recorded contracts are not silently accepted.

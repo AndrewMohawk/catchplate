@@ -21,6 +21,7 @@ class RevocationWriterConfigurationSourceTests(unittest.TestCase):
         cls.service_text, cls.service = source("serverware/authority_service.py", 2 * 1024 * 1024)
         cls.process = definition(cls.service, "AuthorityProcess")
         cls.adapter = definition(cls.process, "_revocation_planner_persistence")
+        cls.continuation = definition(cls.service, "_revocation_writer_from_owned_configuration")
         _, cls.persistence = source("serverware/authority_revocation_persistence.py", 64 * 1024)
 
     def shape(self, actual, expected):
@@ -51,7 +52,18 @@ class RevocationWriterConfigurationSourceTests(unittest.TestCase):
         owned = assigned(adapter, "owned_payload")
         self.shape(owned, '''authority_revocation_configuration._ConfigurationCapture(
             ledger, maximum_bytes=authority_contract.MAX_REQUEST_BYTES).visit(payload)''')
-        callbacks = calls(adapter, "authority_revocation_configuration.production._callback")
+        delegated = call(adapter, "_revocation_writer_from_owned_configuration")
+        self.shape(delegated, '''_revocation_writer_from_owned_configuration(
+            owned_payload=owned_payload, configuration_digest=configuration_digest, work=work)''')
+        self.assertIs(adapter.body[-1].value, delegated)
+        self.assertFalse(calls(adapter, "authority_revocation_configuration.production._callback"))
+        continuation = self.continuation
+        self.assertEqual(continuation.args.args, [])
+        self.assertEqual([item.arg for item in continuation.args.kwonlyargs],
+                         ["owned_payload", "configuration_digest", "work"])
+        self.assertIsNone(continuation.args.kwarg)
+        self.assertIsNone(continuation.args.vararg)
+        callbacks = calls(continuation, "authority_revocation_configuration.production._callback")
         self.assertEqual(len(callbacks), 3)
         for actual, expected in zip(callbacks, (
                 'authority_revocation_configuration.production._callback(work, lambda: authority_launch_guard.require_active("planner-writer"))',
@@ -59,17 +71,21 @@ class RevocationWriterConfigurationSourceTests(unittest.TestCase):
                     lambda: _read_dsn_descriptor("SERVERWARE_POLICY_AUTHORITY_PLANNER_WRITER_POSTGRES_DSN"))''',
                 'authority_revocation_configuration.production._callback(work, lambda: dict(authority_launch_guard.generation()))')):
             self.shape(actual, expected)
-        self.assertIs(assigned(adapter, "persistence_dsn"), callbacks[1])
-        self.assertIs(assigned(adapter, "generation"), callbacks[2])
-        mapped = call(adapter, "authority_revocation_writer_configuration._persistence_from_configuration_on_work")
+        self.assertIs(assigned(continuation, "persistence_dsn"), callbacks[1])
+        self.assertIs(assigned(continuation, "generation"), callbacks[2])
+        mapped = call(continuation, "authority_revocation_writer_configuration._persistence_from_configuration_on_work")
         self.shape(mapped, '''authority_revocation_writer_configuration._persistence_from_configuration_on_work(
             payload=owned_payload, configuration_digest=configuration_digest,
             generation=generation, persistence_dsn=persistence_dsn, work=work)''')
-        self.assertIs(adapter.body[-1].value, mapped)
-        self.assertIs(adapter.body[-2].value, callbacks[2])
+        self.assertIs(continuation.body[-1].value, mapped)
+        self.assertIs(continuation.body[-2].value, callbacks[2])
         ordered = (guards[0], assigned(adapter, "configuration"), payload_pin, ledger,
-                   digest, guards[1], owned, *callbacks, mapped)
+                   digest, guards[1], owned, delegated)
         self.assertEqual([node.lineno for node in ordered], sorted(node.lineno for node in ordered))
+        self.assertEqual([node.lineno for node in (*callbacks, mapped)],
+                         sorted(node.lineno for node in (*callbacks, mapped)))
+        self.assertFalse(any(isinstance(node, ast.Name) and node.id == "self"
+                             for node in ast.walk(continuation)))
         self.assertEqual([node.attr for node in sorted((node for node in ast.walk(adapter)
             if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)
             and node.value.id == "self"), key=lambda node: (node.lineno, node.col_offset))],

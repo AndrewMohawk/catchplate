@@ -270,8 +270,13 @@ class RevocationAtomicSourceTests(unittest.TestCase):
         self.assertIsNone(factory.args.kwarg)
         self.assertIsNone(factory.args.vararg)
         self.assertFalse(calls(service, "self._revocation_planner_persistence"))
-        self.assertFalse(any(isinstance(node, ast.Attribute)
-            and node.attr == "persist_and_reserve_execution" for node in ast.walk(service)))
+        # Preserve this historical ID: the private action now deliberately
+        # composes the owner, while public service dispatch stays unchanged.
+        action = definition(process, "_persist_and_reserve_revocation_plan")
+        atomic_calls = [node for node in ast.walk(service) if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute) and node.func.attr == "persist_and_reserve_execution"]
+        self.assertEqual(len(atomic_calls), 1)
+        self.assertIn(atomic_calls[0], list(ast.walk(action)))
         handle = definition(process, "handle")
         writer, = [node for node in ast.walk(handle) if isinstance(node, ast.If)
                    and ast.unparse(node.test) == "self.role_name == 'planner-writer'"]
@@ -292,7 +297,8 @@ class RevocationAtomicSourceTests(unittest.TestCase):
         self.assertEqual(sum(ast.dump(node) == ast.dump(joined)
             for node in ast.walk(topology) if isinstance(node, ast.Compare)), 1)
         for function in (handle, serve, factory):
-            for spelling in ("persist_and_reserve_execution", "_persist_and_reserve_on_connection"):
+            for spelling in ("persist_and_reserve_execution", "_persist_and_reserve_on_connection",
+                    "_persist_and_reserve_revocation_plan"):
                 self.assertNotIn(spelling, ast.unparse(function))
         for function in (self.method, self.operation):
             for spelling in ("_socket_request", "_socket_request_bytes", "_socket_request_revocation_bytes",

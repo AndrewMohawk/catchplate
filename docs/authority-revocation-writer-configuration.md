@@ -44,6 +44,12 @@ writer launch, reads only the writer-exclusive DSN descriptor and takes the
 generation snapshot immediately before mapping. Descriptor/launch callbacks
 cannot redirect the captured configuration or silently change the work meter.
 
+Source `.62` factors the post-capture continuation into a fixed module-level
+helper, preserving this factory's API and work. The private
+[writer action](authority-revocation-writer-action.md) supplies its own held
+configuration to that same continuation after caller-input and policy capture;
+it does not call the factory to recapture mutable process configuration.
+
 These checks do not turn an arbitrary dataclass into admitted configuration.
 The actual service still depends on root-signed configuration loading, topology,
 runtime closure, attestation, active launch and descriptor custody. Constructing
@@ -52,16 +58,17 @@ actual [connection-admission and cleanup checks](authority-revocation-writer-con
 
 ## What is not activated
 
-There is no new persist, read or reserve service action. A future action adapter
-must own the bounded original byte strings, planned timestamp and all fifteen
-independent expectations before calling the service factory. The UTC database
-clock is not JSON. Request/history/root expectations must be authenticated, and
-historical age/skew policy needs an explicit join to measured configuration;
-this factory neither derives those inputs from a retained record nor configures
-them on the seven-item owner.
+There is no new serving purpose or authenticated writer RPC. The `.62` private
+action owns bounded original byte strings, planned timestamp and all fifteen
+independent expectations before callbacks. Its exact UTC database instant
+remains outside JSON, and its historical age/skew policy must match the same
+owned measured configuration. Request/history/root provenance still needs
+authentication. This factory neither derives those inputs from a retained
+record nor configures them on the seven-item owner.
 
 Source `.61` adds private [atomic retain-and-reserve](authority-revocation-atomic.md)
-to the configured owner, without connecting it to a service action.
+to the configured owner; `.62` connects it to the private measured action but
+does not enable dispatch.
 Authenticated verifier-to-planner-to-writer custody, exact retry/acknowledgment
 bytes, writer response-key custody and the whole-message size contract remain
 unfinished. Legacy writer routes and planner-only peer restrictions are

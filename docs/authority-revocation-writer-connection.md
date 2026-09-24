@@ -69,6 +69,10 @@ Source `.61` adds a separate private configured
 [`persist_and_reserve_execution`](authority-revocation-atomic.md) composition:
 one outer writer transaction and a common savepoint contain both genuine
 store calls. It does not activate a serving action or skip the second replay.
+Source `.62` connects it to a private
+[measured action](authority-revocation-writer-action.md), with owned caller
+history and explicit same-configuration policy joins. Public dispatch and
+authenticated transport remain unfinished.
 
 The legacy service still registers `persist-measured-plan`,
 `read-persisted-plan` and `reserve-execution-envelope`. Their current import path
@@ -82,6 +86,7 @@ The successor still needs authenticated verifier authorization relayed through
 the planner, durable original-byte retries, writer response-key custody, an
 explicit whole-message size contract, authenticated use of the private atomic
 composition and actual runtime/rollback evidence. Production Nitro/KMS, signing
-and independent witness services remain unprovisioned. Source fixtures and synthetic driver observations
-are not real PG16, ACL, TLS, transaction durability or deployment evidence.
+and independent witness services remain unprovisioned. Source fixtures and
+synthetic driver observations are not real PG16, ACL, TLS, transaction durability
+or deployment evidence.
 Follow [goal.md](../goal.md) before any execution.

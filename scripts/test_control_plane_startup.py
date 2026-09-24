@@ -2096,6 +2096,56 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
             {fixture.arguments["envelope_id"]: row}))
         return row
 
+    def revocation_action_fixture(self, *, work=None, recorder=None):
+        """Real inert action/factory plus gated store, not measured service admission."""
+        from serverware import authority_query_read_work as accounting
+        import test_authority_revocation_reservation as reservation_oracle
+        import test_authority_revocation_writer_action as action_oracle
+
+        source = action_oracle.WriterActionFixture()
+        writer_identity = source.configuration.expected_database_identity()
+        stored = reservation_oracle.Recorder() if recorder is None else recorder
+        stored.role = writer_identity[0]
+        events, connected = [], []
+        cursor = _RevocationOwnerWriteCursor(stored, writer_identity)
+        connection = _RevocationOwnerConnection("write", cursor, events, recorder=stored)
+        dsn, timeout = source.configuration.persistence_dsn, 2
+        work = accounting._ValidationWork(accounting.QueryReadValidationLimits()) if work is None else work
+
+        def connect(actual_dsn, **options):
+            self.assertEqual(actual_dsn, dsn)
+            self.assertEqual(set(options), {"row_factory", "connect_timeout", "options", "autocommit"})
+            self.assertEqual((options["connect_timeout"], options["options"]),
+                             (timeout, "-c search_path=pg_catalog"))
+            self.assertIs(options["autocommit"], False)
+            connected.append(actual_dsn)
+            events.append("connect.write")
+            return connection
+
+        return types.SimpleNamespace(source=source, expected=source.plan, fixture=source.plan.semantic,
+            arguments={**source.supplied(), "work": work}, writer_scope=nullcontext(),
+            recorder=stored, writer_identity=writer_identity, write_cursor=cursor, write=connection,
+            events=events, connected=connected, connect=connect)
+
+    def run_revocation_action_components(self, fixture, *, after_capture=None):
+        import test_authority_revocation_writer_action as action_oracle
+
+        work = fixture.arguments["work"]
+        args, expectations, owner = action_oracle.compose_components(fixture.source, work,
+            after_capture=after_capture)
+        fixture.persistence = owner
+        return owner.persist_and_reserve_execution(**args, work=work, **expectations)
+
+    def revocation_action_work(self, fixture, *, retry=False):
+        import test_authority_revocation_plan as oracle
+        import test_authority_revocation_writer_action as action_oracle
+
+        prefix = action_oracle.independent_prefix_work(fixture.source)["total"]
+        atomic = self.revocation_atomic_work(fixture, retry=retry)
+        return {"prefix": prefix, "atomic": atomic,
+            "total": oracle.add(prefix, atomic["total"]),
+            "admission": oracle.add(prefix, atomic["admission"])}
+
     def assert_revocation_writer_empty(self, recorder):
         self.assertEqual((recorder.parent, recorder.sidecar), (None, None))
         self.assertEqual((recorder.assertions, recorder.projections), ({}, {}))
@@ -3310,6 +3360,193 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
                 for scope in ("transaction1", "transaction2", "transaction3", "transaction4", "connection"):
                     self.assertEqual(fixture.events.count("write." + scope + ".exit"), 1)
                 self.assertNotIn("write.close", fixture.events)
+
+    def test_writer_action_components_feed_real_configured_atomic_custody_on_one_work(self):
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+        from serverware import authority_revocation_retention as retention
+        import test_authority_revocation_plan as oracle
+
+        fixture = self.revocation_action_fixture()
+        expected, work = self.revocation_action_work(fixture), fixture.arguments["work"]
+        original = fixture.source.arguments.copy()
+        instant = fixture.source.expectations["database_now"]
+        with self.revocation_owner_scope(fixture), \
+                patch.object(Ed25519PublicKey, "from_public_bytes", wraps=Ed25519PublicKey.from_public_bytes) as keys, \
+                patch.object(retention, "_verify_record_on_work", wraps=retention._verify_record_on_work) as replay, \
+                patch.object(retention.plan.mixed, "_verify", wraps=retention.plan.mixed._verify) as proof:
+            receipt, row = self.run_revocation_action_components(fixture)
+        self.assertEqual((replay.call_count, proof.call_count), (2, 2))
+        # Two mapper keys plus the current-key loader's SPKI check and the
+        # actual current receipt verifier construction. Neither current path
+        # is replaced by a successful admission/signature stub.
+        self.assertEqual(keys.call_count, 4)
+        for call in replay.call_args_list:
+            self.assertIs(call.kwargs["work"], work)
+            self.assertIs(call.kwargs["database_now"], instant)
+            self.assertEqual(call.kwargs["envelope_bytes"], original["envelope_bytes"])
+            self.assertEqual(call.kwargs["evaluation_context_bytes"], original["evaluation_context_bytes"])
+        self.assertEqual(receipt["exactEnvelopeBytes"], original["envelope_bytes"])
+        self.assertEqual(row, self.assert_revocation_atomic_rows(fixture))
+        self.assertEqual(oracle.units(work.metrics), expected["total"])
+        self.assertEqual(expected["prefix"][0], 4)
+        self.assertEqual((fixture.recorder.rollbacks, fixture.recorder.releases), (0, 4))
+        self.assertEqual(fixture.connected, [fixture.source.configuration.persistence_dsn])
+        self.assertIs(fixture.write.closed, True)
+
+    def test_writer_action_owned_inputs_survive_boundary_and_opener_alias_changes(self):
+        from serverware import authority_revocation_retention as retention
+        import test_authority_revocation_plan as oracle
+
+        for stage in ("boundary", "connect"):
+            fixture, changed = self.revocation_action_fixture(), []
+            expected = self.revocation_action_work(fixture)
+            original = copy.deepcopy(fixture.source.expectations)
+            connect = fixture.connect
+            dsn = fixture.source.configuration.persistence_dsn
+
+            def mutate():
+                fixture.source.expectations["expected_request"].clear()
+                fixture.source.expectations["expected_before"].clear()
+                fixture.source.configuration.payload.clear()
+                fixture.source.configuration.persistence_dsn = "postgresql://late-alias.invalid/metadata"
+                changed.append(stage)
+
+            def open_connection(*args, **kwargs):
+                result = connect(*args, **kwargs)
+                if stage == "connect": mutate()
+                return result
+
+            fixture.connect = open_connection
+            with self.subTest(stage=stage), self.revocation_owner_scope(fixture), \
+                    patch.object(retention, "_verify_record_on_work", wraps=retention._verify_record_on_work) as replay:
+                self.run_revocation_action_components(fixture, after_capture=mutate if stage == "boundary" else None)
+            self.assertEqual(changed, [stage])
+            self.assertEqual(fixture.connected, [dsn])
+            self.assertEqual(replay.call_count, 2)
+            for call in replay.call_args_list:
+                for name in ("expected_request", "expected_before", "maximum_assertion_age_ns",
+                             "maximum_plan_age_ns", "maximum_clock_skew_ns", "database_now"):
+                    self.assertEqual(call.kwargs[name], original[name])
+            self.assert_revocation_atomic_rows(fixture)
+            self.assertEqual(oracle.units(fixture.arguments["work"].metrics), expected["total"])
+
+    def test_writer_action_policy_denies_before_connect_and_second_replay_failure_rolls_back(self):
+        from serverware import authority_revocation_retention as retention
+        from serverware import authority_revocation_writer_action as action
+        import test_authority_revocation_plan as oracle
+        import test_authority_revocation_writer_action as action_oracle
+
+        for field in action_oracle.POLICY_FIELDS:
+            fixture = self.revocation_action_fixture()
+            fixture.source.expectations[field] += 1
+            with self.subTest(field=field), self.revocation_owner_scope(fixture), \
+                    patch.object(retention, "_verify_record_on_work", wraps=retention._verify_record_on_work) as replay:
+                with self.assertRaises(action.RevocationWriterActionError):
+                    self.run_revocation_action_components(fixture)
+            self.assertEqual((fixture.connected, replay.call_count, fixture.recorder.statements), ([], 0, []))
+            self.assertEqual(fixture.recorder.snapshot(), (None, None, {}, {}, {}))
+
+        fixture, changed, returned = self.revocation_action_fixture(), [], []
+        before = fixture.recorder.snapshot()
+
+        def corrupt_original(event):
+            if event == "write.transaction3.exit":
+                false_envelope = copy.deepcopy(fixture.expected.envelope)
+                false_envelope["signatureBase64Url"] = "A" * 86
+                fixture.recorder.sidecar["exact_envelope_base64url"] = oracle.encoded(oracle.wire(false_envelope))
+                changed.append(event)
+
+        fixture.write.on_event = corrupt_original
+        with self.revocation_owner_scope(fixture), \
+                patch.object(retention, "_verify_record_on_work", wraps=retention._verify_record_on_work) as replay, \
+                patch.object(retention.plan.mixed, "_verify", wraps=retention.plan.mixed._verify) as proof:
+            with self.assertRaises(retention.RevocationRetentionError):
+                returned.append(self.run_revocation_action_components(fixture))
+        self.assertEqual((len(changed), returned, replay.call_count, proof.call_count), (1, [], 2, 1))
+        self.assertEqual(fixture.recorder.snapshot(), before)
+        self.assertEqual((fixture.recorder.rollbacks, fixture.recorder.releases), (3, 1))
+        self.assertIs(fixture.write.closed, True)
+
+    def test_writer_action_full_composition_exact_prior_and_each_short_budget(self):
+        from serverware import authority_query_read_work as accounting
+        from serverware import authority_revocation_retention as retention
+        import test_authority_revocation_plan as oracle
+        import test_authority_revocation_reservation as reservation_oracle
+
+        for retry in (False, True):
+            for prior, dimension in (((0, 0, 0), None), ((2, 23, 7), None),
+                                     ((2, 23, 7), 0), ((2, 23, 7), 1), ((2, 23, 7), 2)):
+                fixture = self.revocation_action_fixture()
+                if retry:
+                    fixture.recorder.seed(fixture.expected, fixture.expected.now_epoch_ns)
+                    identity = fixture.arguments["envelope_id"]
+                    fixture.recorder.envelopes[identity] = reservation_oracle.expected_envelope(fixture.expected, identity)
+                before = fixture.recorder.snapshot()
+                expected = self.revocation_action_work(fixture, retry=retry)
+                limits = list(oracle.add(prior, expected["admission"]))
+                if dimension is not None: limits[dimension] -= 1
+                work = accounting._ValidationWork(accounting.QueryReadValidationLimits(*limits))
+                work.charge(hashes=prior[0], input_bytes=prior[1], json_nodes=prior[2])
+                fixture.arguments["work"] = work
+                entering = work.limits
+                with self.subTest(retry=retry, prior=prior, dimension=dimension), self.revocation_owner_scope(fixture), \
+                        patch.object(retention.plan.retained._PackagingLedger, "__init__",
+                                     side_effect=AssertionError("replacement outer proof allowance")), \
+                        patch.object(retention.plan.mixed, "_verify", wraps=retention.plan.mixed._verify) as proof:
+                    if dimension is None:
+                        self.run_revocation_action_components(fixture)
+                        self.assert_revocation_atomic_rows(fixture)
+                        self.assertEqual(proof.call_count, 2)
+                        self.assertEqual(oracle.units(work.metrics), oracle.add(prior, expected["total"]))
+                    else:
+                        with self.assertRaises(ValueError):
+                            self.run_revocation_action_components(fixture)
+                        self.assertEqual(fixture.recorder.snapshot(), before)
+                        self.assertTrue(all(start <= used <= maximum for start, used, maximum in zip(
+                            prior, oracle.units(work.metrics), limits)))
+                self.assertIs(work.limits, entering)
+                self.assertFalse(hasattr(work, "_revocation_packaging_owner"))
+
+    def test_writer_action_repeat_rebuilds_factory_and_replays_without_new_allowance(self):
+        from serverware import authority_query_read_work as accounting
+        from serverware import authority_revocation_retention as retention
+        import test_authority_revocation_plan as oracle
+
+        for dimension in (None, 0, 1, 2):
+            first = self.revocation_action_fixture()
+            second = self.revocation_action_fixture(recorder=first.recorder)
+            new, retry, prior = self.revocation_action_work(first), self.revocation_action_work(second, retry=True), (2, 23, 7)
+            limits = list(oracle.add(prior, new["total"], retry["admission"]))
+            self.assertTrue(all(later > earlier for earlier, later in zip(oracle.add(prior, new["admission"]), limits)))
+            if dimension is not None: limits[dimension] -= 1
+            work = accounting._ValidationWork(accounting.QueryReadValidationLimits(*limits))
+            work.charge(hashes=prior[0], input_bytes=prior[1], json_nodes=prior[2])
+            first.arguments["work"] = second.arguments["work"] = work
+            second.source.arguments["planned_at_epoch_ns"] += 1
+            entering = work.limits
+            with self.subTest(dimension=dimension), \
+                    patch.object(retention, "_verify_record_on_work", wraps=retention._verify_record_on_work) as replay:
+                with self.revocation_owner_scope(first):
+                    original = self.run_revocation_action_components(first)
+                self.assertEqual(oracle.units(work.metrics), oracle.add(prior, new["total"]))
+                stored = first.recorder.snapshot()
+                with self.revocation_owner_scope(second):
+                    if dimension is None:
+                        self.assertEqual(self.run_revocation_action_components(second), original)
+                    else:
+                        with self.assertRaises(ValueError):
+                            self.run_revocation_action_components(second)
+            self.assertEqual(first.recorder.snapshot(), stored)
+            if dimension is None:
+                self.assertEqual(replay.call_count, 4)
+                self.assertEqual(oracle.units(work.metrics), oracle.add(prior, new["total"], retry["total"]))
+                self.assertEqual((first.recorder.rollbacks, first.recorder.releases), (0, 8))
+            else:
+                self.assertTrue(all(start <= used <= maximum for start, used, maximum in zip(
+                    oracle.add(prior, new["total"]), oracle.units(work.metrics), limits)))
+            self.assertTrue(all(call.kwargs["work"] is work for call in replay.call_args_list))
+            self.assertIs(work.limits, entering)
+            self.assertFalse(hasattr(work, "_revocation_packaging_owner"))
 
     def test_private_original_wire_replays_actual_production_with_external_expectations(self):
         from serverware import authority_query_read_work as accounting

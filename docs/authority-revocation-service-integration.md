@@ -109,6 +109,9 @@ ingress, serving integration of the [independently observed planning path](autho
 and its [original-byte verifier handoff](authority-revocation-handoff.md),
 durable original invocation retention, and the successor order: retain plan,
 reserve execution, produce capability, sign/send invocation, issue capability.
+Source `.62` supplies a private [measured writer action](authority-revocation-writer-action.md)
+for atomic retain-and-reserve with independent inputs and same-configuration
+policy binding. It is not connected to authenticated RPC or serving dispatch.
 Post-plan witness binding, current-root one-use execution and atomic terminal
 publication remain incomplete. The four unfinished WebAuthn authority kernels
 must not be bypassed to make the registry import or tests succeed.

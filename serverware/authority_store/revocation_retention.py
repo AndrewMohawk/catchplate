@@ -9,6 +9,7 @@ No function commits the caller transaction or grants execution/currentness.
 from __future__ import annotations
 
 import base64
+import time
 from contextlib import contextmanager
 from itertools import chain
 
@@ -16,6 +17,7 @@ from serverware import authority_complete_query_batch as batch
 from serverware import authority_contract
 from serverware import authority_revocation_retention as retention
 from serverware.authority_query_read_work import _ValidationWork
+from serverware.authority_store import authorization_records
 from serverware.authority_store.planner_connection import (
     _db_value, _require_fresh_deadline, _require_planner_writer,
     _require_postgres_connection,
@@ -24,6 +26,8 @@ from serverware.authority_store.planner_connection import (
 
 _PARENT = "serverware_metadata.policy_authority_planner_transactions"
 _SIDECAR = "serverware_metadata.policy_authority_revocation_retained_plans"
+_ASSERTION = "serverware_metadata.policy_authority_webauthn_assertion_evidence"
+_PROJECTION = "serverware_metadata.policy_authority_authorization_projections"
 _RESERVATION_FIELDS = (
     "planner_transaction_id", "operation", "operation_id", "request_digest",
     "capability_id", "operation_contract_digest", "query_manifest_digest",
@@ -272,6 +276,87 @@ def _planned_time(value, reservation):
         raise _error("revocation planned timestamp is outside its reservation interval")
 
 
+def _authorization_bindings(record, work):
+    """Materialize genuine replay's owned data, never admit a result token.
+
+    Both legacy and v4 writers use the actual shared row materializers. Their
+    variable encodings, hashes and copies debit this existing work; the fixed
+    column inventory is not whole-process allocation accounting.
+    """
+    evidence = authorization_records._assertion_storage_row(
+        record.payload["webauthnEvidence"], work=work)
+    projection = authorization_records._projection_storage_row(
+        record.payload["authorizationProjection"], work=work)
+    _match(evidence, {"assertion_evidence_digest":
+        record.payload["authorizationProjection"]["assertionEvidenceDigest"]}, work)
+    _match(projection, {
+        "authorization_projection_digest": record.payload["measuredPlan"]["authorizationProjectionDigest"],
+        "assertion_evidence_digest": evidence["assertion_evidence_digest"],
+        "planner_transaction_id": record.payload["measuredPlan"]["plannerTransactionId"],
+    }, work)
+    return evidence, projection
+
+
+def _admit_current_authorization(record, work):
+    """New custody requires live write admission, not historical freshness.
+
+    Preserve the existing evidence/projection maximum-age and skew windows,
+    using today's configured verifier key for the actual receipt signature.
+    Key loading/SPKI configuration admission is a trusted-config
+    exclusion, not claimed as JSON work. The receipt body is measured.
+    """
+    evidence, projection = record.payload["webauthnEvidence"], record.payload["authorizationProjection"]
+    maximum_age = _db_value("_POLICY_AUTHORITY_VERIFIER_RESPONSE_MAX_AGE_NS")
+    maximum_skew = _db_value("_POLICY_AUTHORITY_VERIFIER_MAX_CLOCK_SKEW_NS")
+    if (type(maximum_age) is not int or not 1 <= maximum_age <= 2**63 - 1
+            or type(maximum_skew) is not int or not 0 <= maximum_skew <= 2**63 - 1):
+        raise _error("revocation current authorization clock policy is invalid")
+    for document, field in ((evidence, "verifiedAtEpochNs"), (projection, "createdAtEpochNs")):
+        now = _callback(work, time.time_ns)
+        if (type(now) is not int or not 1 <= now <= 2**63 - 1
+                or document[field] > now + maximum_skew
+                or document["expiresAtEpochNs"] <= now
+                or document["expiresAtEpochNs"] <= document[field]
+                or document["expiresAtEpochNs"] - document[field] > maximum_age):
+            raise _error("revocation current authorization evidence or projection is stale")
+    authorization_records._verify_pinned_verifier_envelope(evidence,
+        domain="serverware.policyAuthorityVerifiedWebAuthnAssertionReceipt/v1",
+        receipt_digest_field="verifiedAssertionReceiptDigest", work=work)
+
+
+def _owned_authorization_row(row, expected, work):
+    # Source materialization already bounds the exact expected JSON/text. Use
+    # those lengths before copying returned data; do not allocate an oversized
+    # SQL string merely to discover that an immutable retry differs.
+    if (type(row) is not dict or len(row) != len(expected)
+            or any(type(name) is not str or len(name) > 128 for name in row)
+            or set(row) != set(expected)
+            or any(type(row[name]) is not type(value)
+                   or type(value) is str and len(row[name]) > len(value)
+                   for name, value in expected.items())):
+        raise _error("revocation authorization custody row is not closed exact scalar data")
+    work.prepare_copy(row)
+    return row.copy()
+
+
+def _check_authorization_rows(cursor, rows, work, *, insert=False):
+    for table, key, expected in zip((_ASSERTION, _PROJECTION),
+            ("assertion_evidence_digest", "authorization_projection_digest"), rows):
+        # This inventory comes only from the fixed shared source materializers.
+        # There is no caller-selected table, column or SQL fragment.
+        fields = tuple(expected)
+        if insert:
+            parameters = _parameters(expected, fields, work)
+            _callback(work, cursor.execute,
+                "INSERT INTO " + table + " (" + ", ".join(fields) + ") VALUES ("
+                + ", ".join(("%s",) * len(fields)) + ") ON CONFLICT (" + key + ") DO NOTHING",
+                parameters)
+        observed = _owned_authorization_row(_read(cursor,
+            "SELECT " + ", ".join(fields) + " FROM " + table + " WHERE " + key + " = %s",
+            (expected[key],), work), expected, work)
+        _match(observed, expected, work)
+
+
 def _parameters(document, fields, work, extra=()):
     # Conservative full document preparation before the real value tuple.
     work.prepare_copy(document)
@@ -314,6 +399,7 @@ def persist_revocation_planner_record(*, envelope_bytes: bytes, evaluation_conte
     record = retention._verify_record_on_work(envelope_bytes=envelope_bytes,
         evaluation_context_bytes=evaluation_context_bytes, work=work, **expectations)
     reservation, planned, sidecar = _bindings(record, work)
+    authorization = _authorization_bindings(record, work)
     _planned_time(planned_at_epoch_ns, reservation)
     reservation_parameters = _parameters(reservation, _RESERVATION_FIELDS, work)
     sidecar_parameters = _parameters(sidecar, _RECORD_FIELDS, work)
@@ -331,6 +417,8 @@ def persist_revocation_planner_record(*, envelope_bytes: bytes, evaluation_conte
                 _match(row, {name: None for name in _PLANNED_FIELDS}, work)
                 if row["planned_at_epoch_ns"] is not None:
                     raise _error("revocation reserved row has a planned timestamp")
+                _admit_current_authorization(record, work)
+                _check_authorization_rows(cursor, authorization, work, insert=True)
                 _callback(work, cursor.execute, _INSERT_RECORD, sidecar_parameters)
                 stored = _owned_row(_read(cursor, _SELECT_RECORD, identity, work), _RECORD_FIELDS, work)
                 _match(stored, sidecar, work)
@@ -343,6 +431,7 @@ def persist_revocation_planner_record(*, envelope_bytes: bytes, evaluation_conte
                 if row["status"] != "planned" or row["planned_at_epoch_ns"] != planned_at_epoch_ns:
                     raise _error("revocation planner completion status or timestamp changed")
             elif row["status"] in {"planned", "consumed"}:
+                _check_authorization_rows(cursor, authorization, work)
                 stored = _owned_row(_read(cursor, _SELECT_RECORD, identity, work), _RECORD_FIELDS, work)
                 _match(stored, sidecar, work)
             else:
@@ -390,4 +479,7 @@ def read_revocation_planner_record(*, planner_transaction_id: str, connection,
     _match(row, planned, work)
     _match(stored, sidecar, work)
     _planned_time(row["planned_at_epoch_ns"], reservation)
+    authorization = _authorization_bindings(record, work)
+    with _context(_callback(work, raw.cursor), work) as cursor:
+        _check_authorization_rows(cursor, authorization, work)
     return _receipt(record, row)

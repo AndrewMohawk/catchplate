@@ -152,8 +152,14 @@ def production_digest_functions(namespace: str) -> list[str]:
     return statements
 
 
-def production_retained_immutable_sql() -> tuple[str, str]:
+def production_retained_immutable_sql(
+        table="policy_authority_revocation_retained_plans") -> tuple[str, str]:
     """Extract the real immutable function and attachment, without db imports."""
+    if type(table) is not str or table not in {
+            "policy_authority_revocation_retained_plans",
+            "policy_authority_webauthn_assertion_evidence",
+            "policy_authority_authorization_projections"}:
+        raise ValueError("custody fixture immutable target is not source-fixed")
     path = ROOT / "serverware/db.py"
     if path.stat().st_size > 16 * 1024 * 1024:
         raise ValueError("database source exceeds component fixture bound")
@@ -162,9 +168,8 @@ def production_retained_immutable_sql() -> tuple[str, str]:
     inventory_end = source.index("\n)\n", inventory_start) + 2
     declaration = ast.parse(source[inventory_start:inventory_end]).body
     if (len(declaration) != 1 or not isinstance(declaration[0], ast.Assign)
-            or "policy_authority_revocation_retained_plans"
-            not in ast.literal_eval(declaration[0].value)):
-        raise ValueError("retained sidecar is not in the actual immutable inventory")
+            or ast.literal_eval(declaration[0].value).count(table) != 1):
+        raise ValueError("custody table is not in the actual immutable inventory")
     marker = ('        conn.execute(\n            """\n'
               '            CREATE OR REPLACE FUNCTION serverware_reject_policy_authority_mutation()')
     start = source.index(marker)
@@ -183,7 +188,7 @@ def production_retained_immutable_sql() -> tuple[str, str]:
         raise ValueError("immutable guard function is not the actual static SQL")
     if not isinstance(attachment.args[0], ast.JoinedStr):
         raise ValueError("immutable guard attachment is not the actual source template")
-    bindings = {"table": "policy_authority_revocation_retained_plans",
+    bindings = {"table": table,
                 "trigger": "fixture_retained_immutable"}
     fragments = []
     for fragment in attachment.args[0].values:
@@ -753,6 +758,8 @@ class AuthorityRevocationRetentionPostgresTests(unittest.TestCase):
 
     PARENT = "policy_authority_planner_transactions"
     CHILD = "policy_authority_revocation_retained_plans"
+    ASSERTION = "policy_authority_webauthn_assertion_evidence"
+    PROJECTION = "policy_authority_authorization_projections"
     RESERVATION = (
         "planner_transaction_id", "plan_protocol", "operation", "operation_id", "request_digest",
         "capability_id", "operation_contract_digest", "query_manifest_digest",
@@ -786,8 +793,9 @@ class AuthorityRevocationRetentionPostgresTests(unittest.TestCase):
             sql.Identifier(self.schema)))
         self.connection.execute(authority_v9_schema_source())
         self.connection.execute(planner_retention_guard_sql(self.namespace))
-        for statement in production_retained_immutable_sql():
-            self.connection.execute(statement)
+        for table in (self.CHILD, self.ASSERTION, self.PROJECTION):
+            for statement in production_retained_immutable_sql(table):
+                self.connection.execute(statement)
 
     def rollback_owned_schema(self):
         self.connection.rollback()
@@ -795,13 +803,78 @@ class AuthorityRevocationRetentionPostgresTests(unittest.TestCase):
             "SELECT pg_catalog.to_regnamespace(%s)", (self.schema,)).fetchone(), (None,))
 
     def rows(self, table):
+        key = "assertion_evidence_digest" if table == self.ASSERTION else "planner_transaction_id"
         return tuple(row[0] for row in self.connection.execute(sql.SQL(
             'SELECT pg_catalog.to_jsonb(t) FROM {} AS t '
-            'ORDER BY planner_transaction_id COLLATE "C"').format(
-                sql.Identifier(self.schema, table))).fetchall())
+            'ORDER BY {} COLLATE "C"').format(
+                sql.Identifier(self.schema, table), sql.Identifier(key))).fetchall())
 
     def snapshot(self):
         return self.rows(self.PARENT), self.rows(self.CHILD)
+
+    def custody_snapshot(self):
+        return (*self.snapshot(), self.rows(self.ASSERTION), self.rows(self.PROJECTION))
+
+    def authorization_rows(self, label="one"):
+        """Independent complete DDL rows, not valid cryptographic receipts."""
+        parent, _, _ = self.records(label)
+        evidence = {
+            "assertion_evidence_digest": token("assertion-" + label),
+            "operation": parent["operation"], "operation_id": parent["operation_id"],
+            "request_digest": parent["request_digest"], "capability_id": parent["capability_id"],
+            "challenge_id": "challenge-" + label, "challenge_digest": token("challenge-" + label),
+            "client_challenge_digest": token("client-challenge-" + label),
+            "credential_record_id": "credential-record-" + label, "credential_id": "credential-" + label,
+            "credential_policy_digest": token("credential-policy"),
+            "authenticator_data_base64url": "eA", "authenticator_data_digest": token("authenticator"),
+            "client_data_json_base64url": "e30", "client_data_json_digest": token("client-data"),
+            "signature_base64url": "eA", "signature_digest": token("signature"),
+            "rp_id": "fixture.invalid", "rp_id_hash_digest": token("rp-id"),
+            "origin": "https://fixture.invalid", "flags": 5, "user_present": 1,
+            "user_verified": 1, "prior_counter": 0, "counter": 1,
+            "trust_high_water_digest": token("trust-water"), "metadata_publication_sequence": 1,
+            "verifier_session_identity_digest": token("verifier-session"),
+            "verifier_measurement_digest": token("verifier-measurement"),
+            "verifier_attestation_receipt_digest": token("verifier-attestation"),
+            "verified_assertion_receipt_digest": token("receipt-" + label),
+            "evidence_json": "{}", "verified_at_epoch_ns": 1000, "expires_at_epoch_ns": 2000,
+            "source_revision": authority_contract.SOURCE_REVISION,
+        }
+        projection = {
+            "authorization_projection_digest": token("projection-" + label),
+            "planner_transaction_id": parent["planner_transaction_id"],
+            "operation": parent["operation"], "operation_id": parent["operation_id"],
+            "request_digest": parent["request_digest"], "capability_id": parent["capability_id"],
+            "operation_contract_digest": parent["operation_contract_digest"],
+            "authorization_reads_json": "[]", "authorization_reads_digest": token("reads"),
+            "source_rows_json": "[]", "source_rows_digest": token("source-rows"),
+            "source_high_water_digest": token("source-water"), "approver_policy_digest": None,
+            "assertion_evidence_digest": evidence["assertion_evidence_digest"],
+            "projection_json": "{}", "verifier_session_identity_digest": token("verifier-session"),
+            "verifier_measurement_digest": token("verifier-measurement"),
+            "verifier_attestation_receipt_digest": token("verifier-attestation"),
+            "created_at_epoch_ns": 1000, "expires_at_epoch_ns": 2000,
+            "source_revision": authority_contract.SOURCE_REVISION,
+        }
+        self.assertEqual((len(evidence), len(projection)), (35, 21))
+        return evidence, projection
+
+    def unique_constraint(self, table, columns):
+        # PostgreSQL may truncate generated compound constraint names. Bind
+        # the actual name to independent exact column order, not a guessed name.
+        rows = self.connection.execute(
+            "SELECT constraint_record.conname, ARRAY("
+            "SELECT attribute.attname::text FROM pg_catalog.unnest(constraint_record.conkey) "
+            "WITH ORDINALITY AS key_column(attnum, ordinal) "
+            "JOIN pg_catalog.pg_attribute AS attribute "
+            "ON attribute.attrelid = constraint_record.conrelid AND attribute.attnum = key_column.attnum "
+            "ORDER BY key_column.ordinal) FROM pg_catalog.pg_constraint AS constraint_record "
+            "WHERE constraint_record.conrelid = %s::regclass "
+            "AND constraint_record.contype IN ('p', 'u')",
+            (self.namespace + "." + table,)).fetchall()
+        matching = [name for name, actual in rows if actual == list(columns)]
+        self.assertEqual(len(matching), 1)
+        return matching[0]
 
     def insert(self, table, row):
         self.connection.execute(sql.SQL("INSERT INTO {} ({}) VALUES ({})").format(
@@ -1067,6 +1140,132 @@ class AuthorityRevocationRetentionPostgresTests(unittest.TestCase):
             with self.connection.transaction():
                 self.update(self.PARENT, failed["planner_transaction_id"], reserved)
         self.assertEqual(self.snapshot(), baseline)
+
+    def test_assertion_custody_primary_challenge_and_identity_are_unique(self):
+        original, _ = self.authorization_rows()
+        self.insert(self.ASSERTION, original)
+        self.assertEqual(self.rows(self.ASSERTION), (original,))
+        baseline = self.custody_snapshot()
+        identity = ("operation_id", "request_digest", "capability_id")
+        variants = (
+            (("assertion_evidence_digest",), {**self.authorization_rows("primary")[0],
+                "assertion_evidence_digest": original["assertion_evidence_digest"]}),
+            (("challenge_id",), {**self.authorization_rows("challenge")[0],
+                "challenge_id": original["challenge_id"]}),
+            (identity, {**self.authorization_rows("identity")[0],
+                **{name: original[name] for name in identity}}),
+        )
+        for columns, changed in variants:
+            expected_name = self.unique_constraint(self.ASSERTION, columns)
+            if len(columns) == 1:
+                self.assertEqual(expected_name, self.ASSERTION + (
+                    "_pkey" if columns[0] == "assertion_evidence_digest" else "_challenge_id_key"))
+            with self.subTest(columns=columns), self.assertRaises(psycopg.errors.UniqueViolation) as caught:
+                with self.connection.transaction():
+                    self.insert(self.ASSERTION, changed)
+            self.assertEqual((caught.exception.sqlstate, caught.exception.diag.constraint_name),
+                             ("23505", expected_name))
+            self.assertEqual(self.custody_snapshot(), baseline)
+
+    def test_authorization_custody_primary_transaction_and_identity_are_unique(self):
+        _, original = self.authorization_rows()
+        self.insert(self.PROJECTION, original)
+        self.assertEqual(self.rows(self.PROJECTION), (original,))
+        # Actual DDL has no custody-chain FK. These rows are not a verified
+        # record, and an absent referenced assertion is not database admission.
+        foreign_keys = self.connection.execute(
+            "SELECT conname FROM pg_catalog.pg_constraint "
+            "WHERE conrelid = %s::regclass AND contype = 'f'",
+            (self.namespace + "." + self.PROJECTION,)).fetchall()
+        self.assertEqual(foreign_keys, [])
+        baseline = self.custody_snapshot()
+        identity = ("operation_id", "request_digest", "capability_id")
+        variants = (
+            (("authorization_projection_digest",), {**self.authorization_rows("primary")[1],
+                "authorization_projection_digest": original["authorization_projection_digest"]}),
+            (("planner_transaction_id",), {**self.authorization_rows("transaction")[1],
+                "planner_transaction_id": original["planner_transaction_id"]}),
+            (identity, {**self.authorization_rows("identity")[1],
+                **{name: original[name] for name in identity}}),
+        )
+        for columns, changed in variants:
+            expected_name = self.unique_constraint(self.PROJECTION, columns)
+            if columns == ("authorization_projection_digest",):
+                self.assertEqual(expected_name, self.PROJECTION + "_pkey")
+            with self.subTest(columns=columns), self.assertRaises(psycopg.errors.UniqueViolation) as caught:
+                with self.connection.transaction():
+                    self.insert(self.PROJECTION, changed)
+            self.assertEqual((caught.exception.sqlstate, caught.exception.diag.constraint_name),
+                             ("23505", expected_name))
+            self.assertEqual(self.custody_snapshot(), baseline)
+
+    def test_authorization_custody_update_delete_preserve_all_original_columns(self):
+        evidence, projection = self.authorization_rows()
+        for table, row in ((self.ASSERTION, evidence), (self.PROJECTION, projection)):
+            self.insert(table, row)
+        baseline = self.custody_snapshot()
+        for table, key, row in ((self.ASSERTION, "assertion_evidence_digest", evidence),
+                               (self.PROJECTION, "authorization_projection_digest", projection)):
+            for name in row:
+                with self.subTest(table=table, column=name), self.assertRaisesRegex(
+                        psycopg.errors.RaiseException, "candidate-authority history is immutable") as caught:
+                    with self.connection.transaction():
+                        self.connection.execute(sql.SQL("UPDATE {} SET {} = %s WHERE {} = %s").format(
+                            sql.Identifier(self.schema, table), sql.Identifier(name), sql.Identifier(key)),
+                            (self.changed(row[name]), row[key]))
+                self.assertEqual(caught.exception.sqlstate, "P0001")
+                self.assertEqual(self.custody_snapshot(), baseline)
+            with self.subTest(table=table, action="equal-update"), self.assertRaisesRegex(
+                    psycopg.errors.RaiseException, "candidate-authority history is immutable") as caught:
+                with self.connection.transaction():
+                    self.connection.execute(sql.SQL("UPDATE {} SET {} = %s WHERE {} = %s").format(
+                        sql.Identifier(self.schema, table), sql.Identifier(key), sql.Identifier(key)),
+                        (row[key], row[key]))
+            self.assertEqual(caught.exception.sqlstate, "P0001")
+            with self.subTest(table=table, action="delete"), self.assertRaisesRegex(
+                    psycopg.errors.RaiseException, "candidate-authority history is immutable") as caught:
+                with self.connection.transaction():
+                    self.connection.execute(sql.SQL("DELETE FROM {} WHERE {} = %s").format(
+                        sql.Identifier(self.schema, table), sql.Identifier(key)), (row[key],))
+            self.assertEqual(caught.exception.sqlstate, "P0001")
+            self.assertEqual(self.custody_snapshot(), baseline)
+
+    def test_four_custody_rows_roll_back_on_later_immutable_failure(self):
+        def complete(label):
+            reserved, planned, child = self.records(label)
+            evidence, projection = self.authorization_rows(label)
+            planned = {**planned, "authorization_projection_digest": projection["authorization_projection_digest"]}
+            self.connection.execute("SET CONSTRAINTS ALL DEFERRED")
+            self.insert(self.PARENT, reserved)
+            self.insert(self.ASSERTION, evidence)
+            self.insert(self.PROJECTION, projection)
+            self.insert(self.CHILD, child)
+            self.update(self.PARENT, reserved["planner_transaction_id"],
+                        {name: planned[name] for name in (*self.PAYLOAD, "status")})
+            self.connection.execute("SET CONSTRAINTS ALL IMMEDIATE")
+            return planned, child, evidence, projection
+
+        prior = complete("prior")
+        baseline = self.custody_snapshot()
+        self.assertEqual(baseline, tuple((row,) for row in prior))
+        with self.assertRaisesRegex(psycopg.errors.RaiseException,
+                "candidate-authority history is immutable") as caught:
+            with self.connection.transaction():
+                current = complete("current")
+                actual = self.custody_snapshot()
+                self.assertEqual(tuple(map(len, actual)), (2, 2, 2, 2))
+                for rows, row in zip(actual, current):
+                    self.assertIn(row, rows)
+                self.connection.execute(sql.SQL("UPDATE {} SET evidence_json = %s "
+                    "WHERE assertion_evidence_digest = %s").format(
+                        sql.Identifier(self.schema, self.ASSERTION)),
+                    ('{"changed":true}', current[2]["assertion_evidence_digest"]))
+        self.assertEqual(caught.exception.sqlstate, "P0001")
+        self.assertEqual(self.custody_snapshot(), baseline)
+        self.connection.execute("SET CONSTRAINTS ALL IMMEDIATE")
+        self.assertEqual(self.custody_snapshot(), baseline)
+        # The outer transaction is still open and rollback-owned. This proves
+        # neither top-level commit nor the production verifier/store call path.
 
 
 if __name__ == "__main__":

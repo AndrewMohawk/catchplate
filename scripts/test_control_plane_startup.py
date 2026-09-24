@@ -1796,6 +1796,26 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
 
         expected, fixture, cursor, _, supplied, writer_scope = self.revocation_plan_fixture(
             work=work, include_audit=False)
+        # This owner uses the real database's thirty-second write policy, not
+        # the component fixtures' synthetic three-hundred-second allowance.
+        # Re-sign both independently built receipts before any observed work;
+        # the primary populations, roots and business effects are unchanged.
+        for source_fixture in (expected.semantic, fixture):
+            receipt = source_fixture.receipt
+            receipt.evidence = receipt.sign({**receipt.evidence,
+                "expiresAtEpochNs": receipt.now + 10_000_000_000})
+            source_fixture._context()
+            self.assertLessEqual(receipt.evidence["expiresAtEpochNs"]
+                - receipt.evidence["verifiedAtEpochNs"], db._POLICY_AUTHORITY_VERIFIER_RESPONSE_MAX_AGE_NS)
+        self.assertEqual(expected.semantic.receipt.evidence, fixture.receipt.evidence)
+        expected.deadline_epoch_ns = expected.now_epoch_ns + 20_000_000_000
+        expected.deadline_monotonic_ns = expected.now_monotonic_ns + 20_000_000_000
+        expected.rebuild_payload()
+        self.assertLessEqual(expected.deadline_epoch_ns - expected.reserved_at_epoch_ns,
+                             db._POLICY_AUTHORITY_VERIFIER_RESPONSE_MAX_AGE_NS)
+        supplied["evidence"] = copy.deepcopy(fixture.receipt.evidence)
+        supplied["context"]["deadlineEpochNs"] = expected.deadline_epoch_ns
+        supplied["context"]["deadlineMonotonicNs"] = expected.deadline_monotonic_ns
         identity = self.planner.PlannerIdentity(
             database_role="synthetic-read-planner", tls_client_dn="CN=synthetic-planner",
             tls_client_serial="17", tls_issuer_dn="CN=synthetic-issuer",
@@ -1847,11 +1867,20 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
 
     def revocation_owner_scope(self, fixture):
         import psycopg
+        from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
         from serverware.authority_store import planner_connection as admission
+        import test_authority_revocation_plan as oracle
 
         scope = ExitStack()
         scope.enter_context(fixture.writer_scope)
         scope.enter_context(patch.object(psycopg, "connect", side_effect=fixture.connect))
+        key = fixture.fixture.receipt.key.public_key()
+        scope.enter_context(patch.dict(os.environ, {
+            "SERVERWARE_POLICY_AUTHORITY_VERIFIER_ED25519_PUBLIC_KEY_BASE64URL":
+                oracle.encoded(key.public_bytes(Encoding.Raw, PublicFormat.Raw)),
+            "SERVERWARE_POLICY_AUTHORITY_VERIFIER_SPKI_SHA256":
+                oracle.sha(key.public_bytes(Encoding.DER, PublicFormat.SubjectPublicKeyInfo)),
+        }))
         scope.enter_context(patch.object(admission.time, "time_ns", return_value=fixture.expected.now_epoch_ns))
         scope.enter_context(patch.object(admission.time, "monotonic_ns", return_value=fixture.expected.now_monotonic_ns))
         return scope
@@ -1950,6 +1979,9 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
                 self.assertEqual(fixture.recorder.parent[name], expected, name)
         self.assertEqual(fixture.recorder.parent["exact_plan_base64url"], oracle.encoded(produced.signed.payload_bytes))
         self.assertEqual(fixture.recorder.sidecar["exact_envelope_base64url"], oracle.encoded(produced.signed.envelope_bytes))
+        assertion, projection = store_oracle.expected_authorization_rows(fixture.expected)
+        self.assertEqual(fixture.recorder.assertions, {assertion["assertion_evidence_digest"]: assertion})
+        self.assertEqual(fixture.recorder.projections, {projection["authorization_projection_digest"]: projection})
         self.assertEqual((fixture.recorder.rollbacks, fixture.recorder.releases), (0, 2))
         self.assertGreater(work.hash_work, produced.metrics.hash_work)
         self.assertGreater(work.input_bytes, produced.metrics.input_bytes)
@@ -2161,10 +2193,12 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
         self.assertEqual(work.metrics, after_callback[0])
 
     def test_configured_revocation_owner_writer_failure_rolls_back_both_actual_transaction_scopes(self):
+        from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
         from serverware import db
         from serverware.authority_store import planner_connection as admission
+        import test_authority_revocation_plan as oracle
 
-        for failure in ("cas", "expired"):
+        for failure in ("cas", "expired", "wrong_key", "wrong_spki"):
             fixture, produced, receipts = self.revocation_owner_fixture(), [], []
             original = self.planner.TypedTransitionPlanningProgram._produce_revocation_plan
 
@@ -2177,12 +2211,36 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
             fixture.recorder.fail_completion = failure == "cas"
             deadline = (patch.object(admission.time, "time_ns",
                 return_value=fixture.expected.deadline_epoch_ns + 1) if failure == "expired" else nullcontext())
-            error = db.MetadataStoreError if failure == "cas" else ValueError
+            current_configuration = {}
+            if failure == "wrong_key":
+                key = fixture.expected.other_key.public_key()
+                current_configuration = {
+                    "SERVERWARE_POLICY_AUTHORITY_VERIFIER_ED25519_PUBLIC_KEY_BASE64URL":
+                        oracle.encoded(key.public_bytes(Encoding.Raw, PublicFormat.Raw)),
+                    "SERVERWARE_POLICY_AUTHORITY_VERIFIER_SPKI_SHA256":
+                        oracle.sha(key.public_bytes(Encoding.DER, PublicFormat.SubjectPublicKeyInfo)),
+                }
+            elif failure == "wrong_spki":
+                current_configuration = {"SERVERWARE_POLICY_AUTHORITY_VERIFIER_SPKI_SHA256":
+                    oracle.sha(b"different current verifier SPKI")}
+            error, message = {
+                "cas": (db.MetadataStoreError, "completion CAS failed"),
+                "expired": (ValueError, "stale or inconsistent"),
+                "wrong_key": (ValueError, "measured verifier envelope signature is invalid"),
+                "wrong_spki": (db.MetadataStoreError, "does not match its SPKI pin"),
+            }[failure]
+            # Historical pins and the actual signed bytes remain unchanged.
+            # A different genuinely constructed current key has its matching
+            # SPKI pin; the SPKI-only case retains the real original key.
             with self.subTest(failure=failure), self.revocation_owner_scope(fixture), deadline, \
+                    patch.dict(os.environ, current_configuration), \
+                    patch.object(db, "_policy_authority_verifier_public_key",
+                                 wraps=db._policy_authority_verifier_public_key) as current_key, \
                     patch.object(self.planner.TypedTransitionPlanningProgram, "_produce_revocation_plan",
                                  autospec=True, side_effect=produce):
-                with self.assertRaises(error):
+                with self.assertRaisesRegex(error, message):
                     receipts.append(fixture.owner.produce_and_persist(**fixture.arguments))
+            self.assertEqual(current_key.call_count, int(failure != "expired"))
             self.assertEqual((len(produced), receipts), (1, []))
             self.assert_produced_revocation_plan(fixture.expected, fixture.fixture, produced[0])
             for closed in ("read.cursor.exit", "read.transaction1.exit", "read.connection.exit"):
@@ -2194,7 +2252,12 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
             updates = [sql for sql, _ in fixture.recorder.statements
                        if sql.startswith("UPDATE serverware_metadata.policy_authority_planner_transactions")]
             self.assertEqual(len(updates), int(failure == "cas"))
+            for table in ("policy_authority_webauthn_assertion_evidence",
+                          "policy_authority_authorization_projections"):
+                self.assertEqual(any(sql.startswith("INSERT INTO serverware_metadata." + table)
+                    for sql, _ in fixture.recorder.statements), failure == "cas")
             self.assertEqual((fixture.recorder.parent, fixture.recorder.sidecar), (None, None))
+            self.assertEqual((fixture.recorder.assertions, fixture.recorder.projections), ({}, {}))
             self.assertEqual((fixture.read.info.transaction_status, fixture.write.info.transaction_status), (0, 0))
             self.assertEqual(fixture.events.count("write.connection.exit"), 1)
             self.assertGreater(fixture.arguments["work"].hash_work, produced[0].metrics.hash_work)

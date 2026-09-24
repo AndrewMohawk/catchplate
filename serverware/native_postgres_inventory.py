@@ -11,7 +11,7 @@ import re
 
 
 INVENTORY_SCHEMA = "serverware.nativePostgresInventory/v1"
-TOTAL_TESTS = 262
+TOTAL_TESTS = 266
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,7 +78,11 @@ SUITES: tuple[NativePostgresSuite, ...] = (
     NativePostgresSuite(
         script="scripts/test_authority_root_transition_postgres.py",
         test_ids=(
+            "AuthorityRevocationRetentionPostgresTests.test_assertion_custody_primary_challenge_and_identity_are_unique",
+            "AuthorityRevocationRetentionPostgresTests.test_authorization_custody_primary_transaction_and_identity_are_unique",
+            "AuthorityRevocationRetentionPostgresTests.test_authorization_custody_update_delete_preserve_all_original_columns",
             "AuthorityRevocationRetentionPostgresTests.test_deferred_cycle_accepts_original_sidecar_before_parent_completion",
+            "AuthorityRevocationRetentionPostgresTests.test_four_custody_rows_roll_back_on_later_immutable_failure",
             "AuthorityRevocationRetentionPostgresTests.test_incomplete_or_mismatched_pairs_roll_back_at_deferred_boundary",
             "AuthorityRevocationRetentionPostgresTests.test_parent_protocol_status_and_sidecar_shapes_are_closed",
             "AuthorityRevocationRetentionPostgresTests.test_planned_parent_reservation_and_payload_fields_are_immutable",
@@ -393,7 +397,7 @@ _SUITE_SHAPES = (
     ("scripts/test_webauthn_trust_projection_postgres.py", 12, False, 300),
     ("scripts/test_postgres_trigger_manifest.py", 5, False, 300),
     ("scripts/test_authority_mutation_postgres.py", 14, False, 300),
-    ("scripts/test_authority_root_transition_postgres.py", 27, False, 300),
+    ("scripts/test_authority_root_transition_postgres.py", 31, False, 300),
     ("scripts/test_authority_primary_tree_postgres.py", 9, False, 300),
     ("scripts/test_authority_audit_initialization_postgres.py", 31, False, 300),
     ("scripts/test_authority_audit_initialization_store_postgres.py", 36, True, 900),
@@ -416,7 +420,7 @@ def validate_inventory() -> None:
     """
     if (type(INVENTORY_SCHEMA) is not str or INVENTORY_SCHEMA != "serverware.nativePostgresInventory/v1"
             or type(SUITES) is not tuple or len(SUITES) != 14
-            or type(TOTAL_TESTS) is not int or TOTAL_TESTS != 262):
+            or type(TOTAL_TESTS) is not int or TOTAL_TESTS != 266):
         raise ValueError("native PostgreSQL inventory envelope differs from source")
     seen_scripts: set[str] = set()
     seen_tests: set[str] = set()

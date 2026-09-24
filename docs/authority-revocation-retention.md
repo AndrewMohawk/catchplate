@@ -26,6 +26,11 @@ unchanged original bytes with the original independent expectations and work.
 This is authored source integration, not an executed transaction or public v4
 service admission.
 
+Source `.41` adds the executor's assertion-evidence and authorization-projection
+custody rows to the same private v4 write transaction. Genuine raw-record replay
+still precedes storage. This closes a persistence prerequisite, not the v4 SQL
+executor, service or registry gates.
+
 The existing `exact_plan_*` fields continue to contain canonical **payload**
 bytes. Legacy v3 service replay reconstructs its envelope; private v4 replay
 returns the original envelope and context from the new immutable sidecar.
@@ -112,6 +117,15 @@ protocol/reservation identity after insertion and the retained bytes after
 planning. Planner-writer access to the sidecar is SELECT/INSERT only; executor
 access is read-only. Lifecycle status/terminal fields stay separately mutable.
 
+The existing `policy_authority_webauthn_assertion_evidence` and
+`policy_authority_authorization_projections` tables keep their thirty-five and
+twenty-one columns, respectively. Their exact row identities, uniqueness,
+immutable UPDATE/DELETE guards and planner SELECT/INSERT grants are unchanged.
+They do not gain a protocol column or additional privileges. There is no
+parent-to-projection or projection-to-evidence foreign key: the real storage
+body must join their exact digests and identities to the verified record. The
+deferred foreign-key guarantee above covers only the parent/sidecar pair.
+
 ### Record commitment and retries
 
 Commit a canonical thirteen-field header under the new domain
@@ -143,13 +157,31 @@ Key fingerprints and all record commitments are recomputed, never adopted.
 `read_revocation_planner_record` call that verifier from raw inputs. Both require
 an actual PostgreSQL facade and an existing SERIALIZABLE, non-read-only,
 non-deferrable planner-writer transaction. The write uses a nested savepoint,
-locks the reservation, inserts immutable retention, and completes with a CAS.
+locks the reservation, inserts immutable custody records, and completes with a CAS.
 It checks the actual current deadline before insertion and completion. Read
 locks the original reservation and checks the original historical context;
 it does not refresh the clock or authorize current execution.
 Supplied and stored planning timestamps must fall within the original
 reservation-to-deadline interval. Expired persistence retries still fail the
 live freshness gate; historical reads deliberately do not use that gate.
+
+For a reserved parent, source `.41` uses the shared actual legacy row-materialization
+bodies in `authority_store.authorization_records`, then inserts and reads back
+all assertion/projection columns before parent completion. The assertion digest
+must match the projection, and the projection digest must match the signed
+plan. Custody readback uses plain SELECT, not FOR UPDATE; only the parent
+reservation is locked, preserving the custody tables' SELECT/INSERT grants.
+Admission also checks the current clock, configured age/skew limits and
+the receipt against the database-configured verifier. A later failure rolls
+back newly inserted custody rows with the sidecar and parent changes in that
+same savepoint; conflicting existing rows are never overwritten.
+
+Planned/consumed retries and historical reads require both existing custody
+rows to match exactly. They do not insert missing rows, refresh historical
+clocks or reload the current verifier key. The existing live persistence
+freshness check, including current configured maximum age and skew, still
+applies to retries; historical reads do not use that check. Shared legacy public
+helpers retain their own admission behavior; this does not widen v3 acceptance.
 
 `authority_revocation_persistence.RevocationPlannerPersistence` owns a separate
 writer connection/transaction and delegates to those real store functions.
@@ -174,13 +206,18 @@ the producer observation is not an accepted authority token.
 One cumulative work object pays for context/envelope decoding, captures,
 canonical comparisons, genuine signature/proof verification, raw32 key outputs,
 five plain SHA digests, the framed record hash, SQL-value JSON encodings and
-base64 codecs/comparisons. Parser work remains `4B/(N+O+2P)` with no hashes.
+base64 codecs/comparisons. Source `.41` additionally charges actual custody
+payload canonicalization/hashes, copies, codecs, row comparisons and signature
+transport on that same work. Parser work remains `4B/(N+O+2P)` with no hashes.
 Exact admission is the larger of the genuine replay's held peak and the full
 retention total, component by component. No new outer allowance is created.
 SQL/driver CPU and fixed metadata scaffolding are excluded, not heap guarantees.
 The read owner's database-identity and source-manifest admission, including its
 source reconstruction/hashes, is also outside H/B/N; callback guards do not
 turn that work into metered work. The same allowance continues into persistence.
+Loading the current database-configured verifier and admitting its key/SPKI
+metadata is also explicitly outside H/B/N. That exclusion is not permission to
+skip its actual admission checks or to reset the remaining allowance.
 Driver callbacks must preserve the work. Failure cleanup still invokes actual
 rollback/close if work was corrupted; this does not claim rollback of a malicious
 driver that has already committed and then fails a callback guard.
@@ -191,12 +228,12 @@ the actual driver's cleanup behavior.
 
 ## Migration at the actual consumers
 
-| Consumer | Source `.40` status / remaining work |
+| Consumer | Source `.41` status / remaining work |
 | --- | --- |
 | Configured retention coordinator | Separate `RevocationPlannerPersistence` implemented; configuration pins keys/identities and calls genuine raw-byte storage. |
 | Configured read-to-persist owner | Private `RevocationPlanningCoordinator` closes read scopes before separate persistence, preserving original bytes, expectations and work. |
-| Transaction reserve/complete | Private v4 reservation, sidecar insert, exact comparisons and locked CAS implemented. |
-| Store replay | Private original-byte replay and versioned observations implemented; no re-signing. |
+| Transaction reserve/complete | Private v4 reservation, assertion/projection and sidecar custody, exact comparisons and locked CAS implemented. |
+| Store replay | Private original-byte replay requires existing exact assertion/projection custody; no repair or re-signing. |
 | Service persist/replay | Admit the explicit successor protocol; preserve original bytes and require independent context. |
 | Root-transition SQL | Legacy early protocol denial implemented; mixed-root v4 commit validation remains required. |
 | Execution and terminal receipts | Bind the retained record and mixed transition; retain separate current-state, deadline and one-use checks. |

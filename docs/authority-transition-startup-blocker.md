@@ -127,6 +127,18 @@ and source-manifest admission are explicitly outside H/B/N. This remains
 unexecuted source; no registered kernel, service route or execution authority
 is activated.
 
+Source `.41` fills a concrete private-storage prerequisite: v4 persistence now
+materializes the executor's immutable assertion-evidence and authorization
+projection rows in the same savepoint before completing a reserved parent.
+It reuses the actual legacy row recipes, binds exact row/digest identities
+and checks current configured-verifier policy for new records. Planned retries
+and historical reads require existing rows without repair or reloading the
+current verifier key. Retries retain the live deadline/age/skew check;
+historical reads remain clock-free.
+No table shape, grant or registry admission expands; the existing v3-only SQL
+loader and service replay still require coordinated successor consumers.
+This is authored, unexecuted custody integration, not four-kernel completion.
+
 The [explicit-context credential classifier](webauthn-credential-trust.md) now
 shares the actual enrollment/root/AAGUID/class/development decision with the
 live wrapper and both trust-withdrawal passes. Its immutable context does not

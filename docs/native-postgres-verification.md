@@ -25,19 +25,19 @@ supply independent approval, installed controller identity or cleanup proof.
 
 [native_postgres_inventory.py](../serverware/native_postgres_inventory.py)
 defines `serverware.nativePostgresInventory/v1`, fourteen ordered frozen
-`NativePostgresSuite` records and `TOTAL_TESTS = 262`. Each record contains an
+`NativePostgresSuite` records and `TOTAL_TESTS = 266`. Each record contains an
 exact script path, an explicit sorted tuple of `Class.test_method` IDs, its
 disposable-cluster CLI acknowledgement requirement and its timeout in seconds.
 The IDs are authored source declarations, not dynamically discovered or
 executed results. The total includes the pure representation and source-linkage
-methods contained in these fixtures; it is not a count of 262 native SQL tests.
+methods contained in these fixtures; it is not a count of 266 native SQL tests.
 
 | Order | Script under `scripts/` | Methods | Timeout | Extra disposable CLI flag |
 | --- | --- | ---: | ---: | --- |
 | 00 | `test_webauthn_trust_projection_postgres.py` | 12 | 300 s | No |
 | 01 | `test_postgres_trigger_manifest.py` | 5 | 300 s | No |
 | 02 | `test_authority_mutation_postgres.py` | 14 | 300 s | No |
-| 03 | `test_authority_root_transition_postgres.py` | 27 | 300 s | No |
+| 03 | `test_authority_root_transition_postgres.py` | 31 | 300 s | No |
 | 04 | `test_authority_primary_tree_postgres.py` | 9 | 300 s | No |
 | 05 | `test_authority_audit_initialization_postgres.py` | 31 | 300 s | No |
 | 06 | `test_authority_audit_initialization_store_postgres.py` | 36 | 900 s | Yes |
@@ -48,6 +48,19 @@ methods contained in these fixtures; it is not a count of 262 native SQL tests.
 | 11 | `test_authority_counted_projection_postgres.py` | 16 | 300 s | No |
 | 12 | `test_authority_counted_store_postgres.py` | 10 | 300 s | No |
 | 13 | `test_authority_counted_maintenance_postgres.py` | 32 | 300 s | No |
+
+Four further custody methods cover the existing thirty-five-column assertion
+and twenty-one-column authorization-projection tables under the same actual
+v9 DDL and source-extracted immutable attachments. They pin primary/unique
+identity conflicts, every column's UPDATE denial and DELETE denial, then force
+a later immutable-row failure after all four custody rows were inserted and
+the parent/sidecar deferred constraints closed. Savepoint rollback preserves
+the prior rows. The fixture explicitly records that projection-to-evidence
+foreign-key enforcement is absent; it does not invent a custody-chain FK.
+These are authored, unexecuted structural controls, not crypto admission, the
+production storage-helper call path, live ACLs or top-level commit evidence.
+All 262 previous IDs remain; fourteen suites, sixteen children and deadlines
+are unchanged. No new native import/source dependency is introduced.
 
 Six added retained-record custody methods use the full production v9 DDL,
 post-table retention guard and actual immutable-row function/trigger in a

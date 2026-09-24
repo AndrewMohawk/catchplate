@@ -2525,6 +2525,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_revocation_persistence.py \
 				serverware/authority_revocation_coordinator.py \
 				serverware/authority_store/planner_connection.py \
+				serverware/authority_store/authorization_records.py \
 				serverware/authority_store/revocation_retention.py \
 				serverware/authority_store/executor_v9.py \
 				serverware/authority_revocation_write_trace.py \

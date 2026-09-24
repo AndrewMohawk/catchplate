@@ -153,6 +153,18 @@ receipt verification and remains outside H/B/N. The receipt still precedes
 business SQL. This source integration is unexecuted and does not open legacy
 v3, registry, service or execution admission.
 
+Source `.41` extends that private persistence transaction with the actual
+assertion/projection row materializers and exact SQL readback before parent completion.
+New reserved records also pass current configured-verifier and age/skew checks;
+planned retries and historical reads require existing exact rows without
+repair or reloading the current verifier key. Retries still pass the live
+deadline check using current configured maximum age and skew; historical reads
+do not refresh clocks. Payload work stays on the original meter,
+while configured-key/SPKI metadata admission remains explicitly excluded.
+The existing tables/grants are unchanged, and no parent/projection/evidence
+foreign-key chain is claimed. This storage prerequisite does not admit v4 to
+the legacy SQL executor or permit service replay to reconstruct and re-sign it.
+
 Source `.37` implements private original-byte storage and historical replay.
 Public verifier-response admission and service persistence still require
 coordinated v4 admission and consumer changes. They need

@@ -7,7 +7,9 @@ acquisition to the original signed v4 envelope. Source `.38` also returns its
 original canonical evaluation-context bytes. Source `.39` binds actual primary
 root-table reads to independent expectations before the original database clock.
 Source `.40` connects this primitive to a configured read-transaction owner and
-separate original-byte persistence. These implementations are **unbuilt and
+separate original-byte persistence. Source `.41` adds the assertion/projection
+custody required by the executor to that same private write transaction.
+These implementations are **unbuilt and
 unexecuted**, not a public endpoint, registered kernel, observed SQL commit or
 deployed release.
 
@@ -59,6 +61,17 @@ Both connection opens close any returned handle if the post-open work guard
 rejects it, without repairing the meter or replacing the first failure. This
 does not promise cleanup of a handle never returned by an opener or of a
 context manager whose entry raises before completing.
+
+After genuine raw replay, a reserved v4 parent also receives the real immutable
+assertion-evidence and authorization-projection rows before its completion CAS.
+The shared legacy row materializers preserve all thirty-five and twenty-one columns.
+Fresh admission checks the current configured verifier and age/skew policy;
+planned retries and historical reads instead require existing exact rows, with
+no repair or current-verifier key reload. The unchanged live retry deadline
+still uses current configured maximum age and skew; historical reads remain
+clock-free. See the [retention contract](authority-revocation-retention.md)
+for these boundaries and the absence of custody-chain foreign
+keys. This is not mixed-root execution admission.
 
 ## Actual pipeline
 
@@ -178,6 +191,11 @@ including manifest reconstruction and hashes, are outside H/B/N accounting.
 They still use the real source validators and guarded callbacks; guards are not
 work metering. No allowance is reset between production and persistence, and
 the production descriptor's included-phase list is unchanged by this owner.
+The subsequent custody payload encodings/hashes, copies, codecs, comparisons
+and signature transport use the same work. Current database verifier-key loading
+and key/SPKI metadata admission remain an explicit H/B/N exclusion, alongside
+SQL/driver work; the actual configured-verifier check is still mandatory for
+new reserved records.
 
 ## Remaining integration
 
@@ -192,6 +210,8 @@ identical retries, conflict denial and independent replay expectations.
 Source `.38` supplies the producer's original context bytes for that private
 handoff. Source `.40` connects the private configured owner to retention after
 closing its read scopes; public service integration remains separate work.
+Source `.41` fills the retained plan's assertion/projection custody prerequisites
+without changing table shapes, grants or the closed v3 execution path.
 Current-state admission, public service activation, one-use consumption,
 mixed-root SQL/executor checks and terminal witness binding remain required. Historical evaluation context
 must remain separate from current execution authority and deadline enforcement.

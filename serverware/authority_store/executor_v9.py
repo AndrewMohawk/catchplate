@@ -11,6 +11,7 @@ from serverware import authority_contract
 from serverware import authority_audit_capacity
 from serverware import authority_transition_registry
 from serverware.authority_store import planner_connection
+from serverware.authority_store import authorization_records
 from serverware.authority_store.planner_connection import (
     _require_database_role,
     _require_fresh_deadline,
@@ -122,35 +123,10 @@ def _verify_pinned_verifier_envelope(
     domain: str,
     receipt_digest_field: str,
 ) -> None:
-    signature = _decode_b64url(
-        envelope.get("verifierSignatureBase64url"),
-        label="measured verifier signature",
+    return authorization_records._verify_pinned_verifier_envelope(
+        envelope, domain=domain, receipt_digest_field=receipt_digest_field,
+        work=None,
     )
-    if len(signature) != 64:
-        raise ValueError("measured verifier signature length is invalid")
-    unsigned = dict(envelope)
-    unsigned.pop("verifierSignatureBase64url", None)
-    unsigned.pop("verifierSignatureDigest", None)
-    receipt_digest = unsigned.pop(receipt_digest_field, None)
-    statement_digest = _digest(
-        domain,
-        _canonical(unsigned).encode("ascii"),
-    )
-    if (
-        receipt_digest != statement_digest
-        or envelope.get("verifierSignatureDigest")
-            != "sha256:" + hashlib.sha256(signature).hexdigest()
-    ):
-        raise ValueError("measured verifier receipt digest is not exact")
-    invalid_signature = _db_value("InvalidSignature")
-    try:
-        _db_value("Ed25519PublicKey").from_public_bytes(
-            _db_value("_policy_authority_verifier_public_key")()
-        ).verify(signature, statement_digest.encode("ascii"))
-    except invalid_signature as exc:
-        raise ValueError(
-            "measured verifier envelope signature is invalid"
-        ) from exc
 
 
 def _operation_id(operation: str, request_digest: str) -> str:
@@ -3024,86 +3000,13 @@ def persist_webauthn_assertion_evidence(
         ),
         receipt_digest_field="verifiedAssertionReceiptDigest",
     )
-    evidence_json = _canonical(dict(evidence))
-    if len(evidence_json.encode("ascii")) > authority_contract.MAX_REQUEST_BYTES:
-        raise ValueError("WebAuthn assertion evidence exceeds its byte bound")
-    evidence_digest = _digest(
-        "serverware.policyAuthorityWebAuthnAssertionEvidence/v1",
-        evidence_json.encode("ascii"),
-    )
+    evidence_digest, evidence_json = authorization_records._assertion_storage_document(
+        evidence, work=None)
     raw = _require_planner_writer(connection)
-    columns = (
-        "operation",
-        "operation_id",
-        "request_digest",
-        "capability_id",
-        "challenge_id",
-        "challenge_digest",
-        "client_challenge_digest",
-        "credential_record_id",
-        "credential_id",
-        "credential_policy_digest",
-        "authenticator_data_base64url",
-        "authenticator_data_digest",
-        "client_data_json_base64url",
-        "client_data_json_digest",
-        "signature_base64url",
-        "signature_digest",
-        "rp_id",
-        "rp_id_hash_digest",
-        "origin",
-        "flags",
-        "user_present",
-        "user_verified",
-        "prior_counter",
-        "counter",
-        "trust_high_water_digest",
-        "metadata_publication_sequence",
-        "verifier_session_identity_digest",
-        "verifier_measurement_digest",
-        "verifier_attestation_receipt_digest",
-        "verified_assertion_receipt_digest",
-        "evidence_json",
-        "verified_at_epoch_ns",
-        "expires_at_epoch_ns",
-        "source_revision",
-    )
-    values = (
-        evidence["operation"],
-        evidence["operationId"],
-        evidence["requestDigest"],
-        evidence["capabilityId"],
-        evidence["challengeId"],
-        evidence["challengeDigest"],
-        evidence["clientChallengeDigest"],
-        evidence["credentialRecordId"],
-        evidence["credentialId"],
-        evidence["credentialPolicyDigest"],
-        evidence["authenticatorDataBase64url"],
-        evidence["authenticatorDataDigest"],
-        evidence["clientDataJSONBase64url"],
-        evidence["clientDataJSONDigest"],
-        evidence["signatureBase64url"],
-        evidence["signatureDigest"],
-        evidence["rpId"],
-        evidence["rpIdHashDigest"],
-        evidence["origin"],
-        evidence["flags"],
-        1,
-        1,
-        evidence["priorCounter"],
-        evidence["counter"],
-        evidence["trustHighWaterDigest"],
-        evidence["metadataPublicationSequence"],
-        evidence["verifierSessionIdentityDigest"],
-        evidence["verifierMeasurementDigest"],
-        evidence["verifierAttestationReceiptDigest"],
-        evidence["verifiedAssertionReceiptDigest"],
-        evidence_json,
-        evidence["verifiedAtEpochNs"],
-        evidence["expiresAtEpochNs"],
-        authority_contract.SOURCE_REVISION,
-    )
+    storage_row = authorization_records._assertion_storage_row_from_document(
+        evidence, evidence_digest, evidence_json)
+    columns = authorization_records._ASSERTION_FIELDS[1:]
+    values = tuple(storage_row[name] for name in columns)
     with raw.cursor() as cursor:
         cursor.execute(
             "INSERT INTO serverware_metadata."
@@ -3267,65 +3170,11 @@ def persist_authorization_projection(
             > maximum_age_ns
     ):
         raise ValueError("authorization projection source closure is invalid")
-    projection_json = _canonical(dict(projection))
-    if len(projection_json.encode("ascii")) > authority_contract.MAX_REQUEST_BYTES:
-        raise ValueError("authorization projection exceeds its byte bound")
-    projection_digest = _digest(
-        "serverware.policyAuthorityAuthorizationProjection/v1",
-        projection_json.encode("ascii"),
-    )
-    authorization_reads_json = _canonical(list(authorization_reads))
-    source_rows_json = _canonical(projection["sourceRows"])
-    columns = (
-        "planner_transaction_id",
-        "operation",
-        "operation_id",
-        "request_digest",
-        "capability_id",
-        "operation_contract_digest",
-        "authorization_reads_json",
-        "authorization_reads_digest",
-        "source_rows_json",
-        "source_rows_digest",
-        "source_high_water_digest",
-        "approver_policy_digest",
-        "assertion_evidence_digest",
-        "projection_json",
-        "verifier_session_identity_digest",
-        "verifier_measurement_digest",
-        "verifier_attestation_receipt_digest",
-        "created_at_epoch_ns",
-        "expires_at_epoch_ns",
-        "source_revision",
-    )
-    values = (
-        projection["plannerTransactionId"],
-        projection["operation"],
-        projection["operationId"],
-        projection["requestDigest"],
-        projection["capabilityId"],
-        authority_contract.OPERATION_MANIFEST_DIGEST,
-        authorization_reads_json,
-        _digest(
-            "serverware.policyAuthorityAuthorizationReads/v1",
-            authorization_reads_json.encode("ascii"),
-        ),
-        source_rows_json,
-        _digest(
-            "serverware.policyAuthorityAuthorizationRows/v1",
-            source_rows_json.encode("ascii"),
-        ),
-        projection["sourceHighWaterDigest"],
-        projection["approverPolicyDigest"],
-        projection["assertionEvidenceDigest"],
-        projection_json,
-        projection["verifierSessionIdentityDigest"],
-        projection["verifierMeasurementDigest"],
-        projection["verifierAttestationReceiptDigest"],
-        projection["createdAtEpochNs"],
-        projection["expiresAtEpochNs"],
-        authority_contract.SOURCE_REVISION,
-    )
+    storage_row = authorization_records._projection_storage_row_from_reads(
+        projection, authorization_reads, work=None)
+    projection_digest = storage_row["authorization_projection_digest"]
+    columns = authorization_records._PROJECTION_FIELDS[1:]
+    values = tuple(storage_row[name] for name in columns)
     raw = _require_planner_writer(connection)
     with raw.cursor() as cursor:
         cursor.execute(

@@ -21,6 +21,9 @@ from typing import Any
 
 from serverware import authority_contract
 from serverware import authority_complete_query
+from serverware.authority_query_read_work import (
+    QueryReadValidationLimits, QueryReadValidationMetrics, _ValidationWork,
+)
 
 
 MAX_BOOKKEEPING_BYTES = 64 * 1024 * 1024
@@ -66,8 +69,10 @@ def _query_id(value: Any) -> None:
         raise QueryReadError("query read identity is not a bounded exact identifier")
 
 
-def _wire(value: Any) -> bytes:
+def _wire(value: Any, work: _ValidationWork | None = None) -> bytes:
     try:
+        if work is not None:
+            return work.wire(value)
         return json.dumps(value, ensure_ascii=True, allow_nan=False, sort_keys=True,
                           separators=(",", ":")).encode("ascii")
     except (TypeError, ValueError, UnicodeError, RecursionError) as exc:
@@ -81,31 +86,41 @@ class _CopyBudget:
     element is charged an extra separator byte. This is a finite copy profile,
     not the later retained-record metric or an external parser guarantee.
     """
-    def __init__(self) -> None:
+    def __init__(self, work: _ValidationWork | None = None) -> None:
         self.bytes = 0
         self.nodes = 0
+        self.work = work
 
     def charge(self, count: int) -> None:
+        if self.work is not None:
+            self.work.charge(input_bytes=count)
         self.bytes += count
         if self.bytes > MAX_BOOKKEEPING_BYTES:
             raise QueryReadError("query source copy byte budget exceeded")
 
     def copy(self, value: Any, depth: int = 0, ancestors: frozenset[int] = frozenset()) -> Any:
+        if self.work is not None:
+            self.work.charge(json_nodes=1)
         self.nodes += 1
         if self.nodes > MAX_JSON_NODES or depth > MAX_JSON_DEPTH:
             raise QueryReadError("query source copy structure budget exceeded")
         kind = type(value)
         if value is None or kind is bool:
-            self.charge(len(_wire(value)))
+            self.charge(len(_wire(value, self.work)))
             return value
         if kind is int:
             # Fixed source SQL values are integral. Avoid floats, Decimal or
             # datetime coercions; integer conversion itself remains bounded.
             if value.bit_length() > 16384:
                 raise QueryReadError("query integer encoding exceeds its bound")
-            self.charge(len(_wire(value)))
+            self.charge(len(_wire(value, self.work)))
             return value
         if kind is str:
+            remaining = MAX_BOOKKEEPING_BYTES - self.bytes
+            if self.work is not None:
+                remaining = min(remaining, self.work.limits.max_input_bytes - self.work.input_bytes)
+                if len(value) + 2 > remaining:
+                    raise QueryReadError("query source copy exceeds remaining cumulative bytes")
             if len(value) > MAX_BOOKKEEPING_BYTES or "\x00" in value:
                 raise QueryReadError("query text is not bounded NUL-free JSON")
             size = 2
@@ -116,7 +131,7 @@ class _CopyBudget:
                 size += (2 if character in '"\\\b\f\n\r\t' else
                          6 if point < 32 or 127 <= point <= 0xFFFF else
                          12 if point > 0xFFFF else 1)
-                if size > MAX_BOOKKEEPING_BYTES - self.bytes:
+                if size > remaining:
                     raise QueryReadError("query source copy byte budget exceeded")
             self.charge(size)
             return value
@@ -180,20 +195,68 @@ class QueryRead:
             raise QueryReadError("query read address inventory or row count is invalid")
 
 
-def _fresh(value: Any, expected: type) -> Any:
+@dataclass(frozen=True, slots=True)
+class QueryReadValidationResult:
+    """Owned declarations and immutable observations, not verified authority.
+
+    This does not own unreferenced full selected rows. A composing verifier
+    must pass its privately owned row graph; no consumer accepts this result
+    in place of raw observations and genuine proofs.
+    """
+
+    queries: tuple[Any, ...]
+    query_reads: tuple[QueryRead, ...]
+    metrics: QueryReadValidationMetrics
+
+
+def _record_work(values: dict[str, Any], expected: type, work: _ValidationWork | None) -> None:
+    """Reserve bounded scalar frames before constructors scan ASCII fields."""
+    if work is None:
+        return
+    if expected is QueryRead:
+        identity = values["query_id"]
+        declared, resolved = values["declared_query_json"], values["resolved_query_json"]
+        count, addresses = values["returned_row_count"], values["addresses"]
+        if (type(identity) is not str or len(identity) > MAX_QUERY_ID_BYTES
+                or type(declared) is not bytes or not 2 <= len(declared) <= MAX_BOOKKEEPING_BYTES
+                or type(resolved) is not bytes or not 2 <= len(resolved) <= MAX_BOOKKEEPING_BYTES
+                or type(count) is not int or not 0 <= count <= authority_contract.MAX_PLAN_QUERY_ROWS
+                or type(addresses) is not tuple or len(addresses) > authority_contract.MAX_PLAN_QUERY_ROWS):
+            raise QueryReadError("query read record exceeds its cheap measured shape bound")
+        size = 8 + len(identity) + 8 + len(declared) + 8 + len(resolved) + 8 + len(str(count))
+    else:
+        table, key, digest, present = (values["table"], values["key_json"],
+                                       values["key_digest"], values["present"])
+        if (type(table) is not str or len(table) > 128
+                or type(key) is not bytes or not 2 <= len(key) <= MAX_BOOKKEEPING_BYTES
+                or type(digest) is not str or len(digest) != 71 or type(present) is not bool):
+            raise QueryReadError("query read address exceeds its cheap measured shape bound")
+        size = 8 + len(table) + 8 + len(key) + 8 + len(digest) + 9
+    work.charge(input_bytes=size)
+
+
+def _make_record(expected: type, values: dict[str, Any], work: _ValidationWork | None = None):
+    _record_work(values, expected, work)
+    return expected(**values)
+
+
+def _fresh(value: Any, expected: type, work: _ValidationWork | None = None) -> Any:
     if type(value) is not expected:
         raise QueryReadError("query read record has an unexpected exact type")
     try:
-        return expected(**{field.name: getattr(value, field.name) for field in fields(expected)})
+        return _make_record(expected, {field.name: getattr(value, field.name) for field in fields(expected)}, work)
     except AttributeError as exc:
         raise QueryReadError("query read record is incomplete") from exc
 
 
-def _copy_read(value: Any) -> QueryRead:
-    record = _fresh(value, QueryRead)
-    return QueryRead(record.query_id, record.declared_query_json, record.resolved_query_json,
-                     tuple(_fresh(address, QueryReadAddress) for address in record.addresses),
-                     record.returned_row_count)
+def _copy_read(value: Any, work: _ValidationWork | None = None) -> QueryRead:
+    record = _fresh(value, QueryRead, work)
+    return _make_record(QueryRead, {
+        "query_id": record.query_id, "declared_query_json": record.declared_query_json,
+        "resolved_query_json": record.resolved_query_json,
+        "addresses": tuple(_fresh(address, QueryReadAddress, work) for address in record.addresses),
+        "returned_row_count": record.returned_row_count,
+    }, work)
 
 
 def _read_size(record: QueryRead) -> int:
@@ -203,7 +266,8 @@ def _read_size(record: QueryRead) -> int:
                   for item in record.addresses))
 
 
-def validate_read_budget(operation: str, *, query_reads: tuple[QueryRead, ...]) -> None:
+def _validate_read_budget(operation: str, query_reads: tuple[QueryRead, ...],
+                          work: _ValidationWork | None = None) -> None:
     """Cheap immutable-record count/byte admission, not row serialization."""
     maximum = _spec(operation)["maximumQueryRows"]
     if type(query_reads) is not tuple or len(query_reads) > maximum:
@@ -211,12 +275,15 @@ def validate_read_budget(operation: str, *, query_reads: tuple[QueryRead, ...]) 
     total_bytes = total_addresses = total_returned = 0
     identifiers = set()
     for value in query_reads:
-        record = _copy_read(value)
+        record = _copy_read(value, work)
         if (not record.query_id.startswith(f"serverware.policyAuthorityQuery/{operation}/")
                 or record.query_id in identifiers):
             raise QueryReadError("query read identity is duplicated or outside its operation")
         identifiers.add(record.query_id)
-        total_bytes += _read_size(record)
+        size = _read_size(record)
+        if work is not None:
+            work.charge(input_bytes=size)
+        total_bytes += size
         total_addresses += len(record.addresses)
         total_returned += record.returned_row_count
         if (total_bytes > MAX_BOOKKEEPING_BYTES or total_addresses > maximum
@@ -224,12 +291,46 @@ def validate_read_budget(operation: str, *, query_reads: tuple[QueryRead, ...]) 
             raise QueryReadError("query read aggregate bookkeeping budget exceeded")
 
 
+def validate_read_budget(operation: str, *, query_reads: tuple[QueryRead, ...]) -> None:
+    """Check immutable-record count/byte bounds, not row or proof authority."""
+    _validate_read_budget(operation, query_reads)
+
+
+def _profile_work(query, work: _ValidationWork | None) -> None:
+    if work is not None:
+        # Source descriptor serialization is real work inside profile_for,
+        # including calls hidden in complete constructors/properties.
+        descriptor = authority_complete_query.projection._definition(query.index_id).document()
+        work.prepare_encoding(descriptor, ensure_ascii=False)
+        work.charge(hashes=1)
+
+
+def _complete_copy(query, work: _ValidationWork | None):
+    _profile_work(query, work)
+    return authority_complete_query.snapshot_query(query)
+
+
+def _contract_value(query, work: _ValidationWork | None):
+    if type(query) is authority_complete_query.CompleteIndexQuery:
+        _profile_work(query, work)
+    elif work is not None:
+        # SelectedRowFieldReference.contract_value makes another dict(key).
+        core = _core()
+        values = [item.value for item in query.predicates]
+        if query.absent_key is not None:
+            values.extend(query.absent_key.values())
+        for value in values:
+            if type(value) is core.SelectedRowFieldReference:
+                work.prepare_copy(value.key)
+    return query.contract_value()
+
+
 def _query_copy(query: Any, budget: _CopyBudget) -> Any:
     core = _core()
     if type(query) is authority_complete_query.CompleteIndexQuery:
         try:
-            owned = authority_complete_query.snapshot_query(query)
-            budget.charge(len(_wire(owned.contract_value())))
+            owned = _complete_copy(query, budget.work)
+            budget.charge(len(_wire(_contract_value(owned, budget.work), budget.work)))
             return owned
         except authority_complete_query.CompleteQueryError as exc:
             raise QueryReadError("complete query source snapshot is invalid") from exc
@@ -248,7 +349,12 @@ def _query_copy(query: Any, budget: _CopyBudget) -> Any:
             if type(value) is core.SelectedRowFieldReference:
                 _identifier(value.table)
                 _identifier(value.column)
-                return core.SelectedRowFieldReference(value.table, budget.copy(value.key), value.column)
+                key = budget.copy(value.key)
+                if budget.work is not None:
+                    # The real constructor performs dict(key) and its own
+                    # canonical_bytes call. Prepare both before invoking it.
+                    budget.work.prepare_encoding(key, shallow_copies=1)
+                return core.SelectedRowFieldReference(value.table, key, value.column)
             return budget.copy(value)
 
         fresh_predicates = []
@@ -287,7 +393,7 @@ def _query_copy(query: Any, budget: _CopyBudget) -> Any:
             if values[name] is not None and type(values[name]) is not str:
                 raise QueryReadError("query optional identity is not an exact string")
         result = core.BoundedQuery(**values)
-        budget.charge(len(_wire(result.contract_value())))
+        budget.charge(len(_wire(_contract_value(result, budget.work), budget.work)))
         return result
     except (AttributeError, TypeError, ValueError, core.TransitionKernelError) as exc:
         if isinstance(exc, QueryReadError):
@@ -295,7 +401,8 @@ def _query_copy(query: Any, budget: _CopyBudget) -> Any:
         raise QueryReadError("query program source snapshot is invalid") from exc
 
 
-def snapshot_queries(operation: str, queries: tuple[Any, ...]) -> tuple[Any, ...]:
+def _snapshot_queries(operation: str, queries: tuple[Any, ...],
+                      work: _ValidationWork | None = None) -> tuple[Any, ...]:
     """Own source query values before SQL; returned models are private data.
 
     Nested dictionaries are detached, not frozen. The immutable retained form
@@ -304,13 +411,24 @@ def snapshot_queries(operation: str, queries: tuple[Any, ...]) -> tuple[Any, ...
     spec = _spec(operation)
     if type(queries) is not tuple or len(queries) > spec["maximumQueryRows"]:
         raise QueryReadError("query program count exceeds its source operation")
-    budget = _CopyBudget()
+    budget = _CopyBudget(work)
     owned = tuple(_query_copy(query, budget) for query in queries)
     try:
+        if work is not None:
+            # close_queries genuinely constructs every complete declaration
+            # again. Reserve those exact fixed profile encodings/hashes.
+            for query in owned:
+                if type(query) is authority_complete_query.CompleteIndexQuery:
+                    _profile_work(query, work)
         _core().close_queries(operation, owned)
     except _core().TransitionKernelError as exc:
         raise QueryReadError("query program differs from its source operation") from exc
     return owned
+
+
+def snapshot_queries(operation: str, queries: tuple[Any, ...]) -> tuple[Any, ...]:
+    """Own source declarations; nested dictionaries are detached, not frozen."""
+    return _snapshot_queries(operation, queries)
 
 
 def _key_bytes(table: str, key: Any, budget: _CopyBudget | None = None) -> bytes:
@@ -318,10 +436,13 @@ def _key_bytes(table: str, key: Any, budget: _CopyBudget | None = None) -> bytes
     if (columns is None or type(key) is not dict or len(key) != len(columns) or set(key) != set(columns)
             or any(type(value) not in (str, int, bool) for value in key.values())):
         raise QueryReadError("query read key does not match source primary columns")
-    return _wire((budget if budget is not None else _CopyBudget()).copy(key))
+    budget = budget if budget is not None else _CopyBudget()
+    return _wire(budget.copy(key), budget.work)
 
 
-def _key_digest(table: str, key_json: bytes) -> str:
+def _key_digest(table: str, key_json: bytes, work: _ValidationWork | None = None) -> str:
+    if work is not None:
+        work.charge(hashes=1)
     digest = hashlib.sha256(b"serverware.policyAuthorityBusinessKey/v1\x00")
     for frame in (table.encode("ascii"), key_json):
         digest.update(len(frame).to_bytes(8, "big"))
@@ -338,7 +459,7 @@ def _address(selected: Any, budget: _CopyBudget) -> QueryReadAddress:
         raise QueryReadError("query selected row wrapper is not closed")
     _identifier(selected["table"])
     key_json = _key_bytes(selected["table"], selected["key"], budget)
-    digest = _key_digest(selected["table"], key_json)
+    digest = _key_digest(selected["table"], key_json, budget.work)
     if type(selected["keyDigest"]) is not str or selected["keyDigest"] != digest:
         raise QueryReadError("query selected row business-key digest changed")
     if selected["present"]:
@@ -347,16 +468,20 @@ def _address(selected: Any, budget: _CopyBudget) -> QueryReadAddress:
         if any(column not in row for column in columns) or _key_bytes(
                 selected["table"], {column: row[column] for column in columns}, budget) != key_json:
             raise QueryReadError("query selected row omits or changes its original key")
-    return QueryReadAddress(selected["table"], key_json, digest, selected["present"])
+    return _make_record(QueryReadAddress, {
+        "table": selected["table"], "key_json": key_json, "key_digest": digest,
+        "present": selected["present"],
+    }, budget.work)
 
 
-def _selection_map(operation: str, selected_rows: tuple[dict[str, Any], ...]):
+def _selection_map(operation: str, selected_rows: tuple[dict[str, Any], ...],
+                   work: _ValidationWork | None = None):
     spec = _spec(operation)
     allowed = set(spec["businessReads"]) | set(spec["businessWrites"]) | set(spec["authorizationReads"])
     if type(selected_rows) is not tuple or len(selected_rows) > spec["maximumQueryRows"]:
         raise QueryReadError("query global selected inventory exceeds its source operation")
     result = {}
-    budget = _CopyBudget()
+    budget = _CopyBudget(work)
     for row in selected_rows:
         address = _address(row, budget)
         identity = (address.table, address.key_json)
@@ -366,9 +491,12 @@ def _selection_map(operation: str, selected_rows: tuple[dict[str, Any], ...]):
     return result
 
 
-def _associations(records: tuple[QueryRead, ...], selections):
+def _associations(records: tuple[QueryRead, ...], selections,
+                  work: _ValidationWork | None = None):
     seen = set()
     for record in records:
+        if work is not None:
+            work.charge(input_bytes=_read_size(record))
         local = set()
         for address in record.addresses:
             identity = (address.table, address.key_json)
@@ -432,14 +560,15 @@ def reference_source_rows(operation: str, query: Any, *, prior_reads: tuple[Quer
     ))
 
 
-def _resolve(query, prior_reads: tuple[QueryRead, ...], selections):
+def _resolve(query, prior_reads: tuple[QueryRead, ...], selections,
+             work: _ValidationWork | None = None):
     core = _core()
-    available = _associations(prior_reads, selections)
+    available = _associations(prior_reads, selections, work)
     if type(query) is authority_complete_query.CompleteIndexQuery:
         # Do not synthesize legacy primary-key ORDER BY or SQL predicates for
         # an index declaration. This is bookkeeping, not completeness admission.
-        return authority_complete_query.snapshot_query(query)
-    budget = _CopyBudget()
+        return _complete_copy(query, work)
+    budget = _CopyBudget(work)
 
     def resolve(value):
         if type(value) is not core.SelectedRowFieldReference:
@@ -474,16 +603,16 @@ def resolve_query(operation: str, query: Any, *, prior_reads: tuple[QueryRead, .
     return _resolve(owned, records, _selection_map(operation, selected_rows))
 
 
-def _resolution_shape(query, resolved) -> None:
+def _resolution_shape(query, resolved, work: _ValidationWork | None = None) -> None:
     core = _core()
     if (type(query) is authority_complete_query.CompleteIndexQuery
             or type(resolved) is authority_complete_query.CompleteIndexQuery):
         if (type(query) is not authority_complete_query.CompleteIndexQuery
                 or type(resolved) is not authority_complete_query.CompleteIndexQuery
-                or _wire(query.contract_value()) != _wire(resolved.contract_value())):
+                or _wire(_contract_value(query, work), work) != _wire(_contract_value(resolved, work), work)):
             raise QueryReadError("complete query resolution changed its bound declaration")
         return
-    expected, actual = query.contract_value(), resolved.contract_value()
+    expected, actual = _contract_value(query, work), _contract_value(resolved, work)
     expected["orderBy"] = [{"column": item.column, "descending": item.descending}
                            for item in (query.order_by or tuple(core.QueryOrder(c) for c in _keys()[query.table]))]
     if len(query.predicates) != len(resolved.predicates):
@@ -502,12 +631,13 @@ def _resolution_shape(query, resolved) -> None:
                 raise QueryReadError("query resolved absence key still has a reference")
             if type(value) is core.SelectedRowFieldReference:
                 expected["absentKey"][name] = after
-    if _wire(expected) != _wire(actual):
+    if _wire(expected, work) != _wire(actual, work):
         raise QueryReadError("query resolution changed non-reference source fields")
 
 
-def _capture(query, resolved, ordered_selected_rows, returned_row_count) -> QueryRead:
-    _resolution_shape(query, resolved)
+def _capture(query, resolved, ordered_selected_rows, returned_row_count,
+             work: _ValidationWork | None = None) -> QueryRead:
+    _resolution_shape(query, resolved, work)
     complete = type(query) is authority_complete_query.CompleteIndexQuery
     require_absence = False if complete else query.require_absence
     absent_key = None if complete else resolved.absent_key
@@ -515,10 +645,10 @@ def _capture(query, resolved, ordered_selected_rows, returned_row_count) -> Quer
         raise QueryReadError("query observed address count exceeds its declared bound")
     if type(returned_row_count) is not int or not 0 <= returned_row_count <= query.maximum_rows:
         raise QueryReadError("query observed row count exceeds its declared bound")
-    budget = _CopyBudget()
-    declared_json = _wire(query.contract_value())
+    budget = _CopyBudget(work)
+    declared_json = _wire(_contract_value(query, work), work)
     budget.charge(len(declared_json))
-    resolved_json = _wire(resolved.contract_value())
+    resolved_json = _wire(_contract_value(resolved, work), work)
     budget.charge(len(resolved_json))
     addresses = tuple(_address(row, budget) for row in ordered_selected_rows)
     if any(address.table != query.table for address in addresses):
@@ -535,8 +665,11 @@ def _capture(query, resolved, ordered_selected_rows, returned_row_count) -> Quer
     elif (len(addresses) != 1 or addresses[0].present
           or addresses[0].key_json != _key_bytes(query.table, absent_key, budget)):
         raise QueryReadError("exact-absence query lost its resolved absent address")
-    return QueryRead(query.query_id, declared_json, resolved_json,
-                     addresses, returned_row_count)
+    return _make_record(QueryRead, {
+        "query_id": query.query_id, "declared_query_json": declared_json,
+        "resolved_query_json": resolved_json, "addresses": addresses,
+        "returned_row_count": returned_row_count,
+    }, work)
 
 
 def capture_query_read(operation: str, query: Any, *, resolved_query: Any,
@@ -549,32 +682,72 @@ def capture_query_read(operation: str, query: Any, *, resolved_query: Any,
     return record
 
 
-def validate_query_reads(operation: str, *, queries: tuple[Any, ...], query_reads: tuple[QueryRead, ...],
-                         selected_rows: tuple[dict[str, Any], ...]) -> tuple[QueryRead, ...]:
+def _validate_query_reads(operation: str, *, queries: tuple[Any, ...], query_reads: tuple[QueryRead, ...],
+                          selected_rows: tuple[dict[str, Any], ...],
+                          work: _ValidationWork | None = None):
     """Rebind all observations to source definitions and the exact global union.
 
     Global full rows are not copied or serialized: only original primary keys
     and fields actually used by a source reference are read. Primary proof
     verification and the reader's conflicting full-row guard remain separate.
     """
-    owned = snapshot_queries(operation, queries)
-    validate_read_budget(operation, query_reads=query_reads)
+    owned = _snapshot_queries(operation, queries, work)
+    _validate_read_budget(operation, query_reads, work)
     if len(owned) != len(query_reads):
         raise QueryReadError("query read inventory omits or adds a declared query")
-    records = tuple(_copy_read(record) for record in query_reads)
-    selections = _selection_map(operation, selected_rows)
-    _associations(records, selections)
+    records = tuple(_copy_read(record, work) for record in query_reads)
+    selections = _selection_map(operation, selected_rows, work)
+    _associations(records, selections, work)
     checked = []
     for query, record in zip(owned, records):
-        resolved = _resolve(query, tuple(checked), selections)
+        resolved = _resolve(query, tuple(checked), selections, work)
         ordered = tuple(selections[(address.table, address.key_json)][1] for address in record.addresses)
-        expected = _capture(query, resolved, ordered, record.returned_row_count)
+        expected = _capture(query, resolved, ordered, record.returned_row_count, work)
+        if work is not None:
+            work.charge(input_bytes=_read_size(record))
         if expected != record:
             raise QueryReadError("query observation differs from its source definition or resolved fields")
         checked.append(expected)
-    if _associations(tuple(checked), selections) != set(selections):
+    if _associations(tuple(checked), selections, work) != set(selections):
         raise QueryReadError("query read inventory does not exactly cover the global selection")
-    return tuple(checked)
+    return owned, tuple(checked)
+
+
+def validate_query_reads(operation: str, *, queries: tuple[Any, ...], query_reads: tuple[QueryRead, ...],
+                         selected_rows: tuple[dict[str, Any], ...]) -> tuple[QueryRead, ...]:
+    """Legacy observational validation, with its original local guards."""
+    return _validate_query_reads(operation, queries=queries, query_reads=query_reads,
+                                 selected_rows=selected_rows)[1]
+
+
+def validate_query_reads_measured(
+    operation: str, *, queries: tuple[Any, ...], query_reads: tuple[QueryRead, ...],
+    selected_rows: tuple[dict[str, Any], ...], limits: QueryReadValidationLimits,
+) -> QueryReadValidationResult:
+    """Run the same actual bookkeeping validator under one cumulative ledger.
+
+    Each copy traversal, canonical premeasurement and actual encoding is
+    charged separately, including hidden source constructors. Immutable record
+    reconstruction and association/comparison passes charge scalar-frame bytes
+    and no JSON nodes. Fixed identifier/type checks are not general CPU or
+    allocation accounting. No cache or repeated-reference discount is taken.
+
+    This API neither freezes the full caller graph before its first hash nor
+    authenticates full rows. An enclosing proof composer must first own all its
+    inputs and pass only that private graph. Returned source copies/records are
+    observations; ordinary predicates, SQL completeness and authority are not
+    strengthened relative to validate_query_reads.
+    """
+    try:
+        work = _ValidationWork(limits)
+        owned, checked = _validate_query_reads(
+            operation, queries=queries, query_reads=query_reads, selected_rows=selected_rows, work=work)
+        return QueryReadValidationResult(owned, checked, work.metrics)
+    except (AttributeError, KeyError, TypeError, ValueError, OverflowError, RecursionError,
+            _core().TransitionKernelError) as exc:
+        if isinstance(exc, QueryReadError):
+            raise
+        raise QueryReadError("measured query read validation failed") from exc
 
 
 def query_rows(operation: str, *, query_reads: tuple[QueryRead, ...],

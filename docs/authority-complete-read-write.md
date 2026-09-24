@@ -129,6 +129,11 @@ Hashing a compact result does not eliminate the raw evidence needed to
 independently recompute it; encoding and hashing that transport must also be
 bounded and charged.
 
+[Measured query-observation validation](authority-query-read-accounting.md)
+provides the genuine shared-body accounting needed for that next composition.
+It is not yet called here; ordinary point-read/source-program admission and the
+comparison with actual complete-query leaf order remain required.
+
 The existing primary transition and nine-frame Snapshot/v3 remain unchanged.
 Planner, executor, SQL, receipts and historical replay must move together to an
 explicit new protocol; optional extra fields on v3 are not an upgrade path.

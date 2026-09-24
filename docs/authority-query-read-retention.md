@@ -88,6 +88,11 @@ transition metrics or kernel `workUnits`, and not total planner runtime cost.
 Query bookkeeping has additional bounded key hashing, copying and association
 passes; its work is not included in the primary phase's hash metric.
 
+The separate [measured validation entry point](authority-query-read-accounting.md)
+now accounts those repeated observation passes under one cumulative budget.
+It preserves this legacy API and is not yet composed into planner admission.
+Its result remains bookkeeping, not primary or complete-range proof authority.
+
 ## Remaining boundaries
 
 The typed reader now stages membership proofs before deferred values influence

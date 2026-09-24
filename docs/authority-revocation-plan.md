@@ -174,6 +174,20 @@ keys/context, current-root binding and the writer reservation remain required
 before a real v4 execution consumer can be activated. The existing v3 loader,
 reservation and service replay/re-signing paths are unchanged.
 
+Source `.43` adds a separate private
+[execution-envelope reservation](authority-revocation-retention.md#private-execution-envelope-reservation)
+after genuine original-byte signature and complete semantic replay. The replay
+and reservation share one serializable writer transaction/savepoint and locked
+`planned` parent, not a caller-supplied success object. A closed five-field
+successor request commits the original typed request, `revocation-v4`, retained
+record and root transition within the unchanged request-byte ceiling. A retry
+requires every reserved-row column and NULL terminal field to match, preserves
+timestamps and still passes current deadline/age/skew checks. Consumed/failed
+parents and terminal execution envelopes are denied. This adds no immutable
+execution-row/FK schema guarantee and no current-root, capability, business
+execution or terminal authority; the legacy v3 and public service gates remain
+unchanged.
+
 Source `.37` implements private original-byte storage and historical replay.
 Public verifier-response admission and service persistence still require
 coordinated v4 admission and consumer changes. They need

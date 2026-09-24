@@ -148,6 +148,18 @@ verification, current locked primary/counted roots and writer reservation
 remain consumer prerequisites. No v3 executor, reservation, service replay
 or registry gate opens; the component and its native controls are unexecuted.
 
+Source `.43` adds a private stored-replay-to-execution-reservation path. Actual
+signature and complete semantic verification precede internally constructed
+five-field request bytes binding the original typed request, successor protocol,
+retained record and root transition. One serializable writer transaction and
+savepoint hold the `planned` parent lock through insertion/exact reserved retry;
+all reservation columns and NULL terminal fields must match, and live freshness
+is required even on retry. Terminal parents/envelopes are denied without repair.
+This is API-level custody, not a new database immutable-envelope/FK contract,
+current-head validation, capability/fence authority, business commit or terminal
+witness. No native inventory, public v3 route, registry or service gate expands;
+the source and isolated controls remain unexecuted.
+
 The [explicit-context credential classifier](webauthn-credential-trust.md) now
 shares the actual enrollment/root/AAGUID/class/development decision with the
 live wrapper and both trust-withdrawal passes. Its immutable context does not

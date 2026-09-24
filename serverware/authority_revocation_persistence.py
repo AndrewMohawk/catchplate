@@ -164,3 +164,17 @@ class RevocationPlannerPersistence:
         retention.plan.contract._digest(planner_transaction_id)
         return self._run(store.read_revocation_planner_record,
             {"planner_transaction_id": planner_transaction_id}, expectations, work)
+
+    def reserve_execution(self, *, envelope_id, planner_transaction_id, work, **expectations):
+        """Genuine replay and private reservation share one writer transaction.
+
+        This returns reserved data, not a capability or terminal receipt. It
+        does not compose a separately committed historical read with a write.
+        """
+        from serverware.authority_store import revocation_execution
+
+        retention.plan.contract._digest(envelope_id)
+        retention.plan.contract._digest(planner_transaction_id)
+        return self._run(revocation_execution.reserve_revocation_execution_envelope,
+            {"envelope_id": envelope_id, "planner_transaction_id": planner_transaction_id},
+            expectations, work)

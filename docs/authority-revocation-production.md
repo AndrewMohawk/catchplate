@@ -11,6 +11,8 @@ separate original-byte persistence. Source `.41` adds the assertion/projection
 custody required by the executor to that same private write transaction.
 Source `.42` adds a private SQL retained-byte integrity binder, without
 connecting it to this producer or activating any execution route.
+Source `.43` adds a separately invoked private execution-envelope reservation
+after genuine stored replay, without activating business execution.
 These implementations are **unbuilt and
 unexecuted**, not a public endpoint, registered kernel, observed SQL commit or
 deployed release.
@@ -82,6 +84,19 @@ authority: independent key/request/context admission, actual Ed25519 and
 complete-proof verification, current locked primary/counted roots and the
 writer reservation remain separate consumer requirements. Existing public
 v3 execution, reservation and service replay gates are unchanged.
+
+The separately invoked configured `reserve_execution` method genuinely replays
+the stored original bytes and constructs a closed five-field successor request
+binding the typed request, `revocation-v4`, retained-record digest and mixed
+root-transition digest. One serializable writer transaction/savepoint retains
+the parent lock through reservation and readback; it does not reuse an earlier
+replay result from a closed transaction. Only a `planned` parent and a new or
+exactly identical `reserved` envelope are admitted. Every reservation column
+and NULL terminal field is compared on retry, preserving timestamps, and
+current deadline/age/skew checks still apply. No execution-envelope database
+immutability/FK, current-root, capability or terminal-authority guarantee is
+added. `produce_and_persist` does not automatically reserve execution; see the
+[private reservation contract](authority-revocation-retention.md#private-execution-envelope-reservation).
 
 ## Actual pipeline
 

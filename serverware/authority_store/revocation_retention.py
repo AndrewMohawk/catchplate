@@ -441,13 +441,13 @@ def persist_revocation_planner_record(*, envelope_bytes: bytes, evaluation_conte
     return _receipt(record, row)
 
 
-def read_revocation_planner_record(*, planner_transaction_id: str, connection,
-        work: _ValidationWork, **expectations) -> dict | None:
-    """Replay original bytes with independent historical expectations.
+def _read_revocation_record_on_work(*, planner_transaction_id: str, connection,
+        work: _ValidationWork, expectations, _expected_raw=None):
+    """Own and genuinely replay the stored record while keeping its parent lock.
 
-    A differently tagged or incomplete existing parent is a denial, never a
-    not-found signal that could trigger recomputation or re-signing. Historical
-    clocks are deliberately not refreshed and no execution is authorized.
+    The result stays inside this store's actual read/reservation consumers; it
+    is never an admitted input or a transferable successful-verification token.
+    This helper neither closes nor commits the caller's transaction.
     """
     _transaction_connection(connection)
     batch._SharedLedger(work)
@@ -457,6 +457,8 @@ def read_revocation_planner_record(*, planner_transaction_id: str, connection,
     if planner_transaction_id != expectations["expected_planner_transaction_id"]:
         raise ValueError("revocation retained replay transaction binding differs")
     raw = _callback(work, _require_planner_writer, connection)
+    if _expected_raw is not None and raw is not _expected_raw:
+        raise _error("revocation retained reader connection differs from its reservation")
     identity = (planner_transaction_id,)
     with _context(_callback(work, raw.cursor), work) as cursor:
         row = _read(cursor, _SELECT_PARENT, identity, work)
@@ -482,4 +484,17 @@ def read_revocation_planner_record(*, planner_transaction_id: str, connection,
     authorization = _authorization_bindings(record, work)
     with _context(_callback(work, raw.cursor), work) as cursor:
         _check_authorization_rows(cursor, authorization, work)
-    return _receipt(record, row)
+    return record, row
+
+
+def read_revocation_planner_record(*, planner_transaction_id: str, connection,
+        work: _ValidationWork, **expectations) -> dict | None:
+    """Replay original bytes with independent historical expectations.
+
+    A differently tagged or incomplete existing parent is a denial, never a
+    not-found signal that could trigger recomputation or re-signing. Historical
+    clocks are deliberately not refreshed and no execution is authorized.
+    """
+    observed = _read_revocation_record_on_work(planner_transaction_id=planner_transaction_id,
+        connection=connection, work=work, expectations=expectations)
+    return None if observed is None else _receipt(*observed)

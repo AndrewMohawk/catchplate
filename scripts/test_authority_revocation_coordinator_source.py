@@ -69,7 +69,7 @@ class RevocationCoordinatorSourceTests(unittest.TestCase):
         self.assert_shape(self.owner.decorator_list[0],
                          "dataclass(frozen=True, slots=True, init=False, repr=False, eq=False)")
         self.assertEqual({node.name for node in self.owner.body if isinstance(node, ast.FunctionDef)},
-                         {"__init__", "_snapshot_configuration", "_inputs", "_run", "persist", "read"})
+                         {"__init__", "_snapshot_configuration", "_inputs", "_run", "persist", "read", "reserve_execution"})
 
     def test_constructor_pins_real_keys_and_copies_exact_identity_scalars(self):
         constructor = self.method("__init__")
@@ -199,6 +199,26 @@ class RevocationCoordinatorSourceTests(unittest.TestCase):
         run = definition(self.tree, "_run_on_configuration")
         self.assert_shape(run.body[-1].value, "result")
         self.assertEqual(len(calls(run, "operation")), 1)
+
+    def test_reservation_targets_one_real_store_call_without_a_separate_read(self):
+        reserve = self.method("reserve_execution")
+        self.assertEqual([argument.arg for argument in reserve.args.kwonlyargs],
+                         ["envelope_id", "planner_transaction_id", "work"])
+        self.assertEqual(reserve.args.kwarg.arg, "expectations")
+        imports = [(node.module, tuple(item.name for item in node.names))
+                   for node in reserve.body if isinstance(node, ast.ImportFrom)]
+        self.assertEqual(imports, [("serverware.authority_store", ("revocation_execution",))])
+        guards = calls(reserve, "retention.plan.contract._digest")
+        self.assertEqual([ast.unparse(call.args[0]) for call in guards],
+                         ["envelope_id", "planner_transaction_id"])
+        operations = calls(reserve, "self._run")
+        self.assertEqual(len(operations), 1)
+        self.assert_shape(operations[0],
+            'self._run(revocation_execution.reserve_revocation_execution_envelope, '
+            '{"envelope_id": envelope_id, "planner_transaction_id": planner_transaction_id}, expectations, work)')
+        self.assertTrue(all(guard.lineno < operations[0].lineno for guard in guards))
+        self.assertFalse(calls(reserve, "self.read"))
+        self.assertFalse(calls(reserve, "store.read_revocation_planner_record"))
 
     def test_invocation_snapshot_admits_all_six_values_before_callback_free_handoff(self):
         snapshot = self.method("_snapshot_configuration")

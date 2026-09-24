@@ -645,6 +645,7 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_authority_revocation_wire.py \
 	scripts/test_authority_revocation_retention.py \
 	scripts/test_authority_revocation_persistence.py \
+	scripts/test_authority_revocation_reservation.py \
 	scripts/test_authority_revocation_coordinator_source.py \
 	scripts/test_authority_webauthn_trust.py \
 	scripts/test_authority_radix_mutation.py \
@@ -885,6 +886,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_store/planner_connection.py \
 	serverware/authority_store/postgres_trigger_manifest.py \
 	serverware/authority_store/primary_tree_sql.py \
+	serverware/authority_store/revocation_execution.py \
 	serverware/authority_store/revocation_retained_sql.py \
 	serverware/authority_store/revocation_retention.py \
 	serverware/authority_store/root_transition_sql.py \
@@ -2581,6 +2583,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_store/planner_connection.py \
 				serverware/authority_store/authorization_records.py \
 				serverware/authority_store/revocation_retention.py \
+				serverware/authority_store/revocation_execution.py \
 				serverware/authority_store/revocation_retained_sql.py \
 				serverware/authority_store/executor_v9.py \
 				serverware/authority_revocation_write_trace.py \

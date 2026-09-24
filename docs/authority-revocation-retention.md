@@ -36,6 +36,12 @@ installed into the active executor or exposed through reservation/service
 routes. Its observations do not replace independent signature, proof or
 current-state admission.
 
+Source `.43` adds a separate private execution-envelope reservation after
+genuine stored-record replay under the same locked parent and writer
+transaction. This is reservation custody, not capability issuance, current-root
+admission, business execution or terminal authority. Public v3 routes stay closed
+to v4 records.
+
 The existing `exact_plan_*` fields continue to contain canonical **payload**
 bytes. Legacy v3 service replay reconstructs its envelope; private v4 replay
 returns the original envelope and context from the new immutable sidecar.
@@ -57,7 +63,7 @@ flowchart LR
 
 Historical verification must still receive the expected typed request,
 planner/verifier keys and other expectations through independent admission.
-The current reservation stores operation/request digests, not request bytes.
+The planner reservation stores operation/request digests, not request bytes.
 The stored context and key fingerprints are evidence to compare with those
 expectations, not key enrollment, current roots or refreshed deadlines.
 
@@ -263,14 +269,68 @@ can reject its cryptographic invalidity. Source and native controls are
 authored but unexecuted. The existing v3 loader, execution reservation and
 service replay paths remain unchanged and continue to reject v4 records.
 
+## Private execution-envelope reservation
+
+The configured `RevocationPlannerPersistence.reserve_execution` path uses
+[`authority_store.revocation_execution`](../serverware/authority_store/revocation_execution.py).
+It owns a `SERIALIZABLE READ WRITE NOT DEFERRABLE` transaction and reuses the
+actual stored-record replay body inside one savepoint, retaining the parent
+row lock through reservation and exact readback. The reader pins the same raw
+connection after actual role admission and before the parent SELECT; guarded
+checks retain the facade/raw identity and active transaction after replay,
+around reservation writes and before savepoint exit. This pin is a private
+internal argument, not an accepted external verification expectation.
+Independent request, keys,
+historical context and roots remain inputs to genuine signature and complete
+semantic replay; a stored digest, SQL binder observation or successful-result
+object cannot substitute for that replay. The same invocation work continues
+through byte encoding, commitments and comparisons.
+
+Only after genuine replay does the store construct this closed request:
+
+```text
+schema = serverware.policyAuthorityRevocationExecutionRequest/v1
+planProtocol = revocation-v4
+retainedRecordDigest
+rootTransitionDigest
+typedRequest
+```
+
+The existing execution-envelope `purpose` remains `execute-v9`, identifying
+the executor family rather than admitting this successor through its legacy
+request decoder. The semantic `request_digest` still commits the original
+typed request; `exact_request_bytes_digest` commits the entire canonical
+five-field wrapper, including both versioned record/transition bindings.
+The existing 4 MiB request ceiling includes the wrapper overhead.
+
+The parent must be exactly `planned`. A missing envelope can become `reserved`;
+an existing `reserved` envelope must match every reservation column and retain
+NULL in every terminal column. Identical retries preserve original timestamps,
+deadlines and fence. A consumed/failed parent, committed/failed envelope, drift,
+partial terminal data or expired current deadline is rejected, not repaired or
+reset. Live freshness checks use current deadline/maximum-age/skew policy
+before insertion and before returning even an identical retry; historical
+replay itself does not refresh its original clocks or cutoff.
+
+There is no new table, grant, execution-to-parent foreign key or execution-row
+immutability trigger. The parent and retained sidecar have their existing
+database immutability guards; the execution row is protected here by locked
+parent ownership and exact API comparisons, not a newly claimed immutable
+database identity. A future consumer must rebind the original retained record
+and request, then independently admit current locked roots, capability/fence
+authority, one-use execution and terminal witness commitments. This private
+method is not called automatically by `produce_and_persist` and does not open
+the legacy executor or public service. Its fixtures are authored and unexecuted.
+
 ## Migration at the actual consumers
 
-| Consumer | Source `.42` status / remaining work |
+| Consumer | Source `.43` status / remaining work |
 | --- | --- |
 | Configured retention coordinator | Separate `RevocationPlannerPersistence` implemented; configuration pins keys/identities and calls genuine raw-byte storage. |
 | Configured read-to-persist owner | Private `RevocationPlanningCoordinator` closes read scopes before separate persistence, preserving original bytes, expectations and work. |
 | Transaction reserve/complete | Private v4 reservation, assertion/projection and sidecar custody, exact comparisons and locked CAS implemented. |
 | Store replay | Private original-byte replay requires existing exact assertion/projection custody; no repair or re-signing. |
+| Execution-envelope reservation | Private genuine replay and exact reserved-row custody under one parent lock implemented; current-root, capability and terminal authority remain separate. |
 | Service persist/replay | Admit the explicit successor protocol; preserve original bytes and require independent context. |
 | Root-transition SQL | Private retained-byte integrity binder added; legacy early protocol denial unchanged. Independently admitted mixed-root v4 commit validation remains required. |
 | Execution and terminal receipts | Bind the retained record and mixed transition; retain separate current-state, deadline and one-use checks. |

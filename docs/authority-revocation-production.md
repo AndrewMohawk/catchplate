@@ -62,9 +62,10 @@ Callers still supply independently retained request/context expectations.
 
 The owner snapshots configuration and captures caller graphs before external
 callbacks. The read identity's three authority digests must match the captured
-planner identity. One six-setting persistence snapshot retains its DSN, timeout,
-public-key handles and identity triples across both phases; it does not enroll
-keys or freeze arbitrary key-implementation internals.
+planner identity. One seven-setting persistence snapshot retains its DSN, timeout,
+public-key handles, signing-identity triples and independent writer role/TLS
+pins across both phases; it does not enroll keys or freeze arbitrary
+key-implementation internals.
 It opens an actual `SERIALIZABLE READ ONLY DEFERRABLE` transaction,
 checks database TLS/role privileges with the existing identity validator, and
 loads both manifests through their genuine source-comparison bodies. Metadata

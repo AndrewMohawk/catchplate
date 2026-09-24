@@ -55,7 +55,7 @@ Separate audit/recovery and legacy shared-role sealing keep their own policies.
 This is a metadata-namespace check, not an all-database sandbox or continuous
 monitoring against a privileged administrator.
 
-Source revision `.58`, all nineteen v9 DDL revision pins, the schema source
+Source revision `.59`, all nineteen v9 DDL revision pins, the schema source
 contract and the owner verification profile bind this change. The latter two
 include the configured writer role, exact grant inventory, function signatures
 and query digest. Older recorded contracts are not silently accepted.
@@ -75,10 +75,14 @@ IDs and appends the new suite. Neither fixture has executed for this source.
 The suite remains excluded from ordinary verification until its approved native
 lane is prepared; the manual target is not a waiver of that gate.
 
-Still required: bind this query into every actual writer connection alongside
-PostgreSQL version, configured role/TLS identity, transaction mode and connection
-continuity checks; complete authenticated verifier-to-planner-to-writer custody;
-and verify real installation, rollback and service behavior. The persistence
-configuration remains its existing six-item form in this checkpoint. No new
-public operation, WebAuthn kernel, transport route or production deployment is
-activated. Follow [goal.md](../goal.md) before any build or execution.
+Revision `.59` binds the query into the configured original-byte v4 persistence
+owner, alongside PostgreSQL version, fixed role/server-reported TLS identity,
+transaction mode and connection-continuity checks. Its immutable configuration
+now requires independent writer role/TLS pins as a seventh item, with no old-six
+fallback. See [writer connection admission](authority-revocation-writer-connection.md).
+
+Still required: independently configured admission for the latent legacy writer
+routes; authenticated verifier-to-planner-to-writer custody; and real installation,
+rollback and service verification. No new public operation, WebAuthn kernel,
+transport route or production deployment is activated. Follow
+[goal.md](../goal.md) before any build or execution.

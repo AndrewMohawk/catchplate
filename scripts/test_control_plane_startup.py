@@ -968,7 +968,21 @@ class _RevocationReadCursor:
         return self.target.fetchmany(maximum)
 
 
-class _RevocationOwnerScope:
+class _RevocationOwnerGetters:
+    """One-shot hooks model driver attribute lookup, not successful admission."""
+
+    on_lookup = None
+
+    def __getattribute__(self, name):
+        if name in {"transaction", "cursor", "execute", "fetchone", "fetchall", "fetchmany",
+                    "rowcount", "info", "pgconn", "closed", "autocommit", "__enter__", "__exit__"}:
+            callback = object.__getattribute__(self, "on_lookup")
+            if callback is not None:
+                callback(name)
+        return object.__getattribute__(self, name)
+
+
+class _RevocationOwnerScope(_RevocationOwnerGetters):
     """Driver lifecycle recorder only, never a transaction/ACL proof."""
 
     def __init__(self, connection, label, value, *, manager=None, transaction=False):
@@ -983,7 +997,9 @@ class _RevocationOwnerScope:
             self.previous_status = self.connection.info.transaction_status
             self.connection.info.transaction_status = 2
         self.connection.event(self.label + ".enter")
-        return self.value
+        if self.transaction and self.connection.transaction_enter_replacement is not None:
+            return self.connection.transaction_enter_replacement
+        return self if self.transaction else self.value
 
     def __exit__(self, kind, error, traceback):
         try:
@@ -996,13 +1012,18 @@ class _RevocationOwnerScope:
         return False
 
 
-class _RevocationOwnerConnection:
+class _RevocationOwnerConnection(_RevocationOwnerGetters):
     def __init__(self, name, cursor, events, *, recorder=None):
         self.name, self.sql_cursor, self.events = name, cursor, events
         self.recorder, self.on_event = recorder, None
         self.info = types.SimpleNamespace(transaction_status=0)
         self.closed, self.autocommit, self.pgconn = False, False, object()
         self.transactions = 0
+        self.cursor_lookup = None
+        self.enter_result = self
+        self.transaction_enter_replacement = None
+        self.cursor_enter_replacement = None
+        self.execute_replacement = None
 
     def event(self, name):
         self.events.append(name)
@@ -1011,7 +1032,7 @@ class _RevocationOwnerConnection:
 
     def __enter__(self):
         self.event(self.name + ".connection.enter")
-        return self
+        return self.enter_result
 
     def __exit__(self, kind, error, traceback):
         try:
@@ -1031,7 +1052,9 @@ class _RevocationOwnerConnection:
                                     manager=manager, transaction=True)
 
     def cursor(self):
-        return _RevocationOwnerCursorScope(self, self.name + ".cursor", self.sql_cursor)
+        scope = _RevocationOwnerCursorScope(self, self.name + ".cursor", self.sql_cursor)
+        scope.on_lookup = self.cursor_lookup
+        return scope
 
 
 class _RevocationOwnerCursorScope(_RevocationOwnerScope):
@@ -1043,11 +1066,13 @@ class _RevocationOwnerCursorScope(_RevocationOwnerScope):
 
     def __enter__(self):
         super().__enter__()
-        return self
+        return self if self.connection.cursor_enter_replacement is None else self.connection.cursor_enter_replacement
 
     def execute(self, sql, parameters=None):
         arguments = (sql,) if parameters is None else (sql, parameters)
         result = self.value.execute(*arguments)
+        if self.connection.execute_replacement is not None:
+            return self.connection.execute_replacement
         return self if result is self.value else result
 
     def fetchone(self):
@@ -1117,16 +1142,59 @@ class _RevocationOwnerReadCursor:
 
 
 class _RevocationOwnerWriteCursor:
-    def __init__(self, recorder):
+    """Exact synthetic metadata observations followed by the genuine store.
+
+    Identity values are fixture claims, not TLS evidence. The actual fixed ACL
+    SQL is matched but not executed here; the separate native catalog fixture
+    owns real-query coverage. No helper or verifier is replaced by success.
+    """
+
+    def __init__(self, recorder, database_identity):
+        from serverware import authority_revocation_writer_connection as writer
+        from serverware.authority_store.planner_writer_sql import planner_writer_privilege_check
+
         self.recorder, self.cursor, self.calls = recorder, recorder.cursor(), []
+        role, client_dn, client_serial, issuer_dn = database_identity
+        self.identity_sql = writer._IDENTITY_SQL
+        self.privilege_sql, self.privilege_parameters = planner_writer_privilege_check(
+            role=role, namespace="serverware_metadata")
+        self.identity_row = {"server_version_num": 160004, "role": role, "session_role": role,
+            "transaction_isolation": "serializable", "transaction_read_only": "off",
+            "transaction_deferrable": "off", "ssl": True, "client_dn": client_dn,
+            "client_serial": client_serial, "issuer_dn": issuer_dn, "rolcanlogin": True,
+            **{name: False for name in ("rolsuper", "rolcreaterole", "rolcreatedb", "rolreplication",
+                "rolbypassrls", "schema_create", "database_create", "database_temporary")}}
+        self.privilege_row, self.result, self.phase = None, None, 0
+        self.on_execute, self.on_fetch, self.return_aliases = None, None, False
 
     def execute(self, sql, parameters=()):
         self.calls.append((sql, copy.deepcopy(parameters)))
-        if sql != "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE READ WRITE NOT DEFERRABLE":
+        if self.on_execute is not None:
+            self.on_execute(sql, parameters)
+        if sql == "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE READ WRITE NOT DEFERRABLE":
+            if self.phase != 0 or parameters not in (None, ()):
+                raise AssertionError("writer mode is not the first parameter-free statement")
+            self.result, self.phase = None, 1
+        elif sql == self.identity_sql:
+            if self.phase != 1 or parameters not in (None, ()):
+                raise AssertionError("writer identity does not immediately follow its mode")
+            self.result, self.phase = self.identity_row, 2
+        elif sql == self.privilege_sql:
+            if self.phase != 2 or parameters != self.privilege_parameters:
+                raise AssertionError("writer effective ACL query lost its exact source parameters/order")
+            self.result, self.phase = self.privilege_row, 3
+        else:
+            if self.phase != 3:
+                raise AssertionError("custody SQL ran before complete writer admission observations")
+            self.result = None
             self.cursor.execute(sql, parameters)
         return self
 
     def fetchone(self):
+        if self.on_fetch is not None:
+            self.on_fetch()
+        if self.phase < 3 or (self.calls and self.calls[-1][0] == self.privilege_sql):
+            return self.result if self.return_aliases else copy.deepcopy(self.result)
         return self.cursor.fetchone()
 
     @property
@@ -1857,12 +1925,16 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
             session_identity_digest=expected.identity["sessionIdentityDigest"],
             measurement_digest=expected.identity["measurementDigest"],
             attestation_receipt_digest=expected.identity["attestationReceiptDigest"])
+        writer_identity = ("serverware_policy_authority_planner_writer",
+            "CN=synthetic-writer", "23", "CN=synthetic-writer-issuer")
+        self.assertEqual(writer_identity[0], db._METADATA_STORE_AUTHORITY_PLANNER_WRITER_ROLE)
         persisted = persistence.RevocationPlannerPersistence(
             persistence_dsn="postgresql://synthetic-writer.invalid/metadata", connect_timeout_seconds=5,
             planner_public_key=supplied["planner_public_key"],
             verifier_public_key=supplied["verifier_public_key"],
             expected_planner_identity=expected.identity,
-            expected_verifier_identity=fixture.receipt.identity)
+            expected_verifier_identity=fixture.receipt.identity,
+            writer_database_identity=writer_identity)
         owner = coordinator.RevocationPlanningCoordinator(
             read_dsn="postgresql://synthetic-reader.invalid/metadata", database_identity=identity,
             connect_timeout_seconds=7, planner_private_key=expected.key, persistence=persisted)
@@ -1875,7 +1947,7 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
         read = _RevocationOwnerConnection("read", read_cursor, events)
         recorder = store_oracle.Recorder()
         recorder.role = db._METADATA_STORE_AUTHORITY_PLANNER_WRITER_ROLE
-        write_cursor = _RevocationOwnerWriteCursor(recorder)
+        write_cursor = _RevocationOwnerWriteCursor(recorder, writer_identity)
         write = _RevocationOwnerConnection("write", write_cursor, events, recorder=recorder)
         connected = []
 
@@ -1889,7 +1961,10 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
                 self.assertIs(read.closed, True)
             else:
                 raise AssertionError("connection escaped the original independently configured DSNs")
-            self.assertEqual(set(options), {"row_factory", "connect_timeout", "options"})
+            self.assertEqual(set(options), {"row_factory", "connect_timeout", "options", "autocommit"}
+                             if connection is write else {"row_factory", "connect_timeout", "options"})
+            if connection is write:
+                self.assertIs(options["autocommit"], False)
             self.assertEqual((options["connect_timeout"], options["options"]),
                              (timeout, "-c search_path=pg_catalog"))
             connected.append(dsn)
@@ -1899,7 +1974,8 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
         return types.SimpleNamespace(expected=expected, fixture=fixture, cursor=cursor,
             owner=owner, persistence=persisted, arguments=arguments, read=read, write=write,
             read_cursor=read_cursor, write_cursor=write_cursor, recorder=recorder,
-            events=events, connected=connected, connect=connect, writer_scope=writer_scope)
+            events=events, connected=connected, connect=connect, writer_scope=writer_scope,
+            writer_identity=writer_identity)
 
     def revocation_owner_scope(self, fixture):
         import psycopg
@@ -1920,6 +1996,31 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
         scope.enter_context(patch.object(admission.time, "time_ns", return_value=fixture.expected.now_epoch_ns))
         scope.enter_context(patch.object(admission.time, "monotonic_ns", return_value=fixture.expected.now_monotonic_ns))
         return scope
+
+    def revocation_writer_admission_fixture(self):
+        """Synthetic metadata/driver denial controls, not an admitted store.
+
+        The real private connection owner and fixed catalog query are used.
+        Its actual store operation must remain unreachable in these negative
+        cases; genuine producer/replay positives remain in the owner fixture.
+        """
+        from serverware import authority_query_read_work as accounting
+        import test_authority_revocation_persistence as store_oracle
+
+        identity = ("serverware_policy_authority_planner_writer",
+            "CN=synthetic-writer", "23", "CN=synthetic-writer-issuer")
+        recorder, events = store_oracle.Recorder(), []
+        recorder.role = identity[0]
+        cursor = _RevocationOwnerWriteCursor(recorder, identity)
+        connection = _RevocationOwnerConnection("write", cursor, events, recorder=recorder)
+        work = accounting._ValidationWork(accounting.QueryReadValidationLimits())
+        work.charge(hashes=3, input_bytes=5, json_nodes=7)
+        return types.SimpleNamespace(identity=identity, recorder=recorder, cursor=cursor,
+            connection=connection, work=work, events=events)
+
+    def assert_revocation_writer_empty(self, recorder):
+        self.assertEqual((recorder.parent, recorder.sidecar), (None, None))
+        self.assertEqual((recorder.assertions, recorder.projections), ({}, {}))
 
     def assert_produced_revocation_plan(self, expectation, fixture, produced):
         import test_authority_revocation_plan as plan_oracle
@@ -1962,8 +2063,9 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
         import test_authority_revocation_retention as record_oracle
 
         fixture = self.revocation_owner_fixture()
-        work, observed = fixture.arguments["work"], []
+        work, observed, writer_states = fixture.arguments["work"], [], []
         original = self.planner.TypedTransitionPlanningProgram._produce_revocation_plan
+        fixture.write.on_event = lambda event: writer_states.append((event, fixture.write.info.transaction_status))
 
         def produce(program, *args, **kwargs):
             self.assertIs(kwargs["query_work"], work)
@@ -1997,6 +2099,15 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
         self.assertEqual((fixture.read.info.transaction_status, fixture.write.info.transaction_status), (0, 0))
         self.assertIs(fixture.read.closed, True)
         self.assertIs(fixture.write.closed, True)
+        self.assertEqual(fixture.write_cursor.calls[:3], [
+            ("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE READ WRITE NOT DEFERRABLE", ()),
+            (fixture.write_cursor.identity_sql, ()),
+            (fixture.write_cursor.privilege_sql, fixture.write_cursor.privilege_parameters)])
+        self.assertEqual(fixture.write_cursor.phase, 3)
+        self.assertEqual([item for item in writer_states if ".cursor." not in item[0]], [
+            ("write.connection.enter", 0), ("write.transaction1.enter", 2),
+            ("write.transaction2.enter", 2), ("write.transaction2.exit", 2),
+            ("write.transaction1.exit", 0), ("write.connection.exit", 0)])
         self.assertEqual((fixture.cursor.clock_reads, len(fixture.cursor.root_calls)),
                          (1, len(fixture.cursor.root_order)))
         prefix = produced.signed.payload["plannerTrace"]["entries"][:2]
@@ -2159,7 +2270,9 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
                         ("connect_timeout_seconds", 300), ("planner_public_key", fixture.expected.other_key.public_key()),
                         ("verifier_public_key", fixture.expected.other_key.public_key()),
                         ("_planner_identity", ("sha256:" + "0" * 64,) * 3),
-                        ("_verifier_identity", ("sha256:" + "0" * 64,) * 3)):
+                        ("_verifier_identity", ("sha256:" + "0" * 64,) * 3),
+                        ("_database_identity", (fixture.writer_identity[0],
+                            "CN=changed-writer", "29", "CN=changed-issuer"))):
                     object.__setattr__(fixture.persistence, name, value)
                 for name, value in (("read_dsn", "postgresql://changed-reader.invalid/metadata"),
                         ("connect_timeout_seconds", 300),
@@ -2182,6 +2295,9 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
         self.assertIs(supplied["verifier_public_key"], verifier_key)
         self.assertEqual(result["plannerTransactionId"], fixture.expected.planner_transaction_id)
         self.assertEqual(len(fixture.connected), 2)
+        self.assertEqual((fixture.write_cursor.identity_row["role"], fixture.write_cursor.identity_row["client_dn"],
+            fixture.write_cursor.identity_row["client_serial"], fixture.write_cursor.identity_row["issuer_dn"]),
+            fixture.writer_identity)
 
     def test_configured_revocation_owner_rejects_metadata_and_closed_input_drift_before_production(self):
         for changed in ("identity", "mutation_authority", "business_manifest", "authorization_manifest",
@@ -2345,22 +2461,30 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
     def test_configured_revocation_owner_closes_connection_returned_before_meter_guard_failure(self):
         from serverware import db
 
-        fixture = self.revocation_owner_fixture()
-        original, work, after_callback = fixture.connect, fixture.arguments["work"], []
+        for stage in ("read", "write"):
+            fixture = self.revocation_owner_fixture()
+            original, work, after_callback = fixture.connect, fixture.arguments["work"], []
 
-        def changed_connect(*args, **kwargs):
-            connection = original(*args, **kwargs)
-            work.charge(json_nodes=1)
-            after_callback.append(work.metrics)
-            return connection
+            def changed_connect(*args, **kwargs):
+                connection = original(*args, **kwargs)
+                if connection.name == stage:
+                    work.charge(json_nodes=1)
+                    after_callback.append(work.metrics)
+                return connection
 
-        fixture.connect = changed_connect
-        with self.revocation_owner_scope(fixture), self.assertRaises(db.MetadataStoreError):
-            fixture.owner.produce_and_persist(**fixture.arguments)
-        self.assertEqual(fixture.events, ["connect.read", "read.close"])
-        self.assertEqual((fixture.read_cursor.calls, fixture.cursor.calls), ([], []))
-        self.assertEqual((fixture.recorder.parent, fixture.recorder.sidecar), (None, None))
-        self.assertEqual(work.metrics, after_callback[0])
+            fixture.connect = changed_connect
+            with self.subTest(stage=stage), self.revocation_owner_scope(fixture), self.assertRaises(db.MetadataStoreError):
+                fixture.owner.produce_and_persist(**fixture.arguments)
+            if stage == "read":
+                self.assertEqual(fixture.events, ["connect.read", "read.close"])
+                self.assertEqual((fixture.read_cursor.calls, fixture.cursor.calls), ([], []))
+            else:
+                self.assertEqual(fixture.events[-2:], ["connect.write", "write.close"])
+                self.assertIn("read.connection.exit", fixture.events)
+                self.assertEqual((fixture.write.transactions, fixture.write_cursor.calls), (0, []))
+                self.assertIs(fixture.write.closed, True)
+            self.assertEqual((fixture.recorder.parent, fixture.recorder.sidecar), (None, None))
+            self.assertEqual(work.metrics, after_callback[0])
 
     def test_configured_revocation_owner_writer_failure_rolls_back_both_actual_transaction_scopes(self):
         from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
@@ -2431,6 +2555,302 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
             self.assertEqual((fixture.read.info.transaction_status, fixture.write.info.transaction_status), (0, 0))
             self.assertEqual(fixture.events.count("write.connection.exit"), 1)
             self.assertGreater(fixture.arguments["work"].hash_work, produced[0].metrics.hash_work)
+
+    def test_configured_revocation_writer_requires_closed_actual_metadata_before_store(self):
+        from serverware import authority_revocation_writer_connection as writer
+        from serverware.authority_store import revocation_retention as store
+
+        baseline = self.revocation_writer_admission_fixture().cursor.identity_row
+        self.assertEqual(len(baseline), 19)
+        variants = [None, {}, tuple(baseline.items()), {**baseline, "extra": False},
+                    {name: value for name, value in baseline.items() if name != "ssl"}]
+        for value in (True, "160004", 159999, 170000):
+            variants.append({**baseline, "server_version_num": value})
+        for field in ("role", "session_role", "client_dn", "client_serial", "issuer_dn",
+                      "transaction_isolation", "transaction_read_only", "transaction_deferrable"):
+            variants.extend({**baseline, field: value} for value in (None, True, "different"))
+        for field in ("ssl", "rolcanlogin"):
+            variants.extend({**baseline, field: value} for value in (False, 1, None))
+        for field in ("rolsuper", "rolcreaterole", "rolcreatedb", "rolreplication",
+                      "rolbypassrls", "schema_create", "database_create", "database_temporary"):
+            variants.extend({**baseline, field: value} for value in (True, 0, None))
+        for number, row in enumerate(variants):
+            fixture = self.revocation_writer_admission_fixture()
+            fixture.cursor.identity_row = row
+            entering = fixture.work.metrics
+            with self.subTest(variant=number), patch.object(store, "read_revocation_planner_record",
+                    wraps=store.read_revocation_planner_record) as operation:
+                with self.assertRaises(writer.RevocationWriterConnectionError):
+                    writer._run_on_connection(fixture.connection, database_identity=fixture.identity,
+                        work=fixture.work, operation=operation, arguments={}, expectations={})
+            self.assertEqual(operation.call_count, 0)
+            self.assertEqual([sql for sql, _ in fixture.cursor.calls],
+                             [writer._SET_TRANSACTION, fixture.cursor.identity_sql])
+            self.assertEqual(fixture.recorder.statements, [])
+            self.assertEqual((fixture.recorder.rollbacks, fixture.recorder.releases), (1, 0))
+            self.assertEqual(fixture.connection.info.transaction_status, 0)
+            self.assertIs(fixture.connection.closed, True)
+            self.assertEqual(fixture.work.metrics, entering)
+            self.assert_revocation_writer_empty(fixture.recorder)
+
+    def test_configured_revocation_writer_denies_every_returned_catalog_violation(self):
+        from serverware import authority_revocation_writer_connection as writer
+        from serverware.authority_store import revocation_retention as store
+
+        # These are returned observations, not SQL execution or actual ACL
+        # evidence. Any row must deny; the native fixture owns real catalog DDL.
+        labels = ("role-or-namespace", "schema-or-database-privilege", "role-membership",
+            "required-table", "table-privilege", "column-privilege", "sequence-privilege",
+            "required-function", "function-privilege", "function-metadata",
+            "public-schema-privilege", "public-relation-privilege", "public-function-privilege")
+        for row in ({}, False, *({"violation": label} for label in labels)):
+            fixture = self.revocation_writer_admission_fixture()
+            fixture.cursor.privilege_row = row
+            entering = fixture.work.metrics
+            with self.subTest(row=row), patch.object(store, "read_revocation_planner_record",
+                    wraps=store.read_revocation_planner_record) as operation:
+                with self.assertRaisesRegex(writer.RevocationWriterConnectionError, "effective privileges"):
+                    writer._run_on_connection(fixture.connection, database_identity=fixture.identity,
+                        work=fixture.work, operation=operation, arguments={}, expectations={})
+            self.assertEqual(operation.call_count, 0)
+            self.assertEqual(fixture.cursor.calls, [(writer._SET_TRANSACTION, ()),
+                (fixture.cursor.identity_sql, ()),
+                (fixture.cursor.privilege_sql, (fixture.identity[0], "serverware_metadata"))])
+            self.assertEqual((fixture.recorder.statements, fixture.recorder.rollbacks,
+                              fixture.recorder.releases), ([], 1, 0))
+            self.assertEqual(fixture.work.metrics, entering)
+            self.assertIs(fixture.connection.closed, True)
+            self.assert_revocation_writer_empty(fixture.recorder)
+
+    def test_configured_revocation_writer_denies_inactive_or_replaced_driver_scopes(self):
+        from serverware import authority_revocation_writer_connection as writer
+        from serverware.authority_store import revocation_retention as store
+
+        variants = (("closed", True), ("autocommit", True), ("pgconn", None),
+            ("status", True), ("status", 0.0), ("status", 2), ("status", 3),
+            ("enter_result", object()), ("transaction_enter_replacement", object()),
+            ("cursor_enter_replacement", object()), ("execute_replacement", object()))
+        for field, value in variants:
+            fixture = self.revocation_writer_admission_fixture()
+            if field == "status":
+                fixture.connection.info.transaction_status = value
+            else:
+                setattr(fixture.connection, field, value)
+            with self.subTest(field=field, value=value), patch.object(store, "read_revocation_planner_record",
+                    wraps=store.read_revocation_planner_record) as operation:
+                with self.assertRaises(writer.RevocationWriterConnectionError):
+                    writer._run_on_connection(fixture.connection, database_identity=fixture.identity,
+                        work=fixture.work, operation=operation, arguments={}, expectations={})
+            self.assertEqual((operation.call_count, fixture.recorder.statements), (0, []))
+            self.assertEqual(fixture.cursor.calls,
+                [(writer._SET_TRANSACTION, ())] if field == "execute_replacement" else [])
+            self.assertIs(fixture.connection.closed, True)
+            entered_transaction = field in {"transaction_enter_replacement", "cursor_enter_replacement", "execute_replacement"}
+            self.assertEqual((fixture.recorder.rollbacks, fixture.recorder.releases),
+                             (int(entered_transaction), 0))
+            self.assertEqual(fixture.events.count("write.transaction1.exit"), int(entered_transaction))
+            self.assert_revocation_writer_empty(fixture.recorder)
+
+        # Observe the actual proxy allocation, then poison only its working
+        # binding. Cleanup must use its separately held original entry scope.
+        fixture, cursors = self.revocation_writer_admission_fixture(), []
+        actual_cursor = writer._Connection.cursor
+
+        def cursor(connection):
+            result = actual_cursor(connection)
+            cursors.append((result, result._binding, result._scope))
+            return result
+
+        def replace_binding(sql, _parameters):
+            if sql == writer._SET_TRANSACTION:
+                cursors[0][0]._binding = (None, None, None)
+
+        fixture.cursor.on_execute = replace_binding
+        with self.subTest(field="working_scope_binding"), \
+                patch.object(writer._Connection, "cursor", autospec=True, side_effect=cursor), \
+                patch.object(store, "read_revocation_planner_record",
+                             wraps=store.read_revocation_planner_record) as operation:
+            with self.assertRaisesRegex(writer.RevocationWriterConnectionError, "scope binding changed"):
+                writer._run_on_connection(fixture.connection, database_identity=fixture.identity,
+                    work=fixture.work, operation=operation, arguments={}, expectations={})
+        self.assertEqual((len(cursors), operation.call_count), (1, 0))
+        proxy, entry_binding, original_scope = cursors[0]
+        self.assertIs(proxy._entry_binding, entry_binding)
+        self.assertIs(proxy._scope, original_scope)
+        self.assertIsNot(proxy._binding, entry_binding)
+        self.assertEqual(fixture.cursor.calls, [(writer._SET_TRANSACTION, ())])
+        self.assertEqual((fixture.recorder.rollbacks, fixture.recorder.releases), (1, 0))
+        for event in ("write.cursor.exit", "write.transaction1.exit", "write.connection.exit"):
+            self.assertEqual(fixture.events.count(event), 1)
+        self.assert_revocation_writer_empty(fixture.recorder)
+
+    def test_configured_revocation_writer_guards_driver_getters_without_refunding_work(self):
+        from serverware import authority_revocation_writer_connection as writer
+        from serverware.authority_store import revocation_retention as store
+
+        for target in ("info", "pgconn", "closed", "autocommit", "transaction", "cursor",
+                       "__enter__", "execute", "fetchone"):
+            fixture, observed = self.revocation_writer_admission_fixture(), []
+            work, limits = fixture.work, fixture.work.limits
+
+            def lookup(name):
+                if name == target and not observed:
+                    fixture.connection.on_lookup = None
+                    fixture.connection.cursor_lookup = None
+                    work.charge(json_nodes=1)
+                    observed.append(work.metrics)
+
+            if target in {"execute", "fetchone"}:
+                fixture.connection.cursor_lookup = lookup
+            else:
+                fixture.connection.on_lookup = lookup
+            with self.subTest(target=target), patch.object(store, "read_revocation_planner_record",
+                    wraps=store.read_revocation_planner_record) as operation:
+                with self.assertRaises(writer.RevocationWriterConnectionError):
+                    writer._run_on_connection(fixture.connection, database_identity=fixture.identity,
+                        work=work, operation=operation, arguments={}, expectations={})
+            self.assertEqual((len(observed), operation.call_count), (1, 0))
+            self.assertEqual(work.metrics, observed[0])
+            self.assertIs(work.limits, limits)
+            self.assertFalse(hasattr(work, "_authority_query_batch_owner"))
+            self.assertEqual(fixture.recorder.releases, 0)
+            self.assertIs(fixture.connection.closed, True)
+            self.assert_revocation_writer_empty(fixture.recorder)
+
+    def test_configured_revocation_writer_late_state_and_rowcount_getters_roll_back_custody(self):
+        from serverware import authority_revocation_writer_connection as writer
+        from serverware.authority_store import revocation_retention as store
+
+        for failure in ("raw", "status", "autocommit", "closed", "rowcount_work", "rowcount_bool"):
+            fixture, observed = self.revocation_owner_fixture(), []
+            work = fixture.arguments["work"]
+            completion = "UPDATE serverware_metadata.policy_authority_planner_transactions"
+
+            def after_sql(sql, _parameters):
+                if sql.startswith(completion):
+                    observed.append("completion")
+                    if failure == "raw":
+                        fixture.write.pgconn = object()
+                    elif failure == "status":
+                        fixture.write.info.transaction_status = 0
+                    elif failure == "autocommit":
+                        fixture.write.autocommit = True
+                    elif failure == "closed":
+                        fixture.write.closed = True
+
+            def lookup(name):
+                if name == "rowcount" and observed == ["completion"]:
+                    if failure == "rowcount_work":
+                        work.charge(json_nodes=1)
+                        observed.append(work.metrics)
+                    elif failure == "rowcount_bool":
+                        fixture.recorder_cursor.rowcount = True
+                        observed.append("bool")
+
+            fixture.recorder_cursor = fixture.write_cursor.cursor
+            fixture.recorder.callback = after_sql
+            fixture.write.cursor_lookup = lookup
+            with self.subTest(failure=failure), self.revocation_owner_scope(fixture), \
+                    patch.object(store.retention, "_verify_record_on_work",
+                                 wraps=store.retention._verify_record_on_work) as replay:
+                with self.assertRaises(writer.RevocationWriterConnectionError):
+                    fixture.owner.produce_and_persist(**fixture.arguments)
+            self.assertEqual((replay.call_count, observed[0]), (1, "completion"))
+            if failure == "rowcount_work":
+                self.assertEqual(work.metrics, observed[1])
+            if failure == "rowcount_bool":
+                self.assertEqual(observed, ["completion", "bool"])
+            self.assertEqual((fixture.write.transactions, fixture.recorder.rollbacks,
+                              fixture.recorder.releases), (2, 2, 0))
+            self.assertEqual(fixture.write.info.transaction_status, 0)
+            self.assertEqual(fixture.events.count("write.connection.exit"), 1)
+            self.assert_revocation_writer_empty(fixture.recorder)
+
+    def test_configured_revocation_writer_preserves_first_driver_error_during_cleanup(self):
+        from serverware import authority_revocation_writer_connection as writer
+        from serverware.authority_store import revocation_retention as store
+
+        fixture = self.revocation_writer_admission_fixture()
+        failure = RuntimeError("synthetic metadata driver failure")
+
+        def execute(sql, _parameters):
+            if sql == fixture.cursor.identity_sql:
+                raise failure
+
+        def cleanup(event):
+            if event in {"write.cursor.exit", "write.transaction1.exit", "write.connection.exit"}:
+                raise RuntimeError("secondary synthetic cleanup failure")
+
+        fixture.cursor.on_execute = execute
+        fixture.connection.on_event = cleanup
+        with patch.object(store, "read_revocation_planner_record",
+                wraps=store.read_revocation_planner_record) as operation:
+            with self.assertRaises(RuntimeError) as raised:
+                writer._run_on_connection(fixture.connection, database_identity=fixture.identity,
+                    work=fixture.work, operation=operation, arguments={}, expectations={})
+        self.assertIs(raised.exception, failure)
+        self.assertEqual(operation.call_count, 0)
+        self.assertEqual((fixture.recorder.rollbacks, fixture.recorder.releases), (1, 0))
+        self.assertEqual(fixture.connection.info.transaction_status, 0)
+        self.assertIs(fixture.connection.closed, True)
+        for event in ("write.cursor.exit", "write.transaction1.exit", "write.connection.exit"):
+            self.assertEqual(fixture.events.count(event), 1)
+        self.assert_revocation_writer_empty(fixture.recorder)
+
+    def test_configured_revocation_writer_post_exit_rejection_does_not_claim_commit_rollback(self):
+        from serverware import authority_revocation_writer_connection as writer
+        from serverware.authority_store import revocation_retention as store
+        import test_authority_revocation_plan as oracle
+        import test_authority_revocation_persistence as store_oracle
+
+        for event in ("write.transaction1.exit", "write.connection.exit"):
+            for mutation in (False, True):
+                fixture, persisted, returned, changed = self.revocation_owner_fixture(), [], [], []
+                work, actual = fixture.arguments["work"], store.persist_revocation_planner_record
+                failure = RuntimeError("synthetic post-completion driver failure")
+
+                def persist(**arguments):
+                    result = actual(**arguments)
+                    persisted.append(result)
+                    return result
+
+                def exit_callback(observed):
+                    if observed == event:
+                        if mutation:
+                            work.charge(json_nodes=1)
+                            changed.append(work.metrics)
+                        else:
+                            raise failure
+
+                fixture.write.on_event = exit_callback
+                with self.subTest(event=event, mutation=mutation), self.revocation_owner_scope(fixture), \
+                        patch.object(store, "persist_revocation_planner_record", side_effect=persist), \
+                        patch.object(store.retention, "_verify_record_on_work",
+                                     wraps=store.retention._verify_record_on_work) as replay:
+                    with self.assertRaises(writer.RevocationWriterConnectionError if mutation else RuntimeError) as raised:
+                        returned.append(fixture.owner.produce_and_persist(**fixture.arguments))
+                self.assertEqual((len(persisted), returned, replay.call_count), (1, [], 1))
+                if mutation:
+                    self.assertEqual(len(changed), 1)
+                    self.assertEqual(work.metrics, changed[0])
+                else:
+                    self.assertIs(raised.exception, failure)
+                # The recorder completed both genuine managers before this
+                # callback. Real exit errors can be indeterminate; no assertion
+                # here treats a post-exit guard as undoing an actual commit.
+                self.assertEqual((fixture.recorder.rollbacks, fixture.recorder.releases), (0, 2))
+                self.assertEqual(fixture.recorder.parent["status"], "planned")
+                self.assertEqual(fixture.recorder.parent["planned_at_epoch_ns"], fixture.expected.now_epoch_ns)
+                self.assertEqual(fixture.recorder.sidecar["exact_envelope_base64url"],
+                                 oracle.encoded(persisted[0]["exactEnvelopeBytes"]))
+                assertion, projection = store_oracle.expected_authorization_rows(fixture.expected)
+                self.assertEqual(fixture.recorder.assertions, {assertion["assertion_evidence_digest"]: assertion})
+                self.assertEqual(fixture.recorder.projections, {projection["authorization_projection_digest"]: projection})
+                self.assertEqual(fixture.write.info.transaction_status, 0)
+                self.assertIs(fixture.write.closed, True)
+                for name in ("write.transaction2.exit", "write.transaction1.exit", "write.connection.exit"):
+                    self.assertEqual(fixture.events.count(name), 1)
+                self.assertNotIn("write.close", fixture.events)
 
     def test_private_original_wire_replays_actual_production_with_external_expectations(self):
         from serverware import authority_query_read_work as accounting

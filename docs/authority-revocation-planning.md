@@ -99,9 +99,11 @@ Legacy replay stores a payload and re-signs it. It cannot substitute for the
 original signed-plan/context custody required here. The writer must also retain
 independently authenticated request/history/root expectations; supplied context
 bytes cannot authenticate themselves. Writer role/transaction checks and schema
-ACL installation are not a per-connection TLS, PostgreSQL-version or complete
-privilege-admission proof. That remaining connector work is separate from this
-read-only extraction.
+ACL installation alone are not a per-connection TLS, PostgreSQL-version or
+complete privilege-admission proof. Revision `.59` adds those checks to the
+separate configured v4 writer owner; it does not upgrade the latent legacy
+writer routes or establish executed database/TLS evidence. See
+[writer connection admission](authority-revocation-writer-connection.md).
 
 The successor transport's four-MiB limit covers the entire message, not each
 inner value. It cannot carry every otherwise-valid 64-MiB plan plus context in a

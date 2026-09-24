@@ -1,6 +1,6 @@
 """Configured PostgreSQL coordinator for original revocation retention.
 
-Separate from the closed legacy v3 coordinator and public service routes.
+Separate from the legacy v3 coordinator and public service routes.
 Configuration pins keys and identities; requests cannot replace those pins.
 Persistence/read still genuinely verify original bytes with independent request,
 historical clock and root expectations. Nothing here activates v4 execution.
@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from serverware import authority_revocation_retention as retention
+from serverware import authority_revocation_writer_connection as writer_connection
 from serverware.authority_store import revocation_retention as store
 
 
@@ -23,26 +24,33 @@ _IDENTITY_FIELDS = ("sessionIdentityDigest", "measurementDigest", "attestationRe
 
 def _validate_configuration(configuration):
     """Admit fixed local custody, not key enrollment or a verification token."""
-    if type(configuration) is not tuple or len(configuration) != 6:
-        raise ValueError("revocation persistence configuration is not an exact six-tuple")
-    dsn, timeout, planner_key, verifier_key, planner_identity, verifier_identity = configuration
+    if type(configuration) is not tuple or len(configuration) != 7:
+        raise ValueError("revocation persistence configuration is not an exact seven-tuple")
+    dsn, timeout, planner_key, verifier_key, planner_identity, verifier_identity, database_identity = configuration
     if (type(dsn) is not str or not 1 <= len(dsn) <= 65536
-            or type(timeout) is not int or not 1 <= timeout <= 300
+            or any(character in dsn for character in ("\x00", "\n", "\r"))
+            or type(timeout) is not int or not 2 <= timeout <= 300
             or not isinstance(planner_key, Ed25519PublicKey)
             or not isinstance(verifier_key, Ed25519PublicKey)):
         raise ValueError("revocation persistence configuration is invalid")
+    try:
+        if len(dsn.encode("utf-8")) > 65536:
+            raise ValueError("revocation persistence DSN exceeds its byte bound")
+    except UnicodeError as exc:
+        raise ValueError("revocation persistence DSN is not Unicode") from exc
     for identity in (planner_identity, verifier_identity):
         if type(identity) is not tuple or len(identity) != 3:
             raise ValueError("revocation persistence identity is not an exact triple")
         for digest in identity:
             retention.plan.contract._digest(digest)
+    writer_connection._validate_database_identity(database_identity)
 
 
 def _inputs_from_configuration(configuration, expectations, work):
     _validate_configuration(configuration)
     if len(expectations) != len(_CALL_INPUTS) or set(expectations) != _CALL_INPUTS:
         raise ValueError("revocation persistence requires exactly fifteen external expectations")
-    _, _, planner_key, verifier_key, planner_identity, verifier_identity = configuration
+    _, _, planner_key, verifier_key, planner_identity, verifier_identity = configuration[:6]
     pins = {"planner_public_key": planner_key, "verifier_public_key": verifier_key,
         "expected_planner_identity": dict(zip(_IDENTITY_FIELDS, planner_identity)),
         "expected_verifier_identity": dict(zip(_IDENTITY_FIELDS, verifier_identity))}
@@ -81,20 +89,17 @@ def _run_on_configuration(configuration, operation, arguments, expectations, wor
     dsn, timeout = configuration[:2]
     import psycopg
     from psycopg.rows import dict_row
+    # Preserve the actual facade/registry import gate before opening a socket.
     from serverware import db
 
+    if configuration[6][0] != db._METADATA_STORE_AUTHORITY_PLANNER_WRITER_ROLE:
+        raise ValueError("revocation writer role differs from the actual database contract")
     connection = _connect(work, lambda: psycopg.connect(dsn,
-        row_factory=dict_row, connect_timeout=timeout, options="-c search_path=pg_catalog"))
-    with store._context(connection, work):
-        transaction = store._callback(work, connection.transaction)
-        with store._context(transaction, work):
-            cursor = store._callback(work, connection.cursor)
-            with store._context(cursor, work) as active:
-                store._callback(work, active.execute,
-                    "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE READ WRITE NOT DEFERRABLE")
-            result = operation(connection=db.PostgresMetadataConnection(connection),
-                work=work, **arguments, **owned)
-    return result
+        row_factory=dict_row, connect_timeout=timeout, autocommit=False,
+        options="-c search_path=pg_catalog"))
+    return writer_connection._run_on_connection(connection,
+        database_identity=configuration[6], work=work, operation=operation,
+        arguments=arguments, expectations=owned)
 
 
 @dataclass(frozen=True, slots=True, init=False, repr=False, eq=False)
@@ -103,8 +108,11 @@ class RevocationPlannerPersistence:
 
     Fixed bounded configuration is revalidated and captured once per invocation,
     outside JSON work. Each call owns its fifteen external inputs before any
-    connection callback. The private six-tuple pins key handles, not mutable
+    connection callback. The private seven-tuple pins key handles, not mutable
     internals of arbitrary key implementations or independent provenance.
+    Its mandatory writer role/TLS identity is independent of the signed plan's
+    planner/verifier identities. Connection admission checks the actual driver
+    observations; configured strings alone do not enroll a database or CA.
     Driver/transaction work is excluded from H/B/N but cannot alter the meter.
     This opens its own SERIALIZABLE writer transaction and commits only after
     the real store has completed; nested store rollback uses a real savepoint.
@@ -116,22 +124,25 @@ class RevocationPlannerPersistence:
     verifier_public_key: Ed25519PublicKey
     _planner_identity: tuple[str, str, str]
     _verifier_identity: tuple[str, str, str]
+    _database_identity: tuple[str, str, str, str]
 
     def __init__(self, *, persistence_dsn, connect_timeout_seconds,
                  planner_public_key, verifier_public_key,
-                 expected_planner_identity, expected_verifier_identity):
-        if (type(persistence_dsn) is not str or not 1 <= len(persistence_dsn) <= 65536
-                or type(connect_timeout_seconds) is not int or not 1 <= connect_timeout_seconds <= 300
-                or not isinstance(planner_public_key, Ed25519PublicKey)
-                or not isinstance(verifier_public_key, Ed25519PublicKey)):
-            raise ValueError("revocation persistence configuration is invalid")
+                 expected_planner_identity, expected_verifier_identity,
+                 writer_database_identity):
         retention.plan.contract.validate_identity_shape(expected_planner_identity)
         retention.plan.contract.validate_identity_shape(expected_verifier_identity)
+        configuration = (persistence_dsn, connect_timeout_seconds,
+            planner_public_key, verifier_public_key,
+            tuple(expected_planner_identity[name] for name in _IDENTITY_FIELDS),
+            tuple(expected_verifier_identity[name] for name in _IDENTITY_FIELDS),
+            writer_database_identity)
+        _validate_configuration(configuration)
         for name, value in (
-            ("persistence_dsn", persistence_dsn), ("connect_timeout_seconds", connect_timeout_seconds),
-            ("planner_public_key", planner_public_key), ("verifier_public_key", verifier_public_key),
-            ("_planner_identity", tuple(expected_planner_identity[name] for name in _IDENTITY_FIELDS)),
-            ("_verifier_identity", tuple(expected_verifier_identity[name] for name in _IDENTITY_FIELDS)),
+            ("persistence_dsn", configuration[0]), ("connect_timeout_seconds", configuration[1]),
+            ("planner_public_key", configuration[2]), ("verifier_public_key", configuration[3]),
+            ("_planner_identity", configuration[4]), ("_verifier_identity", configuration[5]),
+            ("_database_identity", configuration[6]),
         ):
             object.__setattr__(self, name, value)
 
@@ -140,7 +151,7 @@ class RevocationPlannerPersistence:
             raise ValueError("revocation persistence requires its exact configured owner")
         configuration = (self.persistence_dsn, self.connect_timeout_seconds,
             self.planner_public_key, self.verifier_public_key,
-            self._planner_identity, self._verifier_identity)
+            self._planner_identity, self._verifier_identity, self._database_identity)
         _validate_configuration(configuration)
         return configuration
 

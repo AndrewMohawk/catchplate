@@ -30,6 +30,8 @@ import test_authority_revocation_wire as wire_oracle
 
 CONTEXT_SCHEMA = "serverware.policyAuthorityRevocationEvaluationContext/v1"
 RECORD_SCHEMA = "serverware.policyAuthorityRevocationRetainedPlan/v1"
+WRITER_DATABASE_IDENTITY = ("serverware_policy_authority_planner_writer",
+    "CN=synthetic-writer", "23", "CN=synthetic-writer-issuer")
 
 
 def record_context(fixture):
@@ -88,7 +90,8 @@ class RevocationRetentionTests(unittest.TestCase):
             planner_public_key=fixture.key.public_key() if planner_key is None else planner_key,
             verifier_public_key=fixture.semantic.receipt.key.public_key() if verifier_key is None else verifier_key,
             expected_planner_identity=fixture.identity,
-            expected_verifier_identity=fixture.semantic.receipt.identity)
+            expected_verifier_identity=fixture.semantic.receipt.identity,
+            writer_database_identity=WRITER_DATABASE_IDENTITY)
         expectations = wire_oracle.expectations(fixture)
         for name in ("planner_public_key", "verifier_public_key",
                      "expected_planner_identity", "expected_verifier_identity"):
@@ -395,7 +398,8 @@ class RevocationRetentionTests(unittest.TestCase):
         planner_key, verifier_key = fixture.key.public_key(), fixture.semantic.receipt.key.public_key()
         configured = coordinator.RevocationPlannerPersistence(persistence_dsn="postgresql://synthetic.invalid/example",
             connect_timeout_seconds=5, planner_public_key=planner_key, verifier_public_key=verifier_key,
-            expected_planner_identity=planner_identity, expected_verifier_identity=verifier_identity)
+            expected_planner_identity=planner_identity, expected_verifier_identity=verifier_identity,
+            writer_database_identity=WRITER_DATABASE_IDENTITY)
         planner_identity.clear()
         verifier_identity.clear()
         pins = wire_oracle.expectations(fixture)
@@ -411,6 +415,10 @@ class RevocationRetentionTests(unittest.TestCase):
         self.assertEqual(owned["expected_verifier_identity"], fixture.semantic.receipt.identity)
         self.assertEqual(owned["expected_request"], fixture.semantic.request)
         self.assertEqual(owned["expected_before"], fixture.semantic.expected_before)
+        self.assertEqual(configured._snapshot_configuration()[6], WRITER_DATABASE_IDENTITY)
+        self.assertNotEqual(configured._snapshot_configuration()[6][:3],
+                            configured._snapshot_configuration()[4])
+        self.assertNotIn("writer_database_identity", owned)
         graph = {name: value for name, value in owned.items()
             if name not in {"planner_public_key", "verifier_public_key", "database_now"}}
         self.assertEqual(oracle.units(work.metrics), oracle.graph_cost(graph, 1, 1))
@@ -421,12 +429,14 @@ class RevocationRetentionTests(unittest.TestCase):
         configured = coordinator.RevocationPlannerPersistence(persistence_dsn="postgresql://synthetic.invalid/example",
             connect_timeout_seconds=5, planner_public_key=fixture.key.public_key(),
             verifier_public_key=fixture.semantic.receipt.key.public_key(),
-            expected_planner_identity=fixture.identity, expected_verifier_identity=fixture.semantic.receipt.identity)
+            expected_planner_identity=fixture.identity, expected_verifier_identity=fixture.semantic.receipt.identity,
+            writer_database_identity=WRITER_DATABASE_IDENTITY)
         pins = wire_oracle.expectations(fixture)
         for name in ("planner_public_key", "verifier_public_key", "expected_planner_identity", "expected_verifier_identity"):
             pins.pop(name)
         variants = ({**pins, "planner_public_key": fixture.other_key.public_key()},
             {**pins, "expected_verifier_identity": fixture.identity},
+            {**pins, "writer_database_identity": WRITER_DATABASE_IDENTITY},
             {name: value for name, value in pins.items() if name != "expected_request"})
         for changed in variants:
             work = accounting._ValidationWork(accounting.QueryReadValidationLimits())
@@ -442,14 +452,27 @@ class RevocationRetentionTests(unittest.TestCase):
             def __iter__(self):
                 raise AssertionError("foreign identity iteration")
 
-        variants = [("persistence_dsn", value) for value in (None, "", "x" * 65537)]
-        variants.extend(("connect_timeout_seconds", value) for value in (True, 5.0, 0, 301))
+        variants = [("persistence_dsn", value) for value in (
+            None, "", "x" * 65537, "\u00e9" * 32769, "\ud800", "dsn\x00suffix", "dsn\nsuffix", "dsn\rsuffix")]
+        variants.extend(("connect_timeout_seconds", value) for value in (True, 5.0, 0, 1, 301))
         variants.extend((name, object()) for name in ("planner_public_key", "verifier_public_key"))
         for name in ("_planner_identity", "_verifier_identity"):
             variants.extend((name, value) for value in (
                 list(identity), TupleSubclass(identity), identity[:2], identity + (identity[0],),
                 (True, *identity[1:]), ("sha256:" + "G" * 64, *identity[1:]),
                 (identity[0] + "0", *identity[1:])))
+        database_identity = WRITER_DATABASE_IDENTITY
+        variants.extend(("_database_identity", value) for value in (
+            None, list(database_identity), TupleSubclass(database_identity),
+            database_identity[:3], database_identity + ("extra",),
+            ("different-writer", *database_identity[1:]),
+            (True, *database_identity[1:]),
+        ))
+        for index in (1, 2, 3):
+            for value in (None, False, "", "embedded\x00nul", "\ud800", "x" * 4097, "\u00e9" * 2049):
+                changed = list(database_identity)
+                changed[index] = value
+                variants.append(("_database_identity", tuple(changed)))
         for name, value in variants:
             configured, expectations = self.coordinator_fixture(fixture)
             object.__setattr__(configured, name, value)
@@ -473,14 +496,17 @@ class RevocationRetentionTests(unittest.TestCase):
         configured, expectations = self.coordinator_fixture(fixture)
         configuration = configured._snapshot_configuration()
         self.assertIs(type(configuration), tuple)
-        self.assertEqual(len(configuration), 6)
+        self.assertEqual(len(configuration), 7)
+        self.assertEqual(configuration[6], WRITER_DATABASE_IDENTITY)
+        for timeout in (2, 300):
+            self.assertIsNone(coordinator._validate_configuration((configuration[0], timeout, *configuration[2:])))
         with self.assertRaises(TypeError):
             configuration[0] = "replacement"
 
         class ForeignOwner(coordinator.RevocationPlannerPersistence):
             def __getattribute__(self, name):
                 if name in {"persistence_dsn", "connect_timeout_seconds", "planner_public_key",
-                            "verifier_public_key", "_planner_identity", "_verifier_identity"}:
+                            "verifier_public_key", "_planner_identity", "_verifier_identity", "_database_identity"}:
                     raise AssertionError("foreign configured-owner attribute callback")
                 return super().__getattribute__(name)
 
@@ -553,10 +579,11 @@ class RevocationRetentionTests(unittest.TestCase):
         held = oracle.add(prior, captured, record["admission"])
         maximum = tuple(max(total, peak) for total, peak in zip(final, held))
         fields = ("persistence_dsn", "connect_timeout_seconds", "planner_public_key",
-                  "verifier_public_key", "_planner_identity", "_verifier_identity")
+                  "verifier_public_key", "_planner_identity", "_verifier_identity", "_database_identity")
         replacement = ("postgresql://different.invalid/later", 300,
             fixture.other_key.public_key(), fixture.other_key.public_key(),
-            ("sha256:" + "a" * 64,) * 3, ("sha256:" + "b" * 64,) * 3)
+            ("sha256:" + "a" * 64,) * 3, ("sha256:" + "b" * 64,) * 3,
+            (WRITER_DATABASE_IDENTITY[0], "CN=later-writer", "29", "CN=later-issuer"))
         for phase in ("planner", "verifier"):
             changed = []
 
@@ -591,6 +618,7 @@ class RevocationRetentionTests(unittest.TestCase):
             self.assertEqual((changed, key.calls, mixed.call_count), ([phase], 1, 1))
             self.assertEqual(configured._snapshot_configuration(), replacement)
             self.assertEqual(configuration[:2], ("postgresql://synthetic.invalid/example", 5))
+            self.assertEqual(configuration[6], WRITER_DATABASE_IDENTITY)
             self.assertEqual(actual.envelope_bytes, raw)
             self.assertEqual(actual.context_bytes, context_raw)
             self.assertEqual(actual.payload, fixture.payload)

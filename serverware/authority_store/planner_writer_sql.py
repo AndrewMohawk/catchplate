@@ -1,11 +1,11 @@
 """Source-owned planner-writer metadata privileges, without database IO.
 
-One fixed catalog query is used by sealing and is available for future
-per-connection admission; that connection path is not wired here. A returned
-violation denies; no row means only this namespace's privilege and function-
-metadata contract matched. It is not TLS/session/transaction admission,
-function-body verification, root currentness, or authorization to execute a
-plan. Callers supply only role and namespace names, never a grant inventory.
+One fixed catalog query is used by sealing and configured v4 writer connection
+admission. A returned violation denies; no row means only this namespace's
+privilege and function-metadata contract matched. It is not TLS/session/
+transaction admission, function-body verification, root currentness, or
+authorization to execute a plan. Callers supply only role and namespace names,
+never a grant inventory.
 """
 from __future__ import annotations
 

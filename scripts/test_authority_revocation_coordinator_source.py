@@ -62,6 +62,7 @@ class RevocationCoordinatorSourceTests(unittest.TestCase):
             ("dataclasses", (("dataclass", None),)),
             ("cryptography.hazmat.primitives.asymmetric.ed25519", (("Ed25519PublicKey", None),)),
             ("serverware", (("authority_revocation_retention", "retention"),)),
+            ("serverware", (("authority_revocation_writer_connection", "writer_connection"),)),
             ("serverware.authority_store", (("revocation_retention", "store"),)),
         ])
         self.assertEqual([node for node in self.tree.body if isinstance(node, ast.Import)], [])
@@ -73,25 +74,26 @@ class RevocationCoordinatorSourceTests(unittest.TestCase):
 
     def test_constructor_pins_real_keys_and_copies_exact_identity_scalars(self):
         constructor = self.method("__init__")
-        self.assert_shape(constructor.body[0].test,
-            "type(persistence_dsn) is not str or not 1 <= len(persistence_dsn) <= 65536 "
-            "or type(connect_timeout_seconds) is not int or not 1 <= connect_timeout_seconds <= 300 "
-            "or not isinstance(planner_public_key, Ed25519PublicKey) "
-            "or not isinstance(verifier_public_key, Ed25519PublicKey)")
+        self.assertEqual([item.arg for item in constructor.args.kwonlyargs],
+            ["persistence_dsn", "connect_timeout_seconds", "planner_public_key", "verifier_public_key",
+             "expected_planner_identity", "expected_verifier_identity", "writer_database_identity"])
+        self.assertTrue(all(value is None for value in constructor.args.kw_defaults))
         validation = calls(constructor, "retention.plan.contract.validate_identity_shape")
         self.assertEqual([ast.unparse(item.args[0]) for item in validation],
                          ["expected_planner_identity", "expected_verifier_identity"])
+        self.assert_shape(constructor.body[2].value,
+            "(persistence_dsn, connect_timeout_seconds, planner_public_key, verifier_public_key, "
+            "tuple(expected_planner_identity[name] for name in _IDENTITY_FIELDS), "
+            "tuple(expected_verifier_identity[name] for name in _IDENTITY_FIELDS), writer_database_identity)")
+        self.assert_shape(constructor.body[3].value, "_validate_configuration(configuration)")
         loop = constructor.body[-1]
         self.assertIsInstance(loop, ast.For)
         bindings = {item.elts[0].value: item.elts[1] for item in loop.iter.elts}
         self.assertEqual(set(bindings), {"persistence_dsn", "connect_timeout_seconds",
-            "planner_public_key", "verifier_public_key", "_planner_identity", "_verifier_identity"})
-        for name in ("persistence_dsn", "connect_timeout_seconds", "planner_public_key", "verifier_public_key"):
-            self.assert_shape(bindings[name], name)
-        self.assert_shape(bindings["_planner_identity"],
-                         "tuple(expected_planner_identity[name] for name in _IDENTITY_FIELDS)")
-        self.assert_shape(bindings["_verifier_identity"],
-                         "tuple(expected_verifier_identity[name] for name in _IDENTITY_FIELDS)")
+            "planner_public_key", "verifier_public_key", "_planner_identity", "_verifier_identity", "_database_identity"})
+        for index, name in enumerate(("persistence_dsn", "connect_timeout_seconds", "planner_public_key",
+                "verifier_public_key", "_planner_identity", "_verifier_identity", "_database_identity")):
+            self.assert_shape(bindings[name], f"configuration[{index}]")
         self.assertEqual(len(calls(constructor, "object.__setattr__")), 1)
         self.assertTrue(all(item.lineno < loop.lineno for item in validation))
 
@@ -107,6 +109,7 @@ class RevocationCoordinatorSourceTests(unittest.TestCase):
         self.assert_shape(inputs.body[0].value, "_validate_configuration(configuration)")
         self.assert_shape(inputs.body[1].test,
                          "len(expectations) != len(_CALL_INPUTS) or set(expectations) != _CALL_INPUTS")
+        self.assert_shape(inputs.body[2].value, "configuration[:6]")
         pins = inputs.body[3].value
         self.assert_shape(pins, '{"planner_public_key": planner_key, '
             '"verifier_public_key": verifier_key, '
@@ -144,29 +147,33 @@ class RevocationCoordinatorSourceTests(unittest.TestCase):
         self.assert_shape(owned[0], "_inputs_from_configuration(configuration, expectations, work)")
         self.assertFalse(any(isinstance(node, ast.Name) and node.id == "self" for node in ast.walk(run)))
         self.assert_shape(connect[0], 'psycopg.connect(dsn, row_factory=dict_row, '
-            'connect_timeout=timeout, options="-c search_path=pg_catalog")')
+            'connect_timeout=timeout, autocommit=False, options="-c search_path=pg_catalog")')
         opening = calls(run, "_connect")
         self.assertEqual(len(opening), 1)
         self.assert_shape(opening[0].args[0], "work")
         self.assert_shape(opening[0].args[1], 'lambda: psycopg.connect(dsn, row_factory=dict_row, '
-            'connect_timeout=timeout, options="-c search_path=pg_catalog")')
-        callbacks = calls(run, "store._callback")
-        self.assertEqual(len(callbacks), 3)
-        for callback in callbacks:
-            self.assert_shape(callback.args[0], "work")
-        execution = next(item for item in callbacks if isinstance(item.args[1], ast.Attribute)
-                         and item.args[1].attr == "execute")
-        self.assert_shape(execution, 'store._callback(work, active.execute, '
-            '"SET TRANSACTION ISOLATION LEVEL SERIALIZABLE READ WRITE NOT DEFERRABLE")')
-        contexts = calls(run, "store._context")
-        self.assertEqual({ast.unparse(item) for item in contexts}, {
-            "store._context(connection, work)", "store._context(transaction, work)",
-            "store._context(cursor, work)"})
-        operation = calls(run, "operation")
-        self.assertEqual(len(operation), 1)
-        self.assert_shape(operation[0], "operation(connection=db.PostgresMetadataConnection(connection), "
-                          "work=work, **arguments, **owned)")
-        self.assertLess(execution.lineno, operation[0].lineno)
+            'connect_timeout=timeout, autocommit=False, options="-c search_path=pg_catalog")')
+        imported_db, = [node for node in run.body if isinstance(node, ast.ImportFrom)
+            and node.module == "serverware" and [(item.name, item.asname) for item in node.names] == [("db", None)]]
+        self.assertLess(owned[0].lineno, imported_db.lineno)
+        self.assertLess(imported_db.lineno, opening[0].lineno)
+        role_guard, = [node for node in run.body if isinstance(node, ast.If)]
+        self.assert_shape(role_guard.test,
+            "configuration[6][0] != db._METADATA_STORE_AUTHORITY_PLANNER_WRITER_ROLE")
+        self.assert_shape(role_guard.body[0].exc,
+            "ValueError('revocation writer role differs from the actual database contract')")
+        self.assertLess(imported_db.lineno, role_guard.lineno)
+        self.assertLess(role_guard.end_lineno, opening[0].lineno)
+        delegated, = calls(run, "writer_connection._run_on_connection")
+        self.assert_shape(delegated, "writer_connection._run_on_connection(connection, "
+            "database_identity=configuration[6], work=work, operation=operation, arguments=arguments, expectations=owned)")
+        self.assertLess(opening[0].lineno, delegated.lineno)
+        self.assertFalse(calls(run, "operation"))
+        self.assertFalse(calls(run, "store._context"))
+        _, writer = source("serverware/authority_revocation_writer_connection.py", 128 * 1024)
+        mode = next(node.value for node in writer.body if isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Name) and target.id == "_SET_TRANSACTION" for target in node.targets))
+        self.assertEqual(mode.value, "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE READ WRITE NOT DEFERRABLE")
 
     def test_raw_public_methods_target_only_the_genuine_store_and_same_work(self):
         persist, read = self.method("persist"), self.method("read")
@@ -197,8 +204,10 @@ class RevocationCoordinatorSourceTests(unittest.TestCase):
         self.assertTrue(attributes.isdisjoint({"sign", "verify", "loads", "dumps", "now", "time_ns",
                                                "monotonic_ns", "commit", "derive"}))
         run = definition(self.tree, "_run_on_configuration")
-        self.assert_shape(run.body[-1].value, "result")
-        self.assertEqual(len(calls(run, "operation")), 1)
+        self.assert_shape(run.body[-1].value, "writer_connection._run_on_connection(connection, "
+            "database_identity=configuration[6], work=work, operation=operation, arguments=arguments, expectations=owned)")
+        self.assertFalse(calls(run, "operation"))
+        self.assertEqual(len(calls(run, "writer_connection._run_on_connection")), 1)
 
     def test_reservation_targets_one_real_store_call_without_a_separate_read(self):
         reserve = self.method("reserve_execution")
@@ -221,27 +230,36 @@ class RevocationCoordinatorSourceTests(unittest.TestCase):
         self.assertFalse(calls(reserve, "store.read_revocation_planner_record"))
 
     def test_invocation_snapshot_admits_all_six_values_before_callback_free_handoff(self):
+        # Preserve the historical six-value method ID. The seventh item is
+        # now mandatory independent writer-role/TLS configuration, never an
+        # optional admission flag or a pin recovered from a stored record.
         snapshot = self.method("_snapshot_configuration")
         self.assert_shape(snapshot.body[0].test, "type(self) is not RevocationPlannerPersistence")
         self.assert_shape(snapshot.body[1].value,
             "(self.persistence_dsn, self.connect_timeout_seconds, self.planner_public_key, "
-            "self.verifier_public_key, self._planner_identity, self._verifier_identity)")
+            "self.verifier_public_key, self._planner_identity, self._verifier_identity, self._database_identity)")
         self.assert_shape(snapshot.body[2].value, "_validate_configuration(configuration)")
         self.assert_shape(snapshot.body[3].value, "configuration")
         validation = definition(self.tree, "_validate_configuration")
         self.assert_shape(validation.body[1].test,
-                         "type(configuration) is not tuple or len(configuration) != 6")
+                         "type(configuration) is not tuple or len(configuration) != 7")
         self.assert_shape(validation.body[3].test,
             "type(dsn) is not str or not 1 <= len(dsn) <= 65536 "
-            "or type(timeout) is not int or not 1 <= timeout <= 300 "
+            r"or any(character in dsn for character in ('\x00', '\n', '\r')) "
+            "or type(timeout) is not int or not 2 <= timeout <= 300 "
             "or not isinstance(planner_key, Ed25519PublicKey) "
             "or not isinstance(verifier_key, Ed25519PublicKey)")
-        identities = validation.body[4]
+        encoded = validation.body[4]
+        self.assertIsInstance(encoded, ast.Try)
+        self.assert_shape(encoded.body[0].test, "len(dsn.encode('utf-8')) > 65536")
+        self.assert_shape(encoded.handlers[0].type, "UnicodeError")
+        identities = validation.body[5]
         self.assert_shape(identities.iter, "(planner_identity, verifier_identity)")
         self.assert_shape(identities.body[0].test,
                          "type(identity) is not tuple or len(identity) != 3")
         self.assert_shape(calls(identities, "retention.plan.contract._digest")[0],
                          "retention.plan.contract._digest(digest)")
+        self.assert_shape(validation.body[6].value, "writer_connection._validate_database_identity(database_identity)")
         for function in (snapshot, validation):
             attributes = {node.attr for node in ast.walk(function) if isinstance(node, ast.Attribute)}
             self.assertTrue(attributes.isdisjoint({"verify", "public_bytes", "public_bytes_raw", "connect"}))
@@ -423,7 +441,8 @@ class RevocationCoordinatorSourceTests(unittest.TestCase):
         # successful-verification argument accepted by that API.
         runner = definition(self.tree, "_run_on_configuration")
         self.assertEqual(len(calls(runner, "_inputs_from_configuration")), 1)
-        self.assertEqual(len(calls(runner, "operation")), 1)
+        self.assertEqual(len(calls(runner, "writer_connection._run_on_connection")), 1)
+        self.assertFalse(calls(runner, "operation"))
         service, _ = source("serverware/authority_service.py", 2 * 1024 * 1024)
         self.assertNotIn("produce_observed_and_persist_with_cutoff", service)
 

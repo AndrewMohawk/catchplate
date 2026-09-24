@@ -214,9 +214,17 @@ helpers retain their own admission behavior; this does not widen v3 acceptance.
 
 `authority_revocation_persistence.RevocationPlannerPersistence` owns a separate
 writer connection/transaction and delegates to those real store functions.
-Its constructor pins both real keys and immutable identity triples; its exact
-fifteen-field per-call expectation inventory cannot replace those four pins.
-It captures external inputs before connecting. The legacy `PlannerPersistence`
+Its constructor pins both real keys and immutable signing-identity triples,
+plus a separate mandatory writer database role/TLS identity tuple. Its exact
+fifteen-field per-call expectation inventory cannot replace those pins.
+It captures external inputs before connecting. The configured v4 connection
+owner checks PG16, exact current/session role, server-reported TLS identity,
+writer transaction mode and the fixed catalog privilege query before real store
+invocation. Guarded driver handles retain physical connection identity and active
+transaction observations through custody; this is not independent database
+enrollment or proof against a hostile driver's hidden commit-and-BEGIN. See
+[writer connection admission](authority-revocation-writer-connection.md).
+The legacy `PlannerPersistence`
 API and service routes remain unchanged. Actual database startup still depends
 on resolving the missing registered kernels; a registry-free verifier does not
 repair that startup gate.
@@ -225,8 +233,10 @@ The low-level producer supplies original context bytes without writing. Source
 `.40` adds a configured owner that calls this persistence coordinator only after
 closing all read scopes. Its thirteen per-call context fields cannot replace
 the persistence configuration's two identity triples or pinned public keys.
-The same captured six-setting configuration is reused; callback changes to the
-coordinator's slots do not redirect the writer or replace its key/identity pins.
+The same captured configuration is reused; revision `.59` appends independent
+writer role/TLS pins as the seventh item without moving public-key or signing-
+identity indices. Callback changes to the coordinator's slots do not redirect
+the writer or replace its captured key/identity pins.
 Storage still requires both original byte strings and all independent
 expectations; the owner forwards captured request/root/context expectations,
 not values recovered from its signed payload. No service route is opened and

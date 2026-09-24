@@ -15,6 +15,11 @@ path that preserves the acquired database instant. These components are still
 unbuilt and unexecuted. They do not add a service dispatch route or authenticate
 a cross-role invocation.
 
+Source `.50` adds [private authenticated invocation admission](authority-revocation-invocation.md)
+and `issue_authenticated`, binding original verifier-signed handoff bytes before
+opening the same issuer path. Service dispatch, independent root/cutoff origin
+and durable restart custody remain separate requirements.
+
 ## Narrow database authority
 
 The original three issuer function contracts retain their four/five/four `text`

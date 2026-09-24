@@ -14,11 +14,13 @@ original work, including work consumed before this invocation.
 """
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from serverware import authority_revocation_capability as capability
+from serverware import authority_revocation_invocation as invocation
 from serverware import authority_revocation_persistence as persistence
 from serverware.authority_store import revocation_capability as issuance
 
@@ -132,6 +134,40 @@ def _run_on_configuration(configuration, *, envelope_bytes, witness_request_byte
     return result
 
 
+def _issue_invocation_on_configuration(configuration, *, envelope_bytes, work, opener):
+    """Authenticate original sender claims before the actual issuer can open.
+
+    The sender is the independently configured verifier, not a key carried by
+    the request. Its signed historical claims do not prove current roots or
+    clock provenance. The genuine store still verifies all retained, capability
+    and witness evidence; no caller-supplied observation can skip either body.
+    """
+    _validate_configuration(configuration)
+    capability.capture._SharedLedger(work)
+    if (type(envelope_bytes) is not bytes
+            or not 2 <= len(envelope_bytes) <= capability.authority.MAX_REQUEST_BYTES):
+        raise ValueError("revocation invocation requires bounded original immutable bytes")
+    # Capture all immutable configuration before either actual clock callback.
+    # The issuer's existing current age/skew policy also bounds this successor
+    # handoff; it does not widen the legacy internal-envelope policy or route.
+    verifier_key = configuration[1]
+    configuration_digest = configuration[7]
+    generation_sequence, generation_digest = configuration[9:11]
+    maximum_age_ns, maximum_clock_skew_ns = configuration[6][3:5]
+    now_monotonic_ns = persistence.store._callback(work, time.monotonic_ns)
+    now_epoch_ns = persistence.store._callback(work, time.time_ns)
+    received = invocation._verify_invocation_on_work(envelope_bytes=envelope_bytes,
+        verifier_public_key=verifier_key, expected_configuration_digest=configuration_digest,
+        expected_generation_sequence=generation_sequence, expected_generation_digest=generation_digest,
+        now_epoch_ns=now_epoch_ns, now_monotonic_ns=now_monotonic_ns,
+        maximum_age_ns=maximum_age_ns, maximum_clock_skew_ns=maximum_clock_skew_ns, work=work)
+    return _run_on_configuration(configuration, envelope_bytes=received.capability_bytes,
+        witness_request_bytes=received.witness_request_bytes,
+        expected_execution_envelope_id=received.execution_envelope_id,
+        expected_witness_receipt_digest=received.witness_receipt_digest,
+        expectations=received.historical_expectations, work=work, opener=opener)
+
+
 @dataclass(frozen=True, slots=True, init=False, repr=False, eq=False)
 class RevocationCapabilityIssuer:
     """Constructor-owned independent pins, not a configured public route.
@@ -193,3 +229,19 @@ class RevocationCapabilityIssuer:
             expected_execution_envelope_id=expected_execution_envelope_id,
             expected_witness_receipt_digest=expected_witness_receipt_digest,
             expectations=expectations, work=work, opener=open_issuer)
+
+    def issue_authenticated(self, *, envelope_bytes, work):
+        """Consume original verifier-signed invocation bytes, not an approval DTO.
+
+        This private configured entry does not register a service purpose or
+        retain invocation bytes durably. Cross-role transport admission, root
+        provenance and restart custody remain separate prerequisites.
+        """
+        configuration = self._snapshot_configuration()
+
+        def open_issuer():
+            from serverware import db
+            return db._policy_authority_capability_issuer_pg_connect_raw()
+
+        return _issue_invocation_on_configuration(configuration, envelope_bytes=envelope_bytes,
+            work=work, opener=open_issuer)

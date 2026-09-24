@@ -69,14 +69,16 @@ class RevocationIssuerSourceTests(unittest.TestCase):
             ("dataclasses", (("dataclass", None),)),
             ("cryptography.hazmat.primitives.asymmetric.ed25519", (("Ed25519PublicKey", None),)),
             ("serverware", (("authority_revocation_capability", "capability"),)),
+            ("serverware", (("authority_revocation_invocation", "invocation"),)),
             ("serverware", (("authority_revocation_persistence", "persistence"),)),
             ("serverware.authority_store", (("revocation_capability", "issuance"),))])
-        self.assertFalse(any(isinstance(node, ast.Import) for node in self.tree.body))
+        self.assertEqual([tuple((alias.name, alias.asname) for alias in node.names)
+            for node in self.tree.body if isinstance(node, ast.Import)], [(('time', None),)])
         self.assert_shape(self.owner.decorator_list[0],
             "dataclass(frozen=True, slots=True, init=False, repr=False, eq=False)")
         self.assertEqual([node.target.id for node in self.owner.body if isinstance(node, ast.AnnAssign)], ["_configuration"])
         self.assertEqual({node.name for node in self.owner.body if isinstance(node, ast.FunctionDef)},
-            {"__init__", "_snapshot_configuration", "issue"})
+            {"__init__", "_snapshot_configuration", "issue", "issue_authenticated"})
         self.assertNotIn("private_key", self.source)
         self.assertNotIn("authority_transition_registry", self.source)
 
@@ -191,9 +193,13 @@ class RevocationIssuerSourceTests(unittest.TestCase):
         self.assertEqual(len(calls(run, "capability.shape._digest")), 1)
         names = {node.id for node in ast.walk(self.tree) if isinstance(node, ast.Name)}
         self.assertTrue(names.isdisjoint({"_ValidationWork", "QueryReadValidationLimits", "_PackagingLedger",
-            "json", "base64", "hashlib", "time", "datetime"}))
+            "json", "base64", "hashlib", "datetime"}))
         attributes = {node.attr for node in ast.walk(self.tree) if isinstance(node, ast.Attribute)}
-        self.assertTrue(attributes.isdisjoint({"sign", "verify", "loads", "dumps", "now", "time_ns", "monotonic_ns"}))
+        self.assertTrue(attributes.isdisjoint({"sign", "verify", "loads", "dumps", "now"}))
+        # The original historical entry remains clock-free. Only the separate
+        # authenticated invocation prefix may sample its guarded live clocks.
+        legacy_attributes = {node.attr for node in ast.walk(run) if isinstance(node, ast.Attribute)}
+        self.assertTrue(legacy_attributes.isdisjoint({"time_ns", "monotonic_ns"}))
 
     def test_public_method_lazy_binds_only_the_real_issuer_connector_after_snapshot(self):
         issue = definition(self.owner, "issue")
@@ -274,6 +280,102 @@ class RevocationIssuerSourceTests(unittest.TestCase):
         self.assertEqual(len(calls(worker, "_fresh")), 2)
         self.assertEqual(len(calls(worker, "_load")), 2)
         self.assertFalse(calls(worker, "connection.commit"))
+
+    def test_authenticated_worker_bounds_original_bytes_and_snapshots_pins_before_live_clocks(self):
+        worker = definition(self.tree, "_issue_invocation_on_configuration")
+        self.assertEqual([argument.arg for argument in worker.args.args], ["configuration"])
+        self.assertEqual([argument.arg for argument in worker.args.kwonlyargs],
+            ["envelope_bytes", "work", "opener"])
+        self.assertIsNone(worker.args.kwarg)
+        validated, measured = calls(worker, "_validate_configuration"), calls(worker, "capability.capture._SharedLedger")
+        self.assertEqual((len(validated), len(measured)), (1, 1))
+        self.assert_shape(validated[0], "_validate_configuration(configuration)")
+        self.assert_shape(measured[0], "capability.capture._SharedLedger(work)")
+        bounds = [node for node in worker.body if isinstance(node, ast.If)]
+        self.assertEqual(len(bounds), 1)
+        self.assert_shape(bounds[0].test, """type(envelope_bytes) is not bytes
+            or not 2 <= len(envelope_bytes) <= capability.authority.MAX_REQUEST_BYTES""")
+        clocks = calls(worker, "persistence.store._callback")
+        self.assertEqual(len(clocks), 2)
+        self.assert_shape(clocks[0], "persistence.store._callback(work, time.monotonic_ns)")
+        self.assert_shape(clocks[1], "persistence.store._callback(work, time.time_ns)")
+        self.assertLess(validated[0].lineno, measured[0].lineno)
+        self.assertLess(measured[0].lineno, bounds[0].lineno)
+        bindings = {ast.unparse(node.targets[0]): node for node in worker.body
+            if isinstance(node, ast.Assign) and len(node.targets) == 1}
+        for target, expected in {
+            "verifier_key": "configuration[1]", "configuration_digest": "configuration[7]",
+            "(generation_sequence, generation_digest)": "configuration[9:11]",
+            "(maximum_age_ns, maximum_clock_skew_ns)": "configuration[6][3:5]",
+        }.items():
+            self.assert_shape(bindings[target].value, expected)
+            self.assertLess(bounds[0].lineno, bindings[target].lineno)
+            self.assertLess(bindings[target].lineno, clocks[0].lineno)
+        self.assert_shape(bindings["now_monotonic_ns"].value, "persistence.store._callback(work, time.monotonic_ns)")
+        self.assert_shape(bindings["now_epoch_ns"].value, "persistence.store._callback(work, time.time_ns)")
+        all_clocks = [node for node in ast.walk(self.tree) if isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name) and node.value.id == "time"]
+        self.assertEqual({node.attr for node in all_clocks}, {"time_ns", "monotonic_ns"})
+        self.assertEqual(len(all_clocks), 2)
+        self.assertTrue(all(node in tuple(ast.walk(worker)) for node in all_clocks))
+
+    def test_authenticated_prefix_verifies_raw_originals_before_the_unchanged_issuer_runner(self):
+        worker = definition(self.tree, "_issue_invocation_on_configuration")
+        verified = calls(worker, "invocation._verify_invocation_on_work")
+        delegated = calls(worker, "_run_on_configuration")
+        self.assertEqual((len(verified), len(delegated)), (1, 1))
+        self.assert_shape(verified[0], """invocation._verify_invocation_on_work(
+            envelope_bytes=envelope_bytes, verifier_public_key=verifier_key,
+            expected_configuration_digest=configuration_digest,
+            expected_generation_sequence=generation_sequence, expected_generation_digest=generation_digest,
+            now_epoch_ns=now_epoch_ns, now_monotonic_ns=now_monotonic_ns,
+            maximum_age_ns=maximum_age_ns, maximum_clock_skew_ns=maximum_clock_skew_ns, work=work)""")
+        self.assertIs(assignment(worker, "received").value, verified[0])
+        self.assertLess(calls(worker, "persistence.store._callback")[-1].lineno, verified[0].lineno)
+        self.assertLess(verified[0].lineno, delegated[0].lineno)
+        self.assert_shape(delegated[0], """_run_on_configuration(configuration,
+            envelope_bytes=received.capability_bytes, witness_request_bytes=received.witness_request_bytes,
+            expected_execution_envelope_id=received.execution_envelope_id,
+            expected_witness_receipt_digest=received.witness_receipt_digest,
+            expectations=received.historical_expectations, work=work, opener=opener)""")
+        self.assertIs(worker.body[-1].value, delegated[0])
+        for forbidden in ("opener", "persistence._connect", "issuance._issue_on_connection",
+                "self.issue", "self._snapshot_configuration", "json.loads", "_ValidationWork"):
+            self.assertFalse(calls(worker, forbidden))
+        # Publication still crosses the actual old runner, whose own capture,
+        # connection context and genuine store calls the retained tests pin.
+        runner = definition(self.tree, "_run_on_configuration")
+        self.assertEqual(len(calls(runner, "_inputs_from_configuration")), 1)
+        self.assertEqual(len(calls(runner, "persistence._connect")), 1)
+        self.assertEqual(len(calls(runner, "issuance._issue_on_connection")), 1)
+
+    def test_authenticated_method_owns_one_snapshot_and_lazy_real_connector_without_service_activation(self):
+        method = definition(self.owner, "issue_authenticated")
+        self.assertEqual([argument.arg for argument in method.args.kwonlyargs], ["envelope_bytes", "work"])
+        self.assertIsNone(method.args.kwarg)
+        snapshot = calls(method, "self._snapshot_configuration")
+        self.assertEqual(len(snapshot), 1)
+        self.assertIs(assignment(method, "configuration").value, snapshot[0])
+        opener = definition(method, "open_issuer")
+        self.assertEqual(len(opener.body), 2)
+        self.assertIsInstance(opener.body[0], ast.ImportFrom)
+        self.assertEqual((opener.body[0].module, tuple(alias.name for alias in opener.body[0].names)),
+            ("serverware", ("db",)))
+        self.assert_shape(opener.body[1].value, "db._policy_authority_capability_issuer_pg_connect_raw()")
+        delegated = calls(method, "_issue_invocation_on_configuration")
+        self.assertEqual(len(delegated), 1)
+        self.assert_shape(delegated[0], """_issue_invocation_on_configuration(configuration,
+            envelope_bytes=envelope_bytes, work=work, opener=open_issuer)""")
+        self.assertLess(snapshot[0].lineno, opener.lineno)
+        self.assertLess(opener.lineno, delegated[0].lineno)
+        self.assertIs(method.body[-1].value, delegated[0])
+        for forbidden in ("open_issuer", "self.issue", "_run_on_configuration", "issuance._issue_on_connection"):
+            self.assertFalse(calls(method, forbidden))
+        for module in ("serverware/authority_service.py", "serverware/authority_store/executor_v9.py"):
+            source, _tree = read(module, 2 * 1024 * 1024)
+            self.assertNotIn("RevocationCapabilityIssuer", source)
+            self.assertNotIn("authority_revocation_issuance", source)
+            self.assertNotIn("issue_authenticated", source)
 
 
 if __name__ == "__main__":

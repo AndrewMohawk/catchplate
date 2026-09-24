@@ -97,6 +97,10 @@ EXECUTION_RESERVATION_RECEIPT_SCHEMA = (
 PLANNER_TRACE_SCHEMA = "serverware.policyAuthorityPlannerTrace/v1"
 PLANNER_PROGRAM_SCHEMA = "serverware.policyAuthorityPlannerProgram/v1"
 BUSINESS_INTENT_SCHEMA = authority_contract.BUSINESS_INTENT_SCHEMA
+_EVIDENCE_ADMISSION_READ_OPERATIONS = frozenset({
+    "webauthn.registration.evidence.admit",
+    "webauthn.trust.installation.admit",
+})
 WEBAUTHN_CHALLENGE_SELECTOR_OVERFLOW_LIMIT = (
     authority_contract.MAX_QUERY_PROOFS
 )
@@ -1956,28 +1960,29 @@ def _read_root_set(
         authority_complete_query_batch._SharedLedger(work)
         limits, metrics = work.limits, work.metrics
         values = (limits.max_hashes, limits.max_input_bytes, limits.max_json_nodes)
-        result = function(*arguments)
-        authority_complete_query_batch._SharedLedger(work)
-        if (work.limits is not limits or work.metrics != metrics
-                or (limits.max_hashes, limits.max_input_bytes, limits.max_json_nodes) != values):
-            raise AuthorityPlannerError("planner root callback changed its shared work")
-        return result
+        try:
+            return function(*arguments)
+        finally:
+            authority_complete_query_batch._SharedLedger(work)
+            if (work.limits is not limits or work.metrics != metrics
+                    or (limits.max_hashes, limits.max_input_bytes, limits.max_json_nodes) != values):
+                raise AuthorityPlannerError("planner root callback changed its shared work")
 
     def read_roots(tables: set[str]) -> tuple[dict[str, Any], ...]:
         roots: list[dict[str, Any]] = []
         for table in sorted(tables):
-            callback(trace.read,
+            callback(lambda: trace.read(
                 "policy_authority_authenticated_table_roots",
                 {"tableName": table},
-            )
-            result = callback(cursor.execute,
+            ))
+            result = callback(lambda: cursor.execute(
                 "SELECT root_revision, root_digest, leaf_count "
                 "FROM serverware_metadata."
                 "policy_authority_authenticated_table_roots "
                 "WHERE table_name = %s",
                 (table,),
-            )
-            row = callback(result.fetchone)
+            ))
+            row = callback(lambda: result.fetchone())
             if row is None:
                 raise AuthorityPlannerError(
                     f"planner authenticated root is absent for {table}"
@@ -2688,6 +2693,10 @@ def _read_bounded_transition_rows(
            tuple[authority_query_reads.QueryRead, ...]]:
     # Retain query identity and empty results separately from the deduplicated
     # row union. This records SQL observations, not predicate completeness.
+    if (operation in _EVIDENCE_ADMISSION_READ_OPERATIONS
+            and (type(trace) is not PlannerTrace or trace.operation != operation
+                 or trace._complete_queries is not False or trace._counted_writes is not False)):
+        raise AuthorityPlannerError("evidence admission requires its ordinary source trace")
     query_sources._require_query_work(query_work)
     queries = authority_query_reads._snapshot_queries(operation, queries, work=query_work)
     # Reject the whole inventory before even the first business/proof read.
@@ -2765,10 +2774,12 @@ def _read_bounded_transition_rows(
             ordering = ", ".join(
                 f"target.{item.column} " + ("DESC" if item.descending else "ASC")
                 for item in resolved_query.order_by)
-            if operation == authority_transition_webauthn_completion.OPERATION and trace._counted_writes:
-                # This exact-PK successor has no complete collector. Keep its
+            if (operation == authority_transition_webauthn_completion.OPERATION and trace._counted_writes
+                    or operation in _EVIDENCE_ADMISSION_READ_OPERATIONS):
+                # These exact-PK successors have no complete collector. Keep
                 # separately bounded ordinary SQL callbacks from changing the
-                # original proof/kernel allowance, on success or failure.
+                # original proof/kernel allowance, on success or failure. The
+                # admission operations retain ordinary trace permissions only.
                 _completion_read_callback_on_work(query_work,
                     lambda: trace.read(query.table, _query_trace_key(operation, query)))
                 result = _completion_read_callback_on_work(query_work, lambda: cursor.execute(

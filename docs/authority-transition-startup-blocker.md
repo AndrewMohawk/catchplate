@@ -5,7 +5,7 @@ The frozen `f16da11` source-root run of `scripts/test_control_plane_startup.py`
 failed while importing `authority_transition_registry`, before service startup.
 The diagnostic-only change described here does not make that runtime healthy.
 
-At source `.81`, `authority_contract.OPERATION_REGISTRY` declares six transitions
+At source `.82`, `authority_contract.OPERATION_REGISTRY` declares six transitions
 that have no kernels in the policy, quota, or release registries:
 
 - `webauthn.trust.stage`
@@ -85,6 +85,14 @@ UPDATE-only. These are not registered kernels, configured input owners,
 authenticated read/root acquisition, callable database handlers or executor
 activation. The current registry gap is therefore six, not four. Framework
 audit remains required, while no metadata outbox/capacity path is added.
+Source `.82` connects both private admission operations to actual root/row
+reads, independent expected-root comparison, pre-kernel primary membership
+verification and genuine write-root derivation. Their sole writable receipt
+table has no counted indexes, so no counted-head or complete-range permission
+is added. Read callbacks retain the same work allowance on failure as well as
+success. Configured independent owners, real handlers, signed-plan/executor
+integration and all six registered kernels remain outstanding; the source
+integration is unbuilt and unexecuted.
 
 The [registry-free request commitment](authority-request-commitment.md) separates
 the actual hash/intent workers needed by the inactive revocation verifier from

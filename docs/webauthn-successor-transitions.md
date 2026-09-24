@@ -1,6 +1,6 @@
 # Successor WebAuthn transition implementation
 
-Status: source `.81`, implementation only. These helpers do not register the
+Status: source `.82`, implementation only. These helpers do not register the
 missing kernels or repair service startup. They are unbuilt and unexecuted.
 The existing registry, query-proof, configuration and release gates remain.
 
@@ -83,11 +83,37 @@ and `proposed-insert` or `already-retained`, never a committed receipt.
 
 Neither operation changes challenges, credentials, sessions, trust publication
 or audit-outbox/capacity rows. The executor's framework audit remains required.
-Exact selected primary proofs and independent current roots, configured input
-owners, signed-plan replay and atomic execution are still missing integration.
+Configured independent input/root owners, signed-plan replay and atomic
+execution remain missing. Private proof acquisition is described below.
 The adapters do not register configured kernels or supply the two required
 callable database handlers. All six missing-kernel closure failures remain;
 operator-role admission stays denied. This source does not repair startup.
+
+## Evidence admission read and write-proof acquisition
+
+`authority_webauthn_evidence_acquisition.py` connects both fixed admission
+operations to the actual planner read/proof path and their genuine kernels.
+It owns the request, manifest, independent root expectations and purpose inputs
+before SQL or native callbacks, rederives request/operation commitments, compares
+database roots with those expectations and bounds the one database cutoff
+against admitted live time and the deadline. Historical ceremony/installation
+observation times remain distinct from that fresh admission cutoff.
+
+The actual primary membership engine authenticates selected rows and absences
+before either kernel runs. Query-read validation binds those owned rows to the
+exact declared queries. The same remaining work then covers genuine evidence
+verification and primary before/after-root derivation for the proposed INSERT
+or duplicate no-op. The existing indexed-primary writer handles an empty
+counted-head inventory because the only writable table has no counted profiles;
+there are no invented index reads, complete-range families or capacity effects.
+
+Ordinary query/proof callbacks preserve the existing work allowance. Root-read
+callbacks now guard method lookup and exceptional returns as well as success.
+SQL/driver work keeps its existing separate bounds; this is not whole-process
+resource accounting. Returned acquisitions contain observations and real proof
+results, not a signed plan, persistence receipt or current-root authority.
+Request permission, independent root/key/target configuration and the read-only
+MVCC transaction owner still require admission outside these private helpers.
 
 ## Retained evidence and consumption
 
@@ -285,8 +311,8 @@ and existing input/resource ceilings are unchanged.
 
 ## Admission and execution still required
 
-No durable evidence producer INSERT/root-admission path or independently
-configured registration acquisition owner is established by these helpers.
+No durable evidence INSERT owner or independently configured registration
+acquisition owner is established by these helpers.
 Caller-supplied current roots, signer pins, request authority and transaction
 ownership remain explicit prerequisites, not values authenticated by copying.
 Trust staging still needs its independently configured request/candidate-key
@@ -297,9 +323,9 @@ Registry and public operation admission, authorized atomic execution, terminal
 witnessing and recovery remain pending. The generic evidence signer and ordinary
 row/acquisition results cannot fill those gaps or repair service startup.
 
-The evidence-storage integration must connect the declared admission operations
-and real query/kernel adapters to authenticated exact-key absence or existing
-row proofs, then commit through authenticated root maintenance. The identical
+The evidence-storage integration must connect the private authenticated
+acquisitions to signed-plan retention/replay and an authorized atomic commit
+through authenticated root maintenance. The identical
 unused verified-row no-op requires an explicit empty-mutation policy when its
 configured kernel is eventually registered. No placeholder handler, keyless
 kernel, new ACL or disabled closure check supplies this remaining integration.

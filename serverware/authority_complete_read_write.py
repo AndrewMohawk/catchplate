@@ -1,8 +1,8 @@
 """One source-bound complete-read and counted-write computation.
 
-This composes the six explicit revocation query roles with genuine primary
-and counted write evaluation under one private ledger. All caller evidence is
-owned before hashing; successful observations are never accepted as inputs.
+This composes the fixed revocation or registration query family with genuine
+primary and counted write evaluation under one private ledger. All caller
+evidence is owned before hashing; successful observations are not inputs.
 Source mutation templates restrict the proposed write shapes, not their intent.
 
 No kernel, audit-capacity admission, SQL, trusted clock, population genesis,
@@ -100,20 +100,27 @@ def _source_sizes(spec: dict[str, Any]) -> tuple[int, int, int]:
     return changes, opened, 16 * opened
 
 
-def _frontier_preflight(query_frontiers, write_frontiers, maximum: int) -> None:
+def _frontier_preflight(query_frontiers, write_frontiers, maximum: int, *, family=None) -> None:
     """Reject necessarily over-budget normalization before building records.
 
     Each normalized terminal has a dict plus four keys and four scalar values:
     at least nine JSON nodes. This is a necessary whole-graph check, not a
     promise about interpreter allocation or acceptance at this isolated bound.
     """
-    if (type(query_frontiers) is not tuple or len(query_frontiers) != query_batch.QUERY_COUNT
+    # The existing revocation composer also calls this bounded normalization
+    # preflight before argument capture. Preserve its original six-role bound.
+    # New family callers always supply a source-derived profile and the actual
+    # proof verifier independently rebinds their complete inventory afterward.
+    if family is None:
+        family = {"query_count": query_batch.QUERY_COUNT,
+                  "max_frontier_rows": complete.CASCADE_MAX}
+    if (type(query_frontiers) is not tuple or len(query_frontiers) != family["query_count"]
             or type(write_frontiers) is not tuple or len(write_frontiers) > MAX_COUNTED_HEADS):
         raise CompleteReadWriteError("complete read/write frontier inventories are not bounded exact tuples")
     total = 0
     for inventory, expected, limit in (
         (query_frontiers, query_batch.CompleteQueryFrontier,
-         query_batch.MAX_OUTSIDE_PREFIXES + complete.CASCADE_MAX),
+         query_batch.MAX_OUTSIDE_PREFIXES + family["max_frontier_rows"]),
         (write_frontiers, CompleteWriteFrontier, maximum),
     ):
         for item in inventory:
@@ -150,16 +157,15 @@ def _raw_document(*, operation, arguments, cutoff_us, queries,
     """
     # All preparation here is non-hashing. Even later-role/frontier/row graphs
     # must be detached before the first source/profile constructor can run.
-    if type(operation) is not str or operation != complete.OPERATION:
-        raise CompleteReadWriteError("complete read/write operation is not source admitted")
+    family = complete.family_limits(operation, arguments=arguments)
     spec = authority_contract.operation_spec(operation)
     if (type(mutations) is not tuple or len(mutations) > spec["maximumMutations"]
             or type(counted_before_heads) is not tuple
-            or not query_batch.READ_HEAD_COUNT <= len(counted_before_heads) <= MAX_COUNTED_HEADS
-            or type(queries) is not tuple or len(queries) != query_batch.QUERY_COUNT
+            or not family["head_count"] <= len(counted_before_heads) <= MAX_COUNTED_HEADS
+            or type(queries) is not tuple or len(queries) != family["query_count"]
             or any(type(item) is not complete.CompleteIndexQuery for item in queries)):
         raise CompleteReadWriteError("complete read/write raw inventory exceeds its source bound")
-    _frontier_preflight(query_frontiers, write_frontiers, _source_sizes(spec)[2])
+    _frontier_preflight(query_frontiers, write_frontiers, _source_sizes(spec)[2], family=family)
     raw_heads = []
     for head in counted_before_heads:
         if type(head) is not CompleteReadWriteHead or type(head.index_root) is not CountedNode:
@@ -337,7 +343,7 @@ def _verify(owned, ledger, ownership_bytes, ownership_nodes) -> CompleteReadWrit
     contracts = primary_table_contracts(operation)
     write_ids = _admit_mutations(owned, contracts)
     # This private source-role lookup is hash-free. Actual declaration binding
-    # and exact six-role closure still run inside the genuine read phase.
+    # and exact family closure still run inside the genuine read phase.
     read_ids = tuple(sorted({complete._role(operation, item["role"]).index_id
                              for item in owned["queries"]}))
     expected_union = tuple(sorted(set(read_ids) | set(write_ids)))

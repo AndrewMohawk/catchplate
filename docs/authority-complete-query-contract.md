@@ -2,6 +2,8 @@
 
 ## Status
 
+Source `.75` also admits the fixed [registration family](webauthn-successor-transitions.md#registration-query-and-mutation-integration-75): two ordinary or four OIDC declarations. The revocation-specific inventory below is unchanged. Declaration admission is not public planner or evidence-authority activation.
+
 This is unexecuted source implementation, not installed indexes or a working
 WebAuthn operation. It gives the unregistered explicit-revocation candidate a
 distinct complete-query declaration and removes its reliance on ordinary page

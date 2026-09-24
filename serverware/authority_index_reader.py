@@ -431,7 +431,7 @@ def _query_work(query: complete.CompleteIndexQuery, work: _ValidationWork) -> No
         items = query.selector_items
         if (type(items) is not tuple or len(items) != len(declared.selector_names)
                 or type(query.maximum_rows) is not int
-                or not 1 <= query.maximum_rows <= complete.CASCADE_MAX):
+                or not 1 <= query.maximum_rows <= declared.maximum_rows):
             raise IndexReadError("counted query selector shape is invalid")
         for item, name in zip(items, declared.selector_names):
             if (type(item) is not tuple or len(item) != 2 or type(item[0]) is not str

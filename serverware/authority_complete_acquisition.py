@@ -2,7 +2,9 @@
 
 The caller owns one read-only MVCC transaction and its primary root capture.
 This worker retains actual head/frontier observations, fetches exact full rows,
-and replays genuine global primary membership and all six range/row joins.
+and replays genuine global primary membership and every range/row join in the
+explicit revocation or registration family. Registration's ordinary/OIDC mode
+is derived from the owned arguments; it is not a caller-selected role subset.
 It is not independent root/time authority or a transport admission capability.
 The public v3 planner does not construct or accept this worker: its complete
 query gate remains closed until the coordinated successor protocol exists.
@@ -70,19 +72,28 @@ class _CompleteQueryAcquisition:
         self._proofs: tuple[dict[str, Any], ...] = ()
         self._next = 0
         try:
-            if (type(operation) is not str or operation != complete.OPERATION
+            if (type(operation) is not str or operation not in
+                    (complete.OPERATION, complete.REGISTRATION_OPERATION)
                     or type(work) is not _ValidationWork
-                    or type(queries) is not tuple or len(queries) != len(complete.ROLES)
+                    or type(queries) is not tuple or not 1 <= len(queries) <= len(
+                        complete.ROLES if operation == complete.OPERATION else complete.REGISTRATION_ROLES)
                     or any(type(query) is not complete.CompleteIndexQuery for query in queries)
                     or any(type(getattr(query, "role", None)) is not str
-                           or not 1 <= len(query.role) <= 128 for query in queries)
-                    or {query.role for query in queries} != set(complete.ROLES)):
+                           or not 1 <= len(query.role) <= 128 for query in queries)):
                 raise CompleteAcquisitionError("complete acquisition source inventory is invalid")
             self.operation = operation
             copier = reads._CopyBudget(work)
             self._arguments = copier.copy(arguments)
             if type(self._arguments) is not dict:
                 raise CompleteAcquisitionError("complete acquisition arguments are not an exact object")
+            roles = complete.family_roles(operation, arguments=self._arguments)
+            limits = complete.family_limits(operation, arguments=self._arguments)
+            if (len(queries) != limits["query_count"] or len(queries) != len(roles)
+                    or {query.role for query in queries} != set(roles)
+                    or (operation == complete.REGISTRATION_OPERATION
+                        and tuple(query.role for query in queries) != roles)
+                    or len({query.index_id for query in queries}) != limits["head_count"]):
+                raise CompleteAcquisitionError("complete acquisition role inventory differs from its actual family")
             self._business = copier.copy(business_before_roots)
             self._authorization = copier.copy(authorization_before_roots)
             self._cutoff = complete._cutoff(cutoff_us)
@@ -161,7 +172,8 @@ class _CompleteQueryAcquisition:
             if actual_values != expected_values or actual_arguments != expected_arguments:
                 raise CompleteAcquisitionError("complete acquisition reader inputs changed")
             self._heads = heads.read_operation_index_heads(cursor, operation=operation,
-                trace=trace, work=work, acquisition=self._acquisition)
+                trace=trace, work=work, acquisition=self._acquisition,
+                arguments=self._arguments, queries=self._queries)
             self._require_running()
             self._phase = "reading"
 

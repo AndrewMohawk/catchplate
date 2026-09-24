@@ -39,6 +39,9 @@ plus actual original-byte evidence signing/verification with independent pins.
 They produce ordinary row effects, not registered kernels or proof tokens.
 Successor manifest/query/evidence-consumption adapters and independently owned
 production composers remain necessary; all four startup gaps remain visible.
+Source `.75` connects registration to real source queries, mutation rendering,
+complete-range acquisition and shared proof verification. It does not supply
+the missing evidence custody, operation owner or registry activation.
 
 The [registry-free request commitment](authority-request-commitment.md) separates
 the actual hash/intent workers needed by the inactive revocation verifier from

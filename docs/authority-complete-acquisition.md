@@ -2,6 +2,8 @@
 
 ## Status and admission
 
+Source `.75` extends the existing collector, head reader and read markers to the fixed [registration family](webauthn-successor-transitions.md#registration-query-and-mutation-integration-75). Its actual arguments select two ordinary or four OIDC queries/heads, and all declarations are rebound before SQL. The revocation-only private owner and public planner gates remain unchanged; a registration operation owner is still required.
+
 Source `.31` connects the real typed reader to a private complete-query collector
 for `webauthn.credential.revoke`. This is unbuilt, unexecuted source wiring, not
 an enabled operation or independently authoritative database snapshot.

@@ -2,6 +2,8 @@
 
 ## Source boundary
 
+Source `.75` adds the fixed [registration family](webauthn-successor-transitions.md#registration-query-and-mutation-integration-75), using two ordinary or four OIDC joins on the same ledger. The six-query/five-head/101-context-hash figures below describe revocation; registration uses its exact 2/2/79 or 4/4/91 schedule, without a larger budget.
+
 This document describes the implemented source-only batch contract in
 [`authority_complete_query_batch.py`](../serverware/authority_complete_query_batch.py).
 It is unbuilt and unexecuted. No build, test or SQL execution is claimed, and

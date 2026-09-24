@@ -1,11 +1,11 @@
 """Source-owned complete-index query intent, not range evidence or authority.
 
-The first admitted declaration family is the unregistered explicit revocation
-candidate's six roles. Its arguments and cutoff are supplied intent/time, not
-authenticated facts. Binding proves neither a complete index population nor a
-current root, trusted clock, SQL result, authorized operation or working kernel.
-The planner must reject this distinct query kind until its real proof producer
-and evidence admission exist. Legacy QueryProgram/v1 is not changed here.
+The explicit-revocation family retains its six roles unchanged. Successor
+registration has two unconditional roles and two additional OIDC-first-
+enrollment roles. Arguments and cutoff are supplied intent/time, not facts.
+Binding proves neither a complete index population nor a current root, trusted
+clock, SQL result, authorized operation or working kernel. Actual proof and
+operation admission remain mandatory. Legacy QueryProgram/v1 is unchanged.
 
 This module may be imported by authority_contract. It deliberately imports no
 core, operation registry, query reader, database or verification-result types.
@@ -24,11 +24,15 @@ QUERY_SCHEMA = "serverware.policyAuthorityCompleteIndexQuery/v1"
 ROLE_SCHEMA = "serverware.policyAuthorityCompleteIndexQueryRole/v1"
 PROOF_PRIMITIVE = "authenticated-complete-index-range"
 OPERATION = "webauthn.credential.revoke"
+REGISTRATION_OPERATION = "webauthn.registration.finalize"
 CASCADE_MAX = 32
 MAX_ARGUMENT_FIELDS = 64
 MAX_SOURCE_ID_BYTES = 1024
 _I64_MIN, _I64_MAX = -(2**63), 2**63 - 1
 _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+_REGISTRATION_MODES = frozenset({"bootstrap-token", "development-bootstrap",
+    "existing-webauthn", "oidc-session-first-enrollment"})
+_BASE64URL = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
 
 
 class CompleteQueryError(ValueError):
@@ -46,6 +50,12 @@ class _Role:
 
     @property
     def selector_names(self) -> tuple[str, ...]:
+        if self.name == "credential_id_history":
+            return ("credential_id",)
+        if self.name == "user_credential_history":
+            return ("user_id",)
+        if self.name == "user_registration_challenges":
+            return ("user_id", "expires_after_us")
         if self.name == "pending_trust_publications":
             return ("status",)
         if self.name == "global_registration_challenges":
@@ -55,6 +65,8 @@ class _Role:
 
     @property
     def maximum_rows(self) -> int:
+        if self.name == "user_registration_challenges":
+            return 1 + CASCADE_MAX
         return 1 if self.hint_field is None else CASCADE_MAX
 
 
@@ -73,6 +85,18 @@ _ROLES = (
           None, "pending_trust_publications", "pending"),
 )
 ROLES = tuple(role.name for role in _ROLES)
+_REGISTRATION_ROLES = (
+    _Role("credential_id_history", "webauthn_credentials", "webauthn_credential_id",
+          None, "credential_id_history"),
+    _Role("pending_trust_publications", "webauthn_trust_publications", "webauthn_publication_status",
+          None, "pending_trust_publications", "pending"),
+    _Role("user_credential_history", "webauthn_credentials", "webauthn_credential_user_history",
+          None, "user_credential_history"),
+    _Role("user_registration_challenges", "webauthn_challenges", "webauthn_registration_unused_user",
+          "sibling_challenge_ids", "user_registration_challenges"),
+)
+REGISTRATION_BASE_ROLES = ("credential_id_history", "pending_trust_publications")
+REGISTRATION_ROLES = REGISTRATION_BASE_ROLES + ("user_credential_history", "user_registration_challenges")
 _HINT_FIELDS = ("oidc_session_ids", "approval_grant_ids",
                 "control_plane_approval_ids", "registration_challenge_ids")
 
@@ -84,9 +108,9 @@ def _operation(value: Any) -> None:
 
 def _role(operation: str, role: Any) -> _Role:
     _operation(operation)
-    if operation != OPERATION or type(role) is not str or not 1 <= len(role) <= 128:
+    if operation not in (OPERATION, REGISTRATION_OPERATION) or type(role) is not str or not 1 <= len(role) <= 128:
         raise CompleteQueryError("complete query role is not declared for its operation")
-    for candidate in _ROLES:
+    for candidate in (_ROLES if operation == OPERATION else _REGISTRATION_ROLES):
         if role == candidate.name:
             return candidate
     raise CompleteQueryError("complete query role is not declared for its operation")
@@ -105,6 +129,36 @@ def _source_id(value: Any, *, work: _ValidationWork | None = None) -> str:
             raise CompleteQueryError("complete query source ID exceeds its UTF-8 bound")
     except UnicodeError as exc:
         raise CompleteQueryError("complete query source ID is not valid UTF-8") from exc
+    return value
+
+
+def _registration_id(value: Any, *, credential: bool = False,
+                     work: _ValidationWork | None = None) -> str:
+    """Registration uses its actual ceremony/index bounds, not revoke's 1KiB.
+
+    The credential encoding is canonical unpadded raw1..1024 base64url. Its
+    alphabet, length and unused-tail-bit checks need no decoded allocation.
+    User/challenge/session identifiers retain exact UTF-8 without trimming.
+    """
+    maximum = 1366 if credential else 4096
+    if type(value) is not str or not 1 <= len(value) <= maximum:
+        raise CompleteQueryError("registration query identifier is not bounded exact text")
+    if work is not None:
+        work.prepare_utf8(value)
+    try:
+        if len(value.encode("utf-8")) > maximum or "\x00" in value:
+            raise CompleteQueryError("registration query identifier exceeds its UTF-8 bound")
+    except UnicodeError as exc:
+        raise CompleteQueryError("registration query identifier is not valid UTF-8") from exc
+    if credential:
+        if work is not None:
+            work.prepare_scan(value)
+        remainder = len(value) % 4
+        if (not 1 <= len(value) * 3 // 4 <= 1024 or remainder == 1
+                or any(character not in _BASE64URL for character in value)
+                or (remainder == 2 and _BASE64URL.index(value[-1]) % 16 != 0)
+                or (remainder == 3 and _BASE64URL.index(value[-1]) % 4 != 0)):
+            raise CompleteQueryError("registration credential query encoding is not canonical raw1..1024")
     return value
 
 
@@ -157,6 +211,8 @@ class CompleteIndexQuery:
             elif name == "status":
                 if type(value) is not str or value != declared.status:
                     raise CompleteQueryError("complete query status differs from its source role")
+            elif self.operation == REGISTRATION_OPERATION:
+                _registration_id(value, credential=name == "credential_id")
             else:
                 _source_id(value)
         try:
@@ -259,6 +315,95 @@ def _binding_inputs(
     return record_id, sizes, _cutoff(cutoff_us)
 
 
+def _registration_object(value: Any, label: str) -> dict:
+    if (type(value) is not dict or len(value) > MAX_ARGUMENT_FIELDS
+            or any(type(name) is not str or len(name) > 64 for name in value)):
+        raise CompleteQueryError(f"registration query {label} is not a bounded exact object")
+    return value
+
+
+def _registration_binding_inputs(arguments: Any, cutoff_us: Any, *,
+        work: _ValidationWork | None = None) -> tuple[str, str, bool, int, int]:
+    """Own only referenced bounded scalars; full semantic admission is separate."""
+    arguments = _registration_object(arguments, "arguments")
+    if "oidc_session_id" not in arguments:
+        raise CompleteQueryError("registration query requires its explicit nullable OIDC scope")
+    intent = _registration_object(arguments.get("semantic_intent"), "intent")
+    credential = _registration_object(arguments.get("credential"), "credential")
+    operation, mode = intent.get("operation"), intent.get("authorizationMode")
+    if (type(operation) is not str or operation != REGISTRATION_OPERATION
+            or type(mode) is not str or len(mode) > 64 or mode not in _REGISTRATION_MODES):
+        raise CompleteQueryError("registration query operation or enrollment mode is not source declared")
+    credential_id = _registration_id(credential.get("credential_id"), credential=True, work=work)
+    user_id = _registration_id(credential.get("user_id"), work=work)
+    intent_user = _registration_id(intent.get("userId"), work=work)
+    challenge_id = _registration_id(intent.get("challengeId"), work=work)
+    if work is not None:
+        work.prepare_comparison(user_id, intent_user)
+    if user_id != intent_user:
+        raise CompleteQueryError("registration query user differs from its semantic intent")
+    supplied = arguments.get("sibling_challenge_ids")
+    if type(supplied) is not list or len(supplied) > CASCADE_MAX:
+        raise CompleteQueryError("registration sibling query inventory exceeds its source bound")
+    if work is not None:
+        work.prepare_copy(supplied)
+    siblings = tuple(_registration_id(item, work=work) for item in supplied)
+    if work is not None:
+        for _ in range(3):
+            work.prepare_copy(siblings)
+    ordered = tuple(sorted(set(siblings)))
+    if work is not None:
+        work.prepare_comparison(siblings, ordered)
+        work.prepare_scan(siblings)
+        work.prepare_scan(challenge_id)
+    if siblings != ordered or challenge_id in siblings:
+        raise CompleteQueryError("registration sibling hints are not sorted unique other challenges")
+    oidc = mode == "oidc-session-first-enrollment"
+    session_id = arguments.get("oidc_session_id")
+    if oidc:
+        _registration_id(session_id, work=work)
+    elif session_id is not None or siblings:
+        raise CompleteQueryError("ordinary registration cannot supply OIDC or sibling query scope")
+    return credential_id, user_id, oidc, len(siblings), _cutoff(cutoff_us)
+
+
+def family_roles(operation: str, *, arguments: Any) -> tuple[str, ...]:
+    """Fixed role names derived from actual mode, not a caller-selected family.
+
+    This is bounded mode metadata only: no encoding, hashing, hint sorting or
+    full argument admission. Actual scope/user/sibling/credential checks remain
+    mandatory in binding and rebinding before SQL or proof verification. The
+    unchanged revocation family's existing validator still checks its inputs.
+    """
+    _operation(operation)
+    if operation == OPERATION:
+        return ROLES
+    if operation == REGISTRATION_OPERATION:
+        arguments = _registration_object(arguments, "arguments")
+        intent = _registration_object(arguments.get("semantic_intent"), "intent")
+        declared_operation, mode = intent.get("operation"), intent.get("authorizationMode")
+        if (type(declared_operation) is not str or declared_operation != REGISTRATION_OPERATION
+                or type(mode) is not str or len(mode) > 64 or mode not in _REGISTRATION_MODES):
+            raise CompleteQueryError("registration query family mode is not source declared")
+        return REGISTRATION_ROLES if mode == "oidc-session-first-enrollment" else REGISTRATION_BASE_ROLES
+    raise CompleteQueryError("complete query operation has no source family")
+
+
+def family_limits(operation: str, *, arguments: Any) -> dict[str, int]:
+    """Ordinary source bounds, with no hash, new allowance or authority token.
+
+    Batch context accounting is 66 + 4*query_count + 2*head_count + 1 for the
+    existing constructor/anchor schedule: revocation remains exactly 101 hashes.
+    The fixed outside-prefix bound must be added by the actual frontier owner.
+    """
+    roles = family_roles(operation, arguments=arguments)
+    if operation == OPERATION:
+        return {"query_count": 6, "head_count": 5, "max_frontier_rows": CASCADE_MAX}
+    count = len(roles)
+    return {"query_count": count, "head_count": count,
+        "max_frontier_rows": 1 + CASCADE_MAX if count == 4 else 1}
+
+
 def _prepare_constructor_work(
     index_id: str, selector_items: tuple[tuple[str, str | int], ...],
     work: _ValidationWork,
@@ -274,6 +419,8 @@ def _prepare_constructor_work(
             work.prepare_utf8(value)
             if name != "status":
                 work.prepare_utf8(value)
+            if index_id == "webauthn_credential_id" and name == "credential_id":
+                work.prepare_scan(value)
     work.prepare_copy(selector_items)
     work.prepare_copy(selector_items)
     descriptor = projection._definition(index_id).document()
@@ -300,9 +447,30 @@ def _bind(
     return CompleteIndexQuery(operation, declared.name, selector, maximum)
 
 
+def _bind_registration(declared: _Role, inputs: tuple[str, str, bool, int, int], *,
+        work: _ValidationWork | None = None) -> CompleteIndexQuery:
+    credential_id, user_id, oidc, sibling_count, cutoff_us = inputs
+    if declared.name not in (REGISTRATION_ROLES if oidc else REGISTRATION_BASE_ROLES):
+        raise CompleteQueryError("registration query role is not enabled for its actual enrollment mode")
+    if declared.name == "credential_id_history":
+        selector = (("credential_id", credential_id),)
+    elif declared.name == "pending_trust_publications":
+        selector = (("status", "pending"),)
+    elif declared.name == "user_credential_history":
+        selector = (("user_id", user_id),)
+    else:
+        selector = (("user_id", user_id), ("expires_after_us", cutoff_us))
+    if work is not None:
+        _prepare_constructor_work(declared.index_id, selector, work)
+    maximum = 1 + sibling_count if declared.name == "user_registration_challenges" else 1
+    return CompleteIndexQuery(REGISTRATION_OPERATION, declared.name, selector, maximum)
+
+
 def bind_query(operation: str, role: str, *, arguments: Any, cutoff_us: int) -> CompleteIndexQuery:
     """Derive a fixed role from supplied intent/time, not caller index claims."""
     declared = _role(operation, role)
+    if operation == REGISTRATION_OPERATION:
+        return _bind_registration(declared, _registration_binding_inputs(arguments, cutoff_us))
     return _bind(operation, declared, _binding_inputs(arguments, cutoff_us))
 
 
@@ -312,18 +480,33 @@ def _bind_query(
 ) -> CompleteIndexQuery:
     """Private metered route through the same binding and constructor body."""
     declared = _role(operation, role)
+    if operation == REGISTRATION_OPERATION:
+        return _bind_registration(declared,
+            _registration_binding_inputs(arguments, cutoff_us, work=work), work=work)
     return _bind(operation, declared, _binding_inputs(arguments, cutoff_us, work=work), work=work)
 
 
 def validate_bindings(operation: str, complete_queries: tuple[CompleteIndexQuery, ...], *,
                       arguments: Any, cutoff_us: int) -> tuple[CompleteIndexQuery, ...]:
-    """Require all six exact roles and rederive bindings from actual inputs.
+    """Require the exact family roles and rederive bindings from actual inputs.
 
     Hint lengths are only fail-closed overflow allowances. They do not prove a
     result count or authorize omission. Future evidence admission must also
     enforce each shared union ceiling and the existing operation-wide bounds.
     """
     _operation(operation)
+    if operation == REGISTRATION_OPERATION:
+        inputs = _registration_binding_inputs(arguments, cutoff_us)
+        roles = REGISTRATION_ROLES if inputs[2] else REGISTRATION_BASE_ROLES
+        if type(complete_queries) is not tuple or len(complete_queries) != len(roles):
+            raise CompleteQueryError("registration complete query inventory differs from its actual mode")
+        owned = tuple(snapshot_query(query) for query in complete_queries)
+        if tuple(query.role for query in owned) != roles:
+            raise CompleteQueryError("registration complete roles are missing, duplicated or out of source order")
+        for query in owned:
+            if query != _bind_registration(_role(operation, query.role), inputs):
+                raise CompleteQueryError("registration complete query differs from its supplied intent or cutoff")
+        return owned
     if operation != OPERATION or type(complete_queries) is not tuple or len(complete_queries) != len(_ROLES):
         raise CompleteQueryError("complete query role inventory is not exact for its operation")
     inputs = _binding_inputs(arguments, cutoff_us)
@@ -339,6 +522,8 @@ def validate_bindings(operation: str, complete_queries: tuple[CompleteIndexQuery
 def role_manifest(operation: str) -> list[dict[str, Any]]:
     """Fresh fixed declarations for source commitment, not runtime activation."""
     _operation(operation)
+    if operation == REGISTRATION_OPERATION:
+        return _registration_role_manifest()
     if operation != OPERATION:
         return []
     result = []
@@ -362,6 +547,42 @@ def role_manifest(operation: str) -> list[dict[str, Any]]:
                           "maximum": CASCADE_MAX}),
             "sharedBudget": {"group": declared.shared_group, "maximumRows": declared.maximum_rows,
                              "measure": "distinct-primary-address-union"},
+            "proofPrimitive": PROOF_PRIMITIVE, "workUnits": 1,
+            "order": "fixed-index-key", "overflowDisposition": "fail-closed",
+        })
+    return result
+
+
+def _registration_role_manifest() -> list[dict[str, Any]]:
+    """Commit all possible roles and their exact source mode conditions."""
+    result = []
+    for declared in _REGISTRATION_ROLES:
+        profile = projection.profile_for(declared.index_id)
+        if declared.name == "credential_id_history":
+            sources = {"credential_id": "arguments.credential.credential_id"}
+        elif declared.name == "pending_trust_publications":
+            sources = {"status": {"constant": "pending"}}
+        else:
+            sources = {"user_id": "arguments.credential.user_id"}
+            if declared.name == "user_registration_challenges":
+                sources["expires_after_us"] = "supplied-cutoff-microseconds"
+        oidc_only = declared.name not in REGISTRATION_BASE_ROLES
+        modes = (["oidc-session-first-enrollment"] if oidc_only else sorted(_REGISTRATION_MODES))
+        result.append({
+            "schema": ROLE_SCHEMA, "querySchema": QUERY_SCHEMA,
+            "operation": REGISTRATION_OPERATION, "role": declared.name,
+            "queryId": f"serverware.policyAuthorityQuery/{REGISTRATION_OPERATION}/{declared.name}/{declared.table}/v1",
+            "table": declared.table, "indexId": declared.index_id,
+            "projectionDigest": profile.projection_digest, "selectorSources": sources,
+            "requiredSource": {"arguments.semantic_intent.operation": REGISTRATION_OPERATION,
+                "arguments.semantic_intent.authorizationMode": {"oneOf": modes}},
+            "modeBinding": {"oidcSession": "nonempty-iff-oidc-first-enrollment",
+                "siblingHints": "empty-unless-oidc/sorted-unique/excludes-selected-challenge",
+                "userJoin": "arguments.credential.user_id=arguments.semantic_intent.userId"},
+            "rowBound": ({"rule": "constant", "maximum": 1} if declared.hint_field is None else
+                {"rule": "1+length-of-hint-list", "hintField": declared.hint_field, "maximum": 1 + CASCADE_MAX}),
+            "sharedBudget": {"group": declared.shared_group, "maximumRows": declared.maximum_rows,
+                "measure": "distinct-primary-address-union"},
             "proofPrimitive": PROOF_PRIMITIVE, "workUnits": 1,
             "order": "fixed-index-key", "overflowDisposition": "fail-closed",
         })

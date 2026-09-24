@@ -2,6 +2,8 @@
 
 ## Current boundary
 
+Source `.75` extends this same proof body to the fixed [registration family](webauthn-successor-transitions.md#registration-query-and-mutation-integration-75). Revocation-specific counts below remain unchanged. Proposed registration mutations still require genuine OLD/NEW primary/index evidence; this does not provide mutation-frontier acquisition, business authorization or executor activation.
+
 This integration batch is implemented and source-reviewed, but unbuilt and
 unexecuted. It is not a verified runtime, activated planner path or
 operation-authority decision. The existing

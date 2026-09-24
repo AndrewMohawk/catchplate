@@ -10,7 +10,7 @@ from serverware import authority_complete_query
 from serverware.authority_query_read_work import _ValidationWork
 
 
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.74"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.75"
 SCHEMA_VERSION = 9
 CONTRACT_SCHEMA = "serverware.policyAuthorityOperationContract/v3"
 BUSINESS_INTENT_SCHEMA = "serverware.policyAuthorityBusinessIntent/v2"
@@ -2337,7 +2337,7 @@ _OPERATIONS = {
         proof_primitives=(
             "primary-key-row",
             "aggregate-high-water",
-            "ordered-exact-page",
+            authority_complete_query.PROOF_PRIMITIVE,
             "external-evidence-receipt",
         ),
         external_evidence_types=(

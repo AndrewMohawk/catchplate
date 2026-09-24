@@ -1,6 +1,6 @@
 """Hash-free admission of exact complete-query physical read markers.
 
-These shapes describe the existing revocation head/range/exact-row producers.
+These shapes describe the explicit revocation and registration read families.
 They do not authenticate a supplied root, projection digest, interval, primary
 key, population or clock. Genuine producers and proof engines still bind those
 values. This module neither enables a public planner nor grants generic table
@@ -62,9 +62,11 @@ def _source_role(operation: str, key: dict[str, Any]):
     if (type(key["queryId"]) is not str or not 1 <= len(key["queryId"]) <= 256
             or type(key["indexId"]) is not str or not 1 <= len(key["indexId"]) <= 128):
         raise IndexTraceError("complete read query identity is not bounded exact text")
-    # The five real source roles supply tables/indexes. Do not construct query
+    # The actual source roles supply tables/indexes. Do not construct query
     # DTOs or profile commitments here: their constructors perform hashing.
-    for name in complete.ROLES:
+    names = (complete.ROLES if operation == complete.OPERATION else
+             complete.REGISTRATION_ROLES if operation == complete.REGISTRATION_OPERATION else ())
+    for name in names:
         role = complete._role(operation, name)
         query_id = f"serverware.policyAuthorityQuery/{operation}/{role.name}/{role.table}/v1"
         if key["queryId"] == query_id and key["indexId"] == role.index_id:
@@ -91,12 +93,13 @@ def _primary_id(value: Any) -> bool:
 def validate_complete_read_trace(operation: str, table: str, key: Any) -> None:
     """Admit only one exact existing source producer's physical read shape.
 
-    Metadata reads are limited to the required head union and the five source
+    Metadata reads are limited to the required head union and the source
     roles' leaf/node markers. Business reads here are exact member-PK fetches,
     never predicate scans. Hash-free shape admission is not proof of any value
     association, and must be explicitly enabled by the private planner caller.
     """
-    if (type(operation) is not str or operation != complete.OPERATION
+    if (type(operation) is not str or operation not in
+            (complete.OPERATION, complete.REGISTRATION_OPERATION)
             or type(table) is not str or not 1 <= len(table) <= 128):
         raise IndexTraceError("complete read operation or table is not source admitted")
     if table == heads.HEAD_TABLE:

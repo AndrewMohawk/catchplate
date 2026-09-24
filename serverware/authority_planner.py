@@ -527,7 +527,8 @@ def _query_trace_key(
 class PlannerTrace:
     def __init__(self, *, operation: str, _complete_queries: bool = False) -> None:
         if (type(_complete_queries) is not bool
-                or _complete_queries and operation != authority_complete_query.OPERATION):
+                or _complete_queries and operation not in (authority_complete_query.OPERATION,
+                    authority_complete_query.REGISTRATION_OPERATION)):
             raise AuthorityPlannerError("complete trace scope is not source admitted")
         spec = authority_contract.operation_spec(operation)
         self.operation = operation

@@ -1,9 +1,9 @@
 """Source-bound complete-query verification, not operation authority.
 
-Only the six explicit credential-revocation roles are admitted. Every raw
-input is detached before any hashing constructor or verifier runs. One genuine
-global primary membership evaluation owns the rows used by six genuine joins;
-their repeated proof work is charged, including empty queries and shared heads.
+Only the fixed explicit credential-revocation and registration families are
+admitted. Every raw input is detached before any hashing constructor or verifier
+runs. One genuine global primary membership evaluation owns the rows used by
+the genuine joins; repeated proof work includes empty queries and shared heads.
 
 The reader-sized frontier profile is intentionally narrower than the generic
 range verifier: excessive outside subdivisions are rejected. No SQL, trusted
@@ -266,14 +266,13 @@ def _raw_document(*, operation, arguments, cutoff_us, queries,
     to verification. The read/write composer extends this same document before
     its one capture; the standalone document and accounting remain unchanged.
     """
-    if type(operation) is not str or operation != complete.OPERATION:
-        raise CompleteQueryBatchError("complete query batch operation is not source admitted")
+    family = complete.family_limits(operation, arguments=arguments)
     spec = authority_contract.operation_spec(operation)
     if (type(arguments) is not dict or len(arguments) > complete.MAX_ARGUMENT_FIELDS
             or type(cutoff_us) is not int or not -(2**63) <= cutoff_us <= I64_MAX
-            or type(queries) is not tuple or len(queries) != QUERY_COUNT
-            or type(read_heads) is not tuple or len(read_heads) != READ_HEAD_COUNT
-            or type(query_frontiers) is not tuple or len(query_frontiers) != QUERY_COUNT
+            or type(queries) is not tuple or len(queries) != family["query_count"]
+            or type(read_heads) is not tuple or len(read_heads) != family["head_count"]
+            or type(query_frontiers) is not tuple or len(query_frontiers) != family["query_count"]
             or type(selected_rows) is not tuple or len(selected_rows) > spec["maximumQueryRows"]
             or type(before_proofs) is not tuple or len(before_proofs) != len(selected_rows)):
         raise CompleteQueryBatchError("complete query batch raw inventory exceeds its source bound")
@@ -297,7 +296,7 @@ def _raw_document(*, operation, arguments, cutoff_us, queries,
     raw_frontiers = []
     for proof in query_frontiers:
         if (type(proof) is not CompleteQueryFrontier or type(proof.frontier) is not tuple
-                or len(proof.frontier) > MAX_OUTSIDE_PREFIXES + complete.CASCADE_MAX):
+                or len(proof.frontier) > MAX_OUTSIDE_PREFIXES + family["max_frontier_rows"]):
             raise CompleteQueryBatchError("complete query frontier exceeds its reader-sized inventory")
         records = []
         for item in proof.frontier:
@@ -333,8 +332,8 @@ def _selected_envelopes(owned: dict[str, Any], ledger: _Ledger) -> tuple[int, in
         if (type(item) is not dict or len(item) != len(_SELECTED_FIELDS)
                 or set(item) != _SELECTED_FIELDS or item["contractSelector"] is not None):
             raise CompleteQueryBatchError("complete query global selection wrapper or selector tag is invalid")
-        # The sole admitted operation has no scalar contract selectors. Both
-        # its real planner's global wrappers and the local joins require None.
+        # Both admitted families have no scalar contract selectors. Their
+        # actual global wrappers and the local joins require None.
         # Do not erase a tag here: any future complete-query family with source
         # selectors needs an explicit global/local metadata admission contract.
         # Budget classification only. Actual key/digest/row membership follows
@@ -410,13 +409,19 @@ def _primary_limits(spec: dict[str, Any], maximum_rows: int, ledger: _Ledger) ->
 def _verify(owned: dict[str, Any], ledger: _Ledger,
             ownership_bytes: int, ownership_nodes: int) -> CompleteQueryBatchInputs:
     envelope_bytes, envelope_nodes = _selected_envelopes(owned, ledger)
+    family = complete.family_limits(owned["operation"], arguments=owned["arguments"])
     if (len(owned["businessBeforeRoots"]) + len(owned["authorizationBeforeRoots"])
             > authority_contract.MAX_QUERY_PROOFS):
         raise CompleteQueryBatchError("complete query primary root classes exceed their source inventory")
     # The complete raw graph is already privately owned. Reserve every outer
     # source/constructor hash before the first one can occur, without cache
     # discounts. Do not add property/contract serializers without auditing this.
-    ledger.charge(hashes=CONTEXT_HASH_ALLOWANCE)
+    # Cold primary roots; Q initial declarations and 2Q binding constructors;
+    # H profiles and H empty roots; Q anchors; one source manifest. This is
+    # still 101 for revocation. Registration uses its exact ordinary/OIDC
+    # family, not six fabricated queries or a reset proof allowance.
+    context_hashes = 66 + 4 * family["query_count"] + 2 * family["head_count"] + 1
+    ledger.charge(hashes=context_hashes)
     initial_queries = tuple(complete.CompleteIndexQuery(
         item["operation"], item["role"], tuple(tuple(pair) for pair in item["selectorItems"]),
         item["maximumRows"],
@@ -436,7 +441,7 @@ def _verify(owned: dict[str, Any], ledger: _Ledger,
     authorization = _roots(owned["authorizationBeforeRoots"])
     frontiers = _frontiers(owned["queryFrontiers"], queries)
     expected_ids = tuple(sorted({query.index_id for query in queries}))
-    if (len(expected_ids) != READ_HEAD_COUNT
+    if (len(expected_ids) != family["head_count"]
             or tuple(item["indexId"] for item in owned["readHeads"]) != expected_ids):
         raise CompleteQueryBatchError("complete query read heads are not the exact sorted source union")
     heads, profiles = [], {}
@@ -523,7 +528,7 @@ def _verify(owned: dict[str, Any], ledger: _Ledger,
         projection_manifest_digest=manifest_digest,
         metrics=CompleteQueryBatchMetrics(
             ownership_bytes, ownership_nodes, envelope_bytes, envelope_nodes,
-            CONTEXT_HASH_ALLOWANCE, global_metrics, query_metrics,
+            context_hashes, global_metrics, query_metrics,
             ledger.hashes, ledger.input_bytes, ledger.json_nodes,
         ),
     )
@@ -539,9 +544,10 @@ def verify_complete_query_batch(
     """Reverify raw evidence under source limits, returning actual owned inputs.
 
     Root vectors are closed primary wire dictionaries in lists or tuples. All
-    other inventories require the exact declared tuple/DTO types. The six
-    query/frontier pairs retain supplied program order, while five heads are
-    the sorted unique source union. One head is shared by both session roles.
+    other inventories require the exact declared tuple/DTO types. The exact
+    family query/frontier pairs retain supplied program order; heads are the
+    sorted unique source union. Revocation shares a head between session roles.
+    Registration's OIDC mode requires both additional user-history/sibling roles.
 
     The optional exact framework-counter address earns only one extra selected
     slot; its initialized/present state is not validated here. Other point rows
@@ -576,14 +582,14 @@ def _verify_complete_query_batch(
     """Capture and reverify raw proof inputs on the caller's existing meter.
 
     This private planner seam runs the same ownership, global membership and
-    six genuine joins as the public entry. No successful proof/result input
+    genuine family joins as the public entry. No successful proof/result input
     or replacement work allowance is accepted. Returned batch totals are this
     call's deltas; ``work`` retains every prior and newly charged unit. As with
     the existing proof composers, any phase failure aborts the enclosing call:
     callers must not catch it and retry a partially evaluated proof allowance.
 
-    The currently admitted revocation contract has no scalar selectors, so
-    its global and query-local wrappers all require contractSelector=None.
+    The admitted families have no scalar selectors, so their global and
+    query-local wrappers all require contractSelector=None.
     Source hints do not turn a caller tag into selector or predicate authority.
     """
     try:

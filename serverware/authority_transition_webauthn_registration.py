@@ -1,11 +1,13 @@
-"""Successor registration semantics, deliberately not a registered v1 kernel.
+"""Successor registration semantics and adapters, deliberately unregistered.
 
 The private transition re-verifies original v2 evidence against independent
 key/identity/RP/time pins and derives ordinary row effects. Its caller must
-actually authenticate primary rows and every complete query in the recipe.
+actually authenticate primary rows and every complete query in the program.
 Neither a bare KernelContext nor the returned effects prove that admission.
-The existing v1 manifest/complete-query dispatcher cannot admit this recipe:
-activation requires an explicit successor adapter, not a keyless registry stub.
+The private query adapter constructs and closes genuine source declarations;
+the private transition adapter renders genuine mutation templates on the same
+work. Neither replaces proof acquisition or the common audit-capacity finalizer,
+and both still require independently admitted inputs, not a keyless registry stub.
 
 Evidence signs an acyclic semantic intent and derived attestation result, not
 the final request digest, future credential UUID, evidence ID or signature.
@@ -19,7 +21,7 @@ from datetime import datetime, timezone
 from serverware import authority_complete_query as complete
 from serverware import authority_complete_query_batch as capture
 from serverware import authority_contract as authority
-from serverware import authority_index_projection as projection
+from serverware import authority_audit_capacity as capacity
 from serverware import authority_revocation_invocation as invocation
 from serverware import authority_transition_core as core
 from serverware import authority_transition_webauthn as support
@@ -218,7 +220,7 @@ def _identity(request_digest, purpose, work):
 
 
 def _query_recipe_on_work(*, arguments, database_now, request_digest, work):
-    """Ordinary source declarations; not accepted v1 QueryProgram objects.
+    """Return the actual source-closed registration business query program.
 
     Complete declarations require authenticated full ranges and primary joins,
     not merely an SQL page or the supplied sibling hints. The common framework
@@ -229,45 +231,52 @@ def _query_recipe_on_work(*, arguments, database_now, request_digest, work):
     _digest(request_digest)
     _now(database_now)
     cutoff = complete.cutoff_microseconds(database_now)
-    intent, credential = values["semantic_intent"], values["credential"]
+    intent = values["semantic_intent"]
     result = []
 
-    def exact(name, table, key):
-        result.append({"kind": "primary-key-row", "queryId": core.query_program_id(OPERATION, name, table),
-            "table": table, "key": key, "maximumRows": 1})
-
-    def full(name, index_id, selector, maximum):
-        work.prepare_copy(selector)
-        complete._prepare_constructor_work(index_id, tuple(selector.items()), work)
-        profile = projection.profile_for(index_id)
-        work.prepare_encoding(selector, shallow_copies=1)
-        projection.snapshot_selector(index_id, selector)
-        result.append({"kind": complete.PROOF_PRIMITIVE,
-            "queryId": core.query_program_id(OPERATION, name, profile.table),
-            "table": profile.table, "indexId": index_id,
-            "projectionDigest": profile.projection_digest, "selector": selector,
-            "maximumRows": maximum, "overflowDisposition": "fail-closed"})
+    def exact(name, table, key, *, require_absence=False):
+        result.append(core.BoundedQuery(query_id=core.query_program_id(OPERATION, name, table),
+            table=table, predicates=tuple(core.QueryPredicate(column, "eq", value)
+                for column, value in key.items()),
+            order_by=tuple(core.QueryOrder(column) for column in key),
+            maximum_rows=1, absent_key=key, require_absence=require_absence))
 
     exact("registration_challenge", "webauthn_challenges", {"id": intent["challengeId"]})
-    exact("new_credential", "webauthn_credentials", {"id": _identity(request_digest, "credential-record", work)})
-    exact("registration_audit", "metadata_audit_outbox", {"id": _identity(request_digest, "registration-audit", work)})
+    exact("new_credential", "webauthn_credentials",
+        {"id": _identity(request_digest, "credential-record", work)}, require_absence=True)
+    exact("registration_audit", "metadata_audit_outbox",
+        {"id": _identity(request_digest, "registration-audit", work)}, require_absence=True)
     exact("trust_high_water", trust.HIGH_WATER_TABLE, {"authority_scope": trust.AUTHORITY_SCOPE})
-    full("credential_id_history", "webauthn_credential_id", {"credential_id": credential["credential_id"]}, 1)
-    full("pending_trust_publications", "webauthn_publication_status", {"status": "pending"}, 1)
-    result.append({"kind": "selected-row-field-join", "queryId": core.query_program_id(OPERATION,
-        "trust_publication", trust.PUBLICATION_TABLE), "table": trust.PUBLICATION_TABLE,
-        "maximumRows": 1, "sourceTable": trust.HIGH_WATER_TABLE,
-        "sourceKey": {"authority_scope": trust.AUTHORITY_SCOPE},
-        "fixedPredicates": {"scope": "global", "status": "published"},
-        "fieldJoins": {"bundle_digest": "publication_digest", "payload_digest": "metadata_blob_digest",
-            "rollback_epoch": "rollback_epoch", "sequence": "publication_sequence"}})
+    source_key = {"authority_scope": trust.AUTHORITY_SCOPE}
+    predicates = [core.QueryPredicate("scope", "eq", "global"),
+        core.QueryPredicate("status", "eq", "published")]
+    for column, source in (("bundle_digest", "publication_digest"),
+            ("payload_digest", "metadata_blob_digest"), ("rollback_epoch", "rollback_epoch"),
+            ("sequence", "publication_sequence")):
+        # The real reference constructor copies and canonicalizes this key.
+        work.prepare_encoding(source_key, shallow_copies=1)
+        reference = core.SelectedRowFieldReference(trust.HIGH_WATER_TABLE, source_key, source)
+        predicates.append(core.QueryPredicate(column, "eq", reference))
+    result.append(core.BoundedQuery(query_id=core.query_program_id(OPERATION,
+        "trust_publication", trust.PUBLICATION_TABLE), table=trust.PUBLICATION_TABLE,
+        predicates=tuple(predicates), order_by=(core.QueryOrder("id"),), maximum_rows=1))
     if values["oidc_session_id"] is not None:
         exact("pending_oidc_session", "oidc_browser_sessions", {"id": values["oidc_session_id"]})
-        full("user_credential_history", "webauthn_credential_user_history", {"user_id": credential["user_id"]}, 1)
-        full("user_registration_challenges", "webauthn_registration_unused_user",
-            {"user_id": credential["user_id"], "expires_after_us": cutoff}, 1 + len(values["sibling_challenge_ids"]))
-    work.prepare_copy(result)
-    return tuple(result)
+    # Values were already validated above. Choose the fixed source inventory
+    # without an extra unmetered family_roles normalization; each real binder
+    # below repeats its actual role admission on the same work.
+    roles = (complete.REGISTRATION_BASE_ROLES if values["oidc_session_id"] is None
+        else complete.REGISTRATION_ROLES)
+    for role in roles:
+        result.append(complete._bind_query(OPERATION, role, arguments=values, cutoff_us=cutoff, work=work))
+    queries = tuple(result)
+    spec = authority.operation_spec(OPERATION)
+    if (sum(query.maximum_rows for query in queries) > spec["maximumBusinessQueryRows"]
+            or sum(query.work_units for query in queries) > spec["maximumBusinessWorkUnits"]):
+        _fail("registration query program exceeds its business allowance")
+    # close_queries revalidates each real complete-query constructor once.
+    support._prepare_complete_copies(queries, work)
+    return core.close_queries(OPERATION, queries)
 
 
 def _present(context, table, work):
@@ -322,7 +331,8 @@ def _transition_on_work(context, *, evidence_public_key, expected_signer_identit
     ledger = capture._SharedLedger(work)
     if (type(context) is not core.KernelContext or type(context.operation) is not str
             or context.operation != OPERATION
-            or type(context.selected_rows) is not tuple or len(context.selected_rows) > 112):
+            or type(context.selected_rows) is not tuple
+            or len(context.selected_rows) > authority.operation_spec(OPERATION)["maximumQueryRows"]):
         _fail("registration context is not a bounded exact source input")
     now_ns = _now(context.database_now)
     _integer(maximum_age_ns, "independent maximum age", 1, authority.VERIFIER_RESPONSE_MAX_AGE_NS)
@@ -346,6 +356,11 @@ def _transition_on_work(context, *, evidence_public_key, expected_signer_identit
             _fail("registration present row has no exact object")
         if not selected["present"] and selected["row"] is not None:
             _fail("registration absent row contains data")
+    work.prepare_scan(selected_rows)
+    if sum(not (selected["table"] == capacity.AGGREGATE_TABLE
+            and selected["key"] == {"aggregate_id": capacity.AGGREGATE_ID})
+            for selected in selected_rows) > authority.operation_spec(OPERATION)["maximumBusinessQueryRows"]:
+        _fail("registration owned business rows exceed their source allowance")
     work.prepare_copy(selected_rows)
     current = core.KernelContext(OPERATION, values, tuple(selected_rows), context.database_now, request_digest)
     intent, credential = values["semantic_intent"], values["credential"]
@@ -469,3 +484,65 @@ def _transition_on_work(context, *, evidence_public_key, expected_signer_identit
     work.prepare_copy(effects)
     work.prepare_encoding(result)
     return tuple(effects), result
+
+
+def _kernel_transition_on_work(context, *, evidence_public_key, expected_signer_identity,
+        expected_signer_spki_digest, expected_rp_id, expected_origin,
+        maximum_age_ns, maximum_clock_skew_ns, work):
+    """Render the real registration business transition on the original work.
+
+    The genuine business worker below re-verifies the signed original evidence;
+    there is no accepted successful-evidence DTO or fallback key. Primary/range
+    admission, configured pins and exact currentness remain the owning caller's
+    responsibility. Only the common capacity row is outside business accounting.
+    Its query and mutation are deliberately not created or accepted as completed
+    capacity here: the existing common finalizer must perform that work.
+    """
+    capture._SharedLedger(work)
+    if type(context) is not core.KernelContext:
+        _fail("registration transition adapter requires an exact context")
+    support._kernel_work(context, work)
+    if context.operation != OPERATION:
+        _fail("registration transition adapter operation changed")
+    spec = authority.operation_spec(OPERATION)
+    # Count before any evidence/key callback can mutate the supplied context.
+    # The full graph scan is charged; the fixed address does not admit its row.
+    work.prepare_scan(context.selected_rows)
+    business_count = sum(not (selected.get("table") == capacity.AGGREGATE_TABLE
+        and selected.get("key") == {"aggregate_id": capacity.AGGREGATE_ID})
+        for selected in context.selected_rows)
+    if business_count > spec["maximumBusinessQueryRows"]:
+        _fail("registration selected business rows exceed their source allowance")
+    effects, result = _transition_on_work(context, evidence_public_key=evidence_public_key,
+        expected_signer_identity=expected_signer_identity,
+        expected_signer_spki_digest=expected_signer_spki_digest,
+        expected_rp_id=expected_rp_id, expected_origin=expected_origin,
+        maximum_age_ns=maximum_age_ns, maximum_clock_skew_ns=maximum_clock_skew_ns, work=work)
+    if len(effects) > spec["maximumBusinessMutations"]:
+        _fail("registration rendered effects exceed their business allowance")
+    mutations = []
+    addresses = set()
+    for selected, updated in effects:
+        address = selected["table"], _digest(selected["keyDigest"])
+        if address in addresses:
+            _fail("registration produced more than one mutation for a row")
+        addresses.add(address)
+        # core.mutation actually makes these three bounded shallow copies and
+        # selects the existing operation's exact source-owned template.
+        work.prepare_copy(selected["key"])
+        if selected["present"] is True:
+            work.prepare_copy(selected["row"])
+        work.prepare_copy(updated)
+        mutations.append(core.mutation(operation=OPERATION, selected=selected, row=updated))
+    work.prepare_copy(mutations)
+    ordered = sorted(mutations, key=lambda item: (item["table"], item["keyDigest"], item["operation"]))
+    work.prepare_copy(ordered)
+    planned = tuple(ordered)
+    # Source-owned business units: fixed validation, admitted row visits and
+    # four units per final mutation. H/B/N above remains actual cumulative work.
+    business_work = 8 + business_count + 4 * len(planned)
+    if business_work > spec["maximumBusinessWorkUnits"]:
+        _fail("registration transition exceeds its business work allowance")
+    # KernelTransition performs its real canonical result validation here.
+    work.prepare_encoding(result)
+    return core.KernelTransition(mutations=planned, result=result, work_units=business_work)

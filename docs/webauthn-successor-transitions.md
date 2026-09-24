@@ -65,12 +65,53 @@ is not publication authority.
 ## Activation still required
 
 Ordinary selected rows, row effects and consumption recipes are not proof
-tokens or independently authenticated roots. The successor operation manifests,
-complete query-role adapters, evidence custody/consumption schema, independently
+tokens or independently authenticated roots. The remaining successor manifests,
+trust-stage query adapters, evidence custody/consumption schema, independently
 configured composers, actual evidence producers and atomic execution/recovery
 must be connected before registry activation. The old trust-stage one-write
 manifest and reserved v1 evidence schemas cannot represent these semantics.
-No manifest widening or v1 reinterpretation is implied by these source helpers.
+No v1 evidence reinterpretation is implied by these source helpers.
+
+## Registration query and mutation integration (`.75`)
+
+Registration now produces actual `BoundedQuery` / `CompleteIndexQuery` objects,
+including exact new-credential/audit absence and the real selected-high-water
+field join to the published trust predecessor. Its mutation adapter renders
+the business effects through existing source templates into `KernelTransition`.
+It still requires independent evidence pins and the common audit-capacity
+finalizer; it is not a keyless registered kernel.
+
+The existing complete-query dispatcher, database acquisition and proof engines
+now admit these exact source families:
+
+| Enrollment | Complete roles | Distinct read heads | Largest result |
+| --- | --- | --- | --- |
+| Ordinary | Credential-ID history; pending publication absence | 2 | 1 row per role |
+| OIDC first enrollment | Both ordinary roles; all-status user history; live user registration challenges | 4 | Selected challenge plus at most 32 siblings |
+
+The role inventory follows the actual closed enrollment mode. Every query is
+rebound to its actual credential/user, sibling hints and one cutoff before SQL.
+Hint lengths are overflow bounds, never proof of population completeness.
+Acquisition uses the real counted heads, interval frontiers and exact primary
+fetches; verification reconstructs the roots and joins every returned index
+member to its primary row. Empty ranges still need proofs. Shared read/write
+verification also uses the exact family, without a new budget or proof token.
+
+Source `.75` replaces registration's obsolete ordered-page manifest primitive
+with the complete-index primitive and commits its conditional role definitions.
+Its business bounds remain 112 rows / 40 mutations / 1,024 work units, plus the
+existing exact framework capacity allowance. Revocation's six roles, five read
+heads and 101 context hashes remain unchanged. Registration uses 79 ordinary or
+91 OIDC context hashes for the actual constructor/anchor schedule; all consume
+the same cumulative work budget. The 33-row OIDC challenge bound is role-specific,
+not an increase to revocation or global resource allowances.
+
+This is read-side and mutation-rendering integration, not operation activation.
+The reserved external-evidence v1 manifest/schema is unchanged and cannot consume
+the new v2 evidence. Registration's owning composer, original evidence production
+and custody, authenticated complete mixed-query replay, mutation-frontier
+acquisition, final capacity/root planning and atomic execution are still required.
+The registry, public v3 planner and mutation-read admission remain closed.
 
 Broad fixtures and full verification remain deferred to the consolidated frozen
 build. Production acceptance additionally requires independently operated

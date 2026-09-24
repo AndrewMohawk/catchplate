@@ -623,6 +623,7 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_authority_index_frontier.py \
 	scripts/test_authority_index_mutation.py \
 	scripts/test_authority_indexed_mutation.py \
+	scripts/test_authority_index_mutation_reader.py \
 	scripts/test_authority_mutation_inputs.py \
 	scripts/test_authority_query_reads.py \
 	scripts/test_authority_query_reads_measured.py \
@@ -792,11 +793,14 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_complete_query.py \
 	serverware/authority_contract.py \
 	serverware/authority_index_contract.py \
+	serverware/authority_index_frontier.py \
 	serverware/authority_index_join.py \
 	serverware/authority_index_mutation.py \
+	serverware/authority_index_mutation_reader.py \
 	serverware/authority_indexed_mutation.py \
 	serverware/authority_index_projection.py \
 	serverware/authority_index_range.py \
+	serverware/authority_index_reader.py \
 	serverware/authority_primary_contract.py \
 	serverware/authority_query_read_work.py \
 	serverware/authority_query_reads.py \

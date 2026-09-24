@@ -17,6 +17,9 @@ planner/executor activation, authenticated bootstrap or independent root
 authority supplied by this component. Existing gates remain closed. The
 standalone [range reader](authority-index-storage-integration.md) does not fill
 these gaps or automatically produce the mutation frontier described below.
+The separate [write-proof SQL producer](authority-index-mutation-reader.md)
+now acquires that exact evidence from verified primary OLD/NEW images and
+invokes the actual sparse folds, without admitting production trace/currentness.
 
 The [operation-bound write-transition document](authority-counted-root-transition.md)
 now invokes this evaluator once with source-owned contracts and packaging
@@ -116,18 +119,19 @@ is not a no-op shortcut.
 
 This mutation frontier differs from a complete-range frontier: it proves the
 exact changed paths and their untouched immediate siblings, not a contiguous
-query interval. A future bounded SQL producer must acquire this exact shape;
-the existing range reader cannot simply be relabeled as that producer.
+query interval. The separate bounded write-proof SQL producer acquires this
+exact shape; it does not relabel the existing range reader as that producer.
 
-### Missing planner-side mutation acquisition
+### Write-proof acquisition and remaining planner integration
 
 The native per-event maintenance function reads its own stored paths inside SQL;
 that is not a retained planner proof producer. The pure combined evaluator
-still receives caller-supplied mutation frontiers. Before planner activation,
-acquisition must derive target keys from the same owned normalized OLD/NEW
-images used by the real primary/count evaluator, with every fixed profile of
-every written table included. A caller-selected target subset, range interval
-or already-successful result object is not an acquisition contract.
+still accepts raw mutation frontiers. The separate acquisition entrypoint now
+derives target keys from the same owned normalized OLD/NEW images used by the
+real primary/count evaluator, with every fixed profile of every written indexed
+table included. A caller-selected target subset, range interval or
+already-successful result object is not accepted. Production planner acquisition,
+shared trace admission and independent roots remain separate integration work.
 
 For one profile, let `K` be the number of distinct target keys and `O` the number
 of nodes in their proper-ancestor union, including the root. Target changes are
@@ -158,7 +162,7 @@ positive rows or authenticated population.
 
 Preflight physical calls, parameter bytes and retained proof work before the
 first SQL statement, across **all** affected profiles and other query phases.
-For a proposed 256-identity batch, separate target and sibling reads need at
+For the component's 256-identity batches, separate target and sibling reads need at
 most `ceil(K/256) + ceil((15*O+1-K)/256)` calls before head acquisition and primary
 proof reads. The maximum-size component shape can exceed the existing 4096
 business-trace-entry ceiling even for one profile. That allowance also covers
@@ -169,12 +173,12 @@ over-budget plan without
 issuing partial reads or raising the source ceiling. Empty database results do
 not refund physical reads already performed.
 
-The SQL transport should preserve the range reader's exact-type CASE projection,
+The SQL transport preserves the range reader's exact-type CASE projection,
 bounded fetch and explicit `C`-collation identity checks, without validity
 predicates that conceal corrupt matching rows. Its trace needs a separately
 admitted mutation-read identity, one entry per physical SELECT, not the current
-range-read profile or primary proof profile. None of this section implements
-that producer, admits its trace or establishes backend query-plan cost bounds.
+range-read profile or primary proof profile. The implemented component does not
+admit that production trace or establish backend query-plan cost bounds.
 
 ## Resource accounting
 

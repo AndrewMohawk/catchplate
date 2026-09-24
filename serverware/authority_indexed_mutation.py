@@ -189,6 +189,111 @@ def _changes_for_index(index_id, mutations, old_digests, new_digests, budget):
             revision_delta, projection_allowance)
 
 
+def _verify_primary(*, table_contracts, business_before_roots, authorization_before_roots,
+                    selected_rows, before_proofs, mutations, budget):
+    """Run the genuine primary body once on this computation's remaining budget.
+
+    Private composition only: public entrypoints always supply raw inputs and
+    never accept a successful primary result as authorization or a shortcut.
+    """
+    limits = budget.limits
+    primary_limits = replace(limits.primary,
+        max_hashes=min(limits.primary.max_hashes, _positive_remaining(
+            limits.max_total_hashes - budget.hashes, "hash")),
+        max_input_bytes=min(limits.primary.max_input_bytes, _positive_remaining(
+            limits.max_total_input_bytes - budget.input_bytes, "input")))
+    verified = primary.evaluate_primary_radix_inputs(
+        table_contracts=table_contracts, business_before_roots=business_before_roots,
+        authorization_before_roots=authorization_before_roots, selected_rows=selected_rows,
+        before_proofs=before_proofs, mutations=mutations, limits=primary_limits)
+    budget.hash_work(verified.result.metrics.hash_work)
+    budget.input_work(verified.result.metrics.input_bytes)
+    return verified
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedPrimaryChanges:
+    """Private references to this invocation's genuine owned primary inputs."""
+
+    verified: primary.PrimaryRadixMutationInputs
+    by_table: dict[str, list[dict[str, Any]]]
+    primary_after_counts: dict[str, int]
+    primary_before_counts: dict[str, int]
+    old_digests: dict[tuple[str, str], str]
+    new_digests: dict[tuple[str, str], str]
+    new_row_hashes: int
+
+
+def _prepare_primary_changes(verified, index_ids, budget):
+    # All fixed profiles are required before NEW-row hashing, including those
+    # for which both source images will be nonmembers. Preserve row order and
+    # hash each real NEW row once, not once per affected profile.
+    by_table: dict[str, list[dict[str, Any]]] = {}
+    for mutation in verified.mutations:
+        table = mutation["table"]
+        if projection.index_ids_for_table(table):
+            if len(mutation["key"]) != 1 or "id" not in mutation["key"]:
+                raise IndexedMutationError("indexed mutation primary key does not match its source id codec")
+            by_table.setdefault(table, []).append(mutation)
+    expected_ids = tuple(sorted(index_id for table in by_table for index_id in projection.index_ids_for_table(table)))
+    if index_ids != expected_ids:
+        raise IndexedMutationError("indexed mutation does not include exactly every affected source profile")
+    primary_after_counts = {root.table: root.leaf_count for root in verified.result.business_after_roots}
+    primary_before_counts = {table: primary_after_counts[table] - sum(
+        int(change["operation"] == "INSERT") - int(change["operation"] == "DELETE")
+        for change in changes) for table, changes in by_table.items()}
+    old_digests = {(proof["table"], proof["keyDigest"]): proof["rowDigest"] for proof in verified.before_proofs}
+    new_digests = {}
+    new_row_hashes = 0
+    for table, changes in by_table.items():
+        for mutation in changes:
+            if mutation["row"] is not None:
+                budget.hash_work(1)
+                new_row_hashes += 1
+                new_digests[(table, mutation["keyDigest"])] = radix._tree_digest(
+                    "serverware.policyAuthorityAuthenticatedRow/v1", table.encode("ascii"),
+                    radix.tree_json_bytes(mutation["row"]))
+    return _PreparedPrimaryChanges(verified, by_table, primary_after_counts,
+        primary_before_counts, old_digests, new_digests, new_row_hashes)
+
+
+def _prepare_index_changes(item, prepared, budget):
+    """Genuine source profile and OLD/NEW projections, charged exactly once."""
+    budget.hash_work(projection.PROFILE_HASH_WORK)
+    profile = projection.profile_for(item.index_id)
+    # Each fixed profile emits at most one leaf per base row. This necessary
+    # descriptor-consistency check is not authenticated population proof.
+    if item.index_root.count > prepared.primary_before_counts[profile.table]:
+        raise IndexedMutationError("indexed mutation before count exceeds its primary population descriptor")
+    changes, delta, allowance = _changes_for_index(
+        item.index_id, prepared.by_table[profile.table], prepared.old_digests, prepared.new_digests, budget)
+    if delta > I64_MAX - item.index_revision:
+        raise IndexedMutationError("indexed mutation head revision overflows int64")
+    return profile, changes, delta, allowance
+
+
+def _evaluate_one_index(item, prepared, profile, changes, budget, reserved):
+    """Fold an owned frontier with the genuine sparse evaluator and same ledger.
+
+    Only this frontier's already charged scalar framing receives ``reserved``
+    credit. SQL parameters, returned row material and acquisition work cannot
+    be subtracted as though they were that proof-input reservation.
+    """
+    limits = budget.limits
+    index_limits = replace(limits.index,
+        max_hashes=min(limits.index.max_hashes, _positive_remaining(
+            limits.max_total_hashes - budget.hashes, "hash")),
+        max_input_bytes=min(limits.index.max_input_bytes, _positive_remaining(
+            limits.max_total_input_bytes - budget.input_bytes + reserved, "input")))
+    calculated = counted.evaluate_index_mutations(profile=profile, before_root=item.index_root,
+        changes=changes, frontier=item.frontier, limits=index_limits)
+    budget.hash_work(calculated.metrics.hashes)
+    budget.input_work(calculated.metrics.input_bytes - reserved)
+    if calculated.after_root.count > prepared.primary_after_counts[profile.table]:
+        raise IndexedMutationError("indexed mutation after count exceeds its primary population descriptor")
+    return calculated
+
+
 def evaluate_indexed_primary_batch(
     *, table_contracts: tuple[primary.PrimaryTableContract, ...],
     business_before_roots: tuple[primary.PrimaryRoot, ...],
@@ -211,77 +316,25 @@ def evaluate_indexed_primary_batch(
     # Detach every counted record before primary verification. Later caller
     # changes cannot substitute another head/frontier between the two engines.
     inputs, reservations = _inputs_snapshot(index_inputs, budget)
-    primary_limits = replace(limits.primary,
-        max_hashes=min(limits.primary.max_hashes, _positive_remaining(
-            limits.max_total_hashes - budget.hashes, "hash")),
-        max_input_bytes=min(limits.primary.max_input_bytes, _positive_remaining(
-            limits.max_total_input_bytes - budget.input_bytes, "input")))
-    verified = primary.evaluate_primary_radix_inputs(
-        table_contracts=table_contracts, business_before_roots=business_before_roots,
+    verified = _verify_primary(table_contracts=table_contracts, business_before_roots=business_before_roots,
         authorization_before_roots=authorization_before_roots, selected_rows=selected_rows,
-        before_proofs=before_proofs, mutations=mutations, limits=primary_limits)
-    budget.hash_work(verified.result.metrics.hash_work)
-    budget.input_work(verified.result.metrics.input_bytes)
-
-    by_table: dict[str, list[dict[str, Any]]] = {}
-    for mutation in verified.mutations:
-        table = mutation["table"]
-        if projection.index_ids_for_table(table):
-            if len(mutation["key"]) != 1 or "id" not in mutation["key"]:
-                raise IndexedMutationError("indexed mutation primary key does not match its source id codec")
-            by_table.setdefault(table, []).append(mutation)
-    expected_ids = tuple(sorted(index_id for table in by_table for index_id in projection.index_ids_for_table(table)))
-    if tuple(item.index_id for item in inputs) != expected_ids:
-        raise IndexedMutationError("indexed mutation does not include exactly every affected source profile")
-    primary_after_counts = {root.table: root.leaf_count for root in verified.result.business_after_roots}
-    primary_before_counts = {table: primary_after_counts[table] - sum(
-        int(change["operation"] == "INSERT") - int(change["operation"] == "DELETE")
-        for change in changes) for table, changes in by_table.items()}
-    old_digests = {(proof["table"], proof["keyDigest"]): proof["rowDigest"] for proof in verified.before_proofs}
-    new_digests = {}
-    new_row_hashes = 0
-    for table, changes in by_table.items():
-        for mutation in changes:
-            if mutation["row"] is not None:
-                budget.hash_work(1)
-                new_row_hashes += 1
-                new_digests[(table, mutation["keyDigest"])] = radix._tree_digest(
-                    "serverware.policyAuthorityAuthenticatedRow/v1", table.encode("ascii"),
-                    radix.tree_json_bytes(mutation["row"]))
+        before_proofs=before_proofs, mutations=mutations, budget=budget)
+    prepared = _prepare_primary_changes(verified, tuple(item.index_id for item in inputs), budget)
 
     before_heads, after_heads, index_metrics = [], [], []
     projection_allowance = context_hashes = 0
     for item in inputs:
-        budget.hash_work(projection.PROFILE_HASH_WORK)
+        profile, changes, delta, allowance = _prepare_index_changes(item, prepared, budget)
         context_hashes += projection.PROFILE_HASH_WORK
-        profile = projection.profile_for(item.index_id)
-        # Each fixed profile emits at most one leaf per base row. This necessary
-        # descriptor-consistency check is not authenticated population proof.
-        if item.index_root.count > primary_before_counts[profile.table]:
-            raise IndexedMutationError("indexed mutation before count exceeds its primary population descriptor")
-        changes, delta, allowance = _changes_for_index(
-            item.index_id, by_table[profile.table], old_digests, new_digests, budget)
         projection_allowance += allowance
-        if delta > I64_MAX - item.index_revision:
-            raise IndexedMutationError("indexed mutation head revision overflows int64")
         # The initial frontier reservation uses exactly the low evaluator's
         # record framing. Credit it for this call only; all other frontiers
         # remain reserved while real input/work accumulate across profiles.
         reserved = reservations[item.index_id]
-        index_limits = replace(limits.index,
-            max_hashes=min(limits.index.max_hashes, _positive_remaining(
-                limits.max_total_hashes - budget.hashes, "hash")),
-            max_input_bytes=min(limits.index.max_input_bytes, _positive_remaining(
-                limits.max_total_input_bytes - budget.input_bytes + reserved, "input")))
-        calculated = counted.evaluate_index_mutations(profile=profile, before_root=item.index_root,
-            changes=changes, frontier=item.frontier, limits=index_limits)
-        budget.hash_work(calculated.metrics.hashes)
-        budget.input_work(calculated.metrics.input_bytes - reserved)
-        if calculated.after_root.count > primary_after_counts[profile.table]:
-            raise IndexedMutationError("indexed mutation after count exceeds its primary population descriptor")
+        calculated = _evaluate_one_index(item, prepared, profile, changes, budget, reserved)
         before_heads.append(IndexedMutationHead(item.index_id, item.index_revision, calculated.before_root))
         after_heads.append(IndexedMutationHead(item.index_id, item.index_revision + delta, calculated.after_root))
         index_metrics.append((item.index_id, calculated.metrics))
     return IndexedMutationResult(verified.result, tuple(before_heads), tuple(after_heads),
         IndexedMutationMetrics(verified.result.metrics, tuple(index_metrics), context_hashes,
-                               projection_allowance, new_row_hashes, budget.input_bytes))
+                               projection_allowance, prepared.new_row_hashes, budget.input_bytes))

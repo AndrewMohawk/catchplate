@@ -5,8 +5,9 @@
 This is a source implementation contract, not installed storage or execution
 evidence. The current tree has a pure [range reconstructor](authority-index-range.md),
 fixed projection codecs, an actual [primary-row join](authority-index-primary-join.md)
-and a standalone bounded SQL frontier reader. The reader reconstructs against a
-supplied root; it does not authenticate that root or its currentness. There is
+and separate bounded SQL [range](#bounded-frontier-production) and
+[write-proof](authority-index-mutation-reader.md) readers. They reconstruct
+against supplied roots; they do not authenticate those roots or currentness. There is
 still no installed counted-index schema, authenticated population, all-writer
 maintenance or independently admitted current index/primary root pair. The
 planner still rejects complete-index queries before business/proof SQL. Existing

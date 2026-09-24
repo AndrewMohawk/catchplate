@@ -11,7 +11,7 @@ import re
 
 
 INVENTORY_SCHEMA = "serverware.nativePostgresInventory/v1"
-TOTAL_TESTS = 238
+TOTAL_TESTS = 244
 
 
 @dataclass(frozen=True, slots=True)
@@ -352,6 +352,12 @@ SUITES: tuple[NativePostgresSuite, ...] = (
             "AuthorityCountedMaintenancePostgresTests.test_old_leaf_fullrow_commitment_and_stored_primary_identity_must_match",
             "AuthorityCountedMaintenancePostgresTests.test_primary_key_changes_require_explicit_delete_then_insert_events",
             "AuthorityCountedMaintenancePostgresTests.test_publication_bundle_status_and_generation_moves_all_fixed_profiles",
+            "AuthorityCountedMaintenancePostgresTests.test_reader_all_eleven_profiles_execute_exact_sql_without_store_writes",
+            "AuthorityCountedMaintenancePostgresTests.test_reader_future_records_and_wrong_primary_identity_remain_visible_and_deny",
+            "AuthorityCountedMaintenancePostgresTests.test_reader_missing_leaf_and_corrupt_opaque_sibling_fail_then_repair_replays",
+            "AuthorityCountedMaintenancePostgresTests.test_reader_namespace_refusal_preserves_existing_empty_and_sentinel_schemas",
+            "AuthorityCountedMaintenancePostgresTests.test_reader_nonmember_paths_still_acquire_root_children_and_fold_populated_roots",
+            "AuthorityCountedMaintenancePostgresTests.test_reader_partition_moves_prove_new_absence_with_real_parameter_batches",
             "AuthorityCountedMaintenancePostgresTests.test_real_function_catalog_invoker_contract_has_no_trigger_attachment",
             "AuthorityCountedMaintenancePostgresTests.test_revision_overflow_denies_member_event_but_nonmember_does_not_increment",
             "AuthorityCountedMaintenancePostgresTests.test_session_grant_and_control_approval_membership_transitions",
@@ -379,7 +385,7 @@ _SUITE_SHAPES = (
     ("scripts/test_authority_counted_hash_postgres.py", 10, False, 300),
     ("scripts/test_authority_counted_projection_postgres.py", 16, False, 300),
     ("scripts/test_authority_counted_store_postgres.py", 10, False, 300),
-    ("scripts/test_authority_counted_maintenance_postgres.py", 18, False, 300),
+    ("scripts/test_authority_counted_maintenance_postgres.py", 24, False, 300),
 )
 _TEST_ID = re.compile(r"[A-Za-z][A-Za-z0-9_]*\.test_[a-z][a-z0-9_]*", re.ASCII)
 
@@ -392,7 +398,7 @@ def validate_inventory() -> None:
     """
     if (type(INVENTORY_SCHEMA) is not str or INVENTORY_SCHEMA != "serverware.nativePostgresInventory/v1"
             or type(SUITES) is not tuple or len(SUITES) != 14
-            or type(TOTAL_TESTS) is not int or TOTAL_TESTS != 238):
+            or type(TOTAL_TESTS) is not int or TOTAL_TESTS != 244):
         raise ValueError("native PostgreSQL inventory envelope differs from source")
     seen_scripts: set[str] = set()
     seen_tests: set[str] = set()

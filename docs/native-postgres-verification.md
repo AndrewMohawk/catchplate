@@ -25,12 +25,12 @@ supply independent approval, installed controller identity or cleanup proof.
 
 [native_postgres_inventory.py](../serverware/native_postgres_inventory.py)
 defines `serverware.nativePostgresInventory/v1`, fourteen ordered frozen
-`NativePostgresSuite` records and `TOTAL_TESTS = 238`. Each record contains an
+`NativePostgresSuite` records and `TOTAL_TESTS = 244`. Each record contains an
 exact script path, an explicit sorted tuple of `Class.test_method` IDs, its
 disposable-cluster CLI acknowledgement requirement and its timeout in seconds.
 The IDs are authored source declarations, not dynamically discovered or
 executed results. The total includes the pure representation and source-linkage
-methods contained in these fixtures; it is not a count of 238 native SQL tests.
+methods contained in these fixtures; it is not a count of 244 native SQL tests.
 
 | Order | Script under `scripts/` | Methods | Timeout | Extra disposable CLI flag |
 | --- | --- | ---: | ---: | --- |
@@ -47,7 +47,18 @@ methods contained in these fixtures; it is not a count of 238 native SQL tests.
 | 10 | `test_authority_counted_hash_postgres.py` | 10 | 300 s | No |
 | 11 | `test_authority_counted_projection_postgres.py` | 16 | 300 s | No |
 | 12 | `test_authority_counted_store_postgres.py` | 10 | 300 s | No |
-| 13 | `test_authority_counted_maintenance_postgres.py` | 18 | 300 s | No |
+| 13 | `test_authority_counted_maintenance_postgres.py` | 24 | 300 s | No |
+
+The six appended counted-reader methods execute the unchanged production-qualified
+SQL against an independently seeded `serverware_metadata` schema. They reject
+any pre-existing canonical namespace, even empty, before a plain CREATE inside
+the fixture-owned SERIALIZABLE transaction. All new objects and rows disappear
+by rollback; no namespace adoption, SQL rewriting or DROP is permitted. The
+cases cover all eleven profiles, partition moves, no-target profiles, future or
+mismatched stored records, missing/corrupt evidence and preservation of an
+existing sentinel namespace. Their current status is authored and unexecuted.
+Suite/process counts and deadlines are unchanged; the existing 300-second suite
+ceiling is not a measured performance claim or permission to skip cases.
 
 All fourteen require a prepared disposable local environment. A `False`
 `disposable_cluster` field means that the particular fixture has no extra

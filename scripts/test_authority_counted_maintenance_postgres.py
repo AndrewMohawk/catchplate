@@ -37,6 +37,8 @@ from serverware.authority_store.counted_path_sql import counted_path_functions_s
 from serverware.authority_store.counted_maintenance_sql import counted_maintenance_functions_sql
 from serverware.authority_store.primary_tree_sql import framed_digest_function_sql
 from serverware.authority_store.wire_json_sql import wire_json_function_sql
+from serverware import authority_index_mutation_reader as mutation_reader
+from serverware import authority_indexed_mutation as indexed
 from serverware.native_postgres_results import run_native_fixture
 import test_authority_counted_projection_postgres as row_oracle
 import test_authority_counted_store_postgres as storage_oracle
@@ -503,6 +505,172 @@ class AuthorityCountedMaintenancePostgresTests(unittest.TestCase):
             for invalid in (None, "unquoted", '"UPPER"', '"bad-name"', '"x"; SELECT 1'):
                 with self.subTest(renderer=renderer.__name__, invalid=invalid), self.assertRaises(ValueError):
                     renderer(invalid)
+
+    def require_absent_reader_namespace(self):
+        # This native reader uses the exact production-qualified SQL unchanged.
+        # A prepared disposable cluster is necessary but does not authorize
+        # adopting even an empty pre-existing canonical namespace.
+        row = self.connection.execute(
+            "SELECT oid FROM pg_catalog.pg_namespace WHERE nspname=%s",
+            ("serverware_metadata",)).fetchone()
+        if row is not None:
+            raise RuntimeError("reader fixture canonical namespace already exists")
+
+    def create_reader_store(self):
+        self.require_absent_reader_namespace()
+        self.connection.execute('CREATE SCHEMA "serverware_metadata"')
+        self.connection.execute('REVOKE ALL ON SCHEMA "serverware_metadata" FROM PUBLIC')
+        for statement in counted_store_ddl('"serverware_metadata"'):
+            self.connection.execute(statement)
+
+    def seed_reader_store(self, fixture):
+        self.create_reader_store()
+        # Reuse the independent complete population oracle, not any successful
+        # production projection, reader, maintenance or proof result.
+        self.seed(fixture.tables, revision=29)
+        expected = self.expected_store()
+        for table in (HEADS, LEAVES, NODES):
+            columns = tuple(name for name, _ in storage_oracle.COLUMNS[table])
+            rows = list(expected[table].values())
+            if rows:
+                with self.connection.cursor() as cursor:
+                    cursor.executemany(sql.SQL("INSERT INTO {} ({}) VALUES ({})").format(
+                        sql.Identifier("serverware_metadata", table),
+                        sql.SQL(",").join(sql.Identifier(name) for name in columns),
+                        sql.SQL(",").join(sql.Placeholder() for _ in columns)),
+                        [tuple(row[name] for name in columns) for row in rows])
+
+    def reader_store_snapshot(self):
+        return {table: tuple(row[0] for row in self.connection.execute(
+            sql.SQL('SELECT pg_catalog.to_jsonb(t) FROM {} AS t '
+                    'ORDER BY pg_catalog.to_jsonb(t)::text COLLATE "C"').format(
+                        sql.Identifier("serverware_metadata", table))).fetchall())
+            for table in (HEADS, LEAVES, NODES)}
+
+    def acquire_reader(self, fixture):
+        arguments = fixture.arguments()
+        before = arguments.pop("index_inputs")
+        arguments["index_before_heads"] = tuple(indexed.IndexedMutationHead(
+            item.index_id, item.index_revision, item.index_root) for item in before)
+        self.reader_trace = []
+        entries = self.reader_trace
+
+        class Trace:
+            # This observes every actual reader SELECT. It intentionally grants
+            # no production PlannerTrace or operation-manifest admission.
+            def read(self, table, key):
+                entries.append((table, copy.deepcopy(key)))
+
+        with self.connection.cursor(row_factory=dict_row) as cursor:
+            return mutation_reader.acquire_indexed_primary_batch(cursor, trace=Trace(), **arguments)
+
+    def assert_reader(self, fixture):
+        before = self.reader_store_snapshot()
+        actual = self.acquire_reader(fixture)
+        self.assertEqual(actual.index_inputs, fixture.arguments()["index_inputs"])
+        self.assertEqual(actual.result.primary.business_after_roots,
+            tuple(fixture.after_trees[table].root for table in sorted(fixture.after_trees)))
+        self.assertEqual(actual.result.after_heads, tuple(indexed.IndexedMutationHead(
+            name, info["revision_before"] + info["revision_delta"], info["after"].root)
+            for name, info in sorted(fixture.indexes.items())))
+        self.assertTrue(self.reader_trace)
+        self.assertEqual(self.reader_store_snapshot(), before)
+        return actual
+
+    def reader_credential_fixture(self, *, move=False):
+        first = mutation_oracle.credential("credential")
+        other = mutation_oracle.credential("opaque", user_id="other-user", credential_id="other-id")
+        after = {**first, "sign_count": 4}
+        if move:
+            after.update(user_id="moved-user", credential_id="moved-id")
+        return mutation_oracle.MutationFixture({"webauthn_credentials": [first, other]},
+            (("webauthn_credentials", "credential", "UPDATE", after),))
+
+    def test_reader_all_eleven_profiles_execute_exact_sql_without_store_writes(self):
+        tables = {table: [image(table, "same-id")] for table in BASE_PROFILES}
+        tables["webauthn_challenges"][0]["expires_at"] = "1970-01-01T00:00:00+00:00"
+        actions = tuple((table, "same-id", "UPDATE", {**rows[0], "nonselector": "new-雪"})
+            for table, rows in sorted(tables.items()))
+        fixture = mutation_oracle.MutationFixture(tables, actions, expiry_before={"same-id": 0})
+        self.seed_reader_store(fixture)
+        actual = self.assert_reader(fixture)
+        self.assertEqual(len(actual.index_inputs), 11)
+        self.assertEqual({table for table, _ in self.reader_trace}, {LEAVES, NODES})
+
+    def test_reader_partition_moves_prove_new_absence_with_real_parameter_batches(self):
+        fixture = self.reader_credential_fixture(move=True)
+        self.seed_reader_store(fixture)
+        self.assertEqual({name: len(info["targets"]) for name, info in fixture.indexes.items()}, {
+            "webauthn_credential_id": 2,
+            "webauthn_credential_user_history": 2,
+            "webauthn_credential_live_trust": 1,
+        })
+        actual = self.assert_reader(fixture)
+        self.assertEqual(len(actual.result.after_heads), 3)
+        self.assertTrue(all(item.index_revision == 30 for item in actual.result.after_heads))
+
+    def test_reader_nonmember_paths_still_acquire_root_children_and_fold_populated_roots(self):
+        excluded = image("webauthn_challenges", "excluded", challenge_type="authentication",
+            expires_at="1970-01-01T00:00:00+00:00")
+        retained = {**excluded, "id": "retained", "challenge_type": "registration"}
+        fixture = mutation_oracle.MutationFixture({"webauthn_challenges": [excluded, retained]},
+            (("webauthn_challenges", "excluded", "UPDATE", {**excluded, "used_at": "used"}),),
+            expiry_before={"excluded": 0, "retained": 0})
+        self.seed_reader_store(fixture)
+        actual = self.assert_reader(fixture)
+        self.assertEqual(actual.result.before_heads, actual.result.after_heads)
+        self.assertEqual([table for table, _ in self.reader_trace], [NODES, NODES])
+        for _, metrics in actual.result.metrics.indexes:
+            self.assertEqual((metrics.changes, metrics.opened_nodes, metrics.child_slots), (0, 1, 32))
+
+    def test_reader_future_records_and_wrong_primary_identity_remain_visible_and_deny(self):
+        fixture = self.reader_credential_fixture()
+        self.seed_reader_store(fixture)
+        self.assert_reader(fixture)
+        name, info = next(iter(sorted(fixture.indexes.items())))
+        target = next(iter(info["targets"]))
+        for assignment, value in (("index_revision", 30), ("primary_id", "wrong-primary-id")):
+            with self.subTest(field=assignment), self.variant():
+                self.connection.execute(sql.SQL("UPDATE {} SET {}=%s WHERE index_id=%s AND index_key=%s").format(
+                    sql.Identifier("serverware_metadata", LEAVES), sql.Identifier(assignment)), (value, name, target))
+                with self.assertRaises(ValueError):
+                    self.acquire_reader(fixture)
+                self.assertTrue(self.reader_trace)
+            self.assert_reader(fixture)
+
+    def test_reader_missing_leaf_and_corrupt_opaque_sibling_fail_then_repair_replays(self):
+        fixture = self.reader_credential_fixture()
+        self.seed_reader_store(fixture)
+        self.assert_reader(fixture)
+        name, info = next(iter(sorted(fixture.indexes.items())))
+        target = next(iter(info["targets"]))
+        opaque = next(item for item in info["frontier"] if hasattr(item, "prefix"))
+        for area in ("leaf", "opaque"):
+            with self.subTest(area=area), self.variant():
+                if area == "leaf":
+                    self.connection.execute(sql.SQL("DELETE FROM {} WHERE index_id=%s AND index_key=%s").format(
+                        sql.Identifier("serverware_metadata", LEAVES)), (name, target))
+                else:
+                    self.connection.execute(sql.SQL(
+                        "UPDATE {} SET node_digest=%s WHERE index_id=%s AND depth=%s AND path_prefix=%s").format(
+                            sql.Identifier("serverware_metadata", NODES)),
+                        ("sha256:" + "f" * 64, name, len(opaque.prefix), opaque.prefix))
+                with self.assertRaises(ValueError):
+                    self.acquire_reader(fixture)
+                self.assertTrue(self.reader_trace)
+            self.assert_reader(fixture)
+
+    def test_reader_namespace_refusal_preserves_existing_empty_and_sentinel_schemas(self):
+        self.require_absent_reader_namespace()
+        self.connection.execute('CREATE SCHEMA "serverware_metadata"')
+        with self.assertRaisesRegex(RuntimeError, "already exists"):
+            self.create_reader_store()
+        self.connection.execute('CREATE TABLE "serverware_metadata".reader_fixture_sentinel (value text NOT NULL)')
+        self.connection.execute('INSERT INTO "serverware_metadata".reader_fixture_sentinel VALUES (%s)', ("keep",))
+        with self.assertRaisesRegex(RuntimeError, "already exists"):
+            self.create_reader_store()
+        self.assertEqual(self.connection.execute(
+            'SELECT value FROM "serverware_metadata".reader_fixture_sentinel').fetchall(), [("keep",)])
 
 
 if __name__ == "__main__":

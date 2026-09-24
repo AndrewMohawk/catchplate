@@ -43,7 +43,7 @@ EXPECTED_SUITES = (
     ("scripts/test_authority_counted_hash_postgres.py", 10, False, 300),
     ("scripts/test_authority_counted_projection_postgres.py", 16, False, 300),
     ("scripts/test_authority_counted_store_postgres.py", 10, False, 300),
-    ("scripts/test_authority_counted_maintenance_postgres.py", 18, False, 300),
+    ("scripts/test_authority_counted_maintenance_postgres.py", 24, False, 300),
 )
 SYNTHETIC_SCRIPT = "scripts/test_native_postgres_contract.py"
 SYNTHETIC_SOURCE_DIGEST = "sha256:" + "a" * 64
@@ -119,8 +119,8 @@ class NativePostgresInventoryTests(unittest.TestCase):
         self.assertEqual(tuple((suite.script, len(suite.test_ids), suite.disposable_cluster,
                                 suite.timeout_seconds) for suite in inventory.SUITES), EXPECTED_SUITES)
         self.assertIs(type(inventory.TOTAL_TESTS), int)
-        self.assertEqual(inventory.TOTAL_TESTS, 238)
-        self.assertEqual(sum(shape[1] for shape in EXPECTED_SUITES), 238)
+        self.assertEqual(inventory.TOTAL_TESTS, 244)
+        self.assertEqual(sum(shape[1] for shape in EXPECTED_SUITES), 244)
         all_ids = tuple(test_id for suite in inventory.SUITES for test_id in suite.test_ids)
         self.assertEqual(len(all_ids), len(set(all_ids)))
 
@@ -164,7 +164,7 @@ class NativePostgresInventoryTests(unittest.TestCase):
             with self.subTest(suites=suites), mock.patch.object(inventory, "SUITES", suites):
                 with self.assertRaises(ValueError):
                     inventory.validate_inventory()
-        for total in (True, 237, 238.0, "238"):
+        for total in (True, 243, 244.0, "244"):
             with self.subTest(total=total), mock.patch.object(inventory, "TOTAL_TESTS", total):
                 with self.assertRaises(ValueError):
                     inventory.validate_inventory()

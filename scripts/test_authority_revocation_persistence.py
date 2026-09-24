@@ -163,6 +163,7 @@ class Recorder:
         self.role, self.read_only, self.deferrable = "fixture-planner-writer", "off", "off"
         self.callback = None
         self.fail_completion = False
+        self.return_aliases = False
 
     def cursor(self):
         return Cursor(self)
@@ -223,9 +224,9 @@ class Cursor:
         elif sql.startswith("SELECT ") and " FROM " + PARENT in sql:
             if not sql.endswith("FOR UPDATE"):
                 raise AssertionError("parent read is not locked")
-            self.result = None if r.parent is None else r.parent.copy()
+            self.result = (r.parent if r.return_aliases or r.parent is None else r.parent.copy())
         elif sql.startswith("SELECT ") and " FROM " + SIDECAR in sql:
-            self.result = None if r.sidecar is None else r.sidecar.copy()
+            self.result = (r.sidecar if r.return_aliases or r.sidecar is None else r.sidecar.copy())
         else:
             raise AssertionError("unexpected SQL in fixed persistence recorder: " + sql)
         return self
@@ -251,14 +252,17 @@ class RevocationPersistenceTests(unittest.TestCase):
     def work(self, limits=None):
         return accounting._ValidationWork(accounting.QueryReadValidationLimits(*(limits or ())))
 
-    def persist(self, fixture, recorder, work=None, *, planned_at=None, **changes):
+    def persist(self, fixture, recorder, work=None, *, planned_at=None,
+                clock_epoch_ns=None, clock_monotonic_ns=None, **changes):
         supplied = {"envelope_bytes": oracle.wire(fixture.envelope),
             "evaluation_context_bytes": oracle.wire(record_oracle.record_context(fixture)),
             "planned_at_epoch_ns": fixture.now_epoch_ns if planned_at is None else planned_at,
             "connection": Facade(recorder), "work": work or self.work(), **wire_oracle.expectations(fixture)}
         supplied.update(changes)
-        with patch.object(admission.time, "time_ns", return_value=fixture.now_epoch_ns), \
-                patch.object(admission.time, "monotonic_ns", return_value=fixture.now_monotonic_ns):
+        with patch.object(admission.time, "time_ns", return_value=(fixture.now_epoch_ns
+                if clock_epoch_ns is None else clock_epoch_ns)), \
+                patch.object(admission.time, "monotonic_ns", return_value=(fixture.now_monotonic_ns
+                if clock_monotonic_ns is None else clock_monotonic_ns)):
             return store.persist_revocation_planner_record(**supplied)
 
     def read(self, fixture, recorder, work=None, **changes):
@@ -351,6 +355,235 @@ class RevocationPersistenceTests(unittest.TestCase):
             with self.subTest(changes=tuple(changes)), self.assertRaises(retention.RevocationRetentionError):
                 self.persist(fixture, recorder, **changes)
             self.assertEqual(recorder.statements, [])
+
+    def test_exact_preconsumed_write_and_read_peaks_and_each_minus_one_keep_one_work(self):
+        fixture, prior = self.fixture(), (3, 31, 5)
+        for mode in ("new", "read"):
+            expected = independent_store_metrics(fixture, fixture.now_epoch_ns, mode=mode)
+            for dimension in (None, 0, 1, 2):
+                recorder = Recorder()
+                if mode == "read":
+                    recorder.parent, recorder.sidecar = expected_rows(fixture, fixture.now_epoch_ns)
+                before = copy.deepcopy((recorder.parent, recorder.sidecar))
+                limits = list(oracle.add(prior, expected["admission"]))
+                if dimension is not None:
+                    limits[dimension] -= 1
+                work = self.work(limits)
+                work.charge(hashes=prior[0], input_bytes=prior[1], json_nodes=prior[2])
+                entering = work.limits
+                call = self.persist if mode == "new" else self.read
+                with self.subTest(mode=mode, dimension=dimension), \
+                        patch.object(retention.plan.retained._PackagingLedger, "__init__",
+                            side_effect=AssertionError("new outer work allowance")):
+                    if dimension is None:
+                        call(fixture, recorder, work)
+                        self.assertEqual(oracle.units(work.metrics), oracle.add(prior, expected["total"]))
+                    else:
+                        with self.assertRaises(ValueError):
+                            call(fixture, recorder, work)
+                        self.assertEqual((recorder.parent, recorder.sidecar), before)
+                        self.assertTrue(all(start <= used <= limit for start, used, limit
+                            in zip(prior, oracle.units(work.metrics), limits)))
+                self.assertIs(work.limits, entering)
+                self.assertFalse(hasattr(work, "_revocation_packaging_owner"))
+
+    def test_real_write_then_read_accumulates_without_cached_proof_or_counter_reset(self):
+        fixture, recorder, prior = self.fixture(), Recorder(), (2, 17, 3)
+        written = independent_store_metrics(fixture, fixture.now_epoch_ns)
+        replay = independent_store_metrics(fixture, fixture.now_epoch_ns, mode="read")
+        peak = tuple(max(a, b) for a, b in zip(written["admission"],
+            oracle.add(written["total"], replay["admission"])))
+        work = self.work(oracle.add(prior, peak))
+        work.charge(hashes=prior[0], input_bytes=prior[1], json_nodes=prior[2])
+        entering = work.limits
+        with patch.object(retention, "_verify_record_on_work", wraps=retention._verify_record_on_work) as verified, \
+                patch.object(retention.plan.mixed, "_verify", wraps=retention.plan.mixed._verify) as proof:
+            first = self.persist(fixture, recorder, work)
+            second = self.read(fixture, recorder, work)
+        self.assertEqual(first, second)
+        self.assertEqual((verified.call_count, proof.call_count), (2, 2))
+        self.assertTrue(all(call.kwargs["work"] is work for call in verified.call_args_list))
+        self.assertEqual(oracle.units(work.metrics), oracle.add(prior, written["total"], replay["total"]))
+        self.assertIs(work.limits, entering)
+
+    def test_replay_absence_is_distinct_from_wrong_protocol_incomplete_or_missing_record(self):
+        fixture = self.fixture()
+        with patch.object(retention, "_verify_record_on_work", wraps=retention._verify_record_on_work) as verified:
+            self.assertIsNone(self.read(fixture, Recorder()))
+        self.assertEqual(verified.call_count, 0)
+        for changed in ({"plan_protocol": "v3", "retained_record_digest": None},
+                        {"plan_protocol": "unknown"}, {"plan_protocol": None},
+                        {"status": "reserved"}, {"status": "failed"},
+                        {"retained_record_digest": None}, {"missing_sidecar": True}):
+            recorder = Recorder()
+            recorder.parent, recorder.sidecar = expected_rows(fixture, fixture.now_epoch_ns)
+            if "missing_sidecar" in changed:
+                recorder.sidecar = None
+            else:
+                recorder.parent.update(changed)
+            with self.subTest(changed=changed), \
+                    patch.object(retention, "_verify_record_on_work", wraps=retention._verify_record_on_work) as verified:
+                with self.assertRaises(StoreError):
+                    self.read(fixture, recorder)
+            self.assertEqual(verified.call_count, 0)
+            self.assertFalse(any(sql.startswith(("INSERT ", "UPDATE ")) for sql, _ in recorder.statements))
+
+    def test_stored_codec_digests_keypins_and_parent_payload_are_rechecked_on_read(self):
+        fixture = self.fixture()
+        for target, field, value, replay_calls in (
+                ("sidecar", "exact_envelope_byte_count", True, 0),
+                ("sidecar", "evaluation_context_byte_count", 524289, 0),
+                ("sidecar", "exact_envelope_base64url", "=", 0),
+                ("sidecar", "exact_envelope_bytes_digest", oracle.sha(b"wrong bytes"), 1),
+                ("sidecar", "planner_key_digest", oracle.sha(b"unapproved key"), 1),
+                ("sidecar", "verifier_key_digest", oracle.sha(b"unapproved verifier"), 1),
+                ("sidecar", "retained_record_digest", oracle.sha(b"wrong record"), 1),
+                ("parent", "exact_plan_base64url", oracle.encoded(b"{}"), 1),
+                ("parent", "selected_business_rows_json", "[]", 1)):
+            recorder = Recorder()
+            recorder.parent, recorder.sidecar = expected_rows(fixture, fixture.now_epoch_ns)
+            getattr(recorder, target)[field] = value
+            with self.subTest(target=target, field=field), \
+                    patch.object(retention, "_verify_record_on_work", wraps=retention._verify_record_on_work) as verified:
+                with self.assertRaises(ValueError):
+                    self.read(fixture, recorder)
+            self.assertEqual(verified.call_count, replay_calls)
+
+    def test_actual_facade_transaction_isolation_and_writer_role_guards_precede_dml(self):
+        fixture = self.fixture()
+        for variant in ("foreign_facade", "no_transaction", "isolation", "role", "read_only", "deferrable"):
+            recorder, facade = Recorder(), None
+            facade = Facade(recorder)
+            if variant == "foreign_facade":
+                facade = object()
+            elif variant == "no_transaction":
+                facade.in_transaction = False
+            else:
+                setattr(recorder, variant, {"isolation": "read committed", "role": "foreign-writer",
+                    "read_only": "on", "deferrable": "on"}[variant])
+            with self.subTest(variant=variant), self.assertRaises(StoreError):
+                self.persist(fixture, recorder, connection=facade)
+            self.assertIsNone(recorder.parent)
+            self.assertFalse(any(sql.startswith(("INSERT ", "UPDATE ")) for sql, _ in recorder.statements))
+
+    def test_live_expiry_denies_new_and_identical_writes_and_late_completion_rolls_back(self):
+        fixture = self.fixture()
+        for existing in (False, True):
+            recorder = Recorder()
+            if existing:
+                recorder.parent, recorder.sidecar = expected_rows(fixture, fixture.now_epoch_ns)
+            before = copy.deepcopy((recorder.parent, recorder.sidecar))
+            with self.subTest(existing=existing), self.assertRaisesRegex(ValueError, "stale or inconsistent"):
+                self.persist(fixture, recorder, clock_epoch_ns=fixture.deadline_epoch_ns,
+                    clock_monotonic_ns=fixture.deadline_monotonic_ns)
+            self.assertEqual((recorder.parent, recorder.sidecar), before)
+            self.assertFalse(any(sql.startswith(("INSERT ", "UPDATE ")) for sql, _ in recorder.statements))
+        recorder = Recorder()
+
+        def expire_after_insert(sql, parameters):
+            if sql.startswith("SELECT ") and " FROM " + SIDECAR in sql:
+                admission.time.time_ns.return_value = fixture.deadline_epoch_ns
+                admission.time.monotonic_ns.return_value = fixture.deadline_monotonic_ns
+
+        recorder.callback = expire_after_insert
+        with self.assertRaisesRegex(ValueError, "stale or inconsistent"):
+            self.persist(fixture, recorder)
+        self.assertTrue(any(sql.startswith("INSERT INTO " + SIDECAR) for sql, _ in recorder.statements))
+        self.assertFalse(any(sql.startswith("UPDATE ") for sql, _ in recorder.statements))
+        self.assertEqual((recorder.parent, recorder.sidecar, recorder.rollbacks), (None, None, 1))
+
+    def test_planned_timestamp_is_bound_to_original_interval_on_write_retry_and_read(self):
+        fixture = self.fixture()
+        for planned_at in (fixture.reserved_at_epoch_ns - 1, fixture.deadline_epoch_ns,
+                           fixture.deadline_epoch_ns + 1):
+            recorder = Recorder()
+            with self.subTest(mode="write", planned_at=planned_at), self.assertRaises(StoreError):
+                self.persist(fixture, recorder, planned_at=planned_at)
+            self.assertEqual(recorder.statements, [])
+            for mode in ("retry", "read"):
+                recorder = Recorder()
+                recorder.parent, recorder.sidecar = expected_rows(fixture, planned_at)
+                call = self.persist if mode == "retry" else self.read
+                with self.subTest(mode=mode, planned_at=planned_at), self.assertRaises(StoreError):
+                    call(fixture, recorder)
+
+    def test_read_owns_external_graphs_and_returned_rows_before_later_callbacks(self):
+        fixture, recorder = self.fixture(), Recorder()
+        recorder.parent, recorder.sidecar = expected_rows(fixture, fixture.now_epoch_ns)
+        recorder.return_aliases = True
+        external = wire_oracle.expectations(fixture)
+
+        def mutate_aliases(sql, parameters):
+            if sql == "SHOW transaction_isolation":
+                external["expected_request"]["arguments"].clear()
+                external["expected_before"]["businessBeforeRoots"].clear()
+            elif sql.startswith("SELECT ") and " FROM " + SIDECAR in sql:
+                recorder.parent["selected_business_rows_json"] = "[]"
+
+        recorder.callback = mutate_aliases
+        result = self.read(fixture, recorder, **external)
+        self.assertEqual(result["exactEnvelopeBytes"], oracle.wire(fixture.envelope))
+        self.assertEqual(external["expected_request"]["arguments"], {})
+        self.assertEqual(recorder.parent["selected_business_rows_json"], "[]")
+
+    def test_driver_spending_or_equal_float_counter_corruption_rolls_back_without_refund(self):
+        fixture = self.fixture()
+        for corruption in ("spend", "float"):
+            recorder, work = Recorder(), self.work()
+
+            def alter_work(sql, parameters):
+                if sql.startswith("INSERT INTO " + SIDECAR):
+                    if corruption == "spend":
+                        work.charge(json_nodes=1)
+                    else:
+                        work.json_nodes = float(work.json_nodes)
+
+            recorder.callback = alter_work
+            with self.subTest(corruption=corruption), self.assertRaises(ValueError):
+                self.persist(fixture, recorder, work)
+            self.assertEqual((recorder.parent, recorder.sidecar, recorder.rollbacks), (None, None, 1))
+            self.assertGreater(work.hash_work, 0)
+            if corruption == "float":
+                self.assertIs(type(work.json_nodes), float)
+
+    def test_context_cleanup_cannot_suppress_failure_or_skip_exit_for_corrupt_work(self):
+        class Manager:
+            def __init__(self, *, on_enter=None, cleanup_error=False):
+                self.on_enter, self.cleanup_error, self.exits = on_enter, cleanup_error, []
+
+            def __enter__(self):
+                if self.on_enter is not None:
+                    self.on_enter()
+                return self
+
+            def __exit__(self, kind, error, traceback):
+                self.exits.append((kind, error))
+                if self.cleanup_error:
+                    raise RuntimeError("cleanup is not the first error")
+                return True
+
+        work, manager = self.work(), Manager()
+        with self.assertRaises(ValueError):
+            with store._context(manager, work):
+                work.input_bytes = float(work.input_bytes)
+        self.assertEqual(len(manager.exits), 1)
+        self.assertTrue(issubclass(manager.exits[0][0], ValueError))
+        self.assertIs(type(work.input_bytes), float)
+        for cleanup_error in (False, True):
+            manager = Manager(cleanup_error=cleanup_error)
+            first = ValueError("original body failure")
+            with self.subTest(cleanup_error=cleanup_error), self.assertRaises(ValueError) as caught:
+                with store._context(manager, self.work()):
+                    raise first
+            self.assertIs(caught.exception, first)
+            self.assertEqual(len(manager.exits), 1)
+        work = self.work()
+        manager = Manager(on_enter=lambda: work.charge(input_bytes=1))
+        with self.assertRaisesRegex(StoreError, "callback changed"):
+            with store._context(manager, work):
+                self.fail("entry corruption must not enter the body")
+        self.assertEqual(len(manager.exits), 1)
+        self.assertEqual(work.input_bytes, 1)
 
 
 if __name__ == "__main__":
